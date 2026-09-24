@@ -1,0 +1,1 @@
+Follow principles and ideas in the codebase-design skill.
