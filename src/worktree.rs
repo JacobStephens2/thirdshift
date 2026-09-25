@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::git::Git;
+use crate::progress;
 
 pub struct Worktree {
     launch: Git,
@@ -24,6 +25,10 @@ impl Worktree {
             .join(format!("{repo}-{branch}"));
         let path_arg = path.to_str().context("worktree path is not UTF-8")?;
 
+        progress::step(format_args!(
+            "creating worktree {} on {branch} from origin/{base}",
+            path.display()
+        ));
         launch.run(&["fetch", "origin", base])?;
         launch.run(&[
             "worktree",
@@ -52,6 +57,10 @@ impl Worktree {
 impl Drop for Worktree {
     fn drop(&mut self) {
         let path = self.path().to_string_lossy().into_owned();
+        progress::step(format_args!(
+            "cleaning up the worktree and local branch {}",
+            self.branch
+        ));
         // Each step is attempted even if the one before it failed.
         let steps: [&[&str]; 2] = [
             &["worktree", "remove", "--force", &path],

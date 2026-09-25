@@ -2,6 +2,7 @@ mod git;
 mod github;
 mod issue;
 mod plugin;
+mod progress;
 mod prompt;
 mod run;
 mod session;

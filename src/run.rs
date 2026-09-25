@@ -6,6 +6,7 @@ use crate::git::Git;
 use crate::github;
 use crate::issue::IssueUrl;
 use crate::plugin::Plugin;
+use crate::progress;
 use crate::prompt;
 use crate::session;
 use crate::worktree::Worktree;
@@ -27,14 +28,18 @@ pub fn run(issue_url: &str) -> Result<String> {
     let worktree = Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?;
     let plugin = Plugin::write()?;
     let log = session::log_path(&issue, &timestamp, "implement")?;
+    progress::step(format_args!("logging the session to {}", log.display()));
     session::run(
+        "implement",
         worktree.path(),
         plugin.path(),
         &prompt::fresh(&issue, &base, &branch),
         &log,
     )?;
+    progress::step(format_args!("pushing {branch}"));
     worktree.git().run(&["push", "origin", &branch])?;
 
+    progress::step("checking the PR");
     let pr = github::pull_request_for(&issue, &branch)?.context("no PR found")?;
     if pr.state != "OPEN" {
         bail!("PR {} is {}, not open", pr.url, pr.state.to_lowercase());
