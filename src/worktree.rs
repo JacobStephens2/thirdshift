@@ -14,8 +14,8 @@ pub struct Worktree {
 }
 
 impl Worktree {
-    /// Create `branch` fresh from `origin/<base>`, as last fetched, in a new
-    /// worktree next to the launch repository's root, named `<repo>-<branch>`.
+    /// Create `branch` fresh from `origin/<base>` in a new worktree next to the
+    /// launch repository's root, named `<repo>-<branch>`.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let root = PathBuf::from(launch.run(&["rev-parse", "--show-toplevel"])?);
         let path = root
@@ -24,6 +24,7 @@ impl Worktree {
             .join(format!("{repo}-{branch}"));
         let path_arg = path.to_str().context("worktree path is not UTF-8")?;
 
+        launch.run(&["fetch", "origin", base])?;
         launch.run(&[
             "worktree",
             "add",

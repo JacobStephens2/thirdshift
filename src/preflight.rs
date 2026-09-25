@@ -8,7 +8,7 @@ use crate::github;
 use crate::issue::IssueUrl;
 
 /// Check that a Run on `issue` from the `launch` repository makes sense, and
-/// return its Base branch. On success `origin/<base>` has just been fetched.
+/// return its Base branch.
 pub fn check(launch: &Git, issue: &IssueUrl) -> Result<String> {
     let origin = launch.run(&["config", "remote.origin.url"])?;
     if !issue.matches_origin(&origin) {
@@ -20,13 +20,12 @@ pub fn check(launch: &Git, issue: &IssueUrl) -> Result<String> {
     if !github::issue_is_open(issue)? {
         bail!("issue #{} is closed", issue.number);
     }
-    let base = base_branch(launch)?;
     for key in ["user.name", "user.email"] {
         if launch.run(&["config", "--default", "", key])?.is_empty() {
             bail!("git {key} is not set; the agent needs it to commit");
         }
     }
-    Ok(base)
+    base_branch(launch)
 }
 
 /// The checked-out branch, provided it exists on origin and has no commits

@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! origin.git/        bare repo standing in for github.com/<owner>/<repo>
-//! home/              $HOME: .gitconfig with identity and the insteadOf rules
+//! home/              $HOME: .gitconfig with identity and the insteadOf rule
 //! bin/               fake gh and claude, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
 //! work/<repo>/       the launch clone, origin https://github.com/<owner>/<repo>.git
@@ -159,36 +159,20 @@ impl Scenario {
     /// Commit subjects on `branch` in the origin repo, newest first, or `None`
     /// if the branch doesn't exist there.
     pub fn origin_log(&self, branch: &str) -> Option<Vec<String>> {
-        let output = Command::new("git")
-            .args(["log", "--format=%s", &format!("refs/heads/{branch}")])
-            .current_dir(self.origin_dir())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", self.path("home"))
-            .output()
-            .unwrap();
-        output.status.success().then(|| {
-            String::from_utf8(output.stdout)
-                .unwrap()
-                .lines()
-                .map(String::from)
-                .collect()
-        })
+        try_git(
+            &self.origin_dir(),
+            &["log", "--format=%s", &format!("refs/heads/{branch}")],
+        )
+        .map(|log| log.lines().map(String::from).collect())
     }
 
     /// The contents of `file` on `branch` in the origin repo, or `None` if it
     /// isn't there.
     pub fn origin_file(&self, branch: &str, file: &str) -> Option<String> {
-        let output = Command::new("git")
-            .args(["show", &format!("refs/heads/{branch}:{file}")])
-            .current_dir(self.origin_dir())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", self.path("home"))
-            .output()
-            .unwrap();
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8(output.stdout).unwrap())
+        try_git(
+            &self.origin_dir(),
+            &["show", &format!("refs/heads/{branch}:{file}")],
+        )
     }
 
     /// Output of a git command in the launch clone.
@@ -235,23 +219,22 @@ impl Scenario {
         names
     }
 
-    /// The identity, and `insteadOf` rules sending every spelling of the
-    /// GitHub URL that tests use as an origin to the bare repo.
+    /// Point the launch clone's origin at `url`, another spelling of the
+    /// GitHub URL, which git also redirects to the bare repo.
+    pub fn set_origin_url(&self, url: &str) {
+        let rule = format!("url.{}.insteadOf", self.origin_dir().display());
+        self.launch_git(&["config", "--global", "--add", &rule, url]);
+        self.launch_git(&["config", "remote.origin.url", url]);
+    }
+
     fn write_gitconfig(&self) {
-        let mut config = format!(
+        let config = format!(
             "[user]\n\tname = Test Runner\n\temail = runner@example.com\n\
              [init]\n\tdefaultBranch = main\n\
-             [url \"{origin}\"]\n",
+             [url \"{origin}\"]\n\tinsteadOf = {github}\n",
             origin = self.origin_dir().display(),
+            github = self.github_url(),
         );
-        for github in [
-            self.github_url(),
-            format!("https://github.com/{OWNER}/{REPO}"),
-            "https://github.com/ACME/Widgets.git".to_string(),
-            format!("git@github.com:{OWNER}/{REPO}.git"),
-        ] {
-            config.push_str(&format!("\tinsteadOf = {github}\n"));
-        }
         fs::write(self.path("home/.gitconfig"), config).unwrap();
     }
 
@@ -268,6 +251,12 @@ impl Scenario {
 /// Run git in `dir` with the scenario's config and return stdout, panicking on
 /// failure. `dir` must be inside a scenario root.
 fn git(dir: &Path, args: &[&str]) -> String {
+    try_git(dir, args).unwrap_or_else(|| panic!("git {args:?} failed in {}", dir.display()))
+}
+
+/// Run git in `dir` with the scenario's config and return stdout, or `None` if
+/// it fails. `dir` must be inside a scenario root.
+fn try_git(dir: &Path, args: &[&str]) -> Option<String> {
     let home = dir
         .ancestors()
         .find(|ancestor| ancestor.join("home/.gitconfig").exists())
@@ -280,10 +269,9 @@ fn git(dir: &Path, args: &[&str]) -> String {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
+    if !output.status.success() {
+        eprintln!("git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).unwrap())
 }

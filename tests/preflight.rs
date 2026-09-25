@@ -66,7 +66,7 @@ fn the_origin_match_accepts_https_and_ssh_with_or_without_git_in_any_case() {
         "git@github.com:acme/widgets.git",
     ] {
         let scenario = Scenario::new();
-        scenario.launch_git(&["config", "remote.origin.url", origin]);
+        scenario.set_origin_url(origin);
         scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
         let result = scenario.run(&[&scenario.issue_url(7)]);
@@ -154,4 +154,21 @@ fn a_missing_git_identity_is_rejected_naming_the_missing_key() {
 
         scenario.assert_rejected_before_any_work(&result, &format!("git {key} is not set"));
     }
+}
+
+#[test]
+fn a_git_identity_set_only_in_the_launch_repository_is_enough() {
+    let scenario = Scenario::new();
+    for (key, value) in [
+        ("user.name", "Repo Runner"),
+        ("user.email", "repo@example.com"),
+    ] {
+        scenario.launch_git(&["config", "--global", "--unset", key]);
+        scenario.launch_git(&["config", key, value]);
+    }
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
 }
