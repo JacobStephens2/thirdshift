@@ -1,0 +1,93 @@
+# Runs the built musl binary's `thirdshift version` on the Linux platforms it
+# has to start on, before the GitHub Release is created. dist's release.yml
+# calls this after the builds, and its host job only publishes if it passes.
+#
+# On a tag push it always runs. On a pull request it only runs when the pull
+# request touches the release pipeline or the dependencies, so ordinary pull
+# requests don't pay for the slow Rocky and WSL jobs.
+name: Release smoke tests
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+env:
+  ARCHIVE: thirdshift-x86_64-unknown-linux-musl
+  ARTIFACT: artifacts-build-local-x86_64-unknown-linux-musl
+  EXPECTED: thirdshift ${{ fromJson(inputs.plan).releases[0].app_version }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      # A pull request's merge commit has the base branch as its first
+      # parent, so diffing the two gives exactly the pull request's changes.
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != pull_request ] ||
+            git diff --name-only HEAD^1 HEAD |
+              grep -qxE '\.github/workflows/release.*\.yml|dist-workspace\.toml|Cargo\.(toml|lock)'
+          then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  rocky:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARTIFACT }}
+      - name: Check the binary is statically linked
+        run: |
+          tar -xJf "$ARCHIVE.tar.xz"
+          file "$ARCHIVE/thirdshift" | tee /dev/stderr | grep -qE 'static(-pie)? linked'
+      - name: Run thirdshift version in a Rocky Linux 9 container
+        run: |
+          actual=$(docker run --rm -v "$PWD/$ARCHIVE:/opt/thirdshift:ro" rockylinux:9 \
+            sh -c 'cat /etc/rocky-release >&2 && /opt/thirdshift/thirdshift version')
+          echo "$actual"
+          [ "$actual" = "$EXPECTED" ]
+
+  wsl:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: wsl-bash {0}
+    env:
+      # Passes these variables from Windows into WSL.
+      WSLENV: ARCHIVE:EXPECTED
+    steps:
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: xz-utils
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARTIFACT }}
+      - name: Run thirdshift version in WSL2 with Ubuntu 24.04
+        run: |
+          grep -q WSL2 /proc/version
+          grep PRETTY_NAME /etc/os-release
+          # Install onto the Linux filesystem, as users must, not /mnt/c.
+          tar -xJf "$ARCHIVE.tar.xz" -C "$HOME"
+          actual=$("$HOME/$ARCHIVE/thirdshift" version)
+          echo "$actual"
+          [ "$actual" = "$EXPECTED" ]

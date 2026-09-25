@@ -137,6 +137,21 @@ fn prints_a_line_for_each_of_its_own_steps() {
 }
 
 #[test]
+fn ends_a_successful_run_by_naming_the_pr() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        stderr_lines(&result.stderr).last(),
+        Some(&"thirdshift: PR https://github.com/acme/widgets/pull/1 is ready for review")
+    );
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+}
+
+#[test]
 fn skips_unknown_and_malformed_stream_events_and_keeps_stdout_to_the_pr_url() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
