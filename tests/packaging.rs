@@ -33,7 +33,7 @@ fn package_leaves_out_the_repository_tooling() {
 }
 
 #[test]
-fn package_carries_the_factory_skills_with_their_licence_and_credits() {
+fn package_carries_the_factory_skills_with_their_license_and_credits() {
     let list = package_list();
     for expected in [
         "skills/LICENSE",

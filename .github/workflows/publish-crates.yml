@@ -17,15 +17,15 @@ on:
         required: true
         type: string
 
+env:
+  VERSION: ${{ fromJson(inputs.plan).releases[0].app_version }}
+
 jobs:
-  publish-crates:
+  check:
     runs-on: ubuntu-24.04
-    # release.yml grants this job id-token and packages only; the repository
-    # is public, so the checkout needs no contents permission.
-    permissions:
-      id-token: write
-    env:
-      VERSION: ${{ fromJson(inputs.plan).releases[0].app_version }}
+    permissions: {}
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
     steps:
       - id: check
         run: |
@@ -38,16 +38,22 @@ jobs:
             404) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
             *) echo "crates.io answered $status" >&2; exit 1 ;;
           esac
+
+  publish-crates:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    # release.yml grants this job id-token and packages only; the repository
+    # is public, so the checkout needs no contents permission.
+    permissions:
+      id-token: write
+    steps:
       - uses: actions/checkout@v7
-        if: steps.check.outputs.publish == 'true'
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.check.outputs.publish == 'true'
       - uses: rust-lang/crates-io-auth-action@v1
-        if: steps.check.outputs.publish == 'true'
         id: auth
-      - if: steps.check.outputs.publish == 'true'
-        env:
+      - env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish --locked
