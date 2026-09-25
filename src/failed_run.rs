@@ -8,6 +8,7 @@ use chrono::{SecondsFormat, Utc};
 use crate::github;
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::progress;
 use crate::worktree::Worktree;
 
 /// Why a Run did not end with a ready PR, and what the user should see.
@@ -54,12 +55,16 @@ pub fn fail(
         .unwrap_or_default()
         .to_string();
     if let Err(problem) = commit_and_push(worktree, base, &reason) {
-        eprintln!("thirdshift: could not push the failed run's work: {problem:#}");
+        progress::step(format_args!(
+            "could not push the failed run's work: {problem:#}"
+        ));
     }
     let pr_url = match open_pr_as_draft(issue, worktree.branch()) {
         Ok(pr_url) => pr_url,
         Err(problem) => {
-            eprintln!("thirdshift: could not convert the PR to a draft: {problem:#}");
+            progress::step(format_args!(
+                "could not convert the PR to a draft: {problem:#}"
+            ));
             None
         }
     };

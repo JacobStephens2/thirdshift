@@ -5,6 +5,7 @@ mod interrupt;
 mod issue;
 mod plugin;
 mod preflight;
+mod progress;
 mod prompt;
 mod run;
 mod session;
@@ -29,7 +30,7 @@ fn main() -> ExitCode {
         }
     };
     if let Err(error) = interrupt::install() {
-        eprintln!("thirdshift: {error:#}");
+        progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
     match run::run(&issue) {
@@ -38,9 +39,9 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(failed) => {
-            eprintln!("thirdshift: {:#}", failed.error);
+            progress::step(format_args!("{:#}", failed.error));
             if let Some(log) = failed.log {
-                eprintln!("thirdshift: session log: {}", log.display());
+                progress::step(format_args!("session log: {}", log.display()));
             }
             if let Some(pr_url) = failed.pr_url {
                 println!("{pr_url}");
