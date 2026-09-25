@@ -8,7 +8,8 @@ State lives in the JSON file named by $FAKE_GH_STATE:
      "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
               "mergeable"?, "unknown_polls"?}],
      "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
-     "statuses": {"<sha>": [{"context", "state", "url"}]}}
+     "statuses": {"<sha>": [{"context", "state", "url"}]},
+     "on_ci_read"?: {"times", "script", "seen"}}
 
 A PR's mergeable state reports as UNKNOWN for its first `unknown_polls` reads.
 A check run reports as in progress for its first `pending_polls` reads, then as
@@ -20,6 +21,9 @@ command):
     gh fake checks <sha> '<JSON list>'      set the check runs on <sha>
     gh fake statuses <sha> '<JSON list>'    set the commit statuses on <sha>
     gh fake pr <head> <field> '<JSON>'      set a field of <head>'s newest PR
+    gh fake on-ci-read <times> '<script>'   run <script> in bash the first time
+                                            thirdshift reads CI on each new sha,
+                                            for the next <times> shas
 
 Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
 
@@ -30,6 +34,7 @@ else exits 2 so an unexpected call fails loudly.
 import json
 import os
 import re
+import subprocess
 import sys
 
 
@@ -186,6 +191,7 @@ def api(state, positional, flags):
     repo, sha, endpoint, _ = match.groups()
     check_repo(state, {"repo": repo})
     if endpoint == "check-runs":
+        run_ci_read_hook(state, sha)
         runs = []
         for check in state.get("checks", {}).get(sha, []):
             pending = check.get("pending_polls", 0) > 0
@@ -213,9 +219,23 @@ def api(state, positional, flags):
         print(json.dumps(item))
 
 
+def run_ci_read_hook(state, sha):
+    """Run the `on-ci-read` script, if it has runs left and has not yet run for
+    `sha`, e.g. to move the Base branch while thirdshift waits for CI."""
+    hook = state.get("on_ci_read")
+    if not hook or hook["times"] == 0 or sha in hook["seen"]:
+        return
+    hook["times"] -= 1
+    hook["seen"].append(sha)
+    save(state)
+    subprocess.run(["bash", "-euc", hook["script"]], check=True, stdout=sys.stderr)
+
+
 def fake(state, args):
     if args[0] in ("checks", "statuses"):
         state.setdefault(args[0], {})[args[1]] = json.loads(args[2])
+    elif args[0] == "on-ci-read":
+        state["on_ci_read"] = {"times": int(args[1]), "script": args[2], "seen": []}
     elif args[0] == "pr":
         [pr for pr in state["prs"] if pr["head"] == args[1]][-1][args[2]] = json.loads(args[3])
     else:

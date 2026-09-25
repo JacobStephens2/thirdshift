@@ -99,11 +99,18 @@ fn implement(
 /// The most Repair sessions a Run starts, conflict and CI-fix combined.
 const MAX_REPAIRS: usize = 3;
 
+/// The most times a Run goes round again because the Base branch moved while
+/// CI ran, whether or not the merge that follows needs a Repair. A clean merge
+/// uses no Repair, so without this a busy Base branch could keep a Run going
+/// forever.
+const MAX_BASE_MOVES: usize = 3;
+
 /// Keep the PR mergeable and its CI green: merge the Base branch (never
 /// rebase), push, and watch CI on the head commit, starting a Repair session
 /// through `run_session` for a conflict or red CI and then going round again,
-/// since the Base branch may have moved meanwhile. Fails once a Repair beyond
-/// `MAX_REPAIRS` would be needed.
+/// since the Base branch may have moved meanwhile. Green or absent CI also
+/// goes round again if the Base branch moved while CI ran. Fails once a Repair
+/// beyond `MAX_REPAIRS`, or a round beyond `MAX_BASE_MOVES`, would be needed.
 fn repair_loop(
     issue: &IssueUrl,
     worktree: &Worktree,
@@ -113,6 +120,7 @@ fn repair_loop(
 ) -> Result<()> {
     let branch = worktree.branch();
     let mut repairs = 0;
+    let mut base_moves = 0;
     // Counts the Repair about to start, as `repair-<n>`, or fails if it would
     // be one too many.
     let mut next_repair = |cause: &str| -> Result<String> {
@@ -135,7 +143,20 @@ fn repair_loop(
         }
         worktree.push()?;
         match ci::watch(issue, &worktree.head()?)? {
-            Ci::Absent | Ci::Passed => return Ok(()),
+            Ci::Absent | Ci::Passed => {
+                if !worktree.base_branch_moved(base)? {
+                    return Ok(());
+                }
+                if base_moves == MAX_BASE_MOVES {
+                    bail!(
+                        "origin/{base} kept moving while CI ran: merged it again {MAX_BASE_MOVES} times"
+                    );
+                }
+                base_moves += 1;
+                progress::step(format_args!(
+                    "origin/{base} moved while CI ran; merging it again"
+                ));
+            }
             Ci::Failed(failed) => {
                 let kind = next_repair("CI red")?;
                 run_session(
