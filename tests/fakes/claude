@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Fake `claude` for the thirdshift test harness.
+
+Each call appends a record to the JSON list in $FAKE_CLAUDE_RECORD: its argv,
+prompt, working directory, the branch checked out there, and a snapshot of the
+--plugin-dir contents (the directory is gone by the time a test looks).
+
+It then runs the per-test bash script $FAKE_CLAUDE_SCRIPT in the working
+directory, emits a couple of stream-json lines, and exits with the script's
+exit code.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+
+def plugin_snapshot(plugin_dir):
+    files = {}
+    for dirpath, _, filenames in os.walk(plugin_dir):
+        for filename in filenames:
+            path = os.path.join(dirpath, filename)
+            with open(path, encoding="utf-8", errors="replace") as f:
+                files[os.path.relpath(path, plugin_dir)] = f.read()
+    return files
+
+
+def main():
+    argv = sys.argv[1:]
+    plugin_dir = argv[argv.index("--plugin-dir") + 1] if "--plugin-dir" in argv else None
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], capture_output=True, text=True
+    ).stdout.strip()
+
+    record_path = os.environ["FAKE_CLAUDE_RECORD"]
+    records = []
+    if os.path.exists(record_path):
+        with open(record_path) as f:
+            records = json.load(f)
+    records.append(
+        {
+            "argv": argv,
+            "prompt": argv[-1] if argv else None,
+            "cwd": os.getcwd(),
+            "branch": branch,
+            "plugin_dir": plugin_dir,
+            "plugin_files": plugin_snapshot(plugin_dir) if plugin_dir else {},
+        }
+    )
+    with open(record_path, "w") as f:
+        json.dump(records, f, indent=2)
+
+    print(json.dumps({"type": "system", "subtype": "init", "cwd": os.getcwd()}), flush=True)
+    code = subprocess.run(["bash", "-e", os.environ["FAKE_CLAUDE_SCRIPT"]]).returncode
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": code != 0}), flush=True)
+    sys.exit(code)
+
+
+main()

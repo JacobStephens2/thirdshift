@@ -1,0 +1,12 @@
+[package]
+name = "thirdshift"
+version = "0.1.0"
+edition = "2024"
+description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+include_dir = "0.7.4"
+serde_json = "1.0.151"
+tempfile = "3.27.0"
