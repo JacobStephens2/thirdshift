@@ -114,6 +114,25 @@ fn loads_every_factory_skill_as_the_thirdshift_plugin() {
 }
 
 #[test]
+fn ships_the_mattpocock_skills_mit_notice_with_the_factory_skills() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    scenario.run(&[&scenario.issue_url(7)]);
+
+    let license = scenario.claude_calls()[0]["plugin_files"]["skills/LICENSE"]
+        .as_str()
+        .map(str::to_string);
+    assert!(
+        license
+            .as_deref()
+            .is_some_and(|text| text.contains("MIT License")
+                && text.contains("Copyright (c) 2026 Matt Pocock")),
+        "license: {license:?}"
+    );
+}
+
+#[test]
 fn logs_the_session_stream_under_the_home_directory() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
