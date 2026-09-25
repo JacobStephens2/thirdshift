@@ -3,10 +3,19 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::git::Git;
 use crate::progress;
+
+/// How merging the Base branch into the Issue branch went.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Merge {
+    /// Merged, or nothing to merge.
+    Clean,
+    /// Conflicted; the merge is left in progress for a conflict Repair.
+    Conflicted,
+}
 
 pub struct Worktree {
     launch: Git,
@@ -49,8 +58,48 @@ impl Worktree {
         self.git.dir()
     }
 
-    pub fn git(&self) -> &Git {
-        &self.git
+    /// Push the Issue branch to origin (a no-op if it is already there).
+    pub fn push(&self) -> Result<()> {
+        progress::step(format_args!("pushing {}", self.branch));
+        self.git.run(&["push", "origin", &self.branch])?;
+        Ok(())
+    }
+
+    /// Fetch `origin/<base>` and merge it into the Issue branch: a merge,
+    /// never a rebase, so pushing it is always a fast-forward. `--ff` keeps a
+    /// user's `merge.ff = only` from turning a clean merge into an error.
+    pub fn merge_base_branch(&self, base: &str) -> Result<Merge> {
+        progress::step(format_args!("merging origin/{base} into {}", self.branch));
+        self.git.run(&["fetch", "origin", base])?;
+        match self
+            .git
+            .run(&["merge", "--no-edit", "--ff", &format!("origin/{base}")])
+        {
+            Ok(_) => Ok(Merge::Clean),
+            Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Fail unless `origin/<base>` is fully merged into the Issue branch, e.g.
+    /// after a conflict Repair that left the merge unfinished or aborted it.
+    pub fn ensure_base_branch_merged(&self, base: &str) -> Result<()> {
+        if self.merge_in_progress()? {
+            bail!("the merge of origin/{base} is still in progress");
+        }
+        let upstream = format!("origin/{base}");
+        if !self
+            .git
+            .succeeds(&["merge-base", "--is-ancestor", &upstream, "HEAD"])?
+        {
+            bail!("{upstream} is not merged into {}", self.branch);
+        }
+        Ok(())
+    }
+
+    fn merge_in_progress(&self) -> Result<bool> {
+        self.git
+            .succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
     }
 }
 
