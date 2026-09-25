@@ -98,16 +98,17 @@ fn implement(
 const MAX_REPAIRS: usize = 3;
 
 /// The most times a Run goes round again because the Base branch moved while
-/// CI ran. Rounds without a Repair are not bounded by `MAX_REPAIRS`, so this
-/// stops a busy Base branch from keeping a Run going forever.
-const MAX_CATCH_UPS: usize = 3;
+/// CI ran, whether or not the merge that follows needs a Repair. A clean merge
+/// uses no Repair, so without this a busy Base branch could keep a Run going
+/// forever.
+const MAX_BASE_MOVES: usize = 3;
 
 /// Keep the PR mergeable and its CI green: merge the Base branch (never
 /// rebase), push, and watch CI on the head commit, starting a Repair session
 /// through `run_session` for a conflict or red CI and then going round again,
 /// since the Base branch may have moved meanwhile. Green or absent CI also
 /// goes round again if the Base branch moved while CI ran. Fails once a Repair
-/// beyond `MAX_REPAIRS`, or a catch-up beyond `MAX_CATCH_UPS`, would be needed.
+/// beyond `MAX_REPAIRS`, or a round beyond `MAX_BASE_MOVES`, would be needed.
 fn repair_loop(
     issue: &IssueUrl,
     worktree: &Worktree,
@@ -117,7 +118,7 @@ fn repair_loop(
 ) -> Result<()> {
     let branch = worktree.branch();
     let mut repairs = 0;
-    let mut catch_ups = 0;
+    let mut base_moves = 0;
     // Counts the Repair about to start, as `repair-<n>`, or fails if it would
     // be one too many.
     let mut next_repair = |cause: &str| -> Result<String> {
@@ -144,15 +145,14 @@ fn repair_loop(
                 if !worktree.base_branch_moved(base)? {
                     return Ok(());
                 }
-                if catch_ups == MAX_CATCH_UPS {
+                if base_moves == MAX_BASE_MOVES {
                     bail!(
-                        "origin/{base} kept moving while CI ran: \
-                         caught up {MAX_CATCH_UPS} times"
+                        "origin/{base} kept moving while CI ran: merged it again {MAX_BASE_MOVES} times"
                     );
                 }
-                catch_ups += 1;
+                base_moves += 1;
                 progress::step(format_args!(
-                    "origin/{base} moved while CI ran; catching up"
+                    "origin/{base} moved while CI ran; merging it again"
                 ));
             }
             Ci::Failed(failed) => {

@@ -1,6 +1,7 @@
 //! Keeping the PR mergeable: once the PR is confirmed, thirdshift merges the
 //! Base branch into the Issue branch and pushes, handing a conflicting merge to
-//! a conflict Repair session first.
+//! a conflict Repair session first. If the Base branch moves while CI runs, it
+//! merges it again, at most three times.
 
 mod support;
 
@@ -21,6 +22,7 @@ fn base_moves_on(file: &str, content: &str) -> String {
 other="$(mktemp -d)"
 git clone -q https://github.com/acme/widgets.git "$other"
 echo "{content}" > "$other/{file}"
+# -A, not {file}: a file name built by the shell may expand differently twice.
 git -C "$other" add -A
 git -C "$other" commit -q -m "Base moves on"
 git -C "$other" push -q origin main
@@ -205,7 +207,8 @@ fn fails_when_the_conflict_repair_aborts_the_merge() {
 }
 
 /// While thirdshift waits for CI on each of the next `times` new head commits,
-/// someone else pushes `file` with `content` to main.
+/// someone else pushes `file` with `content` to main. The script goes inside
+/// single quotes, so it must not contain one.
 fn base_moves_during_ci(times: usize, file: &str, content: &str) -> String {
     format!(
         "gh fake on-ci-read {times} '{}'\n",
@@ -214,16 +217,24 @@ fn base_moves_during_ci(times: usize, file: &str, content: &str) -> String {
 }
 
 #[test]
-fn merges_a_base_branch_that_moved_during_the_ci_wait() {
+fn merges_a_base_branch_that_moved_while_ci_passed() {
     let scenario = Scenario::new();
+    // Green CI on the agent's commit; the merge commit after it has none.
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
+        "{AGENT_OPENS_PR}\
+         gh fake checks \"$(git rev-parse HEAD)\" '[{{\"name\": \"test\", \"conclusion\": \"success\"}}]'\n\
+         {}",
         base_moves_during_ci(1, "other.txt", "other")
     ));
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("CI passed on"),
+        "stderr: {}",
+        result.stderr
+    );
     assert_eq!(scenario.claude_calls().len(), 1);
     assert_merged_main_into_issue_7(&scenario);
 }
@@ -270,8 +281,11 @@ fn fails_when_the_base_branch_keeps_moving_during_the_ci_wait() {
     assert!(
         result
             .stderr
-            .contains("origin/main kept moving while CI ran"),
+            .contains("origin/main kept moving while CI ran: merged it again 3 times"),
         "stderr: {}",
         result.stderr
     );
+    // Three moves merged; the fourth ends the Run.
+    let merges = scenario.origin_git(&["log", "--merges", "--format=%s", "issue-7"]);
+    assert_eq!(merges.lines().count(), 3, "merges: {merges}");
 }
