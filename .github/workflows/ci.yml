@@ -5,9 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# The runner images are pinned to the platforms thirdshift supports.
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -17,5 +18,13 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       # The tests run the binary against real git and fake gh and claude
-      # (Python scripts in tests/fakes), all present on ubuntu-latest.
+      # (Python scripts in tests/fakes), all present on the runner image.
+      - run: cargo test
+
+  test-macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test
