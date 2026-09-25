@@ -1,7 +1,7 @@
 //! Running `git` in a directory.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
 
@@ -23,11 +23,7 @@ impl Git {
     /// Run `git <args>` and return its trimmed stdout, failing with git's
     /// stderr if it exits non-zero.
     pub fn run(&self, args: &[&str]) -> Result<String> {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(&self.dir)
-            .output()
-            .with_context(|| format!("could not run git {}", args.join(" ")))?;
+        let output = self.output(args)?;
         if !output.status.success() {
             bail!(
                 "git {} failed: {}",
@@ -41,11 +37,14 @@ impl Git {
     /// Run `git <args>` and report whether it exited zero, for commands whose
     /// exit status is the answer.
     pub fn succeeds(&self, args: &[&str]) -> Result<bool> {
-        let output = Command::new("git")
+        Ok(self.output(args)?.status.success())
+    }
+
+    fn output(&self, args: &[&str]) -> Result<Output> {
+        Command::new("git")
             .args(args)
             .current_dir(&self.dir)
             .output()
-            .with_context(|| format!("could not run git {}", args.join(" ")))?;
-        Ok(output.status.success())
+            .with_context(|| format!("could not run git {}", args.join(" ")))
     }
 }

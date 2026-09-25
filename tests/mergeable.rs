@@ -53,8 +53,10 @@ fn assert_merged_main_into_issue_7(scenario: &Scenario) {
 #[test]
 fn merges_an_advanced_base_branch_without_a_repair() {
     let scenario = Scenario::new();
+    // The agent pushes issue-7 itself, so the merge can only reach origin as a
+    // fast-forward of it (origin rejects anything else).
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
+        "{AGENT_OPENS_PR}git push -q origin issue-7\n{}",
         base_moves_on("other.txt", "other")
     ));
 
@@ -171,6 +173,28 @@ fn fails_when_the_conflict_repair_leaves_the_merge_unfinished() {
         result
             .stderr
             .contains("merge of origin/main is still in progress"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn fails_when_the_conflict_repair_aborts_the_merge() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        base_moves_on("feature.txt", "base feature")
+    ));
+    scenario.agent_does_in_session(2, "git merge --abort");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    assert_eq!(result.stdout, "");
+    assert!(
+        result
+            .stderr
+            .contains("origin/main is not merged into issue-7"),
         "stderr: {}",
         result.stderr
     );

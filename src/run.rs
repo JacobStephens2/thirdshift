@@ -26,14 +26,15 @@ pub fn run(issue_url: &str) -> Result<String> {
 
     let worktree = Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?;
     let plugin = Plugin::write()?;
-    let log = session::log_path(&issue, &timestamp, "implement")?;
-    session::run(
-        worktree.path(),
-        plugin.path(),
-        &prompt::fresh(&issue, &base, &branch),
-        &log,
-    )?;
-    worktree.git().run(&["push", "origin", &branch])?;
+    // Every session runs in the worktree with the plugin loaded, logged as
+    // `kind` under the Run's timestamp.
+    let run_session = |kind: &str, prompt: &str| -> Result<()> {
+        let log = session::log_path(&issue, &timestamp, kind)?;
+        session::run(worktree.path(), plugin.path(), prompt, &log)
+    };
+
+    run_session("implement", &prompt::fresh(&issue, &base, &branch))?;
+    worktree.push()?;
 
     let pr = github::pull_request_for(&issue, &branch)?.context("no PR found")?;
     if pr.state != "OPEN" {
@@ -44,16 +45,13 @@ pub fn run(issue_url: &str) -> Result<String> {
     }
 
     // Keep the PR mergeable: merge the Base branch, never rebase.
-    if worktree.merge_base(&base)? == Merge::Conflicted {
-        let log = session::log_path(&issue, &timestamp, "repair-1")?;
-        session::run(
-            worktree.path(),
-            plugin.path(),
+    if worktree.merge_base_branch(&base)? == Merge::Conflicted {
+        run_session(
+            "repair-1",
             &prompt::conflict_repair(&issue, &base, &branch, &pr.url),
-            &log,
         )?;
-        worktree.ensure_no_merge_in_progress(&base)?;
+        worktree.ensure_base_branch_merged(&base)?;
     }
-    worktree.git().run(&["push", "origin", &branch])?;
+    worktree.push()?;
     Ok(pr.url)
 }
