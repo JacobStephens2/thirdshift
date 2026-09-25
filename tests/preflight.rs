@@ -145,14 +145,21 @@ fn uncommitted_changes_in_the_launch_directory_are_allowed_and_left_out() {
 }
 
 #[test]
-fn a_missing_git_identity_is_rejected_naming_the_missing_key() {
-    for key in ["user.name", "user.email"] {
+fn a_missing_git_identity_is_rejected_with_a_command_to_set_it() {
+    for (key, set_command) in [
+        ("user.name", r#"git config --global user.name "Your Name""#),
+        (
+            "user.email",
+            "git config --global user.email you@example.com",
+        ),
+    ] {
         let scenario = Scenario::new();
         scenario.launch_git(&["config", "--global", "--unset", key]);
 
         let result = scenario.run(&[&scenario.issue_url(7)]);
 
         scenario.assert_rejected_before_any_work(&result, &format!("git {key} is not set"));
+        scenario.assert_rejected_before_any_work(&result, set_command);
     }
 }
 

@@ -21,9 +21,15 @@ pub fn check(launch: &Git, issue: &IssueUrl) -> Result<()> {
     if !github::issue_is_open(issue)? {
         bail!("issue #{} is closed", issue.number);
     }
-    for key in ["user.name", "user.email"] {
+    for (key, example_value) in [
+        ("user.name", r#""Your Name""#),
+        ("user.email", "you@example.com"),
+    ] {
         if launch.run(&["config", "--default", "", key])?.is_empty() {
-            bail!("git {key} is not set; the agent needs it to commit");
+            bail!(
+                "git {key} is not set; the agent needs it to commit. \
+                 Set it with: git config --global {key} {example_value}"
+            );
         }
     }
     Ok(())
