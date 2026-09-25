@@ -1,10 +1,12 @@
 //! One Run: from an Issue URL to a checked PR, or to a Failed run.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::branch::{self, Selection};
+use crate::ci::{self, Ci};
 use crate::failed_run::{self, FailedRun};
 use crate::git::Git;
 use crate::github;
@@ -87,20 +89,89 @@ fn implement(
         github::mark_ready(issue, branch)?;
     }
 
-    // Keep the PR mergeable: merge the Base branch, never rebase.
-    if worktree.merge_base_branch(base)? == Merge::Conflicted {
-        progress::step(format_args!(
-            "merging origin/{base} conflicted; starting a Repair"
-        ));
-        run_session(
-            "repair-1",
-            &prompt::conflict_repair(issue, base, branch, &pr.url),
-        )?;
-        worktree.ensure_base_branch_merged(base)?;
-    }
-    worktree.push()?;
+    repair_loop(issue, worktree, base, &pr.url, &mut run_session)?;
+    check_pr_stands(issue, branch)?;
     if interrupt::requested() {
         bail!("interrupted");
     }
     Ok(pr.url)
+}
+
+/// The most Repair sessions a Run starts, conflict and CI-fix combined.
+const MAX_REPAIRS: usize = 3;
+
+/// Keep the PR mergeable and its CI green: merge the Base branch (never
+/// rebase), push, and watch CI on the head commit, starting a Repair session
+/// through `run_session` for a conflict or red CI and then going round again,
+/// since the Base branch may have moved meanwhile. Fails once a Repair beyond
+/// `MAX_REPAIRS` would be needed.
+fn repair_loop(
+    issue: &IssueUrl,
+    worktree: &Worktree,
+    base: &str,
+    pr_url: &str,
+    run_session: &mut impl FnMut(&str, &str) -> Result<()>,
+) -> Result<()> {
+    let branch = worktree.branch();
+    let mut repairs = 0;
+    // Counts the Repair about to start, as `repair-<n>`, or fails if it would
+    // be one too many.
+    let mut next_repair = |cause: &str| -> Result<String> {
+        if repairs == MAX_REPAIRS {
+            bail!("repairs exhausted: {cause}");
+        }
+        repairs += 1;
+        progress::step(format_args!(
+            "{cause}; starting Repair {repairs} of {MAX_REPAIRS}"
+        ));
+        Ok(format!("repair-{repairs}"))
+    };
+    loop {
+        if worktree.merge_base_branch(base)? == Merge::Conflicted {
+            let kind = next_repair("conflict")?;
+            run_session(&kind, &prompt::conflict_repair(issue, base, branch, pr_url))?;
+            worktree.ensure_base_branch_merged(base)?;
+            worktree.push()?;
+            continue;
+        }
+        worktree.push()?;
+        match ci::watch(issue, &worktree.head()?)? {
+            Ci::Absent | Ci::Passed => return Ok(()),
+            Ci::Failed(failed) => {
+                let kind = next_repair("CI red")?;
+                run_session(
+                    &kind,
+                    &prompt::ci_fix_repair(issue, base, branch, pr_url, &failed),
+                )?;
+                worktree.push()?;
+            }
+        }
+    }
+}
+
+/// Fail unless the PR for `branch` is still open, ready for review, and
+/// mergeable, waiting up to the grace period for GitHub to work out the last.
+fn check_pr_stands(issue: &IssueUrl, branch: &str) -> Result<()> {
+    progress::step("checking the PR is open, ready and mergeable");
+    let pr = github::pull_request_for(issue, branch)?.context("the PR is gone")?;
+    if !pr.is_open() {
+        bail!("PR {} is {}, not open", pr.url, pr.state);
+    }
+    if pr.is_draft {
+        bail!("PR {} is a draft", pr.url);
+    }
+    let deadline = Instant::now() + ci::grace_period();
+    loop {
+        match github::is_mergeable(issue, branch)? {
+            Some(true) => return Ok(()),
+            Some(false) => bail!("PR {} is not mergeable", pr.url),
+            None if Instant::now() >= deadline => {
+                bail!(
+                    "GitHub has not worked out whether PR {} is mergeable",
+                    pr.url
+                )
+            }
+            None => ci::sleep(ci::poll_interval())?,
+        }
+    }
 }

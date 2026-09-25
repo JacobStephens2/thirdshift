@@ -1,5 +1,6 @@
 //! The prompts agent sessions are started with.
 
+use crate::github::Check;
 use crate::issue::IssueUrl;
 
 /// The fresh prompt, for a run that starts a new Issue branch.
@@ -58,6 +59,36 @@ pub fn conflict_repair(issue: &IssueUrl, base: &str, branch: &str, pr_url: &str)
          {branch} implements {url}; its pull request is {pr_url}.\n\
          \n\
          Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n",
+        url = issue.url,
+    )
+}
+
+/// The CI-fix Repair prompt, for red CI on the PR's head commit, listing
+/// each check in `failed`.
+pub fn ci_fix_repair(
+    issue: &IssueUrl,
+    base: &str,
+    branch: &str,
+    pr_url: &str,
+    failed: &[Check],
+) -> String {
+    let checks: String = failed
+        .iter()
+        .map(|check| match &check.url {
+            Some(url) => format!("- {}: {url}\n", check.name),
+            None => format!("- {}\n", check.name),
+        })
+        .collect();
+    format!(
+        "CI failed on pull request {pr_url} (branch {branch}, implementing {url}).\n\
+         \n\
+         Failed checks:\n\
+         {checks}\
+         \n\
+         Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
+         Run the affected checks locally, commit, and push {branch}.\n\
+         \n\
+         If a failure is not caused by this branch (it is flaky, or also fails on {base}), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n",
         url = issue.url,
     )
 }

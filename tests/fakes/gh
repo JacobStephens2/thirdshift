@@ -5,7 +5,20 @@ State lives in the JSON file named by $FAKE_GH_STATE:
 
     {"repo": "owner/repo",
      "issues": {"<number>": "OPEN" | "CLOSED"},
-     "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body"}]}
+     "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
+              "mergeable"?}],
+     "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
+     "statuses": {"<sha>": [{"context", "state", "url"}]}}
+
+A check run reports as in progress for its first `pending_polls` reads, then as
+completed with its `conclusion`.
+
+Tests and fake agents change that state with `gh fake …` (not a real gh
+command):
+
+    gh fake checks <sha> '<JSON list>'      set the check runs on <sha>
+    gh fake statuses <sha> '<JSON list>'    set the commit statuses on <sha>
+    gh fake pr <head> <field> '<JSON>'      set a field of <head>'s newest PR
 
 Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
 
@@ -15,6 +28,7 @@ else exits 2 so an unexpected call fails loudly.
 
 import json
 import os
+import re
 import sys
 
 
@@ -111,6 +125,7 @@ def pr_fields(pr):
         "isDraft": pr["isDraft"],
         "number": pr["number"],
         "isCrossRepository": pr.get("isCrossRepository", False),
+        "mergeable": pr.get("mergeable", "MERGEABLE"),
     }
 
 
@@ -153,6 +168,50 @@ def issue_view(state, positional, flags):
     print(json.dumps({key: fields[key] for key in wanted}))
 
 
+def api(state, positional):
+    """The two commit endpoints thirdshift reads CI from."""
+    match = re.fullmatch(
+        r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/(check-runs|status)(\?.*)?",
+        positional[0],
+    )
+    if not match:
+        die(f"fake gh: unsupported api path {positional[0]}", 2)
+    repo, sha, endpoint, _ = match.groups()
+    check_repo(state, {"repo": repo})
+    if endpoint == "check-runs":
+        runs = []
+        for check in state.get("checks", {}).get(sha, []):
+            pending = check.get("pending_polls", 0) > 0
+            if pending:
+                check["pending_polls"] -= 1
+            runs.append(
+                {
+                    "name": check["name"],
+                    "status": "in_progress" if pending else "completed",
+                    "conclusion": None if pending else check["conclusion"],
+                    "details_url": check.get("url"),
+                }
+            )
+        save(state)
+        print(json.dumps({"total_count": len(runs), "check_runs": runs}))
+    else:
+        statuses = [
+            {"context": s["context"], "state": s["state"], "target_url": s.get("url")}
+            for s in state.get("statuses", {}).get(sha, [])
+        ]
+        print(json.dumps({"sha": sha, "statuses": statuses}))
+
+
+def fake(state, args):
+    if args[0] in ("checks", "statuses"):
+        state.setdefault(args[0], {})[args[1]] = json.loads(args[2])
+    elif args[0] == "pr":
+        [pr for pr in state["prs"] if pr["head"] == args[1]][-1][args[2]] = json.loads(args[3])
+    else:
+        die(f"fake gh: unsupported fake command {args}", 2)
+    save(state)
+
+
 def main():
     args = sys.argv[1:]
     record(args)
@@ -177,6 +236,11 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         issue_view(state, positional, flags)
+    elif args[0] == "api":
+        positional, flags = parse(args[1:])
+        api(state, positional)
+    elif args[0] == "fake":
+        fake(state, args[1:])
     else:
         die(f"fake gh: unsupported command: {args}", 2)
 

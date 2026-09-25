@@ -1,4 +1,5 @@
 mod branch;
+mod ci;
 mod failed_run;
 mod git;
 mod github;

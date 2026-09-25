@@ -142,6 +142,92 @@ pub fn convert_to_draft(issue: &IssueUrl, branch: &str) -> Result<()> {
     ])
 }
 
+/// Whether the pull request whose head is `branch` can be merged into its
+/// base: `None` while GitHub is still working it out.
+pub fn is_mergeable(issue: &IssueUrl, branch: &str) -> Result<Option<bool>> {
+    let json = gh_json(&[
+        "pr",
+        "view",
+        branch,
+        "--repo",
+        &issue.repo_slug(),
+        "--json",
+        "mergeable",
+    ])?;
+    match json["mergeable"].as_str() {
+        Some("MERGEABLE") => Ok(Some(true)),
+        Some("CONFLICTING") => Ok(Some(false)),
+        Some("UNKNOWN") => Ok(None),
+        other => bail!("gh output has an unknown mergeable state {other:?}"),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckState {
+    Pending,
+    Passed,
+    Failed,
+}
+
+/// A check run or a commit status.
+pub struct Check {
+    pub name: String,
+    pub state: CheckState,
+    pub url: Option<String>,
+}
+
+/// Every check run and commit status on commit `sha`.
+pub fn checks_on(issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
+    let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
+    let runs = gh_json(&["api", &format!("{commit}/check-runs?per_page=100")])?;
+    let statuses = gh_json(&["api", &format!("{commit}/status?per_page=100")])?;
+    let url = |value: &Value| {
+        value
+            .as_str()
+            .filter(|url| !url.is_empty())
+            .map(String::from)
+    };
+
+    let mut checks = Vec::new();
+    for run in runs["check_runs"]
+        .as_array()
+        .context("gh api returned no check_runs")?
+    {
+        let state = match (run["status"].as_str(), run["conclusion"].as_str()) {
+            (Some("completed"), Some("success" | "neutral" | "skipped")) => CheckState::Passed,
+            (Some("completed"), _) => CheckState::Failed,
+            _ => CheckState::Pending,
+        };
+        checks.push(Check {
+            name: run["name"]
+                .as_str()
+                .context("a check run has no name")?
+                .to_string(),
+            state,
+            url: url(&run["details_url"]).or_else(|| url(&run["html_url"])),
+        });
+    }
+    for status in statuses["statuses"]
+        .as_array()
+        .context("gh api returned no statuses")?
+    {
+        let state = match status["state"].as_str() {
+            Some("success") => CheckState::Passed,
+            Some("pending") => CheckState::Pending,
+            _ => CheckState::Failed,
+        };
+        checks.push(Check {
+            name: status["context"]
+                .as_str()
+                .context("a commit status has no context")?
+                .to_string(),
+            state,
+            url: url(&status["target_url"]),
+        });
+    }
+    Ok(checks)
+}
+
 /// Run `gh <args>`, failing with its stderr if it exits non-zero.
 fn gh(args: &[&str]) -> Result<()> {
     let output = Command::new("gh")

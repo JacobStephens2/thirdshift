@@ -172,7 +172,10 @@ impl Scenario {
             .env("FAKE_GH_STATE", self.path("gh-state.json"))
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
-            .env("FAKE_GH_RECORD", self.path("gh-calls.json"));
+            .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
+            // Seconds of waiting for CI become milliseconds.
+            .env("THIRDSHIFT_CI_GRACE_MS", "300")
+            .env("THIRDSHIFT_POLL_MS", "10");
         command
     }
 
