@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Fake `gh` for the thirdshift test harness.
+
+State lives in the JSON file named by $FAKE_GH_STATE:
+
+    {"repo": "owner/repo",
+     "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body"}]}
+
+Only the subcommands thirdshift and the fake agents use are supported. Anything
+else exits 2 so an unexpected call fails loudly.
+"""
+
+import json
+import os
+import sys
+
+
+def load():
+    with open(os.environ["FAKE_GH_STATE"]) as f:
+        return json.load(f)
+
+
+def save(state):
+    with open(os.environ["FAKE_GH_STATE"], "w") as f:
+        json.dump(state, f, indent=2)
+
+
+BOOLEAN_FLAGS = {"draft"}
+
+
+def parse(args):
+    """Split args into positionals and a dict of --flag values."""
+    positional, flags = [], {}
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("-"):
+            name = arg.lstrip("-")
+            if name in BOOLEAN_FLAGS:
+                value = True
+            elif "=" in name:
+                name, value = name.split("=", 1)
+            else:
+                i += 1
+                value = args[i]
+            flags[name] = value
+        else:
+            positional.append(arg)
+        i += 1
+    return positional, flags
+
+
+def check_repo(state, flags):
+    repo = flags.get("R") or flags.get("repo")
+    if repo is not None and repo.lower() != state["repo"].lower():
+        die(f"fake gh: unknown repo {repo}")
+
+
+def die(message, code=1):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def pr_create(state, flags):
+    number = len(state["prs"]) + 1
+    pr = {
+        "number": number,
+        "url": f"https://github.com/{state['repo']}/pull/{number}",
+        "head": flags["head"],
+        "base": flags["base"],
+        "state": "OPEN",
+        "isDraft": "draft" in flags,
+        "title": flags.get("title", ""),
+        "body": flags.get("body", ""),
+    }
+    state["prs"].append(pr)
+    save(state)
+    print(pr["url"])
+
+
+def pr_view(state, positional, flags):
+    head = positional[0]
+    matches = [pr for pr in state["prs"] if pr["head"] == head]
+    if not matches:
+        die(f'no pull requests found for branch "{head}"')
+    pr = matches[-1]
+    fields = {
+        "url": pr["url"],
+        "state": pr["state"],
+        "baseRefName": pr["base"],
+        "isDraft": pr["isDraft"],
+        "number": pr["number"],
+    }
+    wanted = flags["json"].split(",")
+    print(json.dumps({key: fields[key] for key in wanted}))
+
+
+def main():
+    args = sys.argv[1:]
+    state = load()
+    if args[:2] == ["pr", "create"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        pr_create(state, flags)
+    elif args[:2] == ["pr", "view"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        pr_view(state, positional, flags)
+    else:
+        die(f"fake gh: unsupported command: {args}", 2)
+
+
+main()
