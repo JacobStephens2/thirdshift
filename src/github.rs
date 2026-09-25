@@ -26,6 +26,13 @@ pub struct PullRequest {
     pub url: String,
     pub state: String,
     pub base: String,
+    pub is_draft: bool,
+}
+
+impl PullRequest {
+    pub fn is_open(&self) -> bool {
+        self.state == "OPEN"
+    }
 }
 
 /// The pull request whose head is `branch`, if `gh` finds one.
@@ -37,7 +44,7 @@ pub fn pull_request_for(issue: &IssueUrl, branch: &str) -> Result<Option<PullReq
         "--repo",
         &issue.repo_slug(),
         "--json",
-        "url,state,baseRefName",
+        "url,state,baseRefName,isDraft",
     ])?;
     let Some(json) = json else {
         return Ok(None);
@@ -46,7 +53,43 @@ pub fn pull_request_for(issue: &IssueUrl, branch: &str) -> Result<Option<PullReq
         url: string_field(&json, "url")?,
         state: string_field(&json, "state")?,
         base: string_field(&json, "baseRefName")?,
+        is_draft: json["isDraft"]
+            .as_bool()
+            .context("gh output has no isDraft")?,
     }))
+}
+
+/// Mark the pull request whose head is `branch` ready for review.
+pub fn mark_ready(issue: &IssueUrl, branch: &str) -> Result<()> {
+    gh(&["pr", "ready", branch, "--repo", &issue.repo_slug()])
+}
+
+/// Convert the pull request whose head is `branch` back to a draft.
+pub fn convert_to_draft(issue: &IssueUrl, branch: &str) -> Result<()> {
+    gh(&[
+        "pr",
+        "ready",
+        branch,
+        "--undo",
+        "--repo",
+        &issue.repo_slug(),
+    ])
+}
+
+/// Run `gh <args>`, failing with its stderr if it exits non-zero.
+fn gh(args: &[&str]) -> Result<()> {
+    let output = Command::new("gh")
+        .args(args)
+        .output()
+        .context("could not run gh")?;
+    if !output.status.success() {
+        bail!(
+            "gh {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 /// Run `gh <args>` and parse its JSON output, or `None` if `gh` found no

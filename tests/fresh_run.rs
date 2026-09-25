@@ -189,14 +189,20 @@ fn leaves_no_worktree_local_issue_branch_or_temp_directory_behind() {
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(scenario.entries("work"), vec!["widgets"]);
-    assert_eq!(
-        scenario
-            .launch_git(&["worktree", "list", "--porcelain"])
-            .matches("worktree ")
-            .count(),
-        1
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn marks_a_draft_pr_ready_and_succeeds() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        "echo feature > feature.txt\ngit add feature.txt\ngit commit -q -m 'Add feature'\n\
+         gh pr create --draft --base main --head issue-7 --title 'Add feature' --body 'Closes #7'\n",
     );
-    assert_eq!(scenario.launch_git(&["branch", "--list", "issue-7"]), "");
-    assert_eq!(scenario.entries("tmp"), Vec::<String>::new());
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
 }
