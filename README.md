@@ -38,6 +38,24 @@ cargo install --path .
 
 Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md)).
 
+### Updating
+
+To build a new binary from the latest `main`, pull and reinstall:
+
+```sh
+git checkout main && git pull
+cargo install --path .
+```
+
+`cargo install` puts the binary in `~/.cargo/bin`. To install it system-wide instead, build it and copy it into place:
+
+```sh
+cargo build --release
+sudo install -m 755 target/release/thirdshift /usr/local/bin/thirdshift
+```
+
+Keep a single copy: `~/.cargo/bin` usually comes before `/usr/local/bin` on `PATH`, so with a copy in each you can end up running a stale one without noticing. `type -a thirdshift` lists every copy on your `PATH`.
+
 ## Prerequisites
 
 The Linux user that runs thirdshift needs:
