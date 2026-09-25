@@ -1,5 +1,5 @@
-//! SIGINT, SIGTERM and SIGHUP: recorded rather than fatal, so an interrupted Run can
-//! still go through the Failed run path and clean up.
+//! SIGINT, SIGTERM and SIGHUP: recorded rather than fatal, so an interrupted
+//! Run can still go through the Failed run path and clean up.
 
 use std::sync::Arc;
 use std::sync::OnceLock;
