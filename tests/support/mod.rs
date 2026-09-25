@@ -4,13 +4,16 @@
 //! Layout of a scenario's temp root:
 //!
 //! ```text
-//! origin.git/        bare repo standing in for github.com/<owner>/<repo>
+//! origin.git/        bare repo standing in for github.com/<owner>/<repo>;
+//!                    it rejects non-fast-forward pushes, so no rebase or
+//!                    force-push can reach it
 //! home/              $HOME: .gitconfig with identity and the insteadOf rule
 //! bin/               fake gh and claude, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
 //! work/<repo>/       the launch clone, origin https://github.com/<owner>/<repo>.git
 //! gh-state.json      fake GitHub state
 //! claude-script.sh   what the fake agent does this test
+//! claude-script.sh.<n>  what it does in the n-th session instead, if present
 //! claude-calls.json  what the fake agent was asked to do
 //! ```
 
@@ -59,6 +62,10 @@ impl Scenario {
             &scenario.path(""),
             &["init", "--bare", "--initial-branch=main", "origin.git"],
         );
+        git(
+            &scenario.origin_dir(),
+            &["config", "receive.denyNonFastForwards", "true"],
+        );
         let seed = scenario.path("seed");
         git(
             &scenario.path(""),
@@ -101,6 +108,12 @@ impl Scenario {
     /// working directory.
     pub fn agent_does(&self, script: &str) {
         fs::write(self.path("claude-script.sh"), script).unwrap();
+    }
+
+    /// Script the fake agent's `session`-th session (1-based) differently
+    /// from the rest.
+    pub fn agent_does_in_session(&self, session: usize, script: &str) {
+        fs::write(self.path(&format!("claude-script.sh.{session}")), script).unwrap();
     }
 
     pub fn run(&self, args: &[&str]) -> RunResult {
@@ -173,6 +186,11 @@ impl Scenario {
             &self.origin_dir(),
             &["show", &format!("refs/heads/{branch}:{file}")],
         )
+    }
+
+    /// Output of a git command in the origin repo.
+    pub fn origin_git(&self, args: &[&str]) -> String {
+        git(&self.origin_dir(), args)
     }
 
     /// Output of a git command in the launch clone.

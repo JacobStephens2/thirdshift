@@ -9,7 +9,7 @@ use crate::plugin::Plugin;
 use crate::preflight;
 use crate::prompt;
 use crate::session;
-use crate::worktree::Worktree;
+use crate::worktree::{Merge, Worktree};
 
 /// Take `issue` to a PR and return the PR's URL. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns.
@@ -22,14 +22,15 @@ pub fn run(issue: &IssueUrl) -> Result<String> {
 
     let worktree = Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?;
     let plugin = Plugin::write()?;
-    let log = session::log_path(issue, &timestamp, "implement")?;
-    session::run(
-        worktree.path(),
-        plugin.path(),
-        &prompt::fresh(issue, &base, &branch),
-        &log,
-    )?;
-    worktree.git().run(&["push", "origin", &branch])?;
+    // Every session runs in the worktree with the plugin loaded, logged as
+    // `kind` under the Run's timestamp.
+    let run_session = |kind: &str, prompt: &str| -> Result<()> {
+        let log = session::log_path(issue, &timestamp, kind)?;
+        session::run(worktree.path(), plugin.path(), prompt, &log)
+    };
+
+    run_session("implement", &prompt::fresh(issue, &base, &branch))?;
+    worktree.push()?;
 
     let pr = github::pull_request_for(issue, &branch)?.context("no PR found")?;
     if pr.state != "OPEN" {
@@ -38,5 +39,15 @@ pub fn run(issue: &IssueUrl) -> Result<String> {
     if pr.base != base {
         bail!("PR targets {}, not {base}", pr.base);
     }
+
+    // Keep the PR mergeable: merge the Base branch, never rebase.
+    if worktree.merge_base_branch(&base)? == Merge::Conflicted {
+        run_session(
+            "repair-1",
+            &prompt::conflict_repair(issue, &base, &branch, &pr.url),
+        )?;
+        worktree.ensure_base_branch_merged(&base)?;
+    }
+    worktree.push()?;
     Ok(pr.url)
 }
