@@ -3,9 +3,18 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::git::Git;
+
+/// How merging the Base branch into the Issue branch went.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Merge {
+    /// Merged, or nothing to merge.
+    Clean,
+    /// Conflicted; the merge is left in progress for a conflict Repair.
+    Conflicted,
+}
 
 pub struct Worktree {
     launch: Git,
@@ -46,6 +55,34 @@ impl Worktree {
 
     pub fn git(&self) -> &Git {
         &self.git
+    }
+
+    /// Fetch `origin/<base>` and merge it into the Issue branch: a merge,
+    /// never a rebase, so pushing it is always a fast-forward.
+    pub fn merge_base(&self, base: &str) -> Result<Merge> {
+        self.git.run(&["fetch", "origin", base])?;
+        match self
+            .git
+            .run(&["merge", "--no-edit", &format!("origin/{base}")])
+        {
+            Ok(_) => Ok(Merge::Clean),
+            Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Fail if a merge is still in progress, e.g. one a conflict Repair
+    /// didn't finish.
+    pub fn ensure_no_merge_in_progress(&self, base: &str) -> Result<()> {
+        if self.merge_in_progress()? {
+            bail!("the merge of origin/{base} is still in progress");
+        }
+        Ok(())
+    }
+
+    fn merge_in_progress(&self) -> Result<bool> {
+        self.git
+            .succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
     }
 }
 

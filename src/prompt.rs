@@ -15,3 +15,17 @@ pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
         number = issue.number,
     )
 }
+
+/// The conflict Repair prompt, for a merge of the Base branch left in progress
+/// with conflicts.
+pub fn conflict_repair(issue: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> String {
+    format!(
+        "/thirdshift:resolving-merge-conflicts\n\
+         \n\
+         A merge of origin/{base} into {branch} is in progress in this worktree and has conflicts.\n\
+         {branch} implements {url}; its pull request is {pr_url}.\n\
+         \n\
+         Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n",
+        url = issue.url,
+    )
+}

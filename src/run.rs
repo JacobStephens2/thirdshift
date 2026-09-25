@@ -8,7 +8,7 @@ use crate::issue::IssueUrl;
 use crate::plugin::Plugin;
 use crate::prompt;
 use crate::session;
-use crate::worktree::Worktree;
+use crate::worktree::{Merge, Worktree};
 
 /// Take `issue_url` to a PR and return the PR's URL. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns.
@@ -42,5 +42,18 @@ pub fn run(issue_url: &str) -> Result<String> {
     if pr.base != base {
         bail!("PR targets {}, not {base}", pr.base);
     }
+
+    // Keep the PR mergeable: merge the Base branch, never rebase.
+    if worktree.merge_base(&base)? == Merge::Conflicted {
+        let log = session::log_path(&issue, &timestamp, "repair-1")?;
+        session::run(
+            worktree.path(),
+            plugin.path(),
+            &prompt::conflict_repair(&issue, &base, &branch, &pr.url),
+            &log,
+        )?;
+        worktree.ensure_no_merge_in_progress(&base)?;
+    }
+    worktree.git().run(&["push", "origin", &branch])?;
     Ok(pr.url)
 }
