@@ -4,6 +4,7 @@ mod github;
 mod issue;
 mod plugin;
 mod preflight;
+mod progress;
 mod prompt;
 mod run;
 mod session;
@@ -33,7 +34,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("thirdshift: {error:#}");
+            progress::step(format_args!("{error:#}"));
             ExitCode::FAILURE
         }
     }
