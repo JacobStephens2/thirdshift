@@ -18,19 +18,35 @@ use std::process::ExitCode;
 
 use issue::IssueUrl;
 
-const USAGE: &str = "usage: thirdshift <Issue URL>";
+const HELP: &str = "\
+thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
+
+usage: thirdshift <Issue URL>   Run the factory on the issue, from the clone on the Base branch
+       thirdshift update        Update thirdshift to the latest release
+       thirdshift version       Print thirdshift's version
+       thirdshift help          Print this help
+";
 
 fn main() -> ExitCode {
-    let Some(arg) = std::env::args().nth(1) else {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
-    };
-    let issue = match IssueUrl::parse(&arg) {
-        Ok(issue) => issue,
-        Err(error) => {
-            eprintln!("thirdshift: {error:#}\n{USAGE}");
-            return ExitCode::from(2);
+    let arg = std::env::args().nth(1);
+    let issue = match arg.as_deref() {
+        Some("help" | "--help" | "-h") => {
+            print!("{HELP}");
+            return ExitCode::SUCCESS;
         }
+        Some("version" | "--version" | "-V") => {
+            println!("thirdshift {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        Some("update") => {
+            progress::step("update is not yet available");
+            return ExitCode::FAILURE;
+        }
+        Some(arg) => match IssueUrl::parse(arg) {
+            Ok(issue) => issue,
+            Err(error) => return argument_error(format_args!("{error:#}")),
+        },
+        None => return argument_error(format_args!("missing Issue URL")),
     };
     if let Err(error) = interrupt::install() {
         progress::step(format_args!("{error:#}"));
@@ -54,4 +70,11 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// An argument thirdshift can't use: the error, then the help, on stderr.
+fn argument_error(error: std::fmt::Arguments) -> ExitCode {
+    progress::step(error);
+    eprint!("\n{HELP}");
+    ExitCode::from(2)
 }
