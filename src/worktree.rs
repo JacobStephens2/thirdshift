@@ -137,6 +137,16 @@ impl Worktree {
         Ok(())
     }
 
+    /// Fetch `origin/<base>` and say whether it has commits the Issue branch
+    /// has not merged yet.
+    pub fn base_branch_moved(&self, base: &str) -> Result<bool> {
+        self.git.run(&["fetch", "origin", base])?;
+        let upstream = format!("origin/{base}");
+        Ok(!self
+            .git
+            .succeeds(&["merge-base", "--is-ancestor", &upstream, "HEAD"])?)
+    }
+
     /// Whether a merge is in progress in the worktree.
     pub fn merge_in_progress(&self) -> Result<bool> {
         self.git
