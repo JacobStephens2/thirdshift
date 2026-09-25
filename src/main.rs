@@ -54,6 +54,8 @@ fn main() -> ExitCode {
     }
     match run::run(&issue) {
         Ok(pr_url) => {
+            // Also on stderr, so the outcome shows even when stdout is captured.
+            progress::step(format_args!("PR {pr_url} is ready for review"));
             println!("{pr_url}");
             ExitCode::SUCCESS
         }
