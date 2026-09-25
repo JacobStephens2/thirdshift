@@ -34,6 +34,9 @@ pub const REPO: &str = "widgets";
 
 pub struct Scenario {
     root: TempDir,
+    /// `root`'s path with symlinks resolved, as git reports it: on macOS the
+    /// temp directory is under `/var`, a symlink to `/private/var`.
+    dir: PathBuf,
 }
 
 pub struct RunResult {
@@ -57,7 +60,8 @@ impl Scenario {
     /// checked out, and an open issue #7.
     pub fn new() -> Self {
         let root = TempDir::new().unwrap();
-        let scenario = Scenario { root };
+        let dir = root.path().canonicalize().unwrap();
+        let scenario = Scenario { root, dir };
         for dir in ["home", "bin", "tmp", "work"] {
             fs::create_dir_all(scenario.path(dir)).unwrap();
         }
@@ -97,7 +101,7 @@ impl Scenario {
     }
 
     pub fn path(&self, relative: &str) -> PathBuf {
-        self.root.path().join(relative)
+        self.dir.join(relative)
     }
 
     pub fn launch_dir(&self) -> PathBuf {
