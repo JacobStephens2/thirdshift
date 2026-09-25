@@ -21,7 +21,7 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 3. Creates a git worktree next to your clone, named `<repo>-<Issue branch>`, so your own checkout is never touched.
 4. Runs a headless Claude Code session in that worktree with the **Factory skills** loaded. The agent implements the issue, reviews its work against the Base branch, addresses the **Standards findings** and **Spec findings** it agrees with, and opens a ready-for-review pull request that lists every **Unaddressed finding** with a reason and closes the issue.
 5. Takes over deterministically: pushes the Issue branch, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
-6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 3 per Run.
+6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 3 per Run. If the Base branch moves while CI runs, it merges it again and goes round, at most 3 times per Run.
 7. Cleans up: removes the worktree, the local Issue branch and the temporary plugin directory, whether the Run succeeded or not.
 
 ### Status
@@ -136,7 +136,7 @@ A Run is not idempotent: re-running builds on whatever is already on the branch,
 
 ## Failed runs
 
-A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI. Causes include the session exiting non-zero, no pull request or one with the wrong base, and running out of Repairs.
+A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, and a Base branch that keeps moving while CI runs.
 
 A Failed run:
 
