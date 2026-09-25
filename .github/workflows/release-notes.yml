@@ -1,0 +1,27 @@
+# Sets the GitHub Release body to notes generated from the merged pull
+# requests, followed by dist's install instructions. dist's release.yml calls
+# this once the Release is published. There is no CHANGELOG file.
+name: Release notes
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  release-notes:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+      INSTALL_NOTES: ${{ fromJson(inputs.plan).announcement_github_body }}
+    steps:
+      # Builds the body from the plan rather than the current body, so a
+      # re-run doesn't repeat the notes.
+      - run: |
+          gh api "repos/$REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body > notes.md
+          printf '\n%s\n' "$INSTALL_NOTES" >> notes.md
+          gh release edit "$TAG" --repo "$REPO" --notes-file notes.md

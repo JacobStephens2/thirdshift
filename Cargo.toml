@@ -3,6 +3,7 @@ name = "thirdshift"
 version = "0.1.0"
 edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
+repository = "https://github.com/JacobStephens2/thirdshift"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -12,3 +13,8 @@ libc = "0.2.189"
 serde_json = "1.0.151"
 signal-hook = "0.4.4"
 tempfile = "3.27.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

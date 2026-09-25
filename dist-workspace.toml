@@ -1,0 +1,29 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'. Change it here, then run `dist generate` to regenerate
+# .github/workflows/release.yml; never edit that file by hand.
+[dist]
+cargo-dist-version = "0.33.0"
+ci = "github"
+targets = ["x86_64-unknown-linux-musl", "aarch64-apple-darwin"]
+installers = ["shell"]
+install-path = "~/.local/bin"
+# Only the binaries and the installer are published.
+source-tarball = false
+# The installer still writes the install receipt that `thirdshift update`
+# reads; the updater is built into the binary, not shipped beside it.
+install-updater = false
+# Build on every pull request without publishing. The slow Rocky and WSL
+# checks in release-smoke.yml decide for themselves whether to run.
+pr-run-mode = "upload"
+# Runs after the builds; the GitHub Release is only created if it passes.
+global-artifacts-jobs = ["./release-smoke"]
+# Replaces the Release body with notes generated from the merged pull requests.
+post-announce-jobs = ["./release-notes"]
+
+# The runner images are pinned to the platforms thirdshift supports, as in ci.yml.
+[dist.github-custom-runners]
+global = "ubuntu-24.04"
+x86_64-unknown-linux-musl = "ubuntu-24.04"
+aarch64-apple-darwin = "macos-26"
