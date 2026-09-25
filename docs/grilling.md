@@ -60,7 +60,7 @@ Create a pull request using /pr and set it to ready for review.
 
 6 - The work tree location should be put in a sibling directory and the branch name should use the format issue-<n>. Is the br base branch the branch that is checked out in the directory in which the program command will be written. If so, then yes, I want to create off the base branch. The pull request target should be the base branch, assuming base branch is how I just described it. And yes, the agent should push. After the run, the worktree should be deleted. 
 
-7 - I created a jacob user which I'll switch to in order to run the program. I'm curious though, will Claude run in auto mode as root? I'm okay with giving the agent full root access to the server, for example, if or given that the Jacob user will have passwordless sudo. So I want the agent to use the permissions that the user, the Linux user which ran the command has. 
+7 - I created a jacob user which I'll switch to in order to run the program. I'm curious though, will Claude run in auto mode as root? I want the agent to use the permissions that the user, the Linux user which ran the command has. 
 
 8 - Drop the dot txt file. Keep the transcript log and yes, print the URL checked through gh in a deterministic fashion. 
 
