@@ -37,4 +37,14 @@ impl Git {
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
+
+    /// Run `git <args>` for its exit status alone: whether it succeeded.
+    pub fn succeeds(&self, args: &[&str]) -> Result<bool> {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&self.dir)
+            .output()
+            .with_context(|| format!("could not run git {}", args.join(" ")))?;
+        Ok(output.status.success())
+    }
 }

@@ -44,6 +44,10 @@ impl Worktree {
         self.git.dir()
     }
 
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
     pub fn git(&self) -> &Git {
         &self.git
     }

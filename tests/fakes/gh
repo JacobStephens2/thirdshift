@@ -25,7 +25,7 @@ def save(state):
         json.dump(state, f, indent=2)
 
 
-BOOLEAN_FLAGS = {"draft"}
+BOOLEAN_FLAGS = {"draft", "undo"}
 
 
 def parse(args):
@@ -95,6 +95,18 @@ def pr_view(state, positional, flags):
     print(json.dumps({key: fields[key] for key in wanted}))
 
 
+def pr_ready(state, positional, flags):
+    head = positional[0]
+    matches = [pr for pr in state["prs"] if pr["head"] == head]
+    if not matches:
+        die(f'no pull requests found for branch "{head}"')
+    pr = matches[-1]
+    if pr["state"] != "OPEN":
+        die(f"pull request #{pr['number']} is not open")
+    pr["isDraft"] = "undo" in flags
+    save(state)
+
+
 def main():
     args = sys.argv[1:]
     state = load()
@@ -106,6 +118,10 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         pr_view(state, positional, flags)
+    elif args[:2] == ["pr", "ready"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        pr_ready(state, positional, flags)
     else:
         die(f"fake gh: unsupported command: {args}", 2)
 

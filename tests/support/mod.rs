@@ -19,7 +19,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -35,6 +36,16 @@ pub struct RunResult {
     pub stdout: String,
     pub stderr: String,
     pub code: Option<i32>,
+}
+
+impl From<Output> for RunResult {
+    fn from(output: Output) -> Self {
+        RunResult {
+            stdout: String::from_utf8(output.stdout).unwrap(),
+            stderr: String::from_utf8(output.stderr).unwrap(),
+            code: output.status.code(),
+        }
+    }
 }
 
 impl Scenario {
@@ -100,12 +111,39 @@ impl Scenario {
     }
 
     pub fn run(&self, args: &[&str]) -> RunResult {
+        self.command(args).output().unwrap().into()
+    }
+
+    /// Run thirdshift and send it `signal` (e.g. `"INT"`) once the fake agent
+    /// has touched the file `started` in the scenario root.
+    pub fn run_and_signal(&self, args: &[&str], started: &str, signal: &str) -> RunResult {
+        let child = self
+            .command(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.path(started).exists() {
+            assert!(Instant::now() < deadline, "the agent never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let status = Command::new("kill")
+            .args([&format!("-{signal}"), &child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        child.wait_with_output().unwrap().into()
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
         let path = format!(
             "{}:{}",
             self.path("bin").display(),
             std::env::var("PATH").unwrap()
         );
-        let output: Output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
             .args(args)
             .current_dir(self.launch_dir())
             .env_clear()
@@ -115,14 +153,8 @@ impl Scenario {
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("FAKE_GH_STATE", self.path("gh-state.json"))
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
-            .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
-            .output()
-            .unwrap();
-        RunResult {
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-            code: output.status.code(),
-        }
+            .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"));
+        command
     }
 
     pub fn gh_state(&self) -> Value {
@@ -162,6 +194,45 @@ impl Scenario {
                 .map(String::from)
                 .collect()
         })
+    }
+
+    /// The contents of `file` on `branch` in the origin repo, or `None` if
+    /// either doesn't exist there.
+    pub fn origin_file(&self, branch: &str, file: &str) -> Option<String> {
+        let output = Command::new("git")
+            .args(["show", &format!("refs/heads/{branch}:{file}")])
+            .current_dir(self.origin_dir())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", self.path("home"))
+            .output()
+            .unwrap();
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8(output.stdout).unwrap())
+    }
+
+    /// Output of a git command in the origin repo, panicking on failure.
+    pub fn origin_git(&self, args: &[&str]) -> String {
+        git(&self.origin_dir(), args)
+    }
+
+    /// Create `branch` on origin, pointing at `main`.
+    pub fn origin_has_branch(&self, branch: &str) {
+        self.origin_git(&["branch", branch, "main"]);
+    }
+
+    /// Assert the Run left no worktree, local `branch` or temp directory.
+    pub fn assert_cleaned_up(&self, branch: &str) {
+        assert_eq!(self.entries("work"), vec![REPO]);
+        assert_eq!(
+            self.launch_git(&["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            1
+        );
+        assert_eq!(self.launch_git(&["branch", "--list", branch]), "");
+        assert_eq!(self.entries("tmp"), Vec::<String>::new());
     }
 
     /// Output of a git command in the launch clone.
