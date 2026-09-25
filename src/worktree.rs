@@ -17,6 +17,38 @@ impl Worktree {
     /// Create `branch` fresh from `origin/<base>` in a new worktree next to the
     /// launch repository's root, named `<repo>-<branch>`.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
+        launch.run(&["fetch", "origin", base])?;
+        Self::add(
+            launch,
+            repo,
+            branch,
+            &["-b", branch],
+            &format!("origin/{base}"),
+        )
+    }
+
+    /// Check out the existing `branch` from origin in a new worktree next to
+    /// the launch repository's root, named `<repo>-<branch>`. `origin/<base>`
+    /// is fetched too, for the review fixed point. A local `branch`, if any,
+    /// must already match its origin copy: it is reset to it.
+    pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
+        launch.run(&["fetch", "origin", base, branch])?;
+        Self::add(
+            launch,
+            repo,
+            branch,
+            &["-B", branch],
+            &format!("origin/{branch}"),
+        )
+    }
+
+    fn add(
+        launch: &Git,
+        repo: &str,
+        branch: &str,
+        branch_args: &[&str],
+        start: &str,
+    ) -> Result<Self> {
         let root = PathBuf::from(launch.run(&["rev-parse", "--show-toplevel"])?);
         let path = root
             .parent()
@@ -24,15 +56,10 @@ impl Worktree {
             .join(format!("{repo}-{branch}"));
         let path_arg = path.to_str().context("worktree path is not UTF-8")?;
 
-        launch.run(&["fetch", "origin", base])?;
-        launch.run(&[
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            path_arg,
-            &format!("origin/{base}"),
-        ])?;
+        let mut args = vec!["worktree", "add"];
+        args.extend_from_slice(branch_args);
+        args.extend([path_arg, start]);
+        launch.run(&args)?;
         Ok(Worktree {
             launch: Git::new(root),
             branch: branch.to_string(),

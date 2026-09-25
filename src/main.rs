@@ -1,3 +1,4 @@
+mod branch;
 mod git;
 mod github;
 mod issue;

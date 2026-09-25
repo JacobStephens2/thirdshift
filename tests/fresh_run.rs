@@ -183,3 +183,23 @@ fn leaves_no_worktree_local_issue_branch_or_temp_directory_behind() {
     assert_eq!(scenario.launch_git(&["branch", "--list", "issue-7"]), "");
     assert_eq!(scenario.entries("tmp"), Vec::<String>::new());
 }
+
+#[test]
+fn another_issues_branch_and_pr_do_not_count_as_this_issues() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("issue-70", "main", &["Other work"]);
+    scenario.github_has_pr("issue-70", "main", "MERGED");
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7");
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            "Add feature".to_string(),
+            "Initial commit".to_string()
+        ])
+    );
+}
