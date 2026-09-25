@@ -22,7 +22,7 @@ fn a_failing_session_pushes_a_failure_commit_with_the_uncommitted_work() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_failed(&scenario, &result);
+    assert_failed(&scenario, &result, "");
     assert_eq!(
         scenario.origin_log("issue-7"),
         Some(vec![
@@ -37,10 +37,11 @@ fn a_failing_session_pushes_a_failure_commit_with_the_uncommitted_work() {
     );
 }
 
-/// What every Failed run shares: a non-zero exit, the session log path on
-/// stderr, and nothing left behind.
-fn assert_failed(scenario: &Scenario, result: &RunResult) {
+/// What every Failed run shares: a non-zero exit, `stdout` (empty unless a PR
+/// exists), the session log path on stderr, and nothing left behind.
+fn assert_failed(scenario: &Scenario, result: &RunResult, stdout: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, stdout);
     let logs = scenario.entries("home/.thirdshift/logs");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let log = scenario.path("home/.thirdshift/logs").join(&logs[0]);
@@ -80,13 +81,12 @@ fn no_pr_after_the_session_is_a_failed_run() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_failed(&scenario, &result);
+    assert_failed(&scenario, &result, "");
     assert!(
         result.stderr.contains("no PR found"),
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(result.stdout, "");
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
         "thirdshift: failed run (no PR found)"
@@ -104,12 +104,15 @@ fn a_pr_against_the_wrong_base_is_sent_back_to_draft() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_failed(&scenario, &result);
+    assert_failed(
+        &scenario,
+        &result,
+        "https://github.com/acme/widgets/pull/1\n",
+    );
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
         "thirdshift: failed run (PR targets develop, not main)"
     );
-    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
 }
 
@@ -120,7 +123,7 @@ fn no_changes_against_the_base_branch_means_no_failure_commit_and_no_push() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_failed(&scenario, &result);
+    assert_failed(&scenario, &result, "");
     assert_eq!(scenario.origin_log("issue-7"), None);
 }
 
@@ -138,7 +141,7 @@ fn an_unfinished_merge_is_aborted_before_the_failure_commit() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_failed(&scenario, &result);
+    assert_failed(&scenario, &result, "");
     assert_eq!(
         scenario.origin_log("issue-7"),
         Some(vec![
@@ -178,7 +181,7 @@ fn assert_interrupt_fails_the_run(signal: &str) {
         began.elapsed() < std::time::Duration::from_secs(20),
         "the session was not stopped"
     );
-    assert_failed(&scenario, &result);
+    assert_failed(&scenario, &result, "");
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
         "thirdshift: failed run (interrupted)"

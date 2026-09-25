@@ -180,36 +180,20 @@ impl Scenario {
     /// Commit subjects on `branch` in the origin repo, newest first, or `None`
     /// if the branch doesn't exist there.
     pub fn origin_log(&self, branch: &str) -> Option<Vec<String>> {
-        let output = Command::new("git")
-            .args(["log", "--format=%s", &format!("refs/heads/{branch}")])
-            .current_dir(self.origin_dir())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", self.path("home"))
-            .output()
-            .unwrap();
-        output.status.success().then(|| {
-            String::from_utf8(output.stdout)
-                .unwrap()
-                .lines()
-                .map(String::from)
-                .collect()
-        })
+        try_git(
+            &self.origin_dir(),
+            &["log", "--format=%s", &format!("refs/heads/{branch}")],
+        )
+        .map(|log| log.lines().map(String::from).collect())
     }
 
     /// The contents of `file` on `branch` in the origin repo, or `None` if
     /// either doesn't exist there.
     pub fn origin_file(&self, branch: &str, file: &str) -> Option<String> {
-        let output = Command::new("git")
-            .args(["show", &format!("refs/heads/{branch}:{file}")])
-            .current_dir(self.origin_dir())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", self.path("home"))
-            .output()
-            .unwrap();
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8(output.stdout).unwrap())
+        try_git(
+            &self.origin_dir(),
+            &["show", &format!("refs/heads/{branch}:{file}")],
+        )
     }
 
     /// Output of a git command in the origin repo, panicking on failure.
@@ -274,22 +258,35 @@ impl Scenario {
 /// Run git in `dir` with the scenario's config and return stdout, panicking on
 /// failure. `dir` must be inside a scenario root.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let home = dir
-        .ancestors()
-        .find(|ancestor| ancestor.join("home/.gitconfig").exists())
-        .expect("git() called outside a scenario")
-        .join("home");
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("HOME", home)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
+    let output = git_output(dir, args);
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap()
+}
+
+/// Like `git`, but `None` if git fails.
+fn try_git(dir: &Path, args: &[&str]) -> Option<String> {
+    let output = git_output(dir, args);
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8(output.stdout).unwrap())
+}
+
+fn git_output(dir: &Path, args: &[&str]) -> Output {
+    let home = dir
+        .ancestors()
+        .find(|ancestor| ancestor.join("home/.gitconfig").exists())
+        .expect("git() called outside a scenario")
+        .join("home");
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap()
 }

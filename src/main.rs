@@ -1,4 +1,4 @@
-mod failure;
+mod failed_run;
 mod git;
 mod github;
 mod interrupt;
@@ -25,12 +25,12 @@ fn main() -> ExitCode {
             println!("{pr_url}");
             ExitCode::SUCCESS
         }
-        Err(failure) => {
-            eprintln!("thirdshift: {:#}", failure.error);
-            if let Some(log) = failure.log {
+        Err(failed) => {
+            eprintln!("thirdshift: {:#}", failed.error);
+            if let Some(log) = failed.log {
                 eprintln!("thirdshift: session log: {}", log.display());
             }
-            if let Some(pr_url) = failure.pr_url {
+            if let Some(pr_url) = failed.pr_url {
                 println!("{pr_url}");
             }
             ExitCode::FAILURE
