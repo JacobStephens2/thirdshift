@@ -5,10 +5,10 @@
 //! release's installer moves the new binary into place with a rename, so a Run
 //! still using the old binary keeps running it.
 
-use anyhow::{Context, Result, anyhow, bail};
-use axoupdater::{AxoUpdater, AxoupdateError};
+use std::fmt::Display;
 
-const APP: &str = "thirdshift";
+use anyhow::{Context, Error, Result, anyhow};
+use axoupdater::{AxoUpdater, AxoupdateError};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -23,23 +23,21 @@ const OTHER_INSTALLS: &str = concat!(
 /// Update to the latest stable release, or confirm this is it. Returns the
 /// line that says which.
 pub fn update() -> Result<String> {
-    let mut updater = AxoUpdater::new_for(APP);
+    let mut updater = AxoUpdater::new_for("thirdshift");
     match updater.load_receipt() {
         Ok(_) => {}
-        Err(AxoupdateError::NoReceipt { .. }) => bail!(
-            "this thirdshift has no install receipt, so the thirdshift installer didn't \
-             install it and update won't replace it. To update it instead:\n{OTHER_INSTALLS}"
-        ),
+        Err(AxoupdateError::NoReceipt { .. }) => {
+            return Err(refusal("this thirdshift has no install receipt"));
+        }
         Err(error) => return Err(anyhow!(error).context("can't read the install receipt")),
     }
     // Without this check, a copy from elsewhere would be reported as up to
     // date whenever the installer's copy is.
     if !updater.check_receipt_is_for_this_executable()? {
-        bail!(
-            "this thirdshift is not the copy the thirdshift installer put in {}, \
-             so update won't replace it. To update it instead:\n{OTHER_INSTALLS}",
+        return Err(refusal(format!(
+            "the install receipt is for the copy in {}, not this one",
             updater.install_prefix_root()?
-        );
+        )));
     }
     // The running binary knows its version better than the receipt does.
     updater.set_current_version(VERSION.parse()?)?;
@@ -53,4 +51,13 @@ pub fn update() -> Result<String> {
         Some(result) => format!("updated thirdshift {VERSION} to {}", result.new_version),
         None => format!("thirdshift {VERSION} is the latest release"),
     })
+}
+
+/// Refuse to replace a copy the installer didn't put in place, for `reason`,
+/// and say how to update it instead.
+fn refusal(reason: impl Display) -> Error {
+    anyhow!(
+        "{reason}; update only replaces the copy the thirdshift installer put in place. \
+         To update this one instead:\n{OTHER_INSTALLS}"
+    )
 }

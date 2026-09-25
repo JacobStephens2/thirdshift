@@ -80,10 +80,7 @@ impl FakeReleases {
 
     /// Run `thirdshift update` against this fake GitHub.
     fn update(&self, scenario: &Scenario) -> RunResult {
-        scenario.run_with_env(
-            &["update"],
-            &[("THIRDSHIFT_INSTALLER_GHE_BASE_URL", &self.url)],
-        )
+        update_against(scenario, &self.url)
     }
 }
 
@@ -92,6 +89,11 @@ impl Drop for FakeReleases {
         let _ = self.server.kill();
         let _ = self.server.wait();
     }
+}
+
+/// Run `thirdshift update` with the GitHub at `url` in place of github.com.
+fn update_against(scenario: &Scenario, url: &str) -> RunResult {
+    scenario.run_with_env(&["update"], &[("THIRDSHIFT_INSTALLER_GHE_BASE_URL", url)])
 }
 
 /// Write an install receipt, as the shell installer does, saying thirdshift
@@ -154,8 +156,10 @@ fn assert_update_refused(result: &RunResult) {
 #[test]
 fn without_an_install_receipt_update_refuses_with_a_reinstall_hint() {
     let scenario = Scenario::new();
+    let empty = TempDir::new().unwrap();
+    let empty = empty.path().to_str().unwrap();
 
-    let result = scenario.run(&["update"]);
+    let result = scenario.run_with_env(&["update"], &[("HOME", empty), ("XDG_CONFIG_HOME", empty)]);
 
     assert_update_refused(&result);
     assert!(
@@ -269,10 +273,7 @@ fn when_github_is_unreachable_update_fails_with_an_explanation() {
     let scenario = installed_scenario();
 
     // Nothing listens on port 1, so the request fails without a network.
-    let result = scenario.run_with_env(
-        &["update"],
-        &[("THIRDSHIFT_INSTALLER_GHE_BASE_URL", "http://127.0.0.1:1/")],
-    );
+    let result = update_against(&scenario, "http://127.0.0.1:1/");
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");
