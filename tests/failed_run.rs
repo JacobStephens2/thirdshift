@@ -166,6 +166,11 @@ fn sigterm_while_the_session_runs_stops_it_and_fails_the_run() {
     assert_interrupt_fails_the_run("TERM");
 }
 
+#[test]
+fn sighup_while_the_session_runs_stops_it_and_fails_the_run() {
+    assert_interrupt_fails_the_run("HUP");
+}
+
 fn assert_interrupt_fails_the_run(signal: &str) {
     let scenario = Scenario::new();
     let started = scenario.path("agent-started");

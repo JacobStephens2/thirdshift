@@ -122,7 +122,7 @@ A Run is not idempotent: re-running builds on whatever is already on the branch,
 
 ## Failed runs
 
-A **Failed run** is one that ends, including by Ctrl-C, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI. Causes include the session exiting non-zero, no pull request or one with the wrong base, and running out of Repairs.
+A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI. Causes include the session exiting non-zero, no pull request or one with the wrong base, and running out of Repairs.
 
 A Failed run:
 
