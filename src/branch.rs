@@ -8,7 +8,8 @@ use crate::github::{self, PrState, PullRequest};
 use crate::issue::IssueUrl;
 
 pub enum Selection {
-    /// No Issue branch has been used yet: start `branch` from the Base branch.
+    /// No Issue branch has been used yet, or the highest-numbered one's PR is
+    /// merged or closed: start `branch` from the Base branch.
     Fresh { branch: String },
     /// `branch` is on origin, with no PR or the open `pr`.
     Continuation {
@@ -49,8 +50,9 @@ impl Selection {
 }
 
 /// Pick the Issue branch for `issue` from the Issue branches on origin (one
-/// `git ls-remote`) and their PRs in any state (one `gh pr list`). Fails if a
-/// local copy of the chosen branch in the launch repository differs from
+/// `git ls-remote`) and their PRs in any state (one `gh pr list`). A branch
+/// number counts as used if its branch is on origin or it has a PR. Fails if
+/// a local copy of the chosen branch in the launch repository differs from
 /// origin's: the Run replaces it and deletes it at cleanup.
 pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
     let first_branch = branch_name(issue, 1);
@@ -96,17 +98,17 @@ pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
         .into_iter()
         .find_map(|(number, sha)| (number == highest).then_some(sha));
     match (origin_sha, pr) {
-        (Some(origin_sha), pr) if pr.as_ref().is_none_or(|pr| pr.state == PrState::Open) => {
+        // Finished work is never reopened, even if its branch was deleted.
+        (_, Some(pr)) if pr.state != PrState::Open => {
+            let next = branch_name(issue, highest + 1);
+            check_local_branch(launch, &next, None)?;
+            Ok(Selection::Fresh { branch: next })
+        }
+        (Some(origin_sha), pr) => {
             check_local_branch(launch, &branch, Some(&origin_sha))?;
             Ok(Selection::Continuation { branch, pr })
         }
-        (_, pr) => bail!(
-            "{branch} can't be continued ({}), and numbered Issue branches are not supported yet",
-            match pr {
-                Some(pr) => format!("its PR {} is {}", pr.url, pr.state),
-                None => "it is gone from origin".to_string(),
-            }
-        ),
+        (None, _) => bail!("{branch} has an open PR but is gone from origin"),
     }
 }
 
