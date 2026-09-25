@@ -206,3 +206,23 @@ fn marks_a_draft_pr_ready_and_succeeds() {
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
 }
+
+#[test]
+fn another_issues_branch_and_pr_do_not_count_as_this_issues() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("issue-70", "main", &["Other work"]);
+    scenario.github_has_pr("issue-70", "main", "MERGED");
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7");
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            "Add feature".to_string(),
+            "Initial commit".to_string()
+        ])
+    );
+}

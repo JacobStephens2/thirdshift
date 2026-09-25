@@ -1,3 +1,4 @@
+mod branch;
 mod failed_run;
 mod git;
 mod github;

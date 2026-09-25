@@ -15,6 +15,7 @@
 //! claude-script.sh   what the fake agent does this test
 //! claude-script.sh.<n>  what it does in the n-th session instead, if present
 //! claude-calls.json  what the fake agent was asked to do
+//! gh-calls.json      every gh command run, by thirdshift or the fake agent
 //! ```
 
 #![allow(dead_code)]
@@ -170,7 +171,8 @@ impl Scenario {
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("FAKE_GH_STATE", self.path("gh-state.json"))
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
-            .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"));
+            .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
+            .env("FAKE_GH_RECORD", self.path("gh-calls.json"));
         command
     }
 
@@ -201,6 +203,61 @@ impl Scenario {
         }
     }
 
+    /// The prompt of the first `claude` call.
+    pub fn first_prompt(&self) -> String {
+        self.claude_calls()[0]["prompt"]
+            .as_str()
+            .expect("claude got no prompt")
+            .to_string()
+    }
+
+    /// The argv of every `gh` call, in order.
+    pub fn gh_calls(&self) -> Vec<Vec<String>> {
+        match fs::read_to_string(self.path("gh-calls.json")) {
+            Ok(text) => serde_json::from_str(&text).unwrap(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Push `branch` to origin: `from` plus one commit per subject in
+    /// `commits`, oldest first.
+    pub fn origin_has_branch(&self, branch: &str, from: &str, commits: &[&str]) {
+        let seed = self.path("seed");
+        git(&self.path(""), &["clone", "-q", &self.github_url(), "seed"]);
+        git(
+            &seed,
+            &["checkout", "-q", "-b", branch, &format!("origin/{from}")],
+        );
+        for (i, subject) in commits.iter().enumerate() {
+            fs::write(seed.join(format!("{branch}-{i}.txt")), subject).unwrap();
+            git(&seed, &["add", "."]);
+            git(&seed, &["commit", "-q", "-m", subject]);
+        }
+        git(&seed, &["push", "-q", "origin", branch]);
+        fs::remove_dir_all(&seed).unwrap();
+    }
+
+    /// Add a PR from `head` into `base` in `state` (`OPEN`, `CLOSED` or
+    /// `MERGED`) to the fake GitHub and return its URL.
+    pub fn github_has_pr(&self, head: &str, base: &str, state: &str) -> String {
+        let mut gh = self.gh_state();
+        let prs = gh["prs"].as_array_mut().unwrap();
+        let number = prs.len() + 1;
+        let url = format!("https://github.com/{OWNER}/{REPO}/pull/{number}");
+        prs.push(json!({
+            "number": number,
+            "url": url,
+            "head": head,
+            "base": base,
+            "state": state,
+            "isDraft": false,
+            "title": format!("Work on {head}"),
+            "body": "",
+        }));
+        self.write_gh_state(&gh);
+        url
+    }
+
     /// Commit subjects on `branch` in the origin repo, newest first, or `None`
     /// if the branch doesn't exist there.
     pub fn origin_log(&self, branch: &str) -> Option<Vec<String>> {
@@ -220,14 +277,15 @@ impl Scenario {
         )
     }
 
+    /// Fetch origin in the launch clone and check out `branch` there.
+    pub fn launch_checks_out(&self, branch: &str) {
+        self.launch_git(&["fetch", "-q", "origin"]);
+        self.launch_git(&["checkout", "-q", branch]);
+    }
+
     /// Output of a git command in the origin repo, panicking on failure.
     pub fn origin_git(&self, args: &[&str]) -> String {
         git(&self.origin_dir(), args)
-    }
-
-    /// Create `branch` on origin, pointing at `main`.
-    pub fn origin_has_branch(&self, branch: &str) {
-        self.origin_git(&["branch", branch, "main"]);
     }
 
     /// Assert the Run left no worktree, local `branch` or temp directory.

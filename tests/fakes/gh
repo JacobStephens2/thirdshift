@@ -7,6 +7,8 @@ State lives in the JSON file named by $FAKE_GH_STATE:
      "issues": {"<number>": "OPEN" | "CLOSED"},
      "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body"}]}
 
+Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
+
 Only the subcommands thirdshift and the fake agents use are supported. Anything
 else exits 2 so an unexpected call fails loudly.
 """
@@ -85,15 +87,49 @@ def pr_view(state, positional, flags):
     if not matches:
         die(f'no pull requests found for branch "{head}"')
     pr = matches[-1]
-    fields = {
+    wanted = flags["json"].split(",")
+    print(json.dumps({key: pr_fields(pr)[key] for key in wanted}))
+
+
+def record(args):
+    path = os.environ["FAKE_GH_RECORD"]
+    calls = []
+    if os.path.exists(path):
+        with open(path) as f:
+            calls = json.load(f)
+    calls.append(args)
+    with open(path, "w") as f:
+        json.dump(calls, f, indent=2)
+
+
+def pr_fields(pr):
+    return {
         "url": pr["url"],
         "state": pr["state"],
+        "headRefName": pr["head"],
         "baseRefName": pr["base"],
         "isDraft": pr["isDraft"],
         "number": pr["number"],
+        "isCrossRepository": pr.get("isCrossRepository", False),
     }
+
+
+def pr_list(state, flags):
+    """Newest first. `--search head:<prefix>` matches head branches starting
+    with <prefix>, as GitHub's search does."""
+    wanted_state = flags.get("state", "open").upper()
+    search = flags.get("search", "")
+    prefix = search[len("head:"):] if search.startswith("head:") else ""
+    if search and not prefix:
+        die(f"fake gh: unsupported search {search}", 2)
+    prs = [
+        pr
+        for pr in reversed(state["prs"])
+        if pr["head"].startswith(prefix)
+        and (wanted_state == "ALL" or pr["state"] == wanted_state)
+    ][: int(flags.get("limit", 30))]
     wanted = flags["json"].split(",")
-    print(json.dumps({key: fields[key] for key in wanted}))
+    print(json.dumps([{key: pr_fields(pr)[key] for key in wanted} for pr in prs]))
 
 
 def pr_ready(state, positional, flags):
@@ -119,6 +155,7 @@ def issue_view(state, positional, flags):
 
 def main():
     args = sys.argv[1:]
+    record(args)
     state = load()
     if args[:2] == ["pr", "create"]:
         positional, flags = parse(args[2:])
@@ -128,6 +165,10 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         pr_view(state, positional, flags)
+    elif args[:2] == ["pr", "list"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        pr_list(state, flags)
     elif args[:2] == ["pr", "ready"]:
         positional, flags = parse(args[2:])
         check_repo(state, flags)

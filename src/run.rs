@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::branch::{self, Selection};
 use crate::failed_run::{self, FailedRun};
 use crate::git::Git;
 use crate::github;
@@ -23,24 +24,41 @@ pub fn run(issue: &IssueUrl) -> Result<String, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
-    let base = preflight::check(&launch, issue)?;
-    let branch = format!("issue-{}", issue.number);
+    preflight::check(&launch, issue)?;
+    let checked_out = launch
+        .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .ok();
+    let selection = branch::select(&launch, issue)?;
+    let branch = selection.branch().to_string();
+    let base = selection.base_branch(checked_out.as_deref())?;
+    preflight::check_base_branch(&launch, &base)?;
 
     if interrupt::requested() {
         return Err(anyhow!("interrupted").into());
     }
-    let worktree = Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?;
+    let (worktree, prompt) = match &selection {
+        Selection::Fresh { .. } => (
+            Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?,
+            prompt::fresh(issue, &base, &branch),
+        ),
+        Selection::Continuation { pr, .. } => (
+            Worktree::continue_existing(&launch, &issue.repo, &branch, &base)?,
+            prompt::continuation(issue, &base, &branch, pr.as_ref().map(|pr| pr.url.as_str())),
+        ),
+    };
     let mut log = session::log_path(issue, &timestamp, "implement")?;
-    implement(issue, &worktree, &base, &timestamp, &mut log)
+    implement(issue, &worktree, &base, &prompt, &timestamp, &mut log)
         .map_err(|error| failed_run::fail(issue, &worktree, &base, &log, error))
 }
 
-/// The implement session, the checks on the PR it opened, and keeping that PR
-/// mergeable. `log` is left at the most recent session's log.
+/// The implement session given `prompt`, the checks on the PR it opened or
+/// updated, and keeping that PR mergeable. `log` is left at the most recent
+/// session's log.
 fn implement(
     issue: &IssueUrl,
     worktree: &Worktree,
     base: &str,
+    prompt: &str,
     timestamp: &str,
     log: &mut PathBuf,
 ) -> Result<String> {
@@ -54,13 +72,13 @@ fn implement(
         session::run(kind, worktree.path(), plugin.path(), prompt, log)
     };
 
-    run_session("implement", &prompt::fresh(issue, base, branch))?;
+    run_session("implement", prompt)?;
     worktree.push()?;
 
     progress::step("checking the PR");
     let pr = github::pull_request_for(issue, branch)?.context("no PR found")?;
     if !pr.is_open() {
-        bail!("PR {} is {}, not open", pr.url, pr.state.to_lowercase());
+        bail!("PR {} is {}, not open", pr.url, pr.state);
     }
     if pr.base != base {
         bail!("PR targets {}, not {base}", pr.base);

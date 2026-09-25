@@ -96,7 +96,7 @@ fn no_pr_after_the_session_is_a_failed_run() {
 #[test]
 fn a_pr_against_the_wrong_base_is_sent_back_to_draft() {
     let scenario = Scenario::new();
-    scenario.origin_has_branch("develop");
+    scenario.origin_has_branch("develop", "main", &[]);
     scenario.agent_does(
         "echo feature > feature.txt\ngit add feature.txt\ngit commit -q -m 'Add feature'\n\
          gh pr create --base develop --head issue-7 --title 'Add feature' --body 'Closes #7'\n",

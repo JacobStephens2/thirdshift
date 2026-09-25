@@ -7,9 +7,10 @@ use crate::git::Git;
 use crate::github;
 use crate::issue::IssueUrl;
 
-/// Check that a Run on `issue` from the `launch` repository makes sense, and
-/// return its Base branch.
-pub fn check(launch: &Git, issue: &IssueUrl) -> Result<String> {
+/// Check that a Run on `issue` from the `launch` repository makes sense. The
+/// Base branch is checked separately, by [`check_base_branch`], once Issue
+/// branch selection has picked it.
+pub fn check(launch: &Git, issue: &IssueUrl) -> Result<()> {
     let origin = launch.run(&["config", "remote.origin.url"])?;
     if !issue.matches_origin(&origin) {
         bail!(
@@ -25,16 +26,12 @@ pub fn check(launch: &Git, issue: &IssueUrl) -> Result<String> {
             bail!("git {key} is not set; the agent needs it to commit");
         }
     }
-    base_branch(launch)
+    Ok(())
 }
 
-/// The checked-out branch, provided it exists on origin and has no commits
-/// origin lacks.
-fn base_branch(launch: &Git) -> Result<String> {
-    let base = launch.run(&["branch", "--show-current"])?;
-    if base.is_empty() {
-        bail!("HEAD is detached; check out the branch the work should be based on");
-    }
+/// Check that the Base branch `base` exists on origin and that the local
+/// `base`, if any, has no commits origin lacks.
+pub fn check_base_branch(launch: &Git, base: &str) -> Result<()> {
     let on_origin = launch.run(&[
         "ls-remote",
         "--heads",
@@ -44,10 +41,17 @@ fn base_branch(launch: &Git) -> Result<String> {
     if on_origin.is_empty() {
         bail!("base branch {base} does not exist on origin; push it first");
     }
-    launch.run(&["fetch", "origin", &base])?;
+    launch.run(&["fetch", "origin", base])?;
+    let local = format!("refs/heads/{base}");
+    if launch
+        .run(&["rev-parse", "--verify", "--quiet", &local])
+        .is_err()
+    {
+        return Ok(());
+    }
     let ahead = launch.run(&["rev-list", "--count", &format!("origin/{base}..{base}")])?;
     if ahead != "0" {
         bail!("local {base} is {ahead} commit(s) ahead of origin/{base}; push them first");
     }
-    Ok(base)
+    Ok(())
 }
