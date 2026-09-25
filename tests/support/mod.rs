@@ -335,6 +335,16 @@ impl Scenario {
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    /// Give the launch clone a `pre-push` hook that says "hook says no" and
+    /// rejects every push, as a target repo's local hook might.
+    pub fn launch_has_rejecting_pre_push_hook(&self) {
+        self.repo_has_hook(
+            &self.launch_dir(),
+            "pre-push",
+            "#!/bin/sh\necho \"hook says no\"\nexit 1\n",
+        );
+    }
+
     /// Output of a git command in the launch clone.
     pub fn launch_git(&self, args: &[&str]) -> String {
         git(&self.launch_dir(), args)

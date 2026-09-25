@@ -29,11 +29,7 @@ fn prints_only_the_pr_url_and_exits_zero() {
 #[test]
 fn a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_push() {
     let scenario = Scenario::new();
-    scenario.repo_has_hook(
-        &scenario.launch_dir(),
-        "pre-push",
-        "#!/bin/sh\necho \"hook says no\"\nexit 1\n",
-    );
+    scenario.launch_has_rejecting_pre_push_hook();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
     let result = scenario.run(&[&scenario.issue_url(7)]);

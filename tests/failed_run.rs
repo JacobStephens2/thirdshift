@@ -200,11 +200,7 @@ fn assert_interrupt_fails_the_run(signal: &str) {
 #[test]
 fn a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_failure_push() {
     let scenario = Scenario::new();
-    scenario.repo_has_hook(
-        &scenario.launch_dir(),
-        "pre-push",
-        "#!/bin/sh\necho \"hook says no\"\nexit 1\n",
-    );
+    scenario.launch_has_rejecting_pre_push_hook();
     scenario.agent_does(AGENT_LEAVES_WORK_AND_EXITS_3);
 
     let result = scenario.run(&[&scenario.issue_url(7)]);

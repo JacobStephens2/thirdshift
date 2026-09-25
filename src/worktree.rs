@@ -109,7 +109,8 @@ impl Worktree {
     }
 
     /// Let go of the worktree without removing it or the local Issue branch,
-    /// saying where they are, for work that may exist nowhere else.
+    /// for work that may exist nowhere else. Dropping it then says where they
+    /// are and the branch's head commit.
     pub fn keep(mut self) {
         self.kept = true;
     }
