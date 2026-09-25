@@ -52,12 +52,15 @@ impl Worktree {
 impl Drop for Worktree {
     fn drop(&mut self) {
         let path = self.path().to_string_lossy().into_owned();
-        let removed = self
-            .launch
-            .run(&["worktree", "remove", "--force", &path])
-            .and_then(|_| self.launch.run(&["branch", "-D", &self.branch]));
-        if let Err(error) = removed {
-            eprintln!("thirdshift: cleanup incomplete: {error:#}");
+        // Each step is attempted even if the one before it failed.
+        let steps: [&[&str]; 2] = [
+            &["worktree", "remove", "--force", &path],
+            &["branch", "-D", &self.branch],
+        ];
+        for step in steps {
+            if let Err(error) = self.launch.run(step) {
+                eprintln!("thirdshift: cleanup incomplete: {error:#}");
+            }
         }
     }
 }
