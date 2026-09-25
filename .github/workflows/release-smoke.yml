@@ -16,6 +16,7 @@ on:
 
 env:
   ARCHIVE: thirdshift-x86_64-unknown-linux-musl
+  ARTIFACT: artifacts-build-local-x86_64-unknown-linux-musl
   EXPECTED: thirdshift ${{ fromJson(inputs.plan).releases[0].app_version }}
 
 jobs:
@@ -37,7 +38,7 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ] ||
             git diff --name-only HEAD^1 HEAD |
-              grep -qxE '\.github/workflows/release(-smoke)?\.yml|dist-workspace\.toml|Cargo\.(toml|lock)'
+              grep -qxE '\.github/workflows/release.*\.yml|dist-workspace\.toml|Cargo\.(toml|lock)'
           then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -51,7 +52,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: artifacts-build-local-x86_64-unknown-linux-musl
+          name: ${{ env.ARTIFACT }}
       - name: Check the binary is statically linked
         run: |
           tar -xJf "$ARCHIVE.tar.xz"
@@ -80,7 +81,7 @@ jobs:
           additional-packages: xz-utils
       - uses: actions/download-artifact@v8
         with:
-          name: artifacts-build-local-x86_64-unknown-linux-musl
+          name: ${{ env.ARTIFACT }}
       - name: Run thirdshift version in WSL2 with Ubuntu 24.04
         run: |
           grep -q WSL2 /proc/version
