@@ -93,7 +93,14 @@ A Run takes minutes to tens of minutes.
 
 - **stdout** carries only the pull request's URL, and only on success, so you can script it: `url=$(thirdshift "$issue")`.
 - **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run.
-- **Exit code** `0` means the Run ended with a pull request the factory stands behind. `2` means the Issue URL argument is missing. Any other failure exits `1`.
+- **Exit code** `0` means the Run ended with a pull request the factory stands behind. `2` means the argument is missing or isn't a GitHub Issue URL; the error and the help text go to stderr. Any other failure exits `1`.
+
+Two more commands print to stdout and exit `0`:
+
+```sh
+thirdshift help      # every form of the command, each with a one-line description
+thirdshift version   # thirdshift <version>
+```
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
