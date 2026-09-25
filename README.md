@@ -26,17 +26,21 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 
 ### Status
 
-The walking skeleton works: a fresh Run on the happy path, with the Origin match, the implement session, the push, the pull request checks (except marking a draft ready), and cleanup. The rest is tracked in the [Spec issue #2](https://github.com/JacobStephens2/thirdshift/issues/2) and its sub-issues: pre-flight checks, **Continuation**, numbered Issue branches, the Failed run path, **Repairs**, and progress lines on stderr. This README describes the designed behaviour.
+The designed behaviour described in this README is implemented. Known gaps and planned work are tracked in the [open issues](https://github.com/JacobStephens2/thirdshift/issues).
 
 ## Install
 
-thirdshift is a single Rust binary with the Factory skills compiled in, so it runs without a checkout of this repository:
-
 ```sh
-cargo install --path .
+curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh
 ```
 
-Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md)).
+The shell installer and the binary both come from this repository's [GitHub Releases](https://github.com/JacobStephens2/thirdshift/releases). It puts `thirdshift` in `~/.local/bin`, where Claude Code's installer puts `claude`, and needs no Rust toolchain. thirdshift is a single binary with the Factory skills compiled in, so it runs without a checkout of this repository ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md), [ADR-0003](docs/adr/0003-static-binaries-through-github-releases.md)).
+
+If you use Rust, you can install it from crates.io instead:
+
+```sh
+cargo install thirdshift
+```
 
 ### Updating
 
@@ -46,36 +50,30 @@ thirdshift update
 
 It replaces the installed binary with the latest stable GitHub Release, or says it is already on it. Messages go to stderr and stdout stays empty. It exits `0` when it updated or was already up to date, and `1` on any failure, such as no network. Updating is safe while a Run is using the old binary, and a Run never checks for updates or updates itself.
 
-`thirdshift update` only replaces a copy put in place by the release's shell installer, which leaves an install receipt in `~/.config/thirdshift/`. It refuses to touch any other copy and names the command that updates it. For a build from source, pull and reinstall:
+`thirdshift update` only replaces a copy put in place by the shell installer (the `curl` command above), which leaves an install receipt in `~/.config/thirdshift/`. It refuses to touch any other copy and lists the command that updates each other kind of install: `cargo install thirdshift` for a crates.io install, pulling and reinstalling for a build from source (see [Building from source](#building-from-source)), and the `curl` command for a copy placed by hand.
 
-```sh
-git checkout main && git pull
-cargo install --path .
-```
+Keep a single copy: with copies in more than one directory on your `PATH` (say `~/.local/bin` and `~/.cargo/bin`), you can end up running a stale one without noticing. `type -a thirdshift` lists every copy on your `PATH`.
 
-`cargo install` puts the binary in `~/.cargo/bin`. To install it system-wide instead, build it and copy it into place:
+## Supported platforms
 
-```sh
-cargo build --release
-sudo install -m 755 target/release/thirdshift /usr/local/bin/thirdshift
-```
+- **Rocky Linux** 9.8 and later, x86_64.
+- **Ubuntu** 24.04.3 and later, x86_64.
+- **WSL2**, latest release, with Ubuntu 24.04 or later, x86_64. Keep your repositories on the Linux filesystem (e.g. `~/repos`), not under `/mnt/c`, where git is slow and file permissions misbehave. WSL1 is not supported.
+- **macOS** Tahoe 26.5.2 and later, Apple Silicon.
 
-Keep a single copy: `~/.cargo/bin` usually comes before `/usr/local/bin` on `PATH`, so with a copy in each you can end up running a stale one without noticing. `type -a thirdshift` lists every copy on your `PATH`.
+One statically linked Linux binary covers the first three, so it doesn't depend on the host's glibc; macOS gets a native build.
 
 ## Prerequisites
 
-The Linux user that runs thirdshift needs:
+The user account that runs thirdshift needs:
 
 - **`claude`** (Claude Code), logged in.
 - **`gh`** (GitHub CLI), logged in.
 - **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
-- **The Rust toolchain**, to build and install thirdshift.
-
-Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the integration tests swap in fake `gh` and `claude`, which are Python scripts in `tests/fakes/`.
 
 ### Auto mode
 
-Sessions run headless in Claude Code's auto mode (`claude -p --permission-mode auto`), with the full permissions of the Linux user, including `sudo` if the user has it. Nobody is there to approve anything; instead, auto mode's classifier checks each action and may block ones it judges risky, such as destructive commands or actions outside the task. A blocked action the agent can't work around can end the Run as a Failed run.
+Sessions run headless in Claude Code's auto mode (`claude -p --permission-mode auto`), with the full permissions of that user account, including `sudo` if the user has it. Nobody is there to approve anything; instead, auto mode's classifier checks each action and may block ones it judges risky, such as destructive commands or actions outside the task. A blocked action the agent can't work around can end the Run as a Failed run.
 
 ### What sessions leave behind
 
@@ -101,12 +99,15 @@ A Run takes minutes to tens of minutes.
 - **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too.
 - **Exit code** `0` means the Run ended with a pull request the factory stands behind. `2` means the argument is missing or isn't a GitHub Issue URL; the error and the help text go to stderr. Any other failure exits `1`.
 
-Two more commands print to stdout and exit `0`:
+The other commands:
 
 ```sh
-thirdshift help      # every form of the command, each with a one-line description
-thirdshift version   # thirdshift <version>
+thirdshift update    # update to the latest release (see Updating)
+thirdshift version   # print thirdshift <version>
+thirdshift help      # print every form of the command, each with a one-line description
 ```
+
+`version` and `help` print to stdout and exit `0`. `update` follows the Run's rule: stdout stays empty, messages go to stderr.
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
@@ -144,6 +145,40 @@ A Failed run:
 3. Cleans up as usual, prints the reason to stderr and exits non-zero.
 
 Merges, never rebases or force-pushes: a branch worked on from several servers never loses history.
+
+## Building from source
+
+Building needs the Rust toolchain. From a clone of this repository:
+
+```sh
+cargo install --path .
+```
+
+`cargo install` puts the binary in `~/.cargo/bin`. To update it, pull and reinstall:
+
+```sh
+git checkout main && git pull
+cargo install --path .
+```
+
+To install it system-wide instead, build it and copy it into place:
+
+```sh
+cargo build --release
+sudo install -m 755 target/release/thirdshift /usr/local/bin/thirdshift
+```
+
+Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md)).
+
+Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the integration tests swap in fake `gh` and `claude`, which are Python scripts in `tests/fakes/`.
+
+## Releasing
+
+1. Bump `version` in `Cargo.toml` (and `Cargo.lock`) in a pull request.
+2. Merge it.
+3. Push a `v<version>` tag on the merge commit, e.g. `git tag v0.2.0 && git push origin v0.2.0`.
+
+The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`. It builds the Linux and macOS binaries and the installer, checks that the Linux binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with notes generated from the merged pull requests.
 
 ## Credits and license
 
