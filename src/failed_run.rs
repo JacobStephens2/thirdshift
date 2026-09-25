@@ -33,10 +33,11 @@ impl From<anyhow::Error> for FailedRun {
 
 /// Take the Run in `worktree` down the Failed run path: commit and push the
 /// work, and send an open PR back to draft. Problems along the way are
-/// reported, not raised, so `error` is what the Run fails with.
+/// reported, not raised, so `error` is what the Run fails with. The worktree
+/// is cleaned up, or kept if its work may not have reached origin.
 pub fn fail(
     issue: &IssueUrl,
-    worktree: &Worktree,
+    worktree: Worktree,
     base: &str,
     log: &Path,
     error: anyhow::Error,
@@ -54,7 +55,8 @@ pub fn fail(
         .next()
         .unwrap_or_default()
         .to_string();
-    if let Err(problem) = commit_and_push(worktree, base, &reason) {
+    let pushed = commit_and_push(&worktree, base, &reason);
+    if let Err(problem) = &pushed {
         progress::step(format_args!(
             "could not push the failed run's work: {problem:#}"
         ));
@@ -68,6 +70,9 @@ pub fn fail(
             None
         }
     };
+    if pushed.is_err() {
+        worktree.keep();
+    }
     FailedRun {
         error,
         pr_url,
@@ -103,8 +108,7 @@ fn commit_and_push(worktree: &Worktree, base: &str, reason: &str) -> Result<()> 
         "-m",
         &message,
     ])?;
-    git.run(&["push", "origin", worktree.branch()])?;
-    Ok(())
+    worktree.push()
 }
 
 /// Convert the open PR for `branch`, if there is one, to a draft, and return

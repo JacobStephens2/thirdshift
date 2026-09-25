@@ -321,6 +321,19 @@ impl Scenario {
         assert_eq!(self.entries("tmp"), Vec::<String>::new());
     }
 
+    /// Install `script` as the `name` hook (e.g. `"pre-push"`) of the git
+    /// repository at `repo`, such as the launch clone or `origin.git`.
+    pub fn repo_has_hook(&self, repo: &Path, name: &str, script: &str) {
+        let hooks = match repo.join(".git").is_dir() {
+            true => repo.join(".git/hooks"),
+            false => repo.join("hooks"),
+        };
+        fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join(name);
+        fs::write(&hook, script).unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     /// Output of a git command in the launch clone.
     pub fn launch_git(&self, args: &[&str]) -> String {
         git(&self.launch_dir(), args)

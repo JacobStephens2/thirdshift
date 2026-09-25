@@ -31,7 +31,7 @@ A **Standards finding** or **Spec finding** the agent chose not to fix. It is li
 One invocation of the factory on an **Issue URL**, from launch to cleanup.
 
 **Failed run**:
-A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI. Its work is still pushed so nothing is lost, and its open pull request, if any, is converted back to a draft.
+A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI. Its work is still pushed so nothing is lost (or, if the push fails, its worktree and local **Issue branch** are kept), and its open pull request, if any, is converted back to a draft.
 
 **Issue branch**:
 A branch a **Run** works on for one issue: `issue-<n>` (the first), then `issue-<n>-branch-<k>` for k ≥ 2. A number counts as used once its pull request is merged or closed, even if the branch itself was deleted.
