@@ -44,7 +44,7 @@ impl Selection {
         }
         checked_out
             .map(String::from)
-            .context("HEAD is detached, so there is no Base branch")
+            .context("HEAD is detached; check out the branch the work should be based on")
     }
 }
 

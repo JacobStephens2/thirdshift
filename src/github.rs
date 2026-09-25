@@ -1,4 +1,4 @@
-//! Asking GitHub, through `gh`, about pull requests.
+//! Asking GitHub, through `gh`, about issues and pull requests.
 
 use std::fmt;
 use std::process::Command;
@@ -7,6 +7,20 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::issue::IssueUrl;
+
+/// Whether `issue` is open.
+pub fn issue_is_open(issue: &IssueUrl) -> Result<bool> {
+    let json = gh_json(&[
+        "issue",
+        "view",
+        &issue.number.to_string(),
+        "--repo",
+        &issue.repo_slug(),
+        "--json",
+        "state",
+    ])?;
+    Ok(json["state"].as_str().context("gh output has no state")? == "OPEN")
+}
 
 const PR_FIELDS: &str = "number,url,state,headRefName,baseRefName";
 
