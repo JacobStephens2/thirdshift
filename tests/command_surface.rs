@@ -5,6 +5,8 @@ mod support;
 
 use support::{RunResult, Scenario};
 
+/// Assert that `text` lists all four forms of the command, each on its own
+/// line with a description after it.
 fn assert_help_text(text: &str) {
     for form in [
         "thirdshift <Issue URL>",
@@ -12,7 +14,14 @@ fn assert_help_text(text: &str) {
         "thirdshift version",
         "thirdshift help",
     ] {
-        assert!(text.contains(form), "expected {form:?} in help: {text}");
+        let line = text.lines().find(|line| line.contains(form));
+        let description = line
+            .and_then(|line| line.split_once(form))
+            .map(|(_, rest)| rest.trim());
+        assert!(
+            description.is_some_and(|description| !description.is_empty()),
+            "expected {form:?} with a description in help: {text}"
+        );
     }
 }
 
@@ -65,6 +74,8 @@ fn version_prints_the_package_version_on_stdout() {
     }
 }
 
+/// Assert that thirdshift rejected its argument with exit 2: `error` first on
+/// stderr, then the help text, and nothing on stdout.
 fn assert_argument_error(scenario: &Scenario, result: &RunResult, error: &str) {
     assert_eq!(result.code, Some(2), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");

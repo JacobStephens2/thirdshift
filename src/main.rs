@@ -39,7 +39,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Some("update") => {
-            eprintln!("thirdshift: update is not yet available");
+            progress::step("update is not yet available");
             return ExitCode::FAILURE;
         }
         Some(arg) => match IssueUrl::parse(arg) {
@@ -72,6 +72,7 @@ fn main() -> ExitCode {
 
 /// An argument thirdshift can't use: the error, then the help, on stderr.
 fn argument_error(error: std::fmt::Arguments) -> ExitCode {
-    eprint!("thirdshift: {error}\n\n{HELP}");
+    progress::step(error);
+    eprint!("\n{HELP}");
     ExitCode::from(2)
 }
