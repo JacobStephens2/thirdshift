@@ -7,6 +7,7 @@ use crate::github;
 use crate::issue::IssueUrl;
 use crate::plugin::Plugin;
 use crate::preflight;
+use crate::progress;
 use crate::prompt;
 use crate::session;
 use crate::worktree::{Merge, Worktree};
@@ -26,12 +27,14 @@ pub fn run(issue: &IssueUrl) -> Result<String> {
     // `kind` under the Run's timestamp.
     let run_session = |kind: &str, prompt: &str| -> Result<()> {
         let log = session::log_path(issue, &timestamp, kind)?;
-        session::run(worktree.path(), plugin.path(), prompt, &log)
+        progress::step(format_args!("logging the session to {}", log.display()));
+        session::run(kind, worktree.path(), plugin.path(), prompt, &log)
     };
 
     run_session("implement", &prompt::fresh(issue, &base, &branch))?;
     worktree.push()?;
 
+    progress::step("checking the PR");
     let pr = github::pull_request_for(issue, &branch)?.context("no PR found")?;
     if pr.state != "OPEN" {
         bail!("PR {} is {}, not open", pr.url, pr.state.to_lowercase());
@@ -42,6 +45,9 @@ pub fn run(issue: &IssueUrl) -> Result<String> {
 
     // Keep the PR mergeable: merge the Base branch, never rebase.
     if worktree.merge_base_branch(&base)? == Merge::Conflicted {
+        progress::step(format_args!(
+            "merging origin/{base} conflicted; starting a Repair"
+        ));
         run_session(
             "repair-1",
             &prompt::conflict_repair(issue, &base, &branch, &pr.url),
