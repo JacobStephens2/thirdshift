@@ -33,10 +33,11 @@ pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
 
 pub struct Scenario {
-    root: TempDir,
-    /// `root`'s path with symlinks resolved, as git reports it: on macOS the
-    /// temp directory is under `/var`, a symlink to `/private/var`.
-    dir: PathBuf,
+    /// Deletes the temp root when the scenario is dropped.
+    _temp_dir: TempDir,
+    /// The temp root's path with symlinks resolved, as git reports it: on
+    /// macOS the temp directory is under `/var`, a symlink to `/private/var`.
+    root: PathBuf,
 }
 
 pub struct RunResult {
@@ -59,9 +60,12 @@ impl Scenario {
     /// An origin with one commit on `main`, a launch clone of it with `main`
     /// checked out, and an open issue #7.
     pub fn new() -> Self {
-        let root = TempDir::new().unwrap();
-        let dir = root.path().canonicalize().unwrap();
-        let scenario = Scenario { root, dir };
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+        let scenario = Scenario {
+            _temp_dir: temp_dir,
+            root,
+        };
         for dir in ["home", "bin", "tmp", "work"] {
             fs::create_dir_all(scenario.path(dir)).unwrap();
         }
@@ -101,7 +105,7 @@ impl Scenario {
     }
 
     pub fn path(&self, relative: &str) -> PathBuf {
-        self.dir.join(relative)
+        self.root.join(relative)
     }
 
     pub fn launch_dir(&self) -> PathBuf {
