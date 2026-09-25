@@ -6,6 +6,7 @@ mod github;
 mod interrupt;
 mod issue;
 mod plugin;
+mod poll;
 mod preflight;
 mod progress;
 mod prompt;

@@ -1,7 +1,6 @@
 //! One Run: from an Issue URL to a checked PR, or to a Failed run.
 
 use std::path::PathBuf;
-use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -9,10 +8,11 @@ use crate::branch::{self, Selection};
 use crate::ci::{self, Ci};
 use crate::failed_run::{self, FailedRun};
 use crate::git::Git;
-use crate::github;
+use crate::github::{self, Mergeable, PullRequest};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::plugin::Plugin;
+use crate::poll;
 use crate::preflight;
 use crate::progress;
 use crate::prompt;
@@ -78,10 +78,7 @@ fn implement(
     worktree.push()?;
 
     progress::step("checking the PR");
-    let pr = github::pull_request_for(issue, branch)?.context("no PR found")?;
-    if !pr.is_open() {
-        bail!("PR {} is {}, not open", pr.url, pr.state);
-    }
+    let pr = open_pr(issue, branch)?;
     if pr.base != base {
         bail!("PR targets {}, not {base}", pr.base);
     }
@@ -90,7 +87,7 @@ fn implement(
     }
 
     repair_loop(issue, worktree, base, &pr.url, &mut run_session)?;
-    check_pr_stands(issue, branch)?;
+    ensure_pr_ready_and_mergeable(issue, branch)?;
     if interrupt::requested() {
         bail!("interrupted");
     }
@@ -149,29 +146,32 @@ fn repair_loop(
     }
 }
 
-/// Fail unless the PR for `branch` is still open, ready for review, and
-/// mergeable, waiting up to the grace period for GitHub to work out the last.
-fn check_pr_stands(issue: &IssueUrl, branch: &str) -> Result<()> {
-    progress::step("checking the PR is open, ready and mergeable");
-    let pr = github::pull_request_for(issue, branch)?.context("the PR is gone")?;
+/// The PR whose head is `branch`, failing unless it exists and is open.
+fn open_pr(issue: &IssueUrl, branch: &str) -> Result<PullRequest> {
+    let pr = github::pull_request_for(issue, branch)?.context("no PR found")?;
     if !pr.is_open() {
         bail!("PR {} is {}, not open", pr.url, pr.state);
     }
+    Ok(pr)
+}
+
+/// Fail unless the PR for `branch` is still open, ready for review, and
+/// mergeable, waiting up to the grace period for GitHub to work out the last.
+fn ensure_pr_ready_and_mergeable(issue: &IssueUrl, branch: &str) -> Result<()> {
+    progress::step("checking the PR is open, ready and mergeable");
+    let pr = open_pr(issue, branch)?;
     if pr.is_draft {
         bail!("PR {} is a draft", pr.url);
     }
-    let deadline = Instant::now() + ci::grace_period();
-    loop {
-        match github::is_mergeable(issue, branch)? {
-            Some(true) => return Ok(()),
-            Some(false) => bail!("PR {} is not mergeable", pr.url),
-            None if Instant::now() >= deadline => {
-                bail!(
-                    "GitHub has not worked out whether PR {} is mergeable",
-                    pr.url
-                )
-            }
-            None => ci::sleep(ci::poll_interval())?,
-        }
+    let mergeable = poll::within(poll::grace_period(), || {
+        Ok(Some(github::mergeable(issue, branch)?).filter(|m| *m != Mergeable::Unknown))
+    })?;
+    match mergeable {
+        Some(Mergeable::Yes) => Ok(()),
+        Some(Mergeable::No) => bail!("PR {} is not mergeable", pr.url),
+        _ => bail!(
+            "GitHub has not worked out whether PR {} is mergeable",
+            pr.url
+        ),
     }
 }

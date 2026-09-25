@@ -6,10 +6,11 @@ State lives in the JSON file named by $FAKE_GH_STATE:
     {"repo": "owner/repo",
      "issues": {"<number>": "OPEN" | "CLOSED"},
      "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
-              "mergeable"?}],
+              "mergeable"?, "unknown_polls"?}],
      "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
      "statuses": {"<sha>": [{"context", "state", "url"}]}}
 
+A PR's mergeable state reports as UNKNOWN for its first `unknown_polls` reads.
 A check run reports as in progress for its first `pending_polls` reads, then as
 completed with its `conclusion`.
 
@@ -42,7 +43,7 @@ def save(state):
         json.dump(state, f, indent=2)
 
 
-BOOLEAN_FLAGS = {"draft", "undo"}
+BOOLEAN_FLAGS = {"draft", "undo", "paginate"}
 
 
 def parse(args):
@@ -102,7 +103,12 @@ def pr_view(state, positional, flags):
         die(f'no pull requests found for branch "{head}"')
     pr = matches[-1]
     wanted = flags["json"].split(",")
-    print(json.dumps({key: pr_fields(pr)[key] for key in wanted}))
+    fields = pr_fields(pr)
+    if "mergeable" in wanted and pr.get("unknown_polls", 0) > 0:
+        pr["unknown_polls"] -= 1
+        save(state)
+        fields["mergeable"] = "UNKNOWN"
+    print(json.dumps({key: fields[key] for key in wanted}))
 
 
 def record(args):
@@ -168,8 +174,9 @@ def issue_view(state, positional, flags):
     print(json.dumps({key: fields[key] for key in wanted}))
 
 
-def api(state, positional):
-    """The two commit endpoints thirdshift reads CI from."""
+def api(state, positional, flags):
+    """The two commit endpoints thirdshift reads CI from, one page, each item
+    of the list `--jq '.<list>[]'` names on its own line."""
     match = re.fullmatch(
         r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/(check-runs|status)(\?.*)?",
         positional[0],
@@ -193,13 +200,17 @@ def api(state, positional):
                 }
             )
         save(state)
-        print(json.dumps({"total_count": len(runs), "check_runs": runs}))
+        items, field = runs, "check_runs"
     else:
-        statuses = [
+        items = [
             {"context": s["context"], "state": s["state"], "target_url": s.get("url")}
             for s in state.get("statuses", {}).get(sha, [])
         ]
-        print(json.dumps({"sha": sha, "statuses": statuses}))
+        field = "statuses"
+    if flags.get("jq") != f".{field}[]":
+        die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
+    for item in items:
+        print(json.dumps(item))
 
 
 def fake(state, args):
@@ -238,7 +249,7 @@ def main():
         issue_view(state, positional, flags)
     elif args[0] == "api":
         positional, flags = parse(args[1:])
-        api(state, positional)
+        api(state, positional, flags)
     elif args[0] == "fake":
         fake(state, args[1:])
     else:

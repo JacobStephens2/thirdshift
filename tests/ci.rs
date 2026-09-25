@@ -267,14 +267,16 @@ fn after_a_repair_the_base_branch_is_merged_again_before_ci_is_watched() {
          Initial commit\n"
     );
     let merge = scenario.origin_git(&["rev-parse", "issue-7"]);
-    let last_checks_call = scenario
+    let last_checks_path = scenario
         .gh_calls()
         .into_iter()
-        .rfind(|call| call[0] == "api" && call[1].contains("/check-runs"))
+        .filter(|call| call[0] == "api")
+        .filter_map(|call| call.last().cloned())
+        .rfind(|path| path.contains("/check-runs"))
         .unwrap();
     assert!(
-        last_checks_call[1].contains(merge.trim()),
-        "last watched: {last_checks_call:?}, merge: {merge}"
+        last_checks_path.contains(merge.trim()),
+        "last watched: {last_checks_path}, merge: {merge}"
     );
     assert!(
         result.stderr.contains("no CI checks appeared"),
@@ -352,4 +354,37 @@ fn a_pr_sent_back_to_draft_by_the_end_is_a_failed_run() {
         "stderr: {}",
         result.stderr
     );
+}
+
+#[test]
+fn waits_for_github_to_work_out_whether_the_pr_is_mergeable() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake pr issue-7 unknown_polls 3\n"
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+}
+
+#[test]
+fn a_pr_whose_mergeability_stays_unknown_is_a_failed_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake pr issue-7 mergeable '\"UNKNOWN\"'\n"
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    assert!(
+        result.stderr.contains(
+            "GitHub has not worked out whether PR https://github.com/acme/widgets/pull/1 is mergeable"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
 }

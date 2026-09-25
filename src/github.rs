@@ -142,9 +142,18 @@ pub fn convert_to_draft(issue: &IssueUrl, branch: &str) -> Result<()> {
     ])
 }
 
-/// Whether the pull request whose head is `branch` can be merged into its
-/// base: `None` while GitHub is still working it out.
-pub fn is_mergeable(issue: &IssueUrl, branch: &str) -> Result<Option<bool>> {
+/// Whether a pull request can be merged into its base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mergeable {
+    Yes,
+    /// It conflicts with its base.
+    No,
+    /// GitHub is still working it out.
+    Unknown,
+}
+
+/// Whether the pull request whose head is `branch` can be merged.
+pub fn mergeable(issue: &IssueUrl, branch: &str) -> Result<Mergeable> {
     let json = gh_json(&[
         "pr",
         "view",
@@ -155,13 +164,14 @@ pub fn is_mergeable(issue: &IssueUrl, branch: &str) -> Result<Option<bool>> {
         "mergeable",
     ])?;
     match json["mergeable"].as_str() {
-        Some("MERGEABLE") => Ok(Some(true)),
-        Some("CONFLICTING") => Ok(Some(false)),
-        Some("UNKNOWN") => Ok(None),
+        Some("MERGEABLE") => Ok(Mergeable::Yes),
+        Some("CONFLICTING") => Ok(Mergeable::No),
+        Some("UNKNOWN") => Ok(Mergeable::Unknown),
         other => bail!("gh output has an unknown mergeable state {other:?}"),
     }
 }
 
+/// Where a check or status stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckState {
     Pending,
@@ -179,8 +189,8 @@ pub struct Check {
 /// Every check run and commit status on commit `sha`.
 pub fn checks_on(issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
     let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
-    let runs = gh_json(&["api", &format!("{commit}/check-runs?per_page=100")])?;
-    let statuses = gh_json(&["api", &format!("{commit}/status?per_page=100")])?;
+    let runs = gh_api_items(&format!("{commit}/check-runs?per_page=100"), "check_runs")?;
+    let statuses = gh_api_items(&format!("{commit}/status?per_page=100"), "statuses")?;
     let url = |value: &Value| {
         value
             .as_str()
@@ -189,10 +199,7 @@ pub fn checks_on(issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
     };
 
     let mut checks = Vec::new();
-    for run in runs["check_runs"]
-        .as_array()
-        .context("gh api returned no check_runs")?
-    {
+    for run in &runs {
         let state = match (run["status"].as_str(), run["conclusion"].as_str()) {
             (Some("completed"), Some("success" | "neutral" | "skipped")) => CheckState::Passed,
             (Some("completed"), _) => CheckState::Failed,
@@ -207,10 +214,7 @@ pub fn checks_on(issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
             url: url(&run["details_url"]).or_else(|| url(&run["html_url"])),
         });
     }
-    for status in statuses["statuses"]
-        .as_array()
-        .context("gh api returned no statuses")?
-    {
+    for status in &statuses {
         let state = match status["state"].as_str() {
             Some("success") => CheckState::Passed,
             Some("pending") => CheckState::Pending,
@@ -242,6 +246,25 @@ fn gh(args: &[&str]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Every item of the `field` list of the GitHub API's `path`, across all its
+/// pages.
+fn gh_api_items(path: &str, field: &str) -> Result<Vec<Value>> {
+    let output = Command::new("gh")
+        .args(["api", "--paginate", "--jq", &format!(".{field}[]"), path])
+        .output()
+        .context("could not run gh")?;
+    if !output.status.success() {
+        bail!(
+            "gh api {path} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("gh api {path} returned invalid JSON"))
 }
 
 /// Run `gh <args>` and parse its stdout as JSON, failing with gh's stderr if
