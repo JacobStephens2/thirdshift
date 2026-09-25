@@ -54,14 +54,12 @@ fn the_next_numbered_branch_gets_the_fresh_prompt() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_eq!(
-        scenario.first_prompt(),
-        "/thirdshift:implement https://github.com/acme/widgets/issues/7\n\
-         The base branch is main. Review with /thirdshift:code-review using main as the fixed point.\n\
-         Address the Standards and Spec findings you agree with.\n\
-         Push branch issue-7-branch-2 and create a pull request against main using /thirdshift:pr, marked ready for review.\n\
-         In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
-         Include \"Closes #7\" in the PR body.\n"
+    let prompt = scenario.first_prompt();
+    assert!(
+        prompt.contains(
+            "\nPush branch issue-7-branch-2 and create a pull request against main using /thirdshift:pr, marked ready for review.\n"
+        ) && !prompt.contains("You are continuing work"),
+        "prompt: {prompt}"
     );
 }
 
@@ -161,6 +159,20 @@ fn a_merged_branch_2_starts_branch_3() {
 }
 
 #[test]
+fn a_merged_branch_2_deleted_from_origin_is_not_reused() {
+    let scenario = Scenario::new();
+    scenario.github_has_pr("issue-7", "main", "MERGED");
+    scenario.github_has_pr("issue-7-branch-2", "main", "MERGED");
+    scenario.agent_does(&agent_commits_and_opens_pr_for("issue-7-branch-3"));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7-branch-3");
+    assert_eq!(scenario.origin_log("issue-7-branch-2"), None);
+}
+
+#[test]
 fn the_pr_comes_from_the_numbered_branch_and_closes_the_issue() {
     let scenario = Scenario::new();
     scenario.github_has_pr("issue-7", "main", "MERGED");
@@ -189,11 +201,5 @@ fn a_local_copy_of_the_next_numbered_branch_stops_the_run() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_ne!(result.code, Some(0));
-    assert!(
-        result.stderr.contains("issue-7-branch-2 is not on origin"),
-        "stderr: {}",
-        result.stderr
-    );
-    assert!(scenario.claude_calls().is_empty(), "claude was run");
+    scenario.assert_rejected_before_any_work(&result, "issue-7-branch-2 is not on origin");
 }

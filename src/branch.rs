@@ -50,9 +50,8 @@ impl Selection {
 }
 
 /// Pick the Issue branch for `issue` from the Issue branches on origin (one
-/// `git ls-remote`) and their PRs in any state (one `gh pr list`). A branch
-/// number counts as used if its branch is on origin or it has a PR. Fails if
-/// a local copy of the chosen branch in the launch repository differs from
+/// `git ls-remote`) and their PRs in any state (one `gh pr list`): the
+/// highest number seen on either decides. Fails if a local copy of the chosen branch in the launch repository differs from
 /// origin's: the Run replaces it and deletes it at cleanup.
 pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
     let first_branch = branch_name(issue, 1);
@@ -98,7 +97,7 @@ pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
         .into_iter()
         .find_map(|(number, sha)| (number == highest).then_some(sha));
     match (origin_sha, pr) {
-        // Finished work is never reopened, even if its branch was deleted.
+        // A merged or closed PR uses its number up, even if its branch was deleted.
         (_, Some(pr)) if pr.state != PrState::Open => {
             let next = branch_name(issue, highest + 1);
             check_local_branch(launch, &next, None)?;
