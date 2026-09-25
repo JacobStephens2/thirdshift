@@ -1,6 +1,7 @@
 //! Progress lines on stderr: thirdshift's own steps, and a session's
 //! stream-json output condensed to one short line per notable event.
 
+use std::collections::HashMap;
 use std::fmt::Display;
 
 use serde_json::Value;
@@ -21,10 +22,20 @@ pub fn step(message: impl Display) {
 /// each resumption with another `result`. So only the first `init` gives a
 /// line, `result` events give none, and [`Progress::summary`] reports the last
 /// one once the process has exited.
+///
+/// A background task still running when the session ends its turn for good is
+/// killed as the process exits, so a task killed after the last `result` is
+/// work the session was waiting on: see [`Progress::killed_background_work`].
 #[derive(Default)]
 pub struct Progress {
     started: bool,
     cwd: Option<String>,
+    session_id: Option<String>,
+    /// Each background task's description, by task id.
+    tasks: HashMap<String, String>,
+    /// Descriptions of the tasks killed since the last `result`, by task id,
+    /// in the order they were killed.
+    killed: Vec<(String, String)>,
     /// Signed in with a claude.ai subscription rather than an API key.
     subscription: bool,
     turns_and_cost: Option<(u64, f64)>,
@@ -41,6 +52,7 @@ impl Progress {
             Some("system") if event["subtype"] == "init" && !self.started => {
                 self.started = true;
                 self.cwd = event["cwd"].as_str().map(String::from);
+                self.session_id = event["session_id"].as_str().map(String::from);
                 self.subscription = event["apiKeySource"] == "none";
                 vec!["session started".to_string()]
             }
@@ -51,7 +63,12 @@ impl Progress {
                 .filter(|block| block["type"] == "tool_use")
                 .filter_map(|block| Some(self.tool_use(block["name"].as_str()?, &block["input"])))
                 .collect(),
+            Some("system") => {
+                self.task(&event);
+                Vec::new()
+            }
             Some("result") => {
+                self.killed.clear();
                 // Both are cumulative across a session's result events.
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),
@@ -76,6 +93,48 @@ impl Progress {
             ""
         };
         Some(format!("{turns} turns, ${cost:.2}{basis}"))
+    }
+
+    /// The session's id, from its first `init` event.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Descriptions of the background tasks killed after the last `result`:
+    /// the work the session was still waiting on when it ended.
+    pub fn killed_background_work(&self) -> Vec<&str> {
+        self.killed
+            .iter()
+            .map(|(_, description)| description.as_str())
+            .collect()
+    }
+
+    /// Track a background task's description and whether it was killed.
+    fn task(&mut self, event: &Value) {
+        let Some(id) = event["task_id"].as_str() else {
+            return;
+        };
+        let killed = match event["subtype"].as_str() {
+            Some("task_started") => {
+                if let Some(description) = event["description"].as_str() {
+                    self.tasks.insert(id.to_string(), description.to_string());
+                }
+                false
+            }
+            Some("task_updated") => event["patch"]["status"] == "killed",
+            Some("task_notification") => event["status"] == "stopped",
+            _ => false,
+        };
+        if killed && !self.killed.iter().any(|(killed_id, _)| killed_id == id) {
+            let description = self
+                .tasks
+                .get(id)
+                .map(String::as_str)
+                .or(event["summary"].as_str())
+                .unwrap_or(id)
+                .to_string();
+            self.killed.push((id.to_string(), description));
+        }
     }
 
     fn tool_use(&self, name: &str, input: &Value) -> String {
@@ -314,6 +373,84 @@ mod tests {
     #[test]
     fn no_result_means_no_summary() {
         assert_eq!(Progress::default().summary(), None);
+    }
+
+    fn task_started(id: &str, description: &str) -> Value {
+        json!({ "type": "system", "subtype": "task_started", "task_id": id, "description": description })
+    }
+
+    fn task_updated(id: &str, status: &str) -> Value {
+        json!({ "type": "system", "subtype": "task_updated", "task_id": id, "patch": { "status": status } })
+    }
+
+    fn task_notification(id: &str, status: &str, summary: &str) -> Value {
+        json!({ "type": "system", "subtype": "task_notification", "task_id": id, "status": status, "summary": summary })
+    }
+
+    #[test]
+    fn a_task_killed_after_the_last_result_is_killed_background_work() {
+        let (progress, _) = lines(&[
+            json!({ "type": "system", "subtype": "init", "session_id": "s-1" }),
+            task_started("b1", "./mvnw test -Dtest='GamesPageTest'"),
+            result(12, 0.4),
+            task_updated("b1", "killed"),
+        ]);
+        assert_eq!(progress.session_id(), Some("s-1"));
+        assert_eq!(
+            progress.killed_background_work(),
+            ["./mvnw test -Dtest='GamesPageTest'"]
+        );
+    }
+
+    #[test]
+    fn a_stopped_task_notification_is_killed_background_work_once() {
+        let (progress, _) = lines(&[
+            task_started("b1", "cargo test"),
+            result(12, 0.4),
+            task_updated("b1", "killed"),
+            task_notification("b1", "stopped", "cargo test"),
+            task_notification("b2", "stopped", "npm run build"),
+        ]);
+        assert_eq!(
+            progress.killed_background_work(),
+            ["cargo test", "npm run build"]
+        );
+    }
+
+    #[test]
+    fn no_killed_tasks_means_no_killed_background_work() {
+        let (progress, _) = lines(&[
+            task_started("b1", "cargo test"),
+            task_notification("b1", "completed", "cargo test"),
+            result(12, 0.4),
+        ]);
+        assert!(progress.killed_background_work().is_empty());
+    }
+
+    #[test]
+    fn background_sub_agents_that_resumed_the_session_are_not_killed_background_work() {
+        let (progress, _) = lines(&[
+            task_started("a1", "Standards review"),
+            result(12, 0.4),
+            task_updated("a1", "completed"),
+            task_notification("a1", "completed", "Standards review"),
+            init("/work/widgets-issue-7"),
+            result(20, 0.9),
+        ]);
+        assert!(progress.killed_background_work().is_empty());
+    }
+
+    #[test]
+    fn a_task_killed_before_a_later_result_is_not_killed_background_work() {
+        let (progress, _) = lines(&[
+            task_started("b1", "cargo watch"),
+            task_updated("b1", "killed"),
+            result(12, 0.4),
+            init("/work/widgets-issue-7"),
+            task_notification("b1", "stopped", "cargo watch"),
+            result(20, 0.9),
+        ]);
+        assert!(progress.killed_background_work().is_empty());
     }
 
     #[test]

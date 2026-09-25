@@ -7,7 +7,10 @@ progress there, and a snapshot of the
 --plugin-dir contents (the directory is gone by the time a test looks).
 
 It then runs a per-test bash script in the working directory, emits a couple
-of stream-json lines, and exits with the script's exit code. The script for the
+of stream-json lines, and exits with the script's exit code. The `init` line
+carries session id `fake-session-<n>` for the n-th call. Lines the script
+appends to the file named by $FAKE_CLAUDE_AFTER_RESULT are emitted after the
+closing `result` line, e.g. to kill a background task as the session ends. The script for the
 n-th call (1-based) is $FAKE_CLAUDE_SCRIPT with `.<n>` appended if that file
 exists, else $FAKE_CLAUDE_SCRIPT itself.
 """
@@ -60,12 +63,24 @@ def main():
     with open(record_path, "w") as f:
         json.dump(records, f, indent=2)
 
-    print(json.dumps({"type": "system", "subtype": "init", "cwd": os.getcwd()}), flush=True)
+    init = {
+        "type": "system",
+        "subtype": "init",
+        "cwd": os.getcwd(),
+        "session_id": f"fake-session-{len(records)}",
+    }
+    print(json.dumps(init), flush=True)
     script = os.environ["FAKE_CLAUDE_SCRIPT"]
     if os.path.exists(f"{script}.{len(records)}"):
         script = f"{script}.{len(records)}"
-    code = subprocess.run(["bash", "-e", script]).returncode
+    # Beside the record, not in $TMPDIR, which tests expect to be left empty.
+    after_result = f"{record_path}.after-result.{len(records)}"
+    env = dict(os.environ, FAKE_CLAUDE_AFTER_RESULT=after_result)
+    code = subprocess.run(["bash", "-e", script], env=env).returncode
     print(json.dumps({"type": "result", "subtype": "success", "is_error": code != 0}), flush=True)
+    if os.path.exists(after_result):
+        with open(after_result) as f:
+            print(f.read(), end="", flush=True)
     sys.exit(code)
 
 

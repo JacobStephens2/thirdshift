@@ -66,7 +66,9 @@ fn without_a_pr_the_continuation_prompt_asks_for_one() {
          \n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
          \n\
-         Include \"Closes #7\" in the PR body.\n"
+         Include \"Closes #7\" in the PR body.\n\
+         \n\
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.\n"
     );
 }
 

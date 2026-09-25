@@ -16,6 +16,8 @@
 //! claude-script.sh   what the fake agent does this test
 //! claude-script.sh.<n>  what it does in the n-th session instead, if present
 //! claude-calls.json  what the fake agent was asked to do
+//! claude-calls.json.after-result.<n>  stream lines the n-th session emits
+//!                    after its closing result
 //! gh-calls.json      every gh command run, by thirdshift or the fake agent
 //! ```
 

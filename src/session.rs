@@ -25,21 +25,43 @@ pub fn log_path(issue: &IssueUrl, timestamp: &str, kind: &str) -> Result<PathBuf
     )))
 }
 
+/// How a session that exited cleanly ended.
+pub struct Ended {
+    /// The session's id, to resume it by.
+    pub session_id: Option<String>,
+    /// Descriptions of the background tasks killed as the session ended: work
+    /// it was still waiting on.
+    pub killed_background_work: Vec<String>,
+}
+
 /// Run `claude` headless in auto mode in `worktree`, with the Factory skills
 /// plugin at `plugin_dir` loaded, streaming its output to `log` and condensing
-/// it to progress lines on stderr, each labelled `kind`. An interrupt stops the
+/// it to progress lines on stderr, each labelled `kind`. With `resume`, the
+/// session with that id continues, given `prompt`. An interrupt stops the
 /// session and fails with `interrupted`.
-pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &Path) -> Result<()> {
+pub fn run(
+    kind: &str,
+    worktree: &Path,
+    plugin_dir: &Path,
+    resume: Option<&str>,
+    prompt: &str,
+    log: &Path,
+) -> Result<Ended> {
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
     let mut log_file =
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
-    let mut child = Command::new("claude")
+    let mut command = Command::new("claude");
+    command
         .args(["-p", "--permission-mode", "auto", "--plugin-dir"])
         .arg(plugin_dir)
-        .args(["--output-format", "stream-json", "--verbose"])
+        .args(["--output-format", "stream-json", "--verbose"]);
+    if let Some(session_id) = resume {
+        command.args(["--resume", session_id]);
+    }
+    let mut child = command
         .arg(prompt)
         .current_dir(worktree)
         .stdin(Stdio::null())
@@ -101,7 +123,14 @@ pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &P
                 .map_or("by signal".to_string(), |code| code.to_string())
         );
     }
-    Ok(())
+    Ok(Ended {
+        session_id: progress.session_id().map(String::from),
+        killed_background_work: progress
+            .killed_background_work()
+            .into_iter()
+            .map(String::from)
+            .collect(),
+    })
 }
 
 const POLL: Duration = Duration::from_millis(100);

@@ -75,6 +75,8 @@ The user account that runs thirdshift needs:
 
 Sessions run headless in Claude Code's auto mode (`claude -p --permission-mode auto`), with the full permissions of that user account, including `sudo` if the user has it. Nobody is there to approve anything; instead, auto mode's classifier checks each action and may block ones it judges risky, such as destructive commands or actions outside the task. A blocked action the agent can't work around can end the Run as a Failed run.
 
+`claude -p` exits as soon as the agent ends its turn, killing any background task it started. So every prompt tells the agent to run long commands, such as tests, in the foreground. If a session still ends while waiting on background work, thirdshift gives it a **Resume**: it continues that same session once (`claude -p --resume`), asking the agent to re-run the work in the foreground and finish. If the Resume ends the same way, the Run fails and says which task was killed.
+
 ### What sessions leave behind
 
 Cleanup removes only thirdshift's own worktree, local Issue branch and temporary plugin directory. Anything else an agent does as your user stays. For example, one Run downloaded a JDK to `~/.local/jdk/` because the server had no Java, installed Playwright in `/tmp/pw`, and left a pull request body draft in `/tmp/`. This is by design, but worth knowing:
@@ -120,6 +122,8 @@ Each session's full transcript, as Claude Code's `stream-json` output, is writte
 ~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-repair-<i>.jsonl
 ```
 
+A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.jsonl`.
+
 All sessions in a Run share the Run's UTC timestamp, so a Run's logs sort together. When a Run fails, stderr ends with the path of its most recent session log, the place to start looking.
 
 ## Continuation
@@ -136,7 +140,7 @@ A Run is not idempotent: re-running builds on whatever is already on the branch,
 
 ## Failed runs
 
-A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, and a Base branch that keeps moving while CI runs.
+A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, a session that still ends while waiting on background work after its Resume, and a Base branch that keeps moving while CI runs.
 
 A Failed run:
 

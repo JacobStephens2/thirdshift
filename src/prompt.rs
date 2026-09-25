@@ -3,6 +3,12 @@
 use crate::github::Check;
 use crate::issue::IssueUrl;
 
+/// Every prompt ends with this. Sessions run with `claude -p`, which exits
+/// once the agent ends its turn, killing any background task still running.
+const HEADLESS: &str = "You run headless: nobody is watching, and ending your turn ends the session. \
+    Run tests and other long commands in the foreground, raising the Bash timeout if needed. \
+    Never end your turn while a background task you depend on is still running: ending the turn kills it.\n";
+
 /// The fresh prompt, for a run that starts a new Issue branch.
 pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
     format!(
@@ -11,7 +17,8 @@ pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
          Address the Standards and Spec findings you agree with.\n\
          Push branch {branch} and create a pull request against {base} using /thirdshift:pr, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
-         Include \"Closes #{number}\" in the PR body.\n",
+         Include \"Closes #{number}\" in the PR body.\n\
+         {HEADLESS}",
         url = issue.url,
         number = issue.number,
     )
@@ -43,7 +50,9 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
          \n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
          \n\
-         Include \"Closes #{number}\" in the PR body.\n",
+         Include \"Closes #{number}\" in the PR body.\n\
+         \n\
+         {HEADLESS}",
         url = issue.url,
         number = issue.number,
     )
@@ -58,7 +67,9 @@ pub fn conflict_repair(issue: &IssueUrl, base: &str, branch: &str, pr_url: &str)
          A merge of origin/{base} into {branch} is in progress in this worktree and has conflicts.\n\
          {branch} implements {url}; its pull request is {pr_url}.\n\
          \n\
-         Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n",
+         Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n\
+         \n\
+         {HEADLESS}",
         url = issue.url,
     )
 }
@@ -88,7 +99,22 @@ pub fn ci_fix_repair(
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
          Run the affected checks locally, commit, and push {branch}.\n\
          \n\
-         If a failure is not caused by this branch (it is flaky, or also fails on {base}), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n",
+         If a failure is not caused by this branch (it is flaky, or also fails on {base}), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n\
+         \n\
+         {HEADLESS}",
         url = issue.url,
+    )
+}
+
+/// The resume prompt, for a session whose `killed` background work, by
+/// description, was killed when it ended its turn.
+pub fn resume(killed: &[String]) -> String {
+    format!(
+        "Your background work ({killed}) was killed when your turn ended, because ending the turn ends the session.\n\
+         \n\
+         Re-run whatever you were waiting on in the foreground, then finish your job.\n\
+         \n\
+         {HEADLESS}",
+        killed = killed.join("; "),
     )
 }

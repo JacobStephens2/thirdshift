@@ -75,7 +75,8 @@ fn gives_the_agent_the_fresh_prompt() {
          Address the Standards and Spec findings you agree with.\n\
          Push branch issue-7 and create a pull request against main using /thirdshift:pr, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
-         Include \"Closes #7\" in the PR body.\n"
+         Include \"Closes #7\" in the PR body.\n\
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.\n"
     );
 }
 
