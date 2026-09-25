@@ -36,6 +36,8 @@ pub struct Progress {
     /// Descriptions of the tasks killed since the last `result`, by task id,
     /// in the order they were killed.
     killed: Vec<(String, String)>,
+    /// The last `result` was an error, such as running out of turns.
+    failed: bool,
     /// Signed in with a claude.ai subscription rather than an API key.
     subscription: bool,
     turns_and_cost: Option<(u64, f64)>,
@@ -64,11 +66,12 @@ impl Progress {
                 .filter_map(|block| Some(self.tool_use(block["name"].as_str()?, &block["input"])))
                 .collect(),
             Some("system") => {
-                self.task(&event);
+                self.track_task(&event);
                 Vec::new()
             }
             Some("result") => {
                 self.killed.clear();
+                self.failed = event["subtype"] != "success" || event["is_error"] == true;
                 // Both are cumulative across a session's result events.
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),
@@ -101,8 +104,12 @@ impl Progress {
     }
 
     /// Descriptions of the background tasks killed after the last `result`:
-    /// the work the session was still waiting on when it ended.
+    /// the work the session was still waiting on when it ended. None if that
+    /// `result` was an error: the session ended for another reason.
     pub fn killed_background_work(&self) -> Vec<&str> {
+        if self.failed {
+            return Vec::new();
+        }
         self.killed
             .iter()
             .map(|(_, description)| description.as_str())
@@ -110,7 +117,7 @@ impl Progress {
     }
 
     /// Track a background task's description and whether it was killed.
-    fn task(&mut self, event: &Value) {
+    fn track_task(&mut self, event: &Value) {
         let Some(id) = event["task_id"].as_str() else {
             return;
         };
@@ -226,7 +233,7 @@ mod tests {
     }
 
     fn result(turns: u64, cost: f64) -> Value {
-        json!({ "type": "result", "num_turns": turns, "total_cost_usd": cost })
+        json!({ "type": "result", "subtype": "success", "num_turns": turns, "total_cost_usd": cost })
     }
 
     #[test]
@@ -451,6 +458,27 @@ mod tests {
             result(20, 0.9),
         ]);
         assert!(progress.killed_background_work().is_empty());
+    }
+
+    #[test]
+    fn tasks_killed_after_an_error_result_are_not_killed_background_work() {
+        for last in [
+            json!({ "type": "result", "subtype": "error_max_turns", "is_error": true }),
+            json!({ "type": "result", "subtype": "success", "is_error": true }),
+        ] {
+            let (progress, _) = lines(&[
+                task_started("b1", "cargo test"),
+                last,
+                task_updated("b1", "killed"),
+            ]);
+            assert!(progress.killed_background_work().is_empty());
+        }
+    }
+
+    #[test]
+    fn an_init_without_a_session_id_gives_none() {
+        let (progress, _) = lines(&[init("/a")]);
+        assert_eq!(progress.session_id(), None);
     }
 
     #[test]

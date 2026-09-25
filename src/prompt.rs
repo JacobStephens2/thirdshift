@@ -108,7 +108,7 @@ pub fn ci_fix_repair(
 
 /// The resume prompt, for a session whose `killed` background work, by
 /// description, was killed when it ended its turn.
-pub fn resume(killed: &[String]) -> String {
+pub fn resume(killed: &[&str]) -> String {
     format!(
         "Your background work ({killed}) was killed when your turn ended, because ending the turn ends the session.\n\
          \n\

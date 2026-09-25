@@ -16,7 +16,7 @@ use crate::poll;
 use crate::preflight;
 use crate::progress;
 use crate::prompt;
-use crate::session;
+use crate::session::{self, Sessions};
 use crate::worktree::{Merge, Worktree};
 
 /// Take `issue` to a ready PR and return the PR's URL. Any failure after the
@@ -66,40 +66,13 @@ fn implement(
 ) -> Result<String> {
     let branch = worktree.branch();
     let plugin = Plugin::write()?;
-    // Every session runs in the worktree with the plugin loaded, logged as
-    // `kind` under the Run's timestamp.
-    let mut start = |kind: &str, resume: Option<&str>, prompt: &str| {
-        *log = session::log_path(issue, timestamp, kind)?;
-        progress::step(format_args!("logging the session to {}", log.display()));
-        session::run(kind, worktree.path(), plugin.path(), resume, prompt, log)
+    let sessions = Sessions {
+        issue,
+        timestamp,
+        worktree: worktree.path(),
+        plugin_dir: plugin.path(),
     };
-    // A session that ended while waiting on background work, which was killed
-    // with it, is resumed once, as `<kind>-resume`, to finish the job.
-    let mut run_session = |kind: &str, prompt: &str| -> Result<()> {
-        let ended = start(kind, None, prompt)?;
-        if ended.killed_background_work.is_empty() {
-            return Ok(());
-        }
-        let Some(session_id) = ended.session_id else {
-            return Err(killed_background_work(kind, &ended.killed_background_work));
-        };
-        progress::step(format_args!(
-            "{kind}: background work was killed as the session ended; resuming it once"
-        ));
-        let resumed = start(
-            &format!("{kind}-resume"),
-            Some(&session_id),
-            &prompt::resume(&ended.killed_background_work),
-        )?;
-        if resumed.killed_background_work.is_empty() {
-            Ok(())
-        } else {
-            Err(killed_background_work(
-                kind,
-                &resumed.killed_background_work,
-            ))
-        }
-    };
+    let mut run_session = |kind: &str, prompt: &str| sessions.run(kind, prompt, log);
 
     run_session("implement", prompt)?;
     worktree.push()?;
@@ -119,19 +92,6 @@ fn implement(
         bail!("interrupted");
     }
     Ok(pr.url)
-}
-
-/// The error for a `kind` session that ended while waiting on `killed`
-/// background work, by description.
-fn killed_background_work(kind: &str, killed: &[String]) -> anyhow::Error {
-    let (tasks, were) = match killed {
-        [_] => ("a background task", "was"),
-        _ => ("background tasks", "were"),
-    };
-    anyhow!(
-        "{kind} session ended while waiting on {tasks} ({}), which {were} killed",
-        killed.join("; ")
-    )
 }
 
 /// The most Repair sessions a Run starts, conflict and CI-fix combined.

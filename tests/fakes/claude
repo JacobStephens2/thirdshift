@@ -7,12 +7,14 @@ progress there, and a snapshot of the
 --plugin-dir contents (the directory is gone by the time a test looks).
 
 It then runs a per-test bash script in the working directory, emits a couple
-of stream-json lines, and exits with the script's exit code. The `init` line
-carries session id `fake-session-<n>` for the n-th call. Lines the script
-appends to the file named by $FAKE_CLAUDE_AFTER_RESULT are emitted after the
-closing `result` line, e.g. to kill a background task as the session ends. The script for the
+of stream-json lines, and exits with the script's exit code. The script for the
 n-th call (1-based) is $FAKE_CLAUDE_SCRIPT with `.<n>` appended if that file
 exists, else $FAKE_CLAUDE_SCRIPT itself.
+
+The `init` line carries session id `fake-session-<n>` for the n-th call. Lines
+the script appends to the file named by $FAKE_CLAUDE_AFTER_RESULT are emitted
+after the closing `result` line, e.g. to kill a background task as the session
+ends.
 """
 
 import json
