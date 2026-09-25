@@ -120,12 +120,10 @@ fn ships_the_mattpocock_skills_mit_notice_with_the_factory_skills() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    let license = scenario.claude_calls()[0]["plugin_files"]["skills/LICENSE"]
-        .as_str()
-        .map(str::to_string);
+    let calls = scenario.claude_calls();
+    let license = calls[0]["plugin_files"]["skills/LICENSE"].as_str();
     assert!(
         license
-            .as_deref()
             .is_some_and(|text| text.contains("MIT License")
                 && text.contains("Copyright (c) 2026 Matt Pocock")),
         "license: {license:?}"

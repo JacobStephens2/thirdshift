@@ -10,17 +10,23 @@ Terms in **bold** are defined in [`CONTEXT.md`](CONTEXT.md).
 
 From a clone of the issue's repository, `thirdshift <Issue URL>`:
 
-1. Checks the **Origin match**: the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the directory you run it from. A mismatch stops the Run before any work happens.
+1. Checks that the Run makes sense, before creating anything:
+   - the **Origin match**: the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the directory you run it from;
+   - the issue is open;
+   - the **Base branch** is well defined: HEAD is not detached, the branch exists on `origin`, and your local copy is not ahead of it, so unpushed commits can't leak into the pull request;
+   - a local Issue branch, if you have one, points at the same commit as its copy on `origin`, so local-only commits are never destroyed.
+
+   Any failed check stops the Run before any work happens.
 2. Picks the **Issue branch** (`issue-<n>`, or `issue-<n>-branch-<k>` once earlier ones are finished) and the **Base branch**, normally the branch you have checked out.
 3. Creates a git worktree next to your clone, named `<repo>-<Issue branch>`, so your own checkout is never touched.
 4. Runs a headless Claude Code session in that worktree with the **Factory skills** loaded. The agent implements the issue, reviews its work against the Base branch, addresses the **Standards findings** and **Spec findings** it agrees with, and opens a ready-for-review pull request that lists every **Unaddressed finding** with a reason and closes the issue.
-5. Takes over deterministically: pushes the Issue branch, and checks through `gh` that the pull request exists, is open and targets the Base branch.
+5. Takes over deterministically: pushes the Issue branch, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
 6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 3 per Run.
 7. Cleans up: removes the worktree, the local Issue branch and the temporary plugin directory, whether the Run succeeded or not.
 
 ### Status
 
-The walking skeleton works: a fresh Run on the happy path (steps 1 and 3 to 5, and 7, without the checks on the issue or Base branch state). The rest is tracked in the [Spec issue #2](https://github.com/JacobStephens2/thirdshift/issues/2) and its sub-issues: pre-flight checks, **Continuation**, numbered Issue branches, the Failed run path, **Repairs**, and progress lines on stderr. This README describes the designed behaviour.
+The walking skeleton works: a fresh Run on the happy path, with the Origin match, the implement session, the push, the pull request checks (except marking a draft ready), and cleanup. The rest is tracked in the [Spec issue #2](https://github.com/JacobStephens2/thirdshift/issues/2) and its sub-issues: pre-flight checks, **Continuation**, numbered Issue branches, the Failed run path, **Repairs**, and progress lines on stderr. This README describes the designed behaviour.
 
 ## Install
 
@@ -37,8 +43,8 @@ Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR
 The Linux user that runs thirdshift needs:
 
 - **`claude`** (Claude Code), logged in.
-- **`gh`** (GitHub CLI), logged in, with push access to the repository.
-- **`git`** with a global `user.name` and `user.email`. The agents commit as this identity; without it, an agent may borrow the author of the last commit.
+- **`gh`** (GitHub CLI), logged in.
+- **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
 - **The Rust toolchain**, to build and install thirdshift.
 
 ### Auto mode
@@ -69,7 +75,7 @@ A Run takes minutes to tens of minutes.
 - **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run.
 - **Exit code** `0` means the Run ended with a pull request the factory stands behind. `2` means the Issue URL argument is missing. Any other failure exits `1`.
 
-Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out.
+Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
 ### Logs
 
@@ -80,7 +86,7 @@ Each session's full transcript, as Claude Code's `stream-json` output, is writte
 ~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-repair-<i>.jsonl
 ```
 
-All sessions in a Run share the Run's UTC timestamp, so a Run's logs sort together.
+All sessions in a Run share the Run's UTC timestamp, so a Run's logs sort together. When a Run fails, stderr ends with the path of its most recent session log, the place to start looking.
 
 ## Continuation
 
