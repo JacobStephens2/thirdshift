@@ -168,7 +168,9 @@ fn fails_when_the_conflict_repair_leaves_the_merge_unfinished() {
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_ne!(result.code, Some(0));
-    assert_eq!(result.stdout, "");
+    // A Failed run with an open PR prints it, sent back to draft.
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
     assert!(
         result
             .stderr
@@ -190,7 +192,9 @@ fn fails_when_the_conflict_repair_aborts_the_merge() {
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_ne!(result.code, Some(0));
-    assert_eq!(result.stdout, "");
+    // A Failed run with an open PR prints it, sent back to draft.
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
     assert!(
         result
             .stderr

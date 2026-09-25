@@ -85,6 +85,14 @@ impl Worktree {
         self.git.dir()
     }
 
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
+    pub fn git(&self) -> &Git {
+        &self.git
+    }
+
     /// Push the Issue branch to origin (a no-op if it is already there).
     pub fn push(&self) -> Result<()> {
         progress::step(format_args!("pushing {}", self.branch));
@@ -124,7 +132,8 @@ impl Worktree {
         Ok(())
     }
 
-    fn merge_in_progress(&self) -> Result<bool> {
+    /// Whether a merge is in progress in the worktree.
+    pub fn merge_in_progress(&self) -> Result<bool> {
         self.git
             .succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
     }

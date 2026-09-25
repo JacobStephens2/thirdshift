@@ -2,12 +2,15 @@
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
+use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress::{self, Progress};
 
@@ -24,7 +27,8 @@ pub fn log_path(issue: &IssueUrl, timestamp: &str, kind: &str) -> Result<PathBuf
 
 /// Run `claude` headless in auto mode in `worktree`, with the Factory skills
 /// plugin at `plugin_dir` loaded, streaming its output to `log` and condensing
-/// it to progress lines on stderr, each labelled `kind`.
+/// it to progress lines on stderr, each labelled `kind`. An interrupt stops the
+/// session and fails with `interrupted`.
 pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &Path) -> Result<()> {
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
@@ -40,17 +44,46 @@ pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &P
         .current_dir(worktree)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
+        // Its own process group, so thirdshift decides how it is stopped and
+        // can stop everything it started.
+        .process_group(0)
         .spawn()
         .context("could not run claude")?;
 
+    // Follow the stream on its own thread, so this one can watch for an
+    // interrupt while the session runs.
     let stream = child.stdout.take().context("no stdout from claude")?;
-    let mut progress = Progress::default();
-    let followed = follow(kind, stream, &mut log_file, log, &mut progress);
-    if followed.is_err() {
-        // Nothing reads its output any more, so it could block forever.
-        let _ = child.kill();
-    }
-    let status = child.wait().context("could not wait for claude")?;
+    let group = -(child.id() as libc::pid_t);
+    let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
+    let follower = thread::spawn(move || {
+        let mut progress = Progress::default();
+        let followed = follow(
+            &kind_owned,
+            stream,
+            &mut log_file,
+            &log_owned,
+            &mut progress,
+        );
+        if followed.is_err() {
+            // Nothing reads its output any more, so it could block forever.
+            // SAFETY: kill has no memory-safety preconditions.
+            unsafe { libc::kill(group, libc::SIGKILL) };
+        }
+        (followed, progress)
+    });
+    let status = loop {
+        if interrupt::requested() {
+            stop(&mut child);
+            bail!("interrupted");
+        }
+        if let Some(status) = child.try_wait().context("could not wait for claude")? {
+            break status;
+        }
+        thread::sleep(POLL);
+    };
+    let (followed, progress) = follower
+        .join()
+        .map_err(|_| anyhow!("the session stream reader panicked"))?;
 
     let elapsed = minutes_and_seconds(started.elapsed());
     let summary = progress
@@ -69,6 +102,29 @@ pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &P
         );
     }
     Ok(())
+}
+
+const POLL: Duration = Duration::from_millis(100);
+
+/// How long a session gets to exit after SIGTERM before it is killed.
+const STOP_GRACE: Duration = Duration::from_secs(10);
+
+/// Stop `child`'s process group: SIGTERM, then SIGKILL if it outlives
+/// `STOP_GRACE`.
+fn stop(child: &mut Child) {
+    let group = -(child.id() as libc::pid_t);
+    // SAFETY: kill has no memory-safety preconditions.
+    unsafe { libc::kill(group, libc::SIGTERM) };
+    let deadline = Instant::now() + STOP_GRACE;
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
+        }
+        thread::sleep(POLL);
+    }
+    // SAFETY: as above.
+    unsafe { libc::kill(group, libc::SIGKILL) };
+    let _ = child.wait();
 }
 
 /// Copy every line of `stream` to `log_file` and print the progress lines it

@@ -23,7 +23,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -39,6 +40,16 @@ pub struct RunResult {
     pub stdout: String,
     pub stderr: String,
     pub code: Option<i32>,
+}
+
+impl From<Output> for RunResult {
+    fn from(output: Output) -> Self {
+        RunResult {
+            stdout: String::from_utf8(output.stdout).unwrap(),
+            stderr: String::from_utf8(output.stderr).unwrap(),
+            code: output.status.code(),
+        }
+    }
 }
 
 impl Scenario {
@@ -118,12 +129,39 @@ impl Scenario {
     }
 
     pub fn run(&self, args: &[&str]) -> RunResult {
+        self.command(args).output().unwrap().into()
+    }
+
+    /// Run thirdshift and send it `signal` (e.g. `"INT"`) once the fake agent
+    /// has touched the file `started` in the scenario root.
+    pub fn run_and_signal(&self, args: &[&str], started: &str, signal: &str) -> RunResult {
+        let child = self
+            .command(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.path(started).exists() {
+            assert!(Instant::now() < deadline, "the agent never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let status = Command::new("kill")
+            .args([&format!("-{signal}"), &child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        child.wait_with_output().unwrap().into()
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
         let path = format!(
             "{}:{}",
             self.path("bin").display(),
             std::env::var("PATH").unwrap()
         );
-        let output: Output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
             .args(args)
             .current_dir(self.launch_dir())
             .env_clear()
@@ -134,14 +172,8 @@ impl Scenario {
             .env("FAKE_GH_STATE", self.path("gh-state.json"))
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
-            .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
-            .output()
-            .unwrap();
-        RunResult {
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-            code: output.status.code(),
-        }
+            .env("FAKE_GH_RECORD", self.path("gh-calls.json"));
+        command
     }
 
     /// Set issue `number`'s state on the fake GitHub: `"OPEN"` or `"CLOSED"`.
@@ -236,8 +268,8 @@ impl Scenario {
         .map(|log| log.lines().map(String::from).collect())
     }
 
-    /// The contents of `file` on `branch` in the origin repo, or `None` if it
-    /// isn't there.
+    /// The contents of `file` on `branch` in the origin repo, or `None` if
+    /// either doesn't exist there.
     pub fn origin_file(&self, branch: &str, file: &str) -> Option<String> {
         try_git(
             &self.origin_dir(),
@@ -251,9 +283,22 @@ impl Scenario {
         self.launch_git(&["checkout", "-q", branch]);
     }
 
-    /// Output of a git command in the origin repo.
+    /// Output of a git command in the origin repo, panicking on failure.
     pub fn origin_git(&self, args: &[&str]) -> String {
         git(&self.origin_dir(), args)
+    }
+
+    /// Assert the Run left no worktree, local `branch` or temp directory.
+    pub fn assert_cleaned_up(&self, branch: &str) {
+        assert_eq!(self.entries("work"), vec![REPO]);
+        assert_eq!(
+            self.launch_git(&["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            1
+        );
+        assert_eq!(self.launch_git(&["branch", "--list", branch]), "");
+        assert_eq!(self.entries("tmp"), Vec::<String>::new());
     }
 
     /// Output of a git command in the launch clone.
@@ -332,27 +377,36 @@ impl Scenario {
 /// Run git in `dir` with the scenario's config and return stdout, panicking on
 /// failure. `dir` must be inside a scenario root.
 fn git(dir: &Path, args: &[&str]) -> String {
-    try_git(dir, args).unwrap_or_else(|| panic!("git {args:?} failed in {}", dir.display()))
+    let output = git_output(dir, args);
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
 }
 
-/// Run git in `dir` with the scenario's config and return stdout, or `None` if
-/// it fails. `dir` must be inside a scenario root.
+/// Like `git`, but `None` if git fails.
 fn try_git(dir: &Path, args: &[&str]) -> Option<String> {
-    let home = dir
-        .ancestors()
-        .find(|ancestor| ancestor.join("home/.gitconfig").exists())
-        .expect("git() called outside a scenario")
-        .join("home");
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("HOME", home)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
+    let output = git_output(dir, args);
     if !output.status.success() {
         eprintln!("git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
         return None;
     }
     Some(String::from_utf8(output.stdout).unwrap())
+}
+
+fn git_output(dir: &Path, args: &[&str]) -> Output {
+    let home = dir
+        .ancestors()
+        .find(|ancestor| ancestor.join("home/.gitconfig").exists())
+        .expect("git() called outside a scenario")
+        .join("home");
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap()
 }

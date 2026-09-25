@@ -1,6 +1,8 @@
 mod branch;
+mod failed_run;
 mod git;
 mod github;
+mod interrupt;
 mod issue;
 mod plugin;
 mod preflight;
@@ -28,13 +30,23 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if let Err(error) = interrupt::install() {
+        progress::step(format_args!("{error:#}"));
+        return ExitCode::FAILURE;
+    }
     match run::run(&issue) {
         Ok(pr_url) => {
             println!("{pr_url}");
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            progress::step(format_args!("{error:#}"));
+        Err(failed) => {
+            progress::step(format_args!("{:#}", failed.error));
+            if let Some(log) = failed.log {
+                progress::step(format_args!("session log: {}", log.display()));
+            }
+            if let Some(pr_url) = failed.pr_url {
+                println!("{pr_url}");
+            }
             ExitCode::FAILURE
         }
     }
