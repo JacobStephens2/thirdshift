@@ -65,6 +65,8 @@ The Linux user that runs thirdshift needs:
 - **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
 - **The Rust toolchain**, to build and install thirdshift.
 
+Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the integration tests swap in fake `gh` and `claude`, which are Python scripts in `tests/fakes/`.
+
 ### Auto mode
 
 Sessions run headless in Claude Code's auto mode (`claude -p --permission-mode auto`), with the full permissions of the Linux user, including `sudo` if the user has it. Nobody is there to approve anything; instead, auto mode's classifier checks each action and may block ones it judges risky, such as destructive commands or actions outside the task. A blocked action the agent can't work around can end the Run as a Failed run.
