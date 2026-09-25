@@ -5,12 +5,14 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::branch::{self, Selection};
+use crate::ci::{self, Ci};
 use crate::failed_run::{self, FailedRun};
 use crate::git::Git;
-use crate::github;
+use crate::github::{self, Mergeable, PullRequest};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::plugin::Plugin;
+use crate::poll;
 use crate::preflight;
 use crate::progress;
 use crate::prompt;
@@ -76,10 +78,7 @@ fn implement(
     worktree.push()?;
 
     progress::step("checking the PR");
-    let pr = github::pull_request_for(issue, branch)?.context("no PR found")?;
-    if !pr.is_open() {
-        bail!("PR {} is {}, not open", pr.url, pr.state);
-    }
+    let pr = open_pr(issue, branch)?;
     if pr.base != base {
         bail!("PR targets {}, not {base}", pr.base);
     }
@@ -87,20 +86,92 @@ fn implement(
         github::mark_ready(issue, branch)?;
     }
 
-    // Keep the PR mergeable: merge the Base branch, never rebase.
-    if worktree.merge_base_branch(base)? == Merge::Conflicted {
-        progress::step(format_args!(
-            "merging origin/{base} conflicted; starting a Repair"
-        ));
-        run_session(
-            "repair-1",
-            &prompt::conflict_repair(issue, base, branch, &pr.url),
-        )?;
-        worktree.ensure_base_branch_merged(base)?;
-    }
-    worktree.push()?;
+    repair_loop(issue, worktree, base, &pr.url, &mut run_session)?;
+    ensure_pr_ready_and_mergeable(issue, branch)?;
     if interrupt::requested() {
         bail!("interrupted");
     }
     Ok(pr.url)
+}
+
+/// The most Repair sessions a Run starts, conflict and CI-fix combined.
+const MAX_REPAIRS: usize = 3;
+
+/// Keep the PR mergeable and its CI green: merge the Base branch (never
+/// rebase), push, and watch CI on the head commit, starting a Repair session
+/// through `run_session` for a conflict or red CI and then going round again,
+/// since the Base branch may have moved meanwhile. Fails once a Repair beyond
+/// `MAX_REPAIRS` would be needed.
+fn repair_loop(
+    issue: &IssueUrl,
+    worktree: &Worktree,
+    base: &str,
+    pr_url: &str,
+    run_session: &mut impl FnMut(&str, &str) -> Result<()>,
+) -> Result<()> {
+    let branch = worktree.branch();
+    let mut repairs = 0;
+    // Counts the Repair about to start, as `repair-<n>`, or fails if it would
+    // be one too many.
+    let mut next_repair = |cause: &str| -> Result<String> {
+        if repairs == MAX_REPAIRS {
+            bail!("repairs exhausted: {cause}");
+        }
+        repairs += 1;
+        progress::step(format_args!(
+            "{cause}; starting Repair {repairs} of {MAX_REPAIRS}"
+        ));
+        Ok(format!("repair-{repairs}"))
+    };
+    loop {
+        if worktree.merge_base_branch(base)? == Merge::Conflicted {
+            let kind = next_repair("conflict")?;
+            run_session(&kind, &prompt::conflict_repair(issue, base, branch, pr_url))?;
+            worktree.ensure_base_branch_merged(base)?;
+            worktree.push()?;
+            continue;
+        }
+        worktree.push()?;
+        match ci::watch(issue, &worktree.head()?)? {
+            Ci::Absent | Ci::Passed => return Ok(()),
+            Ci::Failed(failed) => {
+                let kind = next_repair("CI red")?;
+                run_session(
+                    &kind,
+                    &prompt::ci_fix_repair(issue, base, branch, pr_url, &failed),
+                )?;
+                worktree.push()?;
+            }
+        }
+    }
+}
+
+/// The PR whose head is `branch`, failing unless it exists and is open.
+fn open_pr(issue: &IssueUrl, branch: &str) -> Result<PullRequest> {
+    let pr = github::pull_request_for(issue, branch)?.context("no PR found")?;
+    if !pr.is_open() {
+        bail!("PR {} is {}, not open", pr.url, pr.state);
+    }
+    Ok(pr)
+}
+
+/// Fail unless the PR for `branch` is still open, ready for review, and
+/// mergeable, waiting up to the grace period for GitHub to work out the last.
+fn ensure_pr_ready_and_mergeable(issue: &IssueUrl, branch: &str) -> Result<()> {
+    progress::step("checking the PR is open, ready and mergeable");
+    let pr = open_pr(issue, branch)?;
+    if pr.is_draft {
+        bail!("PR {} is a draft", pr.url);
+    }
+    let mergeable = poll::within(poll::grace_period(), || {
+        Ok(Some(github::mergeable(issue, branch)?).filter(|m| *m != Mergeable::Unknown))
+    })?;
+    match mergeable {
+        Some(Mergeable::Yes) => Ok(()),
+        Some(Mergeable::No) => bail!("PR {} is not mergeable", pr.url),
+        _ => bail!(
+            "GitHub has not worked out whether PR {} is mergeable",
+            pr.url
+        ),
+    }
 }

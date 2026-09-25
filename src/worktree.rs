@@ -100,6 +100,11 @@ impl Worktree {
         Ok(())
     }
 
+    /// The Issue branch's head commit.
+    pub fn head(&self) -> Result<String> {
+        self.git.run(&["rev-parse", "HEAD"])
+    }
+
     /// Fetch `origin/<base>` and merge it into the Issue branch: a merge,
     /// never a rebase, so pushing it is always a fast-forward. `--ff` keeps a
     /// user's `merge.ff = only` from turning a clean merge into an error.

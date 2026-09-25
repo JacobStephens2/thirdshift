@@ -1,10 +1,12 @@
 mod branch;
+mod ci;
 mod failed_run;
 mod git;
 mod github;
 mod interrupt;
 mod issue;
 mod plugin;
+mod poll;
 mod preflight;
 mod progress;
 mod prompt;

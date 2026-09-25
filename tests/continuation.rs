@@ -287,8 +287,9 @@ fn selection_asks_github_once_for_the_pr_history() {
         .gh_calls()
         .iter()
         .map(|argv| argv[..2].join(" "))
+        .take_while(|subcommand| subcommand != "pr view")
         .collect();
-    assert_eq!(subcommands, vec!["issue view", "pr list", "pr view"]);
+    assert_eq!(subcommands, vec!["issue view", "pr list"]);
     assert!(
         scenario.gh_calls()[1]
             .windows(2)
