@@ -92,7 +92,7 @@ thirdshift https://github.com/acme/widgets/issues/7
 A Run takes minutes to tens of minutes.
 
 - **stdout** carries only the pull request's URL, and only on success, so you can script it: `url=$(thirdshift "$issue")`.
-- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run.
+- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too.
 - **Exit code** `0` means the Run ended with a pull request the factory stands behind. `2` means the argument is missing or isn't a GitHub Issue URL; the error and the help text go to stderr. Any other failure exits `1`.
 
 Two more commands print to stdout and exit `0`:
