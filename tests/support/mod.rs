@@ -4,13 +4,16 @@
 //! Layout of a scenario's temp root:
 //!
 //! ```text
-//! origin.git/        bare repo standing in for github.com/<owner>/<repo>
+//! origin.git/        bare repo standing in for github.com/<owner>/<repo>;
+//!                    it rejects non-fast-forward pushes, so no rebase or
+//!                    force-push can reach it
 //! home/              $HOME: .gitconfig with identity and the insteadOf rule
 //! bin/               fake gh and claude, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
 //! work/<repo>/       the launch clone, origin https://github.com/<owner>/<repo>.git
 //! gh-state.json      fake GitHub state
 //! claude-script.sh   what the fake agent does this test
+//! claude-script.sh.<n>  what it does in the n-th session instead, if present
 //! claude-calls.json  what the fake agent was asked to do
 //! ```
 
@@ -49,8 +52,8 @@ impl From<Output> for RunResult {
 }
 
 impl Scenario {
-    /// An origin with one commit on `main`, and a launch clone of it with
-    /// `main` checked out.
+    /// An origin with one commit on `main`, a launch clone of it with `main`
+    /// checked out, and an open issue #7.
     pub fn new() -> Self {
         let root = TempDir::new().unwrap();
         let scenario = Scenario { root };
@@ -59,12 +62,20 @@ impl Scenario {
         }
         scenario.write_gitconfig();
         scenario.install_fakes();
-        scenario.write_gh_state(&json!({ "repo": format!("{OWNER}/{REPO}"), "prs": [] }));
+        scenario.write_gh_state(&json!({
+            "repo": format!("{OWNER}/{REPO}"),
+            "issues": { "7": "OPEN" },
+            "prs": [],
+        }));
         scenario.agent_does("true");
 
         git(
             &scenario.path(""),
             &["init", "--bare", "--initial-branch=main", "origin.git"],
+        );
+        git(
+            &scenario.origin_dir(),
+            &["config", "receive.denyNonFastForwards", "true"],
         );
         let seed = scenario.path("seed");
         git(
@@ -108,6 +119,12 @@ impl Scenario {
     /// working directory.
     pub fn agent_does(&self, script: &str) {
         fs::write(self.path("claude-script.sh"), script).unwrap();
+    }
+
+    /// Script the fake agent's `session`-th session (1-based) differently
+    /// from the rest.
+    pub fn agent_does_in_session(&self, session: usize, script: &str) {
+        fs::write(self.path(&format!("claude-script.sh.{session}")), script).unwrap();
     }
 
     pub fn run(&self, args: &[&str]) -> RunResult {
@@ -155,6 +172,13 @@ impl Scenario {
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"));
         command
+    }
+
+    /// Set issue `number`'s state on the fake GitHub: `"OPEN"` or `"CLOSED"`.
+    pub fn issue_is(&self, number: u32, state: &str) {
+        let mut gh = self.gh_state();
+        gh["issues"][number.to_string()] = json!(state);
+        self.write_gh_state(&gh);
     }
 
     pub fn gh_state(&self) -> Value {
@@ -224,6 +248,35 @@ impl Scenario {
         git(&self.launch_dir(), args)
     }
 
+    /// Commit `file` with `contents` on the launch clone's current branch,
+    /// without pushing it.
+    pub fn commit_locally(&self, file: &str, contents: &str, message: &str) {
+        fs::write(self.launch_dir().join(file), contents).unwrap();
+        self.launch_git(&["add", file]);
+        self.launch_git(&["commit", "-q", "-m", message]);
+    }
+
+    /// Assert that a Run was rejected with `message` before it created
+    /// anything: no worktree, no temp directory, no agent session.
+    pub fn assert_rejected_before_any_work(&self, result: &RunResult, message: &str) {
+        assert_ne!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains(message),
+            "expected {message:?} in stderr: {}",
+            result.stderr
+        );
+        assert_eq!(result.stdout, "");
+        assert_eq!(self.entries("work"), vec![REPO]);
+        assert_eq!(
+            self.launch_git(&["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            1
+        );
+        assert_eq!(self.entries("tmp"), Vec::<String>::new());
+        assert!(self.claude_calls().is_empty(), "claude was invoked");
+    }
+
     /// Names of the files and directories directly inside `relative`.
     pub fn entries(&self, relative: &str) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(self.path(relative))
@@ -232,6 +285,14 @@ impl Scenario {
             .collect();
         names.sort();
         names
+    }
+
+    /// Point the launch clone's origin at `url`, another spelling of the
+    /// GitHub URL, which git also redirects to the bare repo.
+    pub fn set_origin_url(&self, url: &str) {
+        let rule = format!("url.{}.insteadOf", self.origin_dir().display());
+        self.launch_git(&["config", "--global", "--add", &rule, url]);
+        self.launch_git(&["config", "remote.origin.url", url]);
     }
 
     fn write_gitconfig(&self) {
@@ -270,10 +331,11 @@ fn git(dir: &Path, args: &[&str]) -> String {
 /// Like `git`, but `None` if git fails.
 fn try_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = git_output(dir, args);
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8(output.stdout).unwrap())
+    if !output.status.success() {
+        eprintln!("git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).unwrap())
 }
 
 fn git_output(dir: &Path, args: &[&str]) -> Output {

@@ -34,7 +34,8 @@ impl Git {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    /// Run `git <args>` for its exit status alone: whether it succeeded.
+    /// Run `git <args>` and report whether it exited zero, for commands whose
+    /// exit status is the answer.
     pub fn succeeds(&self, args: &[&str]) -> Result<bool> {
         Ok(self.output(args)?.status.success())
     }

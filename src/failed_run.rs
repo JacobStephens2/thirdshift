@@ -76,7 +76,7 @@ pub fn fail(
 /// so no empty Issue branch appears on origin.
 fn commit_and_push(worktree: &Worktree, base: &str, reason: &str) -> Result<()> {
     let git = worktree.git();
-    if git.succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])? {
+    if worktree.merge_in_progress()? {
         git.run(&["merge", "--abort"])?;
     }
     git.run(&["add", "-A"])?;

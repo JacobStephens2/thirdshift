@@ -4,6 +4,7 @@
 State lives in the JSON file named by $FAKE_GH_STATE:
 
     {"repo": "owner/repo",
+     "issues": {"<number>": "OPEN" | "CLOSED"},
      "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body"}]}
 
 Only the subcommands thirdshift and the fake agents use are supported. Anything
@@ -107,6 +108,15 @@ def pr_ready(state, positional, flags):
     save(state)
 
 
+def issue_view(state, positional, flags):
+    number = positional[0]
+    if number not in state["issues"]:
+        die(f"GraphQL: Could not resolve to an issue or pull request with the number of {number}.")
+    fields = {"number": int(number), "state": state["issues"][number]}
+    wanted = flags["json"].split(",")
+    print(json.dumps({key: fields[key] for key in wanted}))
+
+
 def main():
     args = sys.argv[1:]
     state = load()
@@ -122,6 +132,10 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         pr_ready(state, positional, flags)
+    elif args[:2] == ["issue", "view"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        issue_view(state, positional, flags)
     else:
         die(f"fake gh: unsupported command: {args}", 2)
 
