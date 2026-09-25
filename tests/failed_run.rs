@@ -217,7 +217,7 @@ fn a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_failure_push(
 }
 
 #[test]
-fn when_the_failure_push_fails_the_worktree_and_local_branch_are_kept() {
+fn when_origin_rejects_the_failure_push_the_worktree_and_local_branch_are_kept() {
     let scenario = Scenario::new();
     scenario.repo_has_hook(
         &scenario.origin_dir(),
@@ -228,13 +228,33 @@ fn when_the_failure_push_fails_the_worktree_and_local_branch_are_kept() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert_eq!(scenario.origin_log("issue-7"), None);
     assert!(
         result.stderr.contains("origin says no"),
         "stderr: {}",
         result.stderr
     );
+    assert_kept(&scenario, &result);
+}
+
+#[test]
+fn when_origin_is_unreachable_for_the_failure_push_the_worktree_and_local_branch_are_kept() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "git remote set-url origin {}\n{AGENT_LEAVES_WORK_AND_EXITS_3}",
+        scenario.path("nowhere.git").display()
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_kept(&scenario, &result);
+}
+
+/// What a Failed run whose work didn't reach origin shares: the failure
+/// commit is on the local Issue branch in the worktree, which are both kept,
+/// and a line on stderr says where.
+fn assert_kept(scenario: &Scenario, result: &RunResult) {
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.origin_log("issue-7"), None);
     let worktree = scenario.path("work/widgets-issue-7");
     assert_eq!(
         std::fs::read_to_string(worktree.join("wip.txt")).unwrap(),

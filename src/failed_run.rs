@@ -58,7 +58,7 @@ pub fn fail(
     let pushed = commit_and_push(&worktree, base, &reason);
     if let Err(problem) = &pushed {
         progress::step(format_args!(
-            "could not push the failed run's work: {problem:#}"
+            "could not push the failed run's work, so it may exist only locally: {problem:#}"
         ));
     }
     let pr_url = match open_pr_as_draft(issue, worktree.branch()) {
@@ -70,6 +70,7 @@ pub fn fail(
             None
         }
     };
+    // Last, since keeping the worktree lets go of it.
     if pushed.is_err() {
         worktree.keep();
     }

@@ -26,13 +26,13 @@ impl Git {
     pub fn run(&self, args: &[&str]) -> Result<String> {
         let output = self.output(args)?;
         if !output.status.success() {
-            let said: Vec<String> = [&output.stderr, &output.stdout]
+            let tail: Vec<String> = [&output.stderr, &output.stdout]
                 .into_iter()
                 .flat_map(|stream| last_lines(stream))
                 .collect();
             let mut message = format!("git {} failed", args.join(" "));
-            if !said.is_empty() {
-                message = format!("{message}: {}", said.join("\n"));
+            if !tail.is_empty() {
+                message = format!("{message}: {}", tail.join("\n"));
             }
             bail!(message);
         }

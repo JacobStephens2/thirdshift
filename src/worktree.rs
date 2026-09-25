@@ -108,8 +108,8 @@ impl Worktree {
         Ok(())
     }
 
-    /// Drop the worktree but leave it and the local Issue branch in place,
-    /// saying where, for work that exists nowhere else.
+    /// Let go of the worktree without removing it or the local Issue branch,
+    /// saying where they are, for work that may exist nowhere else.
     pub fn keep(mut self) {
         self.kept = true;
     }
@@ -166,7 +166,7 @@ impl Drop for Worktree {
                 .head()
                 .unwrap_or_else(|error| format!("an unknown commit ({error:#})"));
             progress::step(format_args!(
-                "keeping the worktree {path} and local branch {} at {head}, since its work is not on origin",
+                "keeping the worktree {path} and local branch {} at {head}",
                 self.branch
             ));
             return;

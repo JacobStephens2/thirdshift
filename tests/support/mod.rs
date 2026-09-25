@@ -324,9 +324,10 @@ impl Scenario {
     /// Install `script` as the `name` hook (e.g. `"pre-push"`) of the git
     /// repository at `repo`, such as the launch clone or `origin.git`.
     pub fn repo_has_hook(&self, repo: &Path, name: &str, script: &str) {
-        let hooks = match repo.join(".git").is_dir() {
-            true => repo.join(".git/hooks"),
-            false => repo.join("hooks"),
+        let hooks = if repo.join(".git").is_dir() {
+            repo.join(".git/hooks")
+        } else {
+            repo.join("hooks")
         };
         fs::create_dir_all(&hooks).unwrap();
         let hook = hooks.join(name);
