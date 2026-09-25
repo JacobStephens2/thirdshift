@@ -1,5 +1,5 @@
 //! The command surface beyond the Run: `help`, `version`, and what an argument
-//! thirdshift can't use prints.
+//! thirdshift can't use prints. `update` has its own tests, in `update.rs`.
 
 mod support;
 
@@ -121,20 +121,5 @@ fn a_url_that_is_not_a_github_issue_prints_an_error_and_the_help_to_stderr() {
         &scenario,
         &result,
         &format!("not a GitHub issue URL: {url}"),
-    );
-}
-
-#[test]
-fn update_is_not_yet_available() {
-    let scenario = Scenario::new();
-
-    let result = scenario.run(&["update"]);
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, "");
-    assert!(
-        result.stderr.contains("not yet available"),
-        "stderr: {}",
-        result.stderr
     );
 }

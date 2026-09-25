@@ -12,6 +12,7 @@ mod progress;
 mod prompt;
 mod run;
 mod session;
+mod update;
 mod worktree;
 
 use std::process::ExitCode;
@@ -39,8 +40,16 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Some("update") => {
-            progress::step("update is not yet available");
-            return ExitCode::FAILURE;
+            return match update::update() {
+                Ok(outcome) => {
+                    progress::step(outcome);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    progress::step(format_args!("{error:#}"));
+                    ExitCode::FAILURE
+                }
+            };
         }
         Some(arg) => match IssueUrl::parse(arg) {
             Ok(issue) => issue,

@@ -40,7 +40,13 @@ Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR
 
 ### Updating
 
-To build a new binary from the latest `main`, pull and reinstall:
+```sh
+thirdshift update
+```
+
+It replaces the installed binary with the latest stable GitHub Release, or says it is already on it. Messages go to stderr and stdout stays empty. It exits `0` when it updated or was already up to date, and `1` on any failure, such as no network. Updating is safe while a Run is using the old binary, and a Run never checks for updates or updates itself.
+
+`thirdshift update` only replaces a copy put in place by the release's shell installer, which leaves an install receipt in `~/.config/thirdshift/`. It refuses to touch any other copy and names the command that updates it. For a build from source, pull and reinstall:
 
 ```sh
 git checkout main && git pull

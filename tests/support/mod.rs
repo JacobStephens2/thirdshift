@@ -8,6 +8,7 @@
 //!                    it rejects non-fast-forward pushes, so no rebase or
 //!                    force-push can reach it
 //! home/              $HOME: .gitconfig with identity and the insteadOf rule
+//! home/.config/      $XDG_CONFIG_HOME, where an install receipt would be
 //! bin/               fake gh and claude, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
 //! work/<repo>/       the launch clone, origin https://github.com/<owner>/<repo>.git
@@ -140,6 +141,13 @@ impl Scenario {
         self.command(args).output().unwrap().into()
     }
 
+    /// Like [`Scenario::run`], with extra environment variables.
+    pub fn run_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> RunResult {
+        let mut command = self.command(args);
+        command.envs(env.iter().copied());
+        command.output().unwrap().into()
+    }
+
     /// Run thirdshift and send it `signal` (e.g. `"INT"`) once the fake agent
     /// has touched the file `started` in the scenario root.
     pub fn run_and_signal(&self, args: &[&str], started: &str, signal: &str) -> RunResult {
@@ -175,6 +183,7 @@ impl Scenario {
             .env_clear()
             .env("PATH", path)
             .env("HOME", self.path("home"))
+            .env("XDG_CONFIG_HOME", self.path("home/.config"))
             .env("TMPDIR", self.path("tmp"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("FAKE_GH_STATE", self.path("gh-state.json"))
