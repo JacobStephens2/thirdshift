@@ -41,8 +41,8 @@ pub struct RunResult {
 }
 
 impl Scenario {
-    /// An origin with one commit on `main`, and a launch clone of it with
-    /// `main` checked out.
+    /// An origin with one commit on `main`, a launch clone of it with `main`
+    /// checked out, and an open issue #7.
     pub fn new() -> Self {
         let root = TempDir::new().unwrap();
         let scenario = Scenario { root };
@@ -51,7 +51,11 @@ impl Scenario {
         }
         scenario.write_gitconfig();
         scenario.install_fakes();
-        scenario.write_gh_state(&json!({ "repo": format!("{OWNER}/{REPO}"), "prs": [] }));
+        scenario.write_gh_state(&json!({
+            "repo": format!("{OWNER}/{REPO}"),
+            "issues": { "7": "OPEN" },
+            "prs": [],
+        }));
         scenario.agent_does("true");
 
         git(
@@ -138,6 +142,13 @@ impl Scenario {
         }
     }
 
+    /// Set issue `number`'s state on the fake GitHub: `"OPEN"` or `"CLOSED"`.
+    pub fn issue_is(&self, number: u32, state: &str) {
+        let mut gh = self.gh_state();
+        gh["issues"][number.to_string()] = json!(state);
+        self.write_gh_state(&gh);
+    }
+
     pub fn gh_state(&self) -> Value {
         serde_json::from_str(&fs::read_to_string(self.path("gh-state.json")).unwrap()).unwrap()
     }
@@ -161,20 +172,20 @@ impl Scenario {
     /// Commit subjects on `branch` in the origin repo, newest first, or `None`
     /// if the branch doesn't exist there.
     pub fn origin_log(&self, branch: &str) -> Option<Vec<String>> {
-        let output = Command::new("git")
-            .args(["log", "--format=%s", &format!("refs/heads/{branch}")])
-            .current_dir(self.origin_dir())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", self.path("home"))
-            .output()
-            .unwrap();
-        output.status.success().then(|| {
-            String::from_utf8(output.stdout)
-                .unwrap()
-                .lines()
-                .map(String::from)
-                .collect()
-        })
+        try_git(
+            &self.origin_dir(),
+            &["log", "--format=%s", &format!("refs/heads/{branch}")],
+        )
+        .map(|log| log.lines().map(String::from).collect())
+    }
+
+    /// The contents of `file` on `branch` in the origin repo, or `None` if it
+    /// isn't there.
+    pub fn origin_file(&self, branch: &str, file: &str) -> Option<String> {
+        try_git(
+            &self.origin_dir(),
+            &["show", &format!("refs/heads/{branch}:{file}")],
+        )
     }
 
     /// Output of a git command in the origin repo.
@@ -187,6 +198,35 @@ impl Scenario {
         git(&self.launch_dir(), args)
     }
 
+    /// Commit `file` with `contents` on the launch clone's current branch,
+    /// without pushing it.
+    pub fn commit_locally(&self, file: &str, contents: &str, message: &str) {
+        fs::write(self.launch_dir().join(file), contents).unwrap();
+        self.launch_git(&["add", file]);
+        self.launch_git(&["commit", "-q", "-m", message]);
+    }
+
+    /// Assert that a Run was rejected with `message` before it created
+    /// anything: no worktree, no temp directory, no agent session.
+    pub fn assert_rejected_before_any_work(&self, result: &RunResult, message: &str) {
+        assert_ne!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains(message),
+            "expected {message:?} in stderr: {}",
+            result.stderr
+        );
+        assert_eq!(result.stdout, "");
+        assert_eq!(self.entries("work"), vec![REPO]);
+        assert_eq!(
+            self.launch_git(&["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            1
+        );
+        assert_eq!(self.entries("tmp"), Vec::<String>::new());
+        assert!(self.claude_calls().is_empty(), "claude was invoked");
+    }
+
     /// Names of the files and directories directly inside `relative`.
     pub fn entries(&self, relative: &str) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(self.path(relative))
@@ -195,6 +235,14 @@ impl Scenario {
             .collect();
         names.sort();
         names
+    }
+
+    /// Point the launch clone's origin at `url`, another spelling of the
+    /// GitHub URL, which git also redirects to the bare repo.
+    pub fn set_origin_url(&self, url: &str) {
+        let rule = format!("url.{}.insteadOf", self.origin_dir().display());
+        self.launch_git(&["config", "--global", "--add", &rule, url]);
+        self.launch_git(&["config", "remote.origin.url", url]);
     }
 
     fn write_gitconfig(&self) {
@@ -221,6 +269,12 @@ impl Scenario {
 /// Run git in `dir` with the scenario's config and return stdout, panicking on
 /// failure. `dir` must be inside a scenario root.
 fn git(dir: &Path, args: &[&str]) -> String {
+    try_git(dir, args).unwrap_or_else(|| panic!("git {args:?} failed in {}", dir.display()))
+}
+
+/// Run git in `dir` with the scenario's config and return stdout, or `None` if
+/// it fails. `dir` must be inside a scenario root.
+fn try_git(dir: &Path, args: &[&str]) -> Option<String> {
     let home = dir
         .ancestors()
         .find(|ancestor| ancestor.join("home/.gitconfig").exists())
@@ -233,10 +287,9 @@ fn git(dir: &Path, args: &[&str]) -> String {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
+    if !output.status.success() {
+        eprintln!("git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).unwrap())
 }
