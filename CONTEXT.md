@@ -4,6 +4,10 @@ A factory that turns a GitHub issue into a ready-for-review pull request by runn
 
 ## Language
 
+**Day shift**:
+The human half of the workflow: shaping work into issues the factory can take on (grilling, specs, tickets), and reviewing the pull requests it delivers.
+_Avoid_: planning phase
+
 **Issue URL**:
 The GitHub issue link the factory is given to implement, e.g. `https://github.com/<owner>/<repo>/issues/<n>`.
 _Avoid_: ticket, spec link
