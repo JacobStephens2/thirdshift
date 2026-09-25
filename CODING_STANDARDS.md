@@ -1,1 +1,1 @@
-Follow principles and ideas in the codebase-design skill.
+Follow principles and ideas in the .agents/skills/codebase-design skill.
