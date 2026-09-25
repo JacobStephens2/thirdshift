@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! origin.git/        bare repo standing in for github.com/<owner>/<repo>
-//! home/              $HOME: .gitconfig with identity and the insteadOf rule
+//! home/              $HOME: .gitconfig with identity and the insteadOf rules
 //! bin/               fake gh and claude, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
 //! work/<repo>/       the launch clone, origin https://github.com/<owner>/<repo>.git
@@ -38,8 +38,8 @@ pub struct RunResult {
 }
 
 impl Scenario {
-    /// An origin with one commit on `main`, and a launch clone of it with
-    /// `main` checked out.
+    /// An origin with one commit on `main`, a launch clone of it with `main`
+    /// checked out, and an open issue #7.
     pub fn new() -> Self {
         let root = TempDir::new().unwrap();
         let scenario = Scenario { root };
@@ -48,7 +48,11 @@ impl Scenario {
         }
         scenario.write_gitconfig();
         scenario.install_fakes();
-        scenario.write_gh_state(&json!({ "repo": format!("{OWNER}/{REPO}"), "prs": [] }));
+        scenario.write_gh_state(&json!({
+            "repo": format!("{OWNER}/{REPO}"),
+            "issues": { "7": "OPEN" },
+            "prs": [],
+        }));
         scenario.agent_does("true");
 
         git(
@@ -125,6 +129,13 @@ impl Scenario {
         }
     }
 
+    /// Set issue `number`'s state on the fake GitHub: `"OPEN"` or `"CLOSED"`.
+    pub fn issue_is(&self, number: u32, state: &str) {
+        let mut gh = self.gh_state();
+        gh["issues"][number.to_string()] = json!(state);
+        self.write_gh_state(&gh);
+    }
+
     pub fn gh_state(&self) -> Value {
         serde_json::from_str(&fs::read_to_string(self.path("gh-state.json")).unwrap()).unwrap()
     }
@@ -164,9 +175,54 @@ impl Scenario {
         })
     }
 
+    /// The contents of `file` on `branch` in the origin repo, or `None` if it
+    /// isn't there.
+    pub fn origin_file(&self, branch: &str, file: &str) -> Option<String> {
+        let output = Command::new("git")
+            .args(["show", &format!("refs/heads/{branch}:{file}")])
+            .current_dir(self.origin_dir())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", self.path("home"))
+            .output()
+            .unwrap();
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8(output.stdout).unwrap())
+    }
+
     /// Output of a git command in the launch clone.
     pub fn launch_git(&self, args: &[&str]) -> String {
         git(&self.launch_dir(), args)
+    }
+
+    /// Commit `file` with `contents` on the launch clone's current branch,
+    /// without pushing it.
+    pub fn commit_locally(&self, file: &str, contents: &str, message: &str) {
+        fs::write(self.launch_dir().join(file), contents).unwrap();
+        self.launch_git(&["add", file]);
+        self.launch_git(&["commit", "-q", "-m", message]);
+    }
+
+    /// Assert that a Run was rejected with `message` before it created
+    /// anything: no worktree, no temp directory, no agent session.
+    pub fn assert_rejected_before_any_work(&self, result: &RunResult, message: &str) {
+        assert_ne!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains(message),
+            "expected {message:?} in stderr: {}",
+            result.stderr
+        );
+        assert_eq!(result.stdout, "");
+        assert_eq!(self.entries("work"), vec![REPO]);
+        assert_eq!(
+            self.launch_git(&["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            1
+        );
+        assert_eq!(self.entries("tmp"), Vec::<String>::new());
+        assert!(self.claude_calls().is_empty(), "claude was invoked");
     }
 
     /// Names of the files and directories directly inside `relative`.
@@ -179,14 +235,23 @@ impl Scenario {
         names
     }
 
+    /// The identity, and `insteadOf` rules sending every spelling of the
+    /// GitHub URL that tests use as an origin to the bare repo.
     fn write_gitconfig(&self) {
-        let config = format!(
+        let mut config = format!(
             "[user]\n\tname = Test Runner\n\temail = runner@example.com\n\
              [init]\n\tdefaultBranch = main\n\
-             [url \"{origin}\"]\n\tinsteadOf = {github}\n",
+             [url \"{origin}\"]\n",
             origin = self.origin_dir().display(),
-            github = self.github_url(),
         );
+        for github in [
+            self.github_url(),
+            format!("https://github.com/{OWNER}/{REPO}"),
+            "https://github.com/ACME/Widgets.git".to_string(),
+            format!("git@github.com:{OWNER}/{REPO}.git"),
+        ] {
+            config.push_str(&format!("\tinsteadOf = {github}\n"));
+        }
         fs::write(self.path("home/.gitconfig"), config).unwrap();
     }
 

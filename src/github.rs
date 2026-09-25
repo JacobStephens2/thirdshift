@@ -1,4 +1,4 @@
-//! Asking GitHub, through `gh`, about pull requests.
+//! Asking GitHub, through `gh`, about issues and pull requests.
 
 use std::process::Command;
 
@@ -6,6 +6,28 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::issue::IssueUrl;
+
+/// Whether `issue` is open.
+pub fn issue_is_open(issue: &IssueUrl) -> Result<bool> {
+    let output = Command::new("gh")
+        .args(["issue", "view", &issue.number.to_string()])
+        .args(["--repo", &issue.repo_slug(), "--json", "state"])
+        .output()
+        .context("could not run gh")?;
+    if !output.status.success() {
+        bail!(
+            "gh issue view {} failed: {}",
+            issue.number,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let json: Value =
+        serde_json::from_slice(&output.stdout).context("gh issue view returned invalid JSON")?;
+    let state = json["state"]
+        .as_str()
+        .context("gh issue view output has no state")?;
+    Ok(state == "OPEN")
+}
 
 pub struct PullRequest {
     pub url: String,
