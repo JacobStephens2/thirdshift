@@ -68,7 +68,7 @@ impl Drop for Worktree {
         ];
         for step in steps {
             if let Err(error) = self.launch.run(step) {
-                eprintln!("thirdshift: cleanup incomplete: {error:#}");
+                progress::step(format_args!("cleanup incomplete: {error:#}"));
             }
         }
     }

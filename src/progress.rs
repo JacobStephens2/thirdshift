@@ -25,53 +25,57 @@ pub fn step(message: impl Display) {
 pub struct Progress {
     started: bool,
     cwd: Option<String>,
-    totals: Option<String>,
+    /// Signed in with a claude.ai subscription rather than an API key.
+    subscription: bool,
+    turns_and_cost: Option<(u64, f64)>,
 }
 
 impl Progress {
-    /// The stderr line, without the `thirdshift: ` prefix, for one line of the
-    /// stream, if it is a notable event.
-    pub fn line(&mut self, raw: &str) -> Option<String> {
-        let event: Value = serde_json::from_str(raw).ok()?;
-        match event["type"].as_str()? {
-            "system" if event["subtype"] == "init" => {
-                if self.started {
-                    return None;
-                }
+    /// The stderr lines, without the `thirdshift: ` prefix, for one line of
+    /// the stream: one per notable event in it, often none.
+    pub fn condense(&mut self, raw: &str) -> Vec<String> {
+        let Ok(event) = serde_json::from_str::<Value>(raw) else {
+            return Vec::new();
+        };
+        match event["type"].as_str() {
+            Some("system") if event["subtype"] == "init" && !self.started => {
                 self.started = true;
                 self.cwd = event["cwd"].as_str().map(String::from);
-                Some("session started".to_string())
+                self.subscription = event["apiKeySource"] == "none";
+                vec!["session started".to_string()]
             }
-            "assistant" => {
-                let lines: Vec<String> = event["message"]["content"]
-                    .as_array()?
-                    .iter()
-                    .filter(|block| block["type"] == "tool_use")
-                    .filter_map(|block| {
-                        Some(self.tool_use(block["name"].as_str()?, &block["input"]))
-                    })
-                    .collect();
-                (!lines.is_empty()).then(|| lines.join("; "))
-            }
-            "result" => {
+            Some("assistant") => event["message"]["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|block| block["type"] == "tool_use")
+                .filter_map(|block| Some(self.tool_use(block["name"].as_str()?, &block["input"])))
+                .collect(),
+            Some("result") => {
                 // Both are cumulative across a session's result events.
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),
                     event["total_cost_usd"].as_f64(),
                 ) {
-                    self.totals = Some(format!("{turns} turns, ${cost:.2} at API prices"));
+                    self.turns_and_cost = Some((turns, cost));
                 }
-                None
+                Vec::new()
             }
-            _ => None,
+            _ => Vec::new(),
         }
     }
 
     /// Turns and cost from the last `result` event that reported them. On a
     /// claude.ai subscription the cost is the API-price equivalent, not a
-    /// charge.
-    pub fn summary(&self) -> Option<&str> {
-        self.totals.as_deref()
+    /// charge, and says so.
+    pub fn summary(&self) -> Option<String> {
+        let (turns, cost) = self.turns_and_cost?;
+        let basis = if self.subscription {
+            " at API prices"
+        } else {
+            ""
+        };
+        Some(format!("{turns} turns, ${cost:.2}{basis}"))
     }
 
     fn tool_use(&self, name: &str, input: &Value) -> String {
@@ -102,16 +106,23 @@ impl Progress {
 
 /// Commits and pushes by name; any other command by its first line.
 fn bash(command: &str) -> String {
-    let actions: Vec<&str> = [("git commit", "commit"), ("git push", "push")]
+    let actions: Vec<&str> = ["commit", "push"]
         .into_iter()
-        .filter(|(needle, _)| command.contains(needle))
-        .map(|(_, action)| action)
+        .filter(|subcommand| runs_git(command, subcommand))
         .collect();
     if actions.is_empty() {
         format!("$ {}", shorten(command.lines().next().unwrap_or("")))
     } else {
         actions.join(" and ")
     }
+}
+
+/// Does one of the commands chained in `command` start `git <subcommand>`?
+fn runs_git(command: &str, subcommand: &str) -> bool {
+    command.split(['\n', ';', '&', '|']).any(|part| {
+        let mut words = part.split_whitespace();
+        words.next() == Some("git") && words.next() == Some(subcommand)
+    })
 }
 
 fn shorten(text: &str) -> String {
@@ -126,11 +137,11 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn lines(events: &[Value]) -> (Progress, Vec<Option<String>>) {
+    fn lines(events: &[Value]) -> (Progress, Vec<Vec<String>>) {
         let mut progress = Progress::default();
         let lines = events
             .iter()
-            .map(|event| progress.line(&event.to_string()))
+            .map(|event| progress.condense(&event.to_string()))
             .collect();
         (progress, lines)
     }
@@ -147,16 +158,22 @@ mod tests {
     }
 
     fn line_for(event: Value) -> Option<String> {
-        lines(&[init("/work/widgets-issue-7"), event])
+        let mut lines = lines(&[init("/work/widgets-issue-7"), event])
             .1
             .pop()
-            .unwrap()
+            .unwrap();
+        assert!(lines.len() <= 1, "several lines: {lines:?}");
+        lines.pop()
+    }
+
+    fn result(turns: u64, cost: f64) -> Value {
+        json!({ "type": "result", "num_turns": turns, "total_cost_usd": cost })
     }
 
     #[test]
     fn only_the_first_init_starts_the_session() {
         let (_, lines) = lines(&[init("/a"), init("/a")]);
-        assert_eq!(lines, [Some("session started".to_string()), None]);
+        assert_eq!(lines, [vec!["session started".to_string()], vec![]]);
     }
 
     #[test]
@@ -178,6 +195,19 @@ mod tests {
         assert_eq!(
             line("git add -A && git commit -m x && git push"),
             Some("commit and push".to_string())
+        );
+    }
+
+    #[test]
+    fn mentions_of_commit_or_push_are_not_commits_or_pushes() {
+        let line = |command: &str| line_for(tool_use("Bash", json!({ "command": command })));
+        assert_eq!(
+            line("grep 'git push' README.md"),
+            Some("$ grep 'git push' README.md".to_string())
+        );
+        assert_eq!(
+            line("git commit-tree HEAD^{tree}"),
+            Some("$ git commit-tree HEAD^{tree}".to_string())
         );
     }
 
@@ -233,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn several_tool_uses_in_one_message_share_a_line() {
+    fn several_tool_uses_in_one_message_get_a_line_each() {
         let event = json!({
             "type": "assistant",
             "message": { "content": [
@@ -242,7 +272,11 @@ mod tests {
                 { "type": "tool_use", "name": "Read", "input": { "file_path": "b.rs" } }
             ] }
         });
-        assert_eq!(line_for(event), Some("Read a.rs; Read b.rs".to_string()));
+        let (_, lines) = lines(&[event]);
+        assert_eq!(
+            lines,
+            [vec!["Read a.rs".to_string(), "Read b.rs".to_string()]]
+        );
     }
 
     #[test]
@@ -252,17 +286,29 @@ mod tests {
             json!({ "type": "user", "message": { "content": [{ "type": "tool_result" }] } }),
             json!({ "type": "result", "num_turns": 3, "total_cost_usd": 0.1 }),
         ]);
-        assert_eq!(lines, [None, None, None]);
+        assert_eq!(lines, [vec![], vec![], vec![]] as [Vec<String>; 3]);
     }
 
     #[test]
     fn the_summary_is_the_last_result_with_totals() {
         let (progress, _) = lines(&[
-            json!({ "type": "result", "num_turns": 10, "total_cost_usd": 0.5 }),
-            json!({ "type": "result", "num_turns": 34, "total_cost_usd": 1.8249 }),
+            result(10, 0.5),
+            result(34, 1.8249),
             json!({ "type": "result", "subtype": "success" }),
         ]);
-        assert_eq!(progress.summary(), Some("34 turns, $1.82 at API prices"));
+        assert_eq!(progress.summary().as_deref(), Some("34 turns, $1.82"));
+    }
+
+    #[test]
+    fn on_a_subscription_the_cost_is_marked_as_at_api_prices() {
+        let (progress, _) = lines(&[
+            json!({ "type": "system", "subtype": "init", "apiKeySource": "none" }),
+            result(34, 1.82),
+        ]);
+        assert_eq!(
+            progress.summary().as_deref(),
+            Some("34 turns, $1.82 at API prices")
+        );
     }
 
     #[test]
@@ -286,7 +332,7 @@ mod tests {
             r#"{"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}"#,
             r#"{"type": "result", "num_turns": "many", "total_cost_usd": null}"#,
         ] {
-            assert_eq!(progress.line(raw), None, "{raw}");
+            assert_eq!(progress.condense(raw), Vec::<String>::new(), "{raw}");
         }
         assert_eq!(progress.summary(), None);
     }

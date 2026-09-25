@@ -103,11 +103,7 @@ fn reports_the_last_result_once_the_session_exits_even_after_several() {
     assert_eq!(ended.len(), 1, "stderr: {lines:?}");
     // The fake's own closing result event carries no totals, so the last
     // result with totals wins.
-    assert!(
-        ended[0].ends_with("34 turns, $1.82 at API prices"),
-        "{}",
-        ended[0]
-    );
+    assert!(ended[0].ends_with("34 turns, $1.82"), "{}", ended[0]);
 }
 
 #[test]

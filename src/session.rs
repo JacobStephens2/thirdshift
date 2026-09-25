@@ -1,7 +1,7 @@
 //! Headless Claude Code sessions and their logs.
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -43,30 +43,23 @@ pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &P
         .spawn()
         .context("could not run claude")?;
 
-    let mut stream = BufReader::new(child.stdout.take().context("no stdout from claude")?);
+    let stream = child.stdout.take().context("no stdout from claude")?;
     let mut progress = Progress::default();
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        if stream.read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
-        log_file
-            .write_all(&line)
-            .with_context(|| format!("could not write {}", log.display()))?;
-        if let Some(event) = progress.line(&String::from_utf8_lossy(&line)) {
-            progress::step(format_args!("{kind}: {event}"));
-        }
+    let followed = follow(kind, stream, &mut log_file, log, &mut progress);
+    if followed.is_err() {
+        // Nothing reads its output any more, so it could block forever.
+        let _ = child.kill();
     }
     let status = child.wait().context("could not wait for claude")?;
 
     let elapsed = minutes_and_seconds(started.elapsed());
-    match progress.summary() {
-        Some(summary) => progress::step(format_args!(
-            "{kind}: session ended after {elapsed}: {summary}"
-        )),
-        None => progress::step(format_args!("{kind}: session ended after {elapsed}")),
-    }
+    let summary = progress
+        .summary()
+        .map_or(String::new(), |summary| format!(": {summary}"));
+    progress::step(format_args!(
+        "{kind}: session ended after {elapsed}{summary}"
+    ));
+    followed?;
     if !status.success() {
         bail!(
             "claude exited {}",
@@ -76,6 +69,35 @@ pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &P
         );
     }
     Ok(())
+}
+
+/// Copy every line of `stream` to `log_file` and print the progress lines it
+/// condenses to, until the stream ends.
+fn follow(
+    kind: &str,
+    stream: impl Read,
+    log_file: &mut File,
+    log: &Path,
+    progress: &mut Progress,
+) -> Result<()> {
+    let mut stream = BufReader::new(stream);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if stream
+            .read_until(b'\n', &mut line)
+            .context("could not read the session stream")?
+            == 0
+        {
+            return Ok(());
+        }
+        log_file
+            .write_all(&line)
+            .with_context(|| format!("could not write {}", log.display()))?;
+        for condensed in progress.condense(&String::from_utf8_lossy(&line)) {
+            progress::step(format_args!("{kind}: {condensed}"));
+        }
+    }
 }
 
 /// `5m 32s`, or `8s` under a minute.

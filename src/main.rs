@@ -21,7 +21,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("thirdshift: {error:#}");
+            progress::step(format_args!("{error:#}"));
             ExitCode::FAILURE
         }
     }
