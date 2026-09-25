@@ -1,0 +1,53 @@
+# Publishes the tagged version to crates.io with trusted publishing: the job
+# trades GitHub's OIDC token for a short-lived crates.io token, so no token is
+# stored anywhere. dist's release.yml calls this after its host job, which only
+# runs once the Rocky and WSL checks in release-smoke.yml have passed.
+#
+# crates.io matches the trusted publisher on the workflow that started the
+# run, so it is configured there with release.yml, not this file.
+#
+# A version already on crates.io is skipped rather than failing, so 0.1.0 can
+# be published by hand first and a release can always be re-run.
+name: Publish to crates.io
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  publish-crates:
+    runs-on: ubuntu-24.04
+    # release.yml grants this job id-token and packages only; the repository
+    # is public, so the checkout needs no contents permission.
+    permissions:
+      id-token: write
+    env:
+      VERSION: ${{ fromJson(inputs.plan).releases[0].app_version }}
+    steps:
+      - id: check
+        run: |
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -A 'thirdshift release (https://github.com/JacobStephens2/thirdshift)' \
+            "https://crates.io/api/v1/crates/thirdshift/$VERSION")
+          case "$status" in
+            200) echo "thirdshift $VERSION is already on crates.io; skipping"
+                 echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            404) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "crates.io answered $status" >&2; exit 1 ;;
+          esac
+      - uses: actions/checkout@v7
+        if: steps.check.outputs.publish == 'true'
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.check.outputs.publish == 'true'
+      - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.check.outputs.publish == 'true'
+        id: auth
+      - if: steps.check.outputs.publish == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
