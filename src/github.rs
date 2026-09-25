@@ -1,5 +1,6 @@
 //! Asking GitHub, through `gh`, about pull requests.
 
+use std::fmt;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -9,11 +10,27 @@ use crate::issue::IssueUrl;
 
 const PR_FIELDS: &str = "number,url,state,headRefName,baseRefName";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrState {
+    Open,
+    Closed,
+    Merged,
+}
+
+impl fmt::Display for PrState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            PrState::Open => "open",
+            PrState::Closed => "closed",
+            PrState::Merged => "merged",
+        })
+    }
+}
+
 pub struct PullRequest {
     pub number: u64,
     pub url: String,
-    /// `OPEN`, `CLOSED` or `MERGED`.
-    pub state: String,
+    pub state: PrState,
     pub head: String,
     pub base: String,
 }
@@ -26,10 +43,16 @@ impl PullRequest {
                 .map(String::from)
                 .with_context(|| format!("gh output has no {name}"))
         };
+        let state = match field("state")?.as_str() {
+            "OPEN" => PrState::Open,
+            "CLOSED" => PrState::Closed,
+            "MERGED" => PrState::Merged,
+            other => bail!("gh output has an unknown PR state {other}"),
+        };
         Ok(PullRequest {
             number: json["number"].as_u64().context("gh output has no number")?,
             url: field("url")?,
-            state: field("state")?,
+            state,
             head: field("headRefName")?,
             base: field("baseRefName")?,
         })
@@ -38,45 +61,62 @@ impl PullRequest {
 
 /// The pull request whose head is `branch`, if `gh` finds one.
 pub fn pull_request_for(issue: &IssueUrl, branch: &str) -> Result<Option<PullRequest>> {
-    let output = Command::new("gh")
-        .args(["pr", "view", branch, "--repo", &issue.repo_slug()])
-        .args(["--json", PR_FIELDS])
-        .output()
-        .context("could not run gh")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("no pull requests found") {
-            return Ok(None);
-        }
-        bail!("gh pr view {branch} failed: {}", stderr.trim());
-    }
-    let json: Value =
-        serde_json::from_slice(&output.stdout).context("gh pr view returned invalid JSON")?;
+    let json = match gh_json(&[
+        "pr",
+        "view",
+        branch,
+        "--repo",
+        &issue.repo_slug(),
+        "--json",
+        PR_FIELDS,
+    ]) {
+        Ok(json) => json,
+        Err(error) if format!("{error:#}").contains("no pull requests found") => return Ok(None),
+        Err(error) => return Err(error),
+    };
     PullRequest::from_json(&json).map(Some)
 }
 
 /// Every pull request in this repository, in any state, whose head branch
 /// starts with `prefix`. PRs from forks are left out: their heads are not
 /// this repository's branches.
-pub fn pull_requests_from(issue: &IssueUrl, prefix: &str) -> Result<Vec<PullRequest>> {
-    let output = Command::new("gh")
-        .args(["pr", "list", "--repo", &issue.repo_slug(), "--state", "all"])
-        .args(["--search", &format!("head:{prefix}"), "--limit", "1000"])
-        .args(["--json", &format!("{PR_FIELDS},isCrossRepository")])
-        .output()
-        .context("could not run gh")?;
-    if !output.status.success() {
-        bail!(
-            "gh pr list failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let json: Value =
-        serde_json::from_slice(&output.stdout).context("gh pr list returned invalid JSON")?;
+pub fn pull_requests_with_head_prefix(issue: &IssueUrl, prefix: &str) -> Result<Vec<PullRequest>> {
+    let json = gh_json(&[
+        "pr",
+        "list",
+        "--repo",
+        &issue.repo_slug(),
+        "--state",
+        "all",
+        "--search",
+        &format!("head:{prefix}"),
+        "--limit",
+        "1000",
+        "--json",
+        &format!("{PR_FIELDS},isCrossRepository"),
+    ])?;
     json.as_array()
         .context("gh pr list did not return a list")?
         .iter()
         .filter(|pr| pr["isCrossRepository"] != Value::Bool(true))
         .map(PullRequest::from_json)
         .collect()
+}
+
+/// Run `gh <args>` and parse its stdout as JSON, failing with gh's stderr if
+/// it exits non-zero.
+fn gh_json(args: &[&str]) -> Result<Value> {
+    let command = format!("gh {}", args[..2].join(" "));
+    let output = Command::new("gh")
+        .args(args)
+        .output()
+        .context("could not run gh")?;
+    if !output.status.success() {
+        bail!(
+            "{command} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("{command} returned invalid JSON"))
 }

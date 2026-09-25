@@ -147,6 +147,14 @@ impl Scenario {
         }
     }
 
+    /// The prompt of the first `claude` call.
+    pub fn first_prompt(&self) -> String {
+        self.claude_calls()[0]["prompt"]
+            .as_str()
+            .expect("claude got no prompt")
+            .to_string()
+    }
+
     /// The argv of every `gh` call, in order.
     pub fn gh_calls(&self) -> Vec<Vec<String>> {
         match fs::read_to_string(self.path("gh-calls.json")) {

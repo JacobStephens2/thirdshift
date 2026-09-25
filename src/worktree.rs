@@ -29,8 +29,8 @@ impl Worktree {
 
     /// Check out the existing `branch` from origin in a new worktree next to
     /// the launch repository's root, named `<repo>-<branch>`. `origin/<base>`
-    /// is fetched too, for the review fixed point. A local `branch`, if any,
-    /// must already match its origin copy: it is reset to it.
+    /// is fetched too, for the review fixed point. A local `branch`, if any, is
+    /// reset to origin's: `branch::select` has checked they already match.
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         launch.run(&["fetch", "origin", base, branch])?;
         Self::add(

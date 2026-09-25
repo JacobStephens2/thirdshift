@@ -101,10 +101,7 @@ fn with_an_open_pr_the_continuation_prompt_asks_to_update_it() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    let prompt = scenario.claude_calls()[0]["prompt"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let prompt = scenario.first_prompt();
     assert!(
         prompt.contains(
             "\n\nPush branch issue-7.\n\
@@ -133,10 +130,7 @@ fn the_open_prs_base_is_the_base_branch_whatever_is_checked_out() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, format!("{pr}\n"));
-    let prompt = scenario.claude_calls()[0]["prompt"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let prompt = scenario.first_prompt();
     assert!(
         prompt.contains("(see git log main..HEAD)")
             && prompt.contains("The base branch is main. Review with /thirdshift:code-review using main as the fixed point.")
@@ -168,10 +162,7 @@ gh pr create --base develop --head issue-7 --title "Add feature" --body "Closes 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let prompt = scenario.claude_calls()[0]["prompt"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let prompt = scenario.first_prompt();
     assert!(
         prompt.contains("Create a pull request against develop"),
         "prompt: {prompt}"
@@ -303,5 +294,24 @@ fn selection_asks_github_once_for_the_pr_history() {
             .any(|w| w == ["--state", "all"]),
         "gh calls: {:?}",
         scenario.gh_calls()
+    );
+}
+
+#[test]
+fn an_open_pr_supplies_the_base_branch_even_on_a_detached_head() {
+    let scenario = Scenario::new();
+    scenario.launch_git(&["checkout", "-q", "--detach"]);
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    let pr = scenario.github_has_pr("issue-7", "main", "OPEN");
+    scenario.agent_does(AGENT_COMMITS);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{pr}\n"));
+    assert!(
+        scenario.first_prompt().contains("The base branch is main."),
+        "prompt: {}",
+        scenario.first_prompt()
     );
 }
