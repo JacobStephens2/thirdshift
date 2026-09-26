@@ -50,6 +50,183 @@
   </div>
 </header>
 
+<section class="sec press" id="how-a-run-works" aria-labelledby="press-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">How a Run works</p>
+      <h2 id="press-title" class="misreg">One issue in, one pull request out.</h2>
+      <p class="lede">A Run feeds one issue through four units and delivers a pull request that is ready for review. Units 2 and 3 are one agent session. Under each unit are the lines thirdshift printed on stderr during a real Run: issue <a href="https://github.com/JacobStephens2/thirdshift/issues/24">#24</a>, which produced <a href="https://github.com/JacobStephens2/thirdshift/pull/25">pull request #25</a>.</p>
+    </div>
+
+    <div class="press-frame grid-bg">
+      <svg class="press-svg" viewBox="0 0 1200 420" role="img" aria-labelledby="press-svg-title press-svg-desc">
+        <title id="press-svg-title">The press line: a feeder, units C, M, Y and K, and a delivery pile</title>
+        <desc id="press-svg-desc">Issue #24 goes in at the feeder and passes through four press units: 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish. A bracket over units M and Y marks them as one agent session. Pull request #25, ready for review, comes out on the delivery pile.</desc>
+        <defs>
+          <pattern id="dots" width="6" height="6" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="1.5" fill="#000"/></pattern>
+          <g id="rollers" fill="none" stroke="var(--dim)" stroke-width="1.5"><circle cx="38" cy="86" r="10"/><circle cx="85" cy="86" r="10"/><circle cx="132" cy="86" r="10"/></g>
+          <path id="spokes" d="M85 114v92M39 160h92M52 127l66 66M118 127l-66 66" stroke="var(--dim)" stroke-width="1"/>
+        </defs>
+
+        <!-- The one agent session: a bracket over M and Y. -->
+        <path d="M425 34V22H805V34" fill="none" stroke="var(--c)" stroke-width="2"/>
+        <text x="615" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="var(--c)" letter-spacing="1.5">ONE AGENT SESSION</text>
+
+        <!-- Feeder: the issue. -->
+        <g transform="translate(24,230)">
+          <rect x="10" y="0" width="140" height="70" fill="var(--k3)" stroke="var(--dim)"/><rect x="5" y="8" width="140" height="70" fill="var(--k3)" stroke="var(--dim)"/>
+          <rect x="0" y="16" width="140" height="70" fill="var(--k2)" stroke="var(--paper)"/>
+          <text x="70" y="50" text-anchor="middle" font-size="16" font-weight="700" fill="var(--paper)">ISSUE #24</text>
+          <text x="70" y="-12" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">FEEDER</text>
+          <text x="70" y="112" text-anchor="middle" font-size="11" fill="var(--dim)">the issue</text>
+        </g>
+
+        <!-- The belt the sheet travels on. -->
+        <line x1="160" y1="322" x2="1040" y2="322" stroke="var(--y)" stroke-opacity=".55" stroke-width="3" stroke-dasharray="10 8"/>
+        <line x1="160" y1="328" x2="1040" y2="328" stroke="var(--rule)" stroke-width="2"/>
+
+        <!-- The four units. The inks are identity only: each unit also has a number and a name. -->
+        <g class="unit" data-unit="1" transform="translate(215,64)">
+          <rect x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
+          <rect x="12" y="12" width="146" height="50" fill="var(--c)"/><rect x="12" y="12" width="146" height="50" fill="url(#dots)" opacity=".35"/>
+          <text class="svg-misreg ink-letter" x="85" y="49" text-anchor="middle" fill="#000">C</text>
+          <use href="#rollers"/>
+          <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--c)" stroke-width="3"/><use href="#spokes"/>
+          <circle cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
+          <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT 1</text>
+          <text class="unit-label" x="85" y="298" text-anchor="middle">1 · C · PREPARE</text>
+        </g>
+        <g class="unit" data-unit="2" transform="translate(425,64)">
+          <rect x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
+          <rect x="12" y="12" width="146" height="50" fill="var(--m)"/><rect x="12" y="12" width="146" height="50" fill="url(#dots)" opacity=".35"/>
+          <text class="svg-misreg ink-letter" x="85" y="49" text-anchor="middle" fill="#000">M</text>
+          <use href="#rollers"/>
+          <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--m)" stroke-width="3"/><use href="#spokes"/>
+          <circle cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
+          <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT 2</text>
+          <text class="unit-label" x="85" y="298" text-anchor="middle">2 · M · IMPLEMENT</text>
+        </g>
+        <g class="unit" data-unit="3" transform="translate(635,64)">
+          <rect x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
+          <rect x="12" y="12" width="146" height="50" fill="var(--y)"/><rect x="12" y="12" width="146" height="50" fill="url(#dots)" opacity=".35"/>
+          <text class="svg-misreg ink-letter" x="85" y="49" text-anchor="middle" fill="#000">Y</text>
+          <use href="#rollers"/>
+          <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--y)" stroke-width="3"/><use href="#spokes"/>
+          <circle cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
+          <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT 3</text>
+          <text class="unit-label" x="85" y="298" text-anchor="middle">3 · Y · REVIEW</text>
+        </g>
+        <!-- K would vanish on the near-black page, so it is a paper-white outline. -->
+        <g class="unit" data-unit="4" transform="translate(845,64)">
+          <rect x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
+          <rect x="12" y="12" width="146" height="50" fill="none" stroke="var(--paper)" stroke-width="2"/>
+          <text class="svg-misreg ink-letter" x="85" y="49" text-anchor="middle" fill="var(--paper)">K</text>
+          <use href="#rollers"/>
+          <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--paper)" stroke-width="3"/><use href="#spokes"/>
+          <circle cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
+          <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT 4</text>
+          <text class="unit-label" x="85" y="298" text-anchor="middle">4 · K · FINISH</text>
+        </g>
+
+        <!-- Delivery pile: the pull request. -->
+        <g transform="translate(1040,230)">
+          <rect x="0" y="36" width="140" height="10" fill="var(--k3)" stroke="var(--dim)"/><rect x="0" y="48" width="140" height="10" fill="var(--k3)" stroke="var(--dim)"/>
+          <rect x="0" y="60" width="140" height="42" fill="var(--k2)" stroke="var(--paper)"/>
+          <text x="70" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">PR #25 · READY</text>
+          <text x="70" y="-12" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">DELIVERY PILE</text>
+          <text x="70" y="124" text-anchor="middle" font-size="11" fill="var(--dim)">ready for review</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="press-cols">
+      <article class="unit-col" style="--ink: var(--c)" aria-labelledby="unit-1">
+        <h3 id="unit-1"><span class="tag" aria-hidden="true"></span>1 · C · Prepare</h3>
+        <p>Pre-flight checks the Origin match, that the issue is open and that git has a name and email to commit with. thirdshift then picks the Issue branch, fresh or a Continuation, and creates a worktree next to your clone. Pre-flight prints nothing when it passes, so the first line is the worktree.</p>
+        <ol class="lines" aria-label="stderr lines from unit 1">
+          <li><span class="pfx">thirdshift:</span> creating worktree /home/jacob/repos/thirdshift-issue-24 on issue-24 from origin/main</li>
+        </ol>
+      </article>
+      <article class="unit-col" style="--ink: var(--m)" aria-labelledby="unit-2">
+        <h3 id="unit-2"><span class="tag" aria-hidden="true"></span>2 · M · Implement</h3>
+        <p>A headless Claude Code session, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits.</p>
+        <ul class="skills" aria-label="Skills"><li>implement</li><li>tdd</li></ul>
+        <ol class="lines" aria-label="stderr lines from unit 2">
+          <li><span class="pfx">thirdshift:</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-24-20260925T134143Z-implement.jsonl</li>
+          <li><span class="pfx">thirdshift:</span> implement: session started</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ gh issue view 24 --comments &amp;&amp; ls &amp;&amp; cat CONTEXT.md | head -80 &amp;&amp; ls docs docs/adr</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ gh issue view 24 --json title,body,comments,labels &amp;&amp; ls &amp;&amp; ls docs docs/adr 2&gt;/dev/null; git log --…</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ cat src/interrupt.rs &amp;&amp; grep -rn "assert_interrupt_fails_the_run\|SIGTERM\|SIGINT\|Signal::" tests/ …</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ sed -n 1,40p tests/failed_run.rs &amp;&amp; sed -n 150,240p tests/failed_run.rs; grep -rn "fn tmp\|\"tmp\"\|…</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ sed -n 40,70p tests/failed_run.rs; sed -n 290,340p tests/support/mod.rs; grep -n "fn run_and_signal"…</li>
+          <li><span class="pfx">thirdshift:</span> implement: Edit tests/failed_run.rs</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ cargo test --test failed_run sighup 2&gt;&amp;1 | tail -15</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ python3 - &lt;&lt;'EOF'</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ grep -rni "interrupt\|ctrl-c\|signal" README.md CONTEXT.md docs/adr; cargo fmt &amp;&amp; cargo clippy --all…</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ sed -i 's/ends, including by Ctrl-C, without/ends, including by Ctrl-C or a closed terminal, without…</li>
+          <li><span class="pfx">thirdshift:</span> implement: commit</li>
+        </ol>
+      </article>
+      <article class="unit-col" style="--ink: var(--y)" aria-labelledby="unit-3">
+        <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>3 · Y · Review</h3>
+        <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Then it opens the pull request, ready for review.</p>
+        <ul class="skills" aria-label="Skills"><li>code-review</li><li>pr</li></ul>
+        <ol class="lines" aria-label="stderr lines from unit 3">
+          <li><span class="pfx">thirdshift:</span> implement: skill thirdshift:code-review</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ git rev-parse main &amp;&amp; git log main..HEAD --oneline &amp;&amp; git diff main...HEAD --stat; ls .agents/skills…</li>
+          <li><span class="pfx">thirdshift:</span> implement: Agent Standards review</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ git diff main...HEAD &amp;&amp; cat CODING_STANDARDS.md &amp;&amp; ls .agents/skills/codebase-design/ &amp;&amp; cat .agents…</li>
+          <li><span class="pfx">thirdshift:</span> implement: Agent Spec review</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ cat CONTEXT.md; grep -rn -i "sigint\|sigterm\|ctrl-c\|interrupt\|signal" README.md CONTEXT.md docs s…</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ gh issue view 24 --json body,comments; git diff main...HEAD</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ sed -n 140,240p tests/failed_run.rs; grep -n "fn assert_cleaned_up" -A25 tests/support/mod.rs; grep …</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ grep -n "TMPDIR\|fn entries\|fn run_and_signal" -A8 tests/support/mod.rs | head -60; git show --stat…</li>
+          <li><span class="pfx">thirdshift:</span> implement: SubagentHandback</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ sed -n 145,162p tests/support/mod.rs; cargo test --test failed_run 2&gt;&amp;1 | tail -8</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ cargo test 2&gt;&amp;1 | grep -E "test result|FAILED|panicked" | head</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ python3 - &lt;&lt;'EOF'</li>
+          <li><span class="pfx">thirdshift:</span> implement: SubagentHandback</li>
+          <li><span class="pfx">thirdshift:</span> implement: commit and push</li>
+          <li><span class="pfx">thirdshift:</span> implement: skill thirdshift:pr</li>
+          <li><span class="pfx">thirdshift:</span> implement: $ cat &gt; /tmp/pr24.md &lt;&lt;'EOF'</li>
+          <li><span class="pfx">thirdshift:</span> implement: session ended after 3m 40s: 5 turns, $1.06 at API prices</li>
+        </ol>
+      </article>
+      <article class="unit-col k" style="--ink: var(--paper)" aria-labelledby="unit-4">
+        <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>4 · K · Finish</h3>
+        <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 3. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready and mergeable. This Run needed no Repair.</p>
+        <ul class="skills" aria-label="Skills"><li>resolving-merge-conflicts <span>in a Repair</span></li></ul>
+        <ol class="lines" aria-label="stderr lines from unit 4">
+          <li><span class="pfx">thirdshift:</span> pushing issue-24</li>
+          <li><span class="pfx">thirdshift:</span> checking the PR</li>
+          <li><span class="pfx">thirdshift:</span> merging origin/main into issue-24</li>
+          <li><span class="pfx">thirdshift:</span> pushing issue-24</li>
+          <li><span class="pfx">thirdshift:</span> waiting up to 60s for CI on f32bc95</li>
+          <li><span class="pfx">thirdshift:</span> CI on f32bc95: 1 of 1 checks still running</li>
+          <li><span class="pfx">thirdshift:</span> CI passed on f32bc95</li>
+          <li><span class="pfx">thirdshift:</span> checking the PR is open, ready and mergeable</li>
+          <li><span class="pfx">thirdshift:</span> cleaning up the worktree and local branch issue-24</li>
+          <li class="win"><span class="pfx">thirdshift:</span> PR https://github.com/JacobStephens2/thirdshift/pull/25 is ready for review</li>
+        </ol>
+      </article>
+    </div>
+    <p class="press-source">The <code>implement:</code> lines are the Run's session log passed through thirdshift's own progress condensing. The other lines are thirdshift's progress messages, filled in with pull request #25's branch, commit and CI result.</p>
+
+    <aside class="misprint" aria-labelledby="misprint-title">
+      <h3 id="misprint-title">Misprint: a Failed run</h3>
+      <p>A Run that can't finish with a pull request that is open, ready and mergeable with passing CI is a Failed run. Nothing is lost: its work, uncommitted changes included, is committed and pushed to the Issue branch, and its pull request goes back to draft. Run the same command again to continue it.</p>
+      <p class="illustrative"><b>Illustrative.</b> These are the last lines of a Run whose CI is still failing after 3 Repairs. Their order is inferred from the code, not seen in a real Run.</p>
+      <ol class="lines" aria-label="stderr lines from an illustrative Failed run">
+        <li><span class="pfx">thirdshift:</span> CI failed on &lt;commit&gt;: &lt;check&gt;</li>
+        <li><span class="pfx">thirdshift:</span> pushing issue-&lt;n&gt;</li>
+        <li><span class="pfx">thirdshift:</span> cleaning up the worktree and local branch issue-&lt;n&gt;</li>
+        <li class="bad"><span class="pfx">thirdshift:</span> repairs exhausted: CI red</li>
+        <li class="bad"><span class="pfx">thirdshift:</span> session log: ~/.thirdshift/logs/&lt;owner&gt;-&lt;repo&gt;-issue-&lt;n&gt;-&lt;timestamp&gt;-repair-3.jsonl</li>
+      </ol>
+    </aside>
+  </div>
+</section>
+
 <footer class="wrap foot">
   <a href="https://github.com/JacobStephens2/thirdshift">GitHub</a>
   <a href="https://github.com/JacobStephens2/thirdshift/releases">Releases</a>
