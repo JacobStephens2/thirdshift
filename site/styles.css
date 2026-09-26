@@ -142,20 +142,21 @@ body::after { /* scanlines */
 .press-cols { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-top: 28px; }
 @media (max-width: 1000px) { .press-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .press-cols { grid-template-columns: minmax(0, 1fr); } }
+.unit-col.ink-c { --ink: var(--c); } .unit-col.ink-m { --ink: var(--m); } .unit-col.ink-y { --ink: var(--y); } .unit-col.ink-k { --ink: var(--paper); }
 .unit-col { display: grid; align-content: start; gap: 10px; border-top: 4px solid var(--ink); padding-top: 12px; }
 .unit-col h3 { font-size: 26px; display: flex; align-items: center; gap: 10px; }
 .unit-col .tag { width: 18px; height: 18px; flex: none; background: var(--ink); }
-.unit-col.k .tag { background: transparent; border: 2px solid var(--paper); }
+.unit-col.ink-k .tag { background: transparent; border: 2px solid var(--paper); }
 .unit-col p { margin: 0; font-size: 13.5px; }
 .skills { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .skills li { font: 700 12px/1 var(--f-mono); padding: 6px 8px; background: var(--k3); border: 1px solid var(--rule); }
 .skills li::before { content: "/"; color: var(--dim); }
 .skills li span { font-weight: 400; color: var(--dim); }
-.lines { list-style: none; margin: 0; padding: 10px 12px; font: 12px/1.6 var(--f-mono); background: #030303; border: 1px solid var(--rule); }
+.lines { list-style: none; margin: 0; padding: 10px 12px; font: 12px/1.6 var(--f-mono); background: #000; border: 1px solid var(--rule); }
 .lines li { white-space: pre-wrap; overflow-wrap: anywhere; }
-.lines .pfx { color: var(--dim); }
-.lines .win { color: var(--nc); }
-.lines .bad { color: var(--m-text); }
+.lines .prefix { color: var(--dim); }
+.lines .ready { color: var(--nc); }
+.lines .failed { color: var(--m-text); }
 .press-source { margin: 16px 0 0; font-size: 13px; color: var(--dim); max-width: 90ch; }
 .misprint { margin-top: 36px; border: 1px solid var(--m); padding: 16px 18px; display: grid; gap: 10px; max-width: 90ch; }
 .misprint h3 { font-size: 26px; color: var(--m-text); }

@@ -140,73 +140,73 @@
     </div>
 
     <div class="press-cols">
-      <article class="unit-col" style="--ink: var(--c)" aria-labelledby="unit-1">
+      <article class="unit-col ink-c" aria-labelledby="unit-1">
         <h3 id="unit-1"><span class="tag" aria-hidden="true"></span>1 · C · Prepare</h3>
         <p>Pre-flight checks the Origin match, that the issue is open and that git has a name and email to commit with. thirdshift then picks the Issue branch, fresh or a Continuation, and creates a worktree next to your clone. Pre-flight prints nothing when it passes, so the first line is the worktree.</p>
         <ol class="lines" aria-label="stderr lines from unit 1">
-          <li><span class="pfx">thirdshift:</span> creating worktree /home/jacob/repos/thirdshift-issue-24 on issue-24 from origin/main</li>
+          <li><span class="prefix">thirdshift:</span> creating worktree /home/jacob/repos/thirdshift-issue-24 on issue-24 from origin/main</li>
         </ol>
       </article>
-      <article class="unit-col" style="--ink: var(--m)" aria-labelledby="unit-2">
+      <article class="unit-col ink-m" aria-labelledby="unit-2">
         <h3 id="unit-2"><span class="tag" aria-hidden="true"></span>2 · M · Implement</h3>
         <p>A headless Claude Code session, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits.</p>
         <ul class="skills" aria-label="Skills"><li>implement</li><li>tdd</li></ul>
         <ol class="lines" aria-label="stderr lines from unit 2">
-          <li><span class="pfx">thirdshift:</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-24-20260925T134143Z-implement.jsonl</li>
-          <li><span class="pfx">thirdshift:</span> implement: session started</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ gh issue view 24 --comments &amp;&amp; ls &amp;&amp; cat CONTEXT.md | head -80 &amp;&amp; ls docs docs/adr</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ gh issue view 24 --json title,body,comments,labels &amp;&amp; ls &amp;&amp; ls docs docs/adr 2&gt;/dev/null; git log --…</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ cat src/interrupt.rs &amp;&amp; grep -rn "assert_interrupt_fails_the_run\|SIGTERM\|SIGINT\|Signal::" tests/ …</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ sed -n 1,40p tests/failed_run.rs &amp;&amp; sed -n 150,240p tests/failed_run.rs; grep -rn "fn tmp\|\"tmp\"\|…</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ sed -n 40,70p tests/failed_run.rs; sed -n 290,340p tests/support/mod.rs; grep -n "fn run_and_signal"…</li>
-          <li><span class="pfx">thirdshift:</span> implement: Edit tests/failed_run.rs</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ cargo test --test failed_run sighup 2&gt;&amp;1 | tail -15</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ python3 - &lt;&lt;'EOF'</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ grep -rni "interrupt\|ctrl-c\|signal" README.md CONTEXT.md docs/adr; cargo fmt &amp;&amp; cargo clippy --all…</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ sed -i 's/ends, including by Ctrl-C, without/ends, including by Ctrl-C or a closed terminal, without…</li>
-          <li><span class="pfx">thirdshift:</span> implement: commit</li>
+          <li><span class="prefix">thirdshift:</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-24-20260925T134143Z-implement.jsonl</li>
+          <li><span class="prefix">thirdshift:</span> implement: session started</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ gh issue view 24 --comments &amp;&amp; ls &amp;&amp; cat CONTEXT.md | head -80 &amp;&amp; ls docs docs/adr</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ gh issue view 24 --json title,body,comments,labels &amp;&amp; ls &amp;&amp; ls docs docs/adr 2&gt;/dev/null; git log --…</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ cat src/interrupt.rs &amp;&amp; grep -rn "assert_interrupt_fails_the_run\|SIGTERM\|SIGINT\|Signal::" tests/ …</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ sed -n 1,40p tests/failed_run.rs &amp;&amp; sed -n 150,240p tests/failed_run.rs; grep -rn "fn tmp\|\"tmp\"\|…</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ sed -n 40,70p tests/failed_run.rs; sed -n 290,340p tests/support/mod.rs; grep -n "fn run_and_signal"…</li>
+          <li><span class="prefix">thirdshift:</span> implement: Edit tests/failed_run.rs</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ cargo test --test failed_run sighup 2&gt;&amp;1 | tail -15</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ python3 - &lt;&lt;'EOF'</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ grep -rni "interrupt\|ctrl-c\|signal" README.md CONTEXT.md docs/adr; cargo fmt &amp;&amp; cargo clippy --all…</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ sed -i 's/ends, including by Ctrl-C, without/ends, including by Ctrl-C or a closed terminal, without…</li>
+          <li><span class="prefix">thirdshift:</span> implement: commit</li>
         </ol>
       </article>
-      <article class="unit-col" style="--ink: var(--y)" aria-labelledby="unit-3">
+      <article class="unit-col ink-y" aria-labelledby="unit-3">
         <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>3 · Y · Review</h3>
         <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Then it opens the pull request, ready for review.</p>
         <ul class="skills" aria-label="Skills"><li>code-review</li><li>pr</li></ul>
         <ol class="lines" aria-label="stderr lines from unit 3">
-          <li><span class="pfx">thirdshift:</span> implement: skill thirdshift:code-review</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ git rev-parse main &amp;&amp; git log main..HEAD --oneline &amp;&amp; git diff main...HEAD --stat; ls .agents/skills…</li>
-          <li><span class="pfx">thirdshift:</span> implement: Agent Standards review</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ git diff main...HEAD &amp;&amp; cat CODING_STANDARDS.md &amp;&amp; ls .agents/skills/codebase-design/ &amp;&amp; cat .agents…</li>
-          <li><span class="pfx">thirdshift:</span> implement: Agent Spec review</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ cat CONTEXT.md; grep -rn -i "sigint\|sigterm\|ctrl-c\|interrupt\|signal" README.md CONTEXT.md docs s…</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ gh issue view 24 --json body,comments; git diff main...HEAD</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ sed -n 140,240p tests/failed_run.rs; grep -n "fn assert_cleaned_up" -A25 tests/support/mod.rs; grep …</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ grep -n "TMPDIR\|fn entries\|fn run_and_signal" -A8 tests/support/mod.rs | head -60; git show --stat…</li>
-          <li><span class="pfx">thirdshift:</span> implement: SubagentHandback</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ sed -n 145,162p tests/support/mod.rs; cargo test --test failed_run 2&gt;&amp;1 | tail -8</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ cargo test 2&gt;&amp;1 | grep -E "test result|FAILED|panicked" | head</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ python3 - &lt;&lt;'EOF'</li>
-          <li><span class="pfx">thirdshift:</span> implement: SubagentHandback</li>
-          <li><span class="pfx">thirdshift:</span> implement: commit and push</li>
-          <li><span class="pfx">thirdshift:</span> implement: skill thirdshift:pr</li>
-          <li><span class="pfx">thirdshift:</span> implement: $ cat &gt; /tmp/pr24.md &lt;&lt;'EOF'</li>
-          <li><span class="pfx">thirdshift:</span> implement: session ended after 3m 40s: 5 turns, $1.06 at API prices</li>
+          <li><span class="prefix">thirdshift:</span> implement: skill thirdshift:code-review</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ git rev-parse main &amp;&amp; git log main..HEAD --oneline &amp;&amp; git diff main...HEAD --stat; ls .agents/skills…</li>
+          <li><span class="prefix">thirdshift:</span> implement: Agent Standards review</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ git diff main...HEAD &amp;&amp; cat CODING_STANDARDS.md &amp;&amp; ls .agents/skills/codebase-design/ &amp;&amp; cat .agents…</li>
+          <li><span class="prefix">thirdshift:</span> implement: Agent Spec review</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ cat CONTEXT.md; grep -rn -i "sigint\|sigterm\|ctrl-c\|interrupt\|signal" README.md CONTEXT.md docs s…</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ gh issue view 24 --json body,comments; git diff main...HEAD</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ sed -n 140,240p tests/failed_run.rs; grep -n "fn assert_cleaned_up" -A25 tests/support/mod.rs; grep …</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ grep -n "TMPDIR\|fn entries\|fn run_and_signal" -A8 tests/support/mod.rs | head -60; git show --stat…</li>
+          <li><span class="prefix">thirdshift:</span> implement: SubagentHandback</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ sed -n 145,162p tests/support/mod.rs; cargo test --test failed_run 2&gt;&amp;1 | tail -8</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ cargo test 2&gt;&amp;1 | grep -E "test result|FAILED|panicked" | head</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ python3 - &lt;&lt;'EOF'</li>
+          <li><span class="prefix">thirdshift:</span> implement: SubagentHandback</li>
+          <li><span class="prefix">thirdshift:</span> implement: commit and push</li>
+          <li><span class="prefix">thirdshift:</span> implement: skill thirdshift:pr</li>
+          <li><span class="prefix">thirdshift:</span> implement: $ cat &gt; /tmp/pr24.md &lt;&lt;'EOF'</li>
+          <li><span class="prefix">thirdshift:</span> implement: session ended after 3m 40s: 5 turns, $1.06 at API prices</li>
         </ol>
       </article>
-      <article class="unit-col k" style="--ink: var(--paper)" aria-labelledby="unit-4">
+      <article class="unit-col ink-k" aria-labelledby="unit-4">
         <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>4 · K · Finish</h3>
         <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 3. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready and mergeable. This Run needed no Repair.</p>
         <ul class="skills" aria-label="Skills"><li>resolving-merge-conflicts <span>in a Repair</span></li></ul>
         <ol class="lines" aria-label="stderr lines from unit 4">
-          <li><span class="pfx">thirdshift:</span> pushing issue-24</li>
-          <li><span class="pfx">thirdshift:</span> checking the PR</li>
-          <li><span class="pfx">thirdshift:</span> merging origin/main into issue-24</li>
-          <li><span class="pfx">thirdshift:</span> pushing issue-24</li>
-          <li><span class="pfx">thirdshift:</span> waiting up to 60s for CI on f32bc95</li>
-          <li><span class="pfx">thirdshift:</span> CI on f32bc95: 1 of 1 checks still running</li>
-          <li><span class="pfx">thirdshift:</span> CI passed on f32bc95</li>
-          <li><span class="pfx">thirdshift:</span> checking the PR is open, ready and mergeable</li>
-          <li><span class="pfx">thirdshift:</span> cleaning up the worktree and local branch issue-24</li>
-          <li class="win"><span class="pfx">thirdshift:</span> PR https://github.com/JacobStephens2/thirdshift/pull/25 is ready for review</li>
+          <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
+          <li><span class="prefix">thirdshift:</span> checking the PR</li>
+          <li><span class="prefix">thirdshift:</span> merging origin/main into issue-24</li>
+          <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
+          <li><span class="prefix">thirdshift:</span> waiting up to 60s for CI on f32bc95</li>
+          <li><span class="prefix">thirdshift:</span> CI on f32bc95: 1 of 1 checks still running</li>
+          <li><span class="prefix">thirdshift:</span> CI passed on f32bc95</li>
+          <li><span class="prefix">thirdshift:</span> checking the PR is open, ready and mergeable</li>
+          <li><span class="prefix">thirdshift:</span> cleaning up the worktree and local branch issue-24</li>
+          <li class="ready"><span class="prefix">thirdshift:</span> PR https://github.com/JacobStephens2/thirdshift/pull/25 is ready for review</li>
         </ol>
       </article>
     </div>
@@ -217,11 +217,11 @@
       <p>A Run that can't finish with a pull request that is open, ready and mergeable with passing CI is a Failed run. Nothing is lost: its work, uncommitted changes included, is committed and pushed to the Issue branch, and its pull request goes back to draft. Run the same command again to continue it.</p>
       <p class="illustrative"><b>Illustrative.</b> These are the last lines of a Run whose CI is still failing after 3 Repairs. Their order is inferred from the code, not seen in a real Run.</p>
       <ol class="lines" aria-label="stderr lines from an illustrative Failed run">
-        <li><span class="pfx">thirdshift:</span> CI failed on &lt;commit&gt;: &lt;check&gt;</li>
-        <li><span class="pfx">thirdshift:</span> pushing issue-&lt;n&gt;</li>
-        <li><span class="pfx">thirdshift:</span> cleaning up the worktree and local branch issue-&lt;n&gt;</li>
-        <li class="bad"><span class="pfx">thirdshift:</span> repairs exhausted: CI red</li>
-        <li class="bad"><span class="pfx">thirdshift:</span> session log: ~/.thirdshift/logs/&lt;owner&gt;-&lt;repo&gt;-issue-&lt;n&gt;-&lt;timestamp&gt;-repair-3.jsonl</li>
+        <li><span class="prefix">thirdshift:</span> CI failed on &lt;commit&gt;: &lt;check&gt;</li>
+        <li><span class="prefix">thirdshift:</span> pushing issue-&lt;n&gt;</li>
+        <li><span class="prefix">thirdshift:</span> cleaning up the worktree and local branch issue-&lt;n&gt;</li>
+        <li class="failed"><span class="prefix">thirdshift:</span> repairs exhausted: CI red</li>
+        <li class="failed"><span class="prefix">thirdshift:</span> session log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;-&lt;repo&gt;-issue-&lt;n&gt;-&lt;timestamp&gt;-repair-3.jsonl</li>
       </ol>
     </aside>
   </div>
