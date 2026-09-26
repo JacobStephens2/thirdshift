@@ -21,7 +21,9 @@ use crate::worktree::{Merge, Worktree};
 
 /// Take `issue` to a ready PR and return the PR's URL. Any failure after the
 /// worktree exists goes through the Failed run path. The worktree, the local
-/// Issue branch and the plugin directory are gone when this returns.
+/// Issue branch and the plugin directory are gone when this returns, except
+/// that a Failed run whose work did not reach origin keeps the worktree and
+/// branch.
 pub fn run(issue: &IssueUrl) -> Result<String, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
@@ -50,7 +52,7 @@ pub fn run(issue: &IssueUrl) -> Result<String, FailedRun> {
     };
     let mut log = session::log_path(issue, &timestamp, "implement")?;
     implement(issue, &worktree, &base, &prompt, &timestamp, &mut log)
-        .map_err(|error| failed_run::fail(issue, &worktree, &base, &log, error))
+        .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
 }
 
 /// The implement session given `prompt`, the checks on the PR it opened or

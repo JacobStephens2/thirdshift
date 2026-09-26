@@ -20,9 +20,9 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 2. Picks the **Issue branch** (`issue-<n>`, or `issue-<n>-branch-<k>` once earlier ones are finished) and the **Base branch**, normally the branch you have checked out.
 3. Creates a git worktree next to your clone, named `<repo>-<Issue branch>`, so your own checkout is never touched.
 4. Runs a headless Claude Code session in that worktree with the **Factory skills** loaded. The agent implements the issue, reviews its work against the Base branch, addresses the **Standards findings** and **Spec findings** it agrees with, and opens a ready-for-review pull request that lists every **Unaddressed finding** with a reason and closes the issue.
-5. Takes over deterministically: pushes the Issue branch, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
+5. Takes over deterministically: pushes the Issue branch, skipping your repo's git hooks since the session runs the tests and CI gates the pull request, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
 6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 3 per Run. If the Base branch moves while CI runs, it merges it again and goes round, at most 3 times per Run.
-7. Cleans up: removes the worktree, the local Issue branch and the temporary plugin directory, whether the Run succeeded or not.
+7. Cleans up: removes the worktree, the local Issue branch and the temporary plugin directory, whether the Run succeeded or not. The one exception is a **Failed run** whose work could not be pushed: see below.
 
 ### Status
 
@@ -142,7 +142,7 @@ A Failed run:
 
 1. Commits any uncommitted work as `thirdshift: failed run (<reason>)`, with a timestamp and the hostname, and pushes the Issue branch, so nothing is lost. If the branch has no changes against the Base branch, nothing is pushed.
 2. Converts its open pull request, if any, back to a draft, so a pull request only claims to be ready when the factory stands behind it. The next successful Continuation marks it ready again.
-3. Cleans up as usual, prints the reason to stderr and exits non-zero.
+3. Cleans up as usual, prints the reason to stderr and exits non-zero. If the push failed, the worktree and local Issue branch are kept instead, and stderr names the branch, its head commit and the worktree path, so you can recover the work or push it by hand.
 
 Merges, never rebases or force-pushes: a branch worked on from several servers never loses history.
 

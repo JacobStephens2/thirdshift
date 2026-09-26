@@ -1,5 +1,6 @@
 //! The Run's worktree: a sibling of the launch repository, on the Issue
-//! branch, removed together with the local Issue branch when dropped.
+//! branch, removed together with the local Issue branch when dropped unless
+//! it is kept.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +22,8 @@ pub struct Worktree {
     launch: Git,
     branch: String,
     git: Git,
+    /// Leave the worktree and local Issue branch in place when dropped.
+    kept: bool,
 }
 
 impl Worktree {
@@ -78,6 +81,7 @@ impl Worktree {
             launch: Git::new(root),
             branch: branch.to_string(),
             git: Git::new(path),
+            kept: false,
         })
     }
 
@@ -94,10 +98,21 @@ impl Worktree {
     }
 
     /// Push the Issue branch to origin (a no-op if it is already there).
+    /// The target repo's hooks are skipped: the session runs the tests and CI
+    /// gates the PR, so a local hook doesn't decide whether work reaches
+    /// origin.
     pub fn push(&self) -> Result<()> {
         progress::step(format_args!("pushing {}", self.branch));
-        self.git.run(&["push", "origin", &self.branch])?;
+        self.git
+            .run(&["push", "--no-verify", "origin", &self.branch])?;
         Ok(())
+    }
+
+    /// Let go of the worktree without removing it or the local Issue branch,
+    /// for work that may exist nowhere else. Dropping it then says where they
+    /// are and the branch's head commit.
+    pub fn keep(mut self) {
+        self.kept = true;
     }
 
     /// The Issue branch's head commit.
@@ -158,6 +173,16 @@ impl Worktree {
 impl Drop for Worktree {
     fn drop(&mut self) {
         let path = self.path().to_string_lossy().into_owned();
+        if self.kept {
+            let head = self
+                .head()
+                .unwrap_or_else(|error| format!("an unknown commit ({error:#})"));
+            progress::step(format_args!(
+                "keeping the worktree {path} and local branch {} at {head}",
+                self.branch
+            ));
+            return;
+        }
         progress::step(format_args!(
             "cleaning up the worktree and local branch {}",
             self.branch

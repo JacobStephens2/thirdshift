@@ -196,3 +196,85 @@ fn assert_interrupt_fails_the_run(signal: &str) {
         Some("half done\n".to_string())
     );
 }
+
+#[test]
+fn a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_failure_push() {
+    let scenario = Scenario::new();
+    scenario.launch_has_rejecting_pre_push_hook();
+    scenario.agent_does(AGENT_LEAVES_WORK_AND_EXITS_3);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        "thirdshift: failed run (claude exited 3)"
+    );
+}
+
+#[test]
+fn when_origin_rejects_the_failure_push_the_worktree_and_local_branch_are_kept() {
+    let scenario = Scenario::new();
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        "#!/bin/sh\necho \"origin says no\"\nexit 1\n",
+    );
+    scenario.agent_does(AGENT_LEAVES_WORK_AND_EXITS_3);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert!(
+        result.stderr.contains("origin says no"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_kept(&scenario, &result);
+}
+
+#[test]
+fn when_origin_is_unreachable_for_the_failure_push_the_worktree_and_local_branch_are_kept() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "git remote set-url origin {}\n{AGENT_LEAVES_WORK_AND_EXITS_3}",
+        scenario.path("nowhere.git").display()
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_kept(&scenario, &result);
+}
+
+/// What a Failed run whose work didn't reach origin shares: the failure
+/// commit is on the local Issue branch in the worktree, which are both kept,
+/// and a line on stderr says where.
+fn assert_kept(scenario: &Scenario, result: &RunResult) {
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.origin_log("issue-7"), None);
+    let worktree = scenario.path("work/widgets-issue-7");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("wip.txt")).unwrap(),
+        "half done\n"
+    );
+    let head = scenario.launch_git(&["rev-parse", "issue-7"]);
+    let head = head.trim();
+    assert_eq!(
+        scenario
+            .launch_git(&["log", "-1", "--format=%s", head])
+            .trim(),
+        "thirdshift: failed run (claude exited 3)"
+    );
+    let kept = result
+        .stderr
+        .lines()
+        .find(|line| line.contains("keeping"))
+        .unwrap_or_else(|| panic!("no line saying what was kept: {}", result.stderr));
+    for detail in ["issue-7", head, worktree.to_str().unwrap()] {
+        assert!(kept.contains(detail), "{detail:?} missing from {kept:?}");
+    }
+    assert!(
+        !result.stderr.contains("cleaning up"),
+        "stderr: {}",
+        result.stderr
+    );
+}

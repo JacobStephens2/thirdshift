@@ -27,6 +27,21 @@ fn prints_only_the_pr_url_and_exits_zero() {
 }
 
 #[test]
+fn a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_push() {
+    let scenario = Scenario::new();
+    scenario.launch_has_rejecting_pre_push_hook();
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        "Add feature".to_string()
+    );
+}
+
+#[test]
 fn runs_claude_headless_in_auto_mode_in_a_sibling_worktree_on_the_issue_branch() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
