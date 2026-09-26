@@ -1,787 +1,1078 @@
+<!doctype html>
 <!--
-  PROTOTYPE, throwaway. Branch prototype/site only; never merge to main.
-  Question (Q31 on #29): what should thirdshift.app look like?
-  Four independent axes, each switchable from the floating bar and stored in the URL:
-    ?hero=A|B|C   masthead wordmark + headline + install block
-    ?unit=A|B|C   the press line: feeder -> units -> delivery pile, step (motion) and static states
-    ?ink=1|2|3    palette + fonts, adjusted by eye from the starting values
-    ?fx=h,m,s     halftone / misregistration / scanline strength, 0-100 each
-    ?static=1     show the reduced-motion / no-JS press line
-  Run: python3 -m http.server -d site 8029, then open http://localhost:8029/prototype/
-  (Double-clicking the file also works; the state then lives in the #hash.)
+  PROTOTYPE: throwaway. Never merge. Lives on the prototype/site branch only.
+
+  Question (Q31, #29): what should thirdshift.app look like?
+  Three heroes (?h=A|B|C), three press lines (?p=A|B|C, each with a motion and a
+  static state, ?mode=motion|static), three ink and type sets (?t=A|B|C) and
+  print-effect strength (?fx=off|subtle|medium|loud, or ?ht= ?mr= ?sl= sliders),
+  all switchable from the floating bar at the bottom. ←/→ cycle the highlighted
+  group; click a group's name to highlight it. "Tokens" prints the current
+  choice as the design tokens to hand back.
+
+  Verdict (2026-09-26): hero D (Proof, compact), press line D (side elevation
+  with the bracket and big unit labels) in motion, ink and type A (Process),
+  effects Subtle. Open ?h=D&p=D&t=A&mode=motion&fx=subtle and press "Tokens".
+
+  Run: open this file in a browser, or python3 -m http.server -d site 8029 and
+  open http://localhost:8029/prototype/
+
+  Prototype shortcuts, not decisions: the press line is built by JS (the real
+  site ships the static diagram in the HTML, so no-JS gets it), and every font
+  loads in full (the real site subsets the wordmark face).
+  Sections 5-7 (the factory grows, proof sheets, requirements) are left out:
+  they don't bear on the four questions.
 -->
-<title>thirdshift press proofs</title>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Third Shift Proof</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- Wordmark faces subset to the letters of "The Third Shift" only, so they cost a few KB. -->
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=UnifrakturCook:wght@700&text=TheThirdShift%20&display=swap">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;800;900&family=Big+Shoulders+Stencil+Display:wght@700;800&family=JetBrains+Mono:wght@400;500;700&family=Playfair+Display:ital,wght@1,400;1,500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<!-- One link per family, so one bad family can't sink the rest. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Grenze+Gotisch:wght@700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Stencil+Display:wght@700;900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Caslon+Text:ital@1&display=swap">
 <style>
-/* ---------- Ink sets (question 3) ---------- */
-:root, :root[data-ink="1"] {
-  color-scheme: dark;
-  --k: #0A0A0A;          /* the black plate / page */
-  --k-raise: #141414;    /* sheet surfaces on K */
-  --rule: #2A2A2A;
-  --paper: #E8E6E1;      /* paper-white text */
-  --paper-dim: #A9A6A0;
-  --c: #00AEEF;          /* process cyan */
-  --y: #FFF200;          /* process yellow */
-  --m: #EC008C;          /* process magenta, large text + fills */
-  --m-small: #FF5CB8;    /* lighter magenta, small text */
-  --neon-c: #00FFFF; --neon-m: #FF00FF; --neon-y: #FFFF00; /* glows only */
-  --grid: rgba(0,174,239,.07);
-  --f-wordmark: "UnifrakturMaguntia", "Old English Text MT", serif;
-  --f-head: "Big Shoulders Display", "Arial Narrow", sans-serif;
-  --w-head: 800;
-  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
-  --f-colophon: "Playfair Display", Georgia, serif;
-  --ink-name: "1 · Starting inks";
-}
-:root[data-ink="2"] {
-  --k: #0E0C0A;          /* warm ink-black, like a press hall under sodium lamps */
-  --k-raise: #181512;
-  --rule: #2E2924;
-  --paper: #EDE5D3;      /* newsprint */
-  --paper-dim: #B0A895;
-  --c: #1FB0E6;
-  --y: #F8DF3A;
-  --m: #E2238B;
-  --m-small: #FF74C0;
-  --grid: rgba(248,223,58,.05);
-  --f-wordmark: "UnifrakturCook", "UnifrakturMaguntia", serif;
-  --f-head: "Big Shoulders Display", "Arial Narrow", sans-serif;
-  --w-head: 900;
-  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
-  --ink-name: "2 · Sodium hall";
-}
-:root[data-ink="3"] {
-  --k: #070A0F;          /* blue-black, blueprint night */
-  --k-raise: #0E131B;
-  --rule: #1D2633;
-  --paper: #DDE4EC;
-  --paper-dim: #93A0B0;
-  --c: #12B9F5;
-  --y: #FFE81A;
-  --m: #F0239A;
-  --m-small: #FF6CC6;
-  --grid: rgba(18,185,245,.10);
-  --f-wordmark: "UnifrakturMaguntia", serif;
-  --f-head: "Big Shoulders Stencil Display", "Big Shoulders Display", "Arial Narrow", sans-serif;
-  --w-head: 800;
-  --f-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
-  --ink-name: "3 · Blueprint stencil";
-}
-
-/* ---------- Effect strengths (question 4), set from JS as 0..1 ---------- */
-:root { --fx-h: .35; --fx-m: .35; --fx-s: .25; }
+/* Tokens. Ink set A is the default; JS swaps these per ?t=. Single dark world by design. */
 :root {
-  --dot-a: calc(var(--fx-h) * .22);             /* halftone dot opacity */
-  --dot-size: calc(3px + var(--fx-h) * 5px);    /* halftone cell */
-  --misreg: calc(var(--fx-m) * 4px);            /* plate offset */
-  --scan-a: calc(var(--fx-s) * .14);            /* scanline opacity */
+  color-scheme: dark;
+  --k: #0A0A0A; --k2: #141414; --k3: #1E1E1E;
+  --paper: #E8E6E1; --dim: #9A978F; --rule: #2A2A2A;
+  --c: #00AEEF; --m: #EC008C; --m-text: #FF5CB8; --y: #FFF200;
+  --nc: #00FFFF; --nm: #FF00FF; --ny: #FFFF00;
+  --grid: rgba(0,174,239,.07);
+  --f-mark: "UnifrakturMaguntia", "Old English Text MT", serif;
+  --f-head: "Big Shoulders Display", "Big Shoulders", Impact, sans-serif;
+  --f-head-w: 800;
+  --f-body: "JetBrains Mono", ui-monospace, monospace;
+  --f-body-size: 15px;
+  --f-mono: "JetBrains Mono", ui-monospace, monospace;
+  --f-colo: "Playfair Display", Georgia, serif;
+  /* Effects, set from the bar. */
+  --ht: .35; --mr: 1px; --sl: .12;
 }
-
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { background: var(--k); }
 body {
   margin: 0; background: var(--k); color: var(--paper);
-  font: 16px/1.6 var(--f-mono);
-  padding-inline: 16px; padding-block: 0 120px;
+  font: 400 var(--f-body-size)/1.6 var(--f-body);
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+  padding-bottom: 140px;
+  -webkit-font-smoothing: antialiased;
 }
 a { color: var(--c); text-underline-offset: 3px; }
-a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--y); outline-offset: 3px; }
-.wrap { max-width: 1120px; margin-inline: auto; }
-code, pre, kbd { font-family: var(--f-mono); }
-h1, h2, h3 { font-family: var(--f-head); font-weight: var(--w-head); text-wrap: balance; line-height: .95; margin: 0; letter-spacing: .005em; }
-.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--paper-dim); }
+a:hover { color: var(--nc); }
+:focus-visible { outline: 2px solid var(--y); outline-offset: 3px; }
+code, kbd, pre, .mono { font-family: var(--f-mono); }
+h1, h2, h3 { font-family: var(--f-head); font-weight: var(--f-head-w); line-height: .95; text-wrap: balance; margin: 0; letter-spacing: .01em; }
+.wrap { max-width: 1180px; margin-inline: auto; }
+.eyebrow { font: 700 12px/1 var(--f-mono); letter-spacing: .18em; text-transform: uppercase; color: var(--dim); margin: 0; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* Scanlines: one fixed overlay, never blocks input. */
-body::after {
+/* ---------- Print effects ---------- */
+body::after { /* scanlines */
   content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
-  background: repeating-linear-gradient(to bottom, rgba(0,0,0,var(--scan-a)) 0 1px, transparent 1px 3px);
+  background: repeating-linear-gradient(to bottom, rgba(0,0,0,var(--sl)) 0 1px, transparent 1px 3px);
 }
-/* Halftone: a dot screen fading out across a surface. */
-.halftone { position: relative; isolation: isolate; }
-.halftone::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(circle, rgba(236,0,140,var(--dot-a)) 28%, transparent 30%) 0 0 / var(--dot-size) var(--dot-size),
-              radial-gradient(circle, rgba(0,174,239,var(--dot-a)) 28%, transparent 30%) calc(var(--dot-size)/2) calc(var(--dot-size)/2) / var(--dot-size) var(--dot-size);
-  -webkit-mask-image: linear-gradient(115deg, #000 0%, transparent 70%);
-          mask-image: linear-gradient(115deg, #000 0%, transparent 70%);
+.misreg { text-shadow:
+  calc(var(--mr) * -1) 0 0 color-mix(in srgb, var(--c) 75%, transparent),
+  var(--mr) calc(var(--mr) * .6) 0 color-mix(in srgb, var(--m) 70%, transparent); }
+.svg-misreg { filter:
+  drop-shadow(calc(var(--mr) * -1) 0 0 color-mix(in srgb, var(--c) 75%, transparent))
+  drop-shadow(var(--mr) calc(var(--mr) * .6) 0 color-mix(in srgb, var(--m) 70%, transparent)); }
+.ht { position: relative; isolation: isolate; }
+.ht::after { /* halftone screen over an ink fill */
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: var(--ht);
+  background: radial-gradient(circle at center, rgba(0,0,0,.85) 0 1.1px, transparent 1.6px) 0 0 / 5px 5px;
+  mix-blend-mode: multiply;
 }
-/* Misregistration: the C and M plates slip off the K. */
-.misreg { text-shadow: calc(var(--misreg) * -1) 0 rgba(0,174,239,.75), var(--misreg) calc(var(--misreg) * .5) rgba(236,0,140,.7); }
+.ht-ov { opacity: var(--ht); }
+.grid-bg {
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
 
-/* Print furniture */
-.regmark { width: 22px; height: 22px; color: var(--paper); opacity: .7; flex: none; }
-.colorbar { display: flex; height: 10px; }
-.colorbar i { flex: 1; }
-.colorbar i:nth-child(4n+1) { background: var(--c); }
-.colorbar i:nth-child(4n+2) { background: var(--m); }
-.colorbar i:nth-child(4n+3) { background: var(--y); }
-.colorbar i:nth-child(4n+4) { background: var(--k); outline: 1px solid var(--paper); outline-offset: -1px; }
-.crop { position: absolute; width: 18px; height: 18px; border-color: var(--paper-dim); border-style: solid; border-width: 0; }
-.crop.tl { top: -10px; left: -10px; border-top-width: 1px; border-left-width: 1px; }
-.crop.tr { top: -10px; right: -10px; border-top-width: 1px; border-right-width: 1px; }
-.crop.bl { bottom: -10px; left: -10px; border-bottom-width: 1px; border-left-width: 1px; }
-.crop.br { bottom: -10px; right: -10px; border-bottom-width: 1px; border-right-width: 1px; }
+/* ---------- Shared bits ---------- */
+.colorbar { display: flex; gap: 2px; align-items: stretch; height: 14px; }
+.colorbar i { flex: 1; min-width: 10px; }
+.colorbar .cb-c { background: var(--c); } .colorbar .cb-m { background: var(--m); }
+.colorbar .cb-y { background: var(--y); } .colorbar .cb-k { background: #000; outline: 1px solid var(--dim); outline-offset: -1px; }
+.colorbar .cb-c50 { background: color-mix(in srgb, var(--c) 50%, var(--k)); }
+.colorbar .cb-m50 { background: color-mix(in srgb, var(--m) 50%, var(--k)); }
+.colorbar .cb-y50 { background: color-mix(in srgb, var(--y) 50%, var(--k)); }
+.colorbar .cb-p { background: var(--paper); }
+.reg { width: 28px; height: 28px; color: var(--paper); flex: none; }
 
-/* Install block (shared parts) */
-.install { display: grid; gap: 8px; }
-.cmd { display: flex; align-items: stretch; border: 1px solid var(--rule); background: var(--k-raise); max-width: 100%; }
-.cmd pre { margin: 0; padding: 14px 16px; overflow-x: auto; flex: 1; font-size: 15px; white-space: pre; }
-.cmd pre::before { content: "$ "; color: var(--paper-dim); }
-.cmd button { font: 500 12px var(--f-mono); letter-spacing: .1em; text-transform: uppercase; background: none; color: var(--paper); border: 0; border-left: 1px solid var(--rule); padding: 0 16px; cursor: pointer; }
-.cmd button:hover { color: var(--y); }
-details.full summary { cursor: pointer; font-size: 13px; color: var(--paper-dim); }
-details.full .cmd { margin-top: 8px; }
-details.full .cmd pre { font-size: 13px; }
+.install { display: flex; align-items: stretch; border: 1px solid var(--rule); background: #000; max-width: 100%; }
+.install code { flex: 1; min-width: 0; padding: 14px 16px; font-size: 15px; white-space: nowrap; overflow-x: auto; color: var(--paper); }
+.install code::before { content: "$ "; color: var(--dim); }
+.install button { font: 700 12px/1 var(--f-mono); letter-spacing: .12em; text-transform: uppercase; border: 0; border-left: 1px solid var(--rule);
+  background: var(--y); color: #000; padding: 0 18px; cursor: pointer; }
+.install button:hover { background: var(--ny); }
+.install-more { margin-top: 10px; font-size: 13px; color: var(--dim); }
+.install-more summary { cursor: pointer; width: fit-content; }
+.install-more code { display: block; margin-top: 8px; padding: 10px 12px; background: #000; border: 1px dashed var(--rule); color: var(--paper); overflow-x: auto; white-space: nowrap; }
+.credit { font-size: 14px; color: var(--dim); margin: 0; }
+.framing { max-width: 62ch; margin: 0; }
+.framing b { color: var(--paper); font-weight: 700; }
 
-.credit { font-size: 14px; color: var(--paper-dim); }
-.credit a { color: var(--m-small); }
+/* ---------- Hero A: Masthead ---------- */
+.hero { padding-block: 40px 56px; }
+body:not([data-h="A"]) .hero-A, body:not([data-h="B"]) .hero-B, body:not([data-h="C"]) .hero-C, body:not([data-h="D"]) .hero-D { display: none; }
+.hero-A .wrap { display: grid; gap: 22px; }
+.hero-A .masthead { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-block: 3px double var(--paper); padding-block: 10px 4px; }
+.hero-A .mark { font: 400 clamp(44px, 9vw, 112px)/1 var(--f-mark); text-align: center; flex: 1; }
+.hero-A .dateline { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 18px; font: 700 12px/1.4 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--rule); padding-bottom: 10px; }
+.hero-A h1 { font-size: clamp(48px, 9.5vw, 128px); text-transform: uppercase; max-width: 12ch; }
+.hero-A .lower { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 32px; align-items: start; }
+.hero-A .lower > div { display: grid; gap: 14px; }
+@media (max-width: 800px) { .hero-A .lower { grid-template-columns: 1fr; } .hero-A .reg { display: none; } }
 
-/* ================= HERO A: The Masthead ================= */
-.hero-A { padding-block: 40px 56px; }
-.hero-A .flag { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; border-bottom: 3px double var(--paper); padding-bottom: 12px; }
-.hero-A .wordmark { font-family: var(--f-wordmark); font-weight: 400; font-size: clamp(48px, 10vw, 112px); line-height: 1; text-align: center; margin: 0; letter-spacing: 0; }
-.hero-A .dateline { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 24px; padding-block: 8px; border-bottom: 1px solid var(--rule); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--paper-dim); }
-.hero-A .body { display: grid; grid-template-columns: 1.3fr 1fr; gap: 40px; padding-top: 40px; align-items: end; }
-.hero-A h1 { font-size: clamp(52px, 8.5vw, 116px); text-transform: uppercase; }
-.hero-A h1 .y { color: var(--y); }
-.hero-A .deck { display: grid; gap: 20px; font-size: 15px; }
-.hero-A .deck p { margin: 0; max-width: 46ch; }
-@media (max-width: 760px) { .hero-A .body { grid-template-columns: 1fr; } .hero-A .flag { grid-template-columns: 1fr; } .hero-A .flag .regmark { display: none; } }
+/* ---------- Hero B: Press sheet ---------- */
+.hero-B .wrap { display: grid; gap: 36px; justify-items: center; }
+.sheet-wrap { position: relative; padding: 26px; width: min(100%, 980px); }
+.crop { position: absolute; width: 22px; height: 22px; border-color: var(--dim); border-style: solid; border-width: 0; }
+.crop.tl { top: 0; left: 0; border-right-width: 1px; border-bottom-width: 1px; }
+.crop.tr { top: 0; right: 0; border-left-width: 1px; border-bottom-width: 1px; }
+.crop.bl { bottom: 0; left: 0; border-right-width: 1px; border-top-width: 1px; }
+.crop.br { bottom: 0; right: 0; border-left-width: 1px; border-top-width: 1px; }
+.sheet-wrap .reg { position: absolute; top: calc(50% - 14px); }
+.sheet-wrap .reg.l { left: -10px; } .sheet-wrap .reg.r { right: -10px; }
+.paper-sheet { background: var(--paper); color: #111; padding: clamp(22px, 5vw, 56px); display: grid; gap: 20px; transform: rotate(-.5deg);
+  box-shadow: 0 30px 60px -20px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,.05); }
+.paper-sheet .topline { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; border-bottom: 2px solid #111; padding-bottom: 8px; }
+.paper-sheet .mark { font: 400 clamp(30px, 5vw, 52px)/1 var(--f-mark); }
+.paper-sheet .slug { font: 700 11px/1.3 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: #555; }
+.paper-sheet h1 { font-size: clamp(52px, 10vw, 140px); color: #0b0b0b; }
+.paper-sheet .framing { color: #2a2a2a; font-size: 16px; }
+.paper-sheet .framing b { color: #000; }
+.paper-sheet .credit { color: #444; }
+.paper-sheet a { color: #0070a8; }
+.paper-sheet .colorbar { height: 16px; margin-top: 6px; }
+.hero-B .feed-slot { width: min(100%, 780px); display: grid; gap: 10px; }
+.hero-B .feed-slot .eyebrow { text-align: center; }
 
-/* ================= HERO B: The Press Sheet ================= */
-.hero-B { padding-block: 48px 64px; }
-.hero-B .sheet { position: relative; border: 1px solid var(--rule); padding: clamp(24px, 5vw, 64px); display: grid; gap: 28px; background: var(--k-raise); }
-.hero-B .sheet-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
-.hero-B .wordmark { font-family: var(--f-wordmark); font-size: 40px; line-height: 1; margin: 0; font-weight: 400; }
-.hero-B .slug { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--paper-dim); }
-.hero-B h1 { font-size: clamp(60px, 12vw, 176px); line-height: .86; text-transform: uppercase; max-width: 10ch; }
-.hero-B h1 em { font-style: normal; color: var(--c); }
-.hero-B .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 32px; align-items: start; }
-.hero-B .cols p { margin: 0; max-width: 48ch; }
-.hero-B .cols p b { color: var(--y); font-weight: 500; }
-.hero-B .bleed { display: flex; gap: 12px; align-items: center; }
-.hero-B .bleed .colorbar { flex: 1; }
-.hero-B .side-regs { position: absolute; top: 50%; transform: translateY(-50%); display: grid; gap: 8px; }
-.hero-B .side-regs.l { left: -30px; } .hero-B .side-regs.r { right: -30px; }
-@media (max-width: 700px) { .hero-B .side-regs { display: none; } }
+/* ---------- Hero D: Proof, compact ---------- */
+.hero-D { padding-block: 28px 44px; }
+.hero-D .wrap { display: grid; justify-items: center; }
+.hero-D .sheet-wrap { width: min(100%, 1060px); }
+.hero-D .paper-sheet { gap: 18px; padding: clamp(20px, 4vw, 44px); }
+.hero-D .paper-sheet h1 { font-size: clamp(44px, 7.2vw, 100px); }
+.proof-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 28px; align-items: start; }
+.proof-row > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.proof-row .eyebrow { color: #555; }
+.paper-sheet .install { border-color: #000; }
+.paper-sheet .install code { font-size: 13px; padding-inline: 12px; }
+.paper-sheet .install-more { color: #555; }
+@media (max-width: 800px) { .proof-row { grid-template-columns: 1fr; } }
 
-/* ================= HERO C: The Night Console ================= */
-.hero-C { padding-block: 40px 56px; display: grid; grid-template-columns: 1fr 1.05fr; gap: 40px; align-items: center; }
-.hero-C .sign { font-family: var(--f-wordmark); font-weight: 400; font-size: 64px; line-height: 1; margin: 0 0 24px; color: var(--paper);
-  text-shadow: 0 0 calc(4px + var(--fx-m) * 10px) color-mix(in srgb, var(--neon-m) 70%, transparent), 0 0 calc(18px + var(--fx-m) * 20px) color-mix(in srgb, var(--neon-m) 35%, transparent); }
-.hero-C h1 { font-size: clamp(44px, 6.4vw, 84px); }
-.hero-C h1 span { color: var(--y); }
-.hero-C .lede { margin: 20px 0 28px; max-width: 48ch; }
-.hero-C .shift { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); margin-bottom: 28px; }
-.hero-C .shift div { padding: 14px 16px; font-size: 13px; }
-.hero-C .shift div + div { border-left: 1px solid var(--rule); }
-.hero-C .shift strong { display: block; font: var(--w-head) 22px/1 var(--f-head); text-transform: uppercase; margin-bottom: 6px; }
-.hero-C .shift .day strong { color: var(--paper); }
-.hero-C .shift .night strong { color: var(--c); }
-.term { background: #050505; border: 1px solid var(--rule); font: 13px/1.7 var(--f-mono); min-width: 0; }
-.term .bar { display: flex; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--rule); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--paper-dim); }
-.term .out { padding: 12px 14px; overflow-x: auto; white-space: pre; min-height: 260px; }
-.term .out .p { color: var(--paper-dim); }
-.term .out .ok { color: var(--y); }
-.term .out .bad { color: var(--m-small); }
-.term .out .cursor { display: inline-block; width: .6em; background: var(--paper); animation: blink 1s steps(1) infinite; }
+/* ---------- Hero C: Console ---------- */
+.hero-C .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; align-items: center; }
+@media (max-width: 880px) { .hero-C .wrap { grid-template-columns: 1fr; } }
+.hero-C .left { display: grid; gap: 22px; }
+.plate { display: inline-grid; grid-template-columns: auto auto; gap: 4px 18px; align-items: center; width: fit-content; padding: 10px 16px; border: 1px solid var(--dim);
+  background: linear-gradient(180deg, #1a1a1a, #0f0f0f); position: relative; }
+.plate::before, .plate::after { content: ""; position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--dim); top: 6px; }
+.plate::before { left: 6px; } .plate::after { right: 6px; }
+.plate .mark { font: 400 30px/1 var(--f-mark); grid-row: span 2; }
+.plate span { font: 700 10px/1.3 var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--dim); }
+.hero-C h1 { font-size: clamp(48px, 7.4vw, 104px); }
+.hero-C h1 em { font-style: normal; color: var(--c); }
+.lamps { display: flex; gap: 14px; font: 700 12px/1 var(--f-mono); letter-spacing: .1em; }
+.lamps span { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+.lamps i { width: 10px; height: 10px; border-radius: 50%; }
+.console { border: 1px solid var(--rule); background: #050505; font: 13.5px/1.7 var(--f-mono); }
+.console-bar { display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--rule); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+.console-body { padding: 14px 16px; overflow-x: auto; }
+.console-body div { white-space: nowrap; }
+.console-body .cmd { color: var(--paper); }
+.console-body .cmd::before { content: "$ "; color: var(--y); }
+.console-body .out { color: var(--dim); }
+.console-body .ok { color: var(--paper); }
+.console-body .ok b { color: var(--c); font-weight: 400; }
+.console .install { border-inline: 0; border-bottom: 0; }
+
+/* ---------- Section frame ---------- */
+.sec { padding-block: 72px; border-top: 1px solid var(--rule); }
+.sec-head { display: grid; gap: 12px; margin-bottom: 28px; }
+.sec-head h2 { font-size: clamp(36px, 5.5vw, 68px); }
+
+/* Day shift / third shift */
+.shifts { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--rule); border: 1px solid var(--rule); }
+@media (max-width: 760px) { .shifts { grid-template-columns: 1fr; } }
+.shift { background: var(--k); padding: 26px; display: grid; gap: 14px; align-content: start; }
+.shift h3 { font-size: 34px; }
+.shift .who { color: var(--dim); margin: 0; }
+.chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; list-style: none; padding: 0; margin: 0; }
+.chain li { font: 700 13px/1 var(--f-mono); padding: 8px 10px; border: 1px solid var(--dim); }
+.chain li + li::before { content: "→"; margin-right: 8px; color: var(--dim); border: 0; }
+.shift.third { background: #000; }
+.shift.third .chain li { border-color: var(--c); }
+
+/* ---------- Press line: shared ---------- */
+body:not([data-p="A"]) .press-A, body:not([data-p="B"]) .press-B, body:not([data-p="C"]) .press-C, body:not([data-p="D"]) .press-D { display: none; }
+.press-scroll { position: relative; height: 360vh; }
+.press-scroll .sentinels { position: absolute; inset: 0; display: grid; grid-template-rows: repeat(4, 1fr); pointer-events: none; }
+.stage { position: sticky; top: 0; min-height: 100vh; display: grid; align-content: center; gap: 18px; padding-block: 24px; }
+body[data-mode="static"] .press-scroll { height: auto; }
+body[data-mode="static"] .press-scroll .sentinels, body[data-mode="static"] .motion-only { display: none; }
+body[data-mode="motion"] .static-only { display: none; }
+body[data-mode="static"] .stage { position: static; min-height: 0; }
+.term { background: #030303; border: 1px solid var(--rule); font: 12.5px/1.65 var(--f-mono); padding: 12px 14px; height: 24vh; min-height: 160px; overflow: auto; }
+.term .ln { white-space: pre-wrap; word-break: break-all; color: var(--paper); }
+.term .ln .pfx { color: var(--dim); }
+.term .ln.old { opacity: .45; }
+.term .ln.win { color: var(--nc); text-shadow: 0 0 10px color-mix(in srgb, var(--nc) 45%, transparent); }
+.term .ln.bad { color: var(--m-text); }
+.term .ln.out { color: var(--y); }
+.term .cursor { display: inline-block; width: .6em; height: 1.1em; background: var(--paper); vertical-align: -.2em; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
-@media (max-width: 860px) { .hero-C { grid-template-columns: 1fr; } }
+body.paused .term .cursor { animation: none; }
+.lines { font: 12px/1.6 var(--f-mono); margin: 0; padding: 10px 12px; background: #030303; border: 1px solid var(--rule); overflow-x: auto; }
+.lines .ln { white-space: pre-wrap; word-break: break-all; }
+.lines .pfx { color: var(--dim); }
+.lines .win { color: var(--nc); } .lines .bad { color: var(--m-text); } .lines .out { color: var(--y); }
+.ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ctl button { font: 700 12px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; background: transparent; color: var(--paper);
+  border: 1px solid var(--dim); padding: 9px 12px; cursor: pointer; min-height: 36px; }
+.ctl button[aria-pressed="true"], .ctl button[aria-current="step"] { background: var(--paper); color: #000; border-color: var(--paper); }
+.ctl button.jam[aria-pressed="true"] { background: var(--m); border-color: var(--m); color: #fff; }
+.ctl .sep { width: 1px; height: 24px; background: var(--rule); }
+.skills { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.skills li { font: 700 12px/1 var(--f-mono); padding: 6px 8px; background: var(--k3); border: 1px solid var(--rule); }
+.skills li::before { content: "/"; color: var(--dim); }
+.skills:empty { display: none; }
+.fail-note { border: 1px solid var(--m); padding: 14px 16px; display: grid; gap: 6px; max-width: 70ch; }
+.fail-note b { color: var(--m-text); font-family: var(--f-head); font-size: 22px; letter-spacing: .02em; }
 
-/* ================= Section heading ================= */
-.sec-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--rule); padding-top: 20px; margin-top: 24px; }
-.sec-head h2 { font-size: clamp(36px, 5vw, 64px); text-transform: uppercase; }
-.sec-head .eyebrow { margin-left: auto; }
-.sec-intro { max-width: 62ch; color: var(--paper-dim); margin: 12px 0 0; }
+/* ---------- Press A: side elevation ---------- */
+.pa-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: end; }
+.pa-head h2 { font-size: clamp(34px, 5vw, 60px); }
+.pa-head .desc { grid-column: 1 / -1; max-width: 72ch; margin: 0; color: var(--paper); }
+.pa-svg { width: 100%; height: auto; display: block; max-height: 36vh; }
+body[data-mode="static"] .pa-svg { max-height: none; }
+.pa-svg text { font-family: var(--f-mono); }
+.pa-svg .u { transition: opacity .4s; }
+body[data-mode="motion"] .pa-svg .u:not(.on) { opacity: .38; }
+.pa-svg .u.on .frame { stroke: var(--paper); }
+.pa-svg .u.on { filter: drop-shadow(0 0 14px var(--glow)); }
+.spin { transform-box: fill-box; transform-origin: center; }
+body[data-mode="motion"] .u.on .spin { animation: spin 2.4s linear infinite; }
+body[data-mode="motion"] .u.on .spin.rev { animation-direction: reverse; animation-duration: 1.6s; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.belt-line { stroke-dasharray: 10 8; }
+body[data-mode="motion"]:not(.paused) .belt-line { animation: belt 0.9s linear infinite; }
+@keyframes belt { to { stroke-dashoffset: -18; } }
+body.paused .spin { animation-play-state: paused !important; }
+.pa-sheet { transform-box: fill-box; transform-origin: center; transition: transform .9s cubic-bezier(.6,.05,.3,1); }
+.pa-foot { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.pa-static { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .pa-static { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .pa-static { grid-template-columns: 1fr; } }
+.pa-static h3 { font-size: 26px; display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; }
+.pa-static h3 span { font: 700 12px/1 var(--f-mono); color: var(--dim); }
+.pa-static p { margin: 0 0 8px; font-size: 13.5px; }
+.pa-static .col { display: grid; align-content: start; gap: 6px; border-top: 4px solid var(--ink); padding-top: 10px; }
 
-/* ================= Press line (shared) ================= */
-.pressline { position: relative; }
-.pl-track { height: 360vh; position: relative; }     /* 4 steps, ~3.5 screens */
-.pl-stage { position: sticky; top: env(safe-area-inset-top, 0px); min-height: 100vh; display: grid; align-content: center; gap: 16px; padding-block: 24px 110px; }
-.pl-markers { position: absolute; inset: 0; display: grid; grid-template-rows: repeat(4, 1fr); pointer-events: none; }
-.pl-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.pl-controls button { font: 500 13px var(--f-mono); background: var(--k-raise); color: var(--paper); border: 1px solid var(--rule); padding: 8px 12px; cursor: pointer; min-width: 44px; }
-.pl-controls button[aria-pressed="true"] { border-color: var(--paper); background: var(--paper); color: var(--k); }
-.pl-controls .sep { flex: 1; }
-.unit-C { --ink: var(--c); --neon: var(--neon-c); }
-.unit-M { --ink: var(--m); --neon: var(--neon-m); }
-.unit-Y { --ink: var(--y); --neon: var(--neon-y); }
-.unit-K { --ink: var(--paper); --neon: var(--paper); }
-.chip { display: inline-block; font-size: 11px; letter-spacing: .06em; border: 1px solid currentColor; padding: 1px 6px; margin: 2px 4px 2px 0; }
-.lines { margin: 0; padding: 0; list-style: none; font-size: 12.5px; line-height: 1.65; }
-.lines li { white-space: pre-wrap; word-break: break-word; }
-.lines li::before { content: "thirdshift: "; color: var(--paper-dim); }
-.lines li.ok { color: var(--y); }
-.lines li.bad { color: var(--m-small); }
+/* ---------- Press B: floor plan ---------- */
+.pb-floor { border: 1px solid var(--rule); padding: 20px; display: grid; gap: 18px; background-color: #06080b; }
+.pb-line { display: flex; align-items: center; overflow-x: auto; padding: 36px 6px 10px; gap: 0; }
+.pb-line > * { flex: none; }
+.chest { width: 104px; height: 104px; border: 2px solid var(--dim); background: #111; display: grid; place-content: center; text-align: center; gap: 4px; padding: 6px; position: relative; }
+.chest b { font: 800 30px/1 var(--f-head); }
+.chest span { font: 700 10px/1.2 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.chest.deliv.jammed { border-color: var(--m); }
+.chest.deliv.jammed b { color: var(--m-text); }
+.belt { width: 64px; height: 22px; border-block: 2px solid #333; position: relative;
+  background: repeating-linear-gradient(90deg, transparent 0 8px, color-mix(in srgb, var(--y) 35%, transparent) 8px 10px, transparent 10px 16px) 0 0 / 16px 100%, #15130a; }
+body[data-mode="motion"]:not(.paused) .belt.run { animation: beltb .5s linear infinite; }
+@keyframes beltb { to { background-position: 16px 0, 0 0; } }
+.belt .item { position: absolute; top: 3px; left: 22px; width: 18px; height: 12px; background: var(--paper); box-shadow: 0 0 8px var(--glow, transparent); display: none; }
+.belt.run .item { display: block; }
+.machine { width: 132px; height: 132px; border: 2px solid #3a3a3a; background: #0e0e0e; position: relative; display: grid; grid-template-rows: auto 1fr auto; padding: 8px; gap: 4px; transition: border-color .3s, box-shadow .3s, opacity .3s; }
+.machine::before, .machine::after { content: ""; position: absolute; width: 6px; height: 6px; background: #3a3a3a; }
+.machine::before { top: 4px; right: 4px; } .machine::after { bottom: 4px; left: 4px; }
+body[data-mode="motion"] .machine:not(.on) { opacity: .45; }
+.machine.on { border-color: var(--paper); box-shadow: 0 0 0 1px #000, 0 0 24px -4px var(--glow); }
+.machine .num { font: 800 13px/1 var(--f-mono); color: var(--dim); }
+.machine .hopper { width: 62px; height: 62px; margin: auto; background: var(--ink); display: grid; place-content: center; }
+.machine .hopper b { font: 900 34px/1 var(--f-head); color: #000; }
+.machine.k .hopper { background: transparent; border: 2px solid var(--paper); }
+.machine.k .hopper b { color: var(--paper); }
+.machine .name { font: 700 11px/1.1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; text-align: center; }
+.machine.on .hopper { animation: none; }
+body[data-mode="motion"]:not(.paused) .machine.on .hopper { animation: work 1.2s ease-in-out infinite; }
+@keyframes work { 50% { transform: scale(.92); } }
+.sessbox { display: flex; align-items: center; border: 2px dashed var(--c); padding: 10px; position: relative; }
+.sessbox::before { content: "one agent session"; position: absolute; top: -26px; left: -2px; font: 700 11px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase;
+  background: var(--c); color: #000; padding: 6px 8px; }
+.pb-read { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .pb-read { grid-template-columns: 1fr; } }
+.pb-read .info { display: grid; gap: 10px; }
+.pb-read h2 { font-size: clamp(30px, 4vw, 48px); }
+.pb-read .info p { margin: 0; }
+.pb-static { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 900px) { .pb-static { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .pb-static { grid-template-columns: 1fr; } }
+.pb-static .col { display: grid; gap: 6px; align-content: start; }
+.pb-static .col h3 { font-size: 22px; }
+.pb-static .col h3 .tag { display: inline-block; width: 20px; height: 20px; vertical-align: -2px; margin-right: 8px; background: var(--ink); }
+.pb-static .col.k h3 .tag { background: transparent; border: 2px solid var(--paper); }
+.pb-static p { margin: 0; font-size: 13.5px; }
 
-/* Static (reduced-motion / no-JS) state: all shared markup, no sticky, no replay. */
-.is-static .pl-track { height: auto; }
-.is-static .pl-stage { position: static; min-height: 0; padding-block: 24px; }
-.is-static .pl-markers, .is-static .pl-controls, .is-static .motion-only { display: none; }
-.static-only { display: none; }
-.is-static .static-only { display: block; }
+/* ---------- Press C: job ticket ---------- */
+.pc-grid { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 28px; align-items: start; }
+@media (max-width: 760px) { .pc-grid { grid-template-columns: 1fr; } }
+.rail { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; position: relative; }
+.rail li { list-style: none; }
+.rail .end { font: 700 11px/1.35 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); border: 1px dashed var(--dim); padding: 8px 10px; }
+.rail .end b { display: block; color: var(--paper); font: 800 20px/1 var(--f-head); letter-spacing: .02em; text-transform: none; margin-bottom: 2px; }
+.rail .end.jammed { border-color: var(--m); } .rail .end.jammed b { color: var(--m-text); }
+.strip { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 10px; border: 1px solid var(--rule); background: var(--k2); padding: 0 10px 0 0; cursor: pointer; width: 100%;
+  color: var(--paper); font: inherit; text-align: left; transition: transform .3s, border-color .3s; }
+.strip .ink { height: 44px; background: var(--ink); display: grid; place-content: center; font: 900 24px/1 var(--f-head); color: #000; }
+.strip.k .ink { background: transparent; box-shadow: inset 0 0 0 2px var(--paper); color: var(--paper); }
+.strip .nm { font: 700 13px/1.1 var(--f-mono); text-transform: uppercase; letter-spacing: .06em; }
+.strip .n { font: 700 11px/1 var(--f-mono); color: var(--dim); }
+body[data-mode="motion"] .strip.on { border-color: var(--paper); transform: translateX(10px); box-shadow: -6px 0 22px -6px var(--glow); }
+.rail .session { border-left: 3px solid var(--c); padding-left: 10px; margin-left: -13px; display: grid; gap: 6px; position: relative; }
+.rail .session > span { font: 700 10px/1 var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--c); }
+.ticket { border: 1px solid var(--rule); background: var(--k2); display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 24px; }
+.ticket .big { grid-row: span 4; font: 900 clamp(110px, 16vw, 220px)/.8 var(--f-head); color: var(--ink); padding: 18px 0 0 18px; }
+.ticket.k .big { color: transparent; -webkit-text-stroke: 2px var(--paper); }
+.ticket .tk-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 16px 18px 0 0; font: 700 11px/1.4 var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+.ticket h2, .ticket h3 { font-size: clamp(34px, 4.6vw, 56px); padding-right: 18px; }
+.ticket .desc { margin: 0; padding-right: 18px; max-width: 64ch; }
+.ticket .skills { padding-right: 18px; }
+.ticket .bottom { grid-column: 1 / -1; display: grid; gap: 10px; padding: 18px; }
+@media (max-width: 560px) { .ticket { grid-template-columns: 1fr; } .ticket .big { grid-row: auto; font-size: 96px; } .ticket .tk-top, .ticket h2, .ticket h3, .ticket .desc, .ticket .skills { padding-left: 18px; } }
+.pc-static { display: grid; gap: 14px; }
+.pc-static .ticket { grid-template-columns: auto minmax(0, 1fr); }
+.pc-static .ticket .big { font-size: clamp(90px, 11vw, 150px); }
 
-/* ---------- UNIT A: Elevation drawing (side view of a sheet-fed press) ---------- */
-.ua svg { width: 100%; height: auto; display: block; }
-.ua .drawing { overflow-x: auto; border: 1px solid var(--rule); background:
-  linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 24px 24px,
-  linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 24px 24px, var(--k); }
-.ua .drawing svg { min-width: 760px; }
-.ua .lbl { font: 700 13px var(--f-mono); letter-spacing: .08em; fill: var(--paper); }
-.ua .sub { font: 400 11px var(--f-mono); fill: var(--paper-dim); }
-.ua .big { font: var(--w-head) 40px var(--f-head); }
-.ua .cyl { fill: var(--k-raise); stroke: var(--paper-dim); stroke-width: 1.5; transition: stroke .3s, filter .3s; }
-.ua .u.on .cyl { stroke: var(--ink-hex); stroke-width: 3; filter: drop-shadow(0 0 calc(4px + var(--fx-m) * 10px) var(--neon-hex)); }
-.ua .u .fill { fill: var(--ink-hex); opacity: .15; transition: opacity .3s; }
-.ua .u.on .fill { opacity: .9; }
-.ua .u.done .fill { opacity: .45; }
-.ua .sheet { fill: var(--paper); transition: transform .6s cubic-bezier(.3,.7,.2,1); }
-.ua .belt { stroke: var(--rule); stroke-width: 6; stroke-dasharray: 10 6; }
-.ua.run .belt { animation: belt 1s linear infinite; }
-@keyframes belt { to { stroke-dashoffset: -16; } }
-.ua .readout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 16px; }
-.ua .readout h3 { font-size: 36px; text-transform: uppercase; }
-.ua .readout h3 small { display: block; font: 500 12px var(--f-mono); letter-spacing: .12em; color: var(--paper-dim); margin-bottom: 6px; }
-.ua .readout p { margin: 8px 0 0; font-size: 14px; }
-@media (max-width: 760px) { .ua .readout { grid-template-columns: 1fr; } }
-.ua .static-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
-.ua .static-list section { border-top: 4px solid var(--ink); padding-top: 10px; }
-.ua .static-list h3 { font-size: 28px; text-transform: uppercase; }
-
-/* ---------- UNIT B: Factorio belts, top-down on blueprint ---------- */
-.ub .floor { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; }
-.ub .plan { position: relative; border: 1px solid var(--rule); padding: 20px; background:
-  linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 16px 16px,
-  linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 16px 16px,
-  linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 80px 80px,
-  linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 80px 80px, var(--k); }
-.ub .row { display: grid; grid-template-columns: 1fr; gap: 0; }
-.ub .machine { display: grid; grid-template-columns: 64px 1fr; gap: 14px; align-items: center; border: 1px solid var(--rule); background: var(--k-raise); padding: 12px; transition: border-color .3s, box-shadow .3s; }
-.ub .machine .plate { width: 64px; height: 64px; display: grid; place-items: center; font: var(--w-head) 40px var(--f-head); border: 2px solid var(--ink); color: var(--ink); }
-.ub .unit-K .plate { border-style: double; border-width: 4px; }
-.ub .machine h3 { font-size: 24px; text-transform: uppercase; }
-.ub .machine p { margin: 2px 0 0; font-size: 12px; color: var(--paper-dim); }
-.ub .machine.on { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink), 0 0 calc(8px + var(--fx-m) * 24px) color-mix(in srgb, var(--neon) 45%, transparent); }
-.ub .machine.on .plate { background: var(--ink); color: var(--k); }
-.ub .machine.done { opacity: .6; }
-.ub .conveyor { height: 28px; margin-left: 38px; width: 14px; background: repeating-linear-gradient(to bottom, var(--rule) 0 4px, transparent 4px 8px); border-inline: 2px solid var(--rule); }
-.ub.run .conveyor { animation: conv .6s linear infinite; }
-@keyframes conv { to { background-position: 0 8px; } }
-.ub .endpoint { border: 1px dashed var(--paper-dim); padding: 10px 12px; font-size: 13px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.ub .endpoint b { font: var(--w-head) 20px var(--f-head); text-transform: uppercase; }
-.ub .session { position: absolute; right: 6px; width: 10px; border: 2px solid var(--m-small); border-left: 0; }
-.ub .session span { position: absolute; left: 14px; top: 50%; transform: translateY(-50%) rotate(90deg); transform-origin: left center; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--m-small); white-space: nowrap; }
-.ub .term .out { min-height: 380px; white-space: pre-wrap; word-break: break-word; }
-@media (max-width: 820px) { .ub .floor { grid-template-columns: 1fr; } .ub .term .out { min-height: 200px; } }
-.ub .static-list { display: grid; gap: 0; }
-.ub .static-list .machine { grid-template-columns: 64px 1fr; align-items: start; }
-
-/* ---------- UNIT C: One unit at a time, with a line map ---------- */
-.uc .map { display: grid; grid-template-columns: auto repeat(4, 1fr) auto; align-items: center; gap: 6px; font-size: 12px; }
-.uc .map .end { color: var(--paper-dim); letter-spacing: .1em; text-transform: uppercase; }
-.uc .map button { all: unset; cursor: pointer; text-align: center; padding: 6px 0; border-bottom: 4px solid var(--rule); font-weight: 700; }
-.uc .map button.on { border-color: var(--ink); color: var(--ink); }
-.uc .map button.done { border-color: color-mix(in srgb, var(--ink) 45%, var(--k)); }
-.uc .map .bracket { grid-column: 3 / span 2; border: 1px solid var(--m-small); border-bottom: 0; height: 8px; position: relative; }
-.uc .map .bracket span { position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--m-small); background: var(--k); padding-inline: 6px; white-space: nowrap; }
-.uc .card { position: relative; display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); border: 1px solid var(--rule); background: var(--k-raise); overflow: hidden; }
-.uc .card .face { padding: clamp(20px, 4vw, 40px); display: grid; align-content: start; gap: 12px; }
-.uc .card .letter { font: var(--w-head) clamp(120px, 20vw, 240px)/.8 var(--f-head); color: var(--ink); }
-.uc .unit-K .letter { color: transparent; -webkit-text-stroke: 2px var(--paper); }
-.uc .card h3 { font-size: clamp(28px, 4vw, 44px); text-transform: uppercase; }
-.uc .card .num { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--paper-dim); }
-.uc .card p { margin: 0; font-size: 14px; max-width: 44ch; }
-.uc .card .term { border: 0; border-left: 1px solid var(--rule); }
-.uc .card .term .out { min-height: 320px; white-space: pre-wrap; word-break: break-word; }
-@media (max-width: 760px) { .uc .card { grid-template-columns: 1fr; } .uc .card .term { border-left: 0; border-top: 1px solid var(--rule); } .uc .card .term .out { min-height: 180px; } }
-.uc .static-list { display: grid; gap: 16px; }
-.uc .static-list .card .lines { padding: 16px; }
-
-/* Misprint (Failed run) treatment */
-.sheet-jam { display: none !important; }
-.jam .sheet-jam { display: inline-block !important; }
-.misprint-tag { display: inline-block; font: 700 12px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--k); background: var(--m-small); padding: 2px 8px; transform: rotate(-2deg); }
-
-/* ================= Colophon specimen ================= */
-.colophon { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 32px; padding-block: 48px; border-top: 1px solid var(--rule); margin-top: 48px; }
-.colophon blockquote { margin: 0; font: italic 400 clamp(18px, 2vw, 21px)/1.6 var(--f-colophon); max-width: 62ch; }
-.colophon blockquote p { margin: 0 0 1em; }
-.colophon .sig { font-style: normal; font-family: var(--f-mono); font-size: 14px; color: var(--paper-dim); }
+/* ---------- Off the press / colophon / footer ---------- */
+.offpress { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+@media (max-width: 820px) { .offpress { grid-template-columns: 1fr; } }
+.offpress div { display: grid; gap: 8px; align-content: start; border-top: 4px solid var(--ink); padding-top: 14px; }
+.offpress h3 { font-size: 28px; }
+.offpress p { margin: 0; }
+.colophon { display: grid; grid-template-columns: minmax(0, 220px) minmax(0, 1fr); gap: 32px; }
 @media (max-width: 760px) { .colophon { grid-template-columns: 1fr; } }
+.colophon blockquote { margin: 0; font: italic 400 clamp(19px, 2.2vw, 24px)/1.55 var(--f-colo); max-width: 58ch; display: grid; gap: 18px; }
+.colophon blockquote p { margin: 0; }
+.colophon cite { font-style: normal; font-family: var(--f-mono); font-size: 14px; color: var(--dim); }
+footer.foot { border-top: 1px solid var(--rule); padding-block: 28px; display: flex; flex-wrap: wrap; gap: 10px 26px; font-size: 13px; color: var(--dim); }
 
-/* ================= Specimen strip ================= */
-.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding-block: 24px; }
-.sw { border: 1px solid var(--rule); font-size: 12px; }
-.sw i { display: block; height: 48px; }
-.sw div { padding: 8px 10px; }
-.sw b { display: block; font-weight: 500; }
-.sw span { color: var(--paper-dim); font-variant-numeric: tabular-nums; }
+/* ---------- Prototype bar: deliberately not part of the design ---------- */
+.proto-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 100;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; align-items: center; max-width: calc(100vw - 16px);
+  background: #fff; color: #111; border-radius: 14px; padding: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.2);
+  font: 500 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+.proto-bar .tag { font-weight: 800; font-size: 10px; letter-spacing: .1em; background: #d00; color: #fff; padding: 5px 6px; border-radius: 6px; }
+.pg { display: flex; align-items: center; gap: 2px; border-radius: 10px; padding: 2px; border: 2px solid transparent; }
+.pg.active { border-color: #2563eb; background: #eef3ff; }
+.proto-bar button { font: inherit; border: 0; background: #f1f1f1; color: #111; border-radius: 8px; padding: 7px 9px; cursor: pointer; }
+.proto-bar button:hover { background: #e2e2e2; }
+.pg .lbl { background: transparent; font-weight: 700; color: #555; padding-inline: 6px; }
+.pg output { min-width: 108px; text-align: center; font-weight: 600; white-space: nowrap; }
+.proto-panel { position: fixed; right: 12px; bottom: 76px; z-index: 101; width: min(420px, calc(100vw - 24px)); max-height: 70vh; overflow: auto;
+  background: #fff; color: #111; border-radius: 12px; padding: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.55);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; display: grid; gap: 10px; }
+.proto-panel label { display: grid; grid-template-columns: 110px 1fr 44px; gap: 8px; align-items: center; }
+.proto-panel pre { font: 11.5px/1.45 ui-monospace, Menlo, monospace; background: #f4f4f4; padding: 10px; border-radius: 8px; margin: 0; white-space: pre-wrap; }
+.proto-panel h4 { margin: 0; font-size: 13px; }
+.proto-panel .row { display: flex; gap: 6px; flex-wrap: wrap; }
+.proto-panel button { font: inherit; border: 0; background: #f1f1f1; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
 
-/* ================= Prototype bar (not part of the design) ================= */
-.proto { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 100;
-  width: min(calc(100vw - 16px), 1080px); background: #fff; color: #111; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,.6);
-  font: 13px/1.3 -apple-system, system-ui, "Segoe UI", sans-serif; }
-.proto .axes { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; align-items: center; }
-.proto .axis { display: flex; align-items: center; border-radius: 8px; padding: 2px; gap: 2px; border: 2px solid transparent; }
-.proto .axis.active { border-color: #2563eb; background: #eef3ff; }
-.proto .axis .k { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #666; padding-inline: 6px 2px; }
-.proto button { font: inherit; border: 0; background: #f0f0f0; color: #111; border-radius: 6px; padding: 6px 9px; cursor: pointer; }
-.proto button:hover { background: #e2e2e2; }
-.proto .axis .v { background: none; font-weight: 600; min-width: 0; text-align: center; cursor: default; }
-.proto .spacer { flex: 1; }
-.proto .fxp { display: none; border-top: 1px solid #e5e5e5; padding: 8px 12px; gap: 8px 20px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); align-items: center; }
-.proto.show-fx .fxp { display: grid; }
-.proto .fxp label { display: grid; grid-template-columns: 110px 1fr 34px; gap: 8px; align-items: center; }
-.proto .fxp .presets { display: flex; gap: 4px; flex-wrap: wrap; }
-.proto .tok { display: none; border-top: 1px solid #e5e5e5; max-height: 38vh; overflow: auto; margin: 0; padding: 10px 12px; font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre; }
-.proto.show-tok .tok { display: block; }
-.proto .hint { color: #777; font-size: 11px; padding: 0 8px 6px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
 </style>
+</head>
+<body data-h="A" data-p="A" data-t="A" data-mode="motion">
 
-<div class="wrap">
-  <header id="hero"></header>
-  <section class="pressline" id="how" aria-labelledby="how-h"></section>
-  <section class="colophon" aria-labelledby="colo-h">
-    <div>
-      <p class="eyebrow">Colophon</p>
-      <h2 id="colo-h" style="font-size:40px;text-transform:uppercase;margin-top:8px">Third shift,<br>Morgantown</h2>
-      <div class="colorbar" style="margin-top:20px;max-width:220px"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="regmark" viewBox="0 0 28 28"><circle cx="14" cy="14" r="8" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="14" cy="14" r="3.5" fill="currentColor"/><path d="M14 0v28M0 14h28" stroke="currentColor" stroke-width="1.2"/></symbol>
+    <pattern id="dots" width="6" height="6" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="1.5" fill="#000"/></pattern>
+  </defs>
+</svg>
+
+<!-- ================= HERO A: Masthead ================= -->
+<header class="hero hero-A">
+  <div class="wrap">
+    <div class="colorbar ht" aria-hidden="true"><i class="cb-c"></i><i class="cb-c50"></i><i class="cb-m"></i><i class="cb-m50"></i><i class="cb-y"></i><i class="cb-y50"></i><i class="cb-k"></i><i class="cb-p"></i><i class="cb-c"></i><i class="cb-m"></i><i class="cb-y"></i><i class="cb-k"></i></div>
+    <div class="masthead">
+      <svg class="reg" aria-hidden="true"><use href="#regmark"/></svg>
+      <div class="mark" role="img" aria-label="The Third Shift">The Third Shift</div>
+      <svg class="reg" aria-hidden="true"><use href="#regmark"/></svg>
     </div>
-    <blockquote class="halftone">
-      <p>My dad, Mark Stephens, was a pressman at Tursack Printing, the print shop Robert Tursack Sr. founded in Philadelphia in 1959. My dad worked third shift at the Morgantown, Pennsylvania plant, keeping the big four-color presses running through the night. Sometimes I got to visit, and I always wondered whether I'd end up in printing myself. The lineage carries on. Bob Tursack went on to found Brilliant Graphics in Exton, where my mom still does graphic design. This is as close as I am to printing right now.</p>
-      <p>The printing press made copying words cheap. Agents are doing that for code. thirdshift is named for my dad's shift: the machines can run overnight, and I need something to keep them running.</p>
-      <p class="sig">- Jacob Stephens</p>
-    </blockquote>
-  </section>
-  <section aria-label="Ink specimen">
-    <p class="eyebrow">Prototype only · ink specimen for the current set</p>
-    <div class="swatches" id="swatches"></div>
-  </section>
-</div>
-
-<div class="proto" id="proto" role="region" aria-label="Prototype controls">
-  <div class="axes" id="axes"></div>
-  <div class="fxp">
-    <label>Halftone <input type="range" id="fx-h" min="0" max="100"><output id="fx-h-o"></output></label>
-    <label>Misregistration <input type="range" id="fx-m" min="0" max="100"><output id="fx-m-o"></output></label>
-    <label>Scanlines <input type="range" id="fx-s" min="0" max="100"><output id="fx-s-o"></output></label>
-    <div class="presets"><button data-p="0,0,0">Off</button><button data-p="20,15,10">Subtle</button><button data-p="40,35,25">Medium</button><button data-p="75,70,55">Loud</button></div>
+    <div class="dateline"><span>Third shift · 23:00 – 07:00</span><span>Four units · sheet-fed</span><span>thirdshift.app</span></div>
+    <h1 class="misreg">Your issues go to press overnight.</h1>
+    <div class="lower">
+      <div>
+        <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into issues. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and opens a pull request that is ready for review by morning.</p>
+        <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a></p>
+      </div>
+      <div>
+        <p class="eyebrow">Install</p>
+        <div class="install"><code>curl -fsSL https://thirdshift.app/install.sh | sh</code><button type="button" class="copy">Copy</button></div>
+        <details class="install-more"><summary>Show the full command</summary><code>curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh</code></details>
+      </div>
+    </div>
   </div>
-  <pre class="tok" id="tok"></pre>
-  <div class="hint">← → cycle the highlighted axis · ↑ ↓ pick an axis · state is in the URL</div>
+</header>
+
+<!-- ================= HERO B: Press sheet ================= -->
+<header class="hero hero-B">
+  <div class="wrap">
+    <div class="sheet-wrap">
+      <i class="crop tl"></i><i class="crop tr"></i><i class="crop bl"></i><i class="crop br"></i>
+      <svg class="reg l" aria-hidden="true"><use href="#regmark"/></svg><svg class="reg r" aria-hidden="true"><use href="#regmark"/></svg>
+      <div class="paper-sheet">
+        <div class="topline"><div class="mark" role="img" aria-label="The Third Shift">The Third Shift</div><span class="slug">Sheet 1 of 1 · run overnight</span></div>
+        <h1 class="misreg">Your issues go to press overnight.</h1>
+        <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into issues. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and opens a pull request that is ready for review by morning.</p>
+        <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a></p>
+        <div class="colorbar ht" aria-hidden="true"><i class="cb-c"></i><i class="cb-c50"></i><i class="cb-m"></i><i class="cb-m50"></i><i class="cb-y"></i><i class="cb-y50"></i><i class="cb-k"></i><i class="cb-c"></i><i class="cb-m"></i><i class="cb-y"></i><i class="cb-k"></i><i class="cb-c50"></i><i class="cb-m50"></i><i class="cb-y50"></i></div>
+      </div>
+    </div>
+    <div class="feed-slot">
+      <p class="eyebrow">Load the feeder</p>
+      <div class="install"><code>curl -fsSL https://thirdshift.app/install.sh | sh</code><button type="button" class="copy">Copy</button></div>
+      <details class="install-more"><summary>Show the full command</summary><code>curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh</code></details>
+    </div>
+  </div>
+</header>
+
+<!-- ================= HERO D: Proof, compact ================= -->
+<header class="hero hero-D">
+  <div class="wrap">
+    <div class="sheet-wrap">
+      <i class="crop tl"></i><i class="crop tr"></i><i class="crop bl"></i><i class="crop br"></i>
+      <svg class="reg l" aria-hidden="true"><use href="#regmark"/></svg><svg class="reg r" aria-hidden="true"><use href="#regmark"/></svg>
+      <div class="paper-sheet">
+        <div class="topline"><div class="mark" role="img" aria-label="The Third Shift">The Third Shift</div><span class="slug">Proof · pulled at 03:12 · unit 4 of 4</span></div>
+        <h1 class="misreg">Your issues go to press overnight.</h1>
+        <div class="proof-row">
+          <div>
+            <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into issues. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and opens a pull request that is ready for review by morning.</p>
+            <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a></p>
+          </div>
+          <div>
+            <p class="eyebrow">Install</p>
+            <div class="install"><code>curl -fsSL https://thirdshift.app/install.sh | sh</code><button type="button" class="copy">Copy</button></div>
+            <details class="install-more"><summary>Show the full command</summary><code>curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh</code></details>
+          </div>
+        </div>
+        <div class="colorbar ht" aria-hidden="true"><i class="cb-c"></i><i class="cb-c50"></i><i class="cb-m"></i><i class="cb-m50"></i><i class="cb-y"></i><i class="cb-y50"></i><i class="cb-k"></i><i class="cb-c"></i><i class="cb-m"></i><i class="cb-y"></i><i class="cb-k"></i><i class="cb-c50"></i><i class="cb-m50"></i><i class="cb-y50"></i></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ================= HERO C: Console ================= -->
+<header class="hero hero-C">
+  <div class="wrap">
+    <div class="left">
+      <div class="plate"><div class="mark" role="img" aria-label="The Third Shift">The Third Shift</div><span>Model 4C · four-unit</span><span>Serial v0.1.0</span></div>
+      <h1 class="misreg">Your issues go to press <em>overnight.</em></h1>
+      <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into issues. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and opens a pull request that is ready for review by morning.</p>
+      <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a></p>
+      <div class="lamps" aria-label="Units"><span><i style="background:var(--c);box-shadow:0 0 8px var(--nc)"></i>1 C</span><span><i style="background:var(--m);box-shadow:0 0 8px var(--nm)"></i>2 M</span><span><i style="background:var(--y);box-shadow:0 0 8px var(--ny)"></i>3 Y</span><span><i style="box-shadow:inset 0 0 0 2px var(--paper)"></i>4 K</span></div>
+    </div>
+    <div class="console">
+      <div class="console-bar"><span>~/repos/widgets</span><span>stderr</span></div>
+      <div class="install"><code>curl -fsSL https://thirdshift.app/install.sh | sh</code><button type="button" class="copy">Copy</button></div>
+      <div class="console-body">
+        <div class="cmd">thirdshift https://github.com/acme/widgets/issues/7</div>
+        <div class="out">thirdshift: creating worktree /home/you/repos/widgets-issue-7 on issue-7 from origin/main</div>
+        <div class="out">thirdshift: implement: skill thirdshift:tdd</div>
+        <div class="out">thirdshift: implement: skill thirdshift:code-review</div>
+        <div class="out">thirdshift: implement: skill thirdshift:pr</div>
+        <div class="out">thirdshift: CI passed on 9b07d53</div>
+        <div class="ok">thirdshift: <b>PR https://github.com/acme/widgets/pull/8 is ready for review</b></div>
+      </div>
+      <details class="install-more" style="padding:0 16px 14px"><summary>Show the full install command</summary><code>curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh</code></details>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- Day shift / third shift -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Two shifts</p><h2>You plan by day. The press runs at night.</h2></div>
+      <div class="shifts">
+        <div class="shift"><h3>Day shift</h3><p class="who">Humans, with Matt Pocock's skills</p>
+          <ol class="chain"><li>grill</li><li>spec</li><li>tickets</li></ol>
+          <p>You stress-test the idea, write it up as a spec and cut the spec into GitHub issues.</p></div>
+        <div class="shift third"><h3>Third shift</h3><p class="who">Agents, with the Factory skills</p>
+          <ol class="chain"><li>implement</li><li>review</li><li>PR</li></ol>
+          <p>thirdshift takes one Issue URL per Run and brings back a pull request it stands behind.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How a Run works: three press lines -->
+  <section class="sec press-A" aria-labelledby="pa-title"><div class="wrap press-scroll" data-variant="A"></div></section>
+  <section class="sec press-B" aria-labelledby="pb-title"><div class="wrap press-scroll" data-variant="B"></div></section>
+  <section class="sec press-C" aria-labelledby="pc-title"><div class="wrap press-scroll" data-variant="C"></div></section>
+  <section class="sec press-D" aria-labelledby="pa-title-D"><div class="wrap press-scroll" data-variant="D"></div></section>
+
+  <!-- What comes off the press -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Delivery pile</p><h2>What comes off the press</h2></div>
+      <div class="offpress">
+        <div style="--ink:var(--c)"><h3>Ready for review</h3><p>An open pull request from the Issue branch to the Base branch. It is mergeable and its CI passes, or thirdshift doesn't call it ready.</p></div>
+        <div style="--ink:var(--y)"><h3>Unaddressed findings</h3><p>Every review finding the agent chose not to fix is listed in the PR body with its reason, so you decide on it.</p></div>
+        <div style="--ink:var(--m)"><h3>Failed runs keep their work</h3><p>A Failed run commits and pushes what it has and turns the PR back to a draft. Run the same command again to continue it.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Colophon -->
+  <section class="sec">
+    <div class="wrap colophon">
+      <div class="sec-head" style="margin:0"><p class="eyebrow">Colophon</p><h2>Third shift</h2></div>
+      <blockquote>
+        <p>My dad, Mark Stephens, was a pressman at Tursack Printing, the print shop Robert Tursack Sr. founded in Philadelphia in 1959. My dad worked third shift at the Morgantown, Pennsylvania plant, keeping the big four-color presses running through the night. Sometimes I got to visit, and I always wondered whether I'd end up in printing myself. The lineage carries on. Bob Tursack went on to found Brilliant Graphics in Exton, where my mom still does graphic design. This is as close as I am to printing right now.</p>
+        <p>The printing press made copying words cheap. Agents are doing that for code. thirdshift is named for my dad's shift: the machines can run overnight, and I need something to keep them running.</p>
+        <cite>- Jacob Stephens</cite>
+      </blockquote>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <a href="https://github.com/JacobStephens2/thirdshift">GitHub</a>
+  <a href="https://github.com/JacobStephens2/thirdshift/releases">Releases</a>
+  <a href="https://github.com/JacobStephens2/thirdshift/blob/main/LICENSE">MIT License</a>
+  <span>Factory skills adapted from <a href="https://github.com/mattpocock/skills">Matt Pocock's skills</a></span>
+</footer>
+
+<!-- ================= Prototype switcher ================= -->
+<nav class="proto-bar" aria-label="Prototype switcher">
+  <span class="tag">PROTOTYPE</span>
+  <div class="pg" data-g="h"><button class="lbl" type="button">Hero</button><button type="button" data-d="-1" aria-label="Previous hero">‹</button><output></output><button type="button" data-d="1" aria-label="Next hero">›</button></div>
+  <div class="pg" data-g="p"><button class="lbl" type="button">Press</button><button type="button" data-d="-1" aria-label="Previous press line">‹</button><output></output><button type="button" data-d="1" aria-label="Next press line">›</button><button type="button" id="mode-btn"></button></div>
+  <div class="pg" data-g="t"><button class="lbl" type="button">Ink</button><button type="button" data-d="-1" aria-label="Previous ink set">‹</button><output></output><button type="button" data-d="1" aria-label="Next ink set">›</button></div>
+  <div class="pg" data-g="fx"><button class="lbl" type="button">Effects</button><button type="button" data-d="-1" aria-label="Weaker effects">‹</button><output></output><button type="button" data-d="1" aria-label="Stronger effects">›</button><button type="button" id="tune-btn">Tune</button></div>
+  <button type="button" id="tokens-btn">Tokens</button>
+</nav>
+<div class="proto-panel" id="tune-panel" hidden>
+  <h4>Effect strength</h4>
+  <label for="ht">Halftone <input id="ht" type="range" min="0" max="100" step="5"><output id="ht-o"></output></label>
+  <label for="mr">Misregistration <input id="mr" type="range" min="0" max="6" step="0.5"><output id="mr-o"></output></label>
+  <label for="sl">Scanlines <input id="sl" type="range" min="0" max="60" step="2"><output id="sl-o"></output></label>
+</div>
+<div class="proto-panel" id="tokens-panel" hidden>
+  <div class="row"><h4 style="flex:1">Current choice as tokens</h4><button type="button" id="copy-tokens">Copy</button></div>
+  <pre id="tokens-out"></pre>
 </div>
 
 <script type="module">
-// ---------------- Content: real stderr lines, quoted from src/ ----------------
-const REPO = "widgets", ISSUE = 7, BR = `issue-${ISSUE}`, SHA = "3f9c2e1";
-const LOG = (kind) => `~/.thirdshift/logs/you-${REPO}-issue-${ISSUE}-20260925T013012Z-${kind}.jsonl`;
+// ---------------- Data: the real stderr lines, from src/ ----------------
+const LOG = "/home/you/.thirdshift/logs/acme-widgets-issue-7-20260926T030412Z";
 const UNITS = [
-  { key: "C", n: 1, name: "Pre-flight", stage: "Checks the Origin match, the issue and the Base branch, picks the Issue branch, and makes a worktree beside your clone.",
-    skills: [], lines: [
-      [`creating worktree /home/you/repos/${REPO}-${BR} on ${BR} from origin/main`],
-    ]},
-  { key: "M", n: 2, name: "Implement", stage: "A headless Claude Code session writes the code, test first.",
-    skills: ["implement", "tdd"], lines: [
-      [`logging the session to ${LOG("implement")}`],
-      ["implement: session started"],
-      ["implement: skill thirdshift:tdd"],
-      ["implement: Read src/parse.rs"],
-      ["implement: Edit src/parse.rs"],
-      ["implement: $ cargo test"],
-      ["implement: commit"],
-    ]},
-  { key: "Y", n: 3, name: "Review", stage: "The same session reviews its own diff, fixes the findings it agrees with, then opens the PR, ready for review.",
-    skills: ["code-review", "pr"], lines: [
-      ["implement: skill thirdshift:code-review"],
-      ["implement: Agent Standards review"],
-      ["implement: Agent Spec review"],
-      ["implement: Edit src/parse.rs"],
-      ["implement: commit and push"],
-      ["implement: skill thirdshift:pr"],
-      ["implement: $ gh pr create --title \"Parse dates in ISO 8601\" --body-file /tmp/pr-body.md"],
-      ["implement: session ended after 23m 41s: 58 turns, $4.12 at API prices"],
-    ]},
-  { key: "K", n: 4, name: "Push & CI", stage: "thirdshift takes over: pushes, checks the PR, merges origin/main, watches CI and runs up to 3 Repairs.",
-    skills: [], lines: [
-      [`pushing ${BR}`],
-      ["checking the PR"],
-      [`merging origin/main into ${BR}`],
-      [`pushing ${BR}`],
-      [`waiting up to 60s for CI on ${SHA}`],
-      [`CI on ${SHA}: 2 of 3 checks still running`],
-      [`CI passed on ${SHA}`, "ok"],
-      ["checking the PR is open, ready and mergeable"],
-      [`cleaning up the worktree and local branch ${BR}`],
-      [`PR https://github.com/you/${REPO}/pull/12 is ready for review`, "ok"],
-    ]},
+  { key: "C", n: 1, name: "Pre-flight", ink: "--c", glow: "--nc", skills: [],
+    desc: "Checks the Origin match, that the issue is open and that the Base branch is sound. Picks the Issue branch and makes a worktree next to your clone, so your own checkout is never touched.",
+    lines: [
+      "creating worktree /home/you/repos/widgets-issue-7 on issue-7 from origin/main",
+    ] },
+  { key: "M", n: 2, name: "Implement", ink: "--m", glow: "--nm", skills: ["implement", "tdd"],
+    desc: "A headless Claude Code session, with the Factory skills loaded, implements the issue test-first in the worktree.",
+    lines: [
+      `logging the session to ${LOG}-implement.jsonl`,
+      "implement: session started",
+      "implement: skill thirdshift:implement",
+      "implement: Read src/cart.rs",
+      "implement: skill thirdshift:tdd",
+      "implement: $ cargo test cart::",
+      "implement: Edit src/cart.rs",
+      "implement: commit",
+    ] },
+  { key: "Y", n: 3, name: "Review", ink: "--y", glow: "--ny", skills: ["code-review", "pr"],
+    desc: "In the same session, the agent reviews its work against the Base branch, fixes the findings it agrees with and opens the pull request, already ready for review. Each Unaddressed finding goes in the PR body with a reason.",
+    lines: [
+      "implement: skill thirdshift:code-review",
+      "implement: $ git diff origin/main...HEAD",
+      "implement: Edit src/cart.rs",
+      "implement: commit and push",
+      "implement: skill thirdshift:pr",
+      "implement: $ gh pr create --title \"Apply discount codes at checkout\" --body-file /tmp/pr-body.md",
+      "implement: session ended after 18m 42s: 96 turns, $5.87 at API prices",
+    ] },
+  { key: "K", n: 4, name: "Push & CI", ink: "--paper", glow: "--nc", skills: [],
+    desc: "thirdshift takes over. It pushes, checks the PR, merges origin/main and watches CI. A conflict or red CI starts a Repair, at most 3. The Run ends when the PR is open, ready and mergeable.",
+    lines: [
+      "pushing issue-7",
+      "checking the PR",
+      "merging origin/main into issue-7",
+      "pushing issue-7",
+      "waiting up to 60s for CI on 4c1e9a2",
+      "CI on 4c1e9a2: 2 of 4 checks still running",
+      "CI failed on 4c1e9a2: test (ubuntu-latest)",
+      "CI red; starting Repair 1 of 3",
+      `logging the session to ${LOG}-repair-1.jsonl`,
+      "repair-1: session started",
+      "repair-1: $ cargo test",
+      "repair-1: commit and push",
+      "repair-1: session ended after 4m 5s: 21 turns, $1.12 at API prices",
+      "pushing issue-7",
+      "merging origin/main into issue-7",
+      "pushing issue-7",
+      "waiting up to 60s for CI on 9b07d53",
+      "CI passed on 9b07d53",
+      "checking the PR is open, ready and mergeable",
+      "cleaning up the worktree and local branch issue-7",
+      { t: "PR https://github.com/acme/widgets/pull/8 is ready for review", cls: "win" },
+      { t: "https://github.com/acme/widgets/pull/8", cls: "out", raw: true },
+    ] },
 ];
-// A jammed sheet: the same K unit ending as a Failed run.
-const JAM = [
-  [`pushing ${BR}`], ["checking the PR"], [`merging origin/main into ${BR}`], [`pushing ${BR}`],
-  [`waiting up to 60s for CI on ${SHA}`], [`CI failed on ${SHA}: test (ubuntu-latest)`, "bad"],
-  ["CI red; starting Repair 1 of 3"], [`logging the session to ${LOG("repair-1")}`], ["repair-1: session started"],
-  ["…"], ["CI red; starting Repair 3 of 3"], ["repair-3: session ended after 9m 02s: 21 turns, $1.37 at API prices"],
-  [`CI failed on 8a41d07: test (ubuntu-latest)`, "bad"],
-  [`cleaning up the worktree and local branch ${BR}`],
-  ["repairs exhausted: CI red", "bad"],
-  [`session log: ${LOG("repair-3")}`],
-];
-
-// ---------------- Prototype state ----------------
-const AX = {
-  hero: { label: "Hero", opts: { A: "Masthead", B: "Press sheet", C: "Night console" } },
-  unit: { label: "Press line", opts: { A: "Elevation drawing", B: "Belt floor plan", C: "One unit at a time" } },
-  ink:  { label: "Ink + type", opts: { 1: "Starting inks", 2: "Sodium hall", 3: "Blueprint stencil" } },
+const JAM = {
+  name: "Misprint: a Failed run",
+  desc: "A jammed sheet is a Failed run. Its work is committed as thirdshift: failed run (…) and pushed so nothing is lost, and the PR goes back to a draft. Run the same command again to continue it.",
+  lines: [
+    "pushing issue-7",
+    "checking the PR",
+    "merging origin/main into issue-7",
+    "pushing issue-7",
+    "waiting up to 60s for CI on 4c1e9a2",
+    "CI failed on 4c1e9a2: test (ubuntu-latest)",
+    "CI red; starting Repair 1 of 3",
+    "…",
+    "CI failed on e71b0c4: test (ubuntu-latest)",
+    "CI red; starting Repair 3 of 3",
+    `logging the session to ${LOG}-repair-3.jsonl`,
+    "repair-3: session ended after 6m 51s: 34 turns, $1.94 at API prices",
+    "pushing issue-7",
+    "merging origin/main into issue-7",
+    "pushing issue-7",
+    "CI failed on 2d9f6a1: test (ubuntu-latest)",
+    "cleaning up the worktree and local branch issue-7",
+    { t: "repairs exhausted: CI red", cls: "bad" },
+    { t: `session log: ${LOG}-repair-3.jsonl`, cls: "bad" },
+    { t: "https://github.com/acme/widgets/pull/8", cls: "out", raw: true },
+  ],
 };
-const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-function readState() {
-  const q = new URLSearchParams(location.search + "&" + location.hash.slice(1));
-  const fx = (q.get("fx") || "40,35,25").split(",").map(Number);
+
+// ---------------- Variant catalogue ----------------
+const HEROES = { A: "Masthead", B: "Press sheet", C: "Console", D: "Proof, compact" };
+const PRESSES = { A: "Side elevation", B: "Floor plan", C: "Job ticket", D: "Elevation, big labels" };
+const INKS = {
+  A: { label: "Process", tokens: { "--k": "#0A0A0A", "--k2": "#141414", "--k3": "#1E1E1E", "--paper": "#E8E6E1", "--dim": "#9A978F", "--rule": "#2A2A2A",
+        "--c": "#00AEEF", "--m": "#EC008C", "--m-text": "#FF5CB8", "--y": "#FFF200", "--nc": "#00FFFF", "--nm": "#FF00FF", "--ny": "#FFFF00", "--grid": "rgba(0,174,239,.07)" },
+       fonts: { "--f-mark": ["UnifrakturMaguntia", 400], "--f-head": ["Big Shoulders Display", 800], "--f-body": ["JetBrains Mono", 400, "15px"], "--f-mono": ["JetBrains Mono", 400], "--f-colo": ["Playfair Display italic", 400] } },
+  B: { label: "Blueprint", tokens: { "--k": "#070A10", "--k2": "#0D1420", "--k3": "#15202F", "--paper": "#DDE5EC", "--dim": "#8494A7", "--rule": "#1F2B3B",
+        "--c": "#27B7F2", "--m": "#F0168F", "--m-text": "#FF6AC1", "--y": "#FFE81A", "--nc": "#00FFFF", "--nm": "#FF00FF", "--ny": "#FFFF00", "--grid": "rgba(39,183,242,.13)" },
+       fonts: { "--f-mark": ["UnifrakturMaguntia", 400], "--f-head": ["Big Shoulders Stencil Display", 900], "--f-body": ["IBM Plex Sans Condensed", 400, "17px"], "--f-mono": ["IBM Plex Mono", 400], "--f-colo": ["Playfair Display italic", 400] } },
+  C: { label: "Night newsprint", tokens: { "--k": "#0E0C0A", "--k2": "#191511", "--k3": "#241E18", "--paper": "#EEE6D5", "--dim": "#A69C8A", "--rule": "#2E2720",
+        "--c": "#0098D8", "--m": "#E3007D", "--m-text": "#FF70B6", "--y": "#F6DE1B", "--nc": "#00FFFF", "--nm": "#FF00FF", "--ny": "#FFFF00", "--grid": "rgba(246,222,27,.05)" },
+       fonts: { "--f-mark": ["Grenze Gotisch", 700], "--f-head": ["Chakra Petch", 700], "--f-body": ["Source Serif 4", 400, "18px"], "--f-mono": ["Space Mono", 400], "--f-colo": ["Libre Caslon Text italic", 400] } },
+};
+const FALLBACK = { "--f-mark": "serif", "--f-head": "Impact, sans-serif", "--f-body": "system-ui, sans-serif", "--f-mono": "ui-monospace, monospace", "--f-colo": "Georgia, serif" };
+const FX = {
+  off:    { ht: 0,  mr: 0,   sl: 0 },
+  subtle: { ht: 35, mr: 1,   sl: 12 },
+  medium: { ht: 60, mr: 2,   sl: 22 },
+  loud:   { ht: 90, mr: 4,   sl: 40 },
+};
+const FX_KEYS = Object.keys(FX);
+
+// ---------------- State in the URL ----------------
+const q = new URLSearchParams(location.search);
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const state = {
+  h: HEROES[q.get("h")] ? q.get("h") : "A",
+  p: PRESSES[q.get("p")] ? q.get("p") : "A",
+  t: INKS[q.get("t")] ? q.get("t") : "A",
+  mode: ["motion", "static"].includes(q.get("mode")) ? q.get("mode") : (reduced ? "static" : "motion"),
+  fx: FX[q.get("fx")] ? q.get("fx") : "subtle",
+  ht: null, mr: null, sl: null,
+  step: 0, jam: false, paused: false,
+};
+for (const k of ["ht", "mr", "sl"]) state[k] = q.has(k) ? Number(q.get(k)) : FX[state.fx][k];
+let activeGroup = "h";
+
+function saveUrl() {
+  const p = new URLSearchParams({ h: state.h, p: state.p, t: state.t, mode: state.mode, fx: state.fx });
+  const preset = FX[state.fx];
+  if (state.ht !== preset.ht || state.mr !== preset.mr || state.sl !== preset.sl) { p.set("ht", state.ht); p.set("mr", state.mr); p.set("sl", state.sl); }
+  history.replaceState(null, "", "?" + p.toString() + location.hash);
+}
+
+// ---------------- Helpers ----------------
+const el = (tag, attrs = {}, html = "") => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (html) e.innerHTML = html; return e; };
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const lineHtml = l => {
+  const o = typeof l === "string" ? { t: l } : l;
+  if (o.raw) return `<div class="ln ${o.cls || ""}">${esc(o.t)}  <span class="pfx">(stdout)</span></div>`;
+  return `<div class="ln ${o.cls || ""}"><span class="pfx">thirdshift:</span> ${esc(o.t)}</div>`;
+};
+const linesFor = i => (i === 3 && state.jam ? JAM.lines : UNITS[i].lines);
+const unitTitle = u => `Unit ${u.n} · ${u.key} · ${u.name}`;
+const skillsHtml = u => u.skills.map(s => `<li>${s}</li>`).join("");
+
+function controls() {
+  const c = el("div", { class: "ctl motion-only", role: "group", "aria-label": "Press line steps" });
+  c.innerHTML = UNITS.map((u, i) => `<button type="button" data-step="${i}">${u.n} ${u.key}</button>`).join("") +
+    `<span class="sep"></span><button type="button" class="jam" aria-pressed="false">Misprint</button>` +
+    `<button type="button" class="pause" aria-pressed="false">Pause</button>`;
+  return c;
+}
+function staticFailNote() {
+  return el("div", { class: "fail-note static-only" }, `<b>${JAM.name}</b><span>${esc(JAM.desc)}</span><div class="lines">${JAM.lines.slice(-4).map(lineHtml).join("")}</div>`);
+}
+function scaffold(root, stage) {
+  const s = el("div", { class: "sentinels", "aria-hidden": "true" }, "<i></i><i></i><i></i><i></i>");
+  root.append(s, stage);
+}
+
+// ---------------- Press A: side elevation (SVG) ----------------
+const TX = [215, 425, 635, 845];
+function towerSvg(u, i, boxed) {
+  const x = TX[i], k = u.key === "K";
+  const inkFill = k ? "none" : `var(${u.ink})`;
+  return `<g class="u" data-i="${i}" style="--glow:var(${u.glow})" transform="translate(${x},64)">
+    <rect class="frame" x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
+    <rect x="12" y="12" width="146" height="50" fill="${inkFill}" ${k ? 'stroke="var(--paper)" stroke-width="2"' : ""}/>
+    ${k ? "" : `<rect class="ht-ov" x="12" y="12" width="146" height="50" fill="url(#dots)"/>`}
+    <text class="svg-misreg" x="85" y="49" text-anchor="middle" font-size="36" font-weight="700" fill="${k ? "var(--paper)" : "#000"}" style="font-family:var(--f-head)">${u.key}</text>
+    <g fill="none" stroke="var(--dim)" stroke-width="1.5">
+      <circle class="spin rev" cx="38" cy="86" r="10"/><circle class="spin rev" cx="85" cy="86" r="10"/><circle class="spin rev" cx="132" cy="86" r="10"/>
+    </g>
+    <g class="spin"><circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="${k ? "var(--paper)" : `var(${u.ink})`}" stroke-width="3"/>
+      <path d="M85 114v92M39 160h92M52 127l66 66M118 127l-66 66" stroke="var(--dim)" stroke-width="1"/></g>
+    <circle class="spin rev" cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
+    <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT ${u.n}</text>
+    ${boxed
+      ? `<text x="85" y="298" text-anchor="middle" font-size="24" font-weight="800" fill="var(--paper)" style="font-family:var(--f-head);letter-spacing:.02em">${u.n} · ${u.key} · ${u.name.toUpperCase()}</text>`
+      : `<text x="85" y="292" text-anchor="middle" font-size="14" font-weight="700" fill="var(--paper)">${u.n} · ${u.key}</text>
+    <text x="85" y="310" text-anchor="middle" font-size="12" fill="var(--dim)">${u.name.toUpperCase()}</text>`}
+  </g>`;
+}
+function pressSvgA(isStatic, boxed) {
+  return `<svg class="pa-svg" viewBox="0 0 1200 ${boxed ? 410 : 400}" role="img" aria-label="Feeder, four press units C M Y K, and the delivery pile${isStatic ? "" : ""}">
+    <rect x="0" y="0" width="1200" height="400" fill="transparent"/>
+    <!-- session bracket over M and Y -->
+    <path d="M425 34V22H805V34" fill="none" stroke="var(--c)" stroke-width="2"/>
+    <text x="615" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="var(--c)" letter-spacing="1.5">ONE AGENT SESSION</text>
+    <!-- feeder -->
+    <g transform="translate(24,230)">
+      <rect x="10" y="0" width="140" height="70" fill="var(--k3)" stroke="var(--dim)"/><rect x="5" y="8" width="140" height="70" fill="var(--k3)" stroke="var(--dim)"/>
+      <rect x="0" y="16" width="140" height="70" fill="var(--k2)" stroke="var(--paper)"/>
+      <text x="70" y="46" text-anchor="middle" font-size="15" font-weight="700" fill="var(--paper)">#7</text>
+      <text x="70" y="66" text-anchor="middle" font-size="10" fill="var(--dim)">+ #9, #12</text>
+      <text x="70" y="-12" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">FEEDER</text>
+      <text x="70" y="112" text-anchor="middle" font-size="11" fill="var(--dim)">issue queue</text>
+    </g>
+    <!-- belt -->
+    <line class="belt-line" x1="160" y1="322" x2="1040" y2="322" stroke="var(--y)" stroke-opacity=".55" stroke-width="3"/>
+    <line x1="160" y1="328" x2="1040" y2="328" stroke="var(--rule)" stroke-width="2"/>
+    ${UNITS.map((u, i) => towerSvg(u, i, boxed)).join("")}
+    <!-- delivery pile -->
+    <g class="deliv" transform="translate(1040,230)">
+      <rect x="0" y="36" width="140" height="10" fill="var(--k3)" stroke="var(--dim)"/><rect x="0" y="48" width="140" height="10" fill="var(--k3)" stroke="var(--dim)"/>
+      <rect class="deliv-top" x="0" y="60" width="140" height="42" fill="var(--k2)" stroke="var(--paper)"/>
+      <text class="deliv-text" x="70" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">PR #8 · READY</text>
+      <text x="70" y="-12" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">DELIVERY PILE</text>
+      <text x="70" y="124" text-anchor="middle" font-size="11" fill="var(--dim)">ready for review</text>
+    </g>
+    ${isStatic ? "" : `<g class="pa-sheet"><rect x="0" y="306" width="54" height="12" fill="var(--paper)"/><rect class="ht-ov" x="0" y="306" width="54" height="12" fill="url(#dots)"/></g>`}
+  </svg>`;
+}
+function buildA(root, boxed = false) {
+  const stage = el("div", { class: "stage" });
+  stage.innerHTML = `
+    <div class="pa-head">
+      <div><p class="eyebrow">How a Run works</p><h2 id="${boxed ? "pa-title-D" : "pa-title"}" class="misreg">Unit 1 · C · Pre-flight</h2></div>
+      <ul class="skills"></ul>
+      <p class="desc motion-only"></p>
+      <p class="desc static-only">A Run feeds one issue through four units and delivers a pull request. Units 2 and 3 are one agent session.</p>
+    </div>
+    <div class="motion-only">${pressSvgA(false, boxed)}</div>
+    <div class="static-only">${pressSvgA(true, boxed)}</div>
+    <div class="pa-foot motion-only"><div class="term" role="log" aria-live="off"></div></div>
+    <div class="pa-static static-only">${UNITS.map(u => `<div class="col" style="--ink:var(${u.ink})"><h3>${u.key} ${u.name} <span>UNIT ${u.n}</span></h3><p>${esc(u.desc)}</p><ul class="skills">${skillsHtml(u)}</ul><div class="lines">${u.lines.map(lineHtml).join("")}</div></div>`).join("")}</div>`;
+  stage.querySelector(".pa-foot").append(controls());
+  stage.append(staticFailNote());
+  stage.querySelectorAll(".static-only .u").forEach(g => g.classList.add("on"));
+  scaffold(root, stage);
   return {
-    hero: AX.hero.opts[q.get("hero")] ? q.get("hero") : "A",
-    unit: AX.unit.opts[q.get("unit")] ? q.get("unit") : "A",
-    ink: AX.ink.opts[q.get("ink")] ? q.get("ink") : "1",
-    fx: { h: fx[0] ?? 40, m: fx[1] ?? 35, s: fx[2] ?? 25 },
-    static: q.get("static") === "1" || reducedMotion,
+    render(i) {
+      const u = UNITS[i], jam = i === 3 && state.jam;
+      stage.querySelector("h2").textContent = jam ? JAM.name : unitTitle(u);
+      stage.querySelector(".pa-head .skills").innerHTML = skillsHtml(u);
+      stage.querySelector(".desc.motion-only").textContent = jam ? JAM.desc : u.desc;
+      const mo = stage.querySelector(".motion-only svg");
+      mo.querySelectorAll(".u").forEach((g, j) => g.classList.toggle("on", j === i));
+      mo.querySelector(".pa-sheet").style.transform = jam ? `translate(${TX[3] + 58}px, -30px) rotate(-24deg)` : `translate(${TX[i] + 58}px, 0)`;
+      mo.querySelector(".deliv-top").setAttribute("stroke", jam ? "var(--m)" : "var(--paper)");
+      const dt = mo.querySelector(".deliv-text");
+      dt.textContent = jam ? "PR #8 · DRAFT" : "PR #8 · READY";
+      dt.setAttribute("fill", jam ? "var(--m-text)" : "var(--paper)");
+      mo.querySelector(".deliv").style.opacity = i === 3 ? 1 : .4;
+    },
+    term: stage.querySelector(".term"),
   };
 }
-let S = readState();
-let active = "hero";
-function writeState() {
-  const q = `?hero=${S.hero}&unit=${S.unit}&ink=${S.ink}&fx=${S.fx.h},${S.fx.m},${S.fx.s}${S.static ? "&static=1" : ""}`;
-  try { history.replaceState(null, "", location.pathname + q); }
-  catch { history.replaceState(null, "", "#" + q.slice(1)); } // file:// fallback
-}
 
-// ---------------- Shared bits ----------------
-const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const REG = `<svg class="regmark" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor"/><path d="M11 0v22M0 11h22" stroke="currentColor"/></svg>`;
-const SHORT = "curl -fsSL https://thirdshift.app/install.sh | sh";
-const FULL = "curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh";
-const install = () => `
-  <div class="install">
-    <div class="cmd"><pre>${SHORT}</pre><button type="button" data-copy="${esc(SHORT)}">Copy</button></div>
-    <details class="full"><summary>Show the full command, straight from GitHub Releases</summary>
-      <div class="cmd"><pre>${FULL}</pre><button type="button" data-copy="${esc(FULL)}">Copy</button></div>
-    </details>
-  </div>`;
-const credit = `<p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a></p>`;
-const colorbar = (n = 16) => `<div class="colorbar" aria-hidden="true">${"<i></i>".repeat(n)}</div>`;
-
-// ---------------- Heroes (question 1) ----------------
-const HEROES = {
-  A: () => `
-  <div class="hero-A halftone">
-    <div class="flag">${REG}<p class="wordmark" aria-label="The Third Shift">The Third Shift</p>${REG}</div>
-    <div class="dateline"><span>Night edition</span><span>Pressed from GitHub issues</span><span>v0.1.0</span></div>
-    <div class="body">
-      <h1 class="misreg">Your issues go to press <span class="y">overnight.</span></h1>
-      <div class="deck">
-        <p>You work the day shift: grill the idea, write the spec, cut the issues. thirdshift works the third shift. Give it an Issue URL and it implements the issue, reviews its own work and hands you a pull request that is ready for review.</p>
-        ${credit}
+// ---------------- Press B: floor plan (Factorio, top-down) ----------------
+function buildB(root) {
+  const stage = el("div", { class: "stage" });
+  const m = (u, i) => `<div class="machine ${u.key === "K" ? "k" : ""}" data-i="${i}" style="--ink:var(${u.ink});--glow:var(${u.glow})"><span class="num">${u.n}</span><div class="hopper ht"><b>${u.key}</b></div><span class="name">${u.name}</span></div>`;
+  const belt = i => `<div class="belt" data-b="${i}"><span class="item"></span></div>`;
+  stage.innerHTML = `
+    <div><p class="eyebrow">How a Run works</p></div>
+    <div class="pb-floor grid-bg">
+      <div class="pb-line" role="img" aria-label="Feeder, four press units C M Y K on a belt, and the delivery pile">
+        <div class="chest feed"><b>#7</b><span>Feeder<br>issue queue</span></div>
+        ${belt(0)}${m(UNITS[0], 0)}${belt(1)}
+        <div class="sessbox">${m(UNITS[1], 1)}${belt(2)}${m(UNITS[2], 2)}</div>
+        ${belt(3)}${m(UNITS[3], 3)}${belt(4)}
+        <div class="chest deliv"><b>PR #8</b><span class="dl">Delivery pile<br>ready for review</span></div>
       </div>
-    </div>
-    <div style="margin-top:36px">${install()}</div>
-  </div>`,
-  B: () => `
-  <div class="hero-B">
-    <div class="sheet halftone">
-      <span class="crop tl"></span><span class="crop tr"></span><span class="crop bl"></span><span class="crop br"></span>
-      <div class="side-regs l">${REG}</div><div class="side-regs r">${REG}</div>
-      <div class="sheet-head"><p class="wordmark">The Third Shift</p><span class="slug">thirdshift · sheet 1 of 1 · 4/0 process</span></div>
-      <h1 class="misreg">Your issues go to press <em>overnight.</em></h1>
-      <div class="cols">
-        <p>Humans are the <b>day shift</b>. Agents work the <b>third shift</b>. Hand thirdshift an issue before you log off, and a pull request marked ready for review is waiting in the morning. It is one the factory stands behind.</p>
-        <div style="display:grid;gap:14px">${install()}${credit}</div>
+      <div class="pb-read motion-only">
+        <div class="info"><h2 id="pb-title">Unit 1 · C · Pre-flight</h2><p class="desc"></p><ul class="skills"></ul></div>
+        <div style="display:grid;gap:10px"><div class="term" role="log" aria-live="off"></div></div>
       </div>
-      <div class="bleed">${colorbar(24)}</div>
-    </div>
-  </div>`,
-  C: () => `
-  <div class="hero-C">
-    <div>
-      <p class="sign" aria-label="The Third Shift">The Third Shift</p>
-      <h1>Your issues go to press <span>overnight.</span></h1>
-      <p class="lede">A factory that turns a GitHub issue into a ready-for-review pull request while you sleep.</p>
-      <div class="shift">
-        <div class="day"><strong>Day shift · you</strong>grill → spec → issues</div>
-        <div class="night"><strong>Third shift · agents</strong>implement → review → PR</div>
-      </div>
-      ${install()}
-      <div style="margin-top:16px">${credit}</div>
-    </div>
-    <div class="term" aria-label="Example Run"><div class="bar"><span>stderr · a Run</span><span>01:30</span></div><div class="out" id="hero-term"></div></div>
-  </div>`,
-};
-
-// ---------------- Press lines (question 2) ----------------
-const NEON = { C: ["#00AEEF", "#00FFFF"], M: ["#EC008C", "#FF00FF"], Y: ["#FFF200", "#FFFF00"], K: ["#E8E6E1", "#E8E6E1"] };
-const linesHtml = (lines) => `<ul class="lines">${lines.map(([t, c]) => `<li class="${c || ""}">${esc(t)}</li>`).join("")}</ul>`;
-const skillChips = (u) => u.skills.map((s) => `<span class="chip">${s}</span>`).join("");
-const controls = () => `
-  <div class="pl-controls">
-    ${UNITS.map((u, i) => `<button type="button" data-step="${i}" aria-label="Step ${i + 1}: unit ${u.key}, ${u.name}">${i + 1} · ${u.key}</button>`).join("")}
-    <button type="button" data-jam aria-pressed="false">Jam the sheet</button>
-    <span class="sep"></span>
-    <button type="button" data-pause aria-pressed="false">Pause replay</button>
-  </div>`;
-const head = `
-  <div class="sec-head"><h2 id="how-h">How a Run works</h2><span class="eyebrow">one sheet · four units</span></div>
-  <p class="sec-intro">A Run takes one issue off the feeder and passes it through four units. What reaches the delivery pile is a pull request, ready for review. A jammed sheet is a Failed run: its work is pushed and the PR goes back to a draft.</p>`;
-
-const PRESS = {
-  A: () => {
-    const xs = [250, 390, 530, 670];
-    const units = UNITS.map((u, i) => {
-      const [ink, neon] = NEON[u.key];
-      return `<g class="u unit-${u.key}" data-u="${i}" style="--ink-hex:${ink};--neon-hex:${neon}">
-        <rect x="${xs[i] - 55}" y="60" width="110" height="150" fill="none" stroke="var(--rule)"/>
-        <circle class="cyl" cx="${xs[i]}" cy="105" r="30"/><circle class="fill" cx="${xs[i]}" cy="105" r="30" ${u.key === "K" ? 'style="fill:none"' : ""}/>
-        <circle class="cyl" cx="${xs[i]}" cy="170" r="30"/>
-        <text class="big" x="${xs[i]}" y="118" text-anchor="middle" style="fill:${u.key === "K" ? "none" : "var(--k)"};stroke:${u.key === "K" ? "var(--paper)" : "none"};stroke-width:1.2">${u.key}</text>
-        <text class="lbl" x="${xs[i]}" y="236" text-anchor="middle">UNIT ${u.n}</text>
-        <text class="sub" x="${xs[i]}" y="252" text-anchor="middle">${u.name}</text>
-      </g>`;
-    }).join("");
-    return `<div class="ua">
-      ${head}
-      <div class="pl-track"><div class="pl-markers">${"<div></div>".repeat(4)}</div>
-      <div class="pl-stage">
-        <div class="drawing motion-only"><svg viewBox="0 0 900 280" role="img" aria-label="Side view of the press line: feeder, units C, M, Y and K, delivery pile">
-          <line class="belt" x1="80" y1="202" x2="830" y2="202"/>
-          <g><rect x="30" y="140" width="90" height="56" fill="var(--k-raise)" stroke="var(--paper-dim)"/>
-            ${[0,1,2,3,4].map((k) => `<rect x="38" y="${146 + k * 9}" width="74" height="4" fill="var(--paper-dim)"/>`).join("")}
-            <text class="lbl" x="75" y="236" text-anchor="middle">FEEDER</text><text class="sub" x="75" y="252" text-anchor="middle">issue queue</text></g>
-          ${units}
-          <path d="M335 48 v-10 h250 v10" fill="none" stroke="var(--m-small)"/><text class="sub" x="460" y="30" text-anchor="middle" style="fill:var(--m-small)">ONE AGENT SESSION</text>
-          <g><rect x="770" y="160" width="100" height="36" fill="var(--k-raise)" stroke="var(--paper-dim)"/>
-            <text class="lbl" x="820" y="236" text-anchor="middle">DELIVERY</text><text class="sub" x="820" y="252" text-anchor="middle">PRs ready for review</text></g>
-          <rect class="sheet" id="ua-sheet" x="60" y="190" width="40" height="8"/>
-          <g class="sheet-jam" id="ua-jam"><path d="M650 196 l20 -30 l24 14 l-16 22z" fill="var(--m-small)"/><text class="lbl" x="700" y="150" style="fill:var(--m-small)">MISPRINT · Failed run</text></g>
-        </svg></div>
-        <div class="readout motion-only">
-          <div><h3 id="ua-title"></h3><p id="ua-stage"></p><div id="ua-skills" style="margin-top:8px"></div></div>
-          <div class="term"><div class="bar"><span>stderr</span><span id="ua-count"></span></div><div class="out" id="pl-out" style="min-height:220px;white-space:pre-wrap;word-break:break-word"></div></div>
-        </div>
-        ${controls()}
-        <div class="static-only"><div class="static-list">${UNITS.map((u) => `
-          <section class="unit-${u.key}"><p class="eyebrow">Unit ${u.n} · ${u.key}</p><h3>${u.name}</h3><p style="font-size:14px">${u.stage}</p>${skillChips(u)}${linesHtml(u.lines)}</section>`).join("")}
-        </div></div>
-      </div></div>
+      <div class="pb-static static-only">${UNITS.map(u => `<div class="col ${u.key === "K" ? "k" : ""}" style="--ink:var(${u.ink})"><h3><span class="tag"></span>${u.n} ${u.key} · ${u.name}</h3><p>${esc(u.desc)}</p><ul class="skills">${skillsHtml(u)}</ul><div class="lines">${u.lines.map(lineHtml).join("")}</div></div>`).join("")}</div>
     </div>`;
-  },
-  B: () => `<div class="ub">
-    ${head}
-    <div class="pl-track"><div class="pl-markers">${"<div></div>".repeat(4)}</div>
-    <div class="pl-stage">
-      <div class="floor motion-only">
-        <div class="plan">
-          <div class="endpoint"><b>Feeder</b><span>issue queue · #7 next</span></div>
-          <div class="conveyor"></div>
-          ${UNITS.map((u, i) => `
-            <div class="machine unit-${u.key}" data-u="${i}">
-              <div class="plate">${u.key}</div>
-              <div><h3>Unit ${u.n} · ${u.name}</h3><p>${u.stage}</p>${u.skills.length ? `<div style="margin-top:4px;color:var(--ink)">${skillChips(u)}</div>` : ""}</div>
-            </div><div class="conveyor"></div>`).join("")}
-          <div class="endpoint" id="ub-end"><b>Delivery pile</b><span>PRs ready for review</span></div>
-          <div class="session" id="ub-session"><span>one agent session</span></div>
-        </div>
-        <div class="term"><div class="bar"><span>stderr</span><span id="ua-count"></span></div><div class="out" id="pl-out"></div></div>
-      </div>
-      ${controls()}
-      <div class="static-only"><div class="static-list">${UNITS.map((u) => `
-        <div class="machine unit-${u.key}"><div class="plate">${u.key}</div>
-        <div><h3>Unit ${u.n} · ${u.name}</h3><p>${u.stage}</p>${skillChips(u)}${linesHtml(u.lines)}</div></div><div class="conveyor"></div>`).join("")}
-        <div class="endpoint"><b>Delivery pile</b><span>PRs ready for review</span></div>
-      </div></div>
-    </div></div>
-  </div>`,
-  C: () => `<div class="uc">
-    ${head}
-    <div class="pl-track"><div class="pl-markers">${"<div></div>".repeat(4)}</div>
-    <div class="pl-stage">
-      <div class="map motion-only">
-        <span></span><span></span><div class="bracket"><span>one agent session</span></div><span></span><span></span>
-        <span class="end">Feeder ▸</span>
-        ${UNITS.map((u, i) => `<button type="button" class="unit-${u.key}" data-step="${i}" data-u="${i}">${u.n} ${u.key}</button>`).join("")}
-        <span class="end">▸ Delivery</span>
-      </div>
-      <div class="card motion-only halftone" id="uc-card">
-        <div class="face">
-          <span class="num" id="uc-num"></span>
-          <div class="letter" id="uc-letter" aria-hidden="true"></div>
-          <h3 id="uc-name"></h3><p id="uc-stage"></p><div id="uc-skills"></div>
-          <span class="misprint-tag sheet-jam">Misprint · Failed run · PR back to draft</span>
-        </div>
-        <div class="term"><div class="bar"><span>stderr</span><span id="ua-count"></span></div><div class="out" id="pl-out"></div></div>
-      </div>
-      ${controls()}
-      <div class="static-only"><div class="static-list">${UNITS.map((u) => `
-        <div class="card unit-${u.key}"><div class="face"><span class="num">Unit ${u.n} of 4${u.key === "M" || u.key === "Y" ? " · agent session" : ""}</span>
-        <div class="letter" style="font-size:120px" aria-hidden="true">${u.key}</div><h3>${u.name}</h3><p>${u.stage}</p><div>${skillChips(u)}</div></div>
-        ${linesHtml(u.lines)}</div>`).join("")}
-      </div></div>
-    </div></div>
-  </div>`,
-};
-
-// ---------------- The one render(n) ----------------
-let step = 0, jam = false, paused = false, replay = null;
-function render(n) {
-  step = n;
-  const root = document.getElementById("how");
-  const u = UNITS[n];
-  const isJam = jam && n === 3;
-  root.classList.toggle("jam", isJam);
-  root.querySelectorAll("[data-step]").forEach((b) => {
-    const i = +b.dataset.step;
-    if (b.closest(".pl-controls")) b.setAttribute("aria-pressed", String(i === n));
-  });
-  root.querySelectorAll("[data-u]").forEach((el) => {
-    const i = +el.dataset.u;
-    el.classList.toggle("on", i === n); el.classList.toggle("done", i < n);
-  });
-  root.querySelector("[data-jam]")?.setAttribute("aria-pressed", String(jam));
-  // Variant-specific readouts
-  const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
-  set("ua-title", `<small>Unit ${u.n} · ${u.key}${n === 1 || n === 2 ? " · agent session" : ""}</small>${u.name}`);
-  set("ua-stage", isJam ? "CI stays red after 3 Repairs. The work is committed and pushed, and the PR goes back to a draft." : u.stage);
-  set("ua-skills", skillChips(u));
-  set("uc-num", `Unit ${u.n} of 4${n === 1 || n === 2 ? " · same agent session" : ""}`);
-  set("uc-letter", u.key); set("uc-name", u.name); set("uc-skills", skillChips(u));
-  set("uc-stage", isJam ? "CI stays red after 3 Repairs. The work is committed and pushed, and the PR goes back to a draft." : u.stage);
-  const card = document.getElementById("uc-card");
-  if (card) card.className = `card motion-only halftone unit-${u.key}`;
-  const sheet = document.getElementById("ua-sheet");
-  if (sheet) sheet.style.transform = `translateX(${isJam ? 590 : [150, 290, 430, 720][n]}px)`;
-  const sess = document.getElementById("ub-session");
-  const ms = root.querySelectorAll(".ub .plan .machine");
-  if (sess && ms.length) { const a = ms[1], b = ms[2]; sess.style.top = a.offsetTop + "px"; sess.style.height = (b.offsetTop + b.offsetHeight - a.offsetTop) + "px"; }
-  const end = document.getElementById("ub-end");
-  if (end) end.innerHTML = isJam ? `<b style="color:var(--m-small)">Misprint</b><span>Failed run · work pushed · PR back to draft</span>` : `<b>Delivery pile</b><span>PRs ready for review</span>`;
-  startReplay(isJam ? JAM : u.lines);
-}
-function startReplay(lines) {
-  clearInterval(replay);
-  const out = document.getElementById("pl-out"), count = document.getElementById("ua-count");
-  if (!out) return;
-  let i = 0;
-  const draw = () => {
-    out.innerHTML = lines.slice(0, i).map(([t, c]) => `<span class="p">thirdshift: </span><span class="${c || ""}">${esc(t)}</span>`).join("\n") + (i < lines.length ? `\n<span class="cursor"> </span>` : "");
-    if (count) count.textContent = `${i}/${lines.length} lines`;
-  };
-  if (paused) { i = lines.length; draw(); return; }
-  draw();
-  replay = setInterval(() => { if (paused) return; i++; draw(); if (i >= lines.length) clearInterval(replay); }, 420);
-}
-let io;
-function wirePress() {
-  const root = document.getElementById("how");
-  root.classList.toggle("is-static", S.static);
-  io?.disconnect();
-  if (S.static) { clearInterval(replay); return; }
-  root.querySelectorAll("[data-step]").forEach((b) => b.addEventListener("click", () => render(+b.dataset.step)));
-  root.querySelector("[data-jam]").addEventListener("click", () => { jam = !jam; render(jam ? 3 : step); });
-  root.querySelector("[data-pause]").addEventListener("click", (e) => { paused = !paused; e.currentTarget.setAttribute("aria-pressed", String(paused)); e.currentTarget.textContent = paused ? "Play replay" : "Pause replay"; render(step); });
-  root.querySelector(".pl-track").parentElement.classList.toggle("run", !paused);
-  io = new IntersectionObserver((es) => es.forEach((e) => { const n = [...e.target.parentElement.children].indexOf(e.target); if (e.isIntersecting && n !== step) render(n); }), { rootMargin: "-50% 0px -50% 0px" });
-  root.querySelectorAll(".pl-markers > div").forEach((m) => io.observe(m));
-  render(step);
-}
-
-// Hero C's terminal: a short loop of the whole Run.
-let heroTimer;
-function heroTerm() {
-  clearInterval(heroTimer);
-  const out = document.getElementById("hero-term");
-  if (!out) return;
-  const all = [[`$ thirdshift https://github.com/you/${REPO}/issues/${ISSUE}`, "cmd"], ...UNITS.flatMap((u) => u.lines)];
-  const paint = (k) => { out.innerHTML = all.slice(Math.max(0, k - 14), k).map(([t, c]) => c === "cmd" ? `<span class="ok">${esc(t)}</span>` : `<span class="p">thirdshift: </span><span class="${c || ""}">${esc(t)}</span>`).join("\n"); };
-  if (S.static) { paint(all.length); return; }
-  let k = 1; paint(k);
-  heroTimer = setInterval(() => { k = k >= all.length + 6 ? 1 : k + 1; paint(Math.min(k, all.length)); }, 650);
-}
-
-// ---------------- Paint everything from state ----------------
-function tokens() {
-  const cs = getComputedStyle(document.documentElement);
-  const v = (n) => cs.getPropertyValue(n).trim();
+  stage.querySelector(".pb-read > div:last-child").append(controls());
+  stage.append(staticFailNote());
+  scaffold(root, stage);
   return {
-    question: "Q31, thirdshift.app visual system (#29)",
-    hero: `${S.hero} (${AX.hero.opts[S.hero]})`,
-    pressLine: `${S.unit} (${AX.unit.opts[S.unit]})`,
-    ink: `${S.ink} (${AX.ink.opts[S.ink]})`,
-    colors: { K: v("--k"), "K raised": v("--k-raise"), rule: v("--rule"), paper: v("--paper"), "paper dim": v("--paper-dim"),
-      cyan: v("--c"), yellow: v("--y"), magenta: v("--m"), "magenta small text": v("--m-small"), "neon C/M/Y (glow only)": [v("--neon-c"), v("--neon-m"), v("--neon-y")].join(" ") },
-    fonts: { wordmark: v("--f-wordmark"), headline: `${v("--f-head")} ${v("--w-head")}`, mono: v("--f-mono"), colophon: `${v("--f-colophon")} italic 400` },
-    effects: { halftone: `${S.fx.h}/100 → dot opacity ${(S.fx.h / 100 * .22).toFixed(3)}, cell ${(3 + S.fx.h / 100 * 5).toFixed(1)}px`,
-      misregistration: `${S.fx.m}/100 → plate offset ${(S.fx.m / 100 * 4).toFixed(2)}px, glow ${(4 + S.fx.m / 10).toFixed(1)}px`,
-      scanlines: `${S.fx.s}/100 → line opacity ${(S.fx.s / 100 * .14).toFixed(3)} every 3px` },
-    pressLineState: S.static ? "static (reduced motion / no JS)" : `step ${step + 1}${jam ? " + misprint" : ""}`,
+    render(i) {
+      const u = UNITS[i], jam = i === 3 && state.jam;
+      stage.querySelector("h2").textContent = jam ? JAM.name : unitTitle(u);
+      stage.querySelector(".pb-read .desc").textContent = jam ? JAM.desc : u.desc;
+      stage.querySelector(".pb-read .skills").innerHTML = skillsHtml(u);
+      const staticMode = state.mode === "static";
+      stage.querySelectorAll(".machine").forEach((e, j) => e.classList.toggle("on", staticMode || j === i));
+      stage.querySelectorAll(".belt").forEach((b, j) => { b.classList.toggle("run", !staticMode && j === i); b.style.setProperty("--glow", `var(${u.glow})`); });
+      const d = stage.querySelector(".chest.deliv");
+      d.classList.toggle("jammed", jam);
+      d.querySelector("b").textContent = jam ? "DRAFT" : "PR #8";
+      d.querySelector(".dl").innerHTML = jam ? "Failed run<br>work pushed" : "Delivery pile<br>ready for review";
+    },
+    term: stage.querySelector(".term"),
   };
 }
-function paint(full) {
-  const d = document.documentElement;
-  d.dataset.ink = S.ink;
-  d.style.setProperty("--fx-h", S.fx.h / 100); d.style.setProperty("--fx-m", S.fx.m / 100); d.style.setProperty("--fx-s", S.fx.s / 100);
-  if (full) {
-    document.getElementById("hero").innerHTML = HEROES[S.hero]();
-    document.getElementById("how").innerHTML = PRESS[S.unit]();
-    wirePress(); heroTerm();
-  }
-  const cs = getComputedStyle(d);
-  document.getElementById("swatches").innerHTML = [["K", "--k"], ["K raised", "--k-raise"], ["Paper", "--paper"], ["Paper dim", "--paper-dim"], ["Cyan", "--c"], ["Yellow", "--y"], ["Magenta", "--m"], ["Magenta, small text", "--m-small"]]
-    .map(([n, t]) => `<div class="sw"><i style="background:var(${t})"></i><div><b>${n}</b><span>${cs.getPropertyValue(t).trim()}</span></div></div>`).join("");
-  for (const k of ["h", "m", "s"]) { document.getElementById("fx-" + k).value = S.fx[k]; document.getElementById(`fx-${k}-o`).textContent = S.fx[k]; }
-  document.getElementById("axes").innerHTML = Object.entries(AX).map(([k, a]) => `
-    <div class="axis ${k === active ? "active" : ""}" data-axis="${k}"><span class="k">${a.label}</span>
-      <button type="button" data-cycle="-1" aria-label="Previous ${a.label}">←</button>
-      <button type="button" class="v" tabindex="-1">${S[k]} (${a.opts[S[k]]})</button>
-      <button type="button" data-cycle="1" aria-label="Next ${a.label}">→</button></div>`).join("") + `
-    <span class="spacer"></span>
-    <button type="button" data-t="fx">Effects</button>
-    <button type="button" data-t="static">${S.static ? "Static ✓" : "Static"}</button>
-    <button type="button" data-t="tok">Tokens</button>`;
-  document.getElementById("tok").textContent = JSON.stringify(tokens(), null, 2);
-  writeState();
-  console.log("[proto] state", S);
-}
-function cycle(axis, dir) {
-  const keys = Object.keys(AX[axis].opts);
-  S[axis] = keys[(keys.indexOf(S[axis]) + dir + keys.length) % keys.length];
-  active = axis;
-  paint(axis !== "ink");
+
+// ---------------- Press C: job ticket (vertical) ----------------
+function buildC(root) {
+  const stage = el("div", { class: "stage" });
+  const strip = (u, i) => `<li><button type="button" class="strip ${u.key === "K" ? "k" : ""}" data-step="${i}" style="--ink:var(${u.ink});--glow:var(${u.glow})"><span class="ink ht">${u.key}</span><span class="nm">${u.name}</span><span class="n">${u.n}/4</span></button></li>`;
+  const ticket = (u, i, tag) => `<article class="ticket ${u.key === "K" ? "k" : ""}" style="--ink:var(${u.ink})">
+      <div class="big svg-misreg">${u.key}</div>
+      <div class="tk-top"><span>Job ticket · acme/widgets#7</span><span>Unit ${u.n} of 4</span></div>
+      <${tag} ${tag === "h2" ? 'id="pc-title"' : ""}>${u.name}</${tag}>
+      <p class="desc">${esc(u.desc)}</p>
+      <ul class="skills">${skillsHtml(u)}</ul>
+      <div class="bottom">${tag === "h2" ? '<div class="term" role="log" aria-live="off"></div>' : `<div class="lines">${u.lines.map(lineHtml).join("")}</div>`}</div>
+    </article>`;
+  stage.innerHTML = `
+    <div><p class="eyebrow">How a Run works</p></div>
+    <div class="pc-grid motion-only">
+      <ol class="rail" aria-label="The press line">
+        <li class="end"><b>Feeder</b>issue queue: #7, #9, #12</li>
+        ${strip(UNITS[0], 0)}
+        <li class="session"><span>one agent session</span><ol class="rail">${strip(UNITS[1], 1)}${strip(UNITS[2], 2)}</ol></li>
+        ${strip(UNITS[3], 3)}
+        <li class="end deliv"><b>Delivery pile</b><span class="dl">PR #8, ready for review</span></li>
+      </ol>
+      <div class="ticket-slot">${ticket(UNITS[0], 0, "h2")}</div>
+    </div>
+    <div class="pc-static static-only">${UNITS.map((u, i) => ticket(u, i, "h3")).join("")}</div>`;
+  stage.querySelector(".ticket-slot .bottom").append(controls());
+  stage.append(staticFailNote());
+  stage.querySelectorAll(".strip").forEach(b => b.addEventListener("click", () => go(Number(b.dataset.step))));
+  scaffold(root, stage);
+  return {
+    render(i) {
+      const u = UNITS[i], jam = i === 3 && state.jam;
+      const t = stage.querySelector(".ticket-slot .ticket");
+      t.classList.toggle("k", u.key === "K" && !jam);
+      t.style.setProperty("--ink", jam ? "var(--m)" : `var(${u.ink})`);
+      t.querySelector(".big").textContent = jam ? "✕" : u.key;
+      t.querySelector(".tk-top span:last-child").textContent = jam ? "Unit 4 of 4 · jammed" : `Unit ${u.n} of 4`;
+      t.querySelector("h2").textContent = jam ? JAM.name : u.name;
+      t.querySelector(".desc").textContent = jam ? JAM.desc : u.desc;
+      t.querySelector(".skills").innerHTML = skillsHtml(u);
+      stage.querySelectorAll(".strip").forEach((s, j) => { s.classList.toggle("on", j === i); s.setAttribute("aria-current", j === i ? "step" : "false"); });
+      const d = stage.querySelector(".end.deliv");
+      d.classList.toggle("jammed", jam);
+      d.querySelector(".dl").textContent = jam ? "PR #8 back to a draft; work pushed" : "PR #8, ready for review";
+    },
+    term: stage.querySelector(".term"),
+  };
 }
 
-// ---------------- Wiring ----------------
-const proto = document.getElementById("proto");
-proto.addEventListener("click", (e) => {
+// ---------------- One render(n) ----------------
+const presses = {};
+for (const root of document.querySelectorAll(".press-scroll")) {
+  const v = root.dataset.variant;
+  presses[v] = { root, ...({ A: buildA, B: buildB, C: buildC, D: r => buildA(r, true) })[v](root) };
+}
+let replayTimer = null;
+function replay(term, i) {
+  clearInterval(replayTimer);
+  const before = [];
+  for (let j = 0; j < i; j++) before.push(...UNITS[j].lines);
+  const now = linesFor(i);
+  term.innerHTML = before.map(l => lineHtml(l).replace('class="ln', 'class="ln old')).join("");
+  const cursor = el("span", { class: "cursor" });
+  let k = 0;
+  const tick = () => {
+    cursor.remove();
+    if (k < now.length) term.insertAdjacentHTML("beforeend", lineHtml(now[k++]));
+    term.append(cursor);
+    term.scrollTop = term.scrollHeight;
+    if (k >= now.length) clearInterval(replayTimer);
+  };
+  if (state.paused) { while (k < now.length) tick(); return; }
+  tick();
+  replayTimer = setInterval(tick, 420);
+}
+function render(i) {
+  state.step = i;
+  const p = presses[state.p];
+  p.render(i);
+  p.root.querySelectorAll(".ctl [data-step]").forEach(b => b.setAttribute("aria-current", Number(b.dataset.step) === i ? "step" : "false"));
+  p.root.querySelectorAll(".ctl .jam").forEach(b => { b.setAttribute("aria-pressed", state.jam); b.hidden = i !== 3; });
+  p.root.querySelectorAll(".ctl .pause").forEach(b => { b.setAttribute("aria-pressed", state.paused); b.textContent = state.paused ? "Play" : "Pause"; });
+  if (state.mode === "motion") replay(p.term, i);
+}
+// Step buttons scroll to that step's band, so scroll and buttons never disagree.
+function go(i) {
+  const p = presses[state.p];
+  if (state.mode === "motion") {
+    const band = p.root.querySelectorAll(".sentinels i")[i];
+    const r = band.getBoundingClientRect();
+    window.scrollTo({ top: window.scrollY + r.top + r.height / 2 - innerHeight / 2 + 1, behavior: "instant" });
+  }
+  render(i);
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest(".ctl button");
+  if (!b) return;
+  if (b.dataset.step) go(Number(b.dataset.step));
+  else if (b.classList.contains("jam")) { state.jam = !state.jam; render(state.step); }
+  else if (b.classList.contains("pause")) { state.paused = !state.paused; document.body.classList.toggle("paused", state.paused); render(state.step); }
+});
+const io = new IntersectionObserver(entries => {
+  for (const en of entries) {
+    if (!en.isIntersecting || state.mode !== "motion") continue;
+    const band = en.target, root = band.closest(".press-scroll");
+    if (root.dataset.variant !== state.p) continue;
+    const i = [...band.parentNode.children].indexOf(band);
+    if (i !== state.step) render(i);
+  }
+}, { rootMargin: "-45% 0px -45% 0px" });
+document.querySelectorAll(".sentinels i").forEach(s => io.observe(s));
+
+// ---------------- Apply the switcher state ----------------
+function applyInk() {
+  const ink = INKS[state.t], r = document.documentElement.style;
+  for (const [k, v] of Object.entries(ink.tokens)) r.setProperty(k, v);
+  for (const [k, [fam, w, size]] of Object.entries(ink.fonts)) {
+    r.setProperty(k, `"${fam.replace(" italic", "")}", ${FALLBACK[k]}`);
+    if (k === "--f-head") r.setProperty("--f-head-w", w);
+    if (size) r.setProperty("--f-body-size", size);
+  }
+}
+function applyFx() {
+  const r = document.documentElement.style;
+  r.setProperty("--ht", state.ht / 100);
+  r.setProperty("--mr", state.mr + "px");
+  r.setProperty("--sl", state.sl / 100);
+  for (const k of ["ht", "mr", "sl"]) { document.getElementById(k).value = state[k]; document.getElementById(k + "-o").textContent = state[k]; }
+}
+function tokensText() {
+  const ink = INKS[state.t];
+  const roles = { "--k": "background (K)", "--k2": "panel", "--k3": "raised panel", "--paper": "paper-white text", "--dim": "secondary text", "--rule": "rules, borders",
+    "--c": "process cyan", "--m": "process magenta (large text, fills)", "--m-text": "magenta small text", "--y": "process yellow",
+    "--nc": "neon cyan (glow only)", "--nm": "neon magenta (glow only)", "--ny": "neon yellow (glow only)", "--grid": "blueprint grid" };
+  const fontRoles = { "--f-mark": "wordmark", "--f-head": "headlines", "--f-body": "body", "--f-mono": "commands, terminal", "--f-colo": "colophon" };
+  return [
+    `hero: ${state.h} (${HEROES[state.h]})`,
+    `press line: ${state.p} (${PRESSES[state.p]}), viewing ${state.mode}`,
+    `ink and type: ${state.t} (${ink.label})`,
+    "",
+    "colours:",
+    ...Object.entries(ink.tokens).map(([k, v]) => `  ${k.padEnd(9)} ${v.padEnd(20)} ${roles[k]}`),
+    "",
+    "fonts:",
+    ...Object.entries(ink.fonts).map(([k, [f, w, s]]) => `  ${fontRoles[k].padEnd(19)} ${f}, ${w}${s ? `, ${s}` : ""}`),
+    "",
+    `effects: preset ${state.fx}${(state.ht !== FX[state.fx].ht || state.mr !== FX[state.fx].mr || state.sl !== FX[state.fx].sl) ? " (tuned)" : ""}`,
+    `  halftone        ${state.ht}% opacity, 5px screen, 1.1px dots, multiply`,
+    `  misregistration ${state.mr}px C left, ${state.mr}px/${(state.mr * .6).toFixed(1)}px M right-down`,
+    `  scanlines       ${state.sl}% black, 1px every 3px`,
+  ].join("\n");
+}
+function applyAll(scrollToPress = false, rerender = true) {
+  const b = document.body;
+  b.dataset.h = state.h; b.dataset.p = state.p; b.dataset.t = state.t; b.dataset.mode = state.mode;
+  applyInk(); applyFx();
+  const labels = { h: `${state.h} · ${HEROES[state.h]}`, p: `${state.p} · ${PRESSES[state.p]}`, t: `${state.t} · ${INKS[state.t].label}`,
+    fx: state.fx[0].toUpperCase() + state.fx.slice(1) + ((state.ht !== FX[state.fx].ht || state.mr !== FX[state.fx].mr || state.sl !== FX[state.fx].sl) ? "*" : "") };
+  for (const [g, t] of Object.entries(labels)) document.querySelector(`.pg[data-g="${g}"] output`).textContent = t;
+  document.getElementById("mode-btn").textContent = state.mode === "motion" ? "Motion" : "Static";
+  document.querySelectorAll(".pg").forEach(p => p.classList.toggle("active", p.dataset.g === activeGroup));
+  document.getElementById("tokens-out").textContent = tokensText();
+  saveUrl();
+  if (rerender) render(state.step);
+  if (scrollToPress) document.querySelector(`.press-${state.p}`).scrollIntoView({ behavior: "instant" });
+}
+function cycle(g, d) {
+  if (g === "fx") {
+    const i = (FX_KEYS.indexOf(state.fx) + d + FX_KEYS.length) % FX_KEYS.length;
+    state.fx = FX_KEYS[i]; Object.assign(state, FX[state.fx]);
+  } else {
+    const keys = Object.keys({ h: HEROES, p: PRESSES, t: INKS }[g]);
+    state[g] = keys[(keys.indexOf(state[g]) + d + keys.length) % keys.length];
+  }
+  activeGroup = g;
+  applyAll(false);
+}
+document.querySelectorAll(".pg").forEach(pg => pg.addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
-  const axis = b.closest("[data-axis]")?.dataset.axis;
-  if (axis) { if (b.dataset.cycle) cycle(axis, +b.dataset.cycle); else { active = axis; paint(false); } return; }
-  if (b.dataset.t === "fx") proto.classList.toggle("show-fx");
-  if (b.dataset.t === "tok") proto.classList.toggle("show-tok");
-  if (b.dataset.t === "static") { S.static = !S.static; paint(true); }
-  if (b.dataset.p) { const [h, m, s] = b.dataset.p.split(",").map(Number); S.fx = { h, m, s }; paint(false); }
-});
-for (const k of ["h", "m", "s"]) document.getElementById("fx-" + k).addEventListener("input", (e) => { S.fx[k] = +e.target.value; paint(false); });
-document.addEventListener("keydown", (e) => {
+  if (b.dataset.d) cycle(pg.dataset.g, Number(b.dataset.d));
+  else { activeGroup = pg.dataset.g; applyAll(false, false); }
+}));
+document.getElementById("mode-btn").addEventListener("click", () => { state.mode = state.mode === "motion" ? "static" : "motion"; activeGroup = "p"; applyAll(true); });
+document.getElementById("tune-btn").addEventListener("click", () => { const p = document.getElementById("tune-panel"); p.hidden = !p.hidden; document.getElementById("tokens-panel").hidden = true; });
+document.getElementById("tokens-btn").addEventListener("click", () => { const p = document.getElementById("tokens-panel"); p.hidden = !p.hidden; document.getElementById("tune-panel").hidden = true; });
+for (const k of ["ht", "mr", "sl"]) document.getElementById(k).addEventListener("input", e => { state[k] = Number(e.target.value); applyAll(false, false); });
+document.getElementById("copy-tokens").addEventListener("click", () => navigator.clipboard?.writeText(tokensText()).catch(() => {}));
+document.addEventListener("keydown", e => {
   if (e.target.closest("input, textarea, [contenteditable]")) return;
-  const keys = Object.keys(AX);
-  if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); cycle(active, e.key === "ArrowLeft" ? -1 : 1); }
-  if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); active = keys[(keys.indexOf(active) + (e.key === "ArrowUp" ? -1 : 1) + keys.length) % keys.length]; paint(false); }
+  if (e.key === "ArrowLeft") cycle(activeGroup, -1);
+  if (e.key === "ArrowRight") cycle(activeGroup, 1);
 });
-document.addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-copy]"); if (!b) return;
-  try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { b.textContent = "Select it"; }
-  setTimeout(() => (b.textContent = "Copy"), 1500);
+document.addEventListener("click", e => {
+  const b = e.target.closest(".install button.copy"); if (!b) return;
+  const text = b.previousElementSibling.textContent;
+  navigator.clipboard?.writeText(text).then(() => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1600); }).catch(() => {});
 });
-paint(true);
+applyAll();
 </script>
+</body>
+</html>
