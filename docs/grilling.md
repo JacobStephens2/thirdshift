@@ -1,4 +1,4 @@
-# Grilling
+# Sep 22 2026: create cli command to implement GitHub issue
 
 Agents, do not modify this file. It is for human handwritten content.
 
@@ -266,5 +266,225 @@ We can test with the ticket sub-issues of my vacation repo's spec issue https://
 
 Having one test seam, the thirdshift binary, sounds good. Is saying "the thirdshift binary as a black box" a meaningful distinction here? And what would it mean to have a second seam at the Origin match parsing and Issue branch selection?
 
+# Sep 25 2026: release
+
+1 - I'm torn between B and C. 
+
+2 - 1.0.0, no one besides me is using this yet, and I consider v0 already done given thirdshift is already working well for me consistently.
+
+3 - The open issues do not block the release. 
+
+4 - Keep them in the repo but out of the published package. 
+
+5 - Fix the stale read me before tagging. 
+
+## 2
+
+The reason I want to create a release is so that I can easily download thirdshift onto another linux server of mine (a Rocky Linux server), and potentially MacBook M5 Pro and run it there. I would also like for someone with running WSL to be able to download it and run it there, but if that's too much of a complicating expansion then we can just do Linux and possibly macOS for now. 
+
+I'm fine with only being able to build thirdshift on Linux. 
+
+6 - 
+
+I have the https://github.com/JacobStephens2/thirdshift/issues/29 to Create a site for thirdshift, and I'm wondering if I should do that before the release. 
+
+My vision for install is to eventually be able to have a command like how users install claude code, something like `curl -fsSL https://claude.ai/install.sh | bash` - and that can be put on the homepage as an easy way for users to install - and that potentially can essentially have the users be downloaded from GitHub or crates.io or somewhere trustworthy, I suppose, more so than a server of mine. So I'm wondering if taking rust off the prerequisites would be necessary for that kind of flow. And so then potentially lean towards B here. But I'm interested in crates.io as well. 
+
+7 - discussed above. If we want to narrow scope though I'm open to just Linux if the macOS and WSL support is a significant lift.
+  
+8 - Actually in this time of significant development early, maybe I will actually move to start with 0.1.0 as the first version number for more flexibility.
+
+9 - only in the GitHub Release body.
+
+10 - see above.
+
+## 3
+
+11 - What are the tradeoffs to publishing now on crates.io or not? I'm leaning towards binaries only for now, but I'm a bit worried about lossing the opportunity to claim thirdshift as a name on crates.io if I don't get it now.
+
+12 - I would want support for these operating systems:
+- >= Rocky Linux 9.8
+- >= macOS Tahoe 26.5.2
+- >= Ubuntu 24.04.3
+- The latest version of WSL
+
+13 - Release before building the site.
+
+14 - ~/.local/bin. There are no existing cargo install users, just me, so the README doesn't need to note that.
+
+15 - I want a `thirdshift update` command to be able to update thirdshift.
+
+16 - Put this in a Releasing section in the README.
+
+## 4
+
+11 - Publish and automate updates to crates.io in the release workflow in order to claim the name with a real crate.
+
+17 - The Rocky and Ubuntu machines I'm targeting are all x86_64, so yeah I think x86_64-unknown-linux-musl and aarch64-apple-darwin should be good, and just planning on WSL2 with Ubuntu 24.04+ is an acceptable expectation for Windows.
+
+18 (revised)- Agreed on running the first two on every PR and the Rocky and WSL smoke tests only in the release workflow.
+
+19 - I accept as proposed.
+
+20 - Yes, though perhaps just thirdshift version instead. Help me weigh between for the update and version commands whether to prefix them with -- or not. I like how with claude I can just run claude update - and that's what I guess without reading documentation and it works, so that's part of what makes me lean towards dropping the --. Maybe there should be a `thirdshift help` as well which shows the commands, including the `thirdshift {github issue url}` command too.
+
+21 - Dogfood it. I want to potentially run the to-spec then to-tickets skill for this.
+
+## 5
+
+20 - Document the bare words and silently accept --version/-V and --help/-h
+
+22 - agreed
+
+23 - agreed
+
+## 6
+
+We have shared understanding. /to-spec
+
+## 7
+
+Yes
+
+# issue 29: thirdshift.app
+
+1 - agree
+
+2 - a or c, the printing-press hall - as that's the kind of place my dad worked in growing up - and he worked third shift to keep the big expensive valuable machines running, sort of like I'm trying to do here with the thirdshift program. And I sort of named the app Third Shift because he worked Third Shift growing up. And so sometimes I would go to the it's called Tersac Printing and he worked on big four color presses, these big machines with rollers and the sort of process he operated. so that's a little bit of the inspiration, maybe aesthetics somewhat pulled from that but also perhaps some inspiration from just more classical printing press too and sort of hearkening to the Gutenberg transformation of printing books as a way to quickly disseminate information.
+
+And with third shift and AI coding I kind of am thinking about a somewhat similar kind of transformation and velocity of delivering code this sort of written material in a sort of way that the printing press did for books. Now Bob Tursack the man who founded my dad's company Tursack Printing, runs Brilliant Studio, https://brilliant-graphics.com/, which my mom still does graphic design for (https://brilliant-graphics.com/about/). The history of Tursack Printing is in repos/thirdshift/docs/research/Tursack_Printing_History.md - maybe some details there about the machines or location could be found for stylistic inspiration. My dad worked at the Morgantown plant, and I would visit it.
+
+I like the Newspaper headline type with cyberpunk colors idea.
+
+3 - agree
+
+4 - agree
+
+5 - I'm interested in trying something I haven't used before. You can see the tools and stacks I've worked with at repos/thirdshift/docs/research/jacob-stephens-stack.md. Or maybe even a Rust / wasm stack to align with the Rust thing, but ultimately my biggest priority is I think #1 facilitating understanding of the tool and #2 capturing attention
+
+6 - agree
+
+7 - agree
+
+8 - v0.1.0 has been published, so c  we can do.
+
+## 2
+
+I want this page to attribute or to make it clear that this is a very Matt Pocock skills workflow oriented product / project / program (https://www.aihero.dev/skills, https://github.com/mattpocock/skills).
+
+I'm kind of between a more grayscale palette and this more CMYK kind of palette. I think I'd like to start with the CMYK to lean into the printing press room aesthetic and touch a little bit more into the cyberpunk palette. /research inspiration for some best practices or libraries or reference points for this.
+
+9 - b, I find a a quite a grand statement, so I'm wary to use it, but maybe I should just go for it. I want to be strong but not too exaggerated, but I do think this is quite cool and has potential. My brother is looking to increase automation with agents and we both like the game Factorio a lot- that can give a bit of aesthetic inspiration too, but I'm trying to build up primitives early game with this which can be pieced together to build automation / factory type work, then I can engineer the factory while the factory engineers the software.
+
+10 - agree
+
+11 - agree
+
+12 - a, but do name the people and companies
+
+13 - agree
+
+14 - agree
+
+## 3
+
+15 - agree
+
+16 - b, except the agent phrase to "Agents are doing that for code"
+
+17 - agree
+
+18 - 1. my dad's name is Mark Stephens, and yes, he was a pressman on the presses at Tursack printing, and worked third shift at the Morgantown plant. 2. agreed. Maybe something too about me always wondering if I would get into printing, the printing industry. so I guess this is as close as I'm getting at the moment. 3. Yes. 4. First person. I don't need to let my dad and Bob see it before it goes live, partly given almost no one will see the page.
+
+## 4
+
+20 - agree; 
+21 - agree
+22 - agree
+23 - agree, though file an issue to add it later
+24 - agree
+25 - I want to also for a moment consider what might just best help communicate for this page, even setting aside the something new interest. Maybe even /research here.
+26 - agree
+27 - agree, though these and the colors and other things can be refined via a /handoff to a /prototype session with another agent, which can then /handoff back to this session
+28 - agree
+29 - agree
+
+## 5
+
+30 - Use this:
+
+My dad, Mark Stephens, was a pressman at Tursack Printing, the print shop Robert Tursack Sr. founded in Philadelphia in 1959. My dad worked third shift at the Morgantown, Pennsylvania plant, keeping the big four-color presses running through the night. Sometimes I got to visit, and I always wondered whether I'd end up in printing myself. The lineage carries on. Bob Tursack went on to found Brilliant Graphics in Exton, where my mom still does graphic design. This is as close as I am to printing right now.
+
+The printing press made copying words cheap. Agents are doing that for code. thirdshift is named for my dad's shift: the machines can run overnight, and I need something to keep them running.
+
+- Jacob Stephens
+
+31 - agreed
+
+25 - agree
+
+## 6
+
+32 - agree
+33 - agree
+34 - agree
+
+## 7
+
+/handoff prototype session for the thirdshift.app visual system (Q31)
+
+## 8 prototype
+
+/prototype ~/Downloads/thirdshift-site-prototype-handoff.md
+
+## 9 prototype
+
+I'm between hero A and B. I like ink A best. I like the subtle effects best. I like the motion press, and I'm torn between A and B, as B the floor
+plan seems more flexible as the process gets more complex if it does, but A looks more printing press with the rollers. Maybe the printing press
+factory or something can be eventually used if needed. I'm thinking about whether or not it is a bit of an artificial constraint to use CMYK as a
+process markers. The box around M and Y in floor plan makes it more clear that they are part of one agent session as compared to the side elevation
+bracket. Further, the larger text of implement and review in the floor plan is easier to read than the smaller text in the side elevation.
+
+## 10 prototype
+
+For Press D, I like the bigger subtitles for the different roller sections, but I now prefer the bracket format of A over the box format of D.
+
+## 11 prototype
+
+I like the crop marks on the hero b. Hero a leaves some - perhaps too much empty space in the right middle of the layout.
+
+The first impression I want is a proof pulled from the press. B feels more like what I would see at the print shop, whereas A feels more like a newspaper. So I'm leaning towards B.
+
 ## 12
 
+I want a page on the site which presents the prompts that thirdshift uses, as well as the factory skills, so readers can better understand what is guiding the agents' process.
+
+35 - agree
+
+36 - agree
+
+37 - I prefer the motion version of press D, but the static version of press D is okay as a fall back if the motion version cannot be played, so I agree. What I like better about the static version is the size of it, that it takes up more width on the on the page in a wider viewport such as viewing on the laptop. 
+
+38 - a
+
+39 - he is right for me
+
+40 - a
+
+## 13
+
+41 - agree - it would be cool if the prompts for example could pull from the source code To reduce the chance for drift, but but that's not essential if that's too complicating. 
+
+42 - agree
+
+43 - agree
+
+44 - agree
+
+45 - agree
+
+46 - agree
+
+## 14
+
+/to-spec
