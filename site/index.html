@@ -143,15 +143,15 @@
       <article class="unit-col ink-c" aria-labelledby="unit-1">
         <h3 id="unit-1"><span class="tag" aria-hidden="true"></span>1 · C · Prepare</h3>
         <p>Pre-flight checks the Origin match, that the issue is open and that git has a name and email to commit with. thirdshift then picks the Issue branch, fresh or a Continuation, and creates a worktree next to your clone. Pre-flight prints nothing when it passes, so the first line is the worktree.</p>
-        <ol class="lines" aria-label="stderr lines from unit 1">
+        <ol class="stderr-lines" aria-label="stderr lines from unit 1">
           <li><span class="prefix">thirdshift:</span> creating worktree /home/jacob/repos/thirdshift-issue-24 on issue-24 from origin/main</li>
         </ol>
       </article>
       <article class="unit-col ink-m" aria-labelledby="unit-2">
         <h3 id="unit-2"><span class="tag" aria-hidden="true"></span>2 · M · Implement</h3>
         <p>A headless Claude Code session, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits.</p>
-        <ul class="skills" aria-label="Skills"><li>implement</li><li>tdd</li></ul>
-        <ol class="lines" aria-label="stderr lines from unit 2">
+        <ul class="factory-skills" aria-label="Factory skills"><li>implement</li><li>tdd</li></ul>
+        <ol class="stderr-lines" aria-label="stderr lines from unit 2">
           <li><span class="prefix">thirdshift:</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-24-20260925T134143Z-implement.jsonl</li>
           <li><span class="prefix">thirdshift:</span> implement: session started</li>
           <li><span class="prefix">thirdshift:</span> implement: $ gh issue view 24 --comments &amp;&amp; ls &amp;&amp; cat CONTEXT.md | head -80 &amp;&amp; ls docs docs/adr</li>
@@ -170,8 +170,8 @@
       <article class="unit-col ink-y" aria-labelledby="unit-3">
         <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>3 · Y · Review</h3>
         <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Then it opens the pull request, ready for review.</p>
-        <ul class="skills" aria-label="Skills"><li>code-review</li><li>pr</li></ul>
-        <ol class="lines" aria-label="stderr lines from unit 3">
+        <ul class="factory-skills" aria-label="Factory skills"><li>code-review</li><li>pr</li></ul>
+        <ol class="stderr-lines" aria-label="stderr lines from unit 3">
           <li><span class="prefix">thirdshift:</span> implement: skill thirdshift:code-review</li>
           <li><span class="prefix">thirdshift:</span> implement: $ git rev-parse main &amp;&amp; git log main..HEAD --oneline &amp;&amp; git diff main...HEAD --stat; ls .agents/skills…</li>
           <li><span class="prefix">thirdshift:</span> implement: Agent Standards review</li>
@@ -194,9 +194,9 @@
       </article>
       <article class="unit-col ink-k" aria-labelledby="unit-4">
         <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>4 · K · Finish</h3>
-        <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 3. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready and mergeable. This Run needed no Repair.</p>
-        <ul class="skills" aria-label="Skills"><li>resolving-merge-conflicts <span>in a Repair</span></li></ul>
-        <ol class="lines" aria-label="stderr lines from unit 4">
+        <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 3. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. This Run needed no Repair.</p>
+        <ul class="factory-skills" aria-label="Factory skills"><li>resolving-merge-conflicts <span>in a Repair</span></li></ul>
+        <ol class="stderr-lines" aria-label="stderr lines from unit 4">
           <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
           <li><span class="prefix">thirdshift:</span> checking the PR</li>
           <li><span class="prefix">thirdshift:</span> merging origin/main into issue-24</li>
@@ -210,13 +210,13 @@
         </ol>
       </article>
     </div>
-    <p class="press-source">The <code>implement:</code> lines are the Run's session log passed through thirdshift's own progress condensing. The other lines are thirdshift's progress messages, filled in with pull request #25's branch, commit and CI result.</p>
+    <p class="press-source">The <code>implement:</code> lines are the Run's session log passed through thirdshift's own progress condensing. The other lines are thirdshift's progress messages, filled in with pull request #25's branch, commit and CI result. The session's duration is rebuilt from its log file's timestamps, so thirdshift may have printed 3m 41s.</p>
 
     <aside class="misprint" aria-labelledby="misprint-title">
       <h3 id="misprint-title">Misprint: a Failed run</h3>
-      <p>A Run that can't finish with a pull request that is open, ready and mergeable with passing CI is a Failed run. Nothing is lost: its work, uncommitted changes included, is committed and pushed to the Issue branch, and its pull request goes back to draft. Run the same command again to continue it.</p>
+      <p>A Run that ends, including by interruption, without an open pull request from its Issue branch that targets the Base branch, is mergeable, and has passing CI is a Failed run. Nothing is lost: its work, uncommitted changes included, is committed and pushed to the Issue branch (or, if the push fails, its worktree and local Issue branch are kept), and its open pull request, if any, goes back to draft. Run the same command again to continue it.</p>
       <p class="illustrative"><b>Illustrative.</b> These are the last lines of a Run whose CI is still failing after 3 Repairs. Their order is inferred from the code, not seen in a real Run.</p>
-      <ol class="lines" aria-label="stderr lines from an illustrative Failed run">
+      <ol class="stderr-lines" aria-label="stderr lines from an illustrative Failed run">
         <li><span class="prefix">thirdshift:</span> CI failed on &lt;commit&gt;: &lt;check&gt;</li>
         <li><span class="prefix">thirdshift:</span> pushing issue-&lt;n&gt;</li>
         <li><span class="prefix">thirdshift:</span> cleaning up the worktree and local branch issue-&lt;n&gt;</li>
