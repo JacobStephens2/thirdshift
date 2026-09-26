@@ -66,7 +66,7 @@
     </div>
   </section>
 
-  <!-- How a Run works: the press line. This static markup is the source; main.js only steps it (see the press line there). -->
+  <!-- How a Run works: the press line. This static markup is the source; main.js only steps it (see stepPressLine). -->
   <section class="sec press" id="how-a-run-works" aria-labelledby="press-title">
     <div class="wrap">
       <div class="sec-head">
@@ -245,7 +245,7 @@
               <span>stderr · issue #24 → <a href="https://github.com/JacobStephens2/thirdshift/pull/25">pull request #25</a></span>
               <button type="button" class="pause">Pause</button>
             </div>
-            <ol class="stderr-lines" role="log" aria-label="Terminal replay of the lit unit's stderr lines"></ol>
+            <ol class="stderr-lines" role="log" aria-live="off" aria-label="Terminal replay of the lit unit's stderr lines"></ol>
           </div>
         </div>
       </div>

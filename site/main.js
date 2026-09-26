@@ -30,9 +30,9 @@ function stepPressLine(section) {
   const term = section.querySelector(".press-term");
   const log = term.querySelector("ol");
   const pause = term.querySelector(".pause");
-  const addOns = [section.querySelector(".press-steps"), section.querySelector(".press-controls"), term];
+  const steppedOnly = [section.querySelector(".press-steps"), section.querySelector(".press-controls"), term];
 
-  let step = 0, paused = false, replaying = [], shown = 0, timer = null;
+  let step = 0, paused = false, litLines = [], shown = 0, timer = null;
 
   // Sets the whole state for step n (1 to 4), never a change from the previous step, so a fast scroll that
   // skips a step can't leave the press and the terminal out of step.
@@ -44,7 +44,7 @@ function stepPressLine(section) {
     for (const b of stepButtons) b.setAttribute("aria-current", Number(b.dataset.step) === n ? "step" : "false");
     // Earlier units' lines stay, dimmed, as they would in a real terminal; the lit unit's lines replay.
     log.replaceChildren(...linesByUnit.slice(0, n - 1).flat().map(li => copyLine(li, "old")));
-    replaying = linesByUnit[n - 1];
+    litLines = linesByUnit[n - 1];
     shown = 0;
     printLine();
     play();
@@ -57,20 +57,21 @@ function stepPressLine(section) {
   }
 
   function printLine() {
-    if (shown < replaying.length) log.append(copyLine(replaying[shown++]));
+    if (shown < litLines.length) log.append(copyLine(litLines[shown++]));
     log.scrollTop = log.scrollHeight;
   }
 
-  // Paused, the lit unit's lines are all shown at once, so pausing never hides any of them.
+  // Continues the lit unit's replay. A step rendered while paused shows all its lines at once, so pausing never
+  // hides any of them; pausing mid-replay only stops the timer, so Play carries on from the same line.
   function play() {
     clearInterval(timer);
     if (paused) {
-      while (shown < replaying.length) printLine();
+      while (shown < litLines.length) printLine();
       return;
     }
     timer = setInterval(() => {
       printLine();
-      if (shown >= replaying.length) clearInterval(timer);
+      if (shown >= litLines.length) clearInterval(timer);
     }, REPLAY_MS);
   }
 
@@ -117,7 +118,7 @@ function stepPressLine(section) {
 
   function setStepped(on) {
     section.classList.toggle("is-stepped", on);
-    for (const el of addOns) el.hidden = !on;
+    for (const el of steppedOnly) el.hidden = !on;
     if (on) {
       for (const m of markers) observer.observe(m);
       render(stepAtCentre());
