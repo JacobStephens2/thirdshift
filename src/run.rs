@@ -16,7 +16,7 @@ use crate::poll;
 use crate::preflight;
 use crate::progress;
 use crate::prompt;
-use crate::session;
+use crate::session::{self, Sessions};
 use crate::worktree::{Merge, Worktree};
 
 /// Take `issue` to a ready PR and return the PR's URL. Any failure after the
@@ -68,13 +68,13 @@ fn implement(
 ) -> Result<String> {
     let branch = worktree.branch();
     let plugin = Plugin::write()?;
-    // Every session runs in the worktree with the plugin loaded, logged as
-    // `kind` under the Run's timestamp.
-    let mut run_session = |kind: &str, prompt: &str| -> Result<()> {
-        *log = session::log_path(issue, timestamp, kind)?;
-        progress::step(format_args!("logging the session to {}", log.display()));
-        session::run(kind, worktree.path(), plugin.path(), prompt, log)
+    let sessions = Sessions {
+        issue,
+        timestamp,
+        worktree: worktree.path(),
+        plugin_dir: plugin.path(),
     };
+    let mut run_session = |kind: &str, prompt: &str| sessions.run(kind, prompt, log);
 
     run_session("implement", prompt)?;
     worktree.push()?;

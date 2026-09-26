@@ -13,6 +13,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress::{self, Progress};
+use crate::prompt;
 
 /// Where a session's stream is logged:
 /// `~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-<kind>.jsonl`.
@@ -25,21 +26,92 @@ pub fn log_path(issue: &IssueUrl, timestamp: &str, kind: &str) -> Result<PathBuf
     )))
 }
 
+/// Where a Run's sessions run: in `worktree`, with the Factory skills plugin
+/// at `plugin_dir` loaded, each logged under the Run's `timestamp`.
+pub struct Sessions<'a> {
+    pub issue: &'a IssueUrl,
+    pub timestamp: &'a str,
+    pub worktree: &'a Path,
+    pub plugin_dir: &'a Path,
+}
+
+impl Sessions<'_> {
+    /// Run a session given `prompt`, logged and labelled as `kind`, pointing
+    /// `log` at each session's log as it starts. A session that ends while
+    /// waiting on background work, which was killed with it, gets one Resume,
+    /// as `<kind>-resume`; if that ends the same way, this fails and names the
+    /// killed work.
+    pub fn run(&self, kind: &str, prompt: &str, log: &mut PathBuf) -> Result<()> {
+        let mut ended = self.start(kind, None, prompt, log)?;
+        let killed = ended.killed_background_work();
+        if let (false, Some(session_id)) = (killed.is_empty(), ended.session_id()) {
+            let (session_id, resume_prompt) = (session_id.to_string(), prompt::resume(&killed));
+            progress::step(format_args!(
+                "{kind}: background work was killed as the session ended; resuming it once"
+            ));
+            ended = self.start(
+                &format!("{kind}-resume"),
+                Some(&session_id),
+                &resume_prompt,
+                log,
+            )?;
+        }
+        let killed = ended.killed_background_work();
+        match killed[..] {
+            [] => Ok(()),
+            [task] => bail!(
+                "{kind} session ended while waiting on a background task ({task}), which was killed"
+            ),
+            _ => bail!(
+                "{kind} session ended while waiting on background tasks ({}), which were killed",
+                killed.join("; ")
+            ),
+        }
+    }
+
+    /// Run one session as `kind`, logged under its own path.
+    fn start(
+        &self,
+        kind: &str,
+        resume: Option<&str>,
+        prompt: &str,
+        log: &mut PathBuf,
+    ) -> Result<Progress> {
+        *log = log_path(self.issue, self.timestamp, kind)?;
+        progress::step(format_args!("logging the session to {}", log.display()));
+        run(kind, self.worktree, self.plugin_dir, resume, prompt, log)
+    }
+}
+
 /// Run `claude` headless in auto mode in `worktree`, with the Factory skills
 /// plugin at `plugin_dir` loaded, streaming its output to `log` and condensing
-/// it to progress lines on stderr, each labelled `kind`. An interrupt stops the
-/// session and fails with `interrupted`.
-pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &Path) -> Result<()> {
+/// it to progress lines on stderr, each labelled `kind`. With `resume`, the
+/// session with that id continues, given `prompt`. Returns what the stream
+/// showed once `claude` has exited cleanly. An interrupt stops the session and
+/// fails with `interrupted`.
+fn run(
+    kind: &str,
+    worktree: &Path,
+    plugin_dir: &Path,
+    resume: Option<&str>,
+    prompt: &str,
+    log: &Path,
+) -> Result<Progress> {
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
     let mut log_file =
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
-    let mut child = Command::new("claude")
+    let mut command = Command::new("claude");
+    command
         .args(["-p", "--permission-mode", "auto", "--plugin-dir"])
         .arg(plugin_dir)
-        .args(["--output-format", "stream-json", "--verbose"])
+        .args(["--output-format", "stream-json", "--verbose"]);
+    if let Some(session_id) = resume {
+        command.args(["--resume", session_id]);
+    }
+    let mut child = command
         .arg(prompt)
         .current_dir(worktree)
         .stdin(Stdio::null())
@@ -101,7 +173,7 @@ pub fn run(kind: &str, worktree: &Path, plugin_dir: &Path, prompt: &str, log: &P
                 .map_or("by signal".to_string(), |code| code.to_string())
         );
     }
-    Ok(())
+    Ok(progress)
 }
 
 const POLL: Duration = Duration::from_millis(100);

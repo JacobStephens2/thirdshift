@@ -45,3 +45,6 @@ A **Run** that picks up an existing **Issue branch**, one with no pull request o
 
 **Repair**:
 A follow-up agent session a **Run** starts after the pull request exists, either to resolve a merge conflict with the **Base branch** or to fix failing CI checks.
+
+**Resume**:
+A continuation of the same agent session, started once when that session ended its turn while waiting on background work, which was killed with it. It asks the agent to re-run that work in the foreground and finish. A Resume is not a **Repair** and does not count against the Repair cap.
