@@ -50,6 +50,95 @@
   </div>
 </header>
 
+<main>
+  <!-- Day shift / third shift -->
+  <section class="sec" aria-labelledby="shifts-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Two shifts</p><h2 id="shifts-title">You plan by day. The press runs at night.</h2></div>
+      <div class="shifts">
+        <div class="shift"><h3>Day shift</h3><p class="who">Humans, with <a href="https://github.com/mattpocock/skills">Matt Pocock's skills</a>, used interactively</p>
+          <ol class="chain"><li>grill</li><li>spec</li><li>issues</li></ol>
+          <p>The human half of the workflow: shaping work into issues the factory can take on, by grilling the idea, writing the spec and cutting it into issues, and reviewing the pull requests it delivers.</p></div>
+        <div class="shift third"><h3>Third shift</h3><p class="who">Agents, with headless copies of the same skills</p>
+          <ol class="chain"><li>implement</li><li>review</li><li>pull request</li></ol>
+          <p>thirdshift takes one Issue URL per Run. Its Factory skills, adapted to run with no human in the loop, implement the issue, review the work and open a pull request that is ready for review.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How a Run works: the press line goes here (#64, #65). -->
+
+  <!-- What comes off the press -->
+  <section class="sec" aria-labelledby="offpress-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Delivery pile</p><h2 id="offpress-title">What comes off the press</h2></div>
+      <div class="offpress">
+        <div style="--ink:var(--c)"><h3>Ready for review</h3><p>An open pull request from the Issue branch to the Base branch. It is mergeable, its CI passes, and it has been reviewed against your repository's documented coding standards and against the issue. Otherwise thirdshift doesn't call it ready.</p></div>
+        <div style="--ink:var(--y)"><h3>Unaddressed findings</h3><p>Every Standards finding and Spec finding the agent chose not to fix is listed as an Unaddressed finding in the pull request body, so you decide on it.</p></div>
+        <div style="--ink:var(--m)"><h3>Failed runs keep their work</h3><p>A Failed run still pushes its work, so nothing is lost, and its pull request goes back to draft. Run the same command again to continue it.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The factory grows: the floor plan goes here (#67). -->
+
+  <!-- Proof sheets: real pull requests thirdshift made -->
+  <section class="sec" aria-labelledby="proofs-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Proof sheets</p><h2 id="proofs-title">Pulled from the press</h2><p class="lede">Real pull requests thirdshift made on its own repository. Judge the work yourself.</p></div>
+      <ul class="proofs">
+        <li class="proof" style="--ink:var(--c)"><p class="slug">Pull request #25 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/24">issue #24</a></p>
+          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/25">Treat SIGHUP like SIGINT and SIGTERM</a></h3>
+          <p>A small fix with a real test: closing the terminal now stops the session and fails the Run cleanly, and it is the Run the press line replays.</p></li>
+        <li class="proof" style="--ink:var(--m)"><p class="slug">Pull request #21 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/7">issue #7</a></p>
+          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/21">Numbered Issue branches after a merged or closed PR</a></h3>
+          <p>A careful change to branch selection, where the agent flags a new error the issue didn't ask for, so a human can decide on it.</p></li>
+        <li class="proof" style="--ink:var(--y)"><p class="slug">Pull request #22 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/9">issue #9</a></p>
+          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/22">CI watching, CI-fix Repair and the Repair cap</a></h3>
+          <p>The factory building its own quality gate: the loop that watches CI and starts a Repair when checks fail.</p></li>
+        <li class="proof" style="--ink:#111"><p class="slug">Pull request #16 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/4">issue #4</a></p>
+          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/16">Pre-flight checks</a></h3>
+          <p>Every check that runs before a Run creates anything, each with a clear message, including the Origin match.</p></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Requirements and platforms: taken from the README, so the two agree. -->
+  <section class="sec" aria-labelledby="reqs-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Before you run it</p><h2 id="reqs-title">Requirements and platforms</h2></div>
+      <div class="reqs">
+        <div><h3>Requirements</h3>
+          <ul>
+            <li><b><code>claude</code></b> (Claude Code), logged in.</li>
+            <li><b><code>gh</code></b> (GitHub CLI), logged in.</li>
+            <li><b><code>git</code></b> with a global <code>user.name</code> and <code>user.email</code>, and credentials that can push to the repository.</li>
+          </ul></div>
+        <div><h3>Platforms</h3>
+          <ul>
+            <li><b>Rocky Linux</b> 9.8 and later, x86_64.</li>
+            <li><b>Ubuntu</b> 24.04.3 and later, x86_64.</li>
+            <li><b>WSL2</b>, latest release, with Ubuntu 24.04 or later, x86_64. Keep your repositories on the Linux filesystem (e.g. <code>~/repos</code>), not under <code>/mnt/c</code>. WSL1 is not supported.</li>
+            <li><b>macOS</b> Tahoe 26.5.2 and later, Apple Silicon.</li>
+          </ul></div>
+      </div>
+      <p class="more">Details in the <a href="https://github.com/JacobStephens2/thirdshift#supported-platforms">README</a>.</p>
+    </div>
+  </section>
+
+  <!-- Colophon: the owner's words from #61, verbatim. Don't edit. -->
+  <section class="sec" aria-labelledby="colophon-title">
+    <div class="wrap colophon">
+      <div class="sec-head"><p class="eyebrow">Colophon</p><h2 id="colophon-title">Third shift</h2></div>
+      <blockquote>
+        <p>My dad, Mark Stephens, was a pressman at Tursack Printing, the print shop Robert Tursack Sr. founded in Philadelphia in 1959. My dad worked third shift at the Morgantown, Pennsylvania plant, keeping the big four-color presses running through the night. Sometimes I got to visit, and I always wondered whether I'd end up in printing myself. The lineage carries on. Bob Tursack went on to found Brilliant Graphics in Exton, where my mom still does graphic design. This is as close as I am to printing right now.</p>
+        <p>The printing press made copying words cheap. Agents are doing that for code. thirdshift is named for my dad's shift: the machines can run overnight, and I need something to keep them running.</p>
+        <cite>- Jacob Stephens</cite>
+      </blockquote>
+    </div>
+  </section>
+</main>
+
 <footer class="wrap foot">
   <a href="https://github.com/JacobStephens2/thirdshift">GitHub</a>
   <a href="https://github.com/JacobStephens2/thirdshift/releases">Releases</a>
