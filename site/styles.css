@@ -130,6 +130,40 @@ body::after { /* scanlines */
 .lede { margin: 0; max-width: 62ch; color: var(--dim); }
 @media (max-width: 560px) { .sec { padding-block: 48px; } }
 
+/* ---------- How a Run works: the press line (prototype press D) ---------- */
+.svg-misreg { filter:
+  drop-shadow(calc(var(--mr) * -1) 0 0 color-mix(in srgb, var(--c) 75%, transparent))
+  drop-shadow(var(--mr) calc(var(--mr) * .6) 0 color-mix(in srgb, var(--m) 70%, transparent)); }
+/* The whole press always fits, so narrow screens get it scaled down; each column below repeats its unit's name in large type. */
+.press-frame { border: 1px solid var(--rule); }
+.press-svg { display: block; width: 100%; height: auto; }
+.press-svg text { font-family: var(--f-mono); }
+.press-svg .ink-letter { font: 800 36px var(--f-head); }
+.press-svg .unit-label { font: 800 24px var(--f-head); letter-spacing: .02em; fill: var(--paper); }
+.press-cols { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-top: 28px; }
+@media (max-width: 1000px) { .press-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .press-cols { grid-template-columns: minmax(0, 1fr); } }
+.unit-col.ink-c { --ink: var(--c); } .unit-col.ink-m { --ink: var(--m); } .unit-col.ink-y { --ink: var(--y); } .unit-col.ink-k { --ink: var(--paper); }
+.unit-col { display: grid; align-content: start; gap: 10px; border-top: 4px solid var(--ink); padding-top: 12px; }
+.unit-col h3 { font-size: 26px; display: flex; align-items: center; gap: 10px; }
+.unit-col .tag { width: 18px; height: 18px; flex: none; background: var(--ink); }
+.unit-col.ink-k .tag { background: transparent; border: 2px solid var(--paper); }
+.unit-col p { margin: 0; font-size: 13.5px; }
+.factory-skills { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.factory-skills li { font: 700 12px/1 var(--f-mono); padding: 6px 8px; background: var(--k3); border: 1px solid var(--rule); }
+.factory-skills li span { font-weight: 400; color: var(--dim); }
+.stderr-lines { list-style: none; margin: 0; padding: 10px 12px; font: 12px/1.6 var(--f-mono); background: #000; border: 1px solid var(--rule); }
+.stderr-lines li { white-space: pre-wrap; overflow-wrap: anywhere; }
+.stderr-lines .prefix { color: var(--dim); }
+.stderr-lines .ready { color: var(--nc); }
+.stderr-lines .failed { color: var(--m-text); }
+.press-source { margin: 16px 0 0; font-size: 13px; color: var(--dim); max-width: 90ch; }
+.misprint { margin-top: 36px; border: 1px solid var(--m); padding: 16px 18px; display: grid; gap: 10px; max-width: 90ch; }
+.misprint h3 { font-size: 26px; color: var(--m-text); }
+.misprint p { margin: 0; font-size: 14px; }
+.misprint .illustrative b { color: var(--m-text); text-transform: uppercase; letter-spacing: .1em; font-size: 12px; }
+.press .lede { max-width: 72ch; }
+
 /* ---------- Day shift / third shift ---------- */
 .shifts { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--rule); border: 1px solid var(--rule); }
 @media (max-width: 760px) { .shifts { grid-template-columns: 1fr; } }
