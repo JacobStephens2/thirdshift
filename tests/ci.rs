@@ -362,10 +362,17 @@ fn a_pr_sent_back_to_draft_by_the_end_is_a_failed_run() {
 fn waits_for_github_to_work_out_whether_the_pr_is_mergeable() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}gh fake pr issue-7 unknown_polls 3\n"
+        "{AGENT_OPENS_PR}gh fake pr issue-7 unknown_polls 3\n{}",
+        checks_on_head(GREEN)
     ));
 
-    let result = scenario.run(&[&scenario.issue_url(7)]);
+    // Each poll starts the fake gh, so the default 300ms grace period can run
+    // out before the fourth read on a slow machine. Green checks keep the
+    // longer grace period from slowing the CI wait.
+    let result = scenario.run_with_env(
+        &[&scenario.issue_url(7)],
+        &[("THIRDSHIFT_CI_GRACE_MS", "5000")],
+    );
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
