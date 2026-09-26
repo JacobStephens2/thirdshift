@@ -140,18 +140,19 @@ body::after { /* scanlines */
 .floor .line-t { font-size: 17px; letter-spacing: .06em; }
 .floor .status { font-size: 14px; letter-spacing: .06em; fill: var(--y); }
 .floor .ghost .status { fill: var(--m-text); }
-.floor .hint { font-size: 15px; font-weight: 400; fill: var(--dim); transition: opacity .15s; }
+.floor .hint { font-size: 15px; font-weight: 400; fill: var(--dim); }
 .floor .chest { fill: #111; stroke: var(--dim); stroke-width: 2; }
 .floor .chest-t { font-size: 13px; text-anchor: middle; fill: var(--paper); }
 .floor .belt { fill: url(#floor-belt); stroke: #333; stroke-width: 1; }
+.floor .belt-slat { fill: color-mix(in srgb, var(--y) 35%, transparent); }
 .floor .unit { fill: #0e0e0e; stroke: #3a3a3a; stroke-width: 2; }
 .floor .hopper.c { fill: var(--c); } .floor .hopper.m { fill: var(--m); } .floor .hopper.y { fill: var(--y); }
 .floor .hopper.k { fill: none; stroke: var(--paper); stroke-width: 2; }
 .floor .ink-t { font: var(--f-head-w) 24px/1 var(--f-head); text-anchor: middle; fill: #000; }
 .floor .ink-t.k { fill: var(--paper); }
 /* Not yet installed: floor tape where a machine will stand, and no ink. */
-.floor .ghost .chest, .floor .ghost .belt, .floor .foot { fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-dasharray: 5 4; }
-.floor .ghost g { opacity: .55; transition: opacity .15s; }
+.floor .ghost .chest, .floor .ghost .belt, .floor .footprint { fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.floor .ghost g { opacity: .55; }
 .floor .ghost .chest-t { fill: var(--dim); }
 /* The hint is the hover and focus label. Only a mouse hides it until hover, so touch screens always show it. */
 .floor a { outline: none; }
