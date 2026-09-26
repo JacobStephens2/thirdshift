@@ -24,10 +24,10 @@ if (commitLabel) {
     .then((text) => {
       const commit = text.trim();
       if (!/^[0-9a-f]{40}$/.test(commit)) return;
-      const link = document.createElement("a");
-      link.href = `https://github.com/JacobStephens2/thirdshift/commit/${commit}`;
-      link.innerHTML = `<code>${commit.slice(0, 7)}</code>`;
-      commitLabel.replaceChildren("commit ", link, " of ", Object.assign(document.createElement("code"), { textContent: "main" }));
+      const code = (text) => Object.assign(document.createElement("code"), { textContent: text });
+      const link = Object.assign(document.createElement("a"), { href: `https://github.com/JacobStephens2/thirdshift/commit/${commit}` });
+      link.append(code(commit.slice(0, 7)));
+      commitLabel.replaceChildren("commit ", link, " of ", code("main"));
     })
     .catch(() => {});
 }

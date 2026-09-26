@@ -88,7 +88,7 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-fresh",
             title: "Fresh",
-            when: "Starts the implement session when the Run starts a new Issue branch. The same session goes on to review its work and open the pull request.",
+            when: "Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.",
             units: &[IMPLEMENT],
             text: prompt::fresh(&issue, BASE, BRANCH),
         },
@@ -123,8 +123,8 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-resume",
             title: "Resume",
-            when: "Continues a session, once, when it ended its turn while waiting on background work, which was killed with it. Any session can get one, and it isn't a Repair.",
-            units: &[IMPLEMENT, FINISH],
+            when: "Continues any session, once, that ended its turn while waiting on background work, which was killed with it.",
+            units: &[IMPLEMENT, REVIEW, FINISH],
             text: prompt::resume(&[BACKGROUND_WORK]),
         },
     ]
@@ -135,14 +135,14 @@ fn skill_unit(skill: &str) -> (Unit, Option<&'static str>) {
     match skill {
         "implement" | "tdd" => (IMPLEMENT, None),
         "code-review" | "pr" => (REVIEW, None),
-        "resolving-merge-conflicts" => (FINISH, Some("in a conflict Repair")),
+        "resolving-merge-conflicts" => (FINISH, Some("in a Repair")),
         _ => panic!("the Factory skill {skill} has no unit: add it to skill_unit"),
     }
 }
 
 /// The fragment: the command line, the prompts, the skills, and the skills'
 /// licence.
-pub fn render() -> String {
+fn render() -> String {
     let mut html = String::new();
     command_line(&mut html);
     prompt_section(&mut html);
@@ -294,13 +294,17 @@ fn file_block(html: &mut String, file: &File, indent: &str) {
     );
 }
 
-/// Links to `units` on the home page.
+/// Links to `units` on the home page, as a list ending "or".
 fn unit_links(units: &[Unit]) -> String {
-    units
+    let links: Vec<_> = units
         .iter()
         .map(|unit| format!(r##"<a href="/#{}">{}</a>"##, unit.anchor, unit.name))
-        .collect::<Vec<_>>()
-        .join(" or ")
+        .collect();
+    match links.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
+    }
 }
 
 /// `text` escaped, with each placeholder marked up.

@@ -24,7 +24,7 @@
       </div>
       <h1 class="misreg">Prompts and skills</h1>
       <p class="framing">Everything that steers thirdshift's agents: the <code>claude</code> command line each session runs, every prompt a Run sends, and every Factory skill in full, as the agent reads it. This page is generated from the same code and embedded skills the binary uses, so it shows what thirdshift does, not a summary of it. Each prompt and skill names the unit of the <a href="/#how-a-run-works">press line</a> that uses it.</p>
-      <p class="as-of">As of <span data-commit>the latest published commit of <code>main</code></span>. The latest release may differ: see <a href="https://github.com/JacobStephens2/thirdshift/releases/latest">the latest release</a> and the <code>skills/</code> directory at its tag for the skills it ships.</p>
+      <p class="as-of">As of <span data-commit>the commit of <code>main</code> this copy of the site comes from</span>. The latest release may differ: see <a href="https://github.com/JacobStephens2/thirdshift/releases/latest">the latest release</a> and the <code>skills/</code> directory at its tag for the skills it ships.</p>
     </div>
   </div>
 </header>
@@ -47,7 +47,7 @@
     <div class="job-sheets">
       <article class="job-sheet" id="prompt-fresh" aria-labelledby="prompt-fresh-title">
         <h3 id="prompt-fresh-title">Fresh</h3>
-        <p>Starts the implement session when the Run starts a new Issue branch. The same session goes on to review its work and open the pull request.</p>
+        <p>Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift:implement <mark class="ph">&lt;Issue URL&gt;</mark>
 The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
@@ -137,8 +137,8 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
       </article>
       <article class="job-sheet" id="prompt-resume" aria-labelledby="prompt-resume-title">
         <h3 id="prompt-resume-title">Resume</h3>
-        <p>Continues a session, once, when it ended its turn while waiting on background work, which was killed with it. Any session can get one, and it isn't a Repair.</p>
-        <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a> or <a href="/#unit-4">4 · K · Finish</a></p>
+        <p>Continues any session, once, that ended its turn while waiting on background work, which was killed with it.</p>
+        <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a>, <a href="/#unit-3">3 · Y · Review</a> or <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>Your background work (<mark class="ph">&lt;background work&gt;</mark>) was killed when your turn ended, because ending the turn ends the session.
 
 Re-run whatever you were waiting on in the foreground, then finish your job.
@@ -466,7 +466,7 @@ The blast radius is the potential impact or scope of the changes introduced by t
       </article>
       <article class="job-sheet" id="skill-resolving-merge-conflicts" aria-labelledby="skill-resolving-merge-conflicts-title">
         <h3 id="skill-resolving-merge-conflicts-title">resolving-merge-conflicts</h3>
-        <p class="sent-by">Used by <a href="/#unit-4">4 · K · Finish</a>, in a conflict Repair</p>
+        <p class="sent-by">Used by <a href="/#unit-4">4 · K · Finish</a>, in a Repair</p>
         <h4 id="file-resolving-merge-conflicts-skill-md"><code>resolving-merge-conflicts/SKILL.md</code></h4>
         <pre class="job-text"><code>---
 name: resolving-merge-conflicts
