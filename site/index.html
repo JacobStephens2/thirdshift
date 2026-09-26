@@ -51,8 +51,8 @@
         <h1 class="misreg">Your issues go to press overnight.</h1>
         <div class="proof-row">
           <div>
-            <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into issues. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and opens a pull request that is ready for review by morning.</p>
-            <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a></p>
+            <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into tickets. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and opens a pull request that is ready for review by morning.</p>
+            <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a>. Read <a href="/prompts/">every prompt and skill thirdshift sends</a>.</p>
           </div>
           <div>
             <p class="eyebrow">Install</p>
@@ -73,11 +73,12 @@
       <div class="sec-head"><p class="eyebrow">Two shifts</p><h2 id="shifts-title">You plan by day. The press runs at night.</h2></div>
       <div class="shifts">
         <div class="shift"><h3>Day shift</h3><p class="who">Humans, with <a href="https://github.com/mattpocock/skills">Matt Pocock's skills</a>, used interactively</p>
-          <ol class="chain"><li>grill</li><li>spec</li><li>issues</li></ol>
-          <p>The human half of the workflow: shaping work into issues the factory can take on, by grilling the idea, writing the spec and cutting it into issues, and reviewing the pull requests it delivers.</p></div>
+          <ol class="chain"><li>/grill-with-docs</li><li>/to-spec</li><li>/to-tickets</li></ol>
+          <p>The human half of the workflow: shaping work into issues the factory can take on, by grilling the idea with <code>/grill-with-docs</code>, writing the spec with <code>/to-spec</code> and cutting it into tickets with <code>/to-tickets</code>, and reviewing the pull requests it delivers.</p></div>
         <div class="shift third"><h3>Third shift</h3><p class="who">Agents, with headless copies of the same skills</p>
-          <ol class="chain"><li>implement</li><li>review</li><li>pull request</li></ol>
-          <p>thirdshift takes one Issue URL per Run. Its Factory skills, adapted to run with no human in the loop, implement the issue, review the work and open a pull request that is ready for review.</p></div>
+          <ol class="chain"><li><a href="/prompts/#skill-implement">/implement</a></li><li><a href="/prompts/#skill-code-review">/code-review</a></li><li><a href="/prompts/#skill-pr">/pr</a></li></ol>
+          <p>thirdshift takes one Issue URL per Run. Its Factory skills, adapted to run with no human in the loop, implement the issue with <code>/implement</code>, review the work with <code>/code-review</code> and open a pull request that is ready for review with <code>/pr</code>.</p>
+          <p class="more"><a href="/prompts/">Read every prompt and skill the agents get →</a></p></div>
       </div>
     </div>
   </section>
@@ -88,7 +89,7 @@
       <div class="sec-head">
         <p class="eyebrow">How a Run works</p>
         <h2 id="press-title" class="misreg">One issue in, one pull request out.</h2>
-        <p class="lede">A Run feeds one issue through four units and delivers a pull request that is ready for review. Units 2 and 3 are one agent session. Under each unit are the lines thirdshift printed on stderr during a real Run: issue <a href="https://github.com/JacobStephens2/thirdshift/issues/24">#24</a>, which produced <a href="https://github.com/JacobStephens2/thirdshift/pull/25">pull request #25</a>.</p>
+        <p class="lede">A Run feeds one issue through four units and delivers a pull request that is ready for review. Units 2 and 3 are one agent session. Under each unit are the lines thirdshift printed on stderr during a real Run: issue <a href="https://github.com/JacobStephens2/thirdshift/issues/24">#24</a>, which produced <a href="https://github.com/JacobStephens2/thirdshift/pull/25">pull request #25</a>. Click a unit to see what it does. Every prompt and skill it sends is on the <a href="/prompts/">Prompts and skills</a> page.</p>
       </div>
 
       <div class="press-track">
@@ -101,8 +102,9 @@
               <desc id="press-svg-desc">Issue #24 goes in at the feeder and passes through four press units: 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish. A bracket over units M and Y marks them as one agent session. Pull request #25, ready for review, comes out on the delivery pile.</desc>
               <defs>
                 <pattern id="dots" width="6" height="6" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="1.5" fill="#000"/></pattern>
-                <g id="rollers" fill="none" stroke="var(--dim)" stroke-width="1.5"><circle cx="38" cy="86" r="10"/><circle cx="85" cy="86" r="10"/><circle cx="132" cy="86" r="10"/></g>
-                <path id="spokes" d="M85 114v92M39 160h92M52 127l66 66M118 127l-66 66" stroke="var(--dim)" stroke-width="1"/>
+                <!-- Centred on the origin, so a spin (styles.css) turns each one about its own centre. -->
+                <g id="roller" fill="none" stroke="var(--dim)" stroke-width="1.5"><circle r="10"/><path d="M0 -10v20M-10 0h20" stroke-width="1"/></g>
+                <path id="spokes" d="M0 -46v92M-46 0h92M-33 -33l66 66M33 -33l-66 66" stroke="var(--dim)" stroke-width="1"/>
               </defs>
 
               <!-- The one agent session: a bracket over M and Y. -->
@@ -127,8 +129,8 @@
                 <rect x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
                 <rect x="12" y="12" width="146" height="50" fill="var(--c)"/><rect x="12" y="12" width="146" height="50" fill="url(#dots)" opacity=".35"/>
                 <text class="svg-misreg ink-letter" x="85" y="49" text-anchor="middle" fill="#000">C</text>
-                <use href="#rollers"/>
-                <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--c)" stroke-width="3"/><use href="#spokes"/>
+                <g class="rollers"><g transform="translate(38 86)"><use class="spin" href="#roller"/></g><g transform="translate(85 86)"><use class="spin" href="#roller"/></g><g transform="translate(132 86)"><use class="spin" href="#roller"/></g></g>
+                <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--c)" stroke-width="3"/><g transform="translate(85 160)"><use class="spin drum" href="#spokes"/></g>
                 <circle cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
                 <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT 1</text>
                 <text class="unit-label" x="85" y="298" text-anchor="middle">1 · C · PREPARE</text>
@@ -137,8 +139,8 @@
                 <rect x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
                 <rect x="12" y="12" width="146" height="50" fill="var(--m)"/><rect x="12" y="12" width="146" height="50" fill="url(#dots)" opacity=".35"/>
                 <text class="svg-misreg ink-letter" x="85" y="49" text-anchor="middle" fill="#000">M</text>
-                <use href="#rollers"/>
-                <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--m)" stroke-width="3"/><use href="#spokes"/>
+                <g class="rollers"><g transform="translate(38 86)"><use class="spin" href="#roller"/></g><g transform="translate(85 86)"><use class="spin" href="#roller"/></g><g transform="translate(132 86)"><use class="spin" href="#roller"/></g></g>
+                <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--m)" stroke-width="3"/><g transform="translate(85 160)"><use class="spin drum" href="#spokes"/></g>
                 <circle cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
                 <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT 2</text>
                 <text class="unit-label" x="85" y="298" text-anchor="middle">2 · M · IMPLEMENT</text>
@@ -147,8 +149,8 @@
                 <rect x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
                 <rect x="12" y="12" width="146" height="50" fill="var(--y)"/><rect x="12" y="12" width="146" height="50" fill="url(#dots)" opacity=".35"/>
                 <text class="svg-misreg ink-letter" x="85" y="49" text-anchor="middle" fill="#000">Y</text>
-                <use href="#rollers"/>
-                <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--y)" stroke-width="3"/><use href="#spokes"/>
+                <g class="rollers"><g transform="translate(38 86)"><use class="spin" href="#roller"/></g><g transform="translate(85 86)"><use class="spin" href="#roller"/></g><g transform="translate(132 86)"><use class="spin" href="#roller"/></g></g>
+                <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--y)" stroke-width="3"/><g transform="translate(85 160)"><use class="spin drum" href="#spokes"/></g>
                 <circle cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
                 <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT 3</text>
                 <text class="unit-label" x="85" y="298" text-anchor="middle">3 · Y · REVIEW</text>
@@ -158,8 +160,8 @@
                 <rect x="0" y="0" width="170" height="246" rx="3" fill="var(--k2)" stroke="var(--dim)" stroke-width="1.5"/>
                 <rect x="12" y="12" width="146" height="50" fill="none" stroke="var(--paper)" stroke-width="2"/>
                 <text class="svg-misreg ink-letter" x="85" y="49" text-anchor="middle" fill="var(--paper)">K</text>
-                <use href="#rollers"/>
-                <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--paper)" stroke-width="3"/><use href="#spokes"/>
+                <g class="rollers"><g transform="translate(38 86)"><use class="spin" href="#roller"/></g><g transform="translate(85 86)"><use class="spin" href="#roller"/></g><g transform="translate(132 86)"><use class="spin" href="#roller"/></g></g>
+                <circle cx="85" cy="160" r="46" fill="var(--k3)" stroke="var(--paper)" stroke-width="3"/><g transform="translate(85 160)"><use class="spin drum" href="#spokes"/></g>
                 <circle cx="85" cy="228" r="14" fill="var(--k)" stroke="var(--dim)" stroke-width="1.5"/>
                 <text x="85" y="-10" text-anchor="middle" font-size="12" fill="var(--dim)">UNIT 4</text>
                 <text class="unit-label" x="85" y="298" text-anchor="middle">4 · K · FINISH</text>
@@ -194,7 +196,7 @@
             <article class="unit-col ink-m" aria-labelledby="unit-2">
               <h3 id="unit-2"><span class="tag" aria-hidden="true"></span>2 · M · Implement</h3>
               <p>A headless Claude Code session, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits.</p>
-              <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-implement">implement</a></li><li><a href="/prompts/#skill-tdd">tdd</a></li></ul>
+              <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-implement">/implement</a></li><li><a href="/prompts/#skill-tdd">/tdd</a></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 2">
                 <li><span class="prefix">thirdshift:</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-24-20260925T134143Z-implement.jsonl</li>
                 <li><span class="prefix">thirdshift:</span> implement: session started</li>
@@ -214,7 +216,7 @@
             <article class="unit-col ink-y" aria-labelledby="unit-3">
               <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>3 · Y · Review</h3>
               <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Then it opens the pull request, ready for review.</p>
-              <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-code-review">code-review</a></li><li><a href="/prompts/#skill-pr">pr</a></li></ul>
+              <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-code-review">/code-review</a></li><li><a href="/prompts/#skill-pr">/pr</a></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 3">
                 <li><span class="prefix">thirdshift:</span> implement: skill thirdshift:code-review</li>
                 <li><span class="prefix">thirdshift:</span> implement: $ git rev-parse main &amp;&amp; git log main..HEAD --oneline &amp;&amp; git diff main...HEAD --stat; ls .agents/skills…</li>
@@ -239,7 +241,7 @@
             <article class="unit-col ink-k" aria-labelledby="unit-4">
               <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>4 · K · Finish</h3>
               <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 3. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. This Run needed no Repair.</p>
-              <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-resolving-merge-conflicts">resolving-merge-conflicts</a> <span>in a Repair</span></li></ul>
+              <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-resolving-merge-conflicts">/resolving-merge-conflicts</a> <span>in a Repair</span></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 4">
                 <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
                 <li><span class="prefix">thirdshift:</span> checking the PR</li>
@@ -451,6 +453,7 @@
 <footer class="wrap foot">
   <a href="https://github.com/JacobStephens2/thirdshift">GitHub</a>
   <a href="https://github.com/JacobStephens2/thirdshift/releases">Releases</a>
+  <a href="/prompts/">Prompts and skills</a>
   <a href="https://github.com/JacobStephens2/thirdshift/blob/main/LICENSE">MIT License</a>
   <span>Factory skills adapted from <a href="https://github.com/mattpocock/skills">Matt Pocock's skills</a></span>
 </footer>

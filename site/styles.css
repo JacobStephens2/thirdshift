@@ -196,6 +196,15 @@ body::after { /* scanlines */
 .press.is-stepped .unit-col:not(.lit), .press.is-stepped .unit-col .stderr-lines { display: none; }
 .press.is-stepped .unit-col.lit { animation: step-in .25s ease-out; }
 @keyframes step-in { from { opacity: 0; } }
+/* The lit unit's rollers and drum turn; Pause stops them. Neighbouring rollers turn opposite ways, as they would on a press. */
+.press-svg .spin { animation: spin 1.4s linear infinite paused; }
+.press-svg .rollers > g:nth-child(2) .spin, .press-svg .drum { animation-direction: reverse; }
+.press-svg .drum { animation-duration: 3.2s; }
+.press.is-stepped:not(.is-paused) .press-svg .unit.lit .spin { animation-play-state: running; }
+@keyframes spin { to { transform: rotate(1turn); } }
+/* Clicking a unit goes to it (main.js adds .units-clickable). The step buttons are the keyboard equivalent. */
+.press.units-clickable .press-svg .unit, .press.units-clickable .press-svg .delivery { cursor: pointer; }
+.press.is-stepped .press-svg .unit:not(.lit):hover, .press.is-stepped .press-svg .delivery:not(.lit):hover { opacity: .65; }
 .press-controls { display: flex; flex-wrap: wrap; gap: 8px; }
 .press-controls button, .press-term .pause { font: 700 12px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
   background: transparent; color: var(--paper); border: 1px solid var(--dim); padding: 9px 12px; min-height: 36px; }
@@ -223,6 +232,9 @@ body::after { /* scanlines */
 .chain li { font: 700 13px/1 var(--f-mono); padding: 8px 10px; border: 1px solid var(--dim); }
 .chain li + li::before { content: "→"; margin-right: 8px; color: var(--dim); }
 .shift.third .chain li { border-color: var(--c); }
+.chain a { color: inherit; }
+.chain a:hover { color: var(--nc); }
+.shift code { font-size: .92em; color: var(--paper); white-space: nowrap; }
 
 /* ---------- What comes off the press ---------- */
 .offpress { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }

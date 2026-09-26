@@ -116,13 +116,23 @@ function stepPressLine(section) {
     if (inBand.size && n !== step) render(n);
   }, { rootMargin: "-45% 0px -45% 0px" });
 
-  // A step button scrolls, instantly, to the middle of that step's marker, so the buttons and scrolling agree.
-  for (const b of stepButtons) {
-    b.addEventListener("click", () => {
-      const n = Number(b.dataset.step);
-      const r = markers[n - 1].getBoundingClientRect();
-      scrollTo({ top: scrollY + r.top + r.height / 2 - innerHeight / 2, behavior: "instant" });
-      render(n);
+  // Going to a step scrolls, instantly, to the middle of that step's marker, so the buttons and scrolling agree.
+  function goTo(n) {
+    const r = markers[n - 1].getBoundingClientRect();
+    scrollTo({ top: scrollY + r.top + r.height / 2 - innerHeight / 2, behavior: "instant" });
+    render(n);
+  }
+
+  for (const b of stepButtons) b.addEventListener("click", () => goTo(Number(b.dataset.step)));
+
+  // Clicking a unit in the drawing goes to its step, or, in the static version, to its column. The delivery pile
+  // is unit 4's output. The step buttons are the keyboard and screen reader equivalent, so the drawing stays an image.
+  section.classList.add("units-clickable");
+  for (const el of [...units, delivery]) {
+    const n = el === delivery ? 4 : Number(el.dataset.unit);
+    el.addEventListener("click", () => {
+      if (step) goTo(n);
+      else cols[n - 1].scrollIntoView({ block: "start" });
     });
   }
 
