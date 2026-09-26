@@ -1,6 +1,6 @@
 //! The crates.io package: it carries the sources and the Factory skills the
-//! binary embeds, and none of the repository's own agent tooling, docs, site or
-//! tests.
+//! binary embeds, and none of the repository's own agent tooling, docs, site
+//! or tests.
 
 use std::process::Command;
 

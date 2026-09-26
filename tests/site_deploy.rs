@@ -10,15 +10,25 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
+use serde_json::Value;
 use tempfile::TempDir;
 
 fn deploy_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("site/deploy")
 }
 
+/// Keeps the machine's git configuration (signing, hooks, default branch) out
+/// of the test's git and the publish script's.
+fn without_user_git_config(command: &mut Command) -> &mut Command {
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+}
+
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = without_user_git_config(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "Test")
@@ -44,39 +54,51 @@ fn installed(tool: &str) -> bool {
 /// checkout the publish script fetches into, and an empty web root.
 struct Deploy {
     temp: TempDir,
+    /// The commit on main before the test adds any.
+    first_commit: String,
 }
 
 impl Deploy {
     fn new() -> Self {
         let temp = TempDir::new().unwrap();
-        let deploy = Deploy { temp };
         git(
-            deploy.root(),
+            temp.path(),
             &["init", "-q", "--bare", "-b", "main", "origin.git"],
         );
-        git(deploy.root(), &["clone", "-q", "origin.git", "contributor"]);
-        deploy.commit(&[
+        git(temp.path(), &["clone", "-q", "origin.git", "contributor"]);
+        let mut deploy = Deploy {
+            temp,
+            first_commit: String::new(),
+        };
+        deploy.first_commit = deploy.commit(&[
             ("site/index.html", "home v1"),
             ("site/prompts/index.html", "prompts v1"),
             ("site/deploy/publish.sh", "not for the web"),
             ("README.md", "readme v1"),
         ]);
-        git(deploy.root(), &["clone", "-q", "origin.git", "checkout"]);
+        git(
+            deploy.temp_dir(),
+            &["clone", "-q", "origin.git", "checkout"],
+        );
         fs::create_dir(deploy.web_root()).unwrap();
         deploy
     }
 
-    fn root(&self) -> &Path {
+    fn temp_dir(&self) -> &Path {
         self.temp.path()
     }
 
+    fn checkout(&self) -> PathBuf {
+        self.temp_dir().join("checkout")
+    }
+
     fn web_root(&self) -> PathBuf {
-        self.root().join("www")
+        self.temp_dir().join("www")
     }
 
     /// Commits `files` in the contributor's clone and pushes them to main.
     fn commit(&self, files: &[(&str, &str)]) -> String {
-        let clone = self.root().join("contributor");
+        let clone = self.temp_dir().join("contributor");
         for (path, contents) in files {
             let path = clone.join(path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -89,8 +111,8 @@ impl Deploy {
     }
 
     fn publish(&self) {
-        let output = Command::new(deploy_dir().join("publish.sh"))
-            .arg(self.root().join("checkout"))
+        let output = without_user_git_config(&mut Command::new(deploy_dir().join("publish.sh")))
+            .arg(self.checkout())
             .arg(self.web_root())
             .output()
             .expect("could not run publish.sh");
@@ -112,8 +134,8 @@ impl Deploy {
 
     /// Every entry under the web root, with modification times, so a run
     /// that changes anything at all shows up as a difference.
-    fn snapshot(&self) -> Vec<(PathBuf, std::time::SystemTime)> {
-        fn walk(dir: &Path, out: &mut Vec<(PathBuf, std::time::SystemTime)>) {
+    fn snapshot(&self) -> Vec<(PathBuf, SystemTime)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, SystemTime)>) {
             for entry in fs::read_dir(dir).unwrap() {
                 let entry = entry.unwrap();
                 let meta = fs::symlink_metadata(entry.path()).unwrap();
@@ -134,13 +156,15 @@ impl Deploy {
 #[cfg(target_os = "linux")]
 fn publishing_serves_the_site_without_the_deploy_directory_and_records_the_commit() {
     let deploy = Deploy::new();
-    let head = git(&deploy.root().join("contributor"), &["rev-parse", "HEAD"]);
 
     deploy.publish();
 
     assert_eq!(deploy.served("index.html"), "home v1");
     assert_eq!(deploy.served("prompts/index.html"), "prompts v1");
-    assert_eq!(deploy.served("commit.txt"), format!("{head}\n"));
+    assert_eq!(
+        deploy.served("commit.txt"),
+        format!("{}\n", deploy.first_commit)
+    );
     assert!(!deploy.current().join("deploy").exists());
     assert!(!deploy.current().join("README.md").exists());
 }
@@ -159,11 +183,11 @@ fn publishing_again_with_no_new_commits_changes_nothing() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn a_commit_outside_the_served_site_changes_nothing() {
+fn a_commit_outside_the_served_site_changes_nothing_served() {
     let deploy = Deploy::new();
     deploy.publish();
     let before = deploy.snapshot();
-    deploy.commit(&[
+    let head = deploy.commit(&[
         ("README.md", "readme v2"),
         ("site/deploy/publish.sh", "still not for the web"),
     ]);
@@ -171,6 +195,13 @@ fn a_commit_outside_the_served_site_changes_nothing() {
     deploy.publish();
 
     assert_eq!(deploy.snapshot(), before);
+    // The deploy checkout still follows main, so the units and Caddy block a
+    // human installs from it are current.
+    assert_eq!(git(&deploy.checkout(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        fs::read_to_string(deploy.checkout().join("site/deploy/publish.sh")).unwrap(),
+        "still not for the web"
+    );
 }
 
 #[test]
@@ -208,7 +239,7 @@ fn only_the_live_and_previous_copies_are_kept() {
         deploy.publish();
     }
 
-    let kept = fs::read_dir(deploy.web_root().join("releases"))
+    let kept = fs::read_dir(deploy.web_root().join("copies"))
         .unwrap()
         .count();
 
@@ -232,17 +263,36 @@ fn the_caddy_block_adapts() {
         "caddy adapt: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let json = String::from_utf8(output.stdout).unwrap();
-    for expected in [
-        r#""thirdshift.app""#,
-        r#""www.thirdshift.app""#,
-        r#""/install.sh""#,
-        "https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh",
-        "302",
-        "301",
-    ] {
-        assert!(json.contains(expected), "{expected} is missing from {json}");
-    }
+    let config: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    let site = caddy_route(&config, "thirdshift.app");
+    assert!(site.contains(r#""handler":"file_server""#), "{site}");
+    assert!(site.contains(&redirect(
+        302,
+        "https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh"
+    )), "{site}");
+    let www = caddy_route(&config, "www.thirdshift.app");
+    assert!(
+        www.contains(&redirect(301, "https://thirdshift.app{http.request.uri}")),
+        "{www}"
+    );
+}
+
+/// The adapted Caddy route that matches `host`, as JSON text.
+fn caddy_route(config: &Value, host: &str) -> String {
+    let routes = &config["apps"]["http"]["servers"]["srv0"]["routes"];
+    routes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|route| route["match"][0]["host"][0] == host)
+        .unwrap_or_else(|| panic!("no route for {host} in {routes}"))
+        .to_string()
+}
+
+/// How a redirect handler reads in adapted Caddy JSON.
+fn redirect(status: u16, location: &str) -> String {
+    format!(r#""headers":{{"Location":["{location}"]}},"status_code":{status}"#)
 }
 
 #[test]

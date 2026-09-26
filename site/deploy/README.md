@@ -60,4 +60,4 @@ Installing is a manual step. Run these as root on the server, which already runs
    curl -I https://thirdshift.app/install.sh     # 302 to the latest thirdshift-installer.sh
    ```
 
-The timer runs `publish.sh` from the deploy checkout, so changes to the script go live with the next publish. Changes to the units or the Caddy block need steps 3 or 4 again. Publish logs are in `journalctl -u thirdshift-site-publish`.
+Every publish moves the deploy checkout to the tip of `main`, even when nothing served changed. The timer runs `publish.sh` from that checkout, so changes to the script take effect on the next run. Changes to the units or the Caddy block need steps 3 or 4 again, which copy them from the same checkout. Publish logs are in `journalctl -u thirdshift-site-publish`.
