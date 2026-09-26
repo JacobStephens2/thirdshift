@@ -66,6 +66,19 @@ fn the_home_page_has_complete_open_graph_tags_with_absolute_urls() {
 }
 
 #[test]
+fn the_open_graph_title_and_description_are_the_pages_own() {
+    let html = home_page();
+    let title =
+        &html[html.find("<title>").unwrap() + "<title>".len()..html.find("</title>").unwrap()];
+
+    assert_eq!(og(&html, "title"), title);
+    assert_eq!(
+        Some(og(&html, "description")),
+        meta(&html, "name", "description")
+    );
+}
+
+#[test]
 fn the_home_page_has_a_large_image_twitter_card_matching_open_graph() {
     let html = home_page();
 

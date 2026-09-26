@@ -33,18 +33,18 @@ const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1200, height: 630 } });
 await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: 'networkidle' });
 await page.evaluate(() => {
-  const press = document.querySelector('.press-svg').cloneNode(true);
-  const colorbar = document.querySelector('.hero .colorbar').cloneNode(true);
+  const take = (selector) => document.querySelector(selector).cloneNode(true);
+  const headline = take('.hero h1');
+  const eyebrow = take('#how-a-run-works .eyebrow');
+  const press = take('.press-svg');
+  const colorbar = take('.hero .colorbar');
   document.body.innerHTML = `
     <div class="card grid-bg">
-      <div class="card-top">
-        <p class="eyebrow">thirdshift.app</p>
-        <p class="eyebrow">How a Run works</p>
-      </div>
-      <h1 class="misreg">Your issues go to press overnight.</h1>
+      <div class="card-top"><p class="eyebrow">thirdshift.app</p></div>
     </div>`;
   const card = document.querySelector('.card');
-  card.append(press, colorbar);
+  card.querySelector('.card-top').append(eyebrow);
+  card.append(headline, press, colorbar);
   const style = document.createElement('style');
   style.textContent = `
     body { padding: 0; }
