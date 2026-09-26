@@ -38,7 +38,7 @@ h1, h2, h3 { font-family: var(--f-head); font-weight: var(--f-head-w); line-heig
 .eyebrow { font: 700 12px/1 var(--f-mono); letter-spacing: .18em; text-transform: uppercase; color: var(--dim); margin: 0; }
 
 /* ---------- Print effects ---------- */
-/* The faint blueprint grid the page is drawn on. */
+/* The faint blueprint grid, for the diagrams drawn on it. */
 .grid-bg {
   background-color: var(--k);
   background-image:
