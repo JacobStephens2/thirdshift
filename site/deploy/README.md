@@ -38,13 +38,15 @@ Installing is a manual step. Run these as root on the server, which already runs
    systemctl list-timers thirdshift-site-publish.timer
    ```
 
-4. Copy `Caddyfile` into `/etc/caddy/sites/`, then validate and reload. Ansible manages the server's own `/etc/caddy/Caddyfile` from the tracewake repo and rewrites it on every run, but that file imports `/etc/caddy/sites/*.caddy` and Ansible never writes there:
+4. Copy `Caddyfile` into `/etc/caddy/sites/`, then validate and restart. Ansible manages the server's own `/etc/caddy/Caddyfile` from the tracewake repo and rewrites it on every run, but that file imports `/etc/caddy/sites/*.caddy` and Ansible never writes there:
 
    ```sh
    cp /var/lib/thirdshift-site/checkout/site/deploy/Caddyfile /etc/caddy/sites/thirdshift.app.caddy
    caddy validate --config /etc/caddy/Caddyfile
-   systemctl reload caddy
+   systemctl restart caddy
    ```
+
+   Restart, not reload. Caddy 2.6 keeps its HTTP/3 listener across a reload with the certificates it started with, so a site added by a reload fails every HTTP/3 handshake with "no certificate available". Chrome on Android then shows a white page, while `curl`, which uses HTTP/2, still gets a 200.
 
    On a host with SELinux enforcing, label the web root so Caddy may read it:
 
