@@ -10,6 +10,8 @@ mod poll;
 mod preflight;
 mod progress;
 mod prompt;
+#[cfg(test)]
+mod prompts_page;
 mod run;
 mod session;
 mod update;

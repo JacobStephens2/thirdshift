@@ -1,5 +1,6 @@
 //! Headless Claude Code sessions and their logs.
 
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -103,16 +104,8 @@ fn run(
     let mut log_file =
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
-    let mut command = Command::new("claude");
-    command
-        .args(["-p", "--permission-mode", "auto", "--plugin-dir"])
-        .arg(plugin_dir)
-        .args(["--output-format", "stream-json", "--verbose"]);
-    if let Some(session_id) = resume {
-        command.args(["--resume", session_id]);
-    }
-    let mut child = command
-        .arg(prompt)
+    let mut child = Command::new("claude")
+        .args(claude_args(plugin_dir.as_os_str(), resume, prompt))
         .current_dir(worktree)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -174,6 +167,27 @@ fn run(
         );
     }
     Ok(progress)
+}
+
+/// The arguments every session runs `claude` with: headless in auto mode,
+/// with the Factory skills plugin at `plugin_dir` loaded, streaming JSON. With
+/// `resume`, the session with that id continues. The prompt comes last.
+pub fn claude_args<'a>(
+    plugin_dir: &'a OsStr,
+    resume: Option<&'a str>,
+    prompt: &'a str,
+) -> Vec<&'a OsStr> {
+    let mut args: Vec<&OsStr> = ["-p", "--permission-mode", "auto", "--plugin-dir"]
+        .into_iter()
+        .map(OsStr::new)
+        .collect();
+    args.push(plugin_dir);
+    args.extend(["--output-format", "stream-json", "--verbose"].map(OsStr::new));
+    if let Some(session_id) = resume {
+        args.extend(["--resume", session_id].map(OsStr::new));
+    }
+    args.push(OsStr::new(prompt));
+    args
 }
 
 const POLL: Duration = Duration::from_millis(100);
