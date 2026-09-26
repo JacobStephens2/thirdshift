@@ -5,7 +5,7 @@ edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
 license = "MIT"
 repository = "https://github.com/JacobStephens2/thirdshift"
-# homepage stays unset until thirdshift.app is live.
+homepage = "https://thirdshift.app"
 # The crate carries the sources and the Factory skills the binary embeds;
 # the repository's agent tooling, docs and tests stay out of it.
 include = ["/src", "/skills", "/README.md", "/LICENSE"]
