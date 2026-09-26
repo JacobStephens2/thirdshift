@@ -38,9 +38,10 @@ Installing is a manual step. Run these as root on the server, which already runs
    systemctl list-timers thirdshift-site-publish.timer
    ```
 
-4. Add the contents of `Caddyfile` to the server's Caddyfile, then validate and reload:
+4. Copy `Caddyfile` into `/etc/caddy/sites/`, then validate and reload. Ansible manages the server's own `/etc/caddy/Caddyfile` from the tracewake repo and rewrites it on every run, but that file imports `/etc/caddy/sites/*.caddy` and Ansible never writes there:
 
    ```sh
+   cp /var/lib/thirdshift-site/checkout/site/deploy/Caddyfile /etc/caddy/sites/thirdshift.app.caddy
    caddy validate --config /etc/caddy/Caddyfile
    systemctl reload caddy
    ```
