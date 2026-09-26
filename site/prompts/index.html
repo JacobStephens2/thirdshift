@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prompts and skills · thirdshift</title>
+<meta name="description" content="Everything that steers thirdshift's agents: the claude command line, every prompt a Run sends, and the full text of every Factory skill, generated from the source.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<script type="module" src="/main.js"></script>
+</head>
+<body>
+
+<header class="hero page-head">
+  <div class="wrap">
+    <div class="paper-sheet">
+      <div class="topline">
+        <!-- "The Third Shift" set in UnifrakturMaguntia (OFL), converted to outlines. -->
+        <a href="/" class="home"><svg class="mark" viewBox="0 -1500 13208 1880" role="img" aria-label="The Third Shift"><path d="M539 -711Q486 -674 385 -674Q243 -677 146 -768Q49 -859 49 -993Q49 -1187 202 -1324Q355 -1461 588 -1462Q786 -1463 961.5 -1369Q1137 -1275 1269 -1180Q1361 -1111 1439 -1180Q1461 -1200 1477 -1184.5Q1493 -1169 1474 -1151L1302 -1007Q1187 -923 1039 -1021Q896 -1120 738.5 -1204Q581 -1288 450 -1288Q296 -1288 204.5 -1201Q113 -1114 112 -1003Q107 -740 377 -713Q454 -704 515 -748Q538 -762 549 -744Q560 -726 539 -711ZM103 -392Q223 -489 308 -524Q430 -576 497 -506Q683 -314 808 -226.5Q933 -139 1024.5 -120Q1116 -101 1186 -133Q1256 -165 1333 -212Q1363 -232 1376 -214.5Q1389 -197 1366 -178Q1270 -99 1164 -41.5Q1058 16 931.5 17.5Q805 19 652 -52Q499 -123 309 -303Q246 -364 185 -363Q152 -363 115 -345Q91 -334 82.5 -352Q74 -370 103 -392ZM784 -1113Q711 -1056 745 -992.5Q779 -929 891 -843Q1085 -693 1069.5 -558Q1054 -423 796 -327Q775 -318 765.5 -333Q756 -348 775 -360Q873 -423 846.5 -496Q820 -569 696 -664Q550 -773 536.5 -895.5Q523 -1018 758 -1144Q782 -1157 794 -1143.5Q806 -1130 784 -1113ZM1588 -1315Q1575 -1334 1590 -1344.5Q1605 -1355 1620 -1337Q1664 -1282 1691 -1219Q1694 -1209 1705 -1209Q1714 -1207 1721 -1217Q1779 -1321 1903.5 -1377.5Q2028 -1434 2156 -1423Q2182 -1422 2182 -1402Q2182 -1382 2157 -1384Q2052 -1391 1974 -1336Q1896 -1281 1897 -1124L1899 -900Q1899 -890 1907 -885.5Q1915 -881 1923 -886Q1978 -916 2033.5 -952Q2089 -988 2136 -1033Q2173 -1070 2178 -1020Q2182 -983 2209 -954Q2236 -925 2259 -897Q2394 -725 2398 -525Q2405 -231 2191 -5.5Q1977 220 1802 339Q1778 356 1766.5 344.5Q1755 333 1773 318Q1914 193 2057.5 45Q2201 -103 2188 -424Q2182 -550 2149.5 -661.5Q2117 -773 2031 -847Q1987 -884 1909 -846Q1900 -843 1900 -831L1904 -227Q1904 -146 1969 -160Q1983 -164 1994 -175Q2005 -186 2018.5 -194.5Q2032 -203 2043 -193Q2054 -183 2043 -172Q1994 -118 1944 -72Q1894 -26 1867 29Q1855 53 1831 29Q1742 -67 1637 -115Q1603 -133 1632 -148Q1696 -170 1695 -280L1693 -948Q1692 -1083 1662.5 -1169Q1633 -1255 1588 -1315ZM2781 28Q2779 4 2755.5 -8Q2732 -20 2716 -32Q2601 -110 2553.5 -222.5Q2506 -335 2500 -461Q2488 -746 2654 -895Q2713 -948 2790 -981.5Q2867 -1015 2948 -1036Q2973 -1041 2985 -1011L3129 -673Q3139 -646 3122 -639H3120L2710 -480Q2698 -474 2700 -461Q2749 -239 2864 -176.5Q2979 -114 3093 -158Q3113 -167 3118.5 -155Q3124 -143 3111 -137Q3030 -96 2956.5 -53Q2883 -10 2825 37Q2816 43 2798.5 41Q2781 39 2781 28ZM2688 -537Q2689 -529 2695 -524.5Q2701 -520 2710 -524L2923 -604Q2938 -610 2932 -625L2810 -924Q2801 -946 2774 -930Q2716 -896 2695 -775Q2674 -654 2688 -537ZM4321 -711Q4268 -674 4167 -674Q4025 -677 3928 -768Q3831 -859 3831 -993Q3831 -1187 3984 -1324Q4137 -1461 4370 -1462Q4568 -1463 4743.5 -1369Q4919 -1275 5051 -1180Q5143 -1111 5221 -1180Q5243 -1200 5259 -1184.5Q5275 -1169 5256 -1151L5084 -1007Q4969 -923 4821 -1021Q4678 -1120 4520.5 -1204Q4363 -1288 4232 -1288Q4078 -1288 3986.5 -1201Q3895 -1114 3894 -1003Q3889 -740 4159 -713Q4236 -704 4297 -748Q4320 -762 4331 -744Q4342 -726 4321 -711ZM3885 -392Q4005 -489 4090 -524Q4212 -576 4279 -506Q4465 -314 4590 -226.5Q4715 -139 4806.5 -120Q4898 -101 4968 -133Q5038 -165 5115 -212Q5145 -232 5158 -214.5Q5171 -197 5148 -178Q5052 -99 4946 -41.5Q4840 16 4713.5 17.5Q4587 19 4434 -52Q4281 -123 4091 -303Q4028 -364 3967 -363Q3934 -363 3897 -345Q3873 -334 3864.5 -352Q3856 -370 3885 -392ZM4566 -1113Q4493 -1056 4527 -992.5Q4561 -929 4673 -843Q4867 -693 4851.5 -558Q4836 -423 4578 -327Q4557 -318 4547.5 -333Q4538 -348 4557 -360Q4655 -423 4628.5 -496Q4602 -569 4478 -664Q4332 -773 4318.5 -895.5Q4305 -1018 4540 -1144Q4564 -1157 4576 -1143.5Q4588 -1130 4566 -1113ZM5370 -1315Q5357 -1334 5372 -1344.5Q5387 -1355 5402 -1337Q5446 -1282 5473 -1219Q5476 -1209 5487 -1209Q5496 -1207 5503 -1217Q5561 -1321 5685.5 -1377.5Q5810 -1434 5938 -1423Q5964 -1422 5964 -1402Q5964 -1382 5939 -1384Q5834 -1391 5756 -1336Q5678 -1281 5679 -1124L5681 -900Q5681 -890 5689 -885.5Q5697 -881 5705 -886Q5760 -916 5815.5 -952Q5871 -988 5918 -1033Q5955 -1070 5960 -1020Q5964 -983 5991 -954Q6018 -925 6041 -897Q6176 -725 6180 -525Q6187 -231 5973 -5.5Q5759 220 5584 339Q5560 356 5548.5 344.5Q5537 333 5555 318Q5696 193 5839.5 45Q5983 -103 5970 -424Q5964 -550 5931.5 -661.5Q5899 -773 5813 -847Q5769 -884 5691 -846Q5682 -843 5682 -831L5686 -227Q5686 -146 5751 -160Q5765 -164 5776 -175Q5787 -186 5800.5 -194.5Q5814 -203 5825 -193Q5836 -183 5825 -172Q5776 -118 5726 -72Q5676 -26 5649 29Q5637 53 5613 29Q5524 -67 5419 -115Q5385 -133 5414 -148Q5478 -170 5477 -280L5475 -948Q5474 -1083 5444.5 -1169Q5415 -1255 5370 -1315ZM6388 -235 6381 -783Q6381 -802 6375 -814Q6351 -853 6334 -833L6294 -792Q6278 -774 6263.5 -788Q6249 -802 6268 -827Q6312 -882 6347 -937Q6382 -992 6419 -1046Q6435 -1065 6456 -1045Q6498 -994 6538 -955.5Q6578 -917 6652 -874Q6673 -866 6670.5 -855Q6668 -844 6657 -843Q6631 -833 6611 -808.5Q6591 -784 6591 -727V-304Q6591 -202 6629 -179Q6673 -153 6701 -201Q6711 -220 6725.5 -209.5Q6740 -199 6725 -175Q6695 -128 6669 -80.5Q6643 -33 6616 14Q6597 42 6569 26Q6479 -17 6433.5 -79Q6388 -141 6388 -235ZM6533 -1422Q6644 -1422 6634 -1315Q6628 -1261 6566.5 -1206.5Q6505 -1152 6469 -1153Q6433 -1153 6414 -1210Q6395 -1267 6399 -1315Q6402 -1361 6443.5 -1391.5Q6485 -1422 6533 -1422ZM7174 -750 7173 -265Q7173 -233 7189 -224L7261 -182Q7284 -168 7331 -231Q7341 -244 7356 -236.5Q7371 -229 7356 -211Q7251 -94 7195 19Q7178 42 7158 19Q7102 -46 7053.5 -80Q7005 -114 6911 -136Q6893 -141 6893 -152Q6893 -163 6906 -168Q6973 -179 6972 -283V-706Q6972 -808 6934 -831Q6890 -860 6862 -810Q6851 -789 6837 -800Q6823 -811 6838 -835Q6867 -881 6893.5 -929Q6920 -977 6948 -1025Q6965 -1055 6993 -1036Q7140 -965 7169 -856Q7172 -846 7181 -843.5Q7190 -841 7197 -850L7351 -1027Q7357 -1033 7365 -1032.5Q7373 -1032 7378 -1024L7483 -823Q7487 -814 7481 -806L7361 -662Q7354 -655 7345.5 -656Q7337 -657 7334 -665L7253 -815Q7249 -821 7240.5 -822.5Q7232 -824 7225 -817L7178 -760Q7174 -756 7174 -750ZM7783 -1393Q7704 -1371 7706 -1300Q7707 -1255 7757.5 -1216.5Q7808 -1178 7876 -1165Q7877 -1165 7878 -1164Q8088 -1086 8243.5 -960Q8399 -834 8420 -594V-591Q8399 -411 8333 -291Q8267 -171 8177 -108L8176 -106Q8134 -70 8077 -42Q8020 -14 7976 16Q7948 35 7940 16Q7884 -117 7631 -187Q7616 -190 7615 -202Q7614 -214 7626 -219Q7689 -243 7689 -352L7687 -768Q7687 -803 7719 -801Q7819 -788 7919 -869Q7925 -873 7925 -884Q7923 -892 7915 -896Q7877 -912 7839 -927.5Q7801 -943 7765 -961Q7672 -1003 7627.5 -1070Q7583 -1137 7575 -1203V-1208Q7600 -1399 7767 -1421Q7793 -1425 7795.5 -1411Q7798 -1397 7783 -1393ZM7978 -868Q7969 -872 7961 -866L7914 -829Q7894 -814 7894 -793L7898 -299Q7898 -284 7910 -278L8126 -151Q8152 -135 8174 -163Q8264 -290 8243.5 -500.5Q8223 -711 8070 -819Q8042 -838 7978 -868ZM10437 -1348Q10460 -1376 10483.5 -1357.5Q10507 -1339 10480 -1313Q10404 -1241 10353.5 -1194.5Q10303 -1148 10260 -1124Q10182 -1079 10107.5 -1097.5Q10033 -1116 9897 -1185Q9755 -1257 9639 -1262.5Q9523 -1268 9422 -1171Q9323 -1076 9293.5 -980.5Q9264 -885 9267 -783Q9274 -543 9480.5 -381.5Q9687 -220 9991 -228Q10204 -232 10358 -324Q10512 -416 10487 -599Q10466 -744 10337 -753.5Q10208 -763 10051 -663Q9845 -532 9752 -547Q9659 -562 9494 -789Q9474 -815 9493 -826Q9512 -837 9530 -810Q9590 -721 9684.5 -756.5Q9779 -792 9893 -858Q9970 -901 10038 -936.5Q10106 -972 10211 -947Q10311 -922 10406.5 -840Q10502 -758 10532 -632Q10557 -522 10528 -432Q10499 -342 10451 -270Q10362 -135 10211.5 -56Q10061 23 9868 23Q9583 23 9344 -168Q9105 -359 9111 -696Q9119 -1173 9825 -1455Q9859 -1469 9896 -1451Q10206 -1298 10304.5 -1301Q10403 -1304 10437 -1348ZM10663 -1315Q10650 -1334 10665 -1344.5Q10680 -1355 10695 -1337Q10739 -1282 10766 -1219Q10769 -1209 10780 -1209Q10789 -1207 10796 -1217Q10854 -1321 10978.5 -1377.5Q11103 -1434 11231 -1423Q11257 -1422 11257 -1402Q11257 -1382 11232 -1384Q11127 -1391 11049 -1336Q10971 -1281 10972 -1124L10974 -900Q10974 -890 10982 -885.5Q10990 -881 10998 -886Q11053 -916 11108.5 -952Q11164 -988 11211 -1033Q11248 -1070 11253 -1020Q11257 -983 11284 -954Q11311 -925 11334 -897Q11469 -725 11473 -525Q11480 -231 11266 -5.5Q11052 220 10877 339Q10853 356 10841.5 344.5Q10830 333 10848 318Q10989 193 11132.5 45Q11276 -103 11263 -424Q11257 -550 11224.5 -661.5Q11192 -773 11106 -847Q11062 -884 10984 -846Q10975 -843 10975 -831L10979 -227Q10979 -146 11044 -160Q11058 -164 11069 -175Q11080 -186 11093.5 -194.5Q11107 -203 11118 -193Q11129 -183 11118 -172Q11069 -118 11019 -72Q10969 -26 10942 29Q10930 53 10906 29Q10817 -67 10712 -115Q10678 -133 10707 -148Q10771 -170 10770 -280L10768 -948Q10767 -1083 10737.5 -1169Q10708 -1255 10663 -1315ZM11681 -235 11674 -783Q11674 -802 11668 -814Q11644 -853 11627 -833L11587 -792Q11571 -774 11556.5 -788Q11542 -802 11561 -827Q11605 -882 11640 -937Q11675 -992 11712 -1046Q11728 -1065 11749 -1045Q11791 -994 11831 -955.5Q11871 -917 11945 -874Q11966 -866 11963.5 -855Q11961 -844 11950 -843Q11924 -833 11904 -808.5Q11884 -784 11884 -727V-304Q11884 -202 11922 -179Q11966 -153 11994 -201Q12004 -220 12018.5 -209.5Q12033 -199 12018 -175Q11988 -128 11962 -80.5Q11936 -33 11909 14Q11890 42 11862 26Q11772 -17 11726.5 -79Q11681 -141 11681 -235ZM11826 -1422Q11937 -1422 11927 -1315Q11921 -1261 11859.5 -1206.5Q11798 -1152 11762 -1153Q11726 -1153 11707 -1210Q11688 -1267 11692 -1315Q11695 -1361 11736.5 -1391.5Q11778 -1422 11826 -1422ZM12403 -1011H12576Q12592 -1011 12592 -995V-933Q12592 -917 12576 -917H12455Q12448 -917 12442.5 -911Q12437 -905 12439 -899Q12445 -843 12436 -743L12335 309Q12331 343 12315 343.5Q12299 344 12295 307Q12270 1 12244 -304Q12218 -609 12189 -915H12073Q12058 -915 12057.5 -929.5Q12057 -944 12069 -946Q12134 -957 12177 -1013Q12220 -1069 12214 -1159Q12207 -1301 12251 -1397.5Q12295 -1494 12427 -1451Q12500 -1426 12560.5 -1407.5Q12621 -1389 12646 -1428Q12658 -1449 12668 -1446Q12678 -1443 12665 -1407Q12629 -1293 12571.5 -1253.5Q12514 -1214 12393 -1272Q12276 -1326 12255.5 -1218.5Q12235 -1111 12299 -1078Q12361 -1044 12380 -1022Q12391 -1011 12403 -1011ZM12958 -815 12957 -255Q12957 -224 12972 -214L13044 -173Q13065 -155 13114 -221Q13123 -234 13138.5 -225Q13154 -216 13140 -201Q13033 -84 12979 29Q12962 50 12942 29Q12886 -37 12838 -70Q12790 -103 12695 -126Q12679 -129 12678 -141Q12677 -153 12690 -158Q12757 -174 12756 -273L12755 -814Q12756 -832 12740 -832H12622Q12608 -832 12604 -843Q12600 -854 12613 -862Q12733 -947 12857.5 -1067Q12982 -1187 13084 -1295Q13097 -1309 13109.5 -1300.5Q13122 -1292 13110 -1276Q13064 -1219 13017.5 -1128Q12971 -1037 12961 -962Q12959 -952 12962 -947Q12968 -941 12976 -941H13149Q13156 -941 13161 -936Q13166 -929 13166 -923L13162 -848Q13160 -832 13145 -832H12972Q12958 -832 12958 -815Z"/></svg></a>
+        <span class="slug">Job sheets · every prompt and skill</span>
+      </div>
+      <h1 class="misreg">Prompts and skills</h1>
+      <p class="framing">Everything that steers thirdshift's agents: the <code>claude</code> command line each session runs, every prompt a Run sends, and every Factory skill in full, as the agent reads it. This page is generated from the same code and embedded skills the binary uses, so it shows what thirdshift does, not a summary of it. Each prompt and skill names the unit of the <a href="/#how-a-run-works">press line</a> that uses it.</p>
+      <p class="as-of">As of <span data-commit>the latest published commit of <code>main</code></span>. The latest release may differ: see <a href="https://github.com/JacobStephens2/thirdshift/releases/latest">the latest release</a> and the <code>skills/</code> directory at its tag for the skills it ships.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+<!-- Generated from the source by src/prompts_page.rs; don't edit. Regenerate with UPDATE_PROMPTS_PAGE=1 cargo test prompts_page -->
+<section class="sec" aria-labelledby="command-title">
+  <div class="wrap">
+    <div class="sec-head"><p class="eyebrow">The command line</p><h2 id="command-title">How each session starts</h2></div>
+    <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode, with the Factory skills loaded as a plugin from a temporary directory. The prompt is one of the templates below.</p>
+    <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --plugin-dir <mark class="ph">&lt;plugin dir&gt;</mark> --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
+    <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
+    <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --plugin-dir <mark class="ph">&lt;plugin dir&gt;</mark> --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
+  </div>
+</section>
+<section class="sec" aria-labelledby="prompts-title">
+  <div class="wrap">
+    <div class="sec-head"><p class="eyebrow">Prompts</p><h2 id="prompts-title">What a Run tells the agent</h2></div>
+    <p class="lede">Every prompt a Run can send, with its placeholders highlighted: they change for each Run.</p>
+    <div class="job-sheets">
+      <article class="job-sheet" id="prompt-fresh" aria-labelledby="prompt-fresh-title">
+        <h3 id="prompt-fresh-title">Fresh</h3>
+        <p>Starts the implement session when the Run starts a new Issue branch. The same session goes on to review its work and open the pull request.</p>
+        <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
+        <pre class="job-text"><code>/thirdshift:implement <mark class="ph">&lt;Issue URL&gt;</mark>
+The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
+Address the Standards and Spec findings you agree with.
+Push branch <mark class="ph">&lt;branch&gt;</mark> and create a pull request against <mark class="ph">&lt;base&gt;</mark> using /thirdshift:pr, marked ready for review.
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
+      <article class="job-sheet" id="prompt-continuation" aria-labelledby="prompt-continuation-title">
+        <h3 id="prompt-continuation-title">Continuation, with no pull request</h3>
+        <p>Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.</p>
+        <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
+        <pre class="job-text"><code>/thirdshift:implement <mark class="ph">&lt;Issue URL&gt;</mark>
+
+You are continuing work on branch <mark class="ph">&lt;branch&gt;</mark>, which already has commits (see git log <mark class="ph">&lt;base&gt;</mark>..HEAD). Build on them; don't start over.
+
+The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
+
+Address the Standards and Spec findings you agree with.
+
+Push branch <mark class="ph">&lt;branch&gt;</mark>.
+
+Create a pull request against <mark class="ph">&lt;base&gt;</mark> using /thirdshift:pr, marked ready for review.
+
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+
+Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
+      <article class="job-sheet" id="prompt-continuation-pr" aria-labelledby="prompt-continuation-pr-title">
+        <h3 id="prompt-continuation-pr-title">Continuation, with an open pull request</h3>
+        <p>Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.</p>
+        <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
+        <pre class="job-text"><code>/thirdshift:implement <mark class="ph">&lt;Issue URL&gt;</mark>
+
+You are continuing work on branch <mark class="ph">&lt;branch&gt;</mark>, which already has commits (see git log <mark class="ph">&lt;base&gt;</mark>..HEAD). Build on them; don't start over.
+
+The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
+
+Address the Standards and Spec findings you agree with.
+
+Push branch <mark class="ph">&lt;branch&gt;</mark>.
+
+Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using /thirdshift:pr, rewriting its body to cover the whole branch, marked ready for review.
+
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+
+Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
+      <article class="job-sheet" id="prompt-conflict-repair" aria-labelledby="prompt-conflict-repair-title">
+        <h3 id="prompt-conflict-repair-title">Conflict Repair</h3>
+        <p>Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.</p>
+        <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
+        <pre class="job-text"><code>/thirdshift:resolving-merge-conflicts
+
+A merge of origin/<mark class="ph">&lt;base&gt;</mark> into <mark class="ph">&lt;branch&gt;</mark> is in progress in this worktree and has conflicts.
+<mark class="ph">&lt;branch&gt;</mark> implements <mark class="ph">&lt;Issue URL&gt;</mark>; its pull request is <mark class="ph">&lt;pull request URL&gt;</mark>.
+
+Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt;</mark>. Do not rebase or force-push.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
+      <article class="job-sheet" id="prompt-ci-fix-repair" aria-labelledby="prompt-ci-fix-repair-title">
+        <h3 id="prompt-ci-fix-repair-title">CI-fix Repair</h3>
+        <p>Starts a Repair session when CI fails on the pull request's head commit, listing each failed check.</p>
+        <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
+        <pre class="job-text"><code>CI failed on pull request <mark class="ph">&lt;pull request URL&gt;</mark> (branch <mark class="ph">&lt;branch&gt;</mark>, implementing <mark class="ph">&lt;Issue URL&gt;</mark>).
+
+Failed checks:
+- <mark class="ph">&lt;failing check&gt;</mark>: <mark class="ph">&lt;check URL&gt;</mark>
+
+Read the failure logs (e.g. `gh run view &lt;run-id&gt; --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.
+Run the affected checks locally, commit, and push <mark class="ph">&lt;branch&gt;</mark>.
+
+If a failure is not caused by this branch (it is flaky, or also fails on <mark class="ph">&lt;base&gt;</mark>), do not change code for it. Instead, add it to a "CI notes" section of the pull request body with a one-line explanation.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
+      <article class="job-sheet" id="prompt-resume" aria-labelledby="prompt-resume-title">
+        <h3 id="prompt-resume-title">Resume</h3>
+        <p>Continues a session, once, when it ended its turn while waiting on background work, which was killed with it. Any session can get one, and it isn't a Repair.</p>
+        <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a> or <a href="/#unit-4">4 · K · Finish</a></p>
+        <pre class="job-text"><code>Your background work (<mark class="ph">&lt;background work&gt;</mark>) was killed when your turn ended, because ending the turn ends the session.
+
+Re-run whatever you were waiting on in the foreground, then finish your job.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
+    </div>
+  </div>
+</section>
+<section class="sec" aria-labelledby="skills-title">
+  <div class="wrap">
+    <div class="sec-head"><p class="eyebrow">Factory skills</p><h2 id="skills-title">The skills, as the agent reads them</h2></div>
+    <p class="lede">Every Factory skill and supporting file, raw, exactly as the plugin writes it out.</p>
+    <div class="job-sheets">
+      <article class="job-sheet" id="skill-code-review" aria-labelledby="skill-code-review-title">
+        <h3 id="skill-code-review-title">code-review</h3>
+        <p class="sent-by">Used by <a href="/#unit-3">3 · Y · Review</a></p>
+        <h4 id="file-code-review-skill-md"><code>code-review/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: code-review
+description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
+---
+
+Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+
+- **Standards**: does the code conform to this repo's documented coding standards?
+- **Spec**: does the code faithfully implement the originating issue / spec?
+
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+
+The issue tracker should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to `gh issue view`.
+
+## Process
+
+### 1. Pin the fixed point
+
+Whatever the user said is the fixed point (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.).
+
+Capture the diff command once: `git diff &lt;fixed-point&gt;...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log &lt;fixed-point&gt;..HEAD --oneline`.
+
+Before going further, confirm the fixed point resolves (`git rev-parse &lt;fixed-point&gt;`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside two parallel sub-agents.
+
+### 2. Identify the spec source
+
+Look for the originating spec, in this order:
+
+1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.), fetched via the workflow in `docs/agents/issue-tracker.md`.
+2. A path the user passed as an argument.
+3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+4. If nothing is found, the **Spec** sub-agent will skip and report "no spec available".
+
+### 3. Identify the standards sources
+
+Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+
+On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below: a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
+
+- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
+- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation. Like any standard here, skip anything tooling already enforces.
+
+Each smell reads *what it is* → *how to fix*; match it against the diff:
+
+- **Mysterious Name**: a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
+- **Duplicated Code**: the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
+- **Feature Envy**: a method that reaches into another object's data more than its own. → move the method onto the data it envies.
+- **Data Clumps**: the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.
+- **Primitive Obsession**: a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.
+- **Repeated Switches**: the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.
+- **Shotgun Surgery**: one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
+- **Divergent Change**: one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
+- **Speculative Generality**: abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
+- **Message Chains**: long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
+- **Middle Man**: a class or function that mostly just delegates onward. → cut it, call the real target direct.
+- **Refused Bequest**: a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
+
+### 4. Spawn both sub-agents in parallel
+
+**Standards sub-agent prompt** should include:
+
+- The full diff command and commit list.
+- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full (the sub-agent has no other access to it).
+- The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+
+**Spec sub-agent prompt** should include:
+
+- The diff command and commit list.
+- The path or fetched contents of the spec.
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+
+If the spec is missing, skip the Spec sub-agent and note this in the final report.
+
+### 5. Aggregate
+
+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
+
+End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
+
+## Why two axes
+
+A change can pass one axis and fail the other:
+
+- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**
+- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
+
+Reporting them separately stops one axis from masking the other.
+</code></pre>
+        <h4 id="file-code-review-agents-openai-yaml"><code>code-review/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "Code Review"
+  short_description: "Review a diff on standards and spec"
+</code></pre>
+      </article>
+      <article class="job-sheet" id="skill-implement" aria-labelledby="skill-implement-title">
+        <h3 id="skill-implement-title">implement</h3>
+        <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
+        <h4 id="file-implement-skill-md"><code>implement/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: implement
+description: "Implement a piece of work based on a spec or set of tickets."
+disable-model-invocation: false
+---
+
+Implement the work described by the user in the spec or tickets.
+
+Use /thirdshift:tdd where possible, at pre-agreed seams.
+
+Run typechecking regularly, single test files regularly, and the full test suite once at the end.
+
+Once done, use /thirdshift:code-review to review the work.
+
+Commit your work to the current branch.
+</code></pre>
+        <h4 id="file-implement-agents-openai-yaml"><code>implement/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "Implement"
+  short_description: "Build work from a spec or tickets"
+policy:
+  allow_implicit_invocation: true
+</code></pre>
+      </article>
+      <article class="job-sheet" id="skill-pr" aria-labelledby="skill-pr-title">
+        <h3 id="skill-pr-title">pr</h3>
+        <p class="sent-by">Used by <a href="/#unit-3">3 · Y · Review</a></p>
+        <h4 id="file-pr-skill-md"><code>pr/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: pr
+description: "Use when writing a PR body."
+metadata:
+  credits:
+    skill: show-me
+    author: Dex Horthy
+    organisation: Humanlayer
+    url: "https://github.com/humanlayer/skills/blob/main/plugins/show-me/skills/show-me/SKILL.md"
+---
+
+Use this template for writing the PR body:
+
+```markdown
+## Summary
+
+&lt;diagram, diff-sketch, or tree&gt;
+
+## Evidence
+
+- **Before:** &lt;screenshot/output/failing test run&gt;
+  **After:** &lt;screenshot/output/passing test run&gt;
+
+## Merge Danger
+
+**Door:** &lt;one-way or two-way&gt;
+
+&lt;optional: description&gt;
+
+**Blast Radius:** &lt;one-word description&gt;
+
+&lt;optional: potential ramifications of merge&gt;
+```
+
+## Sections
+
+Skip all preambles and keep prose brief. Use the user's domain language from `CONTEXT.md`.
+
+### Summary
+
+Pick the smallest view that makes the key point clear.
+
+- Show logic or an algorithm as pseudocode:
+
+```text
+on(save)
+  if content is unchanged
+    return cached result
+  write new content
+  return fresh result
+```
+
+- Show runtime control flow as a call tree:
+
+```text
+submitForm
+  createSession
+    persistPrompt
+    launchAgent
+  navigateToSession
+```
+
+- Show UI structure as a component tree, including state and module boundaries that matter:
+
+```tsx
+&lt;SessionPage&gt;(apps / example / src / routes / session.tsx);
+useSessionEvents() &lt; SessionToolbar &gt; &lt;RunSkillButton&gt;(packages / ui);
+```
+
+- Show file responsibility or a broad refactor as a shallow file tree:
+
+```text
+src/
+├── commands/       # parses user actions
+├── sessions/       # owns session state
+└── transport/      # sends API requests
+```
+
+- Show component interaction, control flow, or data flow with Mermaid:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI
+    participant Daemon
+    User-&gt;&gt;UI: choose command
+    UI-&gt;&gt;Daemon: send expanded prompt
+    Daemon--&gt;&gt;UI: stream result
+```
+
+- Use `diff` when the point is what changes and the surrounding shape already exists. Match the diff shape to the topic.
+
+For a component change:
+
+```diff
+ &lt;SessionPage&gt;
+   useSessionEvents()
+   &lt;SessionToolbar&gt;
++    &lt;RunSkillButton /&gt;
+   &lt;SessionTimeline&gt;
++    &lt;SkillResultCard /&gt;
+```
+
+For a file-layout change:
+
+```diff
+ src/
+ ├── commands/
++│   └── show-me.ts       # expands the slash command
+ ├── sessions/
+-└── transport.ts
++└── transport/
++    ├── client.ts
++    └── stream.ts
+```
+
+For a call-tree or call-stack change:
+
+```diff
+ submitForm
+   createSession
+     persistPrompt
++    expandSkillMention
+     launchAgent
+-  navigateToSession
++  navigateToSession
++    subscribeToEvents
+```
+
+For a state or control-flow change:
+
+```diff
+ on(save)
+-  write content
++  if content is unchanged
++    return cached result
++  write new content
++  invalidate cache
+```
+
+- Show the whole block when most of it is new, when omitted context would hide ownership or order, or when the user needs a copyable target shape:
+
+```ts
+function expandSkill(command: string): string {
+  const skillName = command.slice(1);
+  return `use the ${skillName} skill`;
+}
+```
+
+#### Guidance
+
+Place each visual next to the short text it supports. Keep only the calls, files, props, states, and boundaries needed to answer the user's current question or the options to resolve the current discussion point.
+
+You may use one of these, you may use several, it is unlikely you will use all of them. Use your judgement and don't overwhelm the user.
+
+### Evidence
+
+Concrete evidence that the change works. Show a before and after.
+
+Screenshots are S-tier - when the environment is set up for it and the change is visual.
+
+Execution-based evidence is A-tier. Test results, console output. Show the exact test that now fails and passes, using pseudocode.
+
+### Merge Danger
+
+Describe whether it's a one-way or two-way door. You can walk back through two-way doors, but not one-way doors. A PR that is cheap to roll back is lower risk. Changes that involve destructive actions or hard-to-reverse decisions are one-way doors.
+
+The blast radius is the potential impact or scope of the changes introduced by this PR. Consider all possibilities. Examples are layout shift, breakages for consumers, mobile responsiveness, etc.
+</code></pre>
+        <h4 id="file-pr-credits-md"><code>pr/CREDITS.md</code></h4>
+        <pre class="job-text"><code># Credits
+
+"The shape of the change" section is [Dex Horthy](https://github.com/dexhorthy)'s [`show-me`](https://github.com/humanlayer/humanlayer) skill, reproduced almost word for word, aimed at a diff instead of a live conversation. `pr` does not depend on `show-me` as a skill (it isn't part of this repo, and a hard dependency would break standalone installs), so the content is copied in rather than pointed at; this file is the attribution a dependency would otherwise have carried.
+</code></pre>
+        <h4 id="file-pr-agents-openai-yaml"><code>pr/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "PR"
+  short_description: "Write a PR body that's fast to review"
+</code></pre>
+      </article>
+      <article class="job-sheet" id="skill-resolving-merge-conflicts" aria-labelledby="skill-resolving-merge-conflicts-title">
+        <h3 id="skill-resolving-merge-conflicts-title">resolving-merge-conflicts</h3>
+        <p class="sent-by">Used by <a href="/#unit-4">4 · K · Finish</a>, in a conflict Repair</p>
+        <h4 id="file-resolving-merge-conflicts-skill-md"><code>resolving-merge-conflicts/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: resolving-merge-conflicts
+description: "Use when you need to resolve an in-progress git merge/rebase conflict."
+---
+
+1. **See the current state** of the merge/rebase. Check git history, and the conflicting files.
+
+2. **Find the primary sources** for each conflict. Understand deeply why each change was made, and what the original intent was. Read the commit messages, check the PRs, check original issues/tickets.
+
+3. **Resolve each hunk.** Preserve both intents where possible. Where incompatible, pick the one matching the merge's stated goal and note the trade-off. Do **not** invent new behaviour. Always resolve; never `--abort`.
+
+4. Discover the project's **automated checks** and run them, typically typecheck, then tests, then format. Fix anything the merge broke.
+
+5. **Finish the merge/rebase.** Stage everything, commit, and push. If rebasing, continue the rebase process until all commits are rebased.</code></pre>
+        <h4 id="file-resolving-merge-conflicts-agents-openai-yaml"><code>resolving-merge-conflicts/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "Resolving Merge Conflicts"
+  short_description: "Resolve merge and rebase conflicts"
+</code></pre>
+      </article>
+      <article class="job-sheet" id="skill-tdd" aria-labelledby="skill-tdd-title">
+        <h3 id="skill-tdd-title">tdd</h3>
+        <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
+        <h4 id="file-tdd-skill-md"><code>tdd/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: tdd
+description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
+---
+
+# Test-Driven Development
+
+TDD is the red → green loop. This skill is the reference that makes that loop produce tests worth keeping: what a good test is, where tests go, the anti-patterns, and the rules of the loop. Every section applies on every cycle: consult them before and during the loop, not after.
+
+When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
+
+## What a good test is
+
+Tests verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't. A good test reads like a specification: "user can checkout with valid cart" tells you exactly what capability exists, and it survives refactors because it doesn't care about internal structure.
+
+See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
+
+## Seams: where tests go
+
+A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals.
+
+**Test only at pre-agreed seams.** Before writing any test, write down the seams under test. No test is written at a seam you haven't written down. Have the seams listed in the PR body only. You can't test everything, so agreeing the seams up front is how testing effort lands on the critical paths and complex logic instead of every edge case.
+
+Decide: "What's the public interface, and which seams should we test?"
+
+When the shape of that interface is itself in question (how deep the module is, where the seam belongs, what the interface should expose), call the Skill tool with "codebase-design" for the vocabulary. It is the shared source of the module, interface, depth, seam, adapter, leverage and locality terms, and it is a reference to consult, not a session to run.
+
+## Anti-patterns
+
+- **Implementation-coupled**: mocks internal collaborators, tests private methods, or verifies through a side channel (querying the database instead of using the interface). The tell: the test breaks when you refactor but behavior hasn't changed.
+- **Tautological**: the assertion recomputes the expected value the way the code does (`expect(add(a, b)).toBe(a + b)`, a snapshot derived by hand the same way, a constant asserted equal to itself), so it passes by construction and can never disagree with the code. Expected values must come from an independent source of truth: a known-good literal, a worked example, the spec.
+- **Horizontal slicing**: writing all tests first, then all implementation. Bulk tests verify _imagined_ behavior: you test the _shape_ of things rather than user-facing behavior, the tests go insensitive to real changes, and you commit to test structure before understanding the implementation. Work in **vertical slices** instead: one test → one implementation → repeat, each test a **tracer bullet** that responds to what the last cycle taught you.
+
+## Rules of the loop
+
+- **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
+- **One slice at a time.** One seam, one test, one minimal implementation per cycle.
+- **Refactoring is not part of the loop.** It belongs to the review stage (see the `code-review` skill), not the red → green implementation cycle.
+</code></pre>
+        <h4 id="file-tdd-agents-openai-yaml"><code>tdd/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "TDD"
+  short_description: "Test-driven red-green-refactor"
+</code></pre>
+        <h4 id="file-tdd-mocking-md"><code>tdd/mocking.md</code></h4>
+        <pre class="job-text"><code># When to Mock
+
+Mock at **system boundaries** only:
+
+- External APIs (payment, email, etc.)
+- Databases (sometimes - prefer test DB)
+- Time/randomness
+- File system (sometimes)
+
+Don't mock:
+
+- Your own classes/modules
+- Internal collaborators
+- Anything you control
+
+## Designing for Mockability
+
+At system boundaries, design interfaces that are easy to mock:
+
+**1. Use dependency injection**
+
+Pass external dependencies in rather than creating them internally:
+
+```typescript
+// Easy to mock
+function processPayment(order, paymentClient) {
+  return paymentClient.charge(order.total);
+}
+
+// Hard to mock
+function processPayment(order) {
+  const client = new StripeClient(process.env.STRIPE_KEY);
+  return client.charge(order.total);
+}
+```
+
+**2. Prefer SDK-style interfaces over generic fetchers**
+
+Create specific functions for each external operation instead of one generic function with conditional logic:
+
+```typescript
+// GOOD: Each function is independently mockable
+const api = {
+  getUser: (id) =&gt; fetch(`/users/${id}`),
+  getOrders: (userId) =&gt; fetch(`/users/${userId}/orders`),
+  createOrder: (data) =&gt; fetch('/orders', { method: 'POST', body: data }),
+};
+
+// BAD: Mocking requires conditional logic inside the mock
+const api = {
+  fetch: (endpoint, options) =&gt; fetch(endpoint, options),
+};
+```
+
+The SDK approach means:
+- Each mock returns one specific shape
+- No conditional logic in test setup
+- Easier to see which endpoints a test exercises
+- Type safety per endpoint
+</code></pre>
+        <h4 id="file-tdd-tests-md"><code>tdd/tests.md</code></h4>
+        <pre class="job-text"><code># Good and Bad Tests
+
+## Good Tests
+
+**Integration-style**: Test through real interfaces, not mocks of internal parts.
+
+```typescript
+// GOOD: Tests observable behavior
+test("user can checkout with valid cart", async () =&gt; {
+  const cart = createCart();
+  cart.add(product);
+  const result = await checkout(cart, paymentMethod);
+  expect(result.status).toBe("confirmed");
+});
+```
+
+Characteristics:
+
+- Tests behavior users/callers care about
+- Uses public API only
+- Survives internal refactors
+- Describes WHAT, not HOW
+- One logical assertion per test
+
+## Bad Tests
+
+**Implementation-detail tests**: Coupled to internal structure.
+
+```typescript
+// BAD: Tests implementation details
+test("checkout calls paymentService.process", async () =&gt; {
+  const mockPayment = jest.mock(paymentService);
+  await checkout(cart, payment);
+  expect(mockPayment.process).toHaveBeenCalledWith(cart.total);
+});
+```
+
+Red flags:
+
+- Mocking internal collaborators
+- Testing private methods
+- Asserting on call counts/order
+- Test breaks when refactoring without behavior change
+- Test name describes HOW not WHAT
+- Verifying through external means instead of interface
+
+```typescript
+// BAD: Bypasses interface to verify
+test("createUser saves to database", async () =&gt; {
+  await createUser({ name: "Alice" });
+  const row = await db.query("SELECT * FROM users WHERE name = ?", ["Alice"]);
+  expect(row).toBeDefined();
+});
+
+// GOOD: Verifies through interface
+test("createUser makes user retrievable", async () =&gt; {
+  const user = await createUser({ name: "Alice" });
+  const retrieved = await getUser(user.id);
+  expect(retrieved.name).toBe("Alice");
+});
+```
+
+**Tautological tests**: Expected value restates the implementation, so the test passes by construction.
+
+```typescript
+// BAD: Expected value is recomputed the way the code computes it
+test("calculateTotal sums line items", () =&gt; {
+  const items = [{ price: 10 }, { price: 5 }];
+  const expected = items.reduce((sum, i) =&gt; sum + i.price, 0);
+  expect(calculateTotal(items)).toBe(expected);
+});
+
+// GOOD: Expected value is an independent, known literal
+test("calculateTotal sums line items", () =&gt; {
+  expect(calculateTotal([{ price: 10 }, { price: 5 }])).toBe(15);
+});
+```
+</code></pre>
+      </article>
+    </div>
+  </div>
+</section>
+<section class="sec" aria-labelledby="licence-title">
+  <div class="wrap">
+    <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
+    <p class="lede">The Factory skills are adapted from Matt Pocock's skills, under this licence. The <a href="#skill-pr">pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-pr-credits-md">CREDITS.md</a>.</p>
+    <h4 id="file-license"><code>LICENSE</code></h4>
+    <pre class="job-text"><code>MIT License
+
+Copyright (c) 2026 Matt Pocock
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</code></pre>
+  </div>
+</section>
+<!-- End of the generated fragment -->
+</main>
+
+<footer class="wrap foot">
+  <a href="https://github.com/JacobStephens2/thirdshift">GitHub</a>
+  <a href="https://github.com/JacobStephens2/thirdshift/releases">Releases</a>
+  <a href="https://github.com/JacobStephens2/thirdshift/blob/main/LICENSE">MIT License</a>
+  <span>Factory skills adapted from <a href="https://github.com/mattpocock/skills">Matt Pocock's skills</a></span>
+</footer>
+
+</body>
+</html>
