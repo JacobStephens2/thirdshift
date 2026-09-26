@@ -167,7 +167,7 @@
         <article class="unit-col ink-m" aria-labelledby="unit-2">
           <h3 id="unit-2"><span class="tag" aria-hidden="true"></span>2 · M · Implement</h3>
           <p>A headless Claude Code session, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits.</p>
-          <ul class="factory-skills" aria-label="Factory skills"><li>implement</li><li>tdd</li></ul>
+          <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-implement">implement</a></li><li><a href="/prompts/#skill-tdd">tdd</a></li></ul>
           <ol class="stderr-lines" aria-label="stderr lines from unit 2">
             <li><span class="prefix">thirdshift:</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-24-20260925T134143Z-implement.jsonl</li>
             <li><span class="prefix">thirdshift:</span> implement: session started</li>
@@ -187,7 +187,7 @@
         <article class="unit-col ink-y" aria-labelledby="unit-3">
           <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>3 · Y · Review</h3>
           <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Then it opens the pull request, ready for review.</p>
-          <ul class="factory-skills" aria-label="Factory skills"><li>code-review</li><li>pr</li></ul>
+          <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-code-review">code-review</a></li><li><a href="/prompts/#skill-pr">pr</a></li></ul>
           <ol class="stderr-lines" aria-label="stderr lines from unit 3">
             <li><span class="prefix">thirdshift:</span> implement: skill thirdshift:code-review</li>
             <li><span class="prefix">thirdshift:</span> implement: $ git rev-parse main &amp;&amp; git log main..HEAD --oneline &amp;&amp; git diff main...HEAD --stat; ls .agents/skills…</li>
@@ -212,7 +212,7 @@
         <article class="unit-col ink-k" aria-labelledby="unit-4">
           <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>4 · K · Finish</h3>
           <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 3. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. This Run needed no Repair.</p>
-          <ul class="factory-skills" aria-label="Factory skills"><li>resolving-merge-conflicts <span>in a Repair</span></li></ul>
+          <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-resolving-merge-conflicts">resolving-merge-conflicts</a> <span>in a Repair</span></li></ul>
           <ol class="stderr-lines" aria-label="stderr lines from unit 4">
             <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
             <li><span class="prefix">thirdshift:</span> checking the PR</li>

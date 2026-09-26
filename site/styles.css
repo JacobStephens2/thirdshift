@@ -152,6 +152,8 @@ body::after { /* scanlines */
 .factory-skills { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .factory-skills li { font: 700 12px/1 var(--f-mono); padding: 6px 8px; background: var(--k3); border: 1px solid var(--rule); }
 .factory-skills li span { font-weight: 400; color: var(--dim); }
+.factory-skills a { color: var(--paper); }
+.factory-skills a:hover { color: var(--nc); }
 .stderr-lines { list-style: none; margin: 0; padding: 10px 12px; font: 12px/1.6 var(--f-mono); background: #000; border: 1px solid var(--rule); }
 .stderr-lines li { white-space: pre-wrap; overflow-wrap: anywhere; }
 .stderr-lines .prefix { color: var(--dim); }
@@ -252,6 +254,20 @@ body::after { /* scanlines */
 .colophon blockquote { margin: 0; font: italic 400 clamp(19px, 2.2vw, 24px)/1.55 var(--f-colo); max-width: 58ch; display: grid; gap: 18px; }
 .colophon blockquote p { margin: 0; }
 .colophon cite { font-size: .8em; color: var(--dim); }
+
+/* ---------- Prompts and skills: job sheets ---------- */
+.page-head .home { display: block; color: inherit; }
+.paper-sheet .as-of { margin: 0; font-size: 14px; color: #444; max-width: 90ch; }
+.job-sheets { display: grid; gap: 28px; }
+.job-sheet { display: grid; gap: 10px; align-content: start; border-top: 4px solid var(--c); padding-top: 12px; min-width: 0; }
+.job-sheet h3 { font-size: 30px; }
+.job-sheet h4 { margin: 10px 0 0; font: 700 13px/1.3 var(--f-mono); color: var(--dim); }
+.job-sheet p { margin: 0; max-width: 90ch; }
+.sent-by { font-size: 13px; color: var(--dim); }
+.job-text { margin: 0; padding: 14px 16px; background: #000; border: 1px solid var(--rule); font-size: 13px; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+.job-text .ph { background: color-mix(in srgb, var(--y) 22%, transparent); color: var(--ny); padding-inline: 2px; }
+.lede + .job-text, .job-text + .lede { margin-top: 14px; }
 
 /* ---------- Footer ---------- */
 .foot { border-top: 1px solid var(--rule); padding-block: 28px; display: flex; flex-wrap: wrap; gap: 10px 26px; font-size: 13px; color: var(--dim); }

@@ -174,6 +174,8 @@ sudo install -m 755 target/release/thirdshift /usr/local/bin/thirdshift
 
 Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md)).
 
+The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` arguments and the skills, and `cargo test` fails until it is regenerated after a change to any of them. Regenerate it with `UPDATE_PROMPTS_PAGE=1 cargo test prompts_page`.
+
 Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the integration tests swap in fake `gh` and `claude`, which are Python scripts in `tests/fakes/`.
 
 ## Releasing

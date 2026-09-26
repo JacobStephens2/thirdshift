@@ -8,7 +8,9 @@ use anyhow::{Context, Result};
 use include_dir::{Dir, include_dir};
 use tempfile::TempDir;
 
-static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
+/// The Factory skills, as the plugin writes them out and the Prompts and skills
+/// page shows them.
+pub static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
 /// A temp directory holding the Factory skills and a generated plugin
 /// manifest, removed when dropped.
