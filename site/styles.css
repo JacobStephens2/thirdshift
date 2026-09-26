@@ -164,6 +164,51 @@ body::after { /* scanlines */
 .misprint .illustrative b { color: var(--m-text); text-transform: uppercase; letter-spacing: .1em; font-size: 12px; }
 .press .lede { max-width: 72ch; }
 
+/* The stepped version (main.js adds .is-stepped). The stage sticks while the track scrolls past it; the four step
+   markers split the track between the viewport-centre positions where the stage is stuck, so each step gets an equal
+   share of the scroll. No snapping, no scroll-linked animation: only short transitions between steps. */
+.press.is-stepped .press-track { position: relative; height: 380vh; }
+.press.is-stepped .press-steps { position: absolute; inset: 50vh 0; display: grid; grid-template-rows: repeat(4, 1fr); pointer-events: none; }
+.press.is-stepped .press-stage {
+  position: sticky; top: 0; min-height: 100svh; padding-block: 16px;
+  display: grid; align-content: center; gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  grid-template-areas: "frame frame" "controls controls" "unit term";
+}
+.press.is-stepped .press-frame { grid-area: frame; }
+.press.is-stepped .press-svg { max-height: 52svh; }
+.press.is-stepped .press-controls { grid-area: controls; }
+.press.is-stepped .press-cols { grid-area: unit; display: block; margin: 0; }
+.press.is-stepped .press-term { grid-area: term; }
+@media (max-width: 760px) {
+  .press.is-stepped .press-stage { grid-template-columns: minmax(0, 1fr); grid-template-areas: "frame" "controls" "unit" "term"; gap: 10px; }
+  .press.is-stepped .unit-col h3 { font-size: 22px; }
+  .press.is-stepped .unit-col p { font-size: 12.5px; line-height: 1.5; }
+}
+/* The lit unit: the others dim, and only its column shows. Its lines play in the terminal instead. */
+.press-svg .unit[data-unit="1"] { --glow: var(--nc); } .press-svg .unit[data-unit="2"] { --glow: var(--nm); }
+.press-svg .unit[data-unit="3"] { --glow: var(--ny); } .press-svg .unit[data-unit="4"] { --glow: var(--paper); }
+.press.is-stepped .press-svg .unit, .press.is-stepped .press-svg .delivery { opacity: .3; transition: opacity .25s ease-out, filter .25s ease-out; }
+.press.is-stepped .press-svg .unit.lit { opacity: 1; filter: drop-shadow(0 0 12px color-mix(in srgb, var(--glow) 55%, transparent)); }
+.press.is-stepped .press-svg .delivery.lit { opacity: 1; }
+.press.is-stepped .unit-col:not(.lit), .press.is-stepped .unit-col .stderr-lines { display: none; }
+.press.is-stepped .unit-col.lit { animation: step-in .25s ease-out; }
+@keyframes step-in { from { opacity: 0; } }
+.press-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.press-controls button, .press-term .pause { font: 700 12px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+  background: transparent; color: var(--paper); border: 1px solid var(--dim); padding: 9px 12px; min-height: 36px; }
+.press-controls button[aria-current="step"] { background: var(--paper); color: #000; border-color: var(--paper); }
+.press-term { display: grid; align-content: start; border: 1px solid var(--rule); background: #000; }
+.press-term .term-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--rule); font-size: 12px; color: var(--dim); }
+.press-term .stderr-lines { border: 0; height: clamp(130px, 26svh, 260px); overflow-y: auto; }
+.press-term .old { opacity: .45; }
+/* A block cursor after the newest line; it stops blinking when the replay is paused. */
+.press-term li:last-child::after { content: ""; display: inline-block; width: .6em; height: 1.1em; margin-left: .3em; vertical-align: -.2em;
+  background: var(--paper); animation: blink 1s steps(1) infinite; }
+.press.is-paused .press-term li:last-child::after { animation: none; }
+@keyframes blink { 50% { opacity: 0; } }
+
 /* ---------- Day shift / third shift ---------- */
 .shifts { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--rule); border: 1px solid var(--rule); }
 @media (max-width: 760px) { .shifts { grid-template-columns: 1fr; } }
