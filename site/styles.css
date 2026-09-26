@@ -129,7 +129,7 @@ body::after { /* scanlines */
 .grows-text { display: grid; gap: 16px; }
 .grows-text h2 { font-size: clamp(36px, 5vw, 64px); }
 .grows-text p { margin: 0; max-width: 52ch; }
-.grows .closing { font: var(--f-head-w) clamp(26px, 3vw, 36px)/1.05 var(--f-head); color: var(--paper); margin-top: 8px; text-wrap: balance; }
+.grows .closing { grid-column: 1 / -1; font: var(--f-head-w) clamp(26px, 3vw, 36px)/1.05 var(--f-head); color: var(--paper); margin: 8px 0 0; text-wrap: balance; }
 .floor { margin: 0; border: 1px solid var(--rule); padding: 12px; background-color: #06080b; }
 .floor svg { display: block; width: 100%; height: auto; max-width: 640px; margin-inline: auto; }
 .floor text { font-family: var(--f-mono); font-weight: 700; fill: var(--paper); }
@@ -137,23 +137,24 @@ body::after { /* scanlines */
 .floor .hall text { font-size: 13px; letter-spacing: .14em; fill: var(--dim); }
 .floor .hall .north { text-anchor: end; }
 .floor .frame { fill: transparent; stroke: none; }
-.floor .line-t { font-size: 17px; letter-spacing: .06em; }
+.floor .line-label { font-size: 17px; letter-spacing: .06em; }
 .floor .status { font-size: 14px; letter-spacing: .06em; fill: var(--y); }
 .floor .ghost .status { fill: var(--m-text); }
 .floor .hint { font-size: 15px; font-weight: 400; fill: var(--dim); }
 .floor .chest { fill: #111; stroke: var(--dim); stroke-width: 2; }
-.floor .chest-t { font-size: 13px; text-anchor: middle; fill: var(--paper); }
+.floor .chest-label { font-size: 13px; text-anchor: middle; fill: var(--paper); }
 .floor .belt { fill: url(#floor-belt); stroke: #333; stroke-width: 1; }
+.floor .belt-base { fill: #15130a; }
 .floor .belt-slat { fill: color-mix(in srgb, var(--y) 35%, transparent); }
 .floor .unit { fill: #0e0e0e; stroke: #3a3a3a; stroke-width: 2; }
 .floor .hopper.c { fill: var(--c); } .floor .hopper.m { fill: var(--m); } .floor .hopper.y { fill: var(--y); }
 .floor .hopper.k { fill: none; stroke: var(--paper); stroke-width: 2; }
-.floor .ink-t { font: var(--f-head-w) 24px/1 var(--f-head); text-anchor: middle; fill: #000; }
-.floor .ink-t.k { fill: var(--paper); }
+.floor .ink-letter { font: var(--f-head-w) 24px/1 var(--f-head); text-anchor: middle; fill: #000; }
+.floor .ink-letter.k { fill: var(--paper); }
 /* Not yet installed: floor tape where a machine will stand, and no ink. */
 .floor .ghost .chest, .floor .ghost .belt, .floor .footprint { fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-dasharray: 5 4; }
 .floor .ghost g { opacity: .55; }
-.floor .ghost .chest-t { fill: var(--dim); }
+.floor .ghost .chest-label { fill: var(--dim); }
 /* The hint is the hover and focus label. Only a mouse hides it until hover, so touch screens always show it. */
 .floor a { outline: none; }
 @media (hover: hover) and (pointer: fine) {

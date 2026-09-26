@@ -50,22 +50,22 @@
   </div>
 </header>
 
-<!-- Section 5 of the home page order in #61: the factory grows. -->
+<!-- The factory grows: "How the factory will grow" in the home page order in #61. -->
 <section class="wrap grows" id="grows" aria-labelledby="grows-title">
   <div class="grows-text">
     <p class="eyebrow">Plan view · the press hall</p>
     <h2 id="grows-title">The factory grows</h2>
     <p>One Run is the first primitive the factory is built from: one Issue URL in, one pull request ready for review out. It is the only line on the floor today.</p>
     <p>The rest of the floor is marked out, not built. Each outlined line is a machine that is not yet installed, linked to the issue that tracks it.</p>
-    <p class="closing misreg">Engineer the factory while the factory engineers the software.</p>
   </div>
   <figure class="floor grid-bg">
-    <!-- Drawn once, by hand: no animation. Every label is visible text; the hints also show on hover and focus. -->
+    <!-- Drawn once, by hand: no animation. Every label is visible text; the hints also show on hover and focus.
+         Lines sit on a 150-unit pitch (146 frame + 4 gap) from y=60; a new line means a new translate and a taller viewBox and hall. -->
     <svg viewBox="0 0 480 680" role="group" aria-labelledby="floor-title" aria-describedby="floor-desc">
       <title id="floor-title">Floor plan of the press hall</title>
       <desc id="floor-desc">One press line is installed: a Run, from the issue through units C, M, Y and K to a pull request. Three more lines are outlined and not yet installed: self-merge, the architecture pass and implementing a whole spec.</desc>
       <defs>
-        <pattern id="floor-belt" width="8" height="12" patternUnits="userSpaceOnUse"><rect width="8" height="12" fill="#15130a"/><rect class="belt-slat" x="5" width="2" height="12"/></pattern>
+        <pattern id="floor-belt" width="8" height="12" patternUnits="userSpaceOnUse"><rect class="belt-base" width="8" height="12"/><rect class="belt-slat" x="5" width="2" height="12"/></pattern>
       </defs>
       <g class="hall" aria-hidden="true">
         <rect x="10" y="10" width="460" height="660"/>
@@ -75,73 +75,74 @@
       <g transform="translate(0 60)">
         <a href="https://github.com/JacobStephens2/thirdshift#what-a-run-does" class="line">
           <rect class="frame" x="20" y="0" width="440" height="146"/>
-          <text class="line-t" x="31" y="24">LINE 1 · ONE RUN</text>
+          <text class="line-label" x="31" y="24">LINE 1 · ONE RUN</text>
           <text class="status" x="31" y="47">INSTALLED</text>
           <text class="hint" x="31" y="70">An Issue URL in, a pull request out.</text>
           <g aria-hidden="true">
             <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
-            <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-t" x="65" y="113">issue</text>
-            <rect class="unit" x="113" y="80" width="56" height="56"/><rect class="hopper c" x="125" y="92" width="32" height="32"/><text class="ink-t c" x="141" y="117">C</text>
-            <rect class="unit" x="179" y="80" width="56" height="56"/><rect class="hopper m" x="191" y="92" width="32" height="32"/><text class="ink-t m" x="207" y="117">M</text>
-            <rect class="unit" x="245" y="80" width="56" height="56"/><rect class="hopper y" x="257" y="92" width="32" height="32"/><text class="ink-t y" x="273" y="117">Y</text>
-            <rect class="unit" x="311" y="80" width="56" height="56"/><rect class="hopper k" x="323" y="92" width="32" height="32"/><text class="ink-t k" x="339" y="117">K</text>
-            <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-t" x="415" y="113">PR</text>
+            <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-label" x="65" y="113">issue</text>
+            <rect class="unit" x="113" y="80" width="56" height="56"/><rect class="hopper c" x="125" y="92" width="32" height="32"/><text class="ink-letter" x="141" y="117">C</text>
+            <rect class="unit" x="179" y="80" width="56" height="56"/><rect class="hopper m" x="191" y="92" width="32" height="32"/><text class="ink-letter" x="207" y="117">M</text>
+            <rect class="unit" x="245" y="80" width="56" height="56"/><rect class="hopper y" x="257" y="92" width="32" height="32"/><text class="ink-letter" x="273" y="117">Y</text>
+            <rect class="unit" x="311" y="80" width="56" height="56"/><rect class="hopper k" x="323" y="92" width="32" height="32"/><text class="ink-letter k" x="339" y="117">K</text>
+            <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-label" x="415" y="113">PR</text>
           </g>
         </a>
       </g>
       <g transform="translate(0 210)">
         <a href="https://github.com/JacobStephens2/thirdshift/issues/26" class="line ghost">
           <rect class="frame" x="20" y="0" width="440" height="146"/>
-          <text class="line-t" x="31" y="24">LINE 2 · SELF-MERGE</text>
+          <text class="line-label" x="31" y="24">LINE 2 · SELF-MERGE</text>
           <text class="status" x="31" y="47">NOT YET INSTALLED · #26</text>
           <text class="hint" x="31" y="70">Would merge its own pull request.</text>
           <g aria-hidden="true">
             <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
-            <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-t" x="65" y="113">issue</text>
+            <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-label" x="65" y="113">issue</text>
             <rect class="footprint" x="113" y="80" width="56" height="56"/><path class="footprint" d="M113 80l56 56M169 80l-56 56"/>
             <rect class="footprint" x="179" y="80" width="56" height="56"/><path class="footprint" d="M179 80l56 56M235 80l-56 56"/>
             <rect class="footprint" x="245" y="80" width="56" height="56"/><path class="footprint" d="M245 80l56 56M301 80l-56 56"/>
             <rect class="footprint" x="311" y="80" width="56" height="56"/><path class="footprint" d="M311 80l56 56M367 80l-56 56"/>
-            <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-t" x="415" y="113">merged</text>
+            <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-label" x="415" y="113">merged</text>
           </g>
         </a>
       </g>
       <g transform="translate(0 360)">
         <a href="https://github.com/JacobStephens2/thirdshift/issues/27" class="line ghost">
           <rect class="frame" x="20" y="0" width="440" height="146"/>
-          <text class="line-t" x="31" y="24">LINE 3 · ARCHITECTURE</text>
+          <text class="line-label" x="31" y="24">LINE 3 · ARCHITECTURE</text>
           <text class="status" x="31" y="47">NOT YET INSTALLED · #27</text>
           <text class="hint" x="31" y="70">Would run /improve-codebase-architecture.</text>
           <g aria-hidden="true">
             <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
-            <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-t" x="65" y="113">codebase</text>
+            <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-label" x="65" y="113">codebase</text>
             <rect class="footprint" x="113" y="80" width="56" height="56"/><path class="footprint" d="M113 80l56 56M169 80l-56 56"/>
             <rect class="footprint" x="179" y="80" width="56" height="56"/><path class="footprint" d="M179 80l56 56M235 80l-56 56"/>
             <rect class="footprint" x="245" y="80" width="56" height="56"/><path class="footprint" d="M245 80l56 56M301 80l-56 56"/>
             <rect class="footprint" x="311" y="80" width="56" height="56"/><path class="footprint" d="M311 80l56 56M367 80l-56 56"/>
-            <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-t" x="415" y="113">PRs</text>
+            <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-label" x="415" y="113">PRs</text>
           </g>
         </a>
       </g>
       <g transform="translate(0 510)">
         <a href="https://github.com/JacobStephens2/thirdshift/issues/28" class="line ghost">
           <rect class="frame" x="20" y="0" width="440" height="146"/>
-          <text class="line-t" x="31" y="24">LINE 4 · WHOLE SPEC</text>
+          <text class="line-label" x="31" y="24">LINE 4 · WHOLE SPEC</text>
           <text class="status" x="31" y="47">NOT YET INSTALLED · #28</text>
           <text class="hint" x="31" y="70">Would implement every issue in a spec.</text>
           <g aria-hidden="true">
             <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
-            <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-t" x="65" y="113">spec</text>
+            <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-label" x="65" y="113">spec</text>
             <rect class="footprint" x="113" y="80" width="56" height="56"/><path class="footprint" d="M113 80l56 56M169 80l-56 56"/>
             <rect class="footprint" x="179" y="80" width="56" height="56"/><path class="footprint" d="M179 80l56 56M235 80l-56 56"/>
             <rect class="footprint" x="245" y="80" width="56" height="56"/><path class="footprint" d="M245 80l56 56M301 80l-56 56"/>
             <rect class="footprint" x="311" y="80" width="56" height="56"/><path class="footprint" d="M311 80l56 56M367 80l-56 56"/>
-            <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-t" x="415" y="113">PRs</text>
+            <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-label" x="415" y="113">PRs</text>
           </g>
         </a>
       </g>
     </svg>
   </figure>
+  <p class="closing misreg">Engineer the factory while the factory engineers the software.</p>
 </section>
 
 <footer class="wrap foot">
