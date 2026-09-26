@@ -75,7 +75,7 @@
       <div class="offpress">
         <div style="--ink:var(--c)"><h3>Ready for review</h3><p>An open pull request from the Issue branch to the Base branch. It is mergeable, its CI passes, and it has been reviewed against your repository's documented coding standards and against the issue. Otherwise thirdshift doesn't call it ready.</p></div>
         <div style="--ink:var(--y)"><h3>Unaddressed findings</h3><p>Every Standards finding and Spec finding the agent chose not to fix is listed as an Unaddressed finding in the pull request body, so you decide on it.</p></div>
-        <div style="--ink:var(--m)"><h3>Failed runs keep their work</h3><p>A Failed run still pushes its work, so nothing is lost, and its pull request goes back to draft. Run the same command again to continue it.</p></div>
+        <div style="--ink:var(--m)"><h3>Failed runs keep their work</h3><p>A Failed run still pushes its work, so nothing is lost (if the push fails, it keeps the worktree instead), and its pull request goes back to draft. Run the same command again to continue it.</p></div>
       </div>
     </div>
   </section>
@@ -87,16 +87,16 @@
     <div class="wrap">
       <div class="sec-head"><p class="eyebrow">Proof sheets</p><h2 id="proofs-title">Pulled from the press</h2><p class="lede">Real pull requests thirdshift made on its own repository. Judge the work yourself.</p></div>
       <ul class="proofs">
-        <li class="proof" style="--ink:var(--c)"><p class="slug">Pull request #25 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/24">issue #24</a></p>
+        <li class="proof-card" style="--ink:var(--c)"><p class="slug">Pull request #25 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/24">issue #24</a></p>
           <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/25">Treat SIGHUP like SIGINT and SIGTERM</a></h3>
           <p>A small fix with a real test: closing the terminal now stops the session and fails the Run cleanly, and it is the Run the press line replays.</p></li>
-        <li class="proof" style="--ink:var(--m)"><p class="slug">Pull request #21 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/7">issue #7</a></p>
+        <li class="proof-card" style="--ink:var(--m)"><p class="slug">Pull request #21 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/7">issue #7</a></p>
           <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/21">Numbered Issue branches after a merged or closed PR</a></h3>
           <p>A careful change to branch selection, where the agent flags a new error the issue didn't ask for, so a human can decide on it.</p></li>
-        <li class="proof" style="--ink:var(--y)"><p class="slug">Pull request #22 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/9">issue #9</a></p>
+        <li class="proof-card" style="--ink:var(--y)"><p class="slug">Pull request #22 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/9">issue #9</a></p>
           <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/22">CI watching, CI-fix Repair and the Repair cap</a></h3>
           <p>The factory building its own quality gate: the loop that watches CI and starts a Repair when checks fail.</p></li>
-        <li class="proof" style="--ink:#111"><p class="slug">Pull request #16 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/4">issue #4</a></p>
+        <li class="proof-card" style="--ink:var(--k)"><p class="slug">Pull request #16 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/4">issue #4</a></p>
           <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/16">Pre-flight checks</a></h3>
           <p>Every check that runs before a Run creates anything, each with a clear message, including the Origin match.</p></li>
       </ul>
@@ -122,7 +122,7 @@
             <li><b>macOS</b> Tahoe 26.5.2 and later, Apple Silicon.</li>
           </ul></div>
       </div>
-      <p class="more">Details in the <a href="https://github.com/JacobStephens2/thirdshift#supported-platforms">README</a>.</p>
+      <p class="reqs-note">Details in the <a href="https://github.com/JacobStephens2/thirdshift#supported-platforms">README</a>.</p>
     </div>
   </section>
 
