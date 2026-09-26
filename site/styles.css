@@ -168,8 +168,9 @@ body::after { /* scanlines */
 
 /* The stepped version (main.js adds .is-stepped). The stage sticks while the track scrolls past it; the four step
    markers split the track between the viewport-centre positions where the stage is stuck, so each step gets an equal
-   share of the scroll. No snapping, no scroll-linked animation: only short transitions between steps. */
-.press.is-stepped .press-track { position: relative; height: 380vh; }
+   share of the scroll: (440vh - 100vh) / 4 = 85vh a step. No snapping, no scroll-linked animation: only short
+   transitions between steps. */
+.press.is-stepped .press-track { position: relative; height: 440vh; }
 .press.is-stepped .press-steps { position: absolute; inset: 50vh 0; display: grid; grid-template-rows: repeat(4, 1fr); pointer-events: none; }
 .press.is-stepped .press-stage {
   position: sticky; top: 0; min-height: 100svh; padding-block: 16px;
