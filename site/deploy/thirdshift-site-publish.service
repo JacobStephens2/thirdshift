@@ -1,0 +1,18 @@
+[Unit]
+Description=Publish thirdshift.app from the main branch
+Documentation=https://github.com/JacobStephens2/thirdshift/tree/main/site/deploy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=thirdshift-site
+Group=thirdshift-site
+Environment=HOME=/var/lib/thirdshift-site
+ExecStart=/bin/sh /var/lib/thirdshift-site/checkout/site/deploy/publish.sh /var/lib/thirdshift-site/checkout /srv/thirdshift.app
+UMask=0022
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/thirdshift-site /srv/thirdshift.app

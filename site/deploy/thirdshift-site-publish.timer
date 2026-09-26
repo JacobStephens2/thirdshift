@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish thirdshift.app every five minutes
+Documentation=https://github.com/JacobStephens2/thirdshift/tree/main/site/deploy
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,18 @@
+# thirdshift.app, served from the copy of site/ that publish.sh swaps in.
+# Caddy gets and renews the TLS certificates itself.
+
+thirdshift.app {
+	# The short install command always gets the latest release's installer.
+	# A 302, not a 301, so clients never cache one release's address.
+	redir /install.sh https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh 302
+
+	# publish.sh never copies the deploy directory; this is a second guard.
+	respond /deploy/* 404
+
+	root * /srv/thirdshift.app/current
+	file_server
+}
+
+www.thirdshift.app {
+	redir https://thirdshift.app{uri} permanent
+}

@@ -1,6 +1,6 @@
 //! The crates.io package: it carries the sources and the Factory skills the
-//! binary embeds, and none of the repository's own agent tooling, docs or
-//! tests.
+//! binary embeds, and none of the repository's own agent tooling, docs, site
+//! or tests.
 
 use std::process::Command;
 
@@ -26,7 +26,7 @@ fn package_list() -> Vec<String> {
 #[test]
 fn package_leaves_out_the_repository_tooling() {
     for path in package_list() {
-        for excluded in [".agents/", ".grok/", ".claude/", "docs/", "tests/"] {
+        for excluded in [".agents/", ".grok/", ".claude/", "docs/", "site/", "tests/"] {
             assert!(!path.starts_with(excluded), "{path} is in the package");
         }
     }
