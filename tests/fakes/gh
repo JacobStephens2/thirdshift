@@ -11,6 +11,11 @@ State lives in the JSON file named by $FAKE_GH_STATE:
      "statuses": {"<sha>": [{"context", "state", "url"}]},
      "on_ci_read"?: {"times", "script", "seen"}}
 
+`gh pr merge` makes a real merge commit of the PR's head into its base in the
+bare origin repo beside $FAKE_GH_STATE (`origin.git`), whose HEAD names the
+default branch. It closes the issues the PR body closes (`Closes #<n>` and the
+like) only when the base is the default branch, as GitHub does.
+
 A PR's mergeable state reports as UNKNOWN for its first `unknown_polls` reads.
 A check run reports as in progress for its first `pending_polls` reads, then as
 completed with its `conclusion`.
@@ -36,6 +41,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 
 def load():
@@ -48,7 +54,7 @@ def save(state):
         json.dump(state, f, indent=2)
 
 
-BOOLEAN_FLAGS = {"draft", "undo", "paginate"}
+BOOLEAN_FLAGS = {"draft", "undo", "paginate", "merge"}
 
 
 def parse(args):
@@ -170,6 +176,57 @@ def pr_ready(state, positional, flags):
     save(state)
 
 
+def scenario_root():
+    return os.path.dirname(os.environ["FAKE_GH_STATE"])
+
+
+def origin(*args):
+    """Run git in the bare origin repo and return its stdout."""
+    repo = os.path.join(scenario_root(), "origin.git")
+    return subprocess.run(
+        ["git", "-C", repo, *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+CLOSING_KEYWORD = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?) #(\d+)", re.I)
+
+
+def pr_merge(state, positional, flags):
+    """Only a merge commit on a matching head is supported: anything else,
+    such as --auto or --delete-branch, is an unexpected call."""
+    unsupported = set(flags) - {"merge", "match-head-commit", "repo", "R"}
+    if "merge" not in flags or "match-head-commit" not in flags or unsupported:
+        die(f"fake gh: unsupported pr merge flags {sorted(flags)}", 2)
+    head = positional[0]
+    matches = [pr for pr in state["prs"] if pr["head"] == head]
+    if not matches:
+        die(f'no pull requests found for branch "{head}"')
+    pr = matches[-1]
+    if pr["state"] != "OPEN":
+        die(f"pull request #{pr['number']} is not open")
+    head_sha = origin("rev-parse", f"refs/heads/{pr['head']}")
+    if head_sha != flags["match-head-commit"]:
+        die("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)")
+    with tempfile.TemporaryDirectory(dir=scenario_root()) as work:
+        git = lambda *args: subprocess.run(
+            ["git", "-C", work, *args], capture_output=True, text=True
+        )
+        git("clone", "-q", "-b", pr["base"], os.path.join(scenario_root(), "origin.git"), ".")
+        message = f"Merge pull request #{pr['number']} from {state['repo'].split('/')[0]}/{head}"
+        if git("merge", "-q", "--no-ff", "-m", message, head_sha).returncode != 0:
+            die("Pull request is not mergeable: the merge commit cannot be cleanly created.")
+        pushed = git("push", "-q", "origin", f"HEAD:{pr['base']}")
+        if pushed.returncode != 0:
+            die(f"fake gh: pushing the merge failed: {pushed.stderr}")
+    pr["state"] = "MERGED"
+    default = origin("symbolic-ref", "--short", "HEAD")
+    if pr["base"] == default:
+        for number in CLOSING_KEYWORD.findall(pr.get("body", "")):
+            if number in state["issues"]:
+                state["issues"][number] = "CLOSED"
+    save(state)
+
+
 def issue_view(state, positional, flags):
     number = positional[0]
     if number not in state["issues"]:
@@ -263,6 +320,10 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         pr_ready(state, positional, flags)
+    elif args[:2] == ["pr", "merge"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        pr_merge(state, positional, flags)
     elif args[:2] == ["issue", "view"]:
         positional, flags = parse(args[2:])
         check_repo(state, flags)

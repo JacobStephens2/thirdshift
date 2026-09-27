@@ -5,11 +5,12 @@ mod support;
 
 use support::{RunResult, Scenario};
 
-/// Assert that `text` lists all four forms of the command, each on its own
-/// line with a description after it.
+/// Assert that `text` lists every form of the command, each on its own line
+/// with a description after it.
 fn assert_help_text(text: &str) {
     for form in [
         "thirdshift <Issue URL>",
+        "thirdshift merge <Issue URL>",
         "thirdshift update",
         "thirdshift version",
         "thirdshift help",
@@ -48,7 +49,7 @@ fn help_does_not_mention_the_flag_aliases() {
 
     let help = scenario.run(&["help"]);
 
-    for alias in ["--help", "-h", "--version", "-V"] {
+    for alias in ["--help", "-h", "--version", "-V", "--merge"] {
         assert!(
             !help.stdout.contains(alias),
             "help mentions {alias}: {}",
@@ -122,4 +123,38 @@ fn a_url_that_is_not_a_github_issue_prints_an_error_and_the_help_to_stderr() {
         &result,
         &format!("not a GitHub issue URL: {url}"),
     );
+}
+
+#[test]
+fn merge_without_an_issue_url_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+
+    for merge in ["merge", "--merge"] {
+        let result = scenario.run(&[merge]);
+
+        assert_argument_error(&scenario, &result, "missing Issue URL");
+    }
+}
+
+#[test]
+fn anything_after_the_issue_url_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+    let url = scenario.issue_url(7);
+
+    for args in [
+        vec![url.as_str(), "--merge"],
+        vec![url.as_str(), "merge"],
+        vec!["merge", url.as_str(), "extra"],
+        vec!["--merge", url.as_str(), "--merge"],
+    ] {
+        let extra = args.last().unwrap();
+        let result = scenario.run(&args);
+
+        assert_argument_error(
+            &scenario,
+            &result,
+            &format!("unexpected argument after the Issue URL: {extra}"),
+        );
+        assert!(scenario.claude_calls().is_empty(), "{args:?} started a Run");
+    }
 }

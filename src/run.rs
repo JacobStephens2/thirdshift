@@ -19,12 +19,20 @@ use crate::prompt;
 use crate::session::{self, Sessions};
 use crate::worktree::{Merge, Worktree};
 
-/// Take `issue` to a ready PR and return the PR's URL. Any failure after the
-/// worktree exists goes through the Failed run path. The worktree, the local
+/// Whether a Run ends with its PR ready for review or, as a Merge run, merged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Normal,
+    Merge,
+}
+
+/// Take `issue` to a ready PR, or in a Merge run a merged one, and return the
+/// PR's URL. Any failure after the worktree exists, including a merge that
+/// fails, goes through the Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch.
-pub fn run(issue: &IssueUrl) -> Result<String, FailedRun> {
+pub fn run(issue: &IssueUrl, mode: Mode) -> Result<String, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
@@ -51,18 +59,19 @@ pub fn run(issue: &IssueUrl) -> Result<String, FailedRun> {
         ),
     };
     let mut log = session::log_path(issue, &timestamp, "implement")?;
-    implement(issue, &worktree, &base, &prompt, &timestamp, &mut log)
+    implement(issue, &worktree, &base, &prompt, mode, &timestamp, &mut log)
         .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
 }
 
 /// The implement session given `prompt`, the checks on the PR it opened or
-/// updated, and keeping that PR mergeable. `log` is left at the most recent
-/// session's log.
+/// updated, keeping that PR mergeable and, in a Merge run, the Self-merge.
+/// `log` is left at the most recent session's log.
 fn implement(
     issue: &IssueUrl,
     worktree: &Worktree,
     base: &str,
     prompt: &str,
+    mode: Mode,
     timestamp: &str,
     log: &mut PathBuf,
 ) -> Result<String> {
@@ -88,10 +97,14 @@ fn implement(
         github::mark_ready(issue, branch)?;
     }
 
-    repair_loop(issue, worktree, base, &pr.url, &mut run_session)?;
+    let watched = repair_loop(issue, worktree, base, &pr.url, &mut run_session)?;
     ensure_pr_ready_and_mergeable(issue, branch)?;
     if interrupt::requested() {
         bail!("interrupted");
+    }
+    if mode == Mode::Merge {
+        progress::step(format_args!("merging the PR into {base}"));
+        github::merge(issue, branch, &watched)?;
     }
     Ok(pr.url)
 }
@@ -109,15 +122,17 @@ const MAX_BASE_MOVES: usize = 3;
 /// rebase), push, and watch CI on the head commit, starting a Repair session
 /// through `run_session` for a conflict or red CI and then going round again,
 /// since the Base branch may have moved meanwhile. Green or absent CI also
-/// goes round again if the Base branch moved while CI ran. Fails once a Repair
-/// beyond `MAX_REPAIRS`, or a round beyond `MAX_BASE_MOVES`, would be needed.
+/// goes round again if the Base branch moved while CI ran. Returns the head
+/// commit whose CI was last watched and found green or absent. Fails once a
+/// Repair beyond `MAX_REPAIRS`, or a round beyond `MAX_BASE_MOVES`, would be
+/// needed.
 fn repair_loop(
     issue: &IssueUrl,
     worktree: &Worktree,
     base: &str,
     pr_url: &str,
     run_session: &mut impl FnMut(&str, &str) -> Result<()>,
-) -> Result<()> {
+) -> Result<String> {
     let branch = worktree.branch();
     let mut repairs = 0;
     let mut base_moves = 0;
@@ -142,10 +157,11 @@ fn repair_loop(
             continue;
         }
         worktree.push()?;
-        match ci::watch(issue, &worktree.head()?)? {
+        let head = worktree.head()?;
+        match ci::watch(issue, &head)? {
             Ci::Absent | Ci::Passed => {
                 if !worktree.base_branch_moved(base)? {
-                    return Ok(());
+                    return Ok(head);
                 }
                 if base_moves == MAX_BASE_MOVES {
                     bail!(

@@ -20,19 +20,21 @@ mod worktree;
 use std::process::ExitCode;
 
 use issue::IssueUrl;
+use run::Mode;
 
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
 
-usage: thirdshift <Issue URL>   Run the factory on the issue, from the clone on the Base branch
-       thirdshift update        Update thirdshift to the latest release
-       thirdshift version       Print thirdshift's version
-       thirdshift help          Print this help
+usage: thirdshift <Issue URL>         Run the factory on the issue, from the clone on the Base branch
+       thirdshift merge <Issue URL>   Run the factory on the issue, then merge its pull request
+       thirdshift update              Update thirdshift to the latest release
+       thirdshift version             Print thirdshift's version
+       thirdshift help                Print this help
 ";
 
 fn main() -> ExitCode {
-    let arg = std::env::args().nth(1);
-    let issue = match arg.as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (mode, rest) = match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => {
             print!("{HELP}");
             return ExitCode::SUCCESS;
@@ -53,20 +55,33 @@ fn main() -> ExitCode {
                 }
             };
         }
-        Some(arg) => match IssueUrl::parse(arg) {
-            Ok(issue) => issue,
-            Err(error) => return argument_error(format_args!("{error:#}")),
-        },
-        None => return argument_error(format_args!("missing Issue URL")),
+        Some("merge" | "--merge") => (Mode::Merge, &args[1..]),
+        _ => (Mode::Normal, &args[..]),
     };
+    let Some((url, after)) = rest.split_first() else {
+        return argument_error(format_args!("missing Issue URL"));
+    };
+    let issue = match IssueUrl::parse(url) {
+        Ok(issue) => issue,
+        Err(error) => return argument_error(format_args!("{error:#}")),
+    };
+    if let Some(extra) = after.first() {
+        return argument_error(format_args!(
+            "unexpected argument after the Issue URL: {extra}"
+        ));
+    }
     if let Err(error) = interrupt::install() {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    match run::run(&issue) {
+    match run::run(&issue, mode) {
         Ok(pr_url) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
-            progress::step(format_args!("PR {pr_url} is ready for review"));
+            let outcome = match mode {
+                Mode::Normal => "is ready for review",
+                Mode::Merge => "is merged",
+            };
+            progress::step(format_args!("PR {pr_url} {outcome}"));
             println!("{pr_url}");
             ExitCode::SUCCESS
         }
