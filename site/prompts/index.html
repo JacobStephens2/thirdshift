@@ -118,6 +118,39 @@ Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
 </code></pre>
       </article>
+      <article class="job-sheet" id="prompt-foreign-conflict-repair" aria-labelledby="prompt-foreign-conflict-repair-title">
+        <h3 id="prompt-foreign-conflict-repair-title">Conflict Repair, on Foreign commits</h3>
+        <p>In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.</p>
+        <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
+        <pre class="job-text"><code>/thirdshift:resolving-merge-conflicts
+
+A merge of origin/<mark class="ph">&lt;branch&gt;</mark> into <mark class="ph">&lt;branch&gt;</mark> is in progress in this worktree and has conflicts.
+<mark class="ph">&lt;branch&gt;</mark> implements <mark class="ph">&lt;Issue URL&gt;</mark>; its pull request is <mark class="ph">&lt;pull request URL&gt;</mark>.
+
+Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt;</mark>. Do not rebase or force-push.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
+      <article class="job-sheet" id="prompt-review-repair" aria-labelledby="prompt-review-repair-title">
+        <h3 id="prompt-review-repair-title">Review Repair</h3>
+        <p>In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.</p>
+        <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
+        <pre class="job-text"><code>/thirdshift:code-review <mark class="ph">&lt;own head&gt;</mark>
+
+Someone else pushed commits to <mark class="ph">&lt;branch&gt;</mark> while it was being worked on, and they have been merged into <mark class="ph">&lt;branch&gt;</mark> in this worktree. <mark class="ph">&lt;branch&gt;</mark> implements <mark class="ph">&lt;Issue URL&gt;</mark>; its pull request is <mark class="ph">&lt;pull request URL&gt;</mark>. They are merged into the base branch only once you have reviewed them.
+
+Review with /thirdshift:code-review using <mark class="ph">&lt;own head&gt;</mark> as the fixed point: <mark class="ph">&lt;branch&gt;</mark>'s head before their commits were merged in.
+
+Address the Standards and Spec findings you agree with.
+
+Add each skipped finding to the "Unaddressed findings" section of the pull request body, under Standards or Spec, marked as coming from their commits, with at least a one-line reason. Keep the rest of the body as it is.
+
+Commit and push <mark class="ph">&lt;branch&gt;</mark>. Do not rebase or force-push.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
       <article class="job-sheet" id="prompt-ci-fix-repair" aria-labelledby="prompt-ci-fix-repair-title">
         <h3 id="prompt-ci-fix-repair-title">CI-fix Repair</h3>
         <p>Starts a Repair session when CI fails on the pull request's head commit, listing each failed check.</p>

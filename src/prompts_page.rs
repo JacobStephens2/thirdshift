@@ -42,18 +42,20 @@ const NUMBER: &str = "<n>";
 const BASE: &str = "<base>";
 const BRANCH: &str = "<branch>";
 const PR_URL: &str = "<pull request URL>";
+const OWN_HEAD: &str = "<own head>";
 const CHECK: &str = "<failing check>";
 const CHECK_URL: &str = "<check URL>";
 const BACKGROUND_WORK: &str = "<background work>";
 const PLUGIN_DIR: &str = "<plugin dir>";
 const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
-const PLACEHOLDERS: [&str; 11] = [
+const PLACEHOLDERS: [&str; 12] = [
     ISSUE_URL,
     NUMBER,
     BASE,
     BRANCH,
     PR_URL,
+    OWN_HEAD,
     CHECK,
     CHECK_URL,
     BACKGROUND_WORK,
@@ -112,6 +114,20 @@ fn prompts() -> Vec<Prompt> {
             when: "Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.",
             units: &[FINISH],
             text: prompt::conflict_repair(&issue, BASE, BRANCH, PR_URL),
+        },
+        Prompt {
+            id: "prompt-foreign-conflict-repair",
+            title: "Conflict Repair, on Foreign commits",
+            when: "In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.",
+            units: &[FINISH],
+            text: prompt::conflict_repair(&issue, BRANCH, BRANCH, PR_URL),
+        },
+        Prompt {
+            id: "prompt-review-repair",
+            title: "Review Repair",
+            when: "In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.",
+            units: &[FINISH],
+            text: prompt::review_repair(&issue, BRANCH, PR_URL, OWN_HEAD),
         },
         Prompt {
             id: "prompt-ci-fix-repair",

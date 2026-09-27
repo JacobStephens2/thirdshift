@@ -368,43 +368,341 @@ fn ctrl_c_before_the_merge_is_a_failed_run() {
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
 }
 
-/// While thirdshift waits for CI on the agent's head, someone else pushes a
-/// commit to issue-7, so the head it watched is no longer the PR's head.
-const SOMEONE_PUSHES_TO_THE_ISSUE_BRANCH_DURING_CI: &str = r#"
-gh fake on-ci-read 1 '
+/// Bash that has someone else push `file` with `content` to issue-7 from
+/// another clone, as a commit with `subject`: a Foreign commit.
+fn someone_pushes_to_issue_7(file: &str, content: &str, subject: &str) -> String {
+    format!(
+        r#"
 other="$(mktemp -d)"
 git clone -q -b issue-7 https://github.com/acme/widgets.git "$other"
-echo late > "$other/late.txt"
+echo "{content}" > "$other/{file}"
 git -C "$other" add -A
-git -C "$other" commit -q -m "Late commit"
+git -C "$other" commit -q -m "{subject}"
 git -C "$other" push -q origin issue-7
 rm -rf "$other"
-'
-"#;
+"#
+    )
+}
+
+/// Bash that runs `script` the first time thirdshift reads CI on each of the
+/// next `times` head commits.
+fn on_ci_read(times: usize, script: &str) -> String {
+    format!(
+        "gh fake on-ci-read {times} '{}'\n",
+        script.replace('\'', r"'\''")
+    )
+}
+
+/// The full sha of the commit with `subject` on `branch` in origin.
+fn sha_of(scenario: &Scenario, branch: &str, subject: &str) -> String {
+    scenario
+        .origin_git(&[
+            "log",
+            "--format=%H",
+            "--fixed-strings",
+            &format!("--grep={subject}"),
+            &format!("refs/heads/{branch}"),
+        ])
+        .trim()
+        .to_string()
+}
+
+/// The full sha of `commit`'s first parent in origin.
+fn parent_of(scenario: &Scenario, commit: &str) -> String {
+    scenario.origin_git(&["rev-parse", &format!("{commit}^")])
+}
+
+/// Assert that `prompt` is a review Repair's, reviewing from `fixed_point`.
+fn assert_review_repair_from(prompt: &serde_json::Value, fixed_point: &str) {
+    let prompt = prompt.as_str().unwrap();
+    let fixed_point = fixed_point.trim();
+    assert!(
+        prompt.starts_with("/thirdshift:code-review"),
+        "prompt: {prompt}"
+    );
+    assert!(
+        prompt.contains(&format!(
+            "Review with /thirdshift:code-review using {fixed_point} as the fixed point"
+        )),
+        "prompt: {prompt}"
+    );
+    assert!(prompt.contains("Unaddressed findings"), "prompt: {prompt}");
+}
 
 #[test]
-fn a_merge_refused_because_the_head_moved_is_a_failed_run() {
+fn a_foreign_commit_pushed_during_ci_is_merged_in_reviewed_then_merged() {
     let scenario = Scenario::new();
-    scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{SOMEONE_PUSHES_TO_THE_ISSUE_BRANCH_DURING_CI}"
-    ));
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("late.txt", "late", "Late commit")
+            )
+        ),
+    );
 
     let result = scenario.run(&["merge", &scenario.issue_url(7)]);
 
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    let late = sha_of(&scenario, "main", "Late commit");
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: merging new commit {late} from origin/issue-7\n"
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2, "the implement session and a review Repair");
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &late));
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: repair-1: session started"),
+        "stderr: {}",
+        result.stderr
+    );
+    // Found before the merge was tried, so the one merge is of the reviewed head.
+    assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 1);
+    let head = assert_issue_7_merged_into(&scenario, "main");
+    assert_eq!(head, late);
+    assert_eq!(scenario.origin_file("main", "late.txt").unwrap(), "late\n");
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_foreign_commit_that_lands_as_the_merge_is_tried_is_reviewed_then_merged() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_merge(
+                1,
+                &someone_pushes_to_issue_7("late.txt", "late", "Late commit")
+            )
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert!(
         result.stderr.contains("Head branch was modified"),
         "stderr: {}",
         result.stderr
     );
+    let late = sha_of(&scenario, "main", "Late commit");
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2);
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &late));
+    assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 2);
+    assert_eq!(assert_issue_7_merged_into(&scenario, "main"), late);
+}
+
+#[test]
+fn a_foreign_commit_that_conflicts_with_local_work_gets_a_conflict_repair_then_a_review() {
+    let scenario = Scenario::new();
+    // CI goes red; while the CI-fix Repair rewrites feature.txt, someone else
+    // pushes their own change to it, so the fix can't be pushed as it is.
+    scenario.agent_does_in_session(1, &format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{}echo fixed > feature.txt\ngit commit -q -am \"Fix CI 1\"\n",
+            someone_pushes_to_issue_7("feature.txt", "theirs", "Their feature")
+        ),
+    );
+    scenario.agent_does_in_session(
+        3,
+        "echo both > feature.txt\ngit add feature.txt\ngit commit -q --no-edit\n",
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 4, "implement, CI fix, conflict and review");
+    assert_eq!(calls[2]["merging"], true);
+    let conflict = calls[2]["prompt"].as_str().unwrap();
     assert!(
-        !result.stderr.contains("is merged"),
+        conflict.starts_with("/thirdshift:resolving-merge-conflicts")
+            && conflict.contains("A merge of origin/issue-7 into issue-7 is in progress"),
+        "prompt: {conflict}"
+    );
+    assert_review_repair_from(&calls[3]["prompt"], &sha_of(&scenario, "main", "Fix CI 1"));
+    let theirs = sha_of(&scenario, "main", "Their feature");
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: merging new commit {theirs} from origin/issue-7"
+        )),
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
-    assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
-    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    for repair in ["repair-1", "repair-2", "repair-3"] {
+        assert!(
+            result
+                .stderr
+                .contains(&format!("thirdshift: {repair}: session started")),
+            "no {repair} in stderr: {}",
+            result.stderr
+        );
+    }
+    assert_issue_7_merged_into(&scenario, "main");
+    assert_eq!(
+        scenario.origin_file("main", "feature.txt").unwrap(),
+        "both\n"
+    );
+}
+
+#[test]
+fn a_review_repair_whose_background_work_was_killed_gets_a_resume() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("late.txt", "late", "Late commit")
+            )
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"
+echo '{"type": "system", "subtype": "task_started", "task_id": "b1", "description": "cargo test"}'
+echo '{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"status": "killed"}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#,
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 3);
+    assert!(
+        calls[2]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("was killed when your turn ended"),
+        "prompt: {}",
+        calls[2]["prompt"]
+    );
+    let logs = scenario.entries("home/.thirdshift/logs");
+    assert!(
+        logs.iter()
+            .any(|log| log.ends_with("-repair-1-resume.jsonl")),
+        "logs: {logs:?}"
+    );
+}
+
+#[test]
+fn foreign_commits_that_keep_coming_spend_the_upstream_move_budget() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                6,
+                &someone_pushes_to_issue_7("late-$RANDOM$RANDOM.txt", "late", "Late commit")
+            )
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("origin/issue-7 kept moving: merged it again 5 times"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        6,
+        "the implement session and a review Repair for each of 5 rounds"
+    );
+    assert!(gh_calls_of(&scenario, "pr", "merge").is_empty());
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+}
+
+#[test]
+fn a_review_repair_counts_against_the_repair_cap() {
+    let scenario = Scenario::new();
+    // Five CI-fix Repairs leave none for reviewing the Foreign commit pushed
+    // while CI runs on the fifth fix.
+    scenario.agent_does_in_session(1, &format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    for session in 2..=6 {
+        let (checks, then) = if session == 6 {
+            (
+                GREEN,
+                on_ci_read(
+                    1,
+                    &someone_pushes_to_issue_7("late.txt", "late", "Late commit"),
+                ),
+            )
+        } else {
+            (RED, String::new())
+        };
+        scenario.agent_does_in_session(
+            session,
+            &format!(
+                "{}{}{then}",
+                commits_fix(session - 1),
+                checks_on_head(checks)
+            ),
+        );
+    }
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("repairs exhausted: new commits on origin/issue-7 to review"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 6);
+    assert!(gh_calls_of(&scenario, "pr", "merge").is_empty());
+}
+
+#[test]
+fn a_run_without_merge_takes_no_foreign_commits_in() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("late.txt", "late", "Late commit")
+            )
+        ),
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: PR {PR_URL} is ready for review").as_str())
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(
+        !result.stderr.contains("merging new commit"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.origin_log("issue-7").unwrap()[0], "Late commit");
 }
 
 /// Bash that has someone else push `file` with `content` to main.

@@ -9,7 +9,8 @@ use anyhow::{Context, Result, bail};
 use crate::git::Git;
 use crate::progress;
 
-/// How merging the Base branch into the Issue branch went.
+/// How merging the Base branch, or new commits on origin, into the Issue
+/// branch went.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Merge {
     /// Merged, or nothing to merge.
@@ -138,16 +139,37 @@ impl Worktree {
         self.git.run(&["rev-parse", "HEAD"])
     }
 
-    /// Fetch `origin/<base>` and merge it into the Issue branch: a merge,
-    /// never a rebase, so pushing it is always a fast-forward. `--ff` keeps a
-    /// user's `merge.ff = only` from turning a clean merge into an error.
+    /// Fetch `origin/<base>` and merge it into the Issue branch.
     pub fn merge_base_branch(&self, base: &str) -> Result<Merge> {
         progress::step(format_args!("merging origin/{base} into {}", self.branch));
         self.git.run(&["fetch", "origin", base])?;
-        match self
-            .git
-            .run(&["merge", "--no-edit", "--ff", &format!("origin/{base}")])
-        {
+        self.merge(&format!("origin/{base}"))
+    }
+
+    /// The Issue branch on origin, as fetched: `origin/<branch>`.
+    pub fn upstream(&self) -> String {
+        format!("origin/{}", self.branch)
+    }
+
+    /// Fetch the Issue branch from origin and list, oldest first, the commits
+    /// there that the local Issue branch does not have yet.
+    pub fn new_commits_on_origin(&self) -> Result<Vec<String>> {
+        self.git.run(&["fetch", "origin", &self.branch])?;
+        let range = format!("HEAD..{}", self.upstream());
+        let commits = self.git.run(&["rev-list", "--reverse", &range])?;
+        Ok(commits.lines().map(String::from).collect())
+    }
+
+    /// Merge the Issue branch as last fetched from origin into the local one.
+    pub fn merge_new_commits(&self) -> Result<Merge> {
+        self.merge(&self.upstream())
+    }
+
+    /// Merge `upstream` into the Issue branch: a merge, never a rebase, so
+    /// pushing it is always a fast-forward. `--ff` keeps a user's
+    /// `merge.ff = only` from turning a clean merge into an error.
+    fn merge(&self, upstream: &str) -> Result<Merge> {
+        match self.git.run(&["merge", "--no-edit", "--ff", upstream]) {
             Ok(_) => Ok(Merge::Clean),
             Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted),
             Err(error) => Err(error),
@@ -157,11 +179,21 @@ impl Worktree {
     /// Fail unless `origin/<base>` is fully merged into the Issue branch, e.g.
     /// after a conflict Repair that left the merge unfinished or aborted it.
     pub fn ensure_base_branch_merged(&self, base: &str) -> Result<()> {
+        self.ensure_merged(&format!("origin/{base}"))
+    }
+
+    /// Like [`Worktree::ensure_base_branch_merged`], for the Issue branch as
+    /// last fetched from origin.
+    pub fn ensure_new_commits_merged(&self) -> Result<()> {
+        self.ensure_merged(&self.upstream())
+    }
+
+    fn ensure_merged(&self, upstream: &str) -> Result<()> {
         if self.merge_in_progress()? {
-            bail!("the merge of origin/{base} is still in progress");
+            bail!("the merge of {upstream} is still in progress");
         }
-        if !self.base_branch_merged(base)? {
-            bail!("origin/{base} is not merged into {}", self.branch);
+        if !self.merged(upstream)? {
+            bail!("{upstream} is not merged into {}", self.branch);
         }
         Ok(())
     }
@@ -170,15 +202,14 @@ impl Worktree {
     /// has not merged yet.
     pub fn base_branch_moved(&self, base: &str) -> Result<bool> {
         self.git.run(&["fetch", "origin", base])?;
-        Ok(!self.base_branch_merged(base)?)
+        Ok(!self.merged(&format!("origin/{base}"))?)
     }
 
-    /// Whether the fetched `origin/<base>` is fully merged into the Issue
+    /// Whether `upstream`, as last fetched, is fully merged into the Issue
     /// branch.
-    fn base_branch_merged(&self, base: &str) -> Result<bool> {
-        let upstream = format!("origin/{base}");
+    fn merged(&self, upstream: &str) -> Result<bool> {
         self.git
-            .succeeds(&["merge-base", "--is-ancestor", &upstream, "HEAD"])
+            .succeeds(&["merge-base", "--is-ancestor", upstream, "HEAD"])
     }
 
     /// Whether a merge is in progress in the worktree.

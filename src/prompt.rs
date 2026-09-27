@@ -58,13 +58,14 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
     )
 }
 
-/// The conflict Repair prompt, for a merge of the Base branch left in progress
-/// with conflicts.
-pub fn conflict_repair(issue: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> String {
+/// The conflict Repair prompt, for a merge of `origin/<merging>` left in
+/// progress with conflicts: the Base branch, or in a Merge run the Issue
+/// branch with Foreign commits on it.
+pub fn conflict_repair(issue: &IssueUrl, merging: &str, branch: &str, pr_url: &str) -> String {
     format!(
         "/thirdshift:resolving-merge-conflicts\n\
          \n\
-         A merge of origin/{base} into {branch} is in progress in this worktree and has conflicts.\n\
+         A merge of origin/{merging} into {branch} is in progress in this worktree and has conflicts.\n\
          {branch} implements {url}; its pull request is {pr_url}.\n\
          \n\
          Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n\
@@ -100,6 +101,27 @@ pub fn ci_fix_repair(
          Run the affected checks locally, commit, and push {branch}.\n\
          \n\
          If a failure is not caused by this branch (it is flaky, or also fails on {base}), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n\
+         \n\
+         {HEADLESS}",
+        url = issue.url,
+    )
+}
+
+/// The review Repair prompt, for Foreign commits a Merge run has merged into
+/// the Issue branch on top of `own_head`, the head it last knew as its own.
+pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &str) -> String {
+    format!(
+        "/thirdshift:code-review {own_head}\n\
+         \n\
+         Someone else pushed commits to {branch} while it was being worked on, and they have been merged into {branch} in this worktree. {branch} implements {url}; its pull request is {pr_url}. They are merged into the base branch only once you have reviewed them.\n\
+         \n\
+         Review with /thirdshift:code-review using {own_head} as the fixed point: {branch}'s head before their commits were merged in.\n\
+         \n\
+         Address the Standards and Spec findings you agree with.\n\
+         \n\
+         Add each skipped finding to the \"Unaddressed findings\" section of the pull request body, under Standards or Spec, marked as coming from their commits, with at least a one-line reason. Keep the rest of the body as it is.\n\
+         \n\
+         Commit and push {branch}. Do not rebase or force-push.\n\
          \n\
          {HEADLESS}",
         url = issue.url,

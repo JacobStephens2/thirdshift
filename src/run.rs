@@ -115,6 +115,7 @@ fn implement(
         worktree,
         base,
         pr_url: &pr.url,
+        goal,
         budgets: Budgets::default(),
     };
     let mut watched = repair_loop.run(&mut run_session)?;
@@ -204,21 +205,23 @@ fn warn(error: &anyhow::Error, warning: std::fmt::Arguments) {
     progress::step(format_args!("warning: {warning}"));
 }
 
-/// The most Repair sessions a Run starts, conflict and CI-fix combined.
+/// The most Repair sessions a Run starts, conflict, CI-fix and review
+/// combined.
 const MAX_REPAIRS: usize = 5;
 
 /// The most times a Run goes round again because the Base branch moved while
-/// CI ran or since a merge was tried, whether or not the merge that follows
-/// needs a Repair. A clean merge uses no Repair, so without this a busy Base
+/// CI ran or since a merge was tried, or, in a Merge run, because Foreign
+/// commits arrived, whether or not the merge that follows needs a Repair. A
+/// clean merge of the Base branch uses no Repair, so without this a busy Base
 /// branch could keep a Run going forever.
-const MAX_BASE_MOVES: usize = 5;
+const MAX_UPSTREAM_MOVES: usize = 5;
 
-/// What a Run has spent of its Repair and base-move budgets, across every
-/// round of the Repair loop, those after a failed merge included.
+/// What a Run has spent of its Repair and upstream-move budgets, across every round
+/// of the Repair loop, those after a failed merge included.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Budgets {
     repairs: usize,
-    base_moves: usize,
+    upstream_moves: usize,
 }
 
 impl Budgets {
@@ -236,15 +239,23 @@ impl Budgets {
         Ok(format!("repair-{}", self.repairs))
     }
 
-    /// Counts a round taken because `origin/<base>` moved `when`, or fails if
-    /// it would be one too many.
-    fn count_base_move(&mut self, base: &str, when: &str) -> Result<()> {
-        if self.base_moves == MAX_BASE_MOVES {
-            bail!("origin/{base} kept moving: merged it again {MAX_BASE_MOVES} times");
+    /// Counts a round taken because `upstream` moved, saying `why`, or fails
+    /// if it would be one too many.
+    fn count_upstream_move(&mut self, upstream: &str, why: std::fmt::Arguments) -> Result<()> {
+        if self.upstream_moves == MAX_UPSTREAM_MOVES {
+            bail!("{upstream} kept moving: merged it again {MAX_UPSTREAM_MOVES} times");
         }
-        self.base_moves += 1;
-        progress::step(format_args!("origin/{base} moved {when}; merging it again"));
+        self.upstream_moves += 1;
+        progress::step(why);
         Ok(())
+    }
+
+    /// Counts a round taken because `origin/<base>` moved `when`.
+    fn count_base_move(&mut self, base: &str, when: &str) -> Result<()> {
+        self.count_upstream_move(
+            &format!("origin/{base}"),
+            format_args!("origin/{base} moved {when}; merging it again"),
+        )
     }
 }
 
@@ -252,7 +263,7 @@ impl Budgets {
 enum Round {
     /// A head whose CI was found green or absent, to try the merge on.
     NewHead(String),
-    /// The same head, with no Repair and no base move: a policy refusal.
+    /// The same head, with no Repair and no upstream move: a policy refusal.
     NothingToFix,
 }
 
@@ -262,36 +273,44 @@ struct RepairLoop<'a> {
     worktree: &'a Worktree,
     base: &'a str,
     pr_url: &'a str,
+    goal: Goal,
     budgets: Budgets,
 }
 
 impl RepairLoop<'_> {
-    /// Merge the Base branch (never rebase), push, and watch CI on the head
-    /// commit, starting a Repair session through `run_session` for a conflict
-    /// or red CI and then going round again, since the Base branch may have
-    /// moved meanwhile. Green or absent CI also goes round again if the Base
-    /// branch moved while CI ran. Returns the head commit whose CI was last
-    /// watched and found green or absent. Fails once a Repair beyond
-    /// `MAX_REPAIRS`, or a round beyond `MAX_BASE_MOVES`, would be needed.
+    /// In a Merge run, first take in any Foreign commits. Then merge the
+    /// Base branch (never rebase), push, and watch CI on the head commit,
+    /// starting a Repair session through `run_session` for a conflict or red
+    /// CI and then going round again, since the Base branch may have moved
+    /// meanwhile. Green or absent CI also goes round again if the Base branch
+    /// moved while CI ran, or, in a Merge run, if Foreign commits arrived.
+    /// Returns the head commit whose CI was last watched and found green or
+    /// absent. Fails once a Repair beyond `MAX_REPAIRS`, or a round beyond
+    /// `MAX_UPSTREAM_MOVES`, would be needed.
     fn run(&mut self, run_session: &mut impl FnMut(&str, &str) -> Result<()>) -> Result<String> {
         let (issue, worktree, base, pr_url) = (self.issue, self.worktree, self.base, self.pr_url);
         let branch = worktree.branch();
         loop {
+            if self.goal == Goal::Merged {
+                self.take_in_foreign_commits(run_session)?;
+            }
             if worktree.merge_base_branch(base)? == Merge::Conflicted {
                 let kind = self.budgets.next_repair("conflict")?;
                 run_session(&kind, &prompt::conflict_repair(issue, base, branch, pr_url))?;
                 worktree.ensure_base_branch_merged(base)?;
-                worktree.push()?;
                 continue;
             }
             worktree.push()?;
             let head = worktree.head()?;
             match ci::watch(issue, &head)? {
                 Ci::Absent | Ci::Passed => {
-                    if !worktree.base_branch_moved(base)? {
+                    if worktree.base_branch_moved(base)? {
+                        self.budgets.count_base_move(base, "while CI ran")?;
+                    } else if self.goal == Goal::ReadyForReview
+                        || worktree.new_commits_on_origin()?.is_empty()
+                    {
                         return Ok(head);
                     }
-                    self.budgets.count_base_move(base, "while CI ran")?;
                 }
                 Ci::Failed(failed) => {
                     let kind = self.budgets.next_repair("CI red")?;
@@ -299,14 +318,55 @@ impl RepairLoop<'_> {
                         &kind,
                         &prompt::ci_fix_repair(issue, base, branch, pr_url, &failed),
                     )?;
-                    worktree.push()?;
                 }
             }
         }
     }
 
+    /// Fetch the Issue branch from origin and merge in any Foreign commits on
+    /// it (never rebase), counting that as a round and handing a conflict to
+    /// a conflict Repair. Then a review Repair reviews them from the head the
+    /// Run last knew as its own, the local head before the merge.
+    fn take_in_foreign_commits(
+        &mut self,
+        run_session: &mut impl FnMut(&str, &str) -> Result<()>,
+    ) -> Result<()> {
+        let (issue, worktree, pr_url) = (self.issue, self.worktree, self.pr_url);
+        let branch = worktree.branch();
+        let upstream = worktree.upstream();
+        let foreign = worktree.new_commits_on_origin()?;
+        if foreign.is_empty() {
+            return Ok(());
+        }
+        let own_head = worktree.head()?;
+        self.budgets.count_upstream_move(
+            &upstream,
+            format_args!("{upstream} has new commits; merging them in"),
+        )?;
+        for sha in &foreign {
+            progress::step(format_args!("merging new commit {sha} from {upstream}"));
+        }
+        if worktree.merge_new_commits()? == Merge::Conflicted {
+            let kind = self
+                .budgets
+                .next_repair(&format!("conflict with new commits on {upstream}"))?;
+            run_session(
+                &kind,
+                &prompt::conflict_repair(issue, branch, branch, pr_url),
+            )?;
+            worktree.ensure_new_commits_merged()?;
+        }
+        let kind = self
+            .budgets
+            .next_repair(&format!("new commits on {upstream} to review"))?;
+        run_session(
+            &kind,
+            &prompt::review_repair(issue, branch, pr_url, &own_head),
+        )
+    }
+
     /// Go round again after a merge of `watched` failed, counting a Base
-    /// branch that moved since as a base move. GitHub's error text is never
+    /// branch that moved since as an upstream move. GitHub's error text is never
     /// consulted.
     fn round_after_failed_merge(
         &mut self,
