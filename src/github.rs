@@ -22,6 +22,19 @@ pub fn issue_is_open(issue: &IssueUrl) -> Result<bool> {
     Ok(json["state"].as_str().context("gh output has no state")? == "OPEN")
 }
 
+/// Close `issue` with `comment`.
+pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
+    gh(&[
+        "issue",
+        "close",
+        &issue.number.to_string(),
+        "--repo",
+        &issue.repo_slug(),
+        "--comment",
+        comment,
+    ])
+}
+
 const PR_FIELDS: &str = "number,url,state,headRefName,baseRefName,isDraft";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,17 +94,22 @@ impl PullRequest {
     }
 }
 
-/// The pull request whose head is `branch`, if `gh` finds one.
-pub fn pull_request_for(issue: &IssueUrl, branch: &str) -> Result<Option<PullRequest>> {
-    let json = match gh_json(&[
+/// The `fields` of the pull request whose head is `branch`, as JSON.
+fn pr_view(issue: &IssueUrl, branch: &str, fields: &str) -> Result<Value> {
+    gh_json(&[
         "pr",
         "view",
         branch,
         "--repo",
         &issue.repo_slug(),
         "--json",
-        PR_FIELDS,
-    ]) {
+        fields,
+    ])
+}
+
+/// The pull request whose head is `branch`, if `gh` finds one.
+pub fn pull_request_for(issue: &IssueUrl, branch: &str) -> Result<Option<PullRequest>> {
+    let json = match pr_view(issue, branch, PR_FIELDS) {
         Ok(json) => json,
         Err(error) if format!("{error:#}").contains("no pull requests found") => return Ok(None),
         Err(error) => return Err(error),
@@ -145,9 +163,11 @@ pub fn convert_to_draft(issue: &IssueUrl, branch: &str) -> Result<()> {
 /// Merge the pull request whose head is `branch` into its base with a merge
 /// commit, but only if its head is still `head`. Never GitHub's auto-merge
 /// (ADR-0004), and never `--delete-branch`, whose local deletion would
-/// interfere with the worktree.
+/// interfere with the worktree. If `gh` fails but the pull request merged at
+/// `head` anyway, e.g. because `gh` was interrupted once GitHub had merged,
+/// that is a merge.
 pub fn merge(issue: &IssueUrl, branch: &str, head: &str) -> Result<()> {
-    gh(&[
+    let Err(error) = gh(&[
         "pr",
         "merge",
         branch,
@@ -156,7 +176,47 @@ pub fn merge(issue: &IssueUrl, branch: &str, head: &str) -> Result<()> {
         "--merge",
         "--match-head-commit",
         head,
-    ])
+    ]) else {
+        return Ok(());
+    };
+    match merged_head(issue, branch) {
+        Ok(Some(merged)) if merged == head => Ok(()),
+        _ => Err(error),
+    }
+}
+
+/// The head commit the pull request whose head is `branch` was merged at, if
+/// it is merged.
+fn merged_head(issue: &IssueUrl, branch: &str) -> Result<Option<String>> {
+    let json = pr_view(issue, branch, "state,headRefOid")?;
+    if json["state"] != "MERGED" {
+        return Ok(None);
+    }
+    let head = json["headRefOid"]
+        .as_str()
+        .context("gh output has no headRefOid")?;
+    Ok(Some(head.to_string()))
+}
+
+/// Whether merging the pull request whose head is `branch` closes `issue` by
+/// itself. GitHub closes the issues a pull request links for closing, but
+/// only when it merges into the repository's default branch, and a moment
+/// after the merge rather than with it.
+pub fn merge_closes_issue(issue: &IssueUrl, branch: &str) -> Result<bool> {
+    let pr = pr_view(issue, branch, "baseRefName,closingIssuesReferences")?;
+    let repo = gh_json(&[
+        "repo",
+        "view",
+        &issue.repo_slug(),
+        "--json",
+        "defaultBranchRef",
+    ])?;
+    let links_issue = pr["closingIssuesReferences"]
+        .as_array()
+        .context("gh output has no closingIssuesReferences")?
+        .iter()
+        .any(|linked| linked["number"].as_u64() == Some(issue.number));
+    Ok(links_issue && pr["baseRefName"] == repo["defaultBranchRef"]["name"])
 }
 
 /// Whether a pull request can be merged into its base.
@@ -171,15 +231,7 @@ pub enum Mergeable {
 
 /// Whether the pull request whose head is `branch` can be merged.
 pub fn mergeable(issue: &IssueUrl, branch: &str) -> Result<Mergeable> {
-    let json = gh_json(&[
-        "pr",
-        "view",
-        branch,
-        "--repo",
-        &issue.repo_slug(),
-        "--json",
-        "mergeable",
-    ])?;
+    let json = pr_view(issue, branch, "mergeable")?;
     match json["mergeable"].as_str() {
         Some("MERGEABLE") => Ok(Mergeable::Yes),
         Some("CONFLICTING") => Ok(Mergeable::No),

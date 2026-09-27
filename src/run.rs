@@ -128,6 +128,7 @@ fn implement(
         }
         progress::step(format_args!("merging the PR into {base}"));
         let Err(error) = github::merge(issue, branch, &watched) else {
+            after_merge(issue, worktree, &pr);
             return Ok(pr.url);
         };
         progress::step(format_args!("the merge failed: {error:#}"));
@@ -140,6 +141,67 @@ fn implement(
             }
         }
     }
+}
+
+/// The Self-merge's steps after the merge: delete the Issue branch on origin,
+/// and close the issue if the merge does not. The merge can't be undone, so
+/// these never fail the Run, and an interrupt no longer stops it: a step that
+/// fails is a warning naming the fix to make by hand.
+fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
+    let branch = worktree.branch();
+    if let Err(error) = retry_if_interrupted(|| worktree.delete_from_origin()) {
+        warn(
+            &error,
+            format_args!(
+                "could not delete {branch} on origin, so delete it by hand: \
+                 git push origin --delete {branch}"
+            ),
+        );
+    }
+    let comment = format!(
+        "Closed by #{}, merged into {} by a thirdshift Merge run.",
+        pr.number, pr.base
+    );
+    if let Err(error) = retry_if_interrupted(|| close_unless_merge_does(issue, branch, &comment)) {
+        warn(
+            &error,
+            format_args!(
+                "could not close issue #{number}, so if it is still open, close it by hand: \
+                 gh issue close {number} --repo {repo} --comment '{quoted}'",
+                number = issue.number,
+                repo = issue.repo_slug(),
+                quoted = comment.replace('\'', r"'\''")
+            ),
+        );
+    }
+}
+
+/// Close `issue` with `comment`, unless it is closed already or merging the
+/// PR for `branch` closes it.
+fn close_unless_merge_does(issue: &IssueUrl, branch: &str, comment: &str) -> Result<()> {
+    if github::merge_closes_issue(issue, branch)? || !github::issue_is_open(issue)? {
+        return Ok(());
+    }
+    progress::step(format_args!("closing issue #{}", issue.number));
+    github::close_issue(issue, comment)
+}
+
+/// Run `step`, and once more if it failed with the Run interrupted: Ctrl-C in
+/// a terminal also kills the git or gh the step was running.
+fn retry_if_interrupted(step: impl Fn() -> Result<()>) -> Result<()> {
+    step().or_else(|error| {
+        if interrupt::requested() {
+            step()
+        } else {
+            Err(error)
+        }
+    })
+}
+
+/// Report `error`, then a warning saying what to do about it by hand.
+fn warn(error: &anyhow::Error, warning: std::fmt::Arguments) {
+    progress::step(format_args!("{error:#}"));
+    progress::step(format_args!("warning: {warning}"));
 }
 
 /// The most Repair sessions a Run starts, conflict and CI-fix combined.
