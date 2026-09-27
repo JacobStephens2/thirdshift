@@ -407,9 +407,15 @@ fn sha_of(scenario: &Scenario, branch: &str, subject: &str) -> String {
         .to_string()
 }
 
+/// The full sha of `commit`'s first parent in origin.
+fn parent_of(scenario: &Scenario, commit: &str) -> String {
+    scenario.origin_git(&["rev-parse", &format!("{commit}^")])
+}
+
 /// Assert that `prompt` is a review Repair's, reviewing from `fixed_point`.
 fn assert_review_repair_from(prompt: &serde_json::Value, fixed_point: &str) {
     let prompt = prompt.as_str().unwrap();
+    let fixed_point = fixed_point.trim();
     assert!(
         prompt.starts_with("/thirdshift:code-review"),
         "prompt: {prompt}"
@@ -451,8 +457,7 @@ fn a_foreign_commit_pushed_during_ci_is_merged_in_reviewed_then_merged() {
     );
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 2, "the implement session and a review Repair");
-    let own_head = scenario.origin_git(&["rev-parse", &format!("{late}^")]);
-    assert_review_repair_from(&calls[1]["prompt"], own_head.trim());
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &late));
     assert!(
         result
             .stderr
@@ -493,8 +498,7 @@ fn a_foreign_commit_that_lands_as_the_merge_is_tried_is_reviewed_then_merged() {
     let late = sha_of(&scenario, "main", "Late commit");
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 2);
-    let own_head = scenario.origin_git(&["rev-parse", &format!("{late}^")]);
-    assert_review_repair_from(&calls[1]["prompt"], own_head.trim());
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &late));
     assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 2);
     assert_eq!(assert_issue_7_merged_into(&scenario, "main"), late);
 }
@@ -597,7 +601,7 @@ echo '{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"
 }
 
 #[test]
-fn foreign_commits_that_keep_coming_spend_the_round_budget() {
+fn foreign_commits_that_keep_coming_spend_the_upstream_move_budget() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(
         1,
@@ -616,7 +620,7 @@ fn foreign_commits_that_keep_coming_spend_the_round_budget() {
     assert!(
         result
             .stderr
-            .contains("origin/issue-7 kept moving: went round again 5 times"),
+            .contains("origin/issue-7 kept moving: merged it again 5 times"),
         "stderr: {}",
         result.stderr
     );
@@ -843,7 +847,7 @@ fn merge_failures_that_keep_moving_the_base_branch_spend_the_base_move_budget() 
     assert!(
         result
             .stderr
-            .contains("origin/main kept moving: went round again 5 times"),
+            .contains("origin/main kept moving: merged it again 5 times"),
         "stderr: {}",
         result.stderr
     );

@@ -146,18 +146,23 @@ impl Worktree {
         self.merge(&format!("origin/{base}"))
     }
 
+    /// The Issue branch on origin, as fetched: `origin/<branch>`.
+    pub fn upstream(&self) -> String {
+        format!("origin/{}", self.branch)
+    }
+
     /// Fetch the Issue branch from origin and list, oldest first, the commits
     /// there that the local Issue branch does not have yet.
     pub fn new_commits_on_origin(&self) -> Result<Vec<String>> {
         self.git.run(&["fetch", "origin", &self.branch])?;
-        let range = format!("HEAD..origin/{}", self.branch);
+        let range = format!("HEAD..{}", self.upstream());
         let commits = self.git.run(&["rev-list", "--reverse", &range])?;
         Ok(commits.lines().map(String::from).collect())
     }
 
     /// Merge the Issue branch as last fetched from origin into the local one.
     pub fn merge_new_commits(&self) -> Result<Merge> {
-        self.merge(&format!("origin/{}", self.branch))
+        self.merge(&self.upstream())
     }
 
     /// Merge `upstream` into the Issue branch: a merge, never a rebase, so
@@ -180,7 +185,7 @@ impl Worktree {
     /// Like [`Worktree::ensure_base_branch_merged`], for the Issue branch as
     /// last fetched from origin.
     pub fn ensure_new_commits_merged(&self) -> Result<()> {
-        self.ensure_merged(&format!("origin/{}", self.branch))
+        self.ensure_merged(&self.upstream())
     }
 
     fn ensure_merged(&self, upstream: &str) -> Result<()> {
