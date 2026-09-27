@@ -192,12 +192,19 @@ git checkout main && git pull
 cargo install --path .
 ```
 
-To install it system-wide instead, build it and copy it into place:
+If the shell installer also put a copy in `~/.local/bin`, typing `thirdshift` runs whichever copy comes first on your `PATH`, and the installer's copy often does. To see every copy, in the order the shell tries them:
 
 ```sh
-cargo build --release
-sudo install -m 755 target/release/thirdshift /usr/local/bin/thirdshift
+type -a thirdshift
 ```
+
+To run the build from source, give its path, as in `~/.cargo/bin/thirdshift <Issue URL>`, or put `~/.cargo/bin` first on your `PATH`, for example in `~/.bashrc`:
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+`thirdshift version` can't tell the two apart: a build from `main` reports the last released version until the next release bumps it.
 
 Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md)).
 
