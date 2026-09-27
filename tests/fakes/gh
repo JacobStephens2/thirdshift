@@ -5,16 +5,22 @@ State lives in the JSON file named by $FAKE_GH_STATE:
 
     {"repo": "owner/repo",
      "issues": {"<number>": "OPEN" | "CLOSED"},
+     "comments"?: {"<number>": ["<body>", ...]},
      "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
               "mergeable"?, "unknown_polls"?}],
      "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
      "statuses": {"<sha>": [{"context", "state", "url"}]},
-     "on_ci_read"?: {"times", "script", "seen"}}
+     "on_ci_read"?: {"times", "script", "seen"},
+     "on_merge"?: "<script>",
+     "failing"?: ["<command> <subcommand>", ...]}
 
 `gh pr merge` makes a real merge commit of the PR's head into its base in the
 bare origin repo beside $FAKE_GH_STATE (`origin.git`), whose HEAD names the
 default branch. It closes the issues the PR body closes (`Closes #<n>` and the
 like) only when the base is the default branch, as GitHub does.
+
+`gh issue close` closes the issue, recording its `--comment`; on an issue
+already closed it only warns, as gh does.
 
 A PR's mergeable state reports as UNKNOWN for its first `unknown_polls` reads.
 A check run reports as in progress for its first `pending_polls` reads, then as
@@ -29,6 +35,10 @@ command):
     gh fake on-ci-read <times> '<script>'   run <script> in bash the first time
                                             thirdshift reads CI on each new sha,
                                             for the next <times> shas
+    gh fake on-merge '<script>'             run <script> in bash after each
+                                            successful `gh pr merge`
+    gh fake fails '<command> <subcommand>'  make every such call fail, e.g.
+                                            'issue close'
 
 Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
 
@@ -230,6 +240,8 @@ def pr_merge(state, positional, flags):
             if number in state["issues"]:
                 state["issues"][number] = "CLOSED"
     save(state)
+    if "on_merge" in state:
+        subprocess.run(["bash", "-euc", state["on_merge"]], check=True, stdout=sys.stderr)
 
 
 def issue_view(state, positional, flags):
@@ -239,6 +251,19 @@ def issue_view(state, positional, flags):
     fields = {"number": int(number), "state": state["issues"][number]}
     wanted = flags["json"].split(",")
     print(json.dumps({key: fields[key] for key in wanted}))
+
+
+def issue_close(state, positional, flags):
+    number = positional[0]
+    if number not in state["issues"]:
+        die(f"GraphQL: Could not resolve to an issue or pull request with the number of {number}.")
+    if state["issues"][number] == "CLOSED":
+        print(f"! Issue #{number} is already closed", file=sys.stderr)
+        return
+    if "comment" in flags:
+        state.setdefault("comments", {}).setdefault(number, []).append(flags["comment"])
+    state["issues"][number] = "CLOSED"
+    save(state)
 
 
 def api(state, positional, flags):
@@ -298,6 +323,10 @@ def fake(state, args):
         state.setdefault(args[0], {})[args[1]] = json.loads(args[2])
     elif args[0] == "on-ci-read":
         state["on_ci_read"] = {"times": int(args[1]), "script": args[2], "seen": []}
+    elif args[0] == "on-merge":
+        state["on_merge"] = args[1]
+    elif args[0] == "fails":
+        state.setdefault("failing", []).append(args[1])
     elif args[0] == "pr":
         [pr for pr in state["prs"] if pr["head"] == args[1]][-1][args[2]] = json.loads(args[3])
     else:
@@ -309,6 +338,8 @@ def main():
     args = sys.argv[1:]
     record(args)
     state = load()
+    if " ".join(args[:2]) in state.get("failing", []):
+        die("HTTP 502: Bad Gateway (https://api.github.com/graphql)")
     if args[:2] == ["pr", "create"]:
         positional, flags = parse(args[2:])
         check_repo(state, flags)
@@ -333,6 +364,10 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         issue_view(state, positional, flags)
+    elif args[:2] == ["issue", "close"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        issue_close(state, positional, flags)
     elif args[0] == "api":
         positional, flags = parse(args[1:])
         api(state, positional, flags)

@@ -8,7 +8,7 @@ use crate::branch::{self, Selection};
 use crate::ci::{self, Ci};
 use crate::failed_run::{self, FailedRun};
 use crate::git::Git;
-use crate::github::{self, Mergeable, PullRequest};
+use crate::github::{self, Mergeable, PrState, PullRequest};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::plugin::Plugin;
@@ -115,9 +115,69 @@ fn implement(
     }
     if goal == Goal::Merged {
         progress::step(format_args!("merging the PR into {base}"));
-        github::merge(issue, branch, &watched)?;
+        merge(issue, branch, &watched)?;
+        after_merge(issue, worktree, base, &pr);
     }
     Ok(pr.url)
+}
+
+/// Merge the PR for `branch` on `head`. A merge that reports failure but went
+/// through anyway, e.g. because `gh` was interrupted after GitHub merged, is
+/// a merge: whether the PR merged decides the Run's outcome.
+fn merge(issue: &IssueUrl, branch: &str, head: &str) -> Result<()> {
+    let error = match github::merge(issue, branch, head) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    match github::pull_request_for(issue, branch) {
+        Ok(Some(pr)) if pr.state == PrState::Merged => Ok(()),
+        _ => Err(error),
+    }
+}
+
+/// The Self-merge's steps after the merge: delete the Issue branch on origin,
+/// and close the issue if the merge did not. The merge can't be undone, so
+/// these never fail the Run, and an interrupt no longer stops it: a step that
+/// fails is a warning naming the fix to make by hand.
+fn after_merge(issue: &IssueUrl, worktree: &Worktree, base: &str, pr: &PullRequest) {
+    let branch = worktree.branch();
+    if let Err(error) = worktree.delete_from_origin() {
+        warn(
+            &error,
+            format_args!(
+                "could not delete {branch} on origin, so delete it by hand: \
+                 git push origin --delete {branch}"
+            ),
+        );
+    }
+    let comment = format!(
+        "Closed by #{}, merged into {base} by a thirdshift Merge run.",
+        pr.number
+    );
+    let closed = github::issue_is_open(issue).and_then(|open| {
+        if open {
+            progress::step(format_args!("closing issue #{}", issue.number));
+            github::close_issue(issue, &comment)?;
+        }
+        Ok(())
+    });
+    if let Err(error) = closed {
+        warn(
+            &error,
+            format_args!(
+                "could not close issue #{number}, so close it by hand: \
+                 gh issue close {number} --repo {repo} --comment '{comment}'",
+                number = issue.number,
+                repo = issue.repo_slug()
+            ),
+        );
+    }
+}
+
+/// Report `error`, then a warning saying what to do about it by hand.
+fn warn(error: &anyhow::Error, warning: std::fmt::Arguments) {
+    progress::step(format_args!("{error:#}"));
+    progress::step(format_args!("warning: {warning}"));
 }
 
 /// The most Repair sessions a Run starts, conflict and CI-fix combined.

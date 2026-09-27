@@ -22,6 +22,19 @@ pub fn issue_is_open(issue: &IssueUrl) -> Result<bool> {
     Ok(json["state"].as_str().context("gh output has no state")? == "OPEN")
 }
 
+/// Close `issue` with `comment`.
+pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
+    gh(&[
+        "issue",
+        "close",
+        &issue.number.to_string(),
+        "--repo",
+        &issue.repo_slug(),
+        "--comment",
+        comment,
+    ])
+}
+
 const PR_FIELDS: &str = "number,url,state,headRefName,baseRefName,isDraft";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -108,6 +108,25 @@ impl Worktree {
         Ok(())
     }
 
+    /// Delete the Issue branch on origin, or do nothing if it is already gone
+    /// there, e.g. deleted by GitHub after a merge. Hooks are skipped, as for
+    /// [`Worktree::push`].
+    pub fn delete_from_origin(&self) -> Result<()> {
+        progress::step(format_args!("deleting {} on origin", self.branch));
+        let deleted = self
+            .git
+            .run(&["push", "--no-verify", "origin", "--delete", &self.branch]);
+        if deleted.is_err()
+            && self
+                .git
+                .run(&["ls-remote", "--heads", "origin", &self.branch])?
+                .is_empty()
+        {
+            return Ok(());
+        }
+        deleted.map(drop)
+    }
+
     /// Let go of the worktree without removing it or the local Issue branch,
     /// for work that may exist nowhere else. Dropping it then says where they
     /// are and the branch's head commit.
