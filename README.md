@@ -21,7 +21,7 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 3. Creates a git worktree next to your clone, named `<repo>-<Issue branch>`, so your own checkout is never touched.
 4. Runs a headless Claude Code session in that worktree with the **Factory skills** loaded. The agent implements the issue, reviews its work against the Base branch, addresses the **Standards findings** and **Spec findings** it agrees with, and opens a ready-for-review pull request that lists every **Unaddressed finding** with a reason and closes the issue.
 5. Takes over deterministically: pushes the Issue branch, skipping your repo's git hooks since the session runs the tests and CI gates the pull request, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
-6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 5 per Run. If the Base branch moves while CI runs, it merges it again and goes round, at most 5 times per Run.
+6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 5 per Run. If the Base branch moves while CI runs, it merges it again and goes round, at most 5 rounds per Run. In a Merge run, each round also takes in **Foreign commits** first: see [Foreign commits in a Merge run](#foreign-commits-in-a-merge-run).
 7. In a **Merge run** (`thirdshift merge <Issue URL>`), does the **Self-merge**: once the pull request is open, ready for review, mergeable and green, thirdshift merges it into the Base branch with a merge commit, on exactly the head commit whose CI it watched (`gh pr merge --merge --match-head-commit <sha>`). It never uses GitHub's auto-merge ([ADR-0004](docs/adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)). A merge that fails goes back round step 6, within the same budgets, and is tried again on the new green head. If that round finds nothing to fix, the refusal is a **policy refusal**, such as merge commits being disallowed or a review being required. After the merge, thirdshift deletes the Issue branch on `origin`, and closes the issue if it is still open, with the comment `Closed by #<pr>, merged into <base> by a thirdshift Merge run.` GitHub closes it on its own only for a merge into the repository's default branch, and then thirdshift leaves it alone.
 8. Cleans up: removes the worktree, the local Issue branch and the temporary plugin directory, whether the Run succeeded or not. The one exception is a **Failed run** whose work could not be pushed: see below.
 
@@ -104,7 +104,7 @@ To have the Run merge its pull request instead of leaving it for your review, st
 thirdshift merge https://github.com/acme/widgets/issues/7
 ```
 
-`thirdshift --merge <Issue URL>` does the same. The agent gets the same prompts either way; the only difference is the Self-merge at the end. The keyword goes before the URL: anything after the URL, `--merge` included, is an argument error.
+`thirdshift --merge <Issue URL>` does the same. The agent gets the same implement prompt either way; the differences are the Self-merge at the end and the review of [Foreign commits](#foreign-commits-in-a-merge-run). The keyword goes before the URL: anything after the URL, `--merge` included, is an argument error.
 
 A Merge run ends in one of three ways:
 
@@ -141,6 +141,18 @@ A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.
 
 All sessions in a Run share the Run's UTC timestamp, so a Run's logs sort together. When a Run fails, stderr ends with the path of its most recent session log, the place to start looking.
 
+## Foreign commits in a Merge run
+
+A Merge run merges only code an agent wrote or reviewed. If someone else pushes to the Issue branch during the Run, their **Foreign commits** are reviewed before they can be merged:
+
+1. Each round of step 6 starts by fetching the Issue branch from `origin`. Any new commits there are merged into the Run's branch, by fast-forward or a merge commit, never a rebase, each logged on stderr as `merging new commit <sha> from origin/<branch>`. Foreign commits that arrive while CI runs on a green head send the Run round again rather than on to the merge. A merge that conflicts with the Run's own work gets a conflict Repair.
+2. A **review Repair** then runs `/thirdshift:code-review` with the head thirdshift last knew as the Run's own as the fixed point. The agent fixes the findings it agrees with, adds the rest to the pull request body's "Unaddressed findings" section marked as coming from the Foreign commits, and pushes.
+3. The round goes on as usual: the Base branch is merged in, CI watched, and the merge tried once the head is green.
+
+Review Repairs are logged as `repair-<i>`, numbered with the other Repairs, count against the cap of 5 Repairs, and get a Resume like any session. A round that picks up Foreign commits counts against the 5 rounds, like a Base branch move. A Run that spends either budget fails.
+
+A Run without `merge` does none of this: it never fetches someone else's commits into its branch.
+
 ## Continuation
 
 Running thirdshift again on an issue picks up where the last Run stopped ([ADR-0002](docs/adr/0002-existing-issue-branch-means-continue.md)). It looks at the highest-numbered Issue branch:
@@ -155,7 +167,7 @@ A Run is not idempotent: re-running builds on whatever is already on the branch,
 
 ## Failed runs
 
-A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI, or, for a Merge run, without that pull request merged. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, a session that still ends while waiting on background work after its Resume, and a Base branch that keeps moving while CI runs.
+A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI, or, for a Merge run, without that pull request merged. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, a session that still ends while waiting on background work after its Resume, and a Base branch that keeps moving while CI runs, or in a Merge run, an Issue branch that keeps getting Foreign commits.
 
 A Failed run:
 
