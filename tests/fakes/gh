@@ -180,12 +180,20 @@ def scenario_root():
     return os.path.dirname(os.environ["FAKE_GH_STATE"])
 
 
+def origin_repo():
+    return os.path.join(scenario_root(), "origin.git")
+
+
+def git(repo, *args):
+    """Run git in `repo`, returning the completed process."""
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+
+
 def origin(*args):
     """Run git in the bare origin repo and return its stdout."""
-    repo = os.path.join(scenario_root(), "origin.git")
-    return subprocess.run(
-        ["git", "-C", repo, *args], capture_output=True, text=True, check=True
-    ).stdout.strip()
+    result = git(origin_repo(), *args)
+    result.check_returncode()
+    return result.stdout.strip()
 
 
 CLOSING_KEYWORD = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?) #(\d+)", re.I)
@@ -208,14 +216,11 @@ def pr_merge(state, positional, flags):
     if head_sha != flags["match-head-commit"]:
         die("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)")
     with tempfile.TemporaryDirectory(dir=scenario_root()) as work:
-        git = lambda *args: subprocess.run(
-            ["git", "-C", work, *args], capture_output=True, text=True
-        )
-        git("clone", "-q", "-b", pr["base"], os.path.join(scenario_root(), "origin.git"), ".")
+        git(work, "clone", "-q", "-b", pr["base"], origin_repo(), ".")
         message = f"Merge pull request #{pr['number']} from {state['repo'].split('/')[0]}/{head}"
-        if git("merge", "-q", "--no-ff", "-m", message, head_sha).returncode != 0:
+        if git(work, "merge", "-q", "--no-ff", "-m", message, head_sha).returncode != 0:
             die("Pull request is not mergeable: the merge commit cannot be cleanly created.")
-        pushed = git("push", "-q", "origin", f"HEAD:{pr['base']}")
+        pushed = git(work, "push", "-q", "origin", f"HEAD:{pr['base']}")
         if pushed.returncode != 0:
             die(f"fake gh: pushing the merge failed: {pushed.stderr}")
     pr["state"] = "MERGED"

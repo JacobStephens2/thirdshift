@@ -20,10 +20,10 @@ mod worktree;
 use std::process::ExitCode;
 
 use issue::IssueUrl;
-use run::Mode;
+use run::Goal;
 
 const HELP: &str = "\
-thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
+thirdshift turns a GitHub issue into a ready-for-review pull request, or a merged one, unattended.
 
 usage: thirdshift <Issue URL>         Run the factory on the issue, from the clone on the Base branch
        thirdshift merge <Issue URL>   Run the factory on the issue, then merge its pull request
@@ -34,7 +34,7 @@ usage: thirdshift <Issue URL>         Run the factory on the issue, from the clo
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mode, rest) = match args.first().map(String::as_str) {
+    let (goal, rest) = match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => {
             print!("{HELP}");
             return ExitCode::SUCCESS;
@@ -55,8 +55,8 @@ fn main() -> ExitCode {
                 }
             };
         }
-        Some("merge" | "--merge") => (Mode::Merge, &args[1..]),
-        _ => (Mode::Normal, &args[..]),
+        Some("merge" | "--merge") => (Goal::Merged, &args[1..]),
+        _ => (Goal::ReadyForReview, &args[..]),
     };
     let Some((url, after)) = rest.split_first() else {
         return argument_error(format_args!("missing Issue URL"));
@@ -74,14 +74,10 @@ fn main() -> ExitCode {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    match run::run(&issue, mode) {
+    match run::run(&issue, goal) {
         Ok(pr_url) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
-            let outcome = match mode {
-                Mode::Normal => "is ready for review",
-                Mode::Merge => "is merged",
-            };
-            progress::step(format_args!("PR {pr_url} {outcome}"));
+            progress::step(format_args!("PR {pr_url} {}", goal.outcome()));
             println!("{pr_url}");
             ExitCode::SUCCESS
         }

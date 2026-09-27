@@ -26,6 +26,23 @@ fn merge_calls(scenario: &Scenario) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// Assert that `base`'s tip on origin is a merge commit of issue-7's head,
+/// and return that head.
+fn assert_issue_7_merged_into(scenario: &Scenario, base: &str) -> String {
+    let head = scenario
+        .origin_git(&["rev-parse", "refs/heads/issue-7"])
+        .trim()
+        .to_string();
+    let parents = scenario.origin_git(&["log", "-1", "--format=%P", &format!("refs/heads/{base}")]);
+    let parents: Vec<&str> = parents.split_whitespace().collect();
+    assert_eq!(parents.len(), 2, "{base}'s tip is not a merge commit");
+    assert_eq!(
+        parents[1], head,
+        "{base}'s tip does not merge issue-7's head"
+    );
+    head
+}
+
 #[test]
 fn a_clean_merge_run_merges_the_pr_and_says_so() {
     let scenario = Scenario::new();
@@ -54,10 +71,7 @@ fn the_merge_is_a_merge_commit_of_exactly_the_watched_head() {
     let result = scenario.run(&["merge", &scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let head = scenario
-        .origin_git(&["rev-parse", "refs/heads/issue-7"])
-        .trim()
-        .to_string();
+    let head = assert_issue_7_merged_into(&scenario, "main");
     let short = &head[..7];
     assert!(
         result
@@ -66,10 +80,6 @@ fn the_merge_is_a_merge_commit_of_exactly_the_watched_head() {
         "CI was not watched on {short}: {}",
         result.stderr
     );
-    let parents = scenario.origin_git(&["log", "-1", "--format=%P", "refs/heads/main"]);
-    let parents: Vec<&str> = parents.split_whitespace().collect();
-    assert_eq!(parents.len(), 2, "main's tip is not a merge commit");
-    assert_eq!(parents[1], head);
     assert_eq!(
         merge_calls(&scenario),
         vec![vec![
@@ -140,9 +150,7 @@ fn a_merge_into_a_branch_other_than_the_default_leaves_the_issue_open() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
-    let head = scenario.origin_git(&["rev-parse", "refs/heads/issue-7"]);
-    let parents = scenario.origin_git(&["log", "-1", "--format=%P", "refs/heads/develop"]);
-    assert_eq!(parents.split_whitespace().nth(1), Some(head.trim()));
+    assert_issue_7_merged_into(&scenario, "develop");
     assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
 }

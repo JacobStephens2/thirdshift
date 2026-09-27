@@ -19,11 +19,22 @@ use crate::prompt;
 use crate::session::{self, Sessions};
 use crate::worktree::{Merge, Worktree};
 
-/// Whether a Run ends with its PR ready for review or, as a Merge run, merged.
+/// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Normal,
-    Merge,
+pub enum Goal {
+    ReadyForReview,
+    Merged,
+}
+
+impl Goal {
+    /// What became of the PR once the Run reached this goal, as in
+    /// "PR <url> is merged".
+    pub fn outcome(self) -> &'static str {
+        match self {
+            Goal::ReadyForReview => "is ready for review",
+            Goal::Merged => "is merged",
+        }
+    }
 }
 
 /// Take `issue` to a ready PR, or in a Merge run a merged one, and return the
@@ -32,7 +43,7 @@ pub enum Mode {
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch.
-pub fn run(issue: &IssueUrl, mode: Mode) -> Result<String, FailedRun> {
+pub fn run(issue: &IssueUrl, goal: Goal) -> Result<String, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
@@ -59,7 +70,7 @@ pub fn run(issue: &IssueUrl, mode: Mode) -> Result<String, FailedRun> {
         ),
     };
     let mut log = session::log_path(issue, &timestamp, "implement")?;
-    implement(issue, &worktree, &base, &prompt, mode, &timestamp, &mut log)
+    implement(issue, &worktree, &base, &prompt, goal, &timestamp, &mut log)
         .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
 }
 
@@ -71,7 +82,7 @@ fn implement(
     worktree: &Worktree,
     base: &str,
     prompt: &str,
-    mode: Mode,
+    goal: Goal,
     timestamp: &str,
     log: &mut PathBuf,
 ) -> Result<String> {
@@ -102,7 +113,7 @@ fn implement(
     if interrupt::requested() {
         bail!("interrupted");
     }
-    if mode == Mode::Merge {
+    if goal == Goal::Merged {
         progress::step(format_args!("merging the PR into {base}"));
         github::merge(issue, branch, &watched)?;
     }
