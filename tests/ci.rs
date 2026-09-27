@@ -1,5 +1,6 @@
 //! Watching CI: after each push thirdshift waits for checks on the head
-//! commit, hands red CI to a CI-fix Repair, and gives up after 5 Repairs.
+//! commit, hands red CI to a CI-fix Repair, and gives up after 5 Repairs, or
+//! as soon as a CI-fix Repair makes no commit.
 
 mod support;
 
@@ -160,6 +161,104 @@ fn red_ci_after_the_last_repair_is_a_failed_run() {
         ]
     );
     scenario.assert_cleaned_up("issue-7");
+}
+
+/// The cause of a Failed run whose CI-fix Repair left `head`, CI red, as it
+/// was.
+fn declined_ci_fix(head: &str) -> String {
+    format!(
+        "CI red on {} and the Repair found nothing to fix on the branch",
+        &head[..7]
+    )
+}
+
+#[test]
+fn a_ci_fix_repair_that_makes_no_commit_is_a_failed_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    // The Repair finds the failure isn't the branch's and commits nothing.
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    let cause = declined_ci_fix(watched.trim());
+    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("repairs exhausted"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        result.stderr.matches("starting Repair").count(),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        2,
+        "the implement session and 1 Repair"
+    );
+    assert!(
+        result
+            .stderr
+            .lines()
+            .any(|line| line.starts_with("thirdshift: session log: ")
+                && line.ends_with("-repair-1.jsonl")),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            format!("thirdshift: failed run ({cause})"),
+            "Add feature".to_string(),
+            "Initial commit".to_string(),
+        ])
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_second_ci_fix_repair_that_makes_no_commit_is_a_failed_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    scenario.agent_does_in_session(2, &format!("{}{}", commits_fix(1), checks_on_head(RED)));
+    // The second Repair commits nothing.
+    scenario.agent_does_in_session(3, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    assert!(
+        result.stderr.contains(&declined_ci_fix(watched.trim())),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        3,
+        "the implement session and 2 Repairs"
+    );
+    assert!(
+        result
+            .stderr
+            .lines()
+            .any(|line| line.starts_with("thirdshift: session log: ")
+                && line.ends_with("-repair-2.jsonl")),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[1],
+        "Fix CI 1".to_string()
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
 }
 
 /// Bash that pushes `file` with `content` to main from another clone, as if

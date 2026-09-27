@@ -285,8 +285,9 @@ impl RepairLoop<'_> {
     /// meanwhile. Green or absent CI also goes round again if the Base branch
     /// moved while CI ran, or, in a Merge run, if Foreign commits arrived.
     /// Returns the head commit whose CI was last watched and found green or
-    /// absent. Fails once a Repair beyond `MAX_REPAIRS`, or a round beyond
-    /// `MAX_UPSTREAM_MOVES`, would be needed.
+    /// absent. Fails with a Declined CI fix if a CI-fix Repair leaves the
+    /// head as it was, and once a Repair beyond `MAX_REPAIRS`, or a round
+    /// beyond `MAX_UPSTREAM_MOVES`, would be needed.
     fn run(&mut self, run_session: &mut impl FnMut(&str, &str) -> Result<()>) -> Result<String> {
         let (issue, worktree, base, pr_url) = (self.issue, self.worktree, self.base, self.pr_url);
         let branch = worktree.branch();
@@ -318,6 +319,12 @@ impl RepairLoop<'_> {
                         &kind,
                         &prompt::ci_fix_repair(issue, base, branch, pr_url, &failed),
                     )?;
+                    if worktree.head()? == head {
+                        bail!(
+                            "CI red on {} and the Repair found nothing to fix on the branch",
+                            &head[..7]
+                        );
+                    }
                 }
             }
         }
