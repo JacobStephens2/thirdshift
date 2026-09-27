@@ -127,7 +127,7 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
 }
 
 #[test]
-fn red_ci_after_five_repairs_is_a_failed_run() {
+fn red_ci_after_the_last_repair_is_a_failed_run() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
     for session in 2..=6 {
@@ -184,7 +184,7 @@ fn resolves_conflict(file: &str) -> String {
 }
 
 #[test]
-fn conflict_and_ci_fix_repairs_share_the_cap_of_five() {
+fn conflict_and_ci_fix_repairs_share_one_cap() {
     let scenario = Scenario::new();
     // Repair 1 resolves a conflict and leaves CI red; Repairs 2 to 4 fix CI
     // but it stays red; Repair 5 fixes CI again, but main moves on to a
