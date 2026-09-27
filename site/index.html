@@ -240,7 +240,7 @@
             </article>
             <article class="unit-col ink-k" aria-labelledby="unit-4">
               <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>4 · K · Finish</h3>
-              <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 3. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. This Run needed no Repair.</p>
+              <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 5. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. This Run needed no Repair.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-resolving-merge-conflicts">/resolving-merge-conflicts</a> <span>in a Repair</span></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 4">
                 <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
@@ -272,13 +272,13 @@
       <aside class="misprint" aria-labelledby="misprint-title">
         <h3 id="misprint-title">Misprint: a Failed run</h3>
         <p>A Run that ends, including by interruption, without an open pull request from its Issue branch that targets the Base branch, is mergeable, and has passing CI is a Failed run. Nothing is lost: its work, uncommitted changes included, is committed and pushed to the Issue branch (or, if the push fails, its worktree and local Issue branch are kept), and its open pull request, if any, goes back to draft. Run the same command again to continue it.</p>
-        <p class="illustrative"><b>Illustrative.</b> These are the last lines of a Run whose CI is still failing after 3 Repairs. Their order is inferred from the code, not seen in a real Run.</p>
+        <p class="illustrative"><b>Illustrative.</b> These are the last lines of a Run whose CI is still failing after 5 Repairs. Their order is inferred from the code, not seen in a real Run.</p>
         <ol class="stderr-lines" aria-label="stderr lines from an illustrative Failed run">
           <li><span class="prefix">thirdshift:</span> CI failed on &lt;commit&gt;: &lt;check&gt;</li>
           <li><span class="prefix">thirdshift:</span> pushing issue-&lt;n&gt;</li>
           <li><span class="prefix">thirdshift:</span> cleaning up the worktree and local branch issue-&lt;n&gt;</li>
           <li class="failed"><span class="prefix">thirdshift:</span> repairs exhausted: CI red</li>
-          <li class="failed"><span class="prefix">thirdshift:</span> session log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;-&lt;repo&gt;-issue-&lt;n&gt;-&lt;timestamp&gt;-repair-3.jsonl</li>
+          <li class="failed"><span class="prefix">thirdshift:</span> session log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;-&lt;repo&gt;-issue-&lt;n&gt;-&lt;timestamp&gt;-repair-5.jsonl</li>
         </ol>
       </aside>
     </div>
