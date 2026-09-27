@@ -8,7 +8,7 @@ use crate::branch::{self, Selection};
 use crate::ci::{self, Ci};
 use crate::failed_run::{self, FailedRun};
 use crate::git::Git;
-use crate::github::{self, Mergeable, PrState, PullRequest};
+use crate::github::{self, Mergeable, PullRequest};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::plugin::Plugin;
@@ -115,33 +115,19 @@ fn implement(
     }
     if goal == Goal::Merged {
         progress::step(format_args!("merging the PR into {base}"));
-        merge(issue, branch, &watched)?;
-        after_merge(issue, worktree, base, &pr);
+        github::merge(issue, branch, &watched)?;
+        after_merge(issue, worktree, &pr);
     }
     Ok(pr.url)
 }
 
-/// Merge the PR for `branch` on `head`. A merge that reports failure but went
-/// through anyway, e.g. because `gh` was interrupted after GitHub merged, is
-/// a merge: whether the PR merged decides the Run's outcome.
-fn merge(issue: &IssueUrl, branch: &str, head: &str) -> Result<()> {
-    let error = match github::merge(issue, branch, head) {
-        Ok(()) => return Ok(()),
-        Err(error) => error,
-    };
-    match github::pull_request_for(issue, branch) {
-        Ok(Some(pr)) if pr.state == PrState::Merged => Ok(()),
-        _ => Err(error),
-    }
-}
-
 /// The Self-merge's steps after the merge: delete the Issue branch on origin,
-/// and close the issue if the merge did not. The merge can't be undone, so
+/// and close the issue if the merge does not. The merge can't be undone, so
 /// these never fail the Run, and an interrupt no longer stops it: a step that
 /// fails is a warning naming the fix to make by hand.
-fn after_merge(issue: &IssueUrl, worktree: &Worktree, base: &str, pr: &PullRequest) {
+fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
     let branch = worktree.branch();
-    if let Err(error) = worktree.delete_from_origin() {
+    if let Err(error) = retry_if_interrupted(|| worktree.delete_from_origin()) {
         warn(
             &error,
             format_args!(
@@ -151,17 +137,10 @@ fn after_merge(issue: &IssueUrl, worktree: &Worktree, base: &str, pr: &PullReque
         );
     }
     let comment = format!(
-        "Closed by #{}, merged into {base} by a thirdshift Merge run.",
-        pr.number
+        "Closed by #{}, merged into {} by a thirdshift Merge run.",
+        pr.number, pr.base
     );
-    let closed = github::issue_is_open(issue).and_then(|open| {
-        if open {
-            progress::step(format_args!("closing issue #{}", issue.number));
-            github::close_issue(issue, &comment)?;
-        }
-        Ok(())
-    });
-    if let Err(error) = closed {
+    if let Err(error) = retry_if_interrupted(|| close_unless_merge_does(issue, branch, &comment)) {
         warn(
             &error,
             format_args!(
@@ -172,6 +151,28 @@ fn after_merge(issue: &IssueUrl, worktree: &Worktree, base: &str, pr: &PullReque
             ),
         );
     }
+}
+
+/// Close `issue` with `comment`, unless it is closed already or merging the
+/// PR for `branch` closes it.
+fn close_unless_merge_does(issue: &IssueUrl, branch: &str, comment: &str) -> Result<()> {
+    if github::merge_closes_issue(issue, branch)? || !github::issue_is_open(issue)? {
+        return Ok(());
+    }
+    progress::step(format_args!("closing issue #{}", issue.number));
+    github::close_issue(issue, comment)
+}
+
+/// Run `step`, and once more if it failed with the Run interrupted: Ctrl-C in
+/// a terminal also kills the git or gh the step was running.
+fn retry_if_interrupted(step: impl Fn() -> Result<()>) -> Result<()> {
+    step().or_else(|error| {
+        if interrupt::requested() {
+            step()
+        } else {
+            Err(error)
+        }
+    })
 }
 
 /// Report `error`, then a warning saying what to do about it by hand.

@@ -113,18 +113,17 @@ impl Worktree {
     /// [`Worktree::push`].
     pub fn delete_from_origin(&self) -> Result<()> {
         progress::step(format_args!("deleting {} on origin", self.branch));
-        let deleted = self
+        let Err(error) = self
             .git
-            .run(&["push", "--no-verify", "origin", "--delete", &self.branch]);
-        if deleted.is_err()
-            && self
-                .git
-                .run(&["ls-remote", "--heads", "origin", &self.branch])?
-                .is_empty()
-        {
+            .run(&["push", "--no-verify", "origin", "--delete", &self.branch])
+        else {
             return Ok(());
+        };
+        let reference = format!("refs/heads/{}", self.branch);
+        match self.git.run(&["ls-remote", "origin", &reference]) {
+            Ok(refs) if refs.is_empty() => Ok(()),
+            _ => Err(error),
         }
-        deleted.map(drop)
     }
 
     /// Let go of the worktree without removing it or the local Issue branch,

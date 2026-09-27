@@ -19,6 +19,10 @@ bare origin repo beside $FAKE_GH_STATE (`origin.git`), whose HEAD names the
 default branch. It closes the issues the PR body closes (`Closes #<n>` and the
 like) only when the base is the default branch, as GitHub does.
 
+A PR's `headRefOid` is its head branch's tip on origin, frozen when it is
+merged. Its `closingIssuesReferences` are the issues its body closes.
+`gh repo view` reports origin's HEAD as the default branch.
+
 `gh issue close` closes the issue, recording its `--comment`; on an issue
 already closed it only warns, as gh does.
 
@@ -32,6 +36,7 @@ command):
     gh fake checks <sha> '<JSON list>'      set the check runs on <sha>
     gh fake statuses <sha> '<JSON list>'    set the commit statuses on <sha>
     gh fake pr <head> <field> '<JSON>'      set a field of <head>'s newest PR
+    gh fake issue <number> <state>          set issue <number> OPEN or CLOSED
     gh fake on-ci-read <times> '<script>'   run <script> in bash the first time
                                             thirdshift reads CI on each new sha,
                                             for the next <times> shas
@@ -125,6 +130,11 @@ def pr_view(state, positional, flags):
     pr = matches[-1]
     wanted = flags["json"].split(",")
     fields = pr_fields(pr)
+    if "headRefOid" in wanted:
+        fields["headRefOid"] = pr.get("headRefOid") or origin("rev-parse", f"refs/heads/{head}")
+    fields["closingIssuesReferences"] = [
+        {"number": int(number)} for number in CLOSING_KEYWORD.findall(pr.get("body", ""))
+    ]
     if "mergeable" in wanted and pr.get("unknown_polls", 0) > 0:
         pr["unknown_polls"] -= 1
         save(state)
@@ -234,6 +244,7 @@ def pr_merge(state, positional, flags):
         if pushed.returncode != 0:
             die(f"fake gh: pushing the merge failed: {pushed.stderr}")
     pr["state"] = "MERGED"
+    pr["headRefOid"] = head_sha
     default = origin("symbolic-ref", "--short", "HEAD")
     if pr["base"] == default:
         for number in CLOSING_KEYWORD.findall(pr.get("body", "")):
@@ -249,6 +260,14 @@ def issue_view(state, positional, flags):
     if number not in state["issues"]:
         die(f"GraphQL: Could not resolve to an issue or pull request with the number of {number}.")
     fields = {"number": int(number), "state": state["issues"][number]}
+    wanted = flags["json"].split(",")
+    print(json.dumps({key: fields[key] for key in wanted}))
+
+
+def repo_view(state, positional, flags):
+    if positional and positional[0].lower() != state["repo"].lower():
+        die(f"fake gh: unknown repo {positional[0]}")
+    fields = {"defaultBranchRef": {"name": origin("symbolic-ref", "--short", "HEAD")}}
     wanted = flags["json"].split(",")
     print(json.dumps({key: fields[key] for key in wanted}))
 
@@ -325,6 +344,8 @@ def fake(state, args):
         state["on_ci_read"] = {"times": int(args[1]), "script": args[2], "seen": []}
     elif args[0] == "on-merge":
         state["on_merge"] = args[1]
+    elif args[0] == "issue":
+        state["issues"][args[1]] = args[2]
     elif args[0] == "fails":
         state.setdefault("failing", []).append(args[1])
     elif args[0] == "pr":
@@ -364,6 +385,9 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         issue_view(state, positional, flags)
+    elif args[:2] == ["repo", "view"]:
+        positional, flags = parse(args[2:])
+        repo_view(state, positional, flags)
     elif args[:2] == ["issue", "close"]:
         positional, flags = parse(args[2:])
         check_repo(state, flags)
