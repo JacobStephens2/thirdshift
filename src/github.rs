@@ -142,6 +142,23 @@ pub fn convert_to_draft(issue: &IssueUrl, branch: &str) -> Result<()> {
     ])
 }
 
+/// Merge the pull request whose head is `branch` into its base with a merge
+/// commit, but only if its head is still `head`. Never GitHub's auto-merge
+/// (ADR-0004), and never `--delete-branch`, whose local deletion would
+/// interfere with the worktree.
+pub fn merge(issue: &IssueUrl, branch: &str, head: &str) -> Result<()> {
+    gh(&[
+        "pr",
+        "merge",
+        branch,
+        "--repo",
+        &issue.repo_slug(),
+        "--merge",
+        "--match-head-commit",
+        head,
+    ])
+}
+
 /// Whether a pull request can be merged into its base.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mergeable {

@@ -1,6 +1,6 @@
 # thirdshift
 
-A factory that turns a GitHub issue into a ready-for-review pull request by running unattended agent sessions against it. The humans are the day shift; the agents work the third shift, overnight, on any server, while you do something else.
+A factory that turns a GitHub issue into a ready-for-review pull request, or on request a merged one, by running unattended agent sessions against it. The humans are the day shift; the agents work the third shift, overnight, on any server, while you do something else.
 
 Quality over quantity: a pull request marked ready for review is one the factory stands behind. When it can't stand behind the work, the **Run** is a **Failed run**: the work is pushed so nothing is lost, and the pull request goes back to a draft.
 
@@ -22,7 +22,8 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 4. Runs a headless Claude Code session in that worktree with the **Factory skills** loaded. The agent implements the issue, reviews its work against the Base branch, addresses the **Standards findings** and **Spec findings** it agrees with, and opens a ready-for-review pull request that lists every **Unaddressed finding** with a reason and closes the issue.
 5. Takes over deterministically: pushes the Issue branch, skipping your repo's git hooks since the session runs the tests and CI gates the pull request, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
 6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 5 per Run. If the Base branch moves while CI runs, it merges it again and goes round, at most 5 times per Run.
-7. Cleans up: removes the worktree, the local Issue branch and the temporary plugin directory, whether the Run succeeded or not. The one exception is a **Failed run** whose work could not be pushed: see below.
+7. In a **Merge run** (`thirdshift merge <Issue URL>`), does the **Self-merge**: once the pull request is open, ready for review, mergeable and green, thirdshift merges it into the Base branch with a merge commit, on exactly the head commit whose CI it watched (`gh pr merge --merge --match-head-commit <sha>`). It never uses GitHub's auto-merge ([ADR-0004](docs/adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)). A merge that fails makes the Run a Failed run.
+8. Cleans up: removes the worktree, the local Issue branch and the temporary plugin directory, whether the Run succeeded or not. The one exception is a **Failed run** whose work could not be pushed: see below.
 
 ### Status
 
@@ -97,9 +98,17 @@ thirdshift https://github.com/acme/widgets/issues/7
 
 A Run takes minutes to tens of minutes.
 
+To have the Run merge its pull request instead of leaving it for your review, start a **Merge run**:
+
+```sh
+thirdshift merge https://github.com/acme/widgets/issues/7
+```
+
+`thirdshift --merge <Issue URL>` does the same. The agent gets the same prompts either way; the only difference is the Self-merge at the end. The keyword goes before the URL: anything after the URL, `--merge` included, is an argument error.
+
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves a draft pull request. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
-- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too.
-- **Exit code** `0` means the Run ended with a pull request the factory stands behind. `2` means the argument is missing or isn't a GitHub Issue URL; the error and the help text go to stderr. Any other failure exits `1`.
+- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run.
+- **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. `2` means the Issue URL is missing or isn't a GitHub Issue URL, or something follows it; the error and the help text go to stderr. Any other failure exits `1`.
 
 The other commands:
 
@@ -140,7 +149,7 @@ A Run is not idempotent: re-running builds on whatever is already on the branch,
 
 ## Failed runs
 
-A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, a session that still ends while waiting on background work after its Resume, and a Base branch that keeps moving while CI runs.
+A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI, or, for a Merge run, without that pull request merged. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, a session that still ends while waiting on background work after its Resume, and a Base branch that keeps moving while CI runs.
 
 A Failed run:
 
