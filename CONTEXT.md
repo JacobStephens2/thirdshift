@@ -1,11 +1,11 @@
 # thirdshift
 
-A factory that turns a GitHub issue into a ready-for-review pull request by running unattended agent sessions against it: the humans are the day shift, the agents work the third shift. Quality over quantity: a pull request marked ready for review is one the factory stands behind.
+A factory that turns a GitHub issue into a ready-for-review pull request, or on request a merged one, by running unattended agent sessions against it: the humans are the day shift, the agents work the third shift. Quality over quantity: a pull request marked ready for review, or merged by the factory, is one the factory stands behind.
 
 ## Language
 
 **Day shift**:
-The human half of the workflow: shaping work into issues the factory can take on (grilling, specs, tickets), and reviewing the pull requests it delivers.
+The human half of the workflow: shaping work into issues the factory can take on (grilling, specs, tickets), and reviewing the pull requests it delivers, except those a **Merge run** merges itself.
 _Avoid_: planning phase
 
 **Issue URL**:
@@ -34,8 +34,15 @@ A **Standards finding** or **Spec finding** the agent chose not to fix. It is li
 **Run**:
 One invocation of the factory on an **Issue URL**, from launch to cleanup.
 
+**Merge run**:
+A **Run** asked to end with its pull request merged rather than left for review. It does everything a **Run** does, then a **Self-merge**.
+_Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
+
+**Self-merge**:
+The step at the end of a **Merge run** in which thirdshift itself merges the pull request into the **Base branch** with a merge commit, once it is open, ready for review, mergeable and green on the head commit it merges. No human reviews it first. It ends with the **Issue branch** deleted and the issue closed, by thirdshift if the merge did not close it.
+
 **Failed run**:
-A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI. Its work is still pushed so nothing is lost (or, if the push fails, its worktree and local **Issue branch** are kept), and its open pull request, if any, is converted back to a draft.
+A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI. For a **Merge run**, it is also a Run that ends without its pull request merged. Its work is still pushed so nothing is lost (or, if the push fails, its worktree and local **Issue branch** are kept), and its open pull request, if any, is converted back to a draft, unless the pull request is ready, mergeable and green and only the **Self-merge** could not happen.
 
 **Issue branch**:
 A branch a **Run** works on for one issue: `issue-<n>` (the first), then `issue-<n>-branch-<k>` for k ≥ 2. A number counts as used once its pull request is merged or closed, even if the branch itself was deleted.
@@ -44,7 +51,10 @@ A branch a **Run** works on for one issue: `issue-<n>` (the first), then `issue-
 A **Run** that picks up an existing **Issue branch**, one with no pull request or an open one, instead of starting fresh. When a pull request is open, its base is the **Base branch**.
 
 **Repair**:
-A follow-up agent session a **Run** starts after the pull request exists, either to resolve a merge conflict with the **Base branch** or to fix failing CI checks.
+A follow-up agent session a **Run** starts after the pull request exists: to resolve a merge conflict with the **Base branch** or the **Issue branch** on `origin`, to fix failing CI checks, or, in a **Merge run**, to review and fix **Foreign commits**.
+
+**Foreign commit**:
+A commit that appears on the **Issue branch** during a **Run** and was made neither by one of that Run's sessions nor by thirdshift itself. Commits already on the branch when a **Continuation** starts are not Foreign commits. A **Merge run** merges one only after a **Repair** has reviewed it.
 
 **Resume**:
 A continuation of the same agent session, started once when that session ended its turn while waiting on background work, which was killed with it. It asks the agent to re-run that work in the foreground and finish. A Resume is not a **Repair** and does not count against the Repair cap.
