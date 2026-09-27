@@ -97,13 +97,13 @@ fn implement(
 }
 
 /// The most Repair sessions a Run starts, conflict and CI-fix combined.
-const MAX_REPAIRS: usize = 3;
+const MAX_REPAIRS: usize = 5;
 
 /// The most times a Run goes round again because the Base branch moved while
 /// CI ran, whether or not the merge that follows needs a Repair. A clean merge
 /// uses no Repair, so without this a busy Base branch could keep a Run going
 /// forever.
-const MAX_BASE_MOVES: usize = 3;
+const MAX_BASE_MOVES: usize = 5;
 
 /// Keep the PR mergeable and its CI green: merge the Base branch (never
 /// rebase), push, and watch CI on the head commit, starting a Repair session

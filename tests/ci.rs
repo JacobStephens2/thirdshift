@@ -1,5 +1,5 @@
 //! Watching CI: after each push thirdshift waits for checks on the head
-//! commit, hands red CI to a CI-fix Repair, and gives up after 3 Repairs.
+//! commit, hands red CI to a CI-fix Repair, and gives up after 5 Repairs.
 
 mod support;
 
@@ -127,10 +127,10 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
 }
 
 #[test]
-fn red_ci_after_three_repairs_is_a_failed_run() {
+fn red_ci_after_the_last_repair_is_a_failed_run() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
-    for session in 2..=4 {
+    for session in 2..=6 {
         scenario.agent_does_in_session(
             session,
             &format!("{}{}", commits_fix(session - 1), checks_on_head(RED)),
@@ -148,15 +148,15 @@ fn red_ci_after_three_repairs_is_a_failed_run() {
     );
     assert_eq!(
         scenario.claude_calls().len(),
-        4,
-        "the implement session and 3 Repairs"
+        6,
+        "the implement session and 5 Repairs"
     );
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[..2],
         [
             "thirdshift: failed run (repairs exhausted: CI red)".to_string(),
-            "Fix CI 3".to_string(),
+            "Fix CI 5".to_string(),
         ]
     );
     scenario.assert_cleaned_up("issue-7");
@@ -184,11 +184,11 @@ fn resolves_conflict(file: &str) -> String {
 }
 
 #[test]
-fn conflict_and_ci_fix_repairs_share_the_cap_of_three() {
+fn conflict_and_ci_fix_repairs_share_one_cap() {
     let scenario = Scenario::new();
-    // Repair 1 resolves a conflict and leaves CI red; Repair 2 fixes CI but it
-    // stays red; Repair 3 fixes CI again, but main moves on to a conflict,
-    // which would need a 4th Repair.
+    // Repair 1 resolves a conflict and leaves CI red; Repairs 2 to 4 fix CI
+    // but it stays red; Repair 5 fixes CI again, but main moves on to a
+    // conflict, which would need a 6th Repair.
     scenario.agent_does(&format!(
         "{AGENT_OPENS_PR}{}",
         base_moves_on("feature.txt", "base feature")
@@ -201,14 +201,19 @@ fn conflict_and_ci_fix_repairs_share_the_cap_of_three() {
             checks_on_head(RED)
         ),
     );
-    scenario.agent_does_in_session(3, &format!("{}{}", commits_fix(1), checks_on_head(RED)));
+    for session in 3..=5 {
+        scenario.agent_does_in_session(
+            session,
+            &format!("{}{}", commits_fix(session - 2), checks_on_head(RED)),
+        );
+    }
     scenario.agent_does_in_session(
-        4,
+        6,
         &format!(
             "{}{}{}",
-            commits_fix(2),
+            commits_fix(4),
             checks_on_head(GREEN),
-            base_moves_on("fix-2.txt", "base fix")
+            base_moves_on("fix-4.txt", "base fix")
         ),
     );
 
@@ -233,10 +238,14 @@ fn conflict_and_ci_fix_repairs_share_the_cap_of_three() {
                 .to_string()
         })
         .collect();
-    assert_eq!(prompts.len(), 4, "prompts: {prompts:?}");
+    assert_eq!(prompts.len(), 6, "prompts: {prompts:?}");
     assert_eq!(prompts[1], "/thirdshift:resolving-merge-conflicts");
-    assert!(prompts[2].starts_with("CI failed on pull request"));
-    assert!(prompts[3].starts_with("CI failed on pull request"));
+    for prompt in &prompts[2..] {
+        assert!(
+            prompt.starts_with("CI failed on pull request"),
+            "prompts: {prompts:?}"
+        );
+    }
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
     scenario.assert_cleaned_up("issue-7");
 }
