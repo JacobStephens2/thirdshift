@@ -286,7 +286,7 @@ fn a_failed_issue_close_still_exits_as_merged_with_a_warning() {
     assert_eq!(scenario.origin_log("issue-7"), None);
     assert!(
         result.stderr.contains(&format!(
-            "warning: could not close issue #7, so close it by hand: \
+            "warning: could not close issue #7, so if it is still open, close it by hand: \
              gh issue close 7 --repo acme/widgets --comment '{CLOSING_COMMENT}'"
         )),
         "stderr: {}",

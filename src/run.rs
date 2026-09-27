@@ -166,10 +166,11 @@ fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
         warn(
             &error,
             format_args!(
-                "could not close issue #{number}, so close it by hand: \
-                 gh issue close {number} --repo {repo} --comment '{comment}'",
+                "could not close issue #{number}, so if it is still open, close it by hand: \
+                 gh issue close {number} --repo {repo} --comment '{quoted}'",
                 number = issue.number,
-                repo = issue.repo_slug()
+                repo = issue.repo_slug(),
+                quoted = comment.replace('\'', r"'\''")
             ),
         );
     }

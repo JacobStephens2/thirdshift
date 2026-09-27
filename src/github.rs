@@ -94,17 +94,22 @@ impl PullRequest {
     }
 }
 
-/// The pull request whose head is `branch`, if `gh` finds one.
-pub fn pull_request_for(issue: &IssueUrl, branch: &str) -> Result<Option<PullRequest>> {
-    let json = match gh_json(&[
+/// The `fields` of the pull request whose head is `branch`, as JSON.
+fn pr_view(issue: &IssueUrl, branch: &str, fields: &str) -> Result<Value> {
+    gh_json(&[
         "pr",
         "view",
         branch,
         "--repo",
         &issue.repo_slug(),
         "--json",
-        PR_FIELDS,
-    ]) {
+        fields,
+    ])
+}
+
+/// The pull request whose head is `branch`, if `gh` finds one.
+pub fn pull_request_for(issue: &IssueUrl, branch: &str) -> Result<Option<PullRequest>> {
+    let json = match pr_view(issue, branch, PR_FIELDS) {
         Ok(json) => json,
         Err(error) if format!("{error:#}").contains("no pull requests found") => return Ok(None),
         Err(error) => return Err(error),
@@ -183,15 +188,7 @@ pub fn merge(issue: &IssueUrl, branch: &str, head: &str) -> Result<()> {
 /// The head commit the pull request whose head is `branch` was merged at, if
 /// it is merged.
 fn merged_head(issue: &IssueUrl, branch: &str) -> Result<Option<String>> {
-    let json = gh_json(&[
-        "pr",
-        "view",
-        branch,
-        "--repo",
-        &issue.repo_slug(),
-        "--json",
-        "state,headRefOid",
-    ])?;
+    let json = pr_view(issue, branch, "state,headRefOid")?;
     if json["state"] != "MERGED" {
         return Ok(None);
     }
@@ -206,15 +203,7 @@ fn merged_head(issue: &IssueUrl, branch: &str) -> Result<Option<String>> {
 /// only when it merges into the repository's default branch, and a moment
 /// after the merge rather than with it.
 pub fn merge_closes_issue(issue: &IssueUrl, branch: &str) -> Result<bool> {
-    let pr = gh_json(&[
-        "pr",
-        "view",
-        branch,
-        "--repo",
-        &issue.repo_slug(),
-        "--json",
-        "baseRefName,closingIssuesReferences",
-    ])?;
+    let pr = pr_view(issue, branch, "baseRefName,closingIssuesReferences")?;
     let repo = gh_json(&[
         "repo",
         "view",
@@ -242,15 +231,7 @@ pub enum Mergeable {
 
 /// Whether the pull request whose head is `branch` can be merged.
 pub fn mergeable(issue: &IssueUrl, branch: &str) -> Result<Mergeable> {
-    let json = gh_json(&[
-        "pr",
-        "view",
-        branch,
-        "--repo",
-        &issue.repo_slug(),
-        "--json",
-        "mergeable",
-    ])?;
+    let json = pr_view(issue, branch, "mergeable")?;
     match json["mergeable"].as_str() {
         Some("MERGEABLE") => Ok(Mergeable::Yes),
         Some("CONFLICTING") => Ok(Mergeable::No),
