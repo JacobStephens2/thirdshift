@@ -193,3 +193,227 @@ fn a_merge_refused_because_the_head_moved_is_a_failed_run() {
     assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
 }
+
+/// Bash that has someone else push `file` with `content` to main.
+fn base_moves_on(file: &str, content: &str) -> String {
+    format!(
+        r#"
+other="$(mktemp -d)"
+git clone -q https://github.com/acme/widgets.git "$other"
+echo "{content}" > "$other/{file}"
+git -C "$other" add -A
+git -C "$other" commit -q -m "Base moves on"
+git -C "$other" push -q origin main
+rm -rf "$other"
+"#
+    )
+}
+
+/// Bash that runs `script` before each of the next `times` merge attempts.
+fn on_merge(times: usize, script: &str) -> String {
+    format!(
+        "gh fake on-merge {times} '{}'\n",
+        script.replace('\'', r"'\''")
+    )
+}
+
+/// Bash that has the next `times` merge attempts fail with `error`.
+fn refuse_merges(times: usize, error: &str) -> String {
+    format!("gh fake refuse-merges {times} '{error}'\n")
+}
+
+/// Bash that sets the check runs on the worktree's HEAD to `checks`.
+fn checks_on_head(checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse HEAD)\" '{checks}'\n")
+}
+
+/// Bash that commits a fix, `fix-<n>.txt`, as a CI-fix Repair would.
+fn commits_fix(n: usize) -> String {
+    format!("echo fix > fix-{n}.txt\ngit add fix-{n}.txt\ngit commit -q -m \"Fix CI {n}\"\n")
+}
+
+const GREEN: &str = r#"[{"name": "test", "conclusion": "success"}]"#;
+const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
+
+/// The conflict Repair keeps both sides of feature.txt and finishes the merge.
+const REPAIR_RESOLVES_CONFLICT: &str = r#"
+printf 'feature\nbase feature\n' > feature.txt
+git add feature.txt
+git commit -q --no-edit
+"#;
+
+#[test]
+fn a_merge_that_fails_on_a_base_branch_conflict_gets_a_conflict_repair_then_merges() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        on_merge(1, &base_moves_on("feature.txt", "base feature"))
+    ));
+    scenario.agent_does_in_session(2, REPAIR_RESOLVES_CONFLICT);
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert!(
+        result.stderr.contains("not mergeable"),
+        "the merge error is not shown: {}",
+        result.stderr
+    );
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1]["merging"], true);
+    assert_eq!(merge_calls(&scenario).len(), 2);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    assert_issue_7_merged_into(&scenario, "main");
+    assert_eq!(
+        scenario.origin_file("main", "feature.txt").unwrap(),
+        "feature\nbase feature\n"
+    );
+}
+
+#[test]
+fn a_merge_that_fails_then_finds_red_ci_on_a_new_head_gets_a_ci_fix_repair_then_merges() {
+    let scenario = Scenario::new();
+    // The Base branch moves as the merge is tried, and CI on the head that
+    // merges it in goes red.
+    let at_merge = format!(
+        "{}gh fake on-ci-read 1 'gh fake checks \"$FAKE_CI_SHA\" '\\''{RED}'\\'''\n",
+        base_moves_on("other.txt", "other")
+    );
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}{}",
+        checks_on_head(GREEN),
+        on_merge(1, &at_merge),
+        refuse_merges(
+            1,
+            "Base branch was modified. Review and try the merge again."
+        ),
+    ));
+    scenario.agent_does_in_session(2, &format!("{}{}", commits_fix(1), checks_on_head(GREEN)));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls[1]["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("CI failed on pull request"),
+        "prompt: {}",
+        calls[1]["prompt"]
+    );
+    let head = assert_issue_7_merged_into(&scenario, "main");
+    assert_eq!(merge_calls(&scenario).len(), 2);
+    assert_eq!(merge_calls(&scenario)[1].last(), Some(&head));
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        "Fix CI 1",
+        "the fix is not the merged head"
+    );
+}
+
+#[test]
+fn merge_failures_that_keep_moving_the_base_branch_spend_the_base_move_budget() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        on_merge(6, &base_moves_on("other-$RANDOM$RANDOM.txt", "other")),
+        refuse_merges(
+            6,
+            "Base branch was modified. Review and try the merge again."
+        ),
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("origin/main kept moving: merged it again 5 times"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(merge_calls(&scenario).len(), 6);
+    let pr = &scenario.gh_state()["prs"][0];
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(
+        pr["isDraft"], true,
+        "an exhausted budget is no policy refusal"
+    );
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+}
+
+#[test]
+fn a_repair_needed_after_a_failed_merge_counts_against_the_repair_cap() {
+    let scenario = Scenario::new();
+    // Five CI-fix Repairs before the first merge attempt leave none for the
+    // conflict the merge then runs into.
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        checks_on_head(RED),
+        on_merge(1, &base_moves_on("feature.txt", "base feature")),
+    ));
+    for session in 2..=6 {
+        let checks = if session == 6 { GREEN } else { RED };
+        scenario.agent_does_in_session(
+            session,
+            &format!("{}{}", commits_fix(session - 1), checks_on_head(checks)),
+        );
+    }
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("repairs exhausted: conflict"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 6);
+    assert_eq!(merge_calls(&scenario).len(), 1);
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+}
+
+#[test]
+fn a_merge_refused_with_nothing_left_to_fix_leaves_the_pr_ready_for_review() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        refuse_merges(1, "Merge commits are not allowed on this repository."),
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert!(
+        result
+            .stderr
+            .contains("Merge commits are not allowed on this repository."),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("is merged"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    let pr = &scenario.gh_state()["prs"][0];
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+    // No failure commit: the PR stays on the head whose CI was watched.
+    let head = scenario
+        .origin_git(&["rev-parse", "refs/heads/issue-7"])
+        .trim()
+        .to_string();
+    assert_eq!(merge_calls(&scenario)[0].last(), Some(&head));
+    assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    scenario.assert_cleaned_up("issue-7");
+}

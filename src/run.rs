@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::branch::{self, Selection};
 use crate::ci::{self, Ci};
-use crate::failed_run::{self, FailedRun};
+use crate::failed_run::{self, FailedRun, PolicyRefusal};
 use crate::git::Git;
 use crate::github::{self, Mergeable, PullRequest};
 use crate::interrupt;
@@ -76,7 +76,9 @@ pub fn run(issue: &IssueUrl, goal: Goal) -> Result<String, FailedRun> {
 
 /// The implement session given `prompt`, the checks on the PR it opened or
 /// updated, keeping that PR mergeable and, in a Merge run, the Self-merge.
-/// `log` is left at the most recent session's log.
+/// A merge that fails goes back round the Repair loop and is tried again on
+/// the new head; if that round finds nothing to fix, the Run fails with a
+/// `PolicyRefusal`. `log` is left at the most recent session's log.
 fn implement(
     issue: &IssueUrl,
     worktree: &Worktree,
@@ -108,91 +110,158 @@ fn implement(
         github::mark_ready(issue, branch)?;
     }
 
-    let watched = repair_loop(issue, worktree, base, &pr.url, &mut run_session)?;
-    ensure_pr_ready_and_mergeable(issue, branch)?;
-    if interrupt::requested() {
-        bail!("interrupted");
-    }
-    if goal == Goal::Merged {
+    let mut repair_loop = RepairLoop {
+        issue,
+        worktree,
+        base,
+        pr_url: &pr.url,
+        budgets: Budgets::default(),
+    };
+    let mut watched = repair_loop.run(&mut run_session)?;
+    loop {
+        ensure_pr_ready_and_mergeable(issue, branch)?;
+        if interrupt::requested() {
+            bail!("interrupted");
+        }
+        if goal == Goal::ReadyForReview {
+            return Ok(pr.url);
+        }
         progress::step(format_args!("merging the PR into {base}"));
-        github::merge(issue, branch, &watched)?;
+        let Err(error) = github::merge(issue, branch, &watched) else {
+            return Ok(pr.url);
+        };
+        progress::step(format_args!("the merge failed: {error:#}"));
+        match repair_loop.round_after_failed_merge(&watched, &mut run_session)? {
+            Round::NewHead(head) => watched = head,
+            Round::NothingToFix => {
+                // Only a PR still ready and mergeable is left ready.
+                ensure_pr_ready_and_mergeable(issue, branch)?;
+                return Err(error.context(PolicyRefusal));
+            }
+        }
     }
-    Ok(pr.url)
 }
 
 /// The most Repair sessions a Run starts, conflict and CI-fix combined.
 const MAX_REPAIRS: usize = 5;
 
 /// The most times a Run goes round again because the Base branch moved while
-/// CI ran, whether or not the merge that follows needs a Repair. A clean merge
-/// uses no Repair, so without this a busy Base branch could keep a Run going
-/// forever.
+/// CI ran or since a merge was tried, whether or not the merge that follows
+/// needs a Repair. A clean merge uses no Repair, so without this a busy Base
+/// branch could keep a Run going forever.
 const MAX_BASE_MOVES: usize = 5;
 
-/// Keep the PR mergeable and its CI green: merge the Base branch (never
-/// rebase), push, and watch CI on the head commit, starting a Repair session
-/// through `run_session` for a conflict or red CI and then going round again,
-/// since the Base branch may have moved meanwhile. Green or absent CI also
-/// goes round again if the Base branch moved while CI ran. Returns the head
-/// commit whose CI was last watched and found green or absent. Fails once a
-/// Repair beyond `MAX_REPAIRS`, or a round beyond `MAX_BASE_MOVES`, would be
-/// needed.
-fn repair_loop(
-    issue: &IssueUrl,
-    worktree: &Worktree,
-    base: &str,
-    pr_url: &str,
-    run_session: &mut impl FnMut(&str, &str) -> Result<()>,
-) -> Result<String> {
-    let branch = worktree.branch();
-    let mut repairs = 0;
-    let mut base_moves = 0;
-    // Counts the Repair about to start, as `repair-<n>`, or fails if it would
-    // be one too many.
-    let mut next_repair = |cause: &str| -> Result<String> {
-        if repairs == MAX_REPAIRS {
+/// What a Run has spent of its Repair and base-move budgets, across every
+/// round of the Repair loop, those after a failed merge included.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Budgets {
+    repairs: usize,
+    base_moves: usize,
+}
+
+impl Budgets {
+    /// Counts the Repair about to start, as `repair-<n>`, or fails if it would
+    /// be one too many.
+    fn next_repair(&mut self, cause: &str) -> Result<String> {
+        if self.repairs == MAX_REPAIRS {
             bail!("repairs exhausted: {cause}");
         }
-        repairs += 1;
+        self.repairs += 1;
         progress::step(format_args!(
-            "{cause}; starting Repair {repairs} of {MAX_REPAIRS}"
+            "{cause}; starting Repair {} of {MAX_REPAIRS}",
+            self.repairs
         ));
-        Ok(format!("repair-{repairs}"))
-    };
-    loop {
-        if worktree.merge_base_branch(base)? == Merge::Conflicted {
-            let kind = next_repair("conflict")?;
-            run_session(&kind, &prompt::conflict_repair(issue, base, branch, pr_url))?;
-            worktree.ensure_base_branch_merged(base)?;
-            worktree.push()?;
-            continue;
+        Ok(format!("repair-{}", self.repairs))
+    }
+
+    /// Counts a round taken because `origin/<base>` moved `when`, or fails if
+    /// it would be one too many.
+    fn count_base_move(&mut self, base: &str, when: &str) -> Result<()> {
+        if self.base_moves == MAX_BASE_MOVES {
+            bail!("origin/{base} kept moving: merged it again {MAX_BASE_MOVES} times");
         }
-        worktree.push()?;
-        let head = worktree.head()?;
-        match ci::watch(issue, &head)? {
-            Ci::Absent | Ci::Passed => {
-                if !worktree.base_branch_moved(base)? {
-                    return Ok(head);
-                }
-                if base_moves == MAX_BASE_MOVES {
-                    bail!(
-                        "origin/{base} kept moving while CI ran: merged it again {MAX_BASE_MOVES} times"
-                    );
-                }
-                base_moves += 1;
-                progress::step(format_args!(
-                    "origin/{base} moved while CI ran; merging it again"
-                ));
-            }
-            Ci::Failed(failed) => {
-                let kind = next_repair("CI red")?;
-                run_session(
-                    &kind,
-                    &prompt::ci_fix_repair(issue, base, branch, pr_url, &failed),
-                )?;
+        self.base_moves += 1;
+        progress::step(format_args!("origin/{base} moved {when}; merging it again"));
+        Ok(())
+    }
+}
+
+/// What a round of the Repair loop after a failed merge came to.
+enum Round {
+    /// A head whose CI was found green or absent, to try the merge on.
+    NewHead(String),
+    /// The same head, with no Repair and no base move: a policy refusal.
+    NothingToFix,
+}
+
+/// Keeps the PR mergeable and its CI green, within the Run's budgets.
+struct RepairLoop<'a> {
+    issue: &'a IssueUrl,
+    worktree: &'a Worktree,
+    base: &'a str,
+    pr_url: &'a str,
+    budgets: Budgets,
+}
+
+impl RepairLoop<'_> {
+    /// Merge the Base branch (never rebase), push, and watch CI on the head
+    /// commit, starting a Repair session through `run_session` for a conflict
+    /// or red CI and then going round again, since the Base branch may have
+    /// moved meanwhile. Green or absent CI also goes round again if the Base
+    /// branch moved while CI ran. Returns the head commit whose CI was last
+    /// watched and found green or absent. Fails once a Repair beyond
+    /// `MAX_REPAIRS`, or a round beyond `MAX_BASE_MOVES`, would be needed.
+    fn run(&mut self, run_session: &mut impl FnMut(&str, &str) -> Result<()>) -> Result<String> {
+        let (issue, worktree, base, pr_url) = (self.issue, self.worktree, self.base, self.pr_url);
+        let branch = worktree.branch();
+        loop {
+            if worktree.merge_base_branch(base)? == Merge::Conflicted {
+                let kind = self.budgets.next_repair("conflict")?;
+                run_session(&kind, &prompt::conflict_repair(issue, base, branch, pr_url))?;
+                worktree.ensure_base_branch_merged(base)?;
                 worktree.push()?;
+                continue;
+            }
+            worktree.push()?;
+            let head = worktree.head()?;
+            match ci::watch(issue, &head)? {
+                Ci::Absent | Ci::Passed => {
+                    if !worktree.base_branch_moved(base)? {
+                        return Ok(head);
+                    }
+                    self.budgets.count_base_move(base, "while CI ran")?;
+                }
+                Ci::Failed(failed) => {
+                    let kind = self.budgets.next_repair("CI red")?;
+                    run_session(
+                        &kind,
+                        &prompt::ci_fix_repair(issue, base, branch, pr_url, &failed),
+                    )?;
+                    worktree.push()?;
+                }
             }
         }
+    }
+
+    /// Go round again after a merge of `watched` failed, counting a Base
+    /// branch that moved since as a base move. GitHub's error text is never
+    /// consulted.
+    fn round_after_failed_merge(
+        &mut self,
+        watched: &str,
+        run_session: &mut impl FnMut(&str, &str) -> Result<()>,
+    ) -> Result<Round> {
+        let before = self.budgets;
+        if self.worktree.base_branch_moved(self.base)? {
+            self.budgets
+                .count_base_move(self.base, "since the merge was tried")?;
+        }
+        let head = self.run(run_session)?;
+        Ok(if head == watched && self.budgets == before {
+            Round::NothingToFix
+        } else {
+            Round::NewHead(head)
+        })
     }
 }
 
