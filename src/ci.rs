@@ -21,7 +21,7 @@ pub enum Ci {
 /// them until they have all finished.
 pub fn watch(issue: &IssueUrl, sha: &str) -> Result<Ci> {
     let grace = poll::grace_period();
-    let short = &sha[..sha.len().min(7)];
+    let short = short(sha);
     progress::step(format_args!(
         "waiting up to {}s for CI on {short}",
         grace.as_secs()
@@ -63,6 +63,11 @@ pub fn watch(issue: &IssueUrl, sha: &str) -> Result<Ci> {
     let names: Vec<&str> = failed.iter().map(|check| check.name.as_str()).collect();
     progress::step(format_args!("CI failed on {short}: {}", names.join(", ")));
     Ok(Ci::Failed(failed))
+}
+
+/// `sha` shortened to 7 characters, as in progress messages.
+pub fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(7)]
 }
 
 fn count(checks: &[Check], state: CheckState) -> usize {

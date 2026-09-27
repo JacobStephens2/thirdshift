@@ -1,5 +1,6 @@
 //! Watching CI: after each push thirdshift waits for checks on the head
-//! commit, hands red CI to a CI-fix Repair, and gives up after 5 Repairs.
+//! commit, hands red CI to a CI-fix Repair, and gives up after 5 Repairs, or
+//! as soon as a CI-fix Repair makes no commit.
 
 mod support;
 
@@ -162,6 +163,98 @@ fn red_ci_after_the_last_repair_is_a_failed_run() {
     scenario.assert_cleaned_up("issue-7");
 }
 
+/// The cause of a Failed run whose CI-fix Repair left `head`, CI red, as it
+/// was.
+fn declined_ci_fix(head: &str) -> String {
+    format!(
+        "CI red on {} and the Repair found nothing to fix on the branch",
+        &head[..7]
+    )
+}
+
+/// Assert that a Failed run's stderr ends by naming the `kind` session's log.
+fn assert_session_log_is(result: &support::RunResult, kind: &str) {
+    let last = result.stderr.lines().last().unwrap_or_default();
+    assert!(
+        last.starts_with("thirdshift: session log: ") && last.ends_with(&format!("-{kind}.jsonl")),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_ci_fix_repair_that_makes_no_commit_is_a_failed_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    // The Repair finds the failure isn't the branch's and commits nothing.
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    let cause = declined_ci_fix(watched.trim());
+    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("repairs exhausted"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        result.stderr.matches("starting Repair").count(),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        2,
+        "the implement session and 1 Repair"
+    );
+    assert_session_log_is(&result, "repair-1");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            format!("thirdshift: failed run ({cause})"),
+            "Add feature".to_string(),
+            "Initial commit".to_string(),
+        ])
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_second_ci_fix_repair_that_makes_no_commit_is_a_failed_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    scenario.agent_does_in_session(2, &format!("{}{}", commits_fix(1), checks_on_head(RED)));
+    // The second Repair commits nothing.
+    scenario.agent_does_in_session(3, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    assert!(
+        result.stderr.contains(&declined_ci_fix(watched.trim())),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        3,
+        "the implement session and 2 Repairs"
+    );
+    assert_session_log_is(&result, "repair-2");
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[1],
+        "Fix CI 1".to_string()
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+}
+
 /// Bash that pushes `file` with `content` to main from another clone, as if
 /// someone else's work landed while the agent was busy.
 fn base_moves_on(file: &str, content: &str) -> String {
@@ -181,6 +274,26 @@ rm -rf "$other"
 /// The conflict Repair keeps both sides of `file` and finishes the merge.
 fn resolves_conflict(file: &str) -> String {
     format!("echo resolved > {file}\ngit add {file}\ngit commit -q --no-edit\n")
+}
+
+#[test]
+fn a_ci_fix_repair_that_makes_no_commit_goes_round_if_the_base_branch_moved() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    // The Repair commits nothing, but main moves on meanwhile, so CI is
+    // watched on the merge commit instead, which has no checks.
+    scenario.agent_does_in_session(2, &base_moves_on("other.txt", "other"));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert!(
+        result.stderr.contains("no CI checks appeared"),
+        "stderr: {}",
+        result.stderr
+    );
+    scenario.assert_cleaned_up("issue-7");
 }
 
 #[test]
