@@ -1,7 +1,7 @@
 //! Keeping the PR mergeable: once the PR is confirmed, thirdshift merges the
 //! Base branch into the Issue branch and pushes, handing a conflicting merge to
 //! a conflict Repair session first. If the Base branch moves while CI runs, it
-//! merges it again, at most three times.
+//! merges it again, at most five times.
 
 mod support;
 
@@ -283,11 +283,11 @@ fn fails_when_the_base_branch_keeps_moving_during_the_ci_wait() {
     assert!(
         result
             .stderr
-            .contains("origin/main kept moving while CI ran: merged it again 3 times"),
+            .contains("origin/main kept moving while CI ran: merged it again 5 times"),
         "stderr: {}",
         result.stderr
     );
-    // Three moves merged; the fourth ends the Run.
+    // Five moves merged; the sixth ends the Run.
     let merges = scenario.origin_git(&["log", "--merges", "--format=%s", "issue-7"]);
-    assert_eq!(merges.lines().count(), 3, "merges: {merges}");
+    assert_eq!(merges.lines().count(), 5, "merges: {merges}");
 }
