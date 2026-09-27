@@ -1,6 +1,7 @@
-# Sep 22 2026: create cli command to implement GitHub issue
 
 Agents, do not modify this file. It is for human handwritten content.
+
+# Sep 22 2026: create cli command to implement GitHub issue
 
 ## Round 1
 
@@ -17,7 +18,7 @@ I made the factory-skills directory and put in it skills which this program can 
 The prompt could be:
 
 ```
-/implement <gh issue>
+/implement `<gh issue>`
 Address standards and spec findings.
 Create a pull request using /pr and set it to ready for review.
 ```
@@ -47,7 +48,7 @@ I updated the factory-skills dir to be called pocockfactory-skills.
 2 - The skills should be headless by design. I already started to edit them in this way and if you have any other edits to them you'd suggest run those by me first. And if you would suggest a revision to the prompt format, run that by me as well such as including the base branch for example as the prompt I have here already passes in the GitHub issue:
 
 ```
-/implement <gh issue>
+/implement `<gh issue>`
 Address standards and spec findings.
 Create a pull request using /pr and set it to ready for review.
 ```
@@ -58,7 +59,7 @@ Create a pull request using /pr and set it to ready for review.
 
 5 - Different letter casings, a missing .git suffix and ssh origins should all count as matches. 
 
-6 - The work tree location should be put in a sibling directory and the branch name should use the format issue-<n>. Is the br base branch the branch that is checked out in the directory in which the program command will be written. If so, then yes, I want to create off the base branch. The pull request target should be the base branch, assuming base branch is how I just described it. And yes, the agent should push. After the run, the worktree should be deleted. 
+6 - The work tree location should be put in a sibling directory and the branch name should use the format issue-{4}. Is the br base branch the branch that is checked out in the directory in which the program command will be written. If so, then yes, I want to create off the base branch. The pull request target should be the base branch, assuming base branch is how I just described it. And yes, the agent should push. After the run, the worktree should be deleted. 
 
 7 - I created a jacob user which I'll switch to in order to run the program. I'm curious though, will Claude run in auto mode as root? I want the agent to use the permissions that the user, the Linux user which ran the command has. 
 
@@ -75,19 +76,19 @@ I just installed claude and gh as the jacob user.
 2 - Yes, that prompt is good. I revised it a bit, modifying the one-line reason note.
 
 ```
-/pocockfactory:implement <issue URL>
-The base branch is <base>. Review with /pocockfactory:code-review using <base> as the fixed point.
+/pocockfactory:implement `<issue URL>`
+The base branch is `<base>`. Review with /pocockfactory:code-review using `<base>` as the fixed point.
 Address the Standards and Spec findings you agree with.
-Push branch issue-<issue number> and create a pull request against <base> using /pocockfactory:pr, marked ready for review.
+Push branch issue-`<issue number>` and create a pull request against `<base>` using /pocockfactory:pr, marked ready for review.
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
-Include "Closes #<issue number>" in the PR body.
+Include "Closes #`<issue number>`" in the PR body.
 ```
 
 3 - I made revisions to the skills - similar to what was suggested.
 
-4 - Always delete the work tree. Even when the run fails. A new work tree can be created fairly easily. And yes, also delete the local issue-<issue number> branch at the end of the run given it is already pushed at this point in order to keep the workspace tidy. 
+4 - Always delete the work tree. Even when the run fails. A new work tree can be created fairly easily. And yes, also delete the local `issue-<issue number>` branch at the end of the run given it is already pushed at this point in order to keep the workspace tidy. 
 
-5 - ~/.pocockfactory/logs/<owner>-<repo>-issue-<n>-<timestamp>.jsonl, in the home directory of the user who runs it. This directory structure should be created by the program if it doesn't exist. 
+5 - `~/.pocockfactory/logs/<owner>-<repo>-issue-<n>-<timestamp>.jsonl`, in the home directory of the user who runs it. This directory structure should be created by the program if it doesn't exist. 
 
 6 - Require all of the following, and exit with an error otherwise: a branch is checked out (not a detached HEAD), the branch exists on origin, and the local branch is not ahead of origin. Uncommitted changes are fine, since they're just left out.
 
@@ -95,9 +96,9 @@ Include "Closes #<issue number>" in the PR body.
 
 1 - I choose Rust so that the skills can be embedded into the binary.
 
-2 - c: On failure, have the program push the issue-<n> branch and then delete the local branch. I agree that the same cleanup should run when you press ctrl C. I'm trying to think of a way for that branch which is pushed to somehow indicate that it came out of a failed run or that a run on it was failed. Maybe a commit could be added to it or something. 
+2 - c: On failure, have the program push the issue-`<n>` branch and then delete the local branch. I agree that the same cleanup should run when you press ctrl C. I'm trying to think of a way for that branch which is pushed to somehow indicate that it came out of a failed run or that a run on it was failed. Maybe a commit could be added to it or something. 
 
-3 - If origin/issue-<n> or a PR from issue-<n> already exists then the process should work from that and rerun the implement process but using that branch and that and updating that PR. For example, I might want to continue work on that same branch and issue from a different server or a different environment. 
+3 - If origin/issue-`<n>` or a PR from issue-`<n>` already exists then the process should work from that and rerun the implement process but using that branch and that and updating that PR. For example, I might want to continue work on that same branch and issue from a different server or a different environment. 
 
 4 - b: Print progress lines to stderr as the session works, and Write only the PR URL to stdout.
 
@@ -114,43 +115,43 @@ I added user.name and user.email to the jacob Linux user. I installed rustup, as
 1 - Use this failure commit:
 
 ```
-git add -A && git commit --allow-empty -m "pocockfactory: failed run (<reason>)
+git add -A && git commit --allow-empty -m "pocockfactory: failed run (`<reason>`)
 
-<ISO timestamp>, host <hostname>. Uncommitted work at the time of failure is included in this commit."
+`<ISO timestamp>`, host `<hostname>`. Uncommitted work at the time of failure is included in this commit."
 ```
 
 Skip the push when there is no work, when there are no changes at all. 
 
 2 - For continuing existing work existing work:
 
-`git fetch origin issue-<n>`, then the worktree check out should be the branch that already exists, the issue-<n> branch.
+`git fetch origin issue-<n>`, then the worktree check out should be the branch that already exists, the issue-`<n>` branch.
 
 Why should the Base branch have to match if the work tree can just check out the issue branch that's on origin? 
 
-If a local issue-<n> exists in the launch repo and points somewhere other than origin/issue-<n>, exit with an error.
+If a local issue-`<n>` exists in the launch repo and points somewhere other than origin/issue-`<n>`, exit with an error.
 
-If the branch exists but its only PR is merged or closed, continue with the work anyway, creating a new branch, issue-<n>-branch-<branch number for this issue> and working with that. So if issue-100 exists on origin (not deleted on origin), but is merged or closed, then create branch issue-100-branch-2 and implement the issue on that branch.
+If the branch exists but its only PR is merged or closed, continue with the work anyway, creating a new branch, issue-`<n>`-branch-`<branch number for this issue>` and working with that. So if issue-100 exists on origin (not deleted on origin), but is merged or closed, then create branch issue-100-branch-2 and implement the issue on that branch.
 
 Prompt for continuing work:
 
 ```
-/pocockfactory:implement <Issue URL>
+/pocockfactory:implement `<Issue URL>`
 
-You are continuing work on branch issue-<n>, which already has commits (see git log <base>..HEAD). Build on them; don't start over.
+You are continuing work on branch issue-`<n>`, which already has commits (see git log `<base>`..HEAD). Build on them; don't start over.
 
-The base branch is <base>. Review with /pocockfactory:code-review using <base> as the fixed point.
+The base branch is `<base>`. Review with /pocockfactory:code-review using `<base>` as the fixed point.
 
 Address the Standards and Spec findings you agree with.
 
-Push branch issue-<n>. 
+Push branch issue-`<n>`. 
 
-[If a PR exists:] Update PR <PR URL> using /pocockfactory:pr, rewriting its body to cover the whole branch, marked ready for review. 
+[If a PR exists:] Update PR `<PR URL>` using /pocockfactory:pr, rewriting its body to cover the whole branch, marked ready for review. 
 
 [Otherwise: the usual create-PR line.]
 
 In the PR body, add an "Unaddressed findings" section.
 
-Include "Closes #<n>" in the PR body.
+Include "Closes #`<n>`" in the PR body.
 ```
 
 I just added the resolving-merge-conflicts skill to the pocockfactory-skills dir. If there are merge conflicts, the agent should use that skill to resolve them.
@@ -169,7 +170,7 @@ Make a Cargo project at the root of this repo.
 
 Install with `cargo install --path .`
 
-4 - Write the Rust single binary ADR, and the existing issue-<n> branch or PR meaning continue ADR.
+4 - Write the Rust single binary ADR, and the existing issue-`<n>` branch or PR meaning continue ADR.
 
 ## 7
 
@@ -179,7 +180,7 @@ I rephrased step five of the resolving-merge-conflicts factory skilll to "5. **F
 
 2 - 
 
-"Issue branches" are issue-<n> (which counts as branch 1) and issue-<n>-branch-<k> for k ≥ 2. The program looks at the highest-numbered one.
+"Issue branches" are issue-`<n>` (which counts as branch 1) and issue-`<n>`-branch-`<k>` for k ≥ 2. The program looks at the highest-numbered one.
 - If that branch has no PR, or an open PR, the program continues it. If its PR is merged or closed, it creates branch k+1 fresh from the Base branch.
 - The branch may have been deleted after merging. GitHub often deletes a branch automatically once its PR merges, so issue-100 might be gone even though its merged PR exists. Starting over as issue-100 would reuse a name with a merged PR on it. So the program also checks PR history by head branch name, including closed PRs, and counts a branch as used if it has a merged or closed PR, even when the branch itself no longer exists.
 
@@ -189,7 +190,7 @@ Would doing all this checking make the program slow?
 
 Why is .github/workflows folder prerequisite to checking CI?
 
-1. Conflicts come first. GitHub doesn't run pull_request workflows on a PR with conflicts, so CI can't go green until the conflicts are resolved. The program runs git fetch origin <base> && git merge origin/<base> in the worktree.
+1. Conflicts come first. GitHub doesn't run pull_request workflows on a PR with conflicts, so CI can't go green until the conflicts are resolved. The program runs git fetch origin `<base>` && git merge origin/`<base>` in the worktree.
    - If the merge is clean, the program pushes it.
    - If it conflicts, the program starts the conflict agent (Q4) with the merge left in progress.
    - It uses merge, not rebase, so there's never a force-push, which is safer when the branch is being worked on from several servers.
@@ -203,25 +204,25 @@ Why is .github/workflows folder prerequisite to checking CI?
 ```
 /pocockfactory:resolving-merge-conflicts
 
-A merge of origin/<base> into <branch> is in progress in this worktree and has conflicts.
-<branch> implements <Issue URL>; its pull request is <PR URL>.
+A merge of origin/`<base>` into `<branch>` is in progress in this worktree and has conflicts.
+`<branch>` implements `<Issue URL>`; its pull request is `<PR URL>`.
 
-Resolve the conflicts, finish the merge, and push <branch>. Do not rebase or force-push.
+Resolve the conflicts, finish the merge, and push `<branch>`. Do not rebase or force-push.
 ```
 
 5 - 
 
 ```
-CI failed on pull request <PR URL> (branch <branch>, implementing <Issue URL>).
+CI failed on pull request `<PR URL>` (branch `<branch>`, implementing `<Issue URL>`).
 
 Failed checks:
-- <check name>: <details URL>
+- `<check name>`: `<details URL>`
 - …
 
 Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.
-Run the affected checks locally, commit, and push <branch>.
+Run the affected checks locally, commit, and push `<branch>`.
 
-If a failure is not caused by this branch (it is flaky, or also fails on <base>), do not change code for it. Instead, add it to a "CI notes" section of the pull request body with a one-line explanation.
+If a failure is not caused by this branch (it is flaky, or also fails on `<base>`), do not change code for it. Instead, add it to a "CI notes" section of the pull request body with a one-line explanation.
 ```
 
 6 - I like nightshift a lot - I've lately been thinking about the idea of morning night me being the day shift and agents being the night shift. And there's a sort of night shift connotation to factory work in that you want the factory to be running twenty-four-seven. 
@@ -487,4 +488,40 @@ I want a page on the site which presents the prompts that thirdshift uses, as we
 
 ## 14
 
+/to-spec
+
+# merge
+1 - flag on the command, `--merge` and probably `merge` too
+2 - a
+3 - a
+4 - a
+5 - what's the difference between merge and squash commits here?
+6 - agreed
+## 2
+5 - merge commit
+7 - agreed
+8 - if the problem is a base that moved into a conflict, or if CI failed, then the program should resolve those with a new agent session, but if it is because the repo disallows merge commits or branch protection requires a review, then treat as a failed run that leaves the pr ready for review: exit 1, print the PR URL on stdout, and put the reason on stderr. The PR is still one the factory stands behind; it just couldn't merge it.
+9 - agreed, though if thirdshift notices that new commit, then it should watch CI for that commit, resolve any issues on it, and then merge that commit then instead - making the goal to merge the branch which resolves the issue.
+10 - thirdshift should both delete the local and remote Issue branch, and thirdshift should close the issue - so if the merge does not close it, then thirdshift should close the issue itself. This I imagine can all be done programmatically / deterministically
+11 - yes
+## 3
+12 - agree, though increase the budgets to 5
+13 - agree
+14 - Have the agent run /code-review on the new commit, and ensure the new commit gets repaired if it needs it, so that way we keep it so that only code reviewed by an agent or human gets merged.
+15 - agree
+16 - agree
+17 - agree
+## 4
+18 - agree
+19 - agree
+20 - agree
+21 - agree
+22 - a
+23 - agree
+## 5
+24 - agree
+25 - agree
+26 - Yes, though compare our setup to `gh pr merge --auto`
+27 - agree
+## 6
 /to-spec
