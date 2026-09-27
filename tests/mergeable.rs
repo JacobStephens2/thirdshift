@@ -283,7 +283,7 @@ fn fails_when_the_base_branch_keeps_moving_during_the_ci_wait() {
     assert!(
         result
             .stderr
-            .contains("origin/main kept moving while CI ran: merged it again 5 times"),
+            .contains("origin/main kept moving: merged it again 5 times"),
         "stderr: {}",
         result.stderr
     );

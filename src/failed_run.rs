@@ -1,5 +1,6 @@
 //! The Failed run path: what happens when a Run can't end with a ready PR.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
@@ -20,6 +21,20 @@ pub struct FailedRun {
     pub log: Option<PathBuf>,
 }
 
+/// A merge GitHub refused when a round of the Repair loop found nothing to
+/// fix. The Run fails, but, as it can do no more, leaves the PR ready for review
+/// rather than a draft. It is the context of the merge error.
+#[derive(Debug)]
+pub struct PolicyRefusal;
+
+impl fmt::Display for PolicyRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "the merge was refused with nothing left to fix, so the PR stays ready for review",
+        )
+    }
+}
+
 /// A failure before the worktree exists: nothing to push or clean up.
 impl From<anyhow::Error> for FailedRun {
     fn from(error: anyhow::Error) -> Self {
@@ -32,7 +47,8 @@ impl From<anyhow::Error> for FailedRun {
 }
 
 /// Take the Run in `worktree` down the Failed run path: commit and push the
-/// work, and send an open PR back to draft. Problems along the way are
+/// work, and send an open PR back to draft unless `error` is a
+/// `PolicyRefusal`. Problems along the way are
 /// reported, not raised, so `error` is what the Run fails with. The worktree
 /// is cleaned up, or kept if its work may not have reached origin.
 pub fn fail(
@@ -61,7 +77,8 @@ pub fn fail(
             "could not push the failed run's work, so it may exist only locally: {problem:#}"
         ));
     }
-    let pr_url = match open_pr_as_draft(issue, worktree.branch()) {
+    let keep_ready = error.is::<PolicyRefusal>();
+    let pr_url = match open_pr(issue, worktree.branch(), keep_ready) {
         Ok(pr_url) => pr_url,
         Err(problem) => {
             progress::step(format_args!(
@@ -112,13 +129,13 @@ fn commit_and_push(worktree: &Worktree, base: &str, reason: &str) -> Result<()> 
     worktree.push()
 }
 
-/// Convert the open PR for `branch`, if there is one, to a draft, and return
-/// its URL.
-fn open_pr_as_draft(issue: &IssueUrl, branch: &str) -> Result<Option<String>> {
+/// The URL of the open PR for `branch`, if there is one, converted to a draft
+/// unless `keep_ready`.
+fn open_pr(issue: &IssueUrl, branch: &str, keep_ready: bool) -> Result<Option<String>> {
     let Some(pr) = github::pull_request_for(issue, branch)?.filter(|pr| pr.is_open()) else {
         return Ok(None);
     };
-    if !pr.is_draft {
+    if !pr.is_draft && !keep_ready {
         github::convert_to_draft(issue, branch)?;
     }
     Ok(Some(pr.url))

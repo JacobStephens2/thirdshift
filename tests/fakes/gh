@@ -9,7 +9,9 @@ State lives in the JSON file named by $FAKE_GH_STATE:
               "mergeable"?, "unknown_polls"?}],
      "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
      "statuses": {"<sha>": [{"context", "state", "url"}]},
-     "on_ci_read"?: {"times", "script", "seen"}}
+     "on_ci_read"?: {"times", "script", "seen"},
+     "on_merge"?: {"times", "script"},
+     "refuse_merges"?: {"times", "error"}}
 
 `gh pr merge` makes a real merge commit of the PR's head into its base in the
 bare origin repo beside $FAKE_GH_STATE (`origin.git`), whose HEAD names the
@@ -28,7 +30,13 @@ command):
     gh fake pr <head> <field> '<JSON>'      set a field of <head>'s newest PR
     gh fake on-ci-read <times> '<script>'   run <script> in bash the first time
                                             thirdshift reads CI on each new sha,
-                                            for the next <times> shas
+                                            for the next <times> shas, with the
+                                            sha in $FAKE_CI_SHA
+    gh fake on-merge <times> '<script>'     run <script> in bash before each of
+                                            the next <times> `gh pr merge` calls
+    gh fake refuse-merges <times> '<error>' fail the next <times> `gh pr merge`
+                                            calls with <error> on stderr, after
+                                            any on-merge script
 
 Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
 
@@ -205,6 +213,12 @@ def pr_merge(state, positional, flags):
     unsupported = set(flags) - {"merge", "match-head-commit", "repo", "R"}
     if "merge" not in flags or "match-head-commit" not in flags or unsupported:
         die(f"fake gh: unsupported pr merge flags {sorted(flags)}", 2)
+    state = run_hook(state, "on_merge")
+    refusal = state.get("refuse_merges")
+    if refusal and refusal["times"] > 0:
+        refusal["times"] -= 1
+        save(state)
+        die(refusal["error"])
     head = positional[0]
     matches = [pr for pr in state["prs"] if pr["head"] == head]
     if not matches:
@@ -253,7 +267,7 @@ def api(state, positional, flags):
     repo, sha, endpoint, _ = match.groups()
     check_repo(state, {"repo": repo})
     if endpoint == "check-runs":
-        run_ci_read_hook(state, sha)
+        state = run_ci_read_hook(state, sha)
         runs = []
         for check in state.get("checks", {}).get(sha, []):
             pending = check.get("pending_polls", 0) > 0
@@ -283,14 +297,30 @@ def api(state, positional, flags):
 
 def run_ci_read_hook(state, sha):
     """Run the `on-ci-read` script, if it has runs left and has not yet run for
-    `sha`, e.g. to move the Base branch while thirdshift waits for CI."""
+    `sha`, e.g. to move the Base branch while thirdshift waits for CI. Returns
+    the state as the script left it."""
     hook = state.get("on_ci_read")
-    if not hook or hook["times"] == 0 or sha in hook["seen"]:
-        return
-    hook["times"] -= 1
+    if not hook or sha in hook["seen"]:
+        return state
     hook["seen"].append(sha)
+    return run_hook(state, "on_ci_read", FAKE_CI_SHA=sha)
+
+
+def run_hook(state, name, **env):
+    """Run the script of hook `name`, if it has runs left, with `env` added to
+    the environment. Returns the state as the script left it."""
+    hook = state.get(name)
+    if not hook or hook["times"] == 0:
+        return state
+    hook["times"] -= 1
     save(state)
-    subprocess.run(["bash", "-euc", hook["script"]], check=True, stdout=sys.stderr)
+    subprocess.run(
+        ["bash", "-euc", hook["script"]],
+        check=True,
+        stdout=sys.stderr,
+        env=dict(os.environ, **env),
+    )
+    return load()
 
 
 def fake(state, args):
@@ -298,6 +328,10 @@ def fake(state, args):
         state.setdefault(args[0], {})[args[1]] = json.loads(args[2])
     elif args[0] == "on-ci-read":
         state["on_ci_read"] = {"times": int(args[1]), "script": args[2], "seen": []}
+    elif args[0] == "on-merge":
+        state["on_merge"] = {"times": int(args[1]), "script": args[2]}
+    elif args[0] == "refuse-merges":
+        state["refuse_merges"] = {"times": int(args[1]), "error": args[2]}
     elif args[0] == "pr":
         [pr for pr in state["prs"] if pr["head"] == args[1]][-1][args[2]] = json.loads(args[3])
     else:
