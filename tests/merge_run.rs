@@ -407,6 +407,12 @@ fn a_merge_refused_with_nothing_left_to_fix_leaves_the_pr_ready_for_review() {
     let pr = &scenario.gh_state()["prs"][0];
     assert_eq!(pr["state"], "OPEN");
     assert_eq!(pr["isDraft"], false);
+    // No failure commit: the PR stays on the head whose CI was watched.
+    let head = scenario
+        .origin_git(&["rev-parse", "refs/heads/issue-7"])
+        .trim()
+        .to_string();
+    assert_eq!(merge_calls(&scenario)[0].last(), Some(&head));
     assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
     scenario.assert_cleaned_up("issue-7");

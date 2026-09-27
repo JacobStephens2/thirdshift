@@ -132,8 +132,8 @@ fn implement(
         };
         progress::step(format_args!("the merge failed: {error:#}"));
         match repair_loop.round_after_failed_merge(&watched, &mut run_session)? {
-            Some(head) => watched = head,
-            None => {
+            Round::NewHead(head) => watched = head,
+            Round::NothingToFix => {
                 // Only a PR still ready and mergeable is left ready.
                 ensure_pr_ready_and_mergeable(issue, branch)?;
                 return Err(error.context(PolicyRefusal));
@@ -186,6 +186,14 @@ impl Budgets {
     }
 }
 
+/// What a round of the Repair loop after a failed merge came to.
+enum Round {
+    /// A head whose CI was found green or absent, to try the merge on.
+    NewHead(String),
+    /// The same head, with no Repair and no base move: a policy refusal.
+    NothingToFix,
+}
+
 /// Keeps the PR mergeable and its CI green, within the Run's budgets.
 struct RepairLoop<'a> {
     issue: &'a IssueUrl,
@@ -236,22 +244,24 @@ impl RepairLoop<'_> {
     }
 
     /// Go round again after a merge of `watched` failed, counting a Base
-    /// branch that moved since as a base move. Returns the new head whose CI
-    /// was found green or absent, or `None` if the round found nothing to fix:
-    /// the same head, no Repair and no base move. GitHub's error text is never
+    /// branch that moved since as a base move. GitHub's error text is never
     /// consulted.
     fn round_after_failed_merge(
         &mut self,
         watched: &str,
         run_session: &mut impl FnMut(&str, &str) -> Result<()>,
-    ) -> Result<Option<String>> {
+    ) -> Result<Round> {
         let before = self.budgets;
         if self.worktree.base_branch_moved(self.base)? {
             self.budgets
                 .count_base_move(self.base, "since the merge was tried")?;
         }
         let head = self.run(run_session)?;
-        Ok((head != watched || self.budgets != before).then_some(head))
+        Ok(if head == watched && self.budgets == before {
+            Round::NothingToFix
+        } else {
+            Round::NewHead(head)
+        })
     }
 }
 

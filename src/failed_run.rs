@@ -47,10 +47,10 @@ impl From<anyhow::Error> for FailedRun {
 }
 
 /// Take the Run in `worktree` down the Failed run path: commit and push the
-/// work, and send an open PR back to draft unless `error` is a
-/// `PolicyRefusal`. Problems along the way are
-/// reported, not raised, so `error` is what the Run fails with. The worktree
-/// is cleaned up, or kept if its work may not have reached origin.
+/// work, and send an open PR back to draft. A `PolicyRefusal` does neither,
+/// so the PR stays ready on the head whose CI was watched. Problems along the
+/// way are reported, not raised, so `error` is what the Run fails with. The
+/// worktree is cleaned up, or kept if its work may not have reached origin.
 pub fn fail(
     issue: &IssueUrl,
     worktree: Worktree,
@@ -71,14 +71,19 @@ pub fn fail(
         .next()
         .unwrap_or_default()
         .to_string();
-    let pushed = commit_and_push(&worktree, base, &reason);
+    // Everything is already on origin: the Repair loop pushed the head.
+    let keep_ready = error.is::<PolicyRefusal>();
+    let pushed = if keep_ready {
+        Ok(())
+    } else {
+        commit_and_push(&worktree, base, &reason)
+    };
     if let Err(problem) = &pushed {
         progress::step(format_args!(
             "could not push the failed run's work, so it may exist only locally: {problem:#}"
         ));
     }
-    let keep_ready = error.is::<PolicyRefusal>();
-    let pr_url = match open_pr(issue, worktree.branch(), keep_ready) {
+    let pr_url = match open_pr_url(issue, worktree.branch(), keep_ready) {
         Ok(pr_url) => pr_url,
         Err(problem) => {
             progress::step(format_args!(
@@ -131,7 +136,7 @@ fn commit_and_push(worktree: &Worktree, base: &str, reason: &str) -> Result<()> 
 
 /// The URL of the open PR for `branch`, if there is one, converted to a draft
 /// unless `keep_ready`.
-fn open_pr(issue: &IssueUrl, branch: &str, keep_ready: bool) -> Result<Option<String>> {
+fn open_pr_url(issue: &IssueUrl, branch: &str, keep_ready: bool) -> Result<Option<String>> {
     let Some(pr) = github::pull_request_for(issue, branch)?.filter(|pr| pr.is_open()) else {
         return Ok(None);
     };
