@@ -11,6 +11,7 @@ fn assert_help_text(text: &str) {
     for form in [
         "thirdshift <Issue URL>",
         "thirdshift merge <Issue URL>",
+        "thirdshift email-test [<address>]",
         "thirdshift update",
         "thirdshift version",
         "thirdshift help",
@@ -219,6 +220,22 @@ fn help_lists_no_merge_and_the_user_config() {
     let help = scenario.run(&["help"]).stdout;
 
     for mention in ["--no-merge", "~/.thirdshift/config.toml", "merge.always"] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+}
+
+#[test]
+fn help_lists_the_email_settings() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    for mention in [
+        "email.to",
+        "email.from",
+        "onboarding@resend.dev",
+        "RESEND_API_KEY",
+    ] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");
     }
 }

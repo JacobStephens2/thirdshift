@@ -1,6 +1,6 @@
 //! The User config: `~/.thirdshift/config.toml`, this machine's defaults for
-//! every Run. Only a Run reads it, so a broken one can't block `update`,
-//! `version` or `help`.
+//! every Run. Only a Run and `email-test` read it, so a broken one can't block
+//! `update`, `version` or `help`.
 
 use std::path::{Path, PathBuf};
 
@@ -18,6 +18,19 @@ pub struct UserConfig {
     /// `logs.dir`, with a leading `~` expanded: where session logs are
     /// written, by default `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
+    /// The `[email]` section.
+    pub email: EmailSettings,
+}
+
+/// The `[email]` section: where email goes and who it comes from. The Resend
+/// API key is never here, only in `RESEND_API_KEY`, so the file holds no
+/// secret.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct EmailSettings {
+    /// `email.to`: the address email goes to when the command names none.
+    pub to: Option<String>,
+    /// `email.from`: the sender, in place of Resend's shared test sender.
+    pub from: Option<String>,
 }
 
 impl UserConfig {
@@ -42,6 +55,7 @@ impl UserConfig {
         UserConfig {
             merge_always: false,
             logs_dir: home.join(".thirdshift/logs"),
+            email: EmailSettings::default(),
         }
     }
 
@@ -56,7 +70,7 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
-            let known = matches!(section.as_str(), "merge" | "logs");
+            let known = matches!(section.as_str(), "merge" | "logs" | "email");
             let settings = match value {
                 Value::Table(settings) if known => settings,
                 Value::Table(_) => bail!("unknown section [{section}] in {file}"),
@@ -74,6 +88,13 @@ impl UserConfig {
                         ),
                     },
                     ("logs", "dir", _) => bail!("logs.dir must be a string in {file}"),
+                    ("email", "to", Value::String(to)) => config.email.to = Some(to.clone()),
+                    ("email", "from", Value::String(from)) => {
+                        config.email.from = Some(from.clone())
+                    }
+                    ("email", "to" | "from", _) => {
+                        bail!("{section}.{key} must be a quoted email address in {file}")
+                    }
                     _ => bail!("unknown key {section}.{key} in {file}"),
                 }
             }
@@ -120,6 +141,14 @@ mod tests {
         assert!(parse("[merge]\nalways = true\n").unwrap().merge_always);
         assert!(!parse("[merge]\nalways = false\n").unwrap().merge_always);
         assert!(!parse("").unwrap().merge_always);
+    }
+
+    #[test]
+    fn email_settings_are_read() {
+        let config = parse("[email]\nto = \"me@example.com\"\nfrom = \"ts@acme.dev\"\n").unwrap();
+        assert_eq!(config.email.to.as_deref(), Some("me@example.com"));
+        assert_eq!(config.email.from.as_deref(), Some("ts@acme.dev"));
+        assert_eq!(parse("[email]\n").unwrap().email, EmailSettings::default());
     }
 
     #[test]
@@ -171,6 +200,12 @@ mod tests {
             (
                 "[merge]\nalways = 1\n",
                 "merge.always must be true or false",
+            ),
+            ("[email]\nadress = \"a@b.c\"\n", "unknown key email.adress"),
+            ("email = \"a@b.c\"\n", "email must be the section [email]"),
+            (
+                "[email]\nto = 1\n",
+                "email.to must be a quoted email address",
             ),
         ] {
             let error = format!("{:#}", parse(text).unwrap_err());

@@ -2,9 +2,11 @@ mod args;
 mod branch;
 mod ci;
 mod config;
+mod email;
 mod failed_run;
 mod git;
 mod github;
+mod host;
 mod interrupt;
 mod issue;
 mod plugin;
@@ -30,6 +32,7 @@ thirdshift turns a GitHub issue into a ready-for-review pull request, or a merge
 usage: thirdshift <Issue URL>              Run the factory on the issue, from the clone on the Base branch
        thirdshift merge <Issue URL>        Run the factory on the issue, then merge its pull request
        thirdshift --no-merge <Issue URL>   Run the factory on the issue and leave its pull request for review
+       thirdshift email-test [<address>]   Send a test email through Resend, to check the email setup
        thirdshift update                   Update thirdshift to the latest release
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
@@ -46,6 +49,14 @@ logs.dir sets where session logs go instead of ~/.thirdshift/logs: an absolute p
 
     [logs]
     dir = \"~/elsewhere/logs\"
+
+email-test sends to <address>, else to email.to, from email.from, else from
+onboarding@resend.dev, which only delivers to your own Resend account's address.
+The Resend API key comes only from the RESEND_API_KEY environment variable:
+
+    [email]
+    to = \"you@example.com\"
+    from = \"thirdshift@your-verified-domain.com\"
 ";
 
 fn main() -> ExitCode {
@@ -59,17 +70,11 @@ fn main() -> ExitCode {
             println!("thirdshift {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        Ok(Command::Update) => {
-            return match update::update() {
-                Ok(outcome) => {
-                    progress::step(outcome);
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    progress::step(format_args!("{error:#}"));
-                    ExitCode::FAILURE
-                }
-            };
+        Ok(Command::Update) => return outcome(update::update()),
+        Ok(Command::EmailTest(to)) => {
+            return outcome(
+                UserConfig::load().and_then(|config| email::send_test(to, &config.email)),
+            );
         }
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
@@ -101,6 +106,21 @@ fn main() -> ExitCode {
             if let Some(pr_url) = failed.pr_url {
                 println!("{pr_url}");
             }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The end of a command other than a Run: the line that says how it went,
+/// or its error, on stderr.
+fn outcome(result: anyhow::Result<impl std::fmt::Display>) -> ExitCode {
+    match result {
+        Ok(outcome) => {
+            progress::step(outcome);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            progress::step(format_args!("{error:#}"));
             ExitCode::FAILURE
         }
     }
