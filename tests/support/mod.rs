@@ -238,6 +238,35 @@ impl Scenario {
         self.write_gh_state(&gh);
     }
 
+    /// Set the public email of the profile `gh api user` answers with: an
+    /// address, or `None` for a private one.
+    pub fn github_email_is(&self, email: Option<&str>) {
+        let mut gh = self.gh_state();
+        gh["user_email"] = json!(email);
+        self.write_gh_state(&gh);
+    }
+
+    /// Make every `gh api user` call fail.
+    pub fn github_profile_fails(&self) {
+        let mut gh = self.gh_state();
+        gh["failing"] = json!(["api user"]);
+        self.write_gh_state(&gh);
+    }
+
+    /// Set the global git `user.email`, or with `None` unset it.
+    pub fn git_email_is(&self, email: Option<&str>) {
+        match email {
+            Some(email) => git(
+                &self.path("home"),
+                &["config", "--global", "user.email", email],
+            ),
+            None => git(
+                &self.path("home"),
+                &["config", "--global", "--unset", "user.email"],
+            ),
+        };
+    }
+
     pub fn gh_state(&self) -> Value {
         serde_json::from_str(&fs::read_to_string(self.path("gh-state.json")).unwrap()).unwrap()
     }
