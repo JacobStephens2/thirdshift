@@ -121,7 +121,10 @@ pub fn tickets(issue: &IssueUrl) -> Result<Vec<Ticket>> {
                 .iter()
                 .filter_map(|label| label["name"].as_str().map(String::from))
                 .collect(),
-            has_sub_issues: node["subIssues"]["totalCount"].as_u64().unwrap_or(0) > 0,
+            has_sub_issues: node["subIssues"]["totalCount"]
+                .as_u64()
+                .context("gh api graphql output has an issue with no subIssues count")?
+                > 0,
             open_blockers,
         })
     })
