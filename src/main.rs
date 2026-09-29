@@ -41,6 +41,11 @@ With merge.always set, every Run is a Merge run unless given --no-merge:
 
     [merge]
     always = true
+
+logs.dir sets where session logs go instead of ~/.thirdshift/logs: an absolute path, or one under ~/.
+
+    [logs]
+    dir = \"~/elsewhere/logs\"
 ";
 
 fn main() -> ExitCode {
@@ -69,8 +74,11 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    let goal = match UserConfig::load() {
-        Ok(config) => goal.unwrap_or(config.default_goal()),
+    let (goal, logs_dir) = match UserConfig::load().and_then(|config| {
+        let logs_dir = config.logs_dir()?;
+        Ok((goal.unwrap_or(config.default_goal()), logs_dir))
+    }) {
+        Ok(settings) => settings,
         Err(error) => {
             progress::step(format_args!("{error:#}"));
             return ExitCode::FAILURE;
@@ -80,7 +88,7 @@ fn main() -> ExitCode {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    match run::run(&issue, goal) {
+    match run::run(&issue, goal, &logs_dir) {
         Ok(pr_url) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("PR {pr_url} {}", goal.outcome()));
