@@ -183,6 +183,16 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
     }
 }
 
+/// Every key this version knows, as `section.key`, sorted.
+const EVERY_KEY: [&str; 6] = [
+    "email.always",
+    "email.from",
+    "email.to",
+    "launch.pull",
+    "logs.dir",
+    "merge.always",
+];
+
 /// The `section.key` names of the keys `text` sets, commented out or not, in
 /// the order they appear.
 fn key_names(text: &str) -> Vec<String> {
@@ -240,22 +250,13 @@ to = \"me@example.com\"  # my inbox
     assert_eq!(config["logs"]["dir"].as_str(), Some("~/.thirdshift/logs"));
     let mut names = key_names(&text);
     names.sort();
-    assert_eq!(
-        names,
-        [
-            "email.always",
-            "email.from",
-            "email.to",
-            "launch.pull",
-            "logs.dir",
-            "merge.always"
-        ],
-        "{text}"
-    );
+    assert_eq!(names, EVERY_KEY, "{text}");
     for (section, line) in key_lines(&text) {
         let Some((_, comment)) = line.split_once(" # ") else {
             panic!("no trailing comment on [{section}] {line:?}");
         };
+        // The two lines from the partial User config carry the user's own
+        // comments; every added key's comment gives its default.
         if !line.contains("me@example.com") && !line.starts_with("always = true") {
             assert!(
                 comment.contains("default"),
@@ -281,18 +282,7 @@ fn setup_over_a_user_config_with_no_email_to_adds_it_commented_out_once() {
     assert!(config["email"].get("to").is_none(), "{text}");
     let mut names = key_names(&text);
     names.sort();
-    assert_eq!(
-        names,
-        [
-            "email.always",
-            "email.from",
-            "email.to",
-            "launch.pull",
-            "logs.dir",
-            "merge.always"
-        ],
-        "{text}"
-    );
+    assert_eq!(names, EVERY_KEY, "{text}");
 }
 
 #[test]

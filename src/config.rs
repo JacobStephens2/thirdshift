@@ -2,6 +2,7 @@
 //! every Run. Only a Run, `email-test` and `setup` read it, so a broken one
 //! can't block `update`, `version` or `help`.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -160,17 +161,30 @@ pub fn setup() -> Result<String> {
             path.display()
         ));
     }
-    std::fs::write(&path, completed).with_context(|| format!("can't write {}", path.display()))?;
+    replace(&path, &completed).with_context(|| format!("can't write {}", path.display()))?;
     Ok(format!(
         "added the missing settings to the User config {}",
         path.display()
     ))
 }
 
+/// Replace the file at `path` with `text` all at once, keeping its
+/// permissions, so a failed write leaves it as it was.
+fn replace(path: &Path, text: &str) -> std::io::Result<()> {
+    let permissions = std::fs::metadata(path)?.permissions();
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(dir)?;
+    file.write_all(text.as_bytes())?;
+    file.as_file().set_permissions(permissions)?;
+    file.persist(path)?;
+    Ok(())
+}
+
 /// `text`, a User config a Run accepts, with each key it lacks added at its
 /// default, as `DEFAULTS` writes it. Everything already in `text` stays as
 /// it was: a missing key goes at the end of its section, and a missing
-/// section after the last line of `text`.
+/// section after the last line of `text`. A key added to an inline table
+/// gets no comment, as TOML has no place for one there.
 fn complete(text: &str) -> Result<String> {
     let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
     let defaults: DocumentMut = DEFAULTS.parse().expect("DEFAULTS is valid TOML");
@@ -207,7 +221,7 @@ fn complete(text: &str) -> Result<String> {
                     }
                 }
             }
-            Some(_) => bail!("{section} must be the section [{section}]"),
+            Some(_) => unreachable!("a Run refuses {section} that isn't a section"),
         }
     }
     let mut completed = document.to_string();
@@ -231,7 +245,7 @@ fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, text
     if email.contains_key("to") || has_commented_out_email_to(text) {
         return;
     }
-    let example = prefix(
+    let example = decor_prefix(
         defaults
             .key("from")
             .expect("DEFAULTS has email.from")
@@ -241,12 +255,12 @@ fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, text
         return;
     };
     let decor = from.leaf_decor_mut();
-    decor.set_prefix(format!("{example}{}", prefix(decor)));
+    decor.set_prefix(format!("{example}{}", decor_prefix(decor)));
 }
 
 /// The text `decor` puts before a key: the comment and blank lines above it,
 /// and its indent.
-fn prefix(decor: &toml_edit::Decor) -> String {
+fn decor_prefix(decor: &toml_edit::Decor) -> String {
     decor
         .prefix()
         .and_then(|prefix| prefix.as_str())
@@ -258,12 +272,9 @@ fn prefix(decor: &toml_edit::Decor) -> String {
 fn has_commented_out_email_to(text: &str) -> bool {
     let mut in_email = false;
     for line in text.lines().map(str::trim) {
-        if line.starts_with('[') {
-            in_email = line
-                .trim_start_matches('[')
-                .trim_start()
-                .starts_with("email")
-                && line.trim_end_matches(']').trim_end().ends_with("email");
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.split('#').next().unwrap_or("").trim_end();
+            in_email = header.strip_suffix(']').map(str::trim) == Some("email");
         } else if in_email && let Some(comment) = line.strip_prefix('#') {
             let comment = comment.trim_start();
             if comment
@@ -512,6 +523,7 @@ mod tests {
             "[email]\nalways = true\n",
             "[email]\n# a note on from\nfrom = \"ts@acme.dev\"\n",
             "[email]\n# to = \"me@example.com\"\n",
+            "[ email ]  # mine\n# to = \"me@example.com\"\n",
         ] {
             let completed = completed(text);
             let examples = completed
