@@ -33,6 +33,16 @@ impl IssueUrl {
         }
     }
 
+    /// Issue `number` in the same repository.
+    pub fn sibling(&self, number: u64) -> IssueUrl {
+        IssueUrl {
+            url: format!("https://github.com/{}/issues/{number}", self.repo_slug()),
+            owner: self.owner.clone(),
+            repo: self.repo.clone(),
+            number,
+        }
+    }
+
     /// `owner/repo`, as `gh --repo` takes it.
     pub fn repo_slug(&self) -> String {
         format!("{}/{}", self.owner, self.repo)

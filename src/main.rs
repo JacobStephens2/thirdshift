@@ -20,6 +20,7 @@ mod prompts_page;
 mod questions;
 mod run;
 mod session;
+mod spec_run;
 mod update;
 mod worktree;
 
@@ -29,6 +30,7 @@ use std::process::ExitCode;
 use args::{Command, RunArgs};
 use config::UserConfig;
 use notification::{NotificationAsk, RunNotification};
+use run::Goal;
 
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, or a merged one, unattended.
@@ -79,7 +81,12 @@ The Resend API key comes only from the RESEND_API_KEY environment variable:
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let RunArgs { issue, goal, email } = match args::parse(&args) {
+    let RunArgs {
+        issue,
+        goal,
+        email,
+        spec_branch,
+    } = match args::parse(&args) {
         Ok(Command::Help) => {
             print!("{HELP}");
             return ExitCode::SUCCESS;
@@ -105,13 +112,22 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let goal = goal.unwrap_or(config.default_goal());
+    // A Ticket's Run in a Spec run is always a Merge run, and leaves the Run
+    // notification and the Launch directory to the Spec run.
+    let (goal, email, launch_pull) = match spec_branch {
+        Some(_) => (Goal::Merged, NotificationAsk::Skip, false),
+        None => (
+            goal.unwrap_or(config.default_goal()),
+            email.unwrap_or(config.email.default_ask()),
+            config.launch_pull,
+        ),
+    };
     // First, so no interrupt can end the Run once its notification is checked.
     if let Err(error) = interrupt::install() {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    let notification = match email.unwrap_or(config.email.default_ask()) {
+    let notification = match email {
         NotificationAsk::Send(to) => RunNotification::new(to, &config.email, &issue).map(Some),
         NotificationAsk::Skip => Ok(None),
     };
@@ -122,11 +138,21 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let ended = run::run(&issue, goal, &config.logs_dir, config.launch_pull);
+    let ended = run::run(
+        &issue,
+        goal,
+        &config.logs_dir,
+        launch_pull,
+        spec_branch.as_deref(),
+    );
     let code = match &ended {
         Ok(reached) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
-            progress::step(format_args!("PR {} is {}", reached.pr_url, goal.outcome()));
+            progress::step(format_args!(
+                "PR {} is {}",
+                reached.pr_url,
+                reached.goal.outcome()
+            ));
             print_pr_url(&reached.pr_url);
             ExitCode::SUCCESS
         }
@@ -142,7 +168,7 @@ fn main() -> ExitCode {
         }
     };
     if let Some(notification) = notification {
-        notification.send(&ended, goal);
+        notification.send(&ended);
     }
     code
 }

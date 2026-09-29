@@ -282,18 +282,18 @@ fn selection_asks_github_once_for_the_pr_history() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    // Pre-flight's `issue view` comes first; everything after it and before
-    // the post-session `pr view` is selection. The agent here makes no gh
-    // calls of its own.
+    // Pre-flight's `issue view` comes first, then the `api graphql` that finds
+    // no sub-issues; everything after it and before the post-session
+    // `pr view` is selection. The agent here makes no gh calls of its own.
     let subcommands: Vec<String> = scenario
         .gh_calls()
         .iter()
         .map(|argv| argv[..2].join(" "))
         .take_while(|subcommand| subcommand != "pr view")
         .collect();
-    assert_eq!(subcommands, vec!["issue view", "pr list"]);
+    assert_eq!(subcommands, vec!["issue view", "api graphql", "pr list"]);
     assert!(
-        scenario.gh_calls()[1]
+        scenario.gh_calls()[2]
             .windows(2)
             .any(|w| w == ["--state", "all"]),
         "gh calls: {:?}",
