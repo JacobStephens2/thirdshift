@@ -1,4 +1,5 @@
-//! Asking GitHub, through `gh`, about issues and pull requests.
+//! Asking GitHub, through `gh`, about issues, pull requests and the signed-in
+//! user.
 
 use std::fmt;
 use std::process::Command;
@@ -50,6 +51,14 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
         "--comment",
         comment,
     ])
+}
+
+/// The public email of the signed-in user's GitHub profile, or `None` if it
+/// is private. Private addresses need the `user` scope, which a default
+/// `gh auth login` token lacks, so thirdshift never asks for them.
+pub fn profile_email() -> Result<Option<String>> {
+    let json = gh_json(&["api", "user"])?;
+    Ok(json["email"].as_str().map(str::to_string))
 }
 
 const PR_FIELDS: &str = "number,url,state,headRefName,baseRefName,isDraft";
