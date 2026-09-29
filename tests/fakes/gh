@@ -15,7 +15,8 @@ State lives in the JSON file named by $FAKE_GH_STATE:
      "on_merge"?: {"times", "script"},
      "refuse_merges"?: {"times", "error"},
      "after_merge"?: "<script>",
-     "failing"?: ["<command> <subcommand>", ...]}
+     "failing"?: ["<command> <subcommand>", ...],
+     "user_email"?: "<address>" | null}
 
 `gh pr merge` makes a real merge commit of the PR's head into its base in the
 bare origin repo beside $FAKE_GH_STATE (`origin.git`), whose HEAD names the
@@ -27,6 +28,9 @@ merged. Its `closingIssuesReferences` are the issues its body closes.
 `gh repo view` reports origin's HEAD as the default branch.
 
 An issue's title is its entry in `titles`, else `Issue <number>`.
+
+`gh api user` answers with the signed-in user's profile, whose public `email`
+is `user_email`, else null. `gh fake fails 'api user'` makes it fail.
 
 `gh issue close` closes the issue, recording its `--comment`; on an issue
 already closed it only warns, as gh does.
@@ -55,6 +59,8 @@ command):
                                             successful `gh pr merge`
     gh fake fails '<command> <subcommand>'  make every such call fail, e.g.
                                             'issue close'
+    gh fake user-email '<JSON>'             set the public profile email, an
+                                            address or null
 
 Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
 
@@ -307,8 +313,12 @@ def issue_close(state, positional, flags):
 
 
 def api(state, positional, flags):
-    """The two commit endpoints thirdshift reads CI from, one page, each item
-    of the list `--jq '.<list>[]'` names on its own line."""
+    """The signed-in user, or the two commit endpoints thirdshift reads CI
+    from, one page, each item of the list `--jq '.<list>[]'` names on its own
+    line."""
+    if positional[0] == "user" and not flags:
+        print(json.dumps({"login": "runner", "email": state.get("user_email")}))
+        return
     match = re.fullmatch(
         r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/(check-runs|status)(\?.*)?",
         positional[0],
@@ -387,6 +397,8 @@ def fake(state, args):
         state["after_merge"] = args[1]
     elif args[0] == "issue":
         state["issues"][args[1]] = args[2]
+    elif args[0] == "user-email":
+        state["user_email"] = json.loads(args[1])
     elif args[0] == "fails":
         state.setdefault("failing", []).append(args[1])
     elif args[0] == "pr":

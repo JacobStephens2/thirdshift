@@ -238,6 +238,38 @@ impl Scenario {
         self.write_gh_state(&gh);
     }
 
+    /// Set the public email of the profile `gh api user` answers with: an
+    /// address, or `None` for a private one.
+    pub fn github_email_is(&self, email: Option<&str>) {
+        let mut gh = self.gh_state();
+        gh["user_email"] = json!(email);
+        self.write_gh_state(&gh);
+    }
+
+    /// Make every `gh api user` call fail.
+    pub fn github_profile_fails(&self) {
+        let mut gh = self.gh_state();
+        let failing = gh.as_object_mut().unwrap().entry("failing");
+        failing
+            .or_insert(json!([]))
+            .as_array_mut()
+            .unwrap()
+            .push(json!("api user"));
+        self.write_gh_state(&gh);
+    }
+
+    /// Set the global git `user.email`, or with `None` unset it.
+    pub fn git_email_is(&self, email: Option<&str>) {
+        let change = match email {
+            Some(email) => ["user.email", email],
+            None => ["--unset", "user.email"],
+        };
+        git(
+            &self.path("home"),
+            &[&["config", "--global"][..], &change].concat(),
+        );
+    }
+
     pub fn gh_state(&self) -> Value {
         serde_json::from_str(&fs::read_to_string(self.path("gh-state.json")).unwrap()).unwrap()
     }
@@ -277,17 +309,37 @@ impl Scenario {
     /// Push `branch` to origin: `from` plus one commit per subject in
     /// `commits`, oldest first.
     pub fn origin_has_branch(&self, branch: &str, from: &str, commits: &[&str]) {
+        self.push_from_seed(branch, |seed| {
+            git(
+                seed,
+                &["checkout", "-q", "-b", branch, &format!("origin/{from}")],
+            );
+            for (i, subject) in commits.iter().enumerate() {
+                fs::write(seed.join(format!("{branch}-{i}.txt")), subject).unwrap();
+                git(seed, &["add", "."]);
+                git(seed, &["commit", "-q", "-m", subject]);
+            }
+        });
+    }
+
+    /// Push one commit to `branch` on origin that writes `contents` to
+    /// `file`, as another machine might while the Launch directory isn't
+    /// looking.
+    pub fn origin_has_commit(&self, branch: &str, file: &str, contents: &str, subject: &str) {
+        self.push_from_seed(branch, |seed| {
+            git(seed, &["checkout", "-q", branch]);
+            fs::write(seed.join(file), contents).unwrap();
+            git(seed, &["add", file]);
+            git(seed, &["commit", "-q", "-m", subject]);
+        });
+    }
+
+    /// Clone origin into a scratch `seed`, let `commit` make commits on
+    /// `branch` there, push `branch` and delete the clone.
+    fn push_from_seed(&self, branch: &str, commit: impl FnOnce(&Path)) {
         let seed = self.path("seed");
         git(&self.path(""), &["clone", "-q", &self.github_url(), "seed"]);
-        git(
-            &seed,
-            &["checkout", "-q", "-b", branch, &format!("origin/{from}")],
-        );
-        for (i, subject) in commits.iter().enumerate() {
-            fs::write(seed.join(format!("{branch}-{i}.txt")), subject).unwrap();
-            git(&seed, &["add", "."]);
-            git(&seed, &["commit", "-q", "-m", subject]);
-        }
+        commit(&seed);
         git(&seed, &["push", "-q", "origin", branch]);
         fs::remove_dir_all(&seed).unwrap();
     }

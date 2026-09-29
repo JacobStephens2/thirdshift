@@ -77,6 +77,10 @@ _Avoid_: completion email, alert
 **User config**:
 The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, and whether a Run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
 
+**Setup**:
+Writing the **User config** by answering a few questions, one per setting that matters most, with every other setting written out at its default so the file shows everything that can be changed. Offered by the first **Run** on a machine with no User config, and run again at any time to change the answers.
+_Avoid_: init, onboarding, configure
+
 **Self-merge**:
 The step at the end of a **Merge run** in which thirdshift itself merges the pull request into the **Base branch** with a merge commit, once it is open, ready for review, mergeable and green on the head commit it merges. No human reviews it first. It ends with the **Issue branch** deleted and the issue closed, by thirdshift if the merge did not close it.
 
