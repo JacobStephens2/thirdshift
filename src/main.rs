@@ -74,7 +74,7 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    let (goal, pull_launch) = match UserConfig::load() {
+    let (goal, launch_pull) = match UserConfig::load() {
         Ok(config) => (goal.unwrap_or(config.default_goal()), config.launch_pull),
         Err(error) => {
             progress::step(format_args!("{error:#}"));
@@ -85,7 +85,7 @@ fn main() -> ExitCode {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    match run::run(&issue, goal, pull_launch) {
+    match run::run(&issue, goal, launch_pull) {
         Ok(pr_url) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("PR {pr_url} {}", goal.outcome()));

@@ -42,9 +42,9 @@ impl Goal {
 /// fails, goes through the Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
-/// branch. With `pull_launch`, the Launch directory's checkout of the
+/// branch. With `launch_pull`, the Launch directory's checkout of the
 /// Base branch is first brought up to date with origin.
-pub fn run(issue: &IssueUrl, goal: Goal, pull_launch: bool) -> Result<String, FailedRun> {
+pub fn run(issue: &IssueUrl, goal: Goal, launch_pull: bool) -> Result<String, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
@@ -56,8 +56,8 @@ pub fn run(issue: &IssueUrl, goal: Goal, pull_launch: bool) -> Result<String, Fa
     let branch = selection.branch().to_string();
     let base = selection.base_branch(checked_out.as_deref())?;
     preflight::check_base_branch(&launch, &base)?;
-    if pull_launch && checked_out.as_deref() == Some(base.as_str()) {
-        pull_base_branch(&launch, &base);
+    if launch_pull {
+        pull_base_branch(&launch, checked_out.as_deref(), &base);
     }
 
     if interrupt::requested() {
@@ -78,12 +78,16 @@ pub fn run(issue: &IssueUrl, goal: Goal, pull_launch: bool) -> Result<String, Fa
         .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
 }
 
-/// Fast-forward the Launch directory's checked-out Base branch `base` to
-/// `origin/<base>`, which pre-flight has just fetched and found it not ahead
-/// of. The Run doesn't depend on this, so a failure, such as uncommitted
-/// changes in the way, is only a warning, and those changes are left as they
-/// were.
-fn pull_base_branch(launch: &Git, base: &str) {
+/// Fast-forward the Launch directory's Base branch `base` to
+/// `origin/<base>`, if `base` is the branch `checked_out` there. Call it after
+/// [`preflight::check_base_branch`], which fetches `origin/<base>` and fails
+/// if `base` is ahead of it. The Run doesn't depend on this, so a failure,
+/// such as uncommitted changes in the way, is only a warning, and those
+/// changes are left as they were.
+fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
+    if checked_out != Some(base) {
+        return;
+    }
     let origin_base = format!("origin/{base}");
     let up_to_date = launch.succeeds(&["merge-base", "--is-ancestor", &origin_base, "HEAD"]);
     if up_to_date.unwrap_or(false) {
