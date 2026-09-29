@@ -2,10 +2,12 @@
 //! every Run. Only a Run, `email-test` and `setup` read it, so a broken one
 //! can't block `update`, `version` or `help`.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use toml::{Table, Value};
+use toml_edit::{DocumentMut, Item};
 
 use crate::git::Git;
 use crate::github;
@@ -136,27 +138,156 @@ impl EmailSettings {
 
 /// Setup with no terminal: write the User config with every setting at its
 /// default, asking nothing, and `email.to` as the suggested address, if there
-/// is one. An existing User config keeps its values, once it parses as a Run
-/// would parse it, so Setup never resets a configured machine.
+/// is one. An existing User config is edited in place, once it parses as a Run
+/// would parse it: its values, comments and key order stay, and each key it
+/// lacks is added at its default, so Setup never resets a configured machine.
 pub fn setup() -> Result<String> {
     let (home, path) = home_and_path()?;
-    match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            UserConfig::parse(&text, &path, &home)?;
-            return Ok(format!(
-                "the User config {} is already set up",
-                path.display()
-            ));
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(home.join(".thirdshift"))
+                .and_then(|()| std::fs::write(&path, with_email_to(suggested_address(&home))))
+                .with_context(|| format!("can't write {}", path.display()))?;
+            return Ok(format!("wrote the User config {}", path.display()));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error).with_context(|| format!("can't read {}", path.display()));
         }
+    };
+    UserConfig::parse(&text, &path, &home)?;
+    let completed = complete(&text)?;
+    if completed == text {
+        return Ok(format!(
+            "the User config {} already lists every setting",
+            path.display()
+        ));
     }
-    std::fs::create_dir_all(home.join(".thirdshift"))
-        .and_then(|()| std::fs::write(&path, with_email_to(suggested_address(&home))))
-        .with_context(|| format!("can't write {}", path.display()))?;
-    Ok(format!("wrote the User config {}", path.display()))
+    replace(&path, &completed).with_context(|| format!("can't write {}", path.display()))?;
+    Ok(format!(
+        "added the missing settings to the User config {}",
+        path.display()
+    ))
+}
+
+/// Replace the file at `path` with `text` all at once, keeping its
+/// permissions, so a failed write leaves it as it was.
+fn replace(path: &Path, text: &str) -> std::io::Result<()> {
+    let permissions = std::fs::metadata(path)?.permissions();
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(dir)?;
+    file.write_all(text.as_bytes())?;
+    file.as_file().set_permissions(permissions)?;
+    file.persist(path)?;
+    Ok(())
+}
+
+/// `text`, a User config a Run accepts, with each key it lacks added at its
+/// default, as `DEFAULTS` writes it. Everything already in `text` stays as
+/// it was: a missing key goes at the end of its section, and a missing
+/// section after the last line of `text`. A key added to an inline table
+/// gets no comment, as TOML has no place for one there.
+fn complete(text: &str) -> Result<String> {
+    let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
+    let defaults: DocumentMut = DEFAULTS.parse().expect("DEFAULTS is valid TOML");
+    let mut missing = DocumentMut::new();
+    for (section, default_settings) in defaults.iter() {
+        let default_settings = default_settings
+            .as_table()
+            .expect("every key in DEFAULTS is in a section");
+        match document.get_mut(section) {
+            None => {
+                missing.insert(section, Item::Table(default_settings.clone()));
+            }
+            Some(Item::Table(settings)) => {
+                for (key, item) in default_settings.iter() {
+                    if !settings.contains_key(key) {
+                        let mut key = default_settings
+                            .key(key)
+                            .expect("the key is in DEFAULTS")
+                            .clone();
+                        key.leaf_decor_mut().set_prefix("");
+                        settings.insert_formatted(&key, item.clone());
+                    }
+                }
+                if section == "email" && !settings.is_dotted() {
+                    note_email_to(settings, default_settings, text);
+                }
+            }
+            Some(Item::Value(toml_edit::Value::InlineTable(settings))) => {
+                for (key, item) in default_settings.iter() {
+                    if !settings.contains_key(key) {
+                        let mut value = item.as_value().expect("DEFAULTS has only values").clone();
+                        value.decor_mut().clear();
+                        settings.insert(key, value);
+                    }
+                }
+            }
+            Some(_) => unreachable!("a Run refuses {section} that isn't a section"),
+        }
+    }
+    let mut completed = document.to_string();
+    let missing = missing.to_string();
+    let missing = missing.trim_start_matches('\n');
+    if !missing.is_empty() && !completed.trim().is_empty() {
+        if !completed.ends_with('\n') {
+            completed.push('\n');
+        }
+        completed.push('\n');
+    }
+    completed.push_str(missing);
+    Ok(completed)
+}
+
+/// With no `email.to` in `email`, the `[email]` section of `text`, and no
+/// commented-out one either, add the commented-out example line from
+/// `defaults`, the `[email]` section of `DEFAULTS`, just before `email.from`:
+/// `email.to` has no default to write.
+fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, text: &str) {
+    if email.contains_key("to") || has_commented_out_email_to(text) {
+        return;
+    }
+    let example = decor_prefix(
+        defaults
+            .key("from")
+            .expect("DEFAULTS has email.from")
+            .leaf_decor(),
+    );
+    let Some(mut from) = email.key_mut("from") else {
+        return;
+    };
+    let decor = from.leaf_decor_mut();
+    decor.set_prefix(format!("{example}{}", decor_prefix(decor)));
+}
+
+/// The text `decor` puts before a key: the comment and blank lines above it,
+/// and its indent.
+fn decor_prefix(decor: &toml_edit::Decor) -> String {
+    decor
+        .prefix()
+        .and_then(|prefix| prefix.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Whether the `[email]` section of `text` holds a commented-out `to` line.
+fn has_commented_out_email_to(text: &str) -> bool {
+    let mut in_email = false;
+    for line in text.lines().map(str::trim) {
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.split('#').next().unwrap_or("").trim_end();
+            in_email = header.strip_suffix(']').map(str::trim) == Some("email");
+        } else if in_email && let Some(comment) = line.strip_prefix('#') {
+            let comment = comment.trim_start();
+            if comment
+                .strip_prefix("to")
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// The User config Setup writes with no answers: every key at its default,
@@ -383,5 +514,76 @@ mod tests {
                 "{text:?}: {error}"
             );
         }
+    }
+
+    /// `text` completed, after checking a Run reads it with the settings it
+    /// had, plus the defaults for the keys it lacked.
+    fn completed(text: &str) -> String {
+        let completed = complete(text).unwrap();
+        let before = parse(text).unwrap();
+        let mut after = parse(&completed).unwrap_or_else(|error| panic!("{error:#}\n{completed}"));
+        if before.email.from.is_none() {
+            assert_eq!(
+                after.email.from.as_deref(),
+                Some(crate::email::DEFAULT_FROM)
+            );
+            after.email.from = None;
+        }
+        assert_eq!(after, before, "{completed}");
+        let again = complete(&completed).unwrap();
+        assert_eq!(again, completed, "completing twice changed it");
+        completed
+    }
+
+    #[test]
+    fn completing_an_empty_user_config_writes_the_defaults() {
+        assert_eq!(completed(""), DEFAULTS);
+    }
+
+    #[test]
+    fn completing_the_defaults_changes_nothing() {
+        assert_eq!(completed(DEFAULTS), DEFAULTS);
+    }
+
+    #[test]
+    fn completing_keeps_every_line_already_there_in_order() {
+        for text in [
+            "# top\n[merge]\nalways = true # mine\n",
+            "[merge]\nalways = true",
+            "[email]\n# to = \"me@example.com\"\nalways = true\n",
+            "[email]\n# a note on from\nfrom = \"ts@acme.dev\"\n",
+            "[logs]\ndir = \"/var/log/ts\"\n\n[merge]\nalways = true\n",
+            "merge.always = true\nlaunch = { pull = true }\n",
+            "[email]\nto = \"me@example.com\"\n",
+        ] {
+            let completed = completed(text);
+            let mut lines = completed.lines();
+            for line in text.lines() {
+                assert!(
+                    lines.any(|kept| kept == line),
+                    "{line:?} of {text:?} is lost or moved:\n{completed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn completing_adds_email_to_commented_out_once() {
+        for text in [
+            "",
+            "[email]\nalways = true\n",
+            "[email]\n# a note on from\nfrom = \"ts@acme.dev\"\n",
+            "[email]\n# to = \"me@example.com\"\n",
+            "[ email ]  # mine\n# to = \"me@example.com\"\n",
+        ] {
+            let completed = completed(text);
+            let examples = completed
+                .lines()
+                .filter(|line| line.starts_with("# to = "))
+                .count();
+            assert_eq!(examples, 1, "{text:?}:\n{completed}");
+        }
+        let completed = completed("[email]\nto = \"me@example.com\"\n");
+        assert!(!completed.contains("# to ="), "{completed}");
     }
 }
