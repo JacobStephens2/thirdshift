@@ -1,7 +1,6 @@
 
 Agents, do not modify this file. It is for human handwritten content.
-
-# Sep 22 2026: create cli command to implement GitHub issue, issue 2
+# Sep 22 2026: create cli command to implement GitHub issue, spec 2
 
 ## Round 1
 
@@ -267,7 +266,7 @@ We can test with the ticket sub-issues of my vacation repo's spec issue https://
 
 Having one test seam, the thirdshift binary, sounds good. Is saying "the thirdshift binary as a black box" a meaningful distinction here? And what would it mean to have a second seam at the Origin match parsing and Issue branch selection?
 
-# Sep 25 2026: release, issue 30
+# Sep 25 2026: release, spec 30
 
 1 - I'm torn between B and C. 
 
@@ -347,7 +346,7 @@ We have shared understanding. /to-spec
 
 Yes
 
-# Sep 26 2026: thirdshift.app: issue 29
+# Sep 26 2026: thirdshift.app: spec 61
 
 1 - agree
 
@@ -490,7 +489,7 @@ I want a page on the site which presents the prompts that thirdshift uses, as we
 
 /to-spec
 
-# Sep 27 2026: merge, issue 26
+# Sep 27 2026: merge, spec 26
 1 - flag on the command, `--merge` and probably `merge` too
 2 - a
 3 - a
@@ -563,7 +562,7 @@ Where the logs are written should also be configurable in config.toml, but leave
 11 - agree
 12 - agree
 13 - agree - and keep the environment variable approach rather than the api key in the config. This would also make it more safe to version control the config. And I'm open to allowing the onboarding at resend.dev sender be the email dot from in case the user wants to be able to send to themself without having verified a domain on Resend
-# 3
+## 3
 14 - agree I think, though what do you mean "Expand ~"?
 
 15 - agree
@@ -571,7 +570,7 @@ Where the logs are written should also be configurable in config.toml, but leave
 16 - agree, and maybe a `thirdshift email test` attempts to send a test email based on the configuration settings in case the user wants to test functionality and email sending this in their configuration process without having to do a full run.
 
 17 - agree
-# 4
+## 4
 Yes I agree to expanding ~.
 
 18 - agree, except use thirdshift email-test for alphabetical command relationship / `<command> <flag>-<subflag>` type formatting. However, would this impact tab-completion for the command? Would I even have tab completion on flags? If so maybe `thirdshift test-email` is preferable.
@@ -579,8 +578,139 @@ Yes I agree to expanding ~.
 19 - agree
 
 20 - Yes write an ADR for the decision to send the run notification through Resend. And I'm assuming that sending through resend would allow me to send from my MacBook runs?
-# 5
+## 5
 We have shared understanding. /to-spec
-# 6
+## 6
 I agree on these seams.
+
+# Sep 29 2026, git pull, spec 74
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/74, I want at the start of a third shift run, even before the work tree is created, to get pull to make sure that we're working with the most recent code on the branch from the originating workspace. 
+## 2
+1 - a and c. Often my process is for starting a new third shift run is I I run git pull in the in the launch directory, usually pulling the latest from the default branch and then I run third shift but I think I didn't know about the fetch or I forgot about it so So this is it sounds like this is not entirely necessary.
+
+I think I would still like this though. But I'm working on another spec which is bringing in a configuration file. And so this is something I can even imagine fitting into the configuration whether or not the git pull happens in the launch directory as part of the third shift run process. as that's a setting I would like, but I could see not everyone wanting. 
+
+2 - Are not the branch checked out in the launch directory and the base branch the same? I'm not talking about a continuation run.
+
+3 - What is the difference between a plane get pull and a fast forward only here? 
+
+4 - a
+## 3
+Let's go with a get pull fast forward only then. And if it errors, then let's carry on anyway because the run doesn't need it. 
+5 - agree
+6 - agree
+7 - b
+8 - yes
+
+# Sep 29 2026, thirdshift setup, spec 126
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/126 - I want a command I can run, `thirdshift setup` or I think which takes the user through a bit of a setup wizard which creates their config file and I think I want this to run by default on installation unless there's some flag passed into the installation with which which silences the setup and just uses all the defaults
+## 2
+1 - thirdshift setup
+2 - agree
+3 - agree
+4 - b - I want it easy for the user to see what all of the possible configuration is and then be able to tweak it in reading that file. To this end I'm torn between b and c actually as c demonstrates to the user that the values aren't needed to function, but b makes it more readable initially with possible syntax highlighting. b might also be clearer for agents to read and work with.
+5 - b
+6 - agree
+7 - If we can't have it that `curl -fsSL https://thirdshift.app/install.sh | sh` results in running `thirdshift setup`, I'm I'm okay with users having to manually invoke third shift setup after the installation. Maybe the last message or near the end of the output of the installation, initial installation, there could be an output indicating to the user that they can run third shift setup to finish setup or to customize defaults.  I think I want the install.sh process to setup a config.toml file for the user with all the defaults. Or we just have install.sh ask the setup questions perhaps - doing the same thing that `thirdshift setup` would do. Or maybe the install.sh just asks one question and it is if the user would want to go through setup, but if there's no terminal, then it just goes through all the defaults.
+8 - agree
+9 - agree
+## 3
+10 - agree
+11 - make the email.to default the GitHub email address of the user, but if that is not set, then a.
+12 - agree
+13 - agree
+14 - agree
+15 - agree
+## 4
+16 - agree
+17 - agree
+18 - Compare the dist option with the thirdshift.app/install.sh option
+## 5
+18 - I'm liking the sound of C - does it involve anything being hosted on my thirdshift.app server? I'm leaning away from an option that I need to self host for installation (though I'm fine with the current redirect)
+## 6
+ 19 - what is dist? And what can't it do that we're considering doing?
 ## 7
+I'm actually fine without running anything after installing or without being able to use a flag on install- just having near the end or at the end of the install output a note to the user that they can run `thirdshift setup` next to customize settings - this then is more like the experience of installing claude code, where it ends with a command to add it as a command to your cli. That reminds me that the first time you run claude code you go through setup. There could be something similar with thirdshift where the first run offers wizard setup if it notices you don't have a config.toml file setup
+## 8
+21 - agree
+22 - agree
+23 - agree
+24 - agree
+25 - agree
+26 - agree
+27 - agree
+## 9
+We have shared understanding. /to-spec
+## 10
+These seams sound good.
+## 11
+/to-tickets
+## 12
+ File these tickets as sub-issues of spec issue 126 with dependency blocking
+
+# Sep 29 2026, implement spec, spec 139
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/28, I just made spec issue https://github.com/JacobStephens2/thirdshift/issues/109 with its five ticket sub-issues. I want a way for Third Shift to be able to implement an entire spec by working through its sub-issues according to their dependency graph. I'm thinking probably Well I'm torn between a serial implementation and a parallel implementation. So for example if two sub-issues can run in parallel, they're both ready for agent.
+
+I guess we could implement the spec faster by allowing parallel runs. And I think that third shift's conflict resolution mechanisms are sufficient to handle conflicts that could come out of parallel runs and so I'm think I'm leaning that direction for the speed of it. 
+
+We can reference the implement-spec skill for inspiration about this (.agents/skills/implement-spec/SKILL.md), but But I think the implement spec skill is a little bit more oriented towards an agent running the process and I want to have as much of this process operated deterministically or programmatically as possible by third shift and only introduce agents where necessary for their non-determinism. 
+## 2
+1 - agree
+
+2 - agreed. Check the latest on the default branch - I think updates have landed there regarding to the config file so so we can plan on adding that config override now. I like the option to override per spec run as well. 
+
+3 - agreed
+
+4 - agree, though I'm interested in having a way to run it anyway, getting it as far as it can go until it hits that blocker of an issue that does not have the ready for agent label. Maybe a flag for this or something And a way to configure third shift to by default use this behavior of running as far as it can go on ready for agent subissue tickets on a spec.
+
+5 - I like the drain option, though I'm interested in a setup where if the spec still has more ready for agent tickets that are unblocked, I I'd like for them to be tackled as well. Even if one of the tickets has failed for some reason. I want this process to go as far as it can, implementing as many tickets as it can while respecting the dependency graph. 
+
+6 - agree, and we can reference Matt Pocock's definitions of spec at https://www.aihero.dev/ai-coding-dictionary/spec and ticket at https://www.aihero.dev/ai-coding-dictionary/ticket here
+
+7 - agree
+## 3
+8 - What are unready tickets? Tickets without a ready-for-agent label? It's okay if not all of the Tickets have the ready-for-agent label at the start of the run. Then the run should proceed as far as it can with the Tickets that are ready-for-agent.
+
+9 - agree
+
+10 - agree
+
+11 - agree
+
+12 - agree - and I want to make sure that `thirdshift merge <spec GitHub issue URL>` results in / ends with / has the capacity for the final Spec PR being merged into the default branch.
+
+13 - agree
+
+14 - agree
+## 4
+15 - agree, though I want to clarify what it means for an issue to be ready - i suppose just any open GitHub issue? even if it doesn't have the ready-for-agent label? I think I lean that way rather than having thirdshift run only on ready-for-agent labeled issues?
+
+16 - agree
+
+17 - agree
+
+18 - agree
+
+19 - agree
+
+20 - agree - And would this be a new skill and or prompt? Perhaps somewhat implement-spec inspired? but also implement inspired?
+
+21 - agree
+
+22 - agree
+## 5
+23 - agree
+
+24 - agree, And I'm thinking it would be good to have some process that watches CI on the spec PR and make sure that there are no conflicts and if so it resolves those like we do for a single issue and that it can resolve the CI issues as well before third shift deterministically merges the PR into the base branch. 
+
+25 - agree
+
+26 - agree
+## 6
+We have shared understanding. /to-spec
+## 7
+PR the glossary and adr 006 updates and anything else currently to pr
+## 8
+/to-tickets
+## 9
+ These tickets look good. File them as sub-issues
