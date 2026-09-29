@@ -118,7 +118,7 @@ To be emailed when the Run ends, add `--email` (or `email`), optionally followed
 thirdshift --email you@example.com https://github.com/acme/widgets/issues/7
 ```
 
-It sends one [Run notification](#run-notifications), whatever the outcome.
+It sends one [Run notification](#run-notifications), whatever the outcome. To have every Run on a machine send one, set `email.always` in the [User config](#user-config); `no-email` (or `--no-email`) then skips it for one Run.
 
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
 - **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
@@ -146,6 +146,7 @@ A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults fo
 always = true   # every Run is a Merge run, without the merge word
 
 [email]
+always = true                                 # every Run sends a Run notification, without the email word
 to = "you@example.com"                        # where email goes when the command names no address
 from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.dev if unset
 
@@ -154,6 +155,8 @@ dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/log
 ```
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
+
+With `email.always = true`, every Run sends a [Run notification](#run-notifications) to `email.to`, as if given `--email`, and `thirdshift --no-email <Issue URL>` (or `no-email`, before or after the URL) sends none for that one Run.
 
 `logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
@@ -178,9 +181,9 @@ It sends one test email, whose subject marks it as a test and whose body names t
 
 #### Run notifications
 
-`--email` (or `email`) asks a Run for a **Run notification**: one email, sent when the Run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to `email.to`. Giving the flag twice is an argument error.
+`--email` (or `email`) asks a Run for a **Run notification**: one email, sent when the Run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to `email.to`. With `email.always = true` in the [User config](#user-config), a Run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Run; an address after `--email` still wins over `email.to`. Giving a flag twice, or `--email` together with `--no-email`, is an argument error.
 
-The Run makes the same checks as `email-test` before any other work: an address is known, and `RESEND_API_KEY` is set and not empty. If either fails, the Run stops, exits `1` naming what's missing, and sends nothing. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
+A Run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and `RESEND_API_KEY` is set and not empty. If either fails, the Run stops, exits `1` naming what's missing, and sends nothing. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
 
 - **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
 - **Body**, plain text: the pull request URL (if any), the failure cause (if failed), the session log path (if any), the hostname and how long the Run took.

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use toml::{Table, Value};
 
+use crate::notification::NotificationAsk;
 use crate::run::Goal;
 
 /// The settings a User config can hold. Each is what a Run does when its
@@ -27,6 +28,9 @@ pub struct UserConfig {
 /// secret.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct EmailSettings {
+    /// `email.always`: every Run sends a Run notification unless told
+    /// `no-email`.
+    pub always: bool,
     /// `email.to`: the address email goes to when the command names none.
     pub to: Option<String>,
     /// `email.from`: the sender, in place of Resend's shared test sender.
@@ -88,6 +92,8 @@ impl UserConfig {
                         ),
                     },
                     ("logs", "dir", _) => bail!("logs.dir must be a string in {file}"),
+                    ("email", "always", Value::Boolean(always)) => config.email.always = *always,
+                    ("email", "always", _) => bail!("email.always must be true or false in {file}"),
                     ("email", "to", Value::String(to)) => config.email.to = Some(to.clone()),
                     ("email", "from", Value::String(from)) => {
                         config.email.from = Some(from.clone())
@@ -108,6 +114,18 @@ impl UserConfig {
             Goal::Merged
         } else {
             Goal::ReadyForReview
+        }
+    }
+}
+
+impl EmailSettings {
+    /// What a Run whose command gave no `email` or `no-email` asks about its
+    /// Run notification.
+    pub fn default_ask(&self) -> NotificationAsk {
+        if self.always {
+            NotificationAsk::Send(None)
+        } else {
+            NotificationAsk::Skip
         }
     }
 }
@@ -149,6 +167,22 @@ mod tests {
         assert_eq!(config.email.to.as_deref(), Some("me@example.com"));
         assert_eq!(config.email.from.as_deref(), Some("ts@acme.dev"));
         assert_eq!(parse("[email]\n").unwrap().email, EmailSettings::default());
+        assert!(parse("[email]\nalways = true\n").unwrap().email.always);
+        assert!(!parse("[email]\nalways = false\n").unwrap().email.always);
+    }
+
+    #[test]
+    fn email_always_asks_for_a_notification_to_email_to() {
+        let always = parse("[email]\nalways = true\n").unwrap();
+        assert_eq!(always.email.default_ask(), NotificationAsk::Send(None));
+        for text in ["", "[email]\nalways = false\n"] {
+            let config = parse(text).unwrap();
+            assert_eq!(
+                config.email.default_ask(),
+                NotificationAsk::Skip,
+                "{text:?}"
+            );
+        }
     }
 
     #[test]
@@ -203,6 +237,10 @@ mod tests {
             ),
             ("[email]\nadress = \"a@b.c\"\n", "unknown key email.adress"),
             ("email = \"a@b.c\"\n", "email must be the section [email]"),
+            (
+                "[email]\nalways = \"yes\"\n",
+                "email.always must be true or false",
+            ),
             (
                 "[email]\nto = 1\n",
                 "email.to must be a quoted email address",

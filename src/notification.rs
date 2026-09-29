@@ -15,6 +15,16 @@ use crate::issue::IssueUrl;
 use crate::progress;
 use crate::run::{Goal, Reached};
 
+/// What a Run asks about its Run notification, by its command or, without
+/// `email` or `no-email`, by the User config.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotificationAsk {
+    /// Send one, to this address, else to `email.to`.
+    Send(Option<String>),
+    /// Send none.
+    Skip,
+}
+
 /// A Run notification, checked and waiting for the Run to end.
 pub struct RunNotification {
     resend: Resend,
