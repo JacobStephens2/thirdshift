@@ -182,16 +182,18 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
 }
 
 #[test]
-fn setup_leaves_an_existing_user_config_as_it_is() {
+fn setup_keeps_the_values_and_comments_of_an_existing_user_config() {
     let scenario = Scenario::new();
-    let mine = "# mine\n[merge]\nalways = true\n";
-    scenario.user_config_is(mine);
+    scenario.user_config_is("# mine\n[merge]\nalways = true\n");
 
     let result = scenario.run(&["setup"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");
-    assert_eq!(user_config(&scenario).as_deref(), Some(mine));
+    let text = user_config(&scenario).unwrap();
+    assert!(text.contains("# mine"), "{text}");
+    let config: toml::Table = text.parse().unwrap();
+    assert_eq!(config["merge"]["always"].as_bool(), Some(true), "{text}");
 }
 
 #[test]

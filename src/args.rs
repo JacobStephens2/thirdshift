@@ -31,8 +31,9 @@ pub struct RunArgs {
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
-/// `setup` and `email-test` are commands only as the first argument. Otherwise it is
-/// a Run: one Issue URL, with each Run flag at most once, before or after it.
+/// `setup` and `email-test` are commands only as the first argument.
+/// Otherwise it is a Run: one Issue URL, with each Run flag at most once,
+/// before or after it.
 /// `email` may be followed by the address to send the Run notification to.
 /// `merge` and `no-merge` contradict each other, as do `email` and `no-email`.
 pub fn parse(args: &[String]) -> Result<Command> {

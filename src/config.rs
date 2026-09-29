@@ -43,7 +43,7 @@ pub struct EmailSettings {
 impl UserConfig {
     /// The User config under `$HOME`, or the defaults if there is none.
     pub fn load() -> Result<Self> {
-        let (home, path) = location()?;
+        let (home, path) = home_and_path()?;
         match std::fs::read_to_string(&path) {
             Ok(text) => UserConfig::parse(&text, &path, &home),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -133,10 +133,10 @@ impl EmailSettings {
 }
 
 /// Setup with no terminal: write the User config with every setting at its
-/// default, asking nothing. An existing User config is left as it is, once it
+/// default, asking nothing. An existing User config keeps its values, once it
 /// parses as a Run would parse it, so Setup never resets a configured machine.
 pub fn setup() -> Result<String> {
-    let (home, path) = location()?;
+    let (home, path) = home_and_path()?;
     match std::fs::read_to_string(&path) {
         Ok(text) => {
             UserConfig::parse(&text, &path, &home)?;
@@ -150,11 +150,9 @@ pub fn setup() -> Result<String> {
             return Err(error).with_context(|| format!("can't read {}", path.display()));
         }
     }
-    let write = |path: &Path| -> std::io::Result<()> {
-        std::fs::create_dir_all(path.parent().expect("the User config is in a directory"))?;
-        std::fs::write(path, DEFAULTS)
-    };
-    write(&path).with_context(|| format!("can't write {}", path.display()))?;
+    std::fs::create_dir_all(home.join(".thirdshift"))
+        .and_then(|()| std::fs::write(&path, DEFAULTS))
+        .with_context(|| format!("can't write {}", path.display()))?;
     Ok(format!("wrote the User config {}", path.display()))
 }
 
@@ -177,7 +175,7 @@ dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
 "#;
 
 /// `$HOME`, and the User config's path under it.
-fn location() -> Result<(PathBuf, PathBuf)> {
+fn home_and_path() -> Result<(PathBuf, PathBuf)> {
     let home = std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
