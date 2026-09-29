@@ -17,6 +17,10 @@
 //! gh-state.json      fake GitHub state
 //! claude-script.sh   what the fake agent does this test
 //! claude-script.sh.<n>  what it does in the n-th session instead, if present
+//! claude-script.sh.issue-<i>    what it does in sessions for issue <i>, if
+//!                    present, taking precedence over the two above
+//! claude-script.sh.issue-<i>.<k>  what it does in the k-th session for issue
+//!                    <i>, if present, taking precedence over all the rest
 //! claude-calls.json  what the fake agent was asked to do
 //! claude-calls.json.after-result.<n>  stream lines the n-th session emits
 //!                    after its closing result
@@ -143,6 +147,26 @@ impl Scenario {
         fs::write(self.path(&format!("claude-script.sh.{session}")), script).unwrap();
     }
 
+    /// Script the fake agent's sessions for issue `issue`, the one whose
+    /// Issue URL their prompt names, whatever order they come in.
+    pub fn agent_does_for(&self, issue: u32, script: &str) {
+        fs::write(
+            self.path(&format!("claude-script.sh.issue-{issue}")),
+            script,
+        )
+        .unwrap();
+    }
+
+    /// Script the fake agent's `session`-th session (1-based) for issue
+    /// `issue` differently from its others.
+    pub fn agent_does_for_in_session(&self, issue: u32, session: usize, script: &str) {
+        fs::write(
+            self.path(&format!("claude-script.sh.issue-{issue}.{session}")),
+            script,
+        )
+        .unwrap();
+    }
+
     pub fn run(&self, args: &[&str]) -> RunResult {
         self.command(args).output().unwrap().into()
     }
@@ -228,6 +252,35 @@ impl Scenario {
     pub fn issue_is(&self, number: u32, state: &str) {
         let mut gh = self.gh_state();
         gh["issues"][number.to_string()] = json!(state);
+        self.write_gh_state(&gh);
+    }
+
+    /// Make issue `spec` a Spec on the fake GitHub: `tickets` are its
+    /// sub-issues, in order, each with the issues it is blocked by. Every
+    /// issue named that the fake GitHub doesn't know yet is open.
+    pub fn spec_has_tickets(&self, spec: u32, tickets: &[(u32, &[u32])]) {
+        let mut gh = self.gh_state();
+        let named = std::iter::once(spec).chain(tickets.iter().flat_map(|(ticket, blockers)| {
+            std::iter::once(*ticket).chain(blockers.iter().copied())
+        }));
+        for number in named {
+            let issue = &mut gh["issues"][number.to_string()];
+            if issue.is_null() {
+                *issue = json!("OPEN");
+            }
+        }
+        gh["sub_issues"][spec.to_string()] =
+            json!(tickets.iter().map(|(ticket, _)| ticket).collect::<Vec<_>>());
+        for (ticket, blockers) in tickets {
+            gh["blocked_by"][ticket.to_string()] = json!(blockers);
+        }
+        self.write_gh_state(&gh);
+    }
+
+    /// Give issue `number` the labels `labels` on the fake GitHub.
+    pub fn issue_labelled(&self, number: u32, labels: &[&str]) {
+        let mut gh = self.gh_state();
+        gh["labels"][number.to_string()] = json!(labels);
         self.write_gh_state(&gh);
     }
 

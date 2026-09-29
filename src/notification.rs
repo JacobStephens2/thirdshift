@@ -13,7 +13,7 @@ use crate::github;
 use crate::host;
 use crate::issue::IssueUrl;
 use crate::progress;
-use crate::run::{Goal, Reached};
+use crate::run::Reached;
 
 /// What a Run asks about its Run notification, by its command or, without
 /// `email` or `no-email`, by the User config.
@@ -54,15 +54,15 @@ impl RunNotification {
         })
     }
 
-    /// Send the notification for the Run that `ended`, whose goal was `goal`.
-    /// A failed send is only a warning: it never changes the Run's outcome.
-    pub fn send(self, ended: &Result<Reached, FailedRun>, goal: Goal) {
+    /// Send the notification for the Run that `ended`. A failed send is only
+    /// a warning: it never changes the Run's outcome.
+    pub fn send(self, ended: &Result<Reached, FailedRun>) {
         let (outcome, pr_url, cause, log) = match ended {
             Ok(reached) => (
-                goal.outcome(),
+                reached.goal.outcome(),
                 Some(reached.pr_url.as_str()),
                 None,
-                Some(reached.log.as_path()),
+                reached.log.as_deref(),
             ),
             Err(failed) => {
                 let (outcome, cause) = if failed.interrupted {

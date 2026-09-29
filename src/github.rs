@@ -40,6 +40,94 @@ pub fn issue_title(issue: &IssueUrl) -> Result<String> {
         .to_string())
 }
 
+/// A Spec's sub-issue, as a Spec run reads it.
+pub struct Ticket {
+    pub number: u64,
+    pub is_open: bool,
+    pub labels: Vec<String>,
+    /// It has sub-issues of its own.
+    pub has_sub_issues: bool,
+    /// The numbers of the open issues it is blocked by, in the Spec or not.
+    pub open_blockers: Vec<u64>,
+}
+
+/// Every sub-issue of `issue`, open or closed, with its labels, whether it
+/// has sub-issues of its own and the issues it is blocked by: its GitHub
+/// "blocked by" links, never the text of its body.
+const TICKETS_QUERY: &str = "\
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      subIssues(first: 100) {
+        nodes {
+          number
+          state
+          labels(first: 100) { nodes { name } }
+          subIssues { totalCount }
+          blockedBy(first: 100) { nodes { number state } }
+        }
+      }
+    }
+  }
+}";
+
+/// The sub-issues of `issue`, its Tickets if it has any, in one query.
+pub fn tickets(issue: &IssueUrl) -> Result<Vec<Ticket>> {
+    let json = gh_json(&[
+        "api",
+        "graphql",
+        "-f",
+        &format!("query={TICKETS_QUERY}"),
+        "-f",
+        &format!("owner={}", issue.owner),
+        "-f",
+        &format!("repo={}", issue.repo),
+        "-F",
+        &format!("number={}", issue.number),
+    ])?;
+    let nodes = |value: &Value, what: &str| -> Result<Vec<Value>> {
+        value["nodes"]
+            .as_array()
+            .cloned()
+            .with_context(|| format!("gh api graphql output has no {what}"))
+    };
+    let is_open = |node: &Value| -> Result<bool> {
+        Ok(node["state"]
+            .as_str()
+            .context("gh api graphql output has an issue with no state")?
+            == "OPEN")
+    };
+    let number = |node: &Value| {
+        node["number"]
+            .as_u64()
+            .context("gh api graphql output has an issue with no number")
+    };
+    nodes(
+        &json["data"]["repository"]["issue"]["subIssues"],
+        "subIssues",
+    )?
+    .iter()
+    .map(|node| {
+        let mut open_blockers = Vec::new();
+        for blocker in nodes(&node["blockedBy"], "blockedBy")? {
+            if is_open(&blocker)? {
+                open_blockers.push(number(&blocker)?);
+            }
+        }
+        Ok(Ticket {
+            number: number(node)?,
+            is_open: is_open(node)?,
+            labels: nodes(&node["labels"], "labels")?
+                .iter()
+                .filter_map(|label| label["name"].as_str().map(String::from))
+                .collect(),
+            has_sub_issues: node["subIssues"]["totalCount"].as_u64().unwrap_or(0) > 0,
+            open_blockers,
+        })
+    })
+    .collect()
+}
+
 /// Close `issue` with `comment`.
 pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     gh(&[
@@ -167,6 +255,31 @@ pub fn pull_requests_with_head_prefix(issue: &IssueUrl, prefix: &str) -> Result<
         .filter(|pr| pr["isCrossRepository"] != Value::Bool(true))
         .map(PullRequest::from_json)
         .collect()
+}
+
+/// Open a pull request, ready for review, from `head` into `base`, and
+/// return its URL.
+pub fn create_pr(
+    issue: &IssueUrl,
+    head: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+) -> Result<String> {
+    gh_stdout(&[
+        "pr",
+        "create",
+        "--repo",
+        &issue.repo_slug(),
+        "--head",
+        head,
+        "--base",
+        base,
+        "--title",
+        title,
+        "--body",
+        body,
+    ])
 }
 
 /// Mark the pull request whose head is `branch` ready for review.
@@ -329,6 +442,12 @@ pub fn checks_on(issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
 
 /// Run `gh <args>`, failing with its stderr if it exits non-zero.
 fn gh(args: &[&str]) -> Result<()> {
+    gh_stdout(args).map(drop)
+}
+
+/// Run `gh <args>` and return its trimmed stdout, failing with its stderr if
+/// it exits non-zero.
+fn gh_stdout(args: &[&str]) -> Result<String> {
     let output = Command::new("gh")
         .args(args)
         .output()
@@ -340,7 +459,7 @@ fn gh(args: &[&str]) -> Result<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Every item of the `field` list of the GitHub API's `path`, across all its
