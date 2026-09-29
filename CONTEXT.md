@@ -35,8 +35,15 @@ A **Standards finding** or **Spec finding** the agent chose not to fix. It is li
 One invocation of the factory on an **Issue URL**, from launch to cleanup.
 
 **Merge run**:
-A **Run** asked to end with its pull request merged rather than left for review. It does everything a **Run** does, then a **Self-merge**.
+A **Run** asked to end with its pull request merged rather than left for review, by the command it was started with or by the **User config**. It does everything a **Run** does, then a **Self-merge**.
 _Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
+
+**Run notification**:
+A message thirdshift sends when a **Run** ends, whatever its outcome (ready, merged, failed or interrupted), to the address given with the email flag or the default in the **User config**. A Run sends one only when asked to, by the flag or by the User config. Failing to send one never changes the Run's outcome.
+_Avoid_: completion email, alert
+
+**User config**:
+The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address and whether every Run is a **Merge run**. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
 
 **Self-merge**:
 The step at the end of a **Merge run** in which thirdshift itself merges the pull request into the **Base branch** with a merge commit, once it is open, ready for review, mergeable and green on the head commit it merges. No human reviews it first. It ends with the **Issue branch** deleted and the issue closed, by thirdshift if the merge did not close it.
