@@ -20,6 +20,8 @@ pub struct FailedRun {
     pub pr_url: Option<String>,
     /// The most recent session log, if a session was started.
     pub log: Option<PathBuf>,
+    /// Whether the Run was interrupted, as it was when the Run failed.
+    pub interrupted: bool,
 }
 
 /// A merge GitHub refused when a round of the Repair loop found nothing to
@@ -43,6 +45,7 @@ impl From<anyhow::Error> for FailedRun {
             error,
             pr_url: None,
             log: None,
+            interrupted: interrupt::requested(),
         }
     }
 }
@@ -60,7 +63,8 @@ pub fn fail(
     error: anyhow::Error,
 ) -> FailedRun {
     // An interrupt can surface as some other error, such as a killed git.
-    let error = if interrupt::requested() {
+    let interrupted = interrupt::requested();
+    let error = if interrupted {
         anyhow!("interrupted")
     } else {
         error
@@ -101,6 +105,7 @@ pub fn fail(
         error,
         pr_url,
         log: log.exists().then(|| log.to_path_buf()),
+        interrupted,
     }
 }
 

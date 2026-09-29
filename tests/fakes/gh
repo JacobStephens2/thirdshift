@@ -5,6 +5,7 @@ State lives in the JSON file named by $FAKE_GH_STATE:
 
     {"repo": "owner/repo",
      "issues": {"<number>": "OPEN" | "CLOSED"},
+     "titles"?: {"<number>": "<title>"},
      "comments"?: {"<number>": ["<body>", ...]},
      "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
               "mergeable"?, "unknown_polls"?}],
@@ -24,6 +25,8 @@ like) only when the base is the default branch, as GitHub does.
 A PR's `headRefOid` is its head branch's tip on origin, frozen when it is
 merged. Its `closingIssuesReferences` are the issues its body closes.
 `gh repo view` reports origin's HEAD as the default branch.
+
+An issue's title is its entry in `titles`, else `Issue <number>`.
 
 `gh issue close` closes the issue, recording its `--comment`; on an issue
 already closed it only warns, as gh does.
@@ -273,7 +276,11 @@ def issue_view(state, positional, flags):
     number = positional[0]
     if number not in state["issues"]:
         die(f"GraphQL: Could not resolve to an issue or pull request with the number of {number}.")
-    fields = {"number": int(number), "state": state["issues"][number]}
+    fields = {
+        "number": int(number),
+        "state": state["issues"][number],
+        "title": state.get("titles", {}).get(number, f"Issue {number}"),
+    }
     wanted = flags["json"].split(",")
     print(json.dumps({key: fields[key] for key in wanted}))
 

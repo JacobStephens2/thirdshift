@@ -22,6 +22,23 @@ pub fn issue_is_open(issue: &IssueUrl) -> Result<bool> {
     Ok(json["state"].as_str().context("gh output has no state")? == "OPEN")
 }
 
+/// The title of `issue`.
+pub fn issue_title(issue: &IssueUrl) -> Result<String> {
+    let json = gh_json(&[
+        "issue",
+        "view",
+        &issue.number.to_string(),
+        "--repo",
+        &issue.repo_slug(),
+        "--json",
+        "title",
+    ])?;
+    Ok(json["title"]
+        .as_str()
+        .context("gh output has no title")?
+        .to_string())
+}
+
 /// Close `issue` with `comment`.
 pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     gh(&[

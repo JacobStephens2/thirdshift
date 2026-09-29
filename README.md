@@ -112,8 +112,16 @@ A Merge run ends in one of three ways:
 - **Policy refusal**: GitHub refused the merge and a round of merging the Base branch and watching CI found nothing left to fix. Exit `1`, the pull request's URL on stdout, and GitHub's error on stderr. The pull request stays open and ready for review, not a draft, for you to merge by hand or to change the repository's settings. thirdshift never reads GitHub's error text to decide this.
 - **Any other failure**: a [Failed run](#failed-runs), as for a Run without `merge`.
 
+To be emailed when the Run ends, add `--email` (or `email`), optionally followed by the address, before or after the URL and alongside `merge`:
+
+```sh
+thirdshift --email you@example.com https://github.com/acme/widgets/issues/7
+```
+
+It sends one [Run notification](#run-notifications), whatever the outcome.
+
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
-- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run.
+- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
 - **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin` or closing the issue then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, or a Run flag is repeated or contradicts another; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
 
 The other commands:
@@ -167,6 +175,17 @@ thirdshift email-test you@example.com   # or just `thirdshift email-test`, to se
 ```
 
 It sends one test email, whose subject marks it as a test and whose body names the host, the time and the sender. Before sending, it checks that it has an address (the argument, else `email.to`) and a non-empty `RESEND_API_KEY`; if either is missing, it exits `1` naming what's missing and sends nothing. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word and exits `1`. It gives up after 30 seconds without an answer.
+
+#### Run notifications
+
+`--email` (or `email`) asks a Run for a **Run notification**: one email, sent when the Run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to `email.to`. Giving the flag twice is an argument error.
+
+The Run makes the same checks as `email-test` before any other work: an address is known, and `RESEND_API_KEY` is set and not empty. If either fails, the Run stops, exits `1` naming what's missing, and sends nothing. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
+
+- **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
+- **Body**, plain text: the pull request URL (if any), the failure cause (if failed), the session log path (if any), the hostname and how long the Run took.
+
+A notification that can't be sent is a `warning:` line on stderr with Resend's error. It never changes the Run's outcome, stdout or exit code.
 
 ### Logs
 

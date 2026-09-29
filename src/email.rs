@@ -1,6 +1,6 @@
 //! Email through Resend's HTTP API (ADR 0005): one HTTPS POST per email, with
-//! the key from `RESEND_API_KEY`. `thirdshift email-test` sends through it,
-//! and Run notifications are to use the same checks and the same send.
+//! the key from `RESEND_API_KEY`. `thirdshift email-test` and Run
+//! notifications both send through it, after the same checks.
 
 use std::time::Duration;
 

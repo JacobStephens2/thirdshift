@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::io::Write;
 
 use serde_json::Value;
 
@@ -11,7 +12,9 @@ const MAX_DETAIL: usize = 100;
 
 /// Print one of thirdshift's own steps.
 pub fn step(message: impl Display) {
-    eprintln!("thirdshift: {message}");
+    // Ignored if it fails, as it does once the terminal has closed: the Run
+    // still has to clean up and send its Run notification.
+    let _ = writeln!(std::io::stderr(), "thirdshift: {message}");
 }
 
 /// Condenses one session's stream, a line at a time. Unknown and malformed
