@@ -37,13 +37,19 @@ impl Goal {
     }
 }
 
-/// Take `issue` to a ready PR, or in a Merge run a merged one, and return the
-/// PR's URL. Any failure after the worktree exists, including a merge that
+/// A Run that reached its goal.
+pub struct Reached {
+    pub pr_url: String,
+    /// The most recent session's log.
+    pub log: PathBuf,
+}
+
+/// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure after the worktree exists, including a merge that
 /// fails, goes through the Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch.
-pub fn run(issue: &IssueUrl, goal: Goal, logs_dir: &Path) -> Result<String, FailedRun> {
+pub fn run(issue: &IssueUrl, goal: Goal, logs_dir: &Path) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
@@ -75,8 +81,10 @@ pub fn run(issue: &IssueUrl, goal: Goal, logs_dir: &Path) -> Result<String, Fail
         timestamp: &timestamp,
     };
     let mut log = logs.path("implement");
-    implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log)
-        .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
+    match implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log) {
+        Ok(pr_url) => Ok(Reached { pr_url, log }),
+        Err(error) => Err(failed_run::fail(issue, worktree, &base, &log, error)),
+    }
 }
 
 /// The implement session given `prompt`, the checks on the PR it opened or

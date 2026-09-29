@@ -157,8 +157,20 @@ impl Scenario {
     /// Run thirdshift and send it `signal` (e.g. `"INT"`) once the fake agent
     /// has touched the file `started` in the scenario root.
     pub fn run_and_signal(&self, args: &[&str], started: &str, signal: &str) -> RunResult {
+        self.run_and_signal_with_env(args, &[], started, signal)
+    }
+
+    /// Like [`Scenario::run_and_signal`], with extra environment variables.
+    pub fn run_and_signal_with_env(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+        started: &str,
+        signal: &str,
+    ) -> RunResult {
         let child = self
             .command(args)
+            .envs(env.iter().copied())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -216,6 +228,13 @@ impl Scenario {
     pub fn issue_is(&self, number: u32, state: &str) {
         let mut gh = self.gh_state();
         gh["issues"][number.to_string()] = json!(state);
+        self.write_gh_state(&gh);
+    }
+
+    /// Give issue `number` the title `title` on the fake GitHub.
+    pub fn issue_titled(&self, number: u32, title: &str) {
+        let mut gh = self.gh_state();
+        gh["titles"][number.to_string()] = json!(title);
         self.write_gh_state(&gh);
     }
 
