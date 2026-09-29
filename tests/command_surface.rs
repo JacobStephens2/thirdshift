@@ -137,17 +137,16 @@ fn merge_without_an_issue_url_prints_an_error_and_the_help_to_stderr() {
 }
 
 #[test]
-fn anything_after_the_issue_url_prints_an_error_and_the_help_to_stderr() {
+fn an_extra_argument_prints_an_error_and_the_help_to_stderr() {
     let scenario = Scenario::new();
     let url = scenario.issue_url(7);
 
-    for args in [
-        vec![url.as_str(), "--merge"],
-        vec![url.as_str(), "merge"],
-        vec!["merge", url.as_str(), "extra"],
-        vec!["--merge", url.as_str(), "--merge"],
+    for (args, extra) in [
+        (vec![url.as_str(), "extra"], "extra"),
+        (vec!["merge", url.as_str(), "extra"], "extra"),
+        (vec![url.as_str(), url.as_str()], url.as_str()),
+        (vec![url.as_str(), "--no-merge", "frobnicate"], "frobnicate"),
     ] {
-        let extra = args.last().unwrap();
         let result = scenario.run(&args);
 
         assert_argument_error(
@@ -156,5 +155,70 @@ fn anything_after_the_issue_url_prints_an_error_and_the_help_to_stderr() {
             &format!("unexpected argument after the Issue URL: {extra}"),
         );
         assert!(scenario.claude_calls().is_empty(), "{args:?} started a Run");
+    }
+}
+
+#[test]
+fn a_repeated_flag_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+    let url = scenario.issue_url(7);
+
+    for (args, repeated) in [
+        (vec!["merge", url.as_str(), "merge"], "merge"),
+        (vec!["--merge", url.as_str(), "--merge"], "--merge"),
+        (vec!["merge", "--merge", url.as_str()], "--merge"),
+        (vec![url.as_str(), "no-merge", "--no-merge"], "--no-merge"),
+    ] {
+        let result = scenario.run(&args);
+
+        assert_argument_error(
+            &scenario,
+            &result,
+            &format!("repeated argument: {repeated}"),
+        );
+        assert!(scenario.claude_calls().is_empty(), "{args:?} started a Run");
+    }
+}
+
+#[test]
+fn merge_with_no_merge_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+    let url = scenario.issue_url(7);
+
+    for args in [
+        vec!["merge", url.as_str(), "no-merge"],
+        vec!["--no-merge", "--merge", url.as_str()],
+        vec![url.as_str(), "--merge", "no-merge"],
+    ] {
+        let result = scenario.run(&args);
+
+        assert_argument_error(
+            &scenario,
+            &result,
+            "merge and no-merge can't be used together",
+        );
+        assert!(scenario.claude_calls().is_empty(), "{args:?} started a Run");
+    }
+}
+
+#[test]
+fn no_merge_without_an_issue_url_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+
+    for no_merge in ["no-merge", "--no-merge"] {
+        let result = scenario.run(&[no_merge]);
+
+        assert_argument_error(&scenario, &result, "missing Issue URL");
+    }
+}
+
+#[test]
+fn help_lists_no_merge_and_the_user_config() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    for mention in ["--no-merge", "~/.thirdshift/config.toml", "merge.always"] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
     }
 }
