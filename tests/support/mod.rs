@@ -8,6 +8,7 @@
 //!                    it rejects non-fast-forward pushes, so no rebase or
 //!                    force-push can reach it
 //! home/              $HOME: .gitconfig with identity and the insteadOf rule
+//! home/.thirdshift/  the User config, config.toml, if the test writes one
 //! home/.config/      $XDG_CONFIG_HOME, where an install receipt would be
 //! bin/               fake gh and claude, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
@@ -196,6 +197,16 @@ impl Scenario {
             .env("THIRDSHIFT_CI_GRACE_MS", "300")
             .env("THIRDSHIFT_POLL_MS", "10");
         command
+    }
+
+    /// Write `toml` as the User config, `~/.thirdshift/config.toml` under the
+    /// scenario's `$HOME`, and return its path.
+    pub fn user_config_is(&self, toml: &str) -> PathBuf {
+        let dir = self.path("home/.thirdshift");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, toml).unwrap();
+        path
     }
 
     /// Set issue `number`'s state on the fake GitHub: `"OPEN"` or `"CLOSED"`.

@@ -286,3 +286,19 @@ fn when_github_is_unreachable_update_fails_with_an_explanation() {
         result.stderr
     );
 }
+
+#[test]
+fn update_never_reads_the_user_config_so_a_broken_one_cannot_block_it() {
+    let scenario = installed_scenario();
+    scenario.user_config_is("[merge\nalway = true\n");
+    let github = FakeReleases::start();
+    github.publish(VERSION, "true");
+
+    let result = github.update(&scenario);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        result.stderr,
+        format!("thirdshift: thirdshift {VERSION} is the latest release\n")
+    );
+}
