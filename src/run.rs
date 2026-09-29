@@ -70,10 +70,11 @@ pub fn run(issue: &IssueUrl, goal: Goal, logs_dir: &Path) -> Result<String, Fail
         ),
     };
     let logs = Logs {
+        issue,
         dir: logs_dir,
         timestamp: &timestamp,
     };
-    let mut log = logs.path(issue, "implement");
+    let mut log = logs.path("implement");
     implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log)
         .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
 }
@@ -95,7 +96,6 @@ fn implement(
     let branch = worktree.branch();
     let plugin = Plugin::write()?;
     let sessions = Sessions {
-        issue,
         logs,
         worktree: worktree.path(),
         plugin_dir: plugin.path(),

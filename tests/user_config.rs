@@ -259,13 +259,22 @@ fn an_absolute_logs_dir_is_used_as_is() {
 
 #[test]
 fn a_relative_or_mistyped_logs_dir_stops_the_run_naming_the_setting() {
-    for config in [
-        "[logs]\ndir = \"logs\"\n",
-        "[logs]\ndir = \"./logs\"\n",
-        "[logs]\ndir = \"~other/logs\"\n",
-        "[logs]\ndir = \"\"\n",
-        "[logs]\ndir = 3\n",
-        "logs = \"/tmp/logs\"\n",
+    for (config, named) in [
+        (
+            "[logs]\ndir = \"logs\"\n",
+            "logs.dir must be an absolute path",
+        ),
+        (
+            "[logs]\ndir = \"./logs\"\n",
+            "logs.dir must be an absolute path",
+        ),
+        (
+            "[logs]\ndir = \"~other/logs\"\n",
+            "logs.dir must be an absolute path",
+        ),
+        ("[logs]\ndir = \"\"\n", "logs.dir must be an absolute path"),
+        ("[logs]\ndir = 3\n", "logs.dir must be a string"),
+        ("logs = \"/tmp/logs\"\n", "logs must be the section [logs]"),
     ] {
         let scenario = Scenario::new();
         let path = scenario.user_config_is(config);
@@ -275,7 +284,11 @@ fn a_relative_or_mistyped_logs_dir_stops_the_run_naming_the_setting() {
 
         assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
         scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
-        assert!(result.stderr.contains("logs"), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains(named),
+            "expected {named:?} in stderr for {config:?}: {}",
+            result.stderr
+        );
         assert!(scenario.gh_calls().is_empty(), "thirdshift called gh");
     }
 }

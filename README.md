@@ -142,7 +142,7 @@ dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/log
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 
-`logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path or start with `~/`, which stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
+`logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
 A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `update`, `version` and `help` never read it, so a broken User config can't block them.
 

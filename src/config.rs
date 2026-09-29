@@ -11,27 +11,37 @@ use crate::run::Goal;
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
     /// `logs.dir`, with a leading `~` expanded: where session logs are
-    /// written instead of `~/.thirdshift/logs`.
-    pub logs_dir: Option<PathBuf>,
+    /// written, by default `~/.thirdshift/logs`.
+    pub logs_dir: PathBuf,
 }
 
 impl UserConfig {
     /// The User config under `$HOME`, or the defaults if there is none.
     pub fn load() -> Result<Self> {
-        let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
-            return Ok(UserConfig::default());
-        };
-        let home = PathBuf::from(home);
+        let home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+            .context("HOME is not set")?;
         let path = home.join(".thirdshift/config.toml");
         match std::fs::read_to_string(&path) {
             Ok(text) => UserConfig::parse(&text, &path, &home),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(UserConfig::default()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(UserConfig::defaults(&home))
+            }
             Err(error) => Err(error).with_context(|| format!("can't read {}", path.display())),
+        }
+    }
+
+    /// What a Run does with no User config under `home`.
+    fn defaults(home: &Path) -> Self {
+        UserConfig {
+            merge_always: false,
+            logs_dir: home.join(".thirdshift/logs"),
         }
     }
 
@@ -44,7 +54,7 @@ impl UserConfig {
             .parse()
             .map_err(|error| anyhow!("{error}"))
             .with_context(|| format!("can't parse {file}"))?;
-        let mut config = UserConfig::default();
+        let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
             let known = matches!(section.as_str(), "merge" | "logs");
             let settings = match value {
@@ -58,9 +68,9 @@ impl UserConfig {
                     ("merge", "always", Value::Boolean(always)) => config.merge_always = *always,
                     ("merge", "always", _) => bail!("merge.always must be true or false in {file}"),
                     ("logs", "dir", Value::String(dir)) => match expand_home(dir, home) {
-                        Some(dir) => config.logs_dir = Some(dir),
+                        Some(dir) => config.logs_dir = dir,
                         None => bail!(
-                            "logs.dir must be an absolute path or start with ~/, not {dir:?}, in {file}"
+                            "logs.dir must be an absolute path, ~ or start with ~/, not {dir:?}, in {file}"
                         ),
                     },
                     ("logs", "dir", _) => bail!("logs.dir must be a string in {file}"),
@@ -69,16 +79,6 @@ impl UserConfig {
             }
         }
         Ok(config)
-    }
-
-    /// Where a Run writes its session logs: `logs.dir`, or by default
-    /// `~/.thirdshift/logs`.
-    pub fn logs_dir(&self) -> Result<PathBuf> {
-        if let Some(dir) = &self.logs_dir {
-            return Ok(dir.clone());
-        }
-        let home = std::env::var_os("HOME").context("HOME is not set")?;
-        Ok(PathBuf::from(home).join(".thirdshift/logs"))
     }
 
     /// The goal of a Run whose command gave no `merge` or `no-merge`.
@@ -123,17 +123,22 @@ mod tests {
     }
 
     #[test]
-    fn logs_dir_is_read_with_a_leading_tilde_expanded() {
+    fn logs_dir_is_read_with_a_leading_tilde_expanded_and_defaults_under_home() {
         for (dir, expanded) in [
             ("~/elsewhere/logs", "/home/me/elsewhere/logs"),
             ("~", "/home/me"),
             ("/var/log/thirdshift", "/var/log/thirdshift"),
         ] {
             let config = parse(&format!("[logs]\ndir = {dir:?}\n")).unwrap();
-            assert_eq!(config.logs_dir, Some(PathBuf::from(expanded)), "{dir}");
+            assert_eq!(config.logs_dir, PathBuf::from(expanded), "{dir}");
         }
-        assert_eq!(parse("[logs]\n").unwrap().logs_dir, None);
-        assert_eq!(parse("").unwrap().logs_dir, None);
+        for text in ["", "[logs]\n"] {
+            assert_eq!(
+                parse(text).unwrap().logs_dir,
+                PathBuf::from("/home/me/.thirdshift/logs"),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]
