@@ -13,7 +13,7 @@ use crate::host;
 
 /// Resend's shared sender, used when `email.from` isn't set. Resend only lets
 /// it send to the address of the user's own Resend account.
-const DEFAULT_FROM: &str = "onboarding@resend.dev";
+pub const DEFAULT_FROM: &str = "onboarding@resend.dev";
 
 const RESEND_URL: &str = "https://api.resend.com";
 

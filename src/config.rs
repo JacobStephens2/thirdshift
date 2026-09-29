@@ -1,6 +1,6 @@
 //! The User config: `~/.thirdshift/config.toml`, this machine's defaults for
-//! every Run. Only a Run and `email-test` read it, so a broken one can't block
-//! `update`, `version` or `help`.
+//! every Run. Only a Run, `email-test` and `setup` read it, so a broken one
+//! can't block `update`, `version` or `help`.
 
 use std::path::{Path, PathBuf};
 
@@ -43,11 +43,7 @@ pub struct EmailSettings {
 impl UserConfig {
     /// The User config under `$HOME`, or the defaults if there is none.
     pub fn load() -> Result<Self> {
-        let home = std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from)
-            .context("HOME is not set")?;
-        let path = home.join(".thirdshift/config.toml");
+        let (home, path) = home_and_path()?;
         match std::fs::read_to_string(&path) {
             Ok(text) => UserConfig::parse(&text, &path, &home),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -136,6 +132,58 @@ impl EmailSettings {
     }
 }
 
+/// Setup with no terminal: write the User config with every setting at its
+/// default, asking nothing. An existing User config keeps its values, once it
+/// parses as a Run would parse it, so Setup never resets a configured machine.
+pub fn setup() -> Result<String> {
+    let (home, path) = home_and_path()?;
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            UserConfig::parse(&text, &path, &home)?;
+            return Ok(format!(
+                "the User config {} is already set up",
+                path.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("can't read {}", path.display()));
+        }
+    }
+    std::fs::create_dir_all(home.join(".thirdshift"))
+        .and_then(|()| std::fs::write(&path, DEFAULTS))
+        .with_context(|| format!("can't write {}", path.display()))?;
+    Ok(format!("wrote the User config {}", path.display()))
+}
+
+/// The User config Setup writes with no answers: every key at its default,
+/// each with what it does and that default. `email.to` has no default, so it
+/// is the one key written commented out.
+const DEFAULTS: &str = r#"[merge]
+always = false   # every Run is a Merge run, without the merge word; default false
+
+[launch]
+pull = false     # every Run first fast-forwards your checkout of the Base branch; default false
+
+[email]
+always = false                  # every Run sends a Run notification, without the email word; default false
+# to = "you@example.com"        # where email goes when the command names no address; no default
+from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
+
+[logs]
+dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
+"#;
+
+/// `$HOME`, and the User config's path under it.
+fn home_and_path() -> Result<(PathBuf, PathBuf)> {
+    let home = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .context("HOME is not set")?;
+    let path = home.join(".thirdshift/config.toml");
+    Ok((home, path))
+}
+
 /// `path` as an absolute path, with a leading `~` expanded to `home`, or
 /// `None` if it is relative: the directory a Run is launched from is no base
 /// for a setting that holds for every Run.
@@ -158,6 +206,17 @@ mod tests {
             Path::new("/home/me/.thirdshift/config.toml"),
             Path::new("/home/me"),
         )
+    }
+
+    #[test]
+    fn the_defaults_setup_writes_are_what_a_run_does_with_no_user_config() {
+        let mut config = parse(DEFAULTS).unwrap();
+        assert_eq!(
+            config.email.from.as_deref(),
+            Some(crate::email::DEFAULT_FROM)
+        );
+        config.email.from = None;
+        assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
     }
 
     #[test]

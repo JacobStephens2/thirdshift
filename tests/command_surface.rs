@@ -13,6 +13,7 @@ fn assert_help_text(text: &str) {
         "thirdshift merge <Issue URL>",
         "thirdshift --email <Issue URL>",
         "thirdshift email-test [<address>]",
+        "thirdshift setup",
         "thirdshift update",
         "thirdshift version",
         "thirdshift help",

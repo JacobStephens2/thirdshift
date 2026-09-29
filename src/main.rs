@@ -37,6 +37,7 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift --no-merge <Issue URL>   Run the factory on the issue and leave its pull request for review
        thirdshift --email <Issue URL>      Run the factory on the issue, then email how the Run ended
        thirdshift email-test [<address>]   Send a test email through Resend, to check the email setup
+       thirdshift setup                    Write the User config, with every setting and its default
        thirdshift update                   Update thirdshift to the latest release
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
@@ -47,7 +48,8 @@ merge, --no-merge, --email and --no-email go before or after the Issue URL, in a
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
 after --email is the address only if it has an @ and isn't a URL.
 
-The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine.
+The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
+thirdshift setup writes one listing every setting at its default, to edit.
 With merge.always set, every Run is a Merge run unless given --no-merge:
 
     [merge]
@@ -86,6 +88,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Ok(Command::Update) => return outcome(update::update()),
+        Ok(Command::Setup) => return outcome(config::setup()),
         Ok(Command::EmailTest(to)) => {
             return outcome(
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),
