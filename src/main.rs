@@ -65,30 +65,11 @@ fn main() -> ExitCode {
             println!("thirdshift {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        Ok(Command::Update) => {
-            return match update::update() {
-                Ok(outcome) => {
-                    progress::step(outcome);
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    progress::step(format_args!("{error:#}"));
-                    ExitCode::FAILURE
-                }
-            };
-        }
+        Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::EmailTest(to)) => {
-            let sent = UserConfig::load().and_then(|config| email::email_test(to, &config.email));
-            return match sent {
-                Ok(()) => {
-                    progress::step("accepted by Resend; check your inbox");
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    progress::step(format_args!("{error:#}"));
-                    ExitCode::FAILURE
-                }
-            };
+            return outcome(
+                UserConfig::load().and_then(|config| email::send_test(to, &config.email)),
+            );
         }
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
@@ -119,6 +100,21 @@ fn main() -> ExitCode {
             if let Some(pr_url) = failed.pr_url {
                 println!("{pr_url}");
             }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The end of a command other than a Run: the line that says how it went,
+/// or its error, on stderr.
+fn outcome(result: anyhow::Result<impl std::fmt::Display>) -> ExitCode {
+    match result {
+        Ok(outcome) => {
+            progress::step(outcome);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            progress::step(format_args!("{error:#}"));
             ExitCode::FAILURE
         }
     }

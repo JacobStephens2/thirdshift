@@ -42,17 +42,23 @@ impl Resend {
         let key = std::env::var("RESEND_API_KEY")
             .ok()
             .filter(|key| !key.is_empty());
-        let (Some(to), Some(key)) = (to.clone(), key.clone()) else {
-            let mut missing = Vec::new();
-            if to.is_none() {
-                missing.push("no email address: give one, or set email.to in the User config");
+        let (to, key) = match (to, key) {
+            (Some(to), Some(key)) => (to, key),
+            (to, key) => {
+                let mut missing = Vec::new();
+                if to.is_none() {
+                    missing.push("no email address: give one, or set email.to in the User config");
+                }
+                if key.is_none() {
+                    missing.push("RESEND_API_KEY is unset or empty: set it to a Resend API key");
+                }
+                bail!("{}; nothing sent", missing.join("; "));
             }
-            if key.is_none() {
-                missing.push("RESEND_API_KEY is unset or empty: set it to a Resend API key");
-            }
-            bail!("{}; nothing sent", missing.join("; "));
         };
-        let url = std::env::var("THIRDSHIFT_RESEND_URL").unwrap_or_else(|_| RESEND_URL.into());
+        let url = std::env::var("THIRDSHIFT_RESEND_URL")
+            .ok()
+            .filter(|url| !url.is_empty())
+            .unwrap_or_else(|| RESEND_URL.into());
         Ok(Resend {
             key,
             url: url.trim_end_matches('/').to_string(),
@@ -89,7 +95,10 @@ impl Resend {
             return Ok(());
         }
         let body = response.text().unwrap_or_default();
-        bail!("Resend refused the email ({status}): {}", error_text(&body))
+        match error_text(&body) {
+            text if text.is_empty() => bail!("Resend refused the email ({status})"),
+            text => bail!("Resend refused the email ({status}): {text}"),
+        }
     }
 }
 
@@ -103,7 +112,8 @@ fn error_text(body: &str) -> String {
 }
 
 /// `thirdshift email-test`: send a test email to `to`, else to `email.to`.
-pub fn email_test(to: Option<String>, settings: &EmailSettings) -> Result<()> {
+/// Returns the line that says Resend took it.
+pub fn send_test(to: Option<String>, settings: &EmailSettings) -> Result<&'static str> {
     let resend = Resend::new(to, settings)?;
     let host = host::name();
     let host = host.as_deref().unwrap_or("unknown host");
@@ -111,14 +121,14 @@ pub fn email_test(to: Option<String>, settings: &EmailSettings) -> Result<()> {
     resend.send(
         &format!("thirdshift test email from {host}"),
         &test_text(host, &time, resend.from()),
-    )
+    )?;
+    Ok("accepted by Resend; check your inbox")
 }
 
 /// The body of the test email.
 fn test_text(host: &str, time: &str, from: &str) -> String {
     format!(
-        "This is a test email from `thirdshift email-test`. \
-         Resend accepted it, and it reached you.\n\n\
+        "This is a test email from `thirdshift email-test`.\n\n\
          Host:   {host}\n\
          Time:   {time}\n\
          Sender: {from}\n"
@@ -139,6 +149,7 @@ mod tests {
         );
         assert_eq!(error_text("Bad Gateway\n"), "Bad Gateway");
         assert_eq!(error_text(r#"{"error":"x"}"#), r#"{"error":"x"}"#);
+        assert_eq!(error_text(""), "");
     }
 
     #[test]
