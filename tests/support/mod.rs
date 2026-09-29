@@ -47,6 +47,27 @@ pub struct Scenario {
     root: PathBuf,
 }
 
+/// What typing into thirdshift on a terminal does: wait until the terminal
+/// shows `prompt`, then type `line` and Enter, or with [`CTRL_C`] press
+/// Ctrl-C instead.
+pub type Keystrokes<'a> = (&'a str, &'a str);
+
+/// A `line` of [`Keystrokes`] that presses Ctrl-C.
+pub const CTRL_C: &str = "\x03";
+
+/// How a command run on a terminal ended.
+pub struct TerminalResult {
+    /// What it wrote to stdout, which is not the terminal.
+    pub stdout: String,
+    /// Everything the terminal showed, stderr and the echoed keystrokes,
+    /// with the terminal's `\r\n` as `\n`.
+    pub stderr: String,
+    /// `None` if a signal ended it.
+    pub code: Option<i32>,
+    /// The User config it left, if any.
+    pub user_config: Option<String>,
+}
+
 pub struct RunResult {
     pub stdout: String,
     pub stderr: String,
@@ -186,6 +207,108 @@ impl Scenario {
             .unwrap();
         assert!(status.success());
         child.wait_with_output().unwrap().into()
+    }
+
+    /// Run thirdshift with stdin and stderr on a pseudo-terminal, as from an
+    /// interactive shell, typing `keystrokes` in order. stdout is a pipe, so
+    /// what it prints there stays apart from the terminal.
+    pub fn run_on_terminal(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+        keystrokes: &[Keystrokes],
+    ) -> TerminalResult {
+        use std::io::{Read, Write};
+        use std::os::fd::{FromRawFd, OwnedFd};
+        use std::os::unix::process::CommandExt;
+        use std::sync::{Arc, Mutex};
+
+        let (mut master, slave) = {
+            let (mut master, mut slave) = (0, 0);
+            let opened = unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+            assert_eq!(opened, 0, "openpty: {}", std::io::Error::last_os_error());
+            unsafe { (fs::File::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) }
+        };
+        let mut command = self.command(args);
+        command
+            .envs(env.iter().copied())
+            .stdin(Stdio::from(slave.try_clone().unwrap()))
+            .stderr(Stdio::from(slave))
+            .stdout(Stdio::piped());
+        // The terminal becomes the child's controlling terminal, so Ctrl-C
+        // on it sends SIGINT, as in a shell.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        // Dropping the command closes this process's copies of the terminal,
+        // so reading it ends once the child has gone.
+        drop(command);
+
+        let shown = Arc::new(Mutex::new(Vec::new()));
+        let reader = {
+            let mut master = master.try_clone().unwrap();
+            let shown = Arc::clone(&shown);
+            std::thread::spawn(move || {
+                let mut buffer = [0; 4096];
+                // Linux ends a pseudo-terminal with EIO rather than EOF.
+                while let Ok(read @ 1..) = master.read(&mut buffer) {
+                    shown.lock().unwrap().extend_from_slice(&buffer[..read]);
+                }
+            })
+        };
+        let stdout = {
+            let mut stdout = child.stdout.take().unwrap();
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                stdout.read_to_string(&mut text).unwrap();
+                text
+            })
+        };
+        let shown_text = || String::from_utf8_lossy(&shown.lock().unwrap()).replace("\r\n", "\n");
+        let mut seen = 0;
+        for (prompt, line) in keystrokes {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let text = shown_text();
+                if let Some(at) = text[seen..].find(prompt) {
+                    seen += at + prompt.len();
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the terminal never showed {prompt:?}; it shows:\n{text}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if *line == CTRL_C {
+                master.write_all(line.as_bytes()).unwrap();
+            } else {
+                master.write_all(format!("{line}\n").as_bytes()).unwrap();
+            }
+        }
+        let status = child.wait().unwrap();
+        let stdout = stdout.join().unwrap();
+        reader.join().unwrap();
+        TerminalResult {
+            stdout,
+            stderr: shown_text(),
+            code: status.code(),
+            user_config: fs::read_to_string(self.path("home/.thirdshift/config.toml")).ok(),
+        }
     }
 
     fn command(&self, args: &[&str]) -> Command {

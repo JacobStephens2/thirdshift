@@ -130,7 +130,7 @@ The other commands:
 
 ```sh
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
-thirdshift setup                    # write the User config with every setting at its default (see User config)
+thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print every form of the command, each with a one-line description
@@ -178,7 +178,14 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
 ```
 
-Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. `setup` asks nothing, prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its values, comments and key order stay, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
+Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
+
+1. Every Run a Merge run? (`merge.always`)
+2. Every Run first fast-forwards your checkout of the Base branch? (`launch.pull`)
+3. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
+4. With notifications on and `RESEND_API_KEY` unset or empty, it prints the `export RESEND_API_KEY=...` line to add to your shell profile; the key is never written anywhere. With the key set, it offers to send a test email (default No), as `thirdshift email-test` does, once the file is written.
+
+Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir` is not asked about. The answers are written like everything else below: in place, keeping your comments. Ctrl-C during the questions writes nothing. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 

@@ -17,6 +17,7 @@ mod progress;
 mod prompt;
 #[cfg(test)]
 mod prompts_page;
+mod questions;
 mod run;
 mod session;
 mod update;
@@ -37,7 +38,7 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift --no-merge <Issue URL>   Run the factory on the issue and leave its pull request for review
        thirdshift --email <Issue URL>      Run the factory on the issue, then email how the Run ended
        thirdshift email-test [<address>]   Send a test email through Resend, to check the email setup
-       thirdshift setup                    Write the User config, with every setting and its default
+       thirdshift setup                    Choose your defaults, then write the User config with every setting
        thirdshift update                   Update thirdshift to the latest release
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
@@ -49,7 +50,7 @@ review, merged, failed or interrupted. --email <address> sends it to <address>; 
 after --email is the address only if it has an @ and isn't a URL.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
-thirdshift setup writes one listing every setting at its default, to edit.
+thirdshift setup asks for your defaults and writes one listing every setting, to edit.
 With merge.always set, every Run is a Merge run unless given --no-merge:
 
     [merge]
