@@ -20,6 +20,15 @@ pub struct Answers {
     pub notifications: Option<Notifications>,
 }
 
+impl Answers {
+    /// Whether the user asked for a test email.
+    pub fn send_test(&self) -> bool {
+        self.notifications
+            .as_ref()
+            .is_some_and(|notifications| notifications.send_test)
+    }
+}
+
 /// The settings of Run notifications, when the user wants them.
 pub struct Notifications {
     /// `email.to`.
@@ -74,7 +83,7 @@ pub fn ask(
         yes_or_no("Send a test email now?", false)?
     } else {
         say(
-            "RESEND_API_KEY is unset, so no email can go yet. Add this line to your shell \
+            "RESEND_API_KEY is unset or empty, so no email can go yet. Add this line to your shell \
              profile, with your Resend API key:\n\n    export RESEND_API_KEY=re_...\n",
         );
         false

@@ -168,10 +168,7 @@ pub fn setup() -> Result<String> {
     if asked {
         let current = UserConfig::parse(&text, &path, &home)?;
         let answers = questions::ask(&current, || suggested_address(&home))?;
-        send_test = answers
-            .notifications
-            .as_ref()
-            .is_some_and(|notifications| notifications.send_test);
+        send_test = answers.send_test();
         text = with_answers(&text, &answers)?;
     }
     let written = match &existing {
@@ -312,6 +309,8 @@ fn set_email_to(document: &mut DocumentMut, to: &str) {
         break;
     }
     email.insert_formatted(&key, item.clone());
+    // Each key keeps its place, and `to` goes just before the key at `place`,
+    // or last: odd ranks for the keys that were there, an even one for `to`.
     let rank = |name: &str| match keys.iter().position(|key| key == name) {
         Some(at) => 2 * at + 1,
         None => 2 * place,

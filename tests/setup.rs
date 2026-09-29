@@ -750,6 +750,7 @@ fn on_a_terminal_the_key_hint_shows_only_when_resend_api_key_is_unset_or_empty()
         );
         assert_eq!(result.stderr.contains(TEST_EMAIL), !hinted, "{key:?}");
         assert!(!result.user_config.unwrap().contains(KEY));
+        assert!(!result.stderr.contains(KEY), "{key:?}: {}", result.stderr);
     }
 }
 
