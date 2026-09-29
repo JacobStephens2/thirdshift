@@ -11,7 +11,6 @@ use crate::email::Resend;
 use crate::failed_run::FailedRun;
 use crate::github;
 use crate::host;
-use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
 use crate::run::{Goal, Reached};
@@ -20,18 +19,28 @@ use crate::run::{Goal, Reached};
 pub struct RunNotification {
     resend: Resend,
     issue: IssueUrl,
+    /// The issue's title, if GitHub gave it when the Run started.
+    title: Option<String>,
     started: Instant,
 }
 
 impl RunNotification {
     /// The Run notification for a Run on `issue` starting now, sent to `to`,
     /// else to `email.to`. Fails, before any work, with the same checks as
-    /// `email-test`: an address is known and `RESEND_API_KEY` is set.
+    /// `email-test`: an address is known and `RESEND_API_KEY` is set. Once
+    /// they pass, it reads the issue's title now, while someone may be
+    /// watching, rather than after the Run, when a hung `gh` could keep the
+    /// notification from ever going.
     pub fn new(to: Option<String>, settings: &EmailSettings, issue: &IssueUrl) -> Result<Self> {
+        let started = Instant::now();
+        let resend = Resend::new(to, settings)?;
         Ok(RunNotification {
-            resend: Resend::new(to, settings)?,
+            resend,
             issue: issue.clone(),
-            started: Instant::now(),
+            // Left out of the subject if GitHub can't be asked; the Run's own
+            // preflight reports why.
+            title: github::issue_title(issue).ok(),
+            started,
         })
     }
 
@@ -40,13 +49,13 @@ impl RunNotification {
     pub fn send(self, ended: &Result<Reached, FailedRun>, goal: Goal) {
         let (outcome, pr_url, cause, log) = match ended {
             Ok(reached) => (
-                goal_outcome(goal),
+                goal.outcome(),
                 Some(reached.pr_url.as_str()),
                 None,
                 Some(reached.log.as_path()),
             ),
             Err(failed) => {
-                let (outcome, cause) = if interrupt::requested() {
+                let (outcome, cause) = if failed.interrupted {
                     ("interrupted", None)
                 } else {
                     ("failed", Some(format!("{:#}", failed.error)))
@@ -59,8 +68,6 @@ impl RunNotification {
                 )
             }
         };
-        // Unknown if the Run failed because GitHub couldn't be asked.
-        let title = github::issue_title(&self.issue).ok();
         let host = host::name();
         let body = Body {
             pr_url,
@@ -69,20 +76,12 @@ impl RunNotification {
             host: host.as_deref().unwrap_or("unknown host"),
             took: self.started.elapsed(),
         };
-        let subject = subject(&self.issue, title.as_deref(), outcome);
+        let subject = subject(&self.issue, self.title.as_deref(), outcome);
         if let Err(error) = self.resend.send(&subject, &body.text()) {
             progress::step(format_args!(
                 "warning: could not send the Run notification: {error:#}"
             ));
         }
-    }
-}
-
-/// The outcome of a Run that reached `goal`, as the subject names it.
-fn goal_outcome(goal: Goal) -> &'static str {
-    match goal {
-        Goal::ReadyForReview => "ready for review",
-        Goal::Merged => "merged",
     }
 }
 

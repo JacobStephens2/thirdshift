@@ -22,11 +22,11 @@ mod session;
 mod update;
 mod worktree;
 
+use std::io::Write;
 use std::process::ExitCode;
 
 use args::{Command, RunArgs};
 use config::UserConfig;
-use failed_run::FailedRun;
 use notification::RunNotification;
 
 const HELP: &str = "\
@@ -95,6 +95,11 @@ fn main() -> ExitCode {
         }
     };
     let goal = goal.unwrap_or(config.default_goal());
+    // First, so no interrupt can end the Run once its notification is checked.
+    if let Err(error) = interrupt::install() {
+        progress::step(format_args!("{error:#}"));
+        return ExitCode::FAILURE;
+    }
     let notification = match email
         .map(|to| RunNotification::new(to, &config.email, &issue))
         .transpose()
@@ -105,14 +110,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let ended = interrupt::install()
-        .map_err(FailedRun::from)
-        .and_then(|()| run::run(&issue, goal, &config.logs_dir));
+    let ended = run::run(&issue, goal, &config.logs_dir);
     let code = match &ended {
         Ok(reached) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
-            progress::step(format_args!("PR {} {}", reached.pr_url, goal.outcome()));
-            println!("{}", reached.pr_url);
+            progress::step(format_args!("PR {} is {}", reached.pr_url, goal.outcome()));
+            print_pr_url(&reached.pr_url);
             ExitCode::SUCCESS
         }
         Err(failed) => {
@@ -121,7 +124,7 @@ fn main() -> ExitCode {
                 progress::step(format_args!("session log: {}", log.display()));
             }
             if let Some(pr_url) = &failed.pr_url {
-                println!("{pr_url}");
+                print_pr_url(pr_url);
             }
             ExitCode::FAILURE
         }
@@ -130,6 +133,12 @@ fn main() -> ExitCode {
         notification.send(&ended, goal);
     }
     code
+}
+
+/// The PR's URL on stdout. A failed write, as once the terminal has closed,
+/// is ignored, so the Run notification still goes.
+fn print_pr_url(pr_url: &str) {
+    let _ = writeln!(std::io::stdout(), "{pr_url}");
 }
 
 /// The end of a command other than a Run: the line that says how it went,

@@ -23,14 +23,20 @@ git commit -q -m "Add feature"
 gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 "#;
 
-/// Run thirdshift with `args` against `resend`, with `RESEND_API_KEY` set to
+/// The environment for a Run against `resend`, with `RESEND_API_KEY` set to
 /// `key`, or unset if `None`.
-fn run(scenario: &Scenario, resend: &ResendStandIn, args: &[&str], key: Option<&str>) -> RunResult {
+fn env<'a>(resend: &'a ResendStandIn, key: Option<&'a str>) -> Vec<(&'a str, &'a str)> {
     let mut env = vec![("THIRDSHIFT_RESEND_URL", resend.url())];
     if let Some(key) = key {
         env.push(("RESEND_API_KEY", key));
     }
-    scenario.run_with_env(args, &env)
+    env
+}
+
+/// Run thirdshift with `args` against `resend`, with `RESEND_API_KEY` set to
+/// `key`, or unset if `None`.
+fn run(scenario: &Scenario, resend: &ResendStandIn, args: &[&str], key: Option<&str>) -> RunResult {
+    scenario.run_with_env(args, &env(resend, key))
 }
 
 /// The one request the stand-in received.
@@ -148,32 +154,31 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
 
 #[test]
 fn an_interrupted_run_sends_one_notification_that_it_was_interrupted() {
-    let scenario = Scenario::new();
-    let started = scenario.path("agent-started");
-    scenario.agent_does(&format!("touch {}\nsleep 30\n", started.display()));
-    let resend = ResendStandIn::replying(200, ACCEPTED);
+    for signal in ["INT", "TERM", "HUP"] {
+        let scenario = Scenario::new();
+        let started = scenario.path("agent-started");
+        scenario.agent_does(&format!("touch {}\nsleep 30\n", started.display()));
+        let resend = ResendStandIn::replying(200, ACCEPTED);
 
-    let child = scenario.run_and_signal_with_env(
-        &[&scenario.issue_url(7), "--email", "me@example.com"],
-        &[
-            ("THIRDSHIFT_RESEND_URL", resend.url()),
-            ("RESEND_API_KEY", KEY),
-        ],
-        "agent-started",
-        "TERM",
-    );
+        let result = scenario.run_and_signal_with_env(
+            &[&scenario.issue_url(7), "--email", "me@example.com"],
+            &env(&resend, Some(KEY)),
+            "agent-started",
+            signal,
+        );
 
-    assert_eq!(child.code, Some(1), "stderr: {}", child.stderr);
-    let request = the_one_request(&resend);
-    assert!(
-        subject(&request).ends_with(": interrupted"),
-        "subject: {}",
-        subject(&request)
-    );
+        assert_eq!(result.code, Some(1), "{signal}: {}", result.stderr);
+        let request = the_one_request(&resend);
+        assert!(
+            subject(&request).ends_with(": interrupted"),
+            "{signal}: {}",
+            subject(&request)
+        );
+    }
 }
 
 #[test]
-fn a_failure_before_the_issue_is_read_sends_a_notification_without_a_title() {
+fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
     let scenario = Scenario::new();
     let resend = ResendStandIn::replying(200, ACCEPTED);
     let url = "https://github.com/other/widgets/issues/7";

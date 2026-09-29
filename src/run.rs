@@ -28,11 +28,11 @@ pub enum Goal {
 
 impl Goal {
     /// What became of the PR once the Run reached this goal, as in
-    /// "PR <url> is merged".
+    /// "PR <url> is merged" and a Run notification's subject.
     pub fn outcome(self) -> &'static str {
         match self {
-            Goal::ReadyForReview => "is ready for review",
-            Goal::Merged => "is merged",
+            Goal::ReadyForReview => "ready for review",
+            Goal::Merged => "merged",
         }
     }
 }
@@ -44,8 +44,9 @@ pub struct Reached {
     pub log: PathBuf,
 }
 
-/// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure after the worktree exists, including a merge that
-/// fails, goes through the Failed run path. The worktree, the local
+/// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure
+/// after the worktree exists, including a merge that fails, goes through the
+/// Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch.
