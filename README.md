@@ -104,7 +104,7 @@ To have the Run merge its pull request instead of leaving it for your review, st
 thirdshift merge https://github.com/acme/widgets/issues/7
 ```
 
-`thirdshift --merge <Issue URL>` does the same, and either goes before or after the URL. The agent gets the same implement prompt either way; the differences are the Self-merge at the end and the review of [Foreign commits](#foreign-commits-in-a-merge-run). To make every Run on a machine a Merge run, set `merge.always` in the [User config](#user-config); `no-merge` (or `--no-merge`), before or after the URL, then makes one Run end ready for review instead. Giving a flag twice, `merge` together with `no-merge`, or `email` together with `no-email`, is an argument error.
+`thirdshift --merge <Issue URL>` does the same, and either goes before or after the URL. The agent gets the same implement prompt either way; the differences are the Self-merge at the end and the review of [Foreign commits](#foreign-commits-in-a-merge-run). To make every Run on a machine a Merge run, set `merge.always` in the [User config](#user-config); `no-merge` (or `--no-merge`), before or after the URL, then makes one Run end ready for review instead. Giving a flag twice, or `merge` together with `no-merge`, is an argument error.
 
 A Merge run ends in one of three ways:
 

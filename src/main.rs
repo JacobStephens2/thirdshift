@@ -27,7 +27,7 @@ use std::process::ExitCode;
 
 use args::{Command, RunArgs};
 use config::UserConfig;
-use notification::RunNotification;
+use notification::{NotificationAsk, RunNotification};
 
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, or a merged one, unattended.
@@ -102,12 +102,11 @@ fn main() -> ExitCode {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    let notification = match config
-        .email
-        .notification(email)
-        .map(|to| RunNotification::new(to, &config.email, &issue))
-        .transpose()
-    {
+    let notification = match email.unwrap_or(config.email.default_ask()) {
+        NotificationAsk::Send(to) => RunNotification::new(to, &config.email, &issue).map(Some),
+        NotificationAsk::Skip => Ok(None),
+    };
+    let notification = match notification {
         Ok(notification) => notification,
         Err(error) => {
             progress::step(format_args!("{error:#}"));

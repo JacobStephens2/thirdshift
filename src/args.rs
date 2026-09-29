@@ -1,8 +1,11 @@
 //! The command line: which command, and for a Run, its Issue URL and flags.
 
+use std::mem::discriminant;
+
 use anyhow::{Result, bail};
 
 use crate::issue::IssueUrl;
+use crate::notification::NotificationAsk;
 use crate::run::Goal;
 
 /// What thirdshift was asked to do.
@@ -23,16 +26,7 @@ pub struct RunArgs {
     pub goal: Option<Goal>,
     /// What `email` or `no-email` asked for, if either was given; without
     /// one, the User config decides.
-    pub email: Option<Email>,
-}
-
-/// What a Run's command asked about its Run notification.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Email {
-    /// `email`: send one, to the address after it, if any.
-    Send(Option<String>),
-    /// `no-email`: send none.
-    Skip,
+    pub email: Option<NotificationAsk>,
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`
@@ -59,42 +53,47 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let mut email = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        let asked = match arg.as_str() {
-            "merge" | "--merge" => Goal::Merged,
-            "no-merge" | "--no-merge" => Goal::ReadyForReview,
-            "email" | "--email" | "no-email" | "--no-email" => {
-                let asked = if arg.ends_with("no-email") {
-                    Email::Skip
-                } else {
-                    Email::Send(args.next_if(|next| is_address(next)).cloned())
-                };
-                match (&email, &asked) {
-                    (None, _) => email = Some(asked),
-                    (Some(Email::Skip), Email::Skip) | (Some(Email::Send(_)), Email::Send(_)) => {
-                        bail!("repeated argument: {arg}")
-                    }
-                    (Some(_), _) => bail!("email and no-email can't be used together"),
-                }
-                continue;
+        match arg.as_str() {
+            "merge" | "--merge" => ask_once(&mut goal, Goal::Merged, arg, MERGE_FLAGS)?,
+            "no-merge" | "--no-merge" => {
+                ask_once(&mut goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
+            }
+            "email" | "--email" => {
+                let to = args.next_if(|next| is_address(next)).cloned();
+                ask_once(&mut email, NotificationAsk::Send(to), arg, EMAIL_FLAGS)?
+            }
+            "no-email" | "--no-email" => {
+                ask_once(&mut email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
             }
             _ => {
                 if issue.is_some() {
                     bail!("unexpected argument after the Issue URL: {arg}");
                 }
                 issue = Some(IssueUrl::parse(arg)?);
-                continue;
             }
-        };
-        match goal {
-            None => goal = Some(asked),
-            Some(given) if given == asked => bail!("repeated argument: {arg}"),
-            Some(_) => bail!("merge and no-merge can't be used together"),
         }
     }
     let Some(issue) = issue else {
         bail!("missing Issue URL");
     };
     Ok(Command::Run(RunArgs { issue, goal, email }))
+}
+
+const MERGE_FLAGS: &str = "merge and no-merge";
+const EMAIL_FLAGS: &str = "email and no-email";
+
+/// Record in `given` what the flag `arg` asked for: the same kind of ask
+/// twice is a repeated argument, and a different one contradicts the first,
+/// as one of the pair of `flags` can't go with the other.
+fn ask_once<T>(given: &mut Option<T>, asked: T, arg: &str, flags: &str) -> Result<()> {
+    match given {
+        None => *given = Some(asked),
+        Some(given) if discriminant(given) == discriminant(&asked) => {
+            bail!("repeated argument: {arg}")
+        }
+        Some(_) => bail!("{flags} can't be used together"),
+    }
+    Ok(())
 }
 
 /// Is `arg`, after `email`, the address to send to? Only if it looks like

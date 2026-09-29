@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use toml::{Table, Value};
 
-use crate::args::Email;
+use crate::notification::NotificationAsk;
 use crate::run::Goal;
 
 /// The settings a User config can hold. Each is what a Run does when its
@@ -119,14 +119,13 @@ impl UserConfig {
 }
 
 impl EmailSettings {
-    /// Whether a Run whose command asked `asked` about email sends a Run
-    /// notification: `Some` if it does, holding the address the command
-    /// gave, if any.
-    pub fn notification(&self, asked: Option<Email>) -> Option<Option<String>> {
-        match asked {
-            Some(Email::Send(to)) => Some(to),
-            Some(Email::Skip) => None,
-            None => self.always.then_some(None),
+    /// What a Run whose command gave no `email` or `no-email` asks about its
+    /// Run notification.
+    pub fn default_ask(&self) -> NotificationAsk {
+        if self.always {
+            NotificationAsk::Send(None)
+        } else {
+            NotificationAsk::Skip
         }
     }
 }
@@ -173,26 +172,17 @@ mod tests {
     }
 
     #[test]
-    fn the_command_decides_the_notification_before_email_always() {
-        for always in [false, true] {
-            let settings = EmailSettings {
-                always,
-                ..EmailSettings::default()
-            };
-            let to = Some("me@example.com".to_string());
+    fn email_always_asks_for_a_notification_to_email_to() {
+        let always = parse("[email]\nalways = true\n").unwrap();
+        assert_eq!(always.email.default_ask(), NotificationAsk::Send(None));
+        for text in ["", "[email]\nalways = false\n"] {
+            let config = parse(text).unwrap();
             assert_eq!(
-                settings.notification(Some(Email::Send(to.clone()))),
-                Some(to)
+                config.email.default_ask(),
+                NotificationAsk::Skip,
+                "{text:?}"
             );
-            assert_eq!(settings.notification(Some(Email::Send(None))), Some(None));
-            assert_eq!(settings.notification(Some(Email::Skip)), None);
         }
-        let always = EmailSettings {
-            always: true,
-            ..EmailSettings::default()
-        };
-        assert_eq!(always.notification(None), Some(None));
-        assert_eq!(EmailSettings::default().notification(None), None);
     }
 
     #[test]
