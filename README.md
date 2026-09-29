@@ -178,7 +178,7 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
 ```
 
-Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so it is the only line written commented out. `setup` asks nothing, prints the file's path on stderr and exits `0` with stdout empty. A User config that is already there keeps its values; one a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
+Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so it is the only line written commented out. `setup` asks nothing, prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its values, comments and key order stay, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does is left byte for byte as it was. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 

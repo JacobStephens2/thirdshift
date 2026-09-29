@@ -1,5 +1,7 @@
 //! `thirdshift setup`: Setup writes a complete User config. With no terminal
-//! and no User config, it writes every setting at its default without asking.
+//! and no User config, it writes every setting at its default without asking;
+//! over an existing one, it keeps its values and comments and adds the keys it
+//! lacks.
 
 mod support;
 
@@ -181,35 +183,182 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
     }
 }
 
+/// The `section.key` names of the keys `text` sets, commented out or not, in
+/// the order they appear.
+fn key_names(text: &str) -> Vec<String> {
+    key_lines(text)
+        .iter()
+        .map(|(section, line)| {
+            let key = line.trim_start_matches("# ").split(' ').next().unwrap();
+            format!("{section}.{key}")
+        })
+        .collect()
+}
+
 #[test]
-fn setup_keeps_the_values_and_comments_of_an_existing_user_config() {
+fn setup_over_a_partial_user_config_keeps_it_and_adds_each_missing_key_with_its_comment() {
     let scenario = Scenario::new();
-    scenario.user_config_is("# mine\n[merge]\nalways = true\n");
+    let partial = "\
+# My machine: always merge.
+[merge]
+always = true   # I trust the factory
+
+[email]
+to = \"me@example.com\"  # my inbox
+";
+    scenario.user_config_is(partial);
 
     let result = scenario.run(&["setup"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");
+    assert!(
+        result.stderr.contains(".thirdshift/config.toml"),
+        "stderr: {}",
+        result.stderr
+    );
     let text = user_config(&scenario).unwrap();
-    assert!(text.contains("# mine"), "{text}");
+    assert!(
+        text.starts_with(
+            "# My machine: always merge.\n[merge]\nalways = true   # I trust the factory\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("to = \"me@example.com\"  # my inbox\n"),
+        "{text}"
+    );
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["merge"]["always"].as_bool(), Some(true), "{text}");
+    assert_eq!(config["email"]["to"].as_str(), Some("me@example.com"));
+    assert_eq!(config["launch"]["pull"].as_bool(), Some(false), "{text}");
+    assert_eq!(config["email"]["always"].as_bool(), Some(false), "{text}");
+    assert_eq!(
+        config["email"]["from"].as_str(),
+        Some("onboarding@resend.dev")
+    );
+    assert_eq!(config["logs"]["dir"].as_str(), Some("~/.thirdshift/logs"));
+    let mut names = key_names(&text);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "email.always",
+            "email.from",
+            "email.to",
+            "launch.pull",
+            "logs.dir",
+            "merge.always"
+        ],
+        "{text}"
+    );
+    for (section, line) in key_lines(&text) {
+        let Some((_, comment)) = line.split_once(" # ") else {
+            panic!("no trailing comment on [{section}] {line:?}");
+        };
+        if !line.contains("me@example.com") && !line.starts_with("always = true") {
+            assert!(
+                comment.contains("default"),
+                "the comment on [{section}] {line:?} doesn't give the default"
+            );
+        }
+    }
+}
+
+#[test]
+fn setup_over_a_user_config_with_no_email_to_adds_it_commented_out_once() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[launch]\npull = true\n");
+
+    for _ in 0..2 {
+        let result = scenario.run(&["setup"]);
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    }
+
+    let text = user_config(&scenario).unwrap();
+    let config: toml::Table = text.parse().unwrap();
+    assert_eq!(config["launch"]["pull"].as_bool(), Some(true), "{text}");
+    assert!(config["email"].get("to").is_none(), "{text}");
+    let mut names = key_names(&text);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "email.always",
+            "email.from",
+            "email.to",
+            "launch.pull",
+            "logs.dir",
+            "merge.always"
+        ],
+        "{text}"
+    );
+}
+
+#[test]
+fn setup_over_a_complete_user_config_leaves_it_as_it_was() {
+    let scenario = Scenario::new();
+    assert_eq!(scenario.run(&["setup"]).code, Some(0));
+    let edited = user_config(&scenario)
+        .unwrap()
+        .replace("always = false   #", "always = true    #")
+        .replace("\"~/.thirdshift/logs\"", "\"/var/log/thirdshift\"")
+        + "# hand-written at the end\n";
+    scenario.user_config_is(&edited);
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_eq!(user_config(&scenario).as_deref(), Some(edited.as_str()));
 }
 
 #[test]
 fn setup_refuses_a_user_config_a_run_would_refuse_and_leaves_it_alone() {
+    for (broken, named) in [
+        ("[merge]\nalway = true\n", "unknown key merge.alway"),
+        ("[merge\nalways = true\n", "can't parse the User config"),
+        (
+            "# mine\n[launch]\npull = \"yes\"\n",
+            "launch.pull must be true or false",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(broken);
+        let run = scenario.run(&[&scenario.issue_url(7)]);
+
+        let result = scenario.run(&["setup"]);
+
+        assert_eq!(result.code, Some(1), "{broken:?}: {}", result.stderr);
+        assert_eq!(result.stdout, "");
+        assert!(result.stderr.contains(named), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains(".thirdshift/config.toml"),
+            "stderr: {}",
+            result.stderr
+        );
+        assert_eq!(result.stderr, run.stderr, "{broken:?}");
+        assert_eq!(user_config(&scenario).as_deref(), Some(broken));
+    }
+}
+
+#[test]
+fn a_run_reads_the_completed_user_config_with_the_settings_it_had_before() {
     let scenario = Scenario::new();
-    let broken = "[merge]\nalway = true\n";
-    scenario.user_config_is(broken);
+    scenario.user_config_is("[merge]\nalways = true\n\n[logs]\ndir = \"~/elsewhere/logs\"\n");
+    assert_eq!(scenario.run(&["setup"]).code, Some(0));
+    scenario.agent_does(AGENT_OPENS_PR);
 
-    let result = scenario.run(&["setup"]);
+    let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, "");
-    assert!(
-        result.stderr.contains("unknown key merge.alway"),
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: PR {PR_URL} is merged").as_str()),
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(user_config(&scenario).as_deref(), Some(broken));
+    assert_eq!(scenario.entries("home/elsewhere/logs").len(), 1);
+    assert!(!scenario.path("home/.thirdshift/logs").exists());
 }
