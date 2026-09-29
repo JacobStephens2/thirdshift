@@ -31,27 +31,27 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("update") => return Ok(Command::Update),
         _ => {}
     }
-    let mut url = None;
+    let mut issue = None;
     let mut goal = None;
     for arg in args {
-        let flag = match arg.as_str() {
+        let asked = match arg.as_str() {
             "merge" | "--merge" => Goal::Merged,
             "no-merge" | "--no-merge" => Goal::ReadyForReview,
             _ => {
-                if url.is_some() {
+                if issue.is_some() {
                     bail!("unexpected argument after the Issue URL: {arg}");
                 }
-                url = Some(IssueUrl::parse(arg)?);
+                issue = Some(IssueUrl::parse(arg)?);
                 continue;
             }
         };
         match goal {
-            None => goal = Some(flag),
-            Some(given) if given == flag => bail!("repeated argument: {arg}"),
+            None => goal = Some(asked),
+            Some(given) if given == asked => bail!("repeated argument: {arg}"),
             Some(_) => bail!("merge and no-merge can't be used together"),
         }
     }
-    let Some(issue) = url else {
+    let Some(issue) = issue else {
         bail!("missing Issue URL");
     };
     Ok(Command::Run(RunArgs { issue, goal }))

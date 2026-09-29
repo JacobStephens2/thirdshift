@@ -35,24 +35,24 @@ impl UserConfig {
     /// section thirdshift doesn't know is an error, so a typo can't silently
     /// leave a setting unset.
     fn parse(text: &str, path: &Path) -> Result<Self> {
-        let in_file = || format!("in the User config {}", path.display());
+        let file = format!("the User config {}", path.display());
         let table: Table = text
             .parse()
             .map_err(|error| anyhow!("{error}"))
-            .with_context(|| format!("can't parse the User config {}", path.display()))?;
+            .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::default();
         for (section, value) in &table {
             let settings = match (section.as_str(), value) {
                 ("merge", Value::Table(settings)) => settings,
-                ("merge", _) => bail!("merge must be the section [merge] {}", in_file()),
-                (_, Value::Table(_)) => bail!("unknown section [{section}] {}", in_file()),
-                _ => bail!("unknown key {section} {}", in_file()),
+                ("merge", _) => bail!("merge must be the section [merge] in {file}"),
+                (_, Value::Table(_)) => bail!("unknown section [{section}] in {file}"),
+                _ => bail!("unknown key {section} in {file}"),
             };
             for (key, value) in settings {
                 match (key.as_str(), value) {
                     ("always", Value::Boolean(always)) => config.merge_always = *always,
-                    ("always", _) => bail!("merge.always must be true or false {}", in_file()),
-                    _ => bail!("unknown key merge.{key} {}", in_file()),
+                    ("always", _) => bail!("merge.always must be true or false in {file}"),
+                    _ => bail!("unknown key merge.{key} in {file}"),
                 }
             }
         }
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn errors_name_the_file_and_the_offending_key() {
         for (text, named) in [
-            ("[merge\n", "can't parse"),
+            ("[merge\n", "can't parse the User config"),
             ("[merge]\nalway = true\n", "unknown key merge.alway"),
             ("[logs]\n", "unknown section [logs]"),
             ("merge = true\n", "merge must be the section [merge]"),
