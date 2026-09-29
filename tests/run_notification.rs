@@ -338,3 +338,95 @@ fn a_failed_send_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
         }
     }
 }
+
+/// The User config of a machine where every Run sends a Run notification.
+const EMAIL_ALWAYS: &str = "[email]\nalways = true\nto = \"config@example.com\"\n";
+
+#[test]
+fn email_always_makes_a_run_without_the_flag_send_one_notification_to_email_to() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(&scenario, &resend, &[&scenario.issue_url(7)], Some(KEY));
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_eq!(request.body["to"], "config@example.com");
+    assert!(
+        subject(&request).ends_with(": ready for review"),
+        "{}",
+        subject(&request)
+    );
+}
+
+#[test]
+fn no_email_skips_the_notification_email_always_asks_for() {
+    for no_email in ["no-email", "--no-email"] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(EMAIL_ALWAYS);
+        scenario.agent_does(AGENT_OPENS_PR);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+        let url = scenario.issue_url(7);
+
+        let result = run(&scenario, &resend, &[no_email, &url], Some(KEY));
+
+        assert_eq!(result.code, Some(0), "{no_email}: {}", result.stderr);
+        assert!(resend.requests().is_empty(), "{no_email}");
+    }
+}
+
+#[test]
+fn with_email_always_an_address_after_the_flag_still_wins() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "flag@example.com"],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(the_one_request(&resend).body["to"], "flag@example.com");
+}
+
+#[test]
+fn email_always_without_an_address_or_a_key_stops_the_run_before_any_work() {
+    for (config, key, named) in [
+        ("[email]\nalways = true\n", Some(KEY), "no email address"),
+        (EMAIL_ALWAYS, None, "RESEND_API_KEY"),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run(&scenario, &resend, &[&scenario.issue_url(7)], key);
+
+        scenario.assert_rejected_before_any_work(&result, named);
+        assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
+        assert!(resend.requests().is_empty());
+    }
+}
+
+#[test]
+fn without_email_always_a_run_without_the_flag_sends_nothing() {
+    for config in [
+        "[email]\nalways = false\nto = \"me@example.com\"\n",
+        "[email]\nto = \"me@example.com\"\n",
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        scenario.agent_does(AGENT_OPENS_PR);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run(&scenario, &resend, &[&scenario.issue_url(7)], Some(KEY));
+
+        assert_eq!(result.code, Some(0), "{config}: {}", result.stderr);
+        assert!(resend.requests().is_empty(), "{config}");
+    }
+}

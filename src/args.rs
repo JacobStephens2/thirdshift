@@ -21,15 +21,25 @@ pub struct RunArgs {
     /// The goal `merge` or `no-merge` asked for, if either was given; without
     /// one, the User config decides.
     pub goal: Option<Goal>,
-    /// `Some` if `email` was given, so the Run sends a Run notification,
-    /// holding the address after it, if any.
-    pub email: Option<Option<String>>,
+    /// What `email` or `no-email` asked for, if either was given; without
+    /// one, the User config decides.
+    pub email: Option<Email>,
+}
+
+/// What a Run's command asked about its Run notification.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Email {
+    /// `email`: send one, to the address after it, if any.
+    Send(Option<String>),
+    /// `no-email`: send none.
+    Skip,
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`
 /// and `email-test` are commands only as the first argument. Otherwise it is
 /// a Run: one Issue URL, with each Run flag at most once, before or after it.
 /// `email` may be followed by the address to send the Run notification to.
+/// `merge` and `no-merge` contradict each other, as do `email` and `no-email`.
 pub fn parse(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
@@ -52,11 +62,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
         let asked = match arg.as_str() {
             "merge" | "--merge" => Goal::Merged,
             "no-merge" | "--no-merge" => Goal::ReadyForReview,
-            "email" | "--email" => {
-                if email.is_some() {
-                    bail!("repeated argument: {arg}");
+            "email" | "--email" | "no-email" | "--no-email" => {
+                let asked = if arg.ends_with("no-email") {
+                    Email::Skip
+                } else {
+                    Email::Send(args.next_if(|next| is_address(next)).cloned())
+                };
+                match (&email, &asked) {
+                    (None, _) => email = Some(asked),
+                    (Some(Email::Skip), Email::Skip) | (Some(Email::Send(_)), Email::Send(_)) => {
+                        bail!("repeated argument: {arg}")
+                    }
+                    (Some(_), _) => bail!("email and no-email can't be used together"),
                 }
-                email = Some(args.next_if(|next| is_address(next)).cloned());
                 continue;
             }
             _ => {

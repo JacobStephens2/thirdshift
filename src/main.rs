@@ -41,7 +41,7 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
 
-merge, --no-merge and --email go before or after the Issue URL, in any order.
+merge, --no-merge, --email and --no-email go before or after the Issue URL, in any order.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
@@ -60,9 +60,11 @@ logs.dir sets where session logs go instead of ~/.thirdshift/logs: an absolute p
 
 --email and email-test send to their <address>, else to email.to, from email.from, else
 from onboarding@resend.dev, which only delivers to your own Resend account's address.
+With email.always set, every Run sends a Run notification unless given --no-email.
 The Resend API key comes only from the RESEND_API_KEY environment variable:
 
     [email]
+    always = true
     to = \"you@example.com\"
     from = \"thirdshift@your-verified-domain.com\"
 ";
@@ -100,7 +102,9 @@ fn main() -> ExitCode {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    let notification = match email
+    let notification = match config
+        .email
+        .notification(email)
         .map(|to| RunNotification::new(to, &config.email, &issue))
         .transpose()
     {
