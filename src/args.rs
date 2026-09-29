@@ -2,7 +2,7 @@
 
 use std::mem::discriminant;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
@@ -19,6 +19,12 @@ pub enum Command {
     Run(RunArgs),
 }
 
+/// The hidden argument a Spec run starts each Ticket's Run with, followed by
+/// the Spec branch: it makes the Run a Merge run into the Spec branch that
+/// sends no Run notification and leaves the Launch directory alone. Not in
+/// help.
+pub const SPEC_BRANCH: &str = "--spec-branch";
+
 /// A Run's arguments.
 pub struct RunArgs {
     pub issue: IssueUrl,
@@ -28,6 +34,8 @@ pub struct RunArgs {
     /// What `email` or `no-email` asked for, if either was given; without
     /// one, the User config decides.
     pub email: Option<NotificationAsk>,
+    /// The Spec branch, given with [`SPEC_BRANCH`] to a Ticket's Run.
+    pub spec_branch: Option<String>,
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
@@ -59,6 +67,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let mut issue = None;
     let mut goal = None;
     let mut email = None;
+    let mut spec_branch = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -73,6 +82,12 @@ pub fn parse(args: &[String]) -> Result<Command> {
             "no-email" | "--no-email" => {
                 ask_once(&mut email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
             }
+            SPEC_BRANCH => {
+                if spec_branch.is_some() {
+                    bail!("repeated argument: {arg}");
+                }
+                spec_branch = Some(args.next().context("missing Spec branch")?.clone());
+            }
             _ => {
                 if issue.is_some() {
                     bail!("unexpected argument after the Issue URL: {arg}");
@@ -84,7 +99,12 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let Some(issue) = issue else {
         bail!("missing Issue URL");
     };
-    Ok(Command::Run(RunArgs { issue, goal, email }))
+    Ok(Command::Run(RunArgs {
+        issue,
+        goal,
+        email,
+        spec_branch,
+    }))
 }
 
 const MERGE_FLAGS: &str = "merge and no-merge";

@@ -1,4 +1,5 @@
-//! One Run: from an Issue URL to a checked PR, or to a Failed run.
+//! One Run: from an Issue URL to a checked PR, or to a Failed run. An issue
+//! with sub-issues is a Spec instead, handed to a Spec run.
 
 use std::path::{Path, PathBuf};
 
@@ -17,6 +18,7 @@ use crate::preflight;
 use crate::progress;
 use crate::prompt;
 use crate::session::{Logs, Sessions};
+use crate::spec_run;
 use crate::worktree::{Merge, Worktree};
 
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
@@ -37,11 +39,13 @@ impl Goal {
     }
 }
 
-/// A Run that reached its goal.
+/// A Run, or a Spec run, that reached its goal.
 pub struct Reached {
     pub pr_url: String,
-    /// The most recent session's log.
-    pub log: PathBuf,
+    /// The goal reached.
+    pub goal: Goal,
+    /// The most recent session's log, if a session was started.
+    pub log: Option<PathBuf>,
 }
 
 /// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure
@@ -51,19 +55,32 @@ pub struct Reached {
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch. With `launch_pull`, the Launch directory's checkout of the
 /// Base branch is first brought up to date with origin.
+///
+/// With `spec_branch`, this is a Ticket's Run in a Spec run, and the Spec
+/// branch stands in for the checked-out branch as the Base branch. Otherwise
+/// an issue with sub-issues is a Spec, taken on by a Spec run instead, whose
+/// Spec branch is picked like an Issue branch.
 pub fn run(
     issue: &IssueUrl,
     goal: Goal,
     logs_dir: &Path,
     launch_pull: bool,
+    spec_branch: Option<&str>,
 ) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
     preflight::check(&launch, issue)?;
-    let checked_out = launch
-        .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .ok();
+    let tickets = match spec_branch {
+        Some(_) => Vec::new(),
+        None => github::tickets(issue)?,
+    };
+    let checked_out = match spec_branch {
+        Some(spec_branch) => Some(spec_branch.to_string()),
+        None => launch
+            .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .ok(),
+    };
     let selection = branch::select(&launch, issue)?;
     let branch = selection.branch().to_string();
     let base = selection.base_branch(checked_out.as_deref())?;
@@ -75,15 +92,20 @@ pub fn run(
     if interrupt::requested() {
         return Err(anyhow!("interrupted").into());
     }
-    let (worktree, prompt) = match &selection {
-        Selection::Fresh { .. } => (
-            Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?,
-            prompt::fresh(issue, &base, &branch),
-        ),
-        Selection::Continuation { pr, .. } => (
-            Worktree::continue_existing(&launch, &issue.repo, &branch, &base)?,
-            prompt::continuation(issue, &base, &branch, pr.as_ref().map(|pr| pr.url.as_str())),
-        ),
+    let worktree = match &selection {
+        Selection::Fresh { .. } => Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?,
+        Selection::Continuation { .. } => {
+            Worktree::continue_existing(&launch, &issue.repo, &branch, &base)?
+        }
+    };
+    if !tickets.is_empty() {
+        return spec_run::run(issue, tickets, worktree, &base);
+    }
+    let prompt = match &selection {
+        Selection::Fresh { .. } => prompt::fresh(issue, &base, &branch),
+        Selection::Continuation { pr, .. } => {
+            prompt::continuation(issue, &base, &branch, pr.as_ref().map(|pr| pr.url.as_str()))
+        }
     };
     let logs = Logs {
         issue,
@@ -92,7 +114,11 @@ pub fn run(
     };
     let mut log = logs.path("implement");
     match implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log) {
-        Ok(pr_url) => Ok(Reached { pr_url, log }),
+        Ok(pr_url) => Ok(Reached {
+            pr_url,
+            goal,
+            log: Some(log),
+        }),
         Err(error) => Err(failed_run::fail(issue, worktree, &base, &log, error)),
     }
 }
