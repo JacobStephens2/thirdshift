@@ -1,7 +1,7 @@
 //! `thirdshift setup`: Setup writes a complete User config. With no terminal
-//! and no User config, it writes every setting at its default without asking;
-//! over an existing one, it keeps its values and comments and adds the keys it
-//! lacks.
+//! and no User config, it writes every setting at its default without asking,
+//! and `email.to` as the GitHub email it suggests, if it finds one; over an
+//! existing one, it keeps its values and comments and adds the keys it lacks.
 
 mod support;
 
@@ -24,6 +24,12 @@ fn user_config(scenario: &Scenario) -> Option<String> {
     fs::read_to_string(scenario.path("home/.thirdshift/config.toml")).ok()
 }
 
+/// The `email.to` the User config sets, if it sets one.
+fn email_to(scenario: &Scenario) -> Option<String> {
+    let config: toml::Table = user_config(scenario)?.parse().unwrap();
+    Some(config["email"].get("to")?.as_str()?.to_string())
+}
+
 /// The lines of `text` that set a key, commented out or not, as
 /// `(section, line)`.
 fn key_lines(text: &str) -> Vec<(String, String)> {
@@ -43,6 +49,7 @@ fn key_lines(text: &str) -> Vec<(String, String)> {
 #[test]
 fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     let scenario = Scenario::new();
+    scenario.git_email_is(None);
 
     let result = scenario.run(&["setup"]);
 
@@ -75,6 +82,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
 #[test]
 fn every_key_is_written_with_a_comment_giving_what_it_does_and_its_default() {
     let scenario = Scenario::new();
+    scenario.git_email_is(None);
 
     scenario.run(&["setup"]);
 
@@ -140,7 +148,10 @@ fn a_run_with_the_written_user_config_behaves_as_with_none() {
 #[test]
 fn a_run_with_the_written_user_config_still_needs_an_address_for_email() {
     let scenario = Scenario::new();
+    scenario.git_email_is(Some("123+runner@users.noreply.github.com"));
     assert_eq!(scenario.run(&["setup"]).code, Some(0));
+    assert!(email_to(&scenario).is_none());
+    let setup_calls = scenario.gh_calls().len();
 
     let result = scenario.run_with_env(
         &["--email", &scenario.issue_url(7)],
@@ -154,6 +165,8 @@ fn a_run_with_the_written_user_config_still_needs_an_address_for_email() {
         result.stderr
     );
     assert!(scenario.claude_calls().is_empty(), "the Run started");
+    let run_calls = &scenario.gh_calls()[setup_calls..];
+    assert!(run_calls.is_empty(), "the Run asked GitHub: {run_calls:?}");
 }
 
 #[test]
@@ -351,4 +364,92 @@ fn a_run_reads_the_completed_user_config_with_the_settings_it_had_before() {
     );
     assert_eq!(scenario.entries("home/elsewhere/logs").len(), 1);
     assert!(!scenario.path("home/.thirdshift/logs").exists());
+}
+
+#[test]
+fn setup_writes_the_public_github_email_as_email_to() {
+    let scenario = Scenario::new();
+    scenario.github_email_is(Some("octo@example.com"));
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(email_to(&scenario).as_deref(), Some("octo@example.com"));
+    let text = user_config(&scenario).unwrap();
+    assert!(!text.contains("# to = "), "{text}");
+    let to = key_lines(&text)
+        .into_iter()
+        .find(|(_, line)| line.starts_with("to = "))
+        .unwrap()
+        .1;
+    assert!(to.contains(" # ") && to.contains("default"), "{to}");
+}
+
+#[test]
+fn with_no_public_github_email_setup_writes_the_git_email() {
+    let scenario = Scenario::new();
+    scenario.github_email_is(None);
+    scenario.git_email_is(Some("me@example.org"));
+
+    assert_eq!(scenario.run(&["setup"]).code, Some(0));
+
+    assert_eq!(email_to(&scenario).as_deref(), Some("me@example.org"));
+}
+
+#[test]
+fn when_gh_api_user_fails_setup_writes_the_git_email() {
+    let scenario = Scenario::new();
+    scenario.github_profile_fails();
+    scenario.git_email_is(Some("me@example.org"));
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(email_to(&scenario).as_deref(), Some("me@example.org"));
+    assert!(
+        scenario
+            .gh_calls()
+            .iter()
+            .any(|call| call[..2] == ["api", "user"]),
+        "{:?}",
+        scenario.gh_calls()
+    );
+}
+
+#[test]
+fn a_noreply_git_email_is_never_written() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(Some("123+octo@users.noreply.github.com"));
+
+    assert_eq!(scenario.run(&["setup"]).code, Some(0));
+
+    let text = user_config(&scenario).unwrap();
+    assert!(!text.contains("noreply"), "{text}");
+    assert!(text.contains("\n# to = "), "{text}");
+}
+
+#[test]
+fn with_neither_email_setup_writes_email_to_commented_out() {
+    let scenario = Scenario::new();
+    scenario.github_profile_fails();
+    scenario.git_email_is(None);
+
+    assert_eq!(scenario.run(&["setup"]).code, Some(0));
+
+    let text = user_config(&scenario).unwrap();
+    assert_eq!(email_to(&scenario), None, "{text}");
+    assert!(text.contains("\n# to = \"you@example.com\""), "{text}");
+}
+
+#[test]
+fn setup_never_replaces_an_existing_email_to() {
+    let scenario = Scenario::new();
+    scenario.github_email_is(Some("octo@example.com"));
+    let mine = "[email]\nto = \"mine@example.net\"\n";
+    scenario.user_config_is(mine);
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(email_to(&scenario).as_deref(), Some("mine@example.net"));
 }

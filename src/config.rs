@@ -9,6 +9,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
+use crate::git::Git;
+use crate::github;
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
 
@@ -135,17 +137,17 @@ impl EmailSettings {
 }
 
 /// Setup with no terminal: write the User config with every setting at its
-/// default, asking nothing. An existing User config is edited in place, once
-/// it parses as a Run would parse it: its values, comments and key order stay,
-/// and each key it lacks is added at its default, so Setup never resets a
-/// configured machine.
+/// default, asking nothing, and `email.to` as the suggested address, if there
+/// is one. An existing User config is edited in place, once it parses as a Run
+/// would parse it: its values, comments and key order stay, and each key it
+/// lacks is added at its default, so Setup never resets a configured machine.
 pub fn setup() -> Result<String> {
     let (home, path) = home_and_path()?;
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             std::fs::create_dir_all(home.join(".thirdshift"))
-                .and_then(|()| std::fs::write(&path, DEFAULTS))
+                .and_then(|()| std::fs::write(&path, with_email_to(suggested_address(&home))))
                 .with_context(|| format!("can't write {}", path.display()))?;
             return Ok(format!("wrote the User config {}", path.display()));
         }
@@ -306,6 +308,36 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
 "#;
 
+/// The line `DEFAULTS` holds for `email.to`, which has no default.
+const NO_EMAIL_TO: &str = r#"# to = "you@example.com"        # where email goes when the command names no address; no default"#;
+
+/// `DEFAULTS` with `email.to` set to `to`, if there is one.
+fn with_email_to(to: Option<String>) -> String {
+    let Some(to) = to else {
+        return DEFAULTS.to_string();
+    };
+    let (_, comment) = NO_EMAIL_TO.split_once("  # ").unwrap();
+    let line = format!("to = {}", Value::String(to));
+    DEFAULTS.replace(NO_EMAIL_TO, &format!("{line:<31} # {comment}"))
+}
+
+/// The address Setup suggests for `email.to`: the public email of the user's
+/// GitHub profile, else the global git `user.email`, unless that is a
+/// `@users.noreply.github.com` address, which can't receive mail. Only Setup
+/// looks it up; a Run never falls back to it.
+fn suggested_address(home: &Path) -> Option<String> {
+    let github = github::profile_email().ok().flatten();
+    github.filter(|email| !email.is_empty()).or_else(|| {
+        let git = Git::new(home).run(&["config", "--global", "user.email"]);
+        git.ok().filter(|email| {
+            !email.is_empty()
+                && !email
+                    .to_ascii_lowercase()
+                    .ends_with("@users.noreply.github.com")
+        })
+    })
+}
+
 /// `$HOME`, and the User config's path under it.
 fn home_and_path() -> Result<(PathBuf, PathBuf)> {
     let home = std::env::var_os("HOME")
@@ -349,6 +381,25 @@ mod tests {
         );
         config.email.from = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
+    }
+
+    #[test]
+    fn a_suggested_address_sets_email_to_in_place_of_the_commented_out_line() {
+        assert!(DEFAULTS.contains(&format!("\n{NO_EMAIL_TO}\n")));
+        assert_eq!(with_email_to(None), DEFAULTS);
+        let text = with_email_to(Some("o\"brien@example.com".to_string()));
+        let config = parse(&text).unwrap();
+        assert_eq!(config.email.to.as_deref(), Some("o\"brien@example.com"));
+        let line = text.lines().find(|line| line.starts_with("to = ")).unwrap();
+        let from = text
+            .lines()
+            .find(|line| line.starts_with("from = "))
+            .unwrap();
+        assert_eq!(
+            line.find(" # "),
+            from.find("  # ").map(|at| at + 1),
+            "{text}"
+        );
     }
 
     #[test]
