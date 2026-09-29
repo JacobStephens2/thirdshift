@@ -1,6 +1,7 @@
 //! The User config, `~/.thirdshift/config.toml`: `merge.always` makes every
-//! Run a Merge run unless the command says `no-merge`, and a config thirdshift
-//! can't use stops the Run before any work.
+//! Run a Merge run unless the command says `no-merge`, `logs.dir` moves the
+//! session logs, and a config thirdshift can't use stops the Run before any
+//! work.
 
 mod support;
 
@@ -194,5 +195,100 @@ fn help_and_version_succeed_with_a_broken_config() {
             assert_eq!(result.code, Some(0), "{command}: {}", result.stderr);
             assert_eq!(result.stderr, "", "{command}");
         }
+    }
+}
+
+/// The agent commits nothing and exits 3, so the Run fails after one session.
+const AGENT_EXITS_3: &str = "exit 3\n";
+
+/// Assert the Run failed after logging its one session in `dir`, a directory
+/// under the scenario, and that the "session log:" line names that log.
+fn assert_logged_in(scenario: &Scenario, result: &RunResult, dir: &str) {
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let logs = scenario.entries(dir);
+    assert_eq!(logs.len(), 1, "logs: {logs:?}");
+    let log = scenario.path(dir).join(&logs[0]);
+    assert!(
+        result
+            .stderr
+            .contains(&format!("session log: {}", log.display())),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn without_logs_dir_session_logs_go_to_the_default_directory() {
+    for config in [None, Some("[merge]\nalways = false\n"), Some("[logs]\n")] {
+        let scenario = Scenario::new();
+        if let Some(config) = config {
+            scenario.user_config_is(config);
+        }
+        scenario.agent_does(AGENT_EXITS_3);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_logged_in(&scenario, &result, "home/.thirdshift/logs");
+    }
+}
+
+#[test]
+fn a_logs_dir_under_tilde_is_under_home_and_created_if_missing() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[logs]\ndir = \"~/elsewhere/logs\"\n");
+    scenario.agent_does(AGENT_EXITS_3);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_logged_in(&scenario, &result, "home/elsewhere/logs");
+    assert!(!scenario.path("home/.thirdshift/logs").exists());
+}
+
+#[test]
+fn an_absolute_logs_dir_is_used_as_is() {
+    let scenario = Scenario::new();
+    let dir = scenario.path("somewhere/logs");
+    scenario.user_config_is(&format!("[logs]\ndir = \"{}\"\n", dir.display()));
+    scenario.agent_does(AGENT_EXITS_3);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_logged_in(&scenario, &result, "somewhere/logs");
+    assert!(!scenario.path("home/.thirdshift/logs").exists());
+}
+
+#[test]
+fn a_relative_or_mistyped_logs_dir_stops_the_run_naming_the_setting() {
+    for (config, named) in [
+        (
+            "[logs]\ndir = \"logs\"\n",
+            "logs.dir must be an absolute path",
+        ),
+        (
+            "[logs]\ndir = \"./logs\"\n",
+            "logs.dir must be an absolute path",
+        ),
+        (
+            "[logs]\ndir = \"~other/logs\"\n",
+            "logs.dir must be an absolute path",
+        ),
+        ("[logs]\ndir = \"\"\n", "logs.dir must be an absolute path"),
+        ("[logs]\ndir = 3\n", "logs.dir must be a string"),
+        ("logs = \"/tmp/logs\"\n", "logs must be the section [logs]"),
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(config);
+        scenario.agent_does(AGENT_EXITS_3);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains(named),
+            "expected {named:?} in stderr for {config:?}: {}",
+            result.stderr
+        );
+        assert!(scenario.gh_calls().is_empty(), "thirdshift called gh");
     }
 }

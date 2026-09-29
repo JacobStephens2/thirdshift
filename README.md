@@ -135,15 +135,20 @@ A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults fo
 ```toml
 [merge]
 always = true   # every Run is a Merge run, without the merge word
+
+[logs]
+dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/logs
 ```
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
+
+`logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
 A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `update`, `version` and `help` never read it, so a broken User config can't block them.
 
 ### Logs
 
-Each session's full transcript, as Claude Code's `stream-json` output, is written to its own file under `~/.thirdshift/logs/` (created if missing):
+Each session's full transcript, as Claude Code's `stream-json` output, is written to its own file under `~/.thirdshift/logs/`, or the `logs.dir` set in the [User config](#user-config) (created if missing):
 
 ```
 ~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-implement.jsonl
