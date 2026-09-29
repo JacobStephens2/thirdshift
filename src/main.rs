@@ -41,6 +41,11 @@ With merge.always set, every Run is a Merge run unless given --no-merge:
 
     [merge]
     always = true
+
+With launch.pull set, every Run first fast-forwards the checked-out Base branch to origin:
+
+    [launch]
+    pull = true
 ";
 
 fn main() -> ExitCode {
@@ -69,8 +74,8 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    let goal = match UserConfig::load() {
-        Ok(config) => goal.unwrap_or(config.default_goal()),
+    let (goal, pull_launch) = match UserConfig::load() {
+        Ok(config) => (goal.unwrap_or(config.default_goal()), config.launch_pull),
         Err(error) => {
             progress::step(format_args!("{error:#}"));
             return ExitCode::FAILURE;
@@ -80,7 +85,7 @@ fn main() -> ExitCode {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    match run::run(&issue, goal) {
+    match run::run(&issue, goal, pull_launch) {
         Ok(pr_url) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("PR {pr_url} {}", goal.outcome()));

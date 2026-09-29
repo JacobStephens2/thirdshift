@@ -135,11 +135,16 @@ A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults fo
 ```toml
 [merge]
 always = true   # every Run is a Merge run, without the merge word
+
+[launch]
+pull = true     # every Run first fast-forwards your checkout of the Base branch
 ```
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 
-A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `update`, `version` and `help` never read it, so a broken User config can't block them.
+With `launch.pull = true`, every Run brings the Base branch checked out in the directory you start it from (the **Launch directory**) up to date with `origin`, so you no longer `git pull` by hand before each Run. It happens after the pre-flight checks pass and before the worktree is created, as `git merge --ff-only origin/<Base branch>`: fast-forward only, never a merge commit or a rebase, always from `origin`, whatever the branch's upstream or your `pull.*` settings. A progress line on stderr says when it updates the branch; an already up-to-date branch is left quietly as it is. It is skipped when the checked-out branch isn't the Base branch, as in a Continuation whose open pull request targets another base, or on a detached HEAD. If the update can't happen, for example because uncommitted changes are in the way, stderr gets a `warning:` line with git's error and the command to run by hand, your changes are left as they were, and the Run carries on with the same outcome and exit code. The setting only affects your checkout: the Run's worktree starts from `origin/<Base branch>` either way.
+
+A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value other than `true` or `false`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `update`, `version` and `help` never read it, so a broken User config can't block them.
 
 ### Logs
 

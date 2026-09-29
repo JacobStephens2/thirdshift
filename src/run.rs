@@ -42,8 +42,9 @@ impl Goal {
 /// fails, goes through the Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
-/// branch.
-pub fn run(issue: &IssueUrl, goal: Goal) -> Result<String, FailedRun> {
+/// branch. With `pull_launch`, the Launch directory's checkout of the
+/// Base branch is first brought up to date with origin.
+pub fn run(issue: &IssueUrl, goal: Goal, pull_launch: bool) -> Result<String, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
@@ -55,6 +56,9 @@ pub fn run(issue: &IssueUrl, goal: Goal) -> Result<String, FailedRun> {
     let branch = selection.branch().to_string();
     let base = selection.base_branch(checked_out.as_deref())?;
     preflight::check_base_branch(&launch, &base)?;
+    if pull_launch && checked_out.as_deref() == Some(base.as_str()) {
+        pull_base_branch(&launch, &base);
+    }
 
     if interrupt::requested() {
         return Err(anyhow!("interrupted").into());
@@ -72,6 +76,31 @@ pub fn run(issue: &IssueUrl, goal: Goal) -> Result<String, FailedRun> {
     let mut log = session::log_path(issue, &timestamp, "implement")?;
     implement(issue, &worktree, &base, &prompt, goal, &timestamp, &mut log)
         .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
+}
+
+/// Fast-forward the Launch directory's checked-out Base branch `base` to
+/// `origin/<base>`, which pre-flight has just fetched and found it not ahead
+/// of. The Run doesn't depend on this, so a failure, such as uncommitted
+/// changes in the way, is only a warning, and those changes are left as they
+/// were.
+fn pull_base_branch(launch: &Git, base: &str) {
+    let origin_base = format!("origin/{base}");
+    let up_to_date = launch.succeeds(&["merge-base", "--is-ancestor", &origin_base, "HEAD"]);
+    if up_to_date.unwrap_or(false) {
+        return;
+    }
+    progress::step(format_args!(
+        "updating {base} in the Launch directory from {origin_base}"
+    ));
+    if let Err(error) = launch.run(&["merge", "--ff-only", "--quiet", &origin_base]) {
+        warn(
+            &error,
+            format_args!(
+                "could not update {base} in the Launch directory, \
+                 so update it by hand: git pull --ff-only origin {base}"
+            ),
+        );
+    }
 }
 
 /// The implement session given `prompt`, the checks on the PR it opened or

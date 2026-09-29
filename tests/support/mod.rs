@@ -270,6 +270,20 @@ impl Scenario {
         fs::remove_dir_all(&seed).unwrap();
     }
 
+    /// Push one commit to `branch` on origin that writes `contents` to
+    /// `file`, as another machine might while the launch clone isn't
+    /// looking.
+    pub fn origin_has_commit(&self, branch: &str, file: &str, contents: &str, subject: &str) {
+        let seed = self.path("seed");
+        git(&self.path(""), &["clone", "-q", &self.github_url(), "seed"]);
+        git(&seed, &["checkout", "-q", branch]);
+        fs::write(seed.join(file), contents).unwrap();
+        git(&seed, &["add", file]);
+        git(&seed, &["commit", "-q", "-m", subject]);
+        git(&seed, &["push", "-q", "origin", branch]);
+        fs::remove_dir_all(&seed).unwrap();
+    }
+
     /// Add a PR from `head` into `base` in `state` (`OPEN`, `CLOSED` or
     /// `MERGED`) to the fake GitHub and return its URL.
     pub fn github_has_pr(&self, head: &str, base: &str, state: &str) -> String {
