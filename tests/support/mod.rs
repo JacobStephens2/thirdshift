@@ -249,22 +249,25 @@ impl Scenario {
     /// Make every `gh api user` call fail.
     pub fn github_profile_fails(&self) {
         let mut gh = self.gh_state();
-        gh["failing"] = json!(["api user"]);
+        let failing = gh.as_object_mut().unwrap().entry("failing");
+        failing
+            .or_insert(json!([]))
+            .as_array_mut()
+            .unwrap()
+            .push(json!("api user"));
         self.write_gh_state(&gh);
     }
 
     /// Set the global git `user.email`, or with `None` unset it.
     pub fn git_email_is(&self, email: Option<&str>) {
-        match email {
-            Some(email) => git(
-                &self.path("home"),
-                &["config", "--global", "user.email", email],
-            ),
-            None => git(
-                &self.path("home"),
-                &["config", "--global", "--unset", "user.email"],
-            ),
+        let change = match email {
+            Some(email) => ["user.email", email],
+            None => ["--unset", "user.email"],
         };
+        git(
+            &self.path("home"),
+            &[&["config", "--global"][..], &change].concat(),
+        );
     }
 
     pub fn gh_state(&self) -> Value {

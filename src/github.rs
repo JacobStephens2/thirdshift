@@ -1,4 +1,5 @@
-//! Asking GitHub, through `gh`, about issues and pull requests.
+//! Asking GitHub, through `gh`, about issues, pull requests and the signed-in
+//! user.
 
 use std::fmt;
 use std::process::Command;

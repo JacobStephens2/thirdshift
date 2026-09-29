@@ -164,11 +164,8 @@ fn a_run_with_the_written_user_config_still_needs_an_address_for_email() {
         result.stderr
     );
     assert!(scenario.claude_calls().is_empty(), "the Run started");
-    assert_eq!(
-        scenario.gh_calls()[setup_calls..],
-        [] as [Vec<String>; 0],
-        "the Run asked GitHub"
-    );
+    let run_calls = &scenario.gh_calls()[setup_calls..];
+    assert!(run_calls.is_empty(), "the Run asked GitHub: {run_calls:?}");
 }
 
 #[test]
