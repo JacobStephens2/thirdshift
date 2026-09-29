@@ -20,7 +20,7 @@ _Avoid_: originating workspace, launch repo
 The rule that the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the **Launch directory**. A mismatch stops the run before any work happens.
 
 **Base branch**:
-The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; in a **Continuation** with an open pull request, that pull request's base instead.
+The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for a **Ticket**'s **Run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
 
 **Factory skills**:
 The skills in `skills/`, loaded into the session as the `thirdshift` plugin: adapted copies of Matt Pocock's skills, designed to run headless with no human in the loop.
@@ -35,11 +35,39 @@ A finding from the Spec axis of a code review: the change is missing, gets wrong
 **Unaddressed finding**:
 A **Standards finding** or **Spec finding** the agent chose not to fix. It is listed in the pull request body so a human can decide on it.
 
+**Spec**:
+An issue describing a multi-session piece of work, what is being built rather than how each session does its share, made of **Tickets**: its GitHub sub-issues. See [Spec](https://www.aihero.dev/ai-coding-dictionary/spec) in Matt Pocock's AI Coding Dictionary.
+_Avoid_: PRD, parent issue
+
+**Ticket**:
+An issue scoping one session of work, standing alone or as a sub-issue of a **Spec**. A Ticket in a Spec can block or be blocked by sibling Tickets; the order of work falls out of those GitHub "blocked by" links. See [Ticket](https://www.aihero.dev/ai-coding-dictionary/ticket) in Matt Pocock's AI Coding Dictionary.
+_Avoid_: task, sub-task
+
 **Run**:
-One invocation of the factory on an **Issue URL**, from launch to cleanup.
+One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request. Started directly on an **Issue URL**, or by a **Spec run** for one of its **Tickets**.
+
+**Spec run**:
+One invocation of the factory on a **Spec**'s **Issue URL**: it works through the Spec's **Tickets** in dependency order, starting a **Run** for each Ticket once the Tickets blocking it are done, several at once when the graph allows.
+_Avoid_: batch run, spec implementation
+
+**Spec branch**:
+The **Issue branch** of the **Spec** in a **Spec run**, branched off the **Base branch**. Each **Ticket**'s **Run** is a **Merge run** into it, so the Spec's work gathers there before it reaches the Base branch.
+_Avoid_: integration branch, feature branch
+
+**Spec PR**:
+The pull request from the **Spec branch** into the **Base branch** that closes the **Spec**. It is left ready for review once every **Ticket** is done, or merged by a **Self-merge** when the **Spec run** was asked to merge; a draft listing what is missing otherwise.
+
+**Unready Ticket**:
+An open **Ticket** labelled with a triage role that says it is not agent work: `ready-for-human`, `needs-info`, `wontfix` or `needs-triage`. A **Spec run** never starts a **Run** for one, nor for a Ticket it blocks. An open Ticket with no triage label is taken.
+
+**Spec review**:
+The agent session a **Spec run** starts once every **Ticket** is done: it reviews the whole **Spec branch** against the **Base branch** and the **Spec**, fixes what it agrees with, and writes the **Spec PR**'s description, listing the rest as **Unaddressed findings**.
+
+**Failed spec run**:
+A **Spec run** that ends, including by interruption, with any of its **Tickets** not done, or with its **Spec PR** not ready, mergeable and green (or, when asked to merge, not merged). It still takes every Ticket it can reach, and a failed Ticket stops only the Tickets it blocks.
 
 **Merge run**:
-A **Run** asked to end with its pull request merged rather than left for review, by the command it was started with or by the **User config**. It does everything a **Run** does, then a **Self-merge**.
+A **Run** asked to end with its pull request merged rather than left for review, by the command it was started with or by the **User config**. It does everything a **Run** does, then a **Self-merge**. A **Ticket**'s Run in a **Spec run** is always a Merge run into the **Spec branch**; the command's ask applies to the **Spec PR**.
 _Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
 
 **Run notification**:
@@ -68,7 +96,7 @@ A branch a **Run** works on for one issue: `issue-<n>` (the first), then `issue-
 A **Run** that picks up an existing **Issue branch**, one with no pull request or an open one, instead of starting fresh. When a pull request is open, its base is the **Base branch**.
 
 **Repair**:
-A follow-up agent session a **Run** starts after the pull request exists: to resolve a merge conflict with the **Base branch** or the **Issue branch** on `origin`, to fix failing CI checks, or, in a **Merge run**, to review and fix **Foreign commits**.
+A follow-up agent session a **Run** starts after the pull request exists, or a **Spec run** starts on its **Spec PR** after the **Spec review**: to resolve a merge conflict with the **Base branch** or the **Issue branch** on `origin`, to fix failing CI checks, or, in a **Merge run**, to review and fix **Foreign commits**.
 
 **Foreign commit**:
 A commit that appears on the **Issue branch** during a **Run** and was made neither by one of that Run's sessions nor by thirdshift itself. Commits already on the branch when a **Continuation** starts are not Foreign commits. A **Merge run** merges one only after a **Repair** has reviewed it.
