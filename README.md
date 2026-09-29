@@ -119,12 +119,13 @@ A Merge run ends in one of three ways:
 The other commands:
 
 ```sh
-thirdshift update    # update to the latest release (see Updating)
-thirdshift version   # print thirdshift <version>
-thirdshift help      # print every form of the command, each with a one-line description
+thirdshift email-test [<address>]   # send a test email through Resend (see Email)
+thirdshift update                   # update to the latest release (see Updating)
+thirdshift version                  # print thirdshift <version>
+thirdshift help                     # print every form of the command, each with a one-line description
 ```
 
-`version` and `help` print to stdout and exit `0`. `update` follows the Run's rule: stdout stays empty, messages go to stderr.
+`version` and `help` print to stdout and exit `0`. `update` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr.
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
@@ -135,11 +136,32 @@ A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults fo
 ```toml
 [merge]
 always = true   # every Run is a Merge run, without the merge word
+
+[email]
+to = "you@example.com"                        # where email goes when the command names no address
+from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.dev if unset
 ```
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 
-A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `update`, `version` and `help` never read it, so a broken User config can't block them.
+A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` reads it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
+
+### Email
+
+thirdshift sends email itself, with one HTTPS request to [Resend](https://resend.com)'s API, so it needs no mail server on the machine and works where SMTP ports are blocked ([ADR 0005](docs/adr/0005-run-notifications-through-resend.md)). It needs a Resend account and an API key:
+
+- **`RESEND_API_KEY`**, an environment variable, holds the API key. thirdshift reads the key only from there, never from the User config, so the config file holds no secret.
+- **`email.to`** in the [User config](#user-config) is the address email goes to when the command gives none.
+- **`email.from`** is the sender. Without it, email comes from **`onboarding@resend.dev`**, Resend's shared sender, which only delivers to the address of your own Resend account. To send to any other address, set `email.from` to an address on a domain you have verified with Resend.
+
+To check the setup without starting a Run:
+
+```sh
+export RESEND_API_KEY=re_...
+thirdshift email-test you@example.com   # or just `thirdshift email-test`, to send to email.to
+```
+
+It sends one test email, whose subject marks it as a test and whose body names the host, the time and the sender. Before sending, it checks that it has an address (the argument, else `email.to`) and a non-empty `RESEND_API_KEY`; if either is missing, it exits `1` naming what's missing and sends nothing. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word and exits `1`. It gives up after 30 seconds without an answer.
 
 ### Logs
 

@@ -1,5 +1,6 @@
 //! Test harness: runs the compiled `thirdshift` binary against real git and
-//! fake `gh` and `claude` executables.
+//! fake `gh` and `claude` executables, and, for email, a stand-in for Resend
+//! ([`resend::ResendStandIn`]).
 //!
 //! Layout of a scenario's temp root:
 //!
@@ -23,6 +24,8 @@
 //! ```
 
 #![allow(dead_code)]
+
+pub mod resend;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

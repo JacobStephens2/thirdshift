@@ -2,9 +2,11 @@ mod args;
 mod branch;
 mod ci;
 mod config;
+mod email;
 mod failed_run;
 mod git;
 mod github;
+mod host;
 mod interrupt;
 mod issue;
 mod plugin;
@@ -30,6 +32,7 @@ thirdshift turns a GitHub issue into a ready-for-review pull request, or a merge
 usage: thirdshift <Issue URL>              Run the factory on the issue, from the clone on the Base branch
        thirdshift merge <Issue URL>        Run the factory on the issue, then merge its pull request
        thirdshift --no-merge <Issue URL>   Run the factory on the issue and leave its pull request for review
+       thirdshift email-test [<address>]   Send a test email through Resend, to check the email setup
        thirdshift update                   Update thirdshift to the latest release
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
@@ -41,6 +44,14 @@ With merge.always set, every Run is a Merge run unless given --no-merge:
 
     [merge]
     always = true
+
+email-test sends to <address>, else to email.to, from email.from, else from
+onboarding@resend.dev, which only delivers to your own Resend account's address.
+The Resend API key comes only from the RESEND_API_KEY environment variable:
+
+    [email]
+    to = \"you@example.com\"
+    from = \"thirdshift@your-verified-domain.com\"
 ";
 
 fn main() -> ExitCode {
@@ -58,6 +69,19 @@ fn main() -> ExitCode {
             return match update::update() {
                 Ok(outcome) => {
                     progress::step(outcome);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    progress::step(format_args!("{error:#}"));
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Ok(Command::EmailTest(to)) => {
+            let sent = UserConfig::load().and_then(|config| email::email_test(to, &config.email));
+            return match sent {
+                Ok(()) => {
+                    progress::step("accepted by Resend; check your inbox");
                     ExitCode::SUCCESS
                 }
                 Err(error) => {

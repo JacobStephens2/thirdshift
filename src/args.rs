@@ -10,6 +10,8 @@ pub enum Command {
     Help,
     Version,
     Update,
+    /// `email-test`, with the address it was given, if any.
+    EmailTest(Option<String>),
     Run(RunArgs),
 }
 
@@ -21,14 +23,21 @@ pub struct RunArgs {
     pub goal: Option<Goal>,
 }
 
-/// Parse the arguments after the program name. `help`, `version` and
-/// `update` are commands only as the first argument. Otherwise it is a Run:
-/// one Issue URL, with each Run flag at most once, before or after it.
+/// Parse the arguments after the program name. `help`, `version`, `update`
+/// and `email-test` are commands only as the first argument. Otherwise it is
+/// a Run: one Issue URL, with each Run flag at most once, before or after it.
 pub fn parse(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("email-test") => {
+            return match &args[1..] {
+                [] => Ok(Command::EmailTest(None)),
+                [address] => Ok(Command::EmailTest(Some(address.clone()))),
+                [_, extra, ..] => bail!("unexpected argument after the address: {extra}"),
+            };
+        }
         _ => {}
     }
     let mut issue = None;
