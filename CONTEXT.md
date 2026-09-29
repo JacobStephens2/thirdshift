@@ -13,8 +13,8 @@ The GitHub issue link the factory is given to implement, e.g. `https://github.co
 _Avoid_: ticket, spec link
 
 **Launch directory**:
-The clone of the repository the factory is started from, whose `origin` and checked-out branch a **Run** reads. The Run works in its own worktree, not here, and leaves it untouched unless the **User config** asks for its **Base branch** to be brought up to date.
-_Avoid_: launch clone, working directory
+The directory a **Run** is started from. It must pass **Origin match**, and its checked-out branch is normally the **Base branch**. A Run works in its own worktree, never in the Launch directory.
+_Avoid_: originating workspace, launch repo
 
 **Origin match**:
 The rule that the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the **Launch directory**. A mismatch stops the run before any work happens.
@@ -47,7 +47,7 @@ A message thirdshift sends when a **Run** ends, whatever its outcome (ready, mer
 _Avoid_: completion email, alert
 
 **User config**:
-The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, and whether every Run brings the **Launch directory**'s **Base branch** up to date with `origin` first. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
+The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, and whether a Run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
 
 **Self-merge**:
 The step at the end of a **Merge run** in which thirdshift itself merges the pull request into the **Base branch** with a merge commit, once it is open, ready for review, mergeable and green on the head commit it merges. No human reviews it first. It ends with the **Issue branch** deleted and the issue closed, by thirdshift if the merge did not close it.

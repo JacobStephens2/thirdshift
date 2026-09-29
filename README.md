@@ -112,19 +112,28 @@ A Merge run ends in one of three ways:
 - **Policy refusal**: GitHub refused the merge and a round of merging the Base branch and watching CI found nothing left to fix. Exit `1`, the pull request's URL on stdout, and GitHub's error on stderr. The pull request stays open and ready for review, not a draft, for you to merge by hand or to change the repository's settings. thirdshift never reads GitHub's error text to decide this.
 - **Any other failure**: a [Failed run](#failed-runs), as for a Run without `merge`.
 
+To be emailed when the Run ends, add `--email` (or `email`), optionally followed by the address, before or after the URL and alongside `merge`:
+
+```sh
+thirdshift --email you@example.com https://github.com/acme/widgets/issues/7
+```
+
+It sends one [Run notification](#run-notifications), whatever the outcome. To have every Run on a machine send one, set `email.always` in the [User config](#user-config); `no-email` (or `--no-email`) then skips it for one Run.
+
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
-- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run.
+- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
 - **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin` or closing the issue then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, or a Run flag is repeated or contradicts another; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
 
 The other commands:
 
 ```sh
-thirdshift update    # update to the latest release (see Updating)
-thirdshift version   # print thirdshift <version>
-thirdshift help      # print every form of the command, each with a one-line description
+thirdshift email-test [<address>]   # send a test email through Resend (see Email)
+thirdshift update                   # update to the latest release (see Updating)
+thirdshift version                  # print thirdshift <version>
+thirdshift help                     # print every form of the command, each with a one-line description
 ```
 
-`version` and `help` print to stdout and exit `0`. `update` follows the Run's rule: stdout stays empty, messages go to stderr.
+`version` and `help` print to stdout and exit `0`. `update` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr.
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
@@ -138,17 +147,57 @@ always = true   # every Run is a Merge run, without the merge word
 
 [launch]
 pull = true     # every Run first fast-forwards your checkout of the Base branch
+
+[email]
+always = true                                 # every Run sends a Run notification, without the email word
+to = "you@example.com"                        # where email goes when the command names no address
+from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.dev if unset
+
+[logs]
+dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/logs
 ```
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 
 With `launch.pull = true`, every Run brings the Base branch checked out in the directory you start it from (the **Launch directory**) up to date with `origin`, so you no longer `git pull` by hand before each Run. It happens after the pre-flight checks pass and before the worktree is created, as `git merge --ff-only origin/<Base branch>`: fast-forward only, never a merge commit or a rebase, always from `origin`, whatever the branch's upstream or your `pull.*` settings. A progress line on stderr says when it updates the branch; an already up-to-date branch is left quietly as it is. It is skipped when the checked-out branch isn't the Base branch, as in a Continuation whose open pull request targets another base, or on a detached HEAD. If the update can't happen, for example because uncommitted changes are in the way, stderr gets a `warning:` line with git's error and the command to run by hand, your changes are left as they were, and the Run carries on with the same outcome and exit code. The setting only affects your checkout: the Run's worktree starts from `origin/<Base branch>` either way.
 
-A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value other than `true` or `false`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `update`, `version` and `help` never read it, so a broken User config can't block them.
+With `email.always = true`, every Run sends a [Run notification](#run-notifications) to `email.to`, as if given `--email`, and `thirdshift --no-email <Issue URL>` (or `no-email`, before or after the URL) sends none for that one Run.
+
+`logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
+
+A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` reads it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
+
+### Email
+
+thirdshift sends email itself, with one HTTPS request to [Resend](https://resend.com)'s API, so it needs no mail server on the machine and works where SMTP ports are blocked ([ADR 0005](docs/adr/0005-run-notifications-through-resend.md)). It needs a Resend account and an API key:
+
+- **`RESEND_API_KEY`**, an environment variable, holds the API key. thirdshift reads the key only from there, never from the User config, so the config file holds no secret.
+- **`email.to`** in the [User config](#user-config) is the address email goes to when the command gives none.
+- **`email.from`** is the sender. Without it, email comes from **`onboarding@resend.dev`**, Resend's shared sender, which only delivers to the address of your own Resend account. To send to any other address, set `email.from` to an address on a domain you have verified with Resend.
+
+To check the setup without starting a Run:
+
+```sh
+export RESEND_API_KEY=re_...
+thirdshift email-test you@example.com   # or just `thirdshift email-test`, to send to email.to
+```
+
+It sends one test email, whose subject marks it as a test and whose body names the host, the time and the sender. Before sending, it checks that it has an address (the argument, else `email.to`) and a non-empty `RESEND_API_KEY`; if either is missing, it exits `1` naming what's missing and sends nothing. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word and exits `1`. It gives up after 30 seconds without an answer.
+
+#### Run notifications
+
+`--email` (or `email`) asks a Run for a **Run notification**: one email, sent when the Run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to `email.to`. With `email.always = true` in the [User config](#user-config), a Run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Run; an address after `--email` still wins over `email.to`. Giving a flag twice, or `--email` together with `--no-email`, is an argument error.
+
+A Run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and `RESEND_API_KEY` is set and not empty. If either fails, the Run stops, exits `1` naming what's missing, and sends nothing. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
+
+- **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
+- **Body**, plain text: the pull request URL (if any), the failure cause (if failed), the session log path (if any), the hostname and how long the Run took.
+
+A notification that can't be sent is a `warning:` line on stderr with Resend's error. It never changes the Run's outcome, stdout or exit code.
 
 ### Logs
 
-Each session's full transcript, as Claude Code's `stream-json` output, is written to its own file under `~/.thirdshift/logs/` (created if missing):
+Each session's full transcript, as Claude Code's `stream-json` output, is written to its own file under `~/.thirdshift/logs/`, or the `logs.dir` set in the [User config](#user-config) (created if missing):
 
 ```
 ~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-implement.jsonl

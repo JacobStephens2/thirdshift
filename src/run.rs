@@ -1,6 +1,6 @@
 //! One Run: from an Issue URL to a checked PR, or to a Failed run.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -16,7 +16,7 @@ use crate::poll;
 use crate::preflight;
 use crate::progress;
 use crate::prompt;
-use crate::session::{self, Sessions};
+use crate::session::{Logs, Sessions};
 use crate::worktree::{Merge, Worktree};
 
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
@@ -28,23 +28,35 @@ pub enum Goal {
 
 impl Goal {
     /// What became of the PR once the Run reached this goal, as in
-    /// "PR <url> is merged".
+    /// "PR <url> is merged" and a Run notification's subject.
     pub fn outcome(self) -> &'static str {
         match self {
-            Goal::ReadyForReview => "is ready for review",
-            Goal::Merged => "is merged",
+            Goal::ReadyForReview => "ready for review",
+            Goal::Merged => "merged",
         }
     }
 }
 
-/// Take `issue` to a ready PR, or in a Merge run a merged one, and return the
-/// PR's URL. Any failure after the worktree exists, including a merge that
-/// fails, goes through the Failed run path. The worktree, the local
+/// A Run that reached its goal.
+pub struct Reached {
+    pub pr_url: String,
+    /// The most recent session's log.
+    pub log: PathBuf,
+}
+
+/// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure
+/// after the worktree exists, including a merge that fails, goes through the
+/// Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch. With `launch_pull`, the Launch directory's checkout of the
 /// Base branch is first brought up to date with origin.
-pub fn run(issue: &IssueUrl, goal: Goal, launch_pull: bool) -> Result<String, FailedRun> {
+pub fn run(
+    issue: &IssueUrl,
+    goal: Goal,
+    logs_dir: &Path,
+    launch_pull: bool,
+) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
@@ -73,9 +85,16 @@ pub fn run(issue: &IssueUrl, goal: Goal, launch_pull: bool) -> Result<String, Fa
             prompt::continuation(issue, &base, &branch, pr.as_ref().map(|pr| pr.url.as_str())),
         ),
     };
-    let mut log = session::log_path(issue, &timestamp, "implement")?;
-    implement(issue, &worktree, &base, &prompt, goal, &timestamp, &mut log)
-        .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
+    let logs = Logs {
+        issue,
+        dir: logs_dir,
+        timestamp: &timestamp,
+    };
+    let mut log = logs.path("implement");
+    match implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log) {
+        Ok(pr_url) => Ok(Reached { pr_url, log }),
+        Err(error) => Err(failed_run::fail(issue, worktree, &base, &log, error)),
+    }
 }
 
 /// Fast-forward the Launch directory's Base branch `base` to
@@ -118,14 +137,13 @@ fn implement(
     base: &str,
     prompt: &str,
     goal: Goal,
-    timestamp: &str,
+    logs: &Logs,
     log: &mut PathBuf,
 ) -> Result<String> {
     let branch = worktree.branch();
     let plugin = Plugin::write()?;
     let sessions = Sessions {
-        issue,
-        timestamp,
+        logs,
         worktree: worktree.path(),
         plugin_dir: plugin.path(),
     };

@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 use chrono::{SecondsFormat, Utc};
 
 use crate::github;
+use crate::host;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
@@ -19,6 +20,8 @@ pub struct FailedRun {
     pub pr_url: Option<String>,
     /// The most recent session log, if a session was started.
     pub log: Option<PathBuf>,
+    /// Whether the Run was interrupted, as it was when the Run failed.
+    pub interrupted: bool,
 }
 
 /// A merge GitHub refused when a round of the Repair loop found nothing to
@@ -42,6 +45,7 @@ impl From<anyhow::Error> for FailedRun {
             error,
             pr_url: None,
             log: None,
+            interrupted: interrupt::requested(),
         }
     }
 }
@@ -59,7 +63,8 @@ pub fn fail(
     error: anyhow::Error,
 ) -> FailedRun {
     // An interrupt can surface as some other error, such as a killed git.
-    let error = if interrupt::requested() {
+    let interrupted = interrupt::requested();
+    let error = if interrupted {
         anyhow!("interrupted")
     } else {
         error
@@ -100,6 +105,7 @@ pub fn fail(
         error,
         pr_url,
         log: log.exists().then(|| log.to_path_buf()),
+        interrupted,
     }
 }
 
@@ -120,7 +126,7 @@ fn commit_and_push(worktree: &Worktree, base: &str, reason: &str) -> Result<()> 
         "thirdshift: failed run ({reason})\n\n\
          {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
         timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        host = hostname(),
+        host = host::name().as_deref().unwrap_or("unknown"),
     );
     // No hooks: a hook that rejects the commit would strand the work.
     git.run(&[
@@ -144,15 +150,4 @@ fn open_pr_url(issue: &IssueUrl, branch: &str, keep_ready: bool) -> Result<Optio
         github::convert_to_draft(issue, branch)?;
     }
     Ok(Some(pr.url))
-}
-
-fn hostname() -> String {
-    let mut buffer = [0u8; 256];
-    // SAFETY: the pointer and length describe `buffer`, which outlives the call.
-    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
-    if result != 0 {
-        return "unknown".to_string();
-    }
-    let end = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
-    String::from_utf8_lossy(&buffer[..end]).into_owned()
 }

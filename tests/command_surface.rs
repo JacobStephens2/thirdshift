@@ -11,6 +11,8 @@ fn assert_help_text(text: &str) {
     for form in [
         "thirdshift <Issue URL>",
         "thirdshift merge <Issue URL>",
+        "thirdshift --email <Issue URL>",
+        "thirdshift email-test [<address>]",
         "thirdshift update",
         "thirdshift version",
         "thirdshift help",
@@ -168,6 +170,16 @@ fn a_repeated_flag_prints_an_error_and_the_help_to_stderr() {
         (vec!["--merge", url.as_str(), "--merge"], "--merge"),
         (vec!["merge", "--merge", url.as_str()], "--merge"),
         (vec![url.as_str(), "no-merge", "--no-merge"], "--no-merge"),
+        (vec!["no-email", url.as_str(), "--no-email"], "--no-email"),
+        (vec!["--email", url.as_str(), "--email"], "--email"),
+        (
+            vec!["email", "a@example.com", url.as_str(), "email"],
+            "email",
+        ),
+        (
+            vec![url.as_str(), "email", "--email", "b@example.com"],
+            "--email",
+        ),
     ] {
         let result = scenario.run(&args);
 
@@ -202,6 +214,27 @@ fn merge_with_no_merge_prints_an_error_and_the_help_to_stderr() {
 }
 
 #[test]
+fn email_with_no_email_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+    let url = scenario.issue_url(7);
+
+    for args in [
+        vec!["email", url.as_str(), "no-email"],
+        vec!["--no-email", "--email", "a@example.com", url.as_str()],
+        vec![url.as_str(), "--email", "--no-email"],
+    ] {
+        let result = scenario.run(&args);
+
+        assert_argument_error(
+            &scenario,
+            &result,
+            "email and no-email can't be used together",
+        );
+        assert!(scenario.claude_calls().is_empty(), "{args:?} started a Run");
+    }
+}
+
+#[test]
 fn no_merge_without_an_issue_url_prints_an_error_and_the_help_to_stderr() {
     let scenario = Scenario::new();
 
@@ -219,6 +252,26 @@ fn help_lists_no_merge_and_the_user_config() {
     let help = scenario.run(&["help"]).stdout;
 
     for mention in ["--no-merge", "~/.thirdshift/config.toml", "merge.always"] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+}
+
+#[test]
+fn help_lists_the_email_settings() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    for mention in [
+        "email.to",
+        "email.from",
+        "Run notification",
+        "--email <address>",
+        "email.always",
+        "--no-email",
+        "onboarding@resend.dev",
+        "RESEND_API_KEY",
+    ] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");
     }
 }
