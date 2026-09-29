@@ -1,7 +1,7 @@
 
 Agents, do not modify this file. It is for human handwritten content.
 
-# Sep 22 2026: create cli command to implement GitHub issue
+# Sep 22 2026: create cli command to implement GitHub issue, issue 2
 
 ## Round 1
 
@@ -267,7 +267,7 @@ We can test with the ticket sub-issues of my vacation repo's spec issue https://
 
 Having one test seam, the thirdshift binary, sounds good. Is saying "the thirdshift binary as a black box" a meaningful distinction here? And what would it mean to have a second seam at the Origin match parsing and Issue branch selection?
 
-# Sep 25 2026: release
+# Sep 25 2026: release, issue 30
 
 1 - I'm torn between B and C. 
 
@@ -347,7 +347,7 @@ We have shared understanding. /to-spec
 
 Yes
 
-# issue 29: thirdshift.app
+# Sep 26 2026: thirdshift.app: issue 29
 
 1 - agree
 
@@ -490,7 +490,7 @@ I want a page on the site which presents the prompts that thirdshift uses, as we
 
 /to-spec
 
-# merge
+# Sep 27 2026: merge, issue 26
 1 - flag on the command, `--merge` and probably `merge` too
 2 - a
 3 - a
@@ -525,3 +525,62 @@ I want a page on the site which presents the prompts that thirdshift uses, as we
 27 - agree
 ## 6
 /to-spec
+
+# Sep 29 2026: Email on run finish, spec 109
+/grill-with-docs As someone who runs multiple third shift runs at a time I want to be able to know when the run finishes without having to constantly check back on the window so that I can save my attention for other things. So I want to be able to receive email notification of the completion of a run.
+
+And I want to be able to have a flag that is passed into the command which triggers the sending of an email in that run about its result. And I want to, after the flag, be able to pass in an email address to which that notification would be sent.
+
+But I think I also want to have a configuration file in my user home folder for third shift in which I can configure a default email address to be used. And I use Third Shift on a variety of machines. So mostly Linux machines, but sometimes my MacBook as well.
+
+And so I'm guessing it would be difficult to have the email sent when I'm working on my MacBook, which I'm okay with that. Though maybe there is a way to do that. as far as handling email on various Linux servers go. I'm wondering if we should use the default built-in mail function in the operating system on Ubuntu and Rocky Linux, for example, assuming that is a thing.
+
+And then just kind of assume that it's configured with SMTP or something that's gonna make the delivery reliable. Or maybe in the user the the third shift configuration files we could have a way to configure the email there for that particular server. 
+
+and /research as is useful here.
+
+## 1
+1 - agree
+
+2 - a, and what about using both `--email` and `email` as flags? Can we reliably have both without adding too much complexity? And what about requiring the brackets `[` and `]` versus not? so like either `--email jacob@stephens.page` or `--email [jacob@stephens.page]`. Can we do it without the brackets reliably?
+
+3 - include in the config a way to always email even when the flag is given. Also add to the config a way to always merge even when the merge flag is not given. Make the default for if the config does not include anything about email to be not emailing unless the flag is given. Same for merging - nothing in config? require passing the merge flag to run the merge process.
+
+4 - Compare between ~/.config/thirdshift/config.toml and ~/.thirdshift/config.toml. And what is TOML? What makes it a fitting format for thirdshift's configuration versus json or yaml or something?
+
+5 - agreed
+
+6 - agreed
+
+7 - agreed
+
+8 - I lean towards C, I think, because pretty much all of the servers that I would be running on this run on digital ocean. And I do have resend and SES set up for other machines. 
+## 2
+Where the logs are written should also be configurable in config.toml, but leave the default as where it logs to now. 
+
+9 - correct
+10 - a
+11 - agree
+12 - agree
+13 - agree - and keep the environment variable approach rather than the api key in the config. This would also make it more safe to version control the config. And I'm open to allowing the onboarding at resend.dev sender be the email dot from in case the user wants to be able to send to themself without having verified a domain on Resend
+# 3
+14 - agree I think, though what do you mean "Expand ~"?
+
+15 - agree
+
+16 - agree, and maybe a `thirdshift email test` attempts to send a test email based on the configuration settings in case the user wants to test functionality and email sending this in their configuration process without having to do a full run.
+
+17 - agree
+# 4
+Yes I agree to expanding ~.
+
+18 - agree, except use thirdshift email-test for alphabetical command relationship / `<command> <flag>-<subflag>` type formatting. However, would this impact tab-completion for the command? Would I even have tab completion on flags? If so maybe `thirdshift test-email` is preferable.
+
+19 - agree
+
+20 - Yes write an ADR for the decision to send the run notification through Resend. And I'm assuming that sending through resend would allow me to send from my MacBook runs?
+# 5
+We have shared understanding. /to-spec
+# 6
+I agree on these seams.
+## 7
