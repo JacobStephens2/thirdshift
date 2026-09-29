@@ -16,22 +16,30 @@ use crate::issue::IssueUrl;
 use crate::progress::{self, Progress};
 use crate::prompt;
 
-/// Where a session's stream is logged:
-/// `~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-<kind>.jsonl`.
-/// Every session in a Run shares the Run's `timestamp`.
-pub fn log_path(issue: &IssueUrl, timestamp: &str, kind: &str) -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".thirdshift/logs").join(format!(
-        "{}-{}-issue-{}-{timestamp}-{kind}.jsonl",
-        issue.owner, issue.repo, issue.number
-    )))
+/// Where a Run's session logs go: in `dir`, the User config's `logs.dir` or
+/// `~/.thirdshift/logs`, each named for the Run's `issue` and `timestamp`.
+pub struct Logs<'a> {
+    pub issue: &'a IssueUrl,
+    pub dir: &'a Path,
+    pub timestamp: &'a str,
+}
+
+impl Logs<'_> {
+    /// Where a session's stream is logged:
+    /// `<dir>/<owner>-<repo>-issue-<n>-<timestamp>-<kind>.jsonl`.
+    pub fn path(&self, kind: &str) -> PathBuf {
+        let issue = self.issue;
+        self.dir.join(format!(
+            "{}-{}-issue-{}-{}-{kind}.jsonl",
+            issue.owner, issue.repo, issue.number, self.timestamp
+        ))
+    }
 }
 
 /// Where a Run's sessions run: in `worktree`, with the Factory skills plugin
-/// at `plugin_dir` loaded, each logged under the Run's `timestamp`.
+/// at `plugin_dir` loaded, each logged in the Run's `logs`.
 pub struct Sessions<'a> {
-    pub issue: &'a IssueUrl,
-    pub timestamp: &'a str,
+    pub logs: &'a Logs<'a>,
     pub worktree: &'a Path,
     pub plugin_dir: &'a Path,
 }
@@ -78,7 +86,7 @@ impl Sessions<'_> {
         prompt: &str,
         log: &mut PathBuf,
     ) -> Result<Progress> {
-        *log = log_path(self.issue, self.timestamp, kind)?;
+        *log = self.logs.path(kind);
         progress::step(format_args!("logging the session to {}", log.display()));
         run(kind, self.worktree, self.plugin_dir, resume, prompt, log)
     }

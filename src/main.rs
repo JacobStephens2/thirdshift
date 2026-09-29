@@ -45,6 +45,11 @@ With merge.always set, every Run is a Merge run unless given --no-merge:
     [merge]
     always = true
 
+logs.dir sets where session logs go instead of ~/.thirdshift/logs: an absolute path, or one under ~/.
+
+    [logs]
+    dir = \"~/elsewhere/logs\"
+
 email-test sends to <address>, else to email.to, from email.from, else from
 onboarding@resend.dev, which only delivers to your own Resend account's address.
 The Resend API key comes only from the RESEND_API_KEY environment variable:
@@ -74,18 +79,19 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    let goal = match UserConfig::load() {
-        Ok(config) => goal.unwrap_or(config.default_goal()),
+    let config = match UserConfig::load() {
+        Ok(config) => config,
         Err(error) => {
             progress::step(format_args!("{error:#}"));
             return ExitCode::FAILURE;
         }
     };
+    let goal = goal.unwrap_or(config.default_goal());
     if let Err(error) = interrupt::install() {
         progress::step(format_args!("{error:#}"));
         return ExitCode::FAILURE;
     }
-    match run::run(&issue, goal) {
+    match run::run(&issue, goal, &config.logs_dir) {
         Ok(pr_url) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("PR {pr_url} {}", goal.outcome()));

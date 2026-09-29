@@ -1,6 +1,6 @@
 //! One Run: from an Issue URL to a checked PR, or to a Failed run.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -16,7 +16,7 @@ use crate::poll;
 use crate::preflight;
 use crate::progress;
 use crate::prompt;
-use crate::session::{self, Sessions};
+use crate::session::{Logs, Sessions};
 use crate::worktree::{Merge, Worktree};
 
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
@@ -43,7 +43,7 @@ impl Goal {
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch.
-pub fn run(issue: &IssueUrl, goal: Goal) -> Result<String, FailedRun> {
+pub fn run(issue: &IssueUrl, goal: Goal, logs_dir: &Path) -> Result<String, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
@@ -69,8 +69,13 @@ pub fn run(issue: &IssueUrl, goal: Goal) -> Result<String, FailedRun> {
             prompt::continuation(issue, &base, &branch, pr.as_ref().map(|pr| pr.url.as_str())),
         ),
     };
-    let mut log = session::log_path(issue, &timestamp, "implement")?;
-    implement(issue, &worktree, &base, &prompt, goal, &timestamp, &mut log)
+    let logs = Logs {
+        issue,
+        dir: logs_dir,
+        timestamp: &timestamp,
+    };
+    let mut log = logs.path("implement");
+    implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log)
         .map_err(|error| failed_run::fail(issue, worktree, &base, &log, error))
 }
 
@@ -85,14 +90,13 @@ fn implement(
     base: &str,
     prompt: &str,
     goal: Goal,
-    timestamp: &str,
+    logs: &Logs,
     log: &mut PathBuf,
 ) -> Result<String> {
     let branch = worktree.branch();
     let plugin = Plugin::write()?;
     let sessions = Sessions {
-        issue,
-        timestamp,
+        logs,
         worktree: worktree.path(),
         plugin_dir: plugin.path(),
     };
