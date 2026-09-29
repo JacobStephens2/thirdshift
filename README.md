@@ -128,12 +128,13 @@ The other commands:
 
 ```sh
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
+thirdshift setup                    # write the User config with every setting at its default (see User config)
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print every form of the command, each with a one-line description
 ```
 
-`version` and `help` print to stdout and exit `0`. `update` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr.
+`version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr.
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
@@ -157,6 +158,26 @@ from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.de
 dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/logs
 ```
 
+`thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
+
+```toml
+[merge]
+always = false   # every Run is a Merge run, without the merge word; default false
+
+[launch]
+pull = false     # every Run first fast-forwards your checkout of the Base branch; default false
+
+[email]
+always = false                  # every Run sends a Run notification, without the email word; default false
+# to = "you@example.com"        # where email goes when the command names no address; no default
+from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
+
+[logs]
+dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
+```
+
+Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so it is the only line written commented out. `setup` asks nothing, prints the file's path on stderr and exits `0` with stdout empty. A User config that is already there is left as it is; one a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
+
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 
 With `launch.pull = true`, every Run brings the Base branch checked out in the directory you start it from (the **Launch directory**) up to date with `origin`, so you no longer `git pull` by hand before each Run. It happens after the pre-flight checks pass and before the worktree is created, as `git merge --ff-only origin/<Base branch>`: fast-forward only, never a merge commit or a rebase, always from `origin`, whatever the branch's upstream or your `pull.*` settings. A progress line on stderr says when it updates the branch; an already up-to-date branch is left quietly as it is. It is skipped when the checked-out branch isn't the Base branch, as in a Continuation whose open pull request targets another base, or on a detached HEAD. If the update can't happen, for example because uncommitted changes are in the way, stderr gets a `warning:` line with git's error and the command to run by hand, your changes are left as they were, and the Run carries on with the same outcome and exit code. The setting only affects your checkout: the Run's worktree starts from `origin/<Base branch>` either way.
@@ -165,7 +186,7 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 
 `logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
-A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` reads it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
+A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
 
 ### Email
 

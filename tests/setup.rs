@@ -48,16 +48,12 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(result.stdout, "");
     let text = user_config(&scenario).expect("no User config written");
     let config: toml::Table = text.parse().unwrap();
+    let sections: Vec<&str> = text.lines().filter(|line| line.starts_with('[')).collect();
     assert_eq!(
-        config.keys().collect::<Vec<_>>(),
-        ["merge", "launch", "email", "logs"],
+        sections,
+        ["[merge]", "[launch]", "[email]", "[logs]"],
         "{text}"
     );
-    let sections: Vec<&str> = text
-        .lines()
-        .filter(|line| line.starts_with('['))
-        .collect();
-    assert_eq!(sections, ["[merge]", "[launch]", "[email]", "[logs]"]);
     assert_eq!(config["merge"]["always"].as_bool(), Some(false));
     assert_eq!(config["launch"]["pull"].as_bool(), Some(false));
     assert_eq!(config["email"]["always"].as_bool(), Some(false));
@@ -150,7 +146,11 @@ fn a_run_with_the_written_user_config_still_needs_an_address_for_email() {
     );
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert!(result.stderr.contains("email.to"), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("email.to"),
+        "stderr: {}",
+        result.stderr
+    );
     assert!(scenario.claude_calls().is_empty(), "the Run started");
 }
 
@@ -164,14 +164,19 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
         assert_eq!(result.code, Some(2), "{args:?}: {}", result.stderr);
         assert_eq!(result.stdout, "", "{args:?}");
         assert!(
-            result
-                .stderr
-                .starts_with(&format!("thirdshift: unexpected argument after setup: {}\n", args[1])),
+            result.stderr.starts_with(&format!(
+                "thirdshift: unexpected argument after setup: {}\n",
+                args[1]
+            )),
             "{args:?}: {}",
             result.stderr
         );
         let help = scenario.run(&["help"]).stdout;
-        assert!(result.stderr.ends_with(&help), "{args:?}: {}", result.stderr);
+        assert!(
+            result.stderr.ends_with(&help),
+            "{args:?}: {}",
+            result.stderr
+        );
         assert_eq!(user_config(&scenario), None, "{args:?}");
     }
 }
