@@ -49,8 +49,14 @@ pub struct Reached {
 /// Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
-/// branch.
-pub fn run(issue: &IssueUrl, goal: Goal, logs_dir: &Path) -> Result<Reached, FailedRun> {
+/// branch. With `launch_pull`, the Launch directory's checkout of the
+/// Base branch is first brought up to date with origin.
+pub fn run(
+    issue: &IssueUrl,
+    goal: Goal,
+    logs_dir: &Path,
+    launch_pull: bool,
+) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
@@ -62,6 +68,9 @@ pub fn run(issue: &IssueUrl, goal: Goal, logs_dir: &Path) -> Result<Reached, Fai
     let branch = selection.branch().to_string();
     let base = selection.base_branch(checked_out.as_deref())?;
     preflight::check_base_branch(&launch, &base)?;
+    if launch_pull {
+        pull_base_branch(&launch, checked_out.as_deref(), &base);
+    }
 
     if interrupt::requested() {
         return Err(anyhow!("interrupted").into());
@@ -85,6 +94,35 @@ pub fn run(issue: &IssueUrl, goal: Goal, logs_dir: &Path) -> Result<Reached, Fai
     match implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log) {
         Ok(pr_url) => Ok(Reached { pr_url, log }),
         Err(error) => Err(failed_run::fail(issue, worktree, &base, &log, error)),
+    }
+}
+
+/// Fast-forward the Launch directory's Base branch `base` to
+/// `origin/<base>`, if `base` is the branch `checked_out` there. Call it after
+/// [`preflight::check_base_branch`], which fetches `origin/<base>` and fails
+/// if `base` is ahead of it. The Run doesn't depend on this, so a failure,
+/// such as uncommitted changes in the way, is only a warning, and those
+/// changes are left as they were.
+fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
+    if checked_out != Some(base) {
+        return;
+    }
+    let origin_base = format!("origin/{base}");
+    let up_to_date = launch.succeeds(&["merge-base", "--is-ancestor", &origin_base, "HEAD"]);
+    if up_to_date.unwrap_or(false) {
+        return;
+    }
+    progress::step(format_args!(
+        "updating {base} in the Launch directory from {origin_base}"
+    ));
+    if let Err(error) = launch.run(&["merge", "--ff-only", "--quiet", &origin_base]) {
+        warn(
+            &error,
+            format_args!(
+                "could not update {base} in the Launch directory, \
+                 so update it by hand: git pull --ff-only origin {base}"
+            ),
+        );
     }
 }
 

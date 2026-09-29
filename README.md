@@ -145,6 +145,9 @@ A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults fo
 [merge]
 always = true   # every Run is a Merge run, without the merge word
 
+[launch]
+pull = true     # every Run first fast-forwards your checkout of the Base branch
+
 [email]
 always = true                                 # every Run sends a Run notification, without the email word
 to = "you@example.com"                        # where email goes when the command names no address
@@ -156,11 +159,13 @@ dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/log
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 
+With `launch.pull = true`, every Run brings the Base branch checked out in the directory you start it from (the **Launch directory**) up to date with `origin`, so you no longer `git pull` by hand before each Run. It happens after the pre-flight checks pass and before the worktree is created, as `git merge --ff-only origin/<Base branch>`: fast-forward only, never a merge commit or a rebase, always from `origin`, whatever the branch's upstream or your `pull.*` settings. A progress line on stderr says when it updates the branch; an already up-to-date branch is left quietly as it is. It is skipped when the checked-out branch isn't the Base branch, as in a Continuation whose open pull request targets another base, or on a detached HEAD. If the update can't happen, for example because uncommitted changes are in the way, stderr gets a `warning:` line with git's error and the command to run by hand, your changes are left as they were, and the Run carries on with the same outcome and exit code. The setting only affects your checkout: the Run's worktree starts from `origin/<Base branch>` either way.
+
 With `email.always = true`, every Run sends a [Run notification](#run-notifications) to `email.to`, as if given `--email`, and `thirdshift --no-email <Issue URL>` (or `no-email`, before or after the URL) sends none for that one Run.
 
 `logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
-A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` reads it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
+A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` reads it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
 
 ### Email
 

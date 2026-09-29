@@ -53,6 +53,11 @@ With merge.always set, every Run is a Merge run unless given --no-merge:
     [merge]
     always = true
 
+With launch.pull set, every Run first fast-forwards the checked-out Base branch to origin:
+
+    [launch]
+    pull = true
+
 logs.dir sets where session logs go instead of ~/.thirdshift/logs: an absolute path, or one under ~/.
 
     [logs]
@@ -113,7 +118,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let ended = run::run(&issue, goal, &config.logs_dir);
+    let ended = run::run(&issue, goal, &config.logs_dir, config.launch_pull);
     let code = match &ended {
         Ok(reached) => {
             // Also on stderr, so the outcome shows even when stdout is captured.

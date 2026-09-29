@@ -277,17 +277,37 @@ impl Scenario {
     /// Push `branch` to origin: `from` plus one commit per subject in
     /// `commits`, oldest first.
     pub fn origin_has_branch(&self, branch: &str, from: &str, commits: &[&str]) {
+        self.push_from_seed(branch, |seed| {
+            git(
+                seed,
+                &["checkout", "-q", "-b", branch, &format!("origin/{from}")],
+            );
+            for (i, subject) in commits.iter().enumerate() {
+                fs::write(seed.join(format!("{branch}-{i}.txt")), subject).unwrap();
+                git(seed, &["add", "."]);
+                git(seed, &["commit", "-q", "-m", subject]);
+            }
+        });
+    }
+
+    /// Push one commit to `branch` on origin that writes `contents` to
+    /// `file`, as another machine might while the Launch directory isn't
+    /// looking.
+    pub fn origin_has_commit(&self, branch: &str, file: &str, contents: &str, subject: &str) {
+        self.push_from_seed(branch, |seed| {
+            git(seed, &["checkout", "-q", branch]);
+            fs::write(seed.join(file), contents).unwrap();
+            git(seed, &["add", file]);
+            git(seed, &["commit", "-q", "-m", subject]);
+        });
+    }
+
+    /// Clone origin into a scratch `seed`, let `commit` make commits on
+    /// `branch` there, push `branch` and delete the clone.
+    fn push_from_seed(&self, branch: &str, commit: impl FnOnce(&Path)) {
         let seed = self.path("seed");
         git(&self.path(""), &["clone", "-q", &self.github_url(), "seed"]);
-        git(
-            &seed,
-            &["checkout", "-q", "-b", branch, &format!("origin/{from}")],
-        );
-        for (i, subject) in commits.iter().enumerate() {
-            fs::write(seed.join(format!("{branch}-{i}.txt")), subject).unwrap();
-            git(&seed, &["add", "."]);
-            git(&seed, &["commit", "-q", "-m", subject]);
-        }
+        commit(&seed);
         git(&seed, &["push", "-q", "origin", branch]);
         fs::remove_dir_all(&seed).unwrap();
     }

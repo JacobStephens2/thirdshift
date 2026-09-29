@@ -16,6 +16,9 @@ use crate::run::Goal;
 pub struct UserConfig {
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
+    /// `launch.pull`: every Run fast-forwards the Launch directory's
+    /// checkout of the Base branch to `origin`.
+    pub launch_pull: bool,
     /// `logs.dir`, with a leading `~` expanded: where session logs are
     /// written, by default `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
@@ -58,6 +61,7 @@ impl UserConfig {
     fn defaults(home: &Path) -> Self {
         UserConfig {
             merge_always: false,
+            launch_pull: false,
             logs_dir: home.join(".thirdshift/logs"),
             email: EmailSettings::default(),
         }
@@ -74,7 +78,7 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
-            let known = matches!(section.as_str(), "merge" | "logs" | "email");
+            let known = matches!(section.as_str(), "merge" | "launch" | "logs" | "email");
             let settings = match value {
                 Value::Table(settings) if known => settings,
                 Value::Table(_) => bail!("unknown section [{section}] in {file}"),
@@ -85,6 +89,8 @@ impl UserConfig {
                 match (section.as_str(), key.as_str(), value) {
                     ("merge", "always", Value::Boolean(always)) => config.merge_always = *always,
                     ("merge", "always", _) => bail!("merge.always must be true or false in {file}"),
+                    ("launch", "pull", Value::Boolean(pull)) => config.launch_pull = *pull,
+                    ("launch", "pull", _) => bail!("launch.pull must be true or false in {file}"),
                     ("logs", "dir", Value::String(dir)) => match expand_home(dir, home) {
                         Some(dir) => config.logs_dir = dir,
                         None => bail!(
@@ -162,6 +168,13 @@ mod tests {
     }
 
     #[test]
+    fn launch_pull_is_read() {
+        assert!(parse("[launch]\npull = true\n").unwrap().launch_pull);
+        assert!(!parse("[launch]\npull = false\n").unwrap().launch_pull);
+        assert!(!parse("").unwrap().launch_pull);
+    }
+
+    #[test]
     fn email_settings_are_read() {
         let config = parse("[email]\nto = \"me@example.com\"\nfrom = \"ts@acme.dev\"\n").unwrap();
         assert_eq!(config.email.to.as_deref(), Some("me@example.com"));
@@ -234,6 +247,12 @@ mod tests {
             (
                 "[merge]\nalways = 1\n",
                 "merge.always must be true or false",
+            ),
+            ("[launch]\npul = true\n", "unknown key launch.pul"),
+            ("launch = true\n", "launch must be the section [launch]"),
+            (
+                "[launch]\npull = \"yes\"\n",
+                "launch.pull must be true or false",
             ),
             ("[email]\nadress = \"a@b.c\"\n", "unknown key email.adress"),
             ("email = \"a@b.c\"\n", "email must be the section [email]"),
