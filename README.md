@@ -37,6 +37,8 @@ curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download
 
 The shell installer and the binary both come from this repository's [GitHub Releases](https://github.com/JacobStephens2/thirdshift/releases). It puts `thirdshift` in `~/.local/bin`, where Claude Code's installer puts `claude`, and needs no Rust toolchain. thirdshift is a single binary with the Factory skills compiled in, so it runs without a checkout of this repository ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md), [ADR-0003](docs/adr/0003-static-binaries-through-github-releases.md)).
 
+The installer ends by pointing you to Setup. Run `thirdshift setup` to choose your defaults, or just start a Run and thirdshift will offer it (see [User config](#user-config)).
+
 If you use Rust, you can install it from crates.io instead:
 
 ```sh
