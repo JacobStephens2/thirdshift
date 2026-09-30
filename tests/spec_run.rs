@@ -886,3 +886,44 @@ fn a_ticket_that_fails_once_the_spec_pr_is_open_is_shown_failed_in_its_checklist
         "thirdshift: updating the Spec PR's Tickets checklist\n",
     );
 }
+
+#[test]
+fn a_failed_spec_review_that_rewrote_the_body_has_the_checklist_put_back_in_the_draft() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        "gh fake pr issue-20 body '\"Half a description. Closes #20\"'\nexit 1\n",
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let spec = spec_pr(&scenario);
+    assert_eq!(spec["isDraft"], true);
+    assert_eq!(
+        spec["body"],
+        format!("Half a description. Closes #20\n\n{DONE_CHECKLIST}\n")
+    );
+}
+
+#[test]
+fn a_checklist_update_github_refuses_is_only_a_warning() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "gh fake fails 'api --method'\n{}",
+            agent_lands(21, "21.txt")
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: could not update the Spec PR's Tickets checklist: ",
+    );
+    assert_contains(&result.stderr, "thirdshift: #22 landed\n");
+}

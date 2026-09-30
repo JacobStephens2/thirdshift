@@ -211,13 +211,13 @@ impl PullRequest {
     }
 }
 
-/// The `fields` of the pull request whose head is `branch`, or whose number
-/// it is, as JSON.
-fn pr_view(issue: &IssueUrl, branch: &str, fields: &str) -> Result<Value> {
+/// The `fields` of the pull request `pr`, its head branch or its number, as
+/// JSON.
+fn pr_view(issue: &IssueUrl, pr: &str, fields: &str) -> Result<Value> {
     gh_json(&[
         "pr",
         "view",
-        branch,
+        pr,
         "--repo",
         &issue.repo_slug(),
         "--json",

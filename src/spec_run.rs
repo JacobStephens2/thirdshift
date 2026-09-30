@@ -71,16 +71,18 @@ pub fn run(
             });
         }
     };
-    let pr_url = match spec_pr {
-        Some(pr) => pr.url,
-        None => open_spec_pr(spec, worktree.branch(), base, &checklist)?.url,
+    let spec_pr = match spec_pr {
+        Some(pr) => pr,
+        None => open_spec_pr(spec, worktree.branch(), base, &checklist)?,
     };
     let mut log = logs.path(SPEC_REVIEW);
-    if let Err(error) = review(spec, &worktree, base, &pr_url, &checklist, logs, &mut log) {
+    if let Err(error) = review(spec, &worktree, base, &spec_pr, &checklist, logs, &mut log) {
+        // The session may have rewritten the body without it.
+        write_checklist_or_warn(spec, &spec_pr, &checklist);
         return Err(failed_run::fail(spec, worktree, base, &log, error));
     }
     Ok(Reached {
-        pr_url,
+        pr_url: spec_pr.url,
         goal: Goal::ReadyForReview,
         log: Some(log),
     })
@@ -100,7 +102,7 @@ enum TicketOutcome {
 
 /// Push the Spec branch, then run each ready Ticket, lowest number first,
 /// until none is ready, keeping the Tickets checklist of `spec_pr` up to
-/// date, and opening it into `base` once a Ticket lands if there is none.
+/// date as far as GitHub lets it, and opening it into `base` once a Ticket lands if there is none.
 /// Returns the last Tickets checklist. Fails, after a line on each Ticket
 /// that landed or is not done, if any Ticket is not done.
 fn land_tickets(
@@ -119,7 +121,7 @@ fn land_tickets(
         }
         outcomes.insert(ticket, TicketOutcome::Running);
         if let Some(pr) = spec_pr {
-            write_checklist(spec, pr, &checklist(&tickets, &outcomes))?;
+            write_checklist_or_warn(spec, pr, &checklist(&tickets, &outcomes));
         }
         let outcome = run_ticket(spec, ticket, spec_branch)?;
         let interrupted = matches!(outcome, TicketOutcome::Interrupted);
@@ -128,7 +130,7 @@ fn land_tickets(
         tickets = github::tickets(spec)?;
         let list = checklist(&tickets, &outcomes);
         match spec_pr {
-            Some(pr) => write_checklist(spec, pr, &list)?,
+            Some(pr) => write_checklist_or_warn(spec, pr, &list),
             None if landed => *spec_pr = Some(open_spec_pr(spec, spec_branch, base, &list)?),
             None => {}
         }
@@ -450,16 +452,26 @@ fn write_checklist(spec: &IssueUrl, pr: &PullRequest, checklist: &str) -> Result
     Ok(())
 }
 
+/// [`write_checklist`], only warning if it fails: the Spec run goes on
+/// without it.
+fn write_checklist_or_warn(spec: &IssueUrl, pr: &PullRequest, checklist: &str) {
+    if let Err(problem) = write_checklist(spec, pr, checklist) {
+        progress::step(format_args!(
+            "could not update the Spec PR's Tickets checklist: {problem:#}"
+        ));
+    }
+}
+
 /// Bring the Spec branch in `worktree` up to date with the Tickets landed on
 /// origin, and run the Spec review on it, pointing `log` at its session's
 /// log. Then push the Spec branch, for any commit the session left unpushed,
 /// put `checklist` back in the body the session wrote for the Spec PR
-/// `pr_url` into `base`, and mark it ready.
+/// `spec_pr` into `base`, and mark it ready.
 fn review(
     spec: &IssueUrl,
     worktree: &Worktree,
     base: &str,
-    pr_url: &str,
+    spec_pr: &PullRequest,
     checklist: &str,
     logs: &Logs,
     log: &mut PathBuf,
@@ -472,11 +484,10 @@ fn review(
         worktree: worktree.path(),
         plugin_dir: plugin.path(),
     };
-    let prompt = prompt::spec_review(spec, base, spec_branch, pr_url);
+    let prompt = prompt::spec_review(spec, base, spec_branch, &spec_pr.url);
     sessions.run(SPEC_REVIEW, &prompt, log)?;
     worktree.push()?;
-    let pr = github::pull_request_for(spec, spec_branch)?.context("no PR found")?;
-    write_checklist(spec, &pr, checklist)?;
+    write_checklist(spec, spec_pr, checklist)?;
     run::mark_pr_ready(spec, spec_branch, base)?;
     Ok(())
 }
