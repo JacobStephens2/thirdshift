@@ -20,7 +20,7 @@ use crate::run::{Goal, Reached};
 use crate::worktree::Worktree;
 
 /// How often to check whether a Ticket's Run has ended, or been interrupted.
-const POLL: Duration = Duration::from_millis(50);
+const POLL: Duration = Duration::from_millis(100);
 
 /// The triage labels that make an open Ticket an Unready Ticket.
 const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "needs-triage"];
@@ -31,7 +31,7 @@ const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "
 /// the Tickets run one at a time, the graph read again after each. A Ticket
 /// that fails ends the Spec run. An interrupt ends it too, once the running
 /// Ticket's Run has ended, starting nothing more and leaving the Spec PR
-/// unready. The worktree is cleaned up when this returns.
+/// not ready. The worktree is cleaned up when this returns.
 pub fn run(
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
@@ -39,15 +39,7 @@ pub fn run(
     base: &str,
 ) -> Result<Reached, FailedRun> {
     let pr_url = land_tickets(spec, tickets, &worktree)
-        .and_then(|()| open_spec_pr(spec, worktree.branch(), base))
-        // An interrupt can surface as some other error, such as a killed gh.
-        .map_err(|error| {
-            if interrupt::requested() {
-                anyhow!("interrupted")
-            } else {
-                error
-            }
-        })?;
+        .and_then(|()| open_spec_pr(spec, worktree.branch(), base))?;
     Ok(Reached {
         pr_url,
         goal: Goal::ReadyForReview,
@@ -114,11 +106,13 @@ fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<()> {
         .with_context(|| format!("could not start the Run for #{number}"))?;
     // Relay on its own thread, so this one can watch for an interrupt.
     let stderr = child.stderr.take().context("no stderr from the Run")?;
-    let relay = thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+    let relay = thread::spawn(move || -> std::io::Result<()> {
+        for line in BufReader::new(stderr).lines() {
+            let line = line?;
             let line = line.strip_prefix("thirdshift: ").unwrap_or(&line);
             progress::step(format_args!("#{number}: {line}"));
         }
+        Ok(())
     });
     let mut passed_on = false;
     let status = loop {
@@ -126,7 +120,8 @@ fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<()> {
         // terminal reaches it too, but a signal sent to this process alone
         // doesn't. A second one is harmless: it only records the interrupt.
         if !passed_on && interrupt::requested() {
-            // SAFETY: kill only sends a signal to the child, not yet reaped.
+            // SAFETY: kill has no memory-safety preconditions, and the child
+            // is not yet reaped, so its pid is still its own.
             unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
             passed_on = true;
         }
@@ -138,7 +133,10 @@ fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<()> {
         }
         thread::sleep(POLL);
     };
-    let _ = relay.join();
+    relay
+        .join()
+        .map_err(|_| anyhow!("the relay of the Run for #{number} panicked"))?
+        .with_context(|| format!("could not read the Run for #{number}"))?;
     if !status.success() {
         if interrupt::requested() {
             progress::step(format_args!("#{number} interrupted"));
