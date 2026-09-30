@@ -565,14 +565,9 @@ mod tests {
     #[test]
     fn repairs_of_every_kind_share_one_cap_and_the_one_too_many_names_its_cause() {
         let mut budgets = Budgets::default();
-        for (n, cause) in ["conflict", "CI red", "CI red", "conflict", "CI red"]
-            .iter()
-            .enumerate()
-        {
-            assert_eq!(
-                budgets.next_repair(cause).unwrap(),
-                format!("repair-{}", n + 1)
-            );
+        for n in 1..=MAX_REPAIRS {
+            let cause = if n % 2 == 0 { "conflict" } else { "CI red" };
+            assert_eq!(budgets.next_repair(cause).unwrap(), format!("repair-{n}"));
         }
 
         for cause in ["new commits on origin/issue-7 to review", "conflict"] {
@@ -585,26 +580,24 @@ mod tests {
     #[test]
     fn upstream_moves_of_the_base_or_the_issue_branch_share_one_budget() {
         let mut budgets = Budgets::default();
-        for _ in 0..3 {
+        for _ in 1..MAX_UPSTREAM_MOVES {
             budgets.count_base_move("main", "while CI ran").unwrap();
         }
-        for _ in 0..2 {
-            budgets
-                .count_upstream_move("origin/issue-7", format_args!("new commits"))
-                .unwrap();
-        }
+        budgets
+            .count_upstream_move("origin/issue-7", format_args!("new commits"))
+            .unwrap();
 
         let error = budgets.count_base_move("main", "while CI ran").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "origin/main kept moving: merged it again 5 times"
+            format!("origin/main kept moving: merged it again {MAX_UPSTREAM_MOVES} times")
         );
         let error = budgets
             .count_upstream_move("origin/issue-7", format_args!("new commits"))
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "origin/issue-7 kept moving: merged it again 5 times"
+            format!("origin/issue-7 kept moving: merged it again {MAX_UPSTREAM_MOVES} times")
         );
     }
 

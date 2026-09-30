@@ -1235,13 +1235,14 @@ fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_r
     }
 }
 
-/// SIGTERM to the Spec run's process alone while #21's agent is at work,
-/// leaving it half done: #21's Run pushes that work as a failed run, #22
-/// never starts, and the Spec run ends only after, as interrupted. One
-/// signal end to end; the interrupt's unit tests take SIGINT, SIGTERM and
-/// SIGHUP alike.
 #[test]
 fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as_interrupted() {
+    // SIGTERM to the Spec run's process alone while #21's agent is at work,
+    // leaving it half done: #21's Run pushes that work as a failed run, #22
+    // never starts, and the Spec run ends only after, as interrupted. One
+    // signal end to end: the interrupt's unit tests show SIGINT, SIGTERM and
+    // SIGHUP are each recorded alike, and the Spec run passes any of them on
+    // to the Ticket's Run as SIGTERM.
     let scenario = linear_spec();
     let started = scenario.path("agent-started");
     scenario.agent_does_for(

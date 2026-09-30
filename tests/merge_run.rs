@@ -178,7 +178,7 @@ fn the_merge_flag_also_starts_a_merge_run() {
 
 #[test]
 fn a_merge_run_gives_the_agent_the_same_implement_prompt_as_a_run() {
-    // A Run and a Merge run, as the behavior is that their prompts agree.
+    // Two Runs, one of them a Merge run: the behavior is that they agree.
     let run = Scenario::new();
     run.agent_does(AGENT_OPENS_PR);
     let merge_run = Scenario::new();

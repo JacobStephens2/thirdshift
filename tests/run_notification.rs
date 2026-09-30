@@ -378,10 +378,8 @@ fn with_email_always_an_address_after_the_flag_still_wins() {
 
 #[test]
 fn email_always_without_an_address_stops_the_run_before_any_work() {
-    // Without a key it stops the same way as with the flag, which
-    // without_resend_api_key_the_run_stops_before_any_work_and_sends_nothing
-    // shows; the User config's unit tests show email.always asks for a
-    // notification.
+    // Without a key it stops as a Run with the flag does, shown above; the
+    // User config's unit tests show email.always asks for a notification.
     let scenario = Scenario::new();
     scenario.user_config_is("[email]\nalways = true\n");
     let resend = ResendStandIn::replying(200, ACCEPTED);
@@ -395,8 +393,8 @@ fn email_always_without_an_address_stops_the_run_before_any_work() {
 
 #[test]
 fn email_always_false_makes_a_run_without_the_flag_send_nothing() {
-    // With no email.always, a_run_without_the_flag_sends_nothing shows the
-    // same; the User config's unit tests take both.
+    // With no email.always, a Run without the flag is shown sending nothing
+    // above; the User config's unit tests take both.
     let scenario = Scenario::new();
     scenario.user_config_is("[email]\nalways = false\nto = \"me@example.com\"\n");
     scenario.agent_does(AGENT_OPENS_PR);
@@ -547,6 +545,7 @@ fn a_run_without_a_notification_ignores_broken_credentials() {
 
 #[test]
 fn help_version_and_update_never_read_the_credentials() {
+    // One run of each command, as each is a behavior of its own.
     let scenario = Scenario::new();
     scenario.credentials_are("[resend]\nkye = \"re_file_456\"\n");
 

@@ -805,6 +805,9 @@ fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
 #[cfg(target_os = "linux")]
 fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_install_instructions()
 {
+    // The release script cuts the release the notes are for, and the notes
+    // script runs twice, as the behavior includes that a rerun gives the same
+    // body.
     let release = Release::new();
     release.ci_reports(GREEN);
     let output = release.run_script("0.2.0");
@@ -814,7 +817,7 @@ fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_in
     let again = release.run_notes_script("v0.2.0");
 
     assert!(first.status.success(), "{}", stderr(&first));
-    let body = String::from_utf8(first.stdout).unwrap();
+    let body = stdout(&first);
     let notes = release.generated_notes("v0.2.0");
     assert!(notes.contains("Add the frobnicator"), "{notes}");
     assert_eq!(
@@ -822,7 +825,7 @@ fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_in
         format!("{AGENT_SUMMARY}\n\n{notes}\n\n{INSTALL_NOTES}\n")
     );
     assert!(again.status.success(), "{}", stderr(&again));
-    assert_eq!(String::from_utf8(again.stdout).unwrap(), body);
+    assert_eq!(stdout(&again), body);
 }
 
 #[test]
@@ -888,6 +891,7 @@ fn the_summary_is_only_that_of_a_pr_merged_as_the_tagged_commit() {
 #[test]
 #[cfg(target_os = "linux")]
 fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_a_warning() {
+    // The release script only cuts the release the notes are for.
     let release = Release::new();
     release.ci_reports(GREEN);
     let output = release.run_script("0.2.0");
@@ -909,10 +913,7 @@ fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_
         "{err}"
     );
     let notes = release.generated_notes("v0.2.0");
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        format!("{notes}\n\n{INSTALL_NOTES}\n")
-    );
+    assert_eq!(stdout(&output), format!("{notes}\n\n{INSTALL_NOTES}\n"));
 }
 
 /// Runs the script with `version` and asserts it refused before pushing
