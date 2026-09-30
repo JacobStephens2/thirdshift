@@ -14,10 +14,10 @@ include = ["/src", "/skills", "/README.md", "/LICENSE"]
 anyhow = "1.0.104"
 # axoupdater needs axoasset's `remote` feature, which always pulls in `image`
 # (with moxcms and pxfm) and turns on reqwest's `default-tls`, which is rustls
-# with aws-lc. Neither has a flag to turn it off, and features unify, so
-# asking reqwest below for ring would build ring as well as aws-lc, not
-# instead of it. Dropping either stack needs an axoasset change or another
-# updater (#174).
+# with aws-lc. No flag turns either off, and features unify, so switching
+# reqwest below to ring (`rustls-no-provider` plus rustls's `ring`) would
+# build ring as well as aws-lc, not instead of it. Dropping either stack
+# needs an axoasset change or another updater (#174).
 axoupdater = { version = "0.10.2", default-features = false, features = ["github_releases", "blocking"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 include_dir = "0.7.4"
