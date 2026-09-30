@@ -488,9 +488,9 @@ fn waits_for_github_to_work_out_whether_the_pr_is_mergeable() {
         checks_on_head(GREEN)
     ));
 
-    // Each poll starts the fake gh, so the default 300ms grace period can run
-    // out before the fourth read on a slow machine. Green checks keep the
-    // longer grace period from slowing the CI wait.
+    // At the harness's 100ms poll interval, the default 300ms grace period
+    // holds only about three reads, and this needs a fourth. Green checks keep
+    // the longer grace period from slowing the CI wait.
     let result = scenario.run_with_env(
         &[&scenario.issue_url(7)],
         &[("THIRDSHIFT_CI_GRACE_MS", "5000")],

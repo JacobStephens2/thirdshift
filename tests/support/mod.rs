@@ -389,7 +389,8 @@ impl Scenario {
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
             // Seconds of waiting for CI become milliseconds. Each poll starts
-            // the fake gh, so a shorter interval starts more processes.
+            // the fake gh, whose Python startup costs CPU; at 100ms the grace
+            // period holds about three reads, enough for the absent state.
             .env("THIRDSHIFT_CI_GRACE_MS", "300")
             .env("THIRDSHIFT_POLL_MS", "100");
         command
