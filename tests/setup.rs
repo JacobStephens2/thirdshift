@@ -8,6 +8,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 
 use support::resend::ResendStandIn;
 use support::{CTRL_C, Keystrokes, Scenario, TerminalResult};
@@ -468,7 +469,12 @@ const NOTIFY: &str = "Run notifications, an email";
 const TO: &str = "Send Run notifications to";
 const FROM: &str = "Send them from";
 const TEST_EMAIL: &str = "test email now?";
-const KEY_HINT: &str = "export RESEND_API_KEY=";
+const KEY_QUESTION: &str = "Resend API key (input hidden";
+const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip):";
+const KEPT: &str = "Resend API key (input hidden, Enter keeps the saved one):";
+const SKIPPED: &str = "No Resend API key, so no email can go yet.";
+const OLD_KEY_HINT: &str = "export RESEND_API_KEY=";
+const WROTE_CREDENTIALS: &str = "wrote the Credentials";
 const KEY: &str = "re_secret_123";
 const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
 
@@ -483,6 +489,20 @@ fn setup_on_terminal(
     assert_eq!(result.code, Some(0), "terminal: {}", result.stderr);
     assert_eq!(result.stdout, "");
     result
+}
+
+/// The keystrokes that turn Run notifications on, to `me@example.com` from
+/// the default sender, then `rest`.
+fn notifications_on<'a>(rest: &[Keystrokes<'a>]) -> Vec<Keystrokes<'a>> {
+    let mut keystrokes = vec![
+        (MERGE, ""),
+        (PULL, ""),
+        (NOTIFY, "y"),
+        (TO, "me@example.com"),
+        (FROM, ""),
+    ];
+    keystrokes.extend_from_slice(rest);
+    keystrokes
 }
 
 fn table(result: &TerminalResult) -> toml::Table {
@@ -560,7 +580,7 @@ fn on_a_terminal_the_answers_are_written_with_the_comments_on_each_key() {
     }
     assert!(!text.contains(KEY), "{text}");
     assert!(
-        !result.stderr.contains(KEY_HINT),
+        !result.stderr.contains(KEY_QUESTION),
         "terminal: {}",
         result.stderr
     );
@@ -574,7 +594,14 @@ fn on_a_terminal_the_address_defaults_to_the_suggested_github_email() {
     let result = setup_on_terminal(
         &scenario,
         &[],
-        &[(MERGE, ""), (PULL, ""), (NOTIFY, "y"), (TO, ""), (FROM, "")],
+        &[
+            (MERGE, ""),
+            (PULL, ""),
+            (NOTIFY, "y"),
+            (TO, ""),
+            (FROM, ""),
+            (KEY_PROMPT, ""),
+        ],
     );
 
     assert!(
@@ -663,6 +690,7 @@ always = false # quiet, please
             (NOTIFY, "y"),
             (TO, "me@example.com"),
             (FROM, ""),
+            (KEY_PROMPT, ""),
         ],
     );
 
@@ -698,6 +726,7 @@ fn on_a_terminal_an_address_without_an_at_is_asked_again() {
             (TO, "me.example.com"),
             (TO, "me@example.com"),
             (FROM, ""),
+            (KEY_PROMPT, ""),
         ],
     );
 
@@ -714,13 +743,17 @@ fn on_a_terminal_with_notifications_off_nothing_about_email_is_asked() {
     let resend = ResendStandIn::replying(200, ACCEPTED);
     scenario.git_email_is(None);
 
+    let saved = "[resend]\nkey = \"re_saved_456\"\n";
+    scenario.credentials_are(saved);
+
     let result = setup_on_terminal(
         &scenario,
         &[("THIRDSHIFT_RESEND_URL", resend.url())],
         &[(MERGE, ""), (PULL, ""), (NOTIFY, "n")],
     );
 
-    for asked in [TO, FROM, KEY_HINT, TEST_EMAIL] {
+    assert_eq!(scenario.credentials().as_deref(), Some(saved));
+    for asked in [TO, FROM, KEY_QUESTION, "RESEND_API_KEY", TEST_EMAIL] {
         assert!(
             !result.stderr.contains(asked),
             "terminal: {}",
@@ -732,32 +765,250 @@ fn on_a_terminal_with_notifications_off_nothing_about_email_is_asked() {
 }
 
 #[test]
-fn on_a_terminal_the_key_hint_shows_only_when_resend_api_key_is_unset_or_empty() {
-    for (key, hinted) in [(None, true), (Some(""), true), (Some(KEY), false)] {
+fn on_a_terminal_with_no_key_skipping_it_writes_no_credentials_and_says_how_to_add_one() {
+    for key in [None, Some("")] {
         let scenario = Scenario::new();
         let env: Vec<(&str, &str)> = key.map(|key| ("RESEND_API_KEY", key)).into_iter().collect();
-        let mut keystrokes = vec![
-            (MERGE, ""),
-            (PULL, ""),
-            (NOTIFY, "y"),
-            (TO, "me@example.com"),
-            (FROM, ""),
-        ];
-        if !hinted {
-            keystrokes.push((TEST_EMAIL, "n"));
-        }
 
-        let result = setup_on_terminal(&scenario, &env, &keystrokes);
+        let result = setup_on_terminal(&scenario, &env, &notifications_on(&[(KEY_PROMPT, "")]));
 
-        assert_eq!(
-            result.stderr.contains(KEY_HINT),
-            hinted,
+        assert!(
+            result.stderr.contains(SKIPPED),
             "{key:?}: {}",
             result.stderr
         );
-        assert_eq!(result.stderr.contains(TEST_EMAIL), !hinted, "{key:?}");
-        assert!(!result.user_config.unwrap().contains(KEY));
-        assert!(!result.stderr.contains(KEY), "{key:?}: {}", result.stderr);
+        for said in ["rerun `thirdshift setup`", "set RESEND_API_KEY"] {
+            assert!(result.stderr.contains(said), "{key:?}: {}", result.stderr);
+        }
+        for unsaid in [OLD_KEY_HINT, TEST_EMAIL, WROTE_CREDENTIALS] {
+            assert!(
+                !result.stderr.contains(unsaid),
+                "{key:?}: {}",
+                result.stderr
+            );
+        }
+        assert_eq!(scenario.credentials(), None, "{key:?}");
+        assert_eq!(table(&result)["email"]["always"].as_bool(), Some(true));
+    }
+}
+
+#[test]
+fn on_a_terminal_an_entered_key_is_written_to_the_credentials_and_never_shown() {
+    let scenario = Scenario::new();
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &notifications_on(&[(KEY_PROMPT, &format!("  {KEY}  ")), (TEST_EMAIL, "")]),
+    );
+
+    let path = scenario.path("home/.thirdshift/credentials.toml");
+    assert!(
+        result
+            .stderr
+            .contains(&format!("{WROTE_CREDENTIALS} {}", path.display())),
+        "terminal: {}",
+        result.stderr
+    );
+    let credentials: toml::Table = scenario.credentials().unwrap().parse().unwrap();
+    assert_eq!(credentials["resend"]["key"].as_str(), Some(KEY));
+    let mode = fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+    for part in [&KEY[..6], &KEY[KEY.len() - 6..]] {
+        assert!(!result.stderr.contains(part), "{part}: {}", result.stderr);
+    }
+    assert!(!result.user_config.unwrap().contains(KEY));
+}
+
+#[test]
+fn on_a_terminal_a_key_not_starting_with_re_is_asked_again() {
+    let scenario = Scenario::new();
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &notifications_on(&[
+            (KEY_PROMPT, "sk_not_resend"),
+            (KEY_PROMPT, KEY),
+            (TEST_EMAIL, ""),
+        ]),
+    );
+
+    assert_eq!(
+        result.stderr.matches(KEY_PROMPT).count(),
+        2,
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("sk_not_resend"),
+        "{}",
+        result.stderr
+    );
+    let credentials: toml::Table = scenario.credentials().unwrap().parse().unwrap();
+    assert_eq!(credentials["resend"]["key"].as_str(), Some(KEY));
+}
+
+#[test]
+fn on_a_terminal_pressing_enter_keeps_the_saved_key() {
+    let scenario = Scenario::new();
+    let saved = "# Mine.\n[resend]\nkey = \"re_saved_456\"\n";
+    scenario.credentials_are(saved);
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &notifications_on(&[(KEPT, ""), (TEST_EMAIL, "")]),
+    );
+
+    assert_eq!(scenario.credentials().as_deref(), Some(saved));
+    assert!(
+        !result.stderr.contains(WROTE_CREDENTIALS),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains("re_saved"), "{}", result.stderr);
+}
+
+#[test]
+fn on_a_terminal_a_new_key_replaces_the_saved_one_keeping_the_rest_of_the_file() {
+    let scenario = Scenario::new();
+    scenario.credentials_are(
+        "# My secrets.\n[resend]\n# Rotated monthly.\nkey = \"re_saved_456\"   # from the dashboard\n",
+    );
+
+    setup_on_terminal(
+        &scenario,
+        &[],
+        &notifications_on(&[(KEPT, KEY), (TEST_EMAIL, "")]),
+    );
+
+    assert_eq!(
+        scenario.credentials().as_deref(),
+        Some(
+            "# My secrets.\n[resend]\n# Rotated monthly.\nkey = \"re_secret_123\"   # from the dashboard\n"
+        )
+    );
+}
+
+#[test]
+fn on_a_terminal_a_key_is_added_to_credentials_that_hold_none() {
+    let scenario = Scenario::new();
+    scenario.credentials_are("# Keys go here.\n");
+
+    setup_on_terminal(
+        &scenario,
+        &[],
+        &notifications_on(&[(KEY_PROMPT, KEY), (TEST_EMAIL, "")]),
+    );
+
+    let text = scenario.credentials().unwrap();
+    assert!(text.starts_with("# Keys go here.\n"), "{text}");
+    assert!(!text.contains("# key"), "{text}");
+    let credentials: toml::Table = text.parse().unwrap();
+    assert_eq!(credentials["resend"]["key"].as_str(), Some(KEY));
+}
+
+#[test]
+fn on_a_terminal_with_resend_api_key_set_no_key_is_asked_and_its_source_is_said() {
+    let scenario = Scenario::new();
+    let saved = "[resend]\nkey = \"re_saved_456\"\n";
+    scenario.credentials_are(saved);
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[("RESEND_API_KEY", KEY)],
+        &notifications_on(&[(TEST_EMAIL, "")]),
+    );
+
+    assert!(
+        result
+            .stderr
+            .contains("The Resend API key comes from RESEND_API_KEY"),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains(KEY_QUESTION), "{}", result.stderr);
+    assert!(!result.stderr.contains(KEY), "{}", result.stderr);
+    assert_eq!(scenario.credentials().as_deref(), Some(saved));
+}
+
+#[test]
+fn on_a_terminal_the_test_email_goes_with_the_key_just_entered() {
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+        &notifications_on(&[(KEY_PROMPT, KEY), (TEST_EMAIL, "y")]),
+    );
+
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{}", result.stderr);
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some(format!("Bearer {KEY}").as_str())
+    );
+    let wrote = result.stderr.find(WROTE_CREDENTIALS).unwrap();
+    let sent = result
+        .stderr
+        .find("accepted by Resend; check your inbox")
+        .expect(&result.stderr);
+    assert!(wrote < sent, "{}", result.stderr);
+}
+
+#[test]
+fn ctrl_c_at_the_key_prompt_writes_neither_file() {
+    let scenario = Scenario::new();
+
+    let result =
+        scenario.run_on_terminal(&["setup"], &[], &notifications_on(&[(KEY_PROMPT, CTRL_C)]));
+
+    assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_eq!(result.user_config, None);
+    assert_eq!(scenario.credentials(), None);
+}
+
+#[test]
+fn ctrl_c_at_the_key_prompt_leaves_saved_credentials_unchanged() {
+    let scenario = Scenario::new();
+    let saved = "[resend]\nkey = \"re_saved_456\"\n";
+    scenario.credentials_are(saved);
+
+    let result = scenario.run_on_terminal(&["setup"], &[], &notifications_on(&[(KEPT, CTRL_C)]));
+
+    assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.user_config, None);
+    assert_eq!(scenario.credentials().as_deref(), Some(saved));
+}
+
+#[test]
+fn on_a_terminal_setup_refuses_broken_credentials_before_asking() {
+    for broken in [
+        "[resend]\nkye = \"re_saved_456\"\n",
+        "[resend\n",
+        "[resend]\nkey = 456\n",
+    ] {
+        let scenario = Scenario::new();
+        scenario.credentials_are(broken);
+
+        let result = scenario.run_on_terminal(&["setup"], &[("RESEND_API_KEY", KEY)], &[]);
+
+        assert_eq!(result.code, Some(1), "{broken:?}: {}", result.stderr);
+        assert!(
+            result.stderr.contains("credentials.toml"),
+            "{broken:?}: {}",
+            result.stderr
+        );
+        assert!(
+            !result.stderr.contains(MERGE),
+            "{broken:?}: {}",
+            result.stderr
+        );
+        assert_eq!(result.user_config, None);
+        assert_eq!(scenario.credentials().as_deref(), Some(broken));
     }
 }
 

@@ -14,6 +14,7 @@ use toml_edit::{DocumentMut, Item};
 use crate::git::Git;
 use crate::notification::NotificationAsk;
 use crate::questions::{self, Answers};
+use crate::resend_key::Credentials;
 use crate::run::Goal;
 use crate::{email, github, progress};
 
@@ -165,9 +166,11 @@ impl EmailSettings {
 /// An existing User config is edited in place, once it parses as a Run would
 /// parse it: its comments and key order stay, as do the values Setup didn't
 /// ask about, and each key it lacks is added at its default, so Setup with no
-/// terminal never resets a configured machine. Nothing is written until the
-/// last answer is in. A test email, if the user asked for one, goes once the
-/// User config is written, as `email-test` sends it.
+/// terminal never resets a configured machine. A Resend API key the user
+/// gave is saved in the Credentials once the User config is written; with no
+/// terminal, the Credentials are never read or written. Nothing is written
+/// until the last answer is in. A test email, if the user asked for one, goes
+/// once the files are written, as `email-test` sends it.
 pub fn setup() -> Result<String> {
     let (home, path) = home_and_path()?;
     let existing = match std::fs::read_to_string(&path) {
@@ -184,14 +187,14 @@ pub fn setup() -> Result<String> {
         }
         None => with_email_to(suggested_address(&home)),
     };
-    let asked = questions::has_terminal();
-    let mut send_test = false;
-    if asked {
+    let mut answered = None;
+    if questions::has_terminal() {
         let answers;
-        (text, answers) = answered(&text, &path, &home)?;
-        send_test = answers.send_test();
+        (text, answers) = ask(&text, &path, &home)?;
+        answered = Some(answers);
     }
-    let written = match &existing {
+    let asked = answered.is_some();
+    let mut written = match &existing {
         None => {
             write_new(&home, &path, &text)?;
             format!("wrote the User config {}", path.display())
@@ -218,7 +221,15 @@ pub fn setup() -> Result<String> {
             }
         }
     };
-    if !send_test {
+    let Some(asked) = &answered else {
+        return Ok(written);
+    };
+    if let Some(key) = asked.answers.key() {
+        progress::step(written);
+        asked.credentials.save(key)?;
+        written = format!("wrote {}", asked.credentials);
+    }
+    if !asked.answers.send_test() {
         return Ok(written);
     }
     progress::step(written);
@@ -228,11 +239,13 @@ pub fn setup() -> Result<String> {
 
 /// The first Run's offer of Setup, made only from a terminal and only when
 /// there is no User config. Yes asks the Setup questions and writes the
-/// answers; no writes every setting at its default, as `setup` with no
-/// terminal does. Either way the Run then loads what was written. A User
-/// config that can't be written, or a test email that can't go, is a
-/// warning, so the Run carries on with the defaults; stdin closing before
-/// the last answer ends the command before any work, with nothing written.
+/// answers, and the Resend API key to the Credentials if the user gave one;
+/// no writes every setting at its default, as `setup` with no terminal does,
+/// and leaves the Credentials alone. Either way the Run then loads what was
+/// written. A User config or Credentials that can't be written, or a test
+/// email that can't go, is a warning, so the Run carries on; Credentials a
+/// Run would refuse, or stdin closing before the last answer, end the command
+/// before any work, with nothing written.
 pub fn offer_setup() -> Result<()> {
     if !questions::has_terminal() {
         return Ok(());
@@ -244,11 +257,11 @@ pub fn offer_setup() -> Result<()> {
     }
     let accepted = questions::offer(&path)?;
     let mut text = with_email_to(suggested_address(&home));
-    let mut send_test = false;
+    let mut answered = None;
     if accepted {
         let answers;
-        (text, answers) = answered(&text, &path, &home)?;
-        send_test = answers.send_test();
+        (text, answers) = ask(&text, &path, &home)?;
+        answered = Some(answers);
     }
     if let Err(error) = write_new(&home, &path, &text) {
         progress::step(format_args!(
@@ -256,16 +269,22 @@ pub fn offer_setup() -> Result<()> {
         ));
         return Ok(());
     }
-    if !accepted {
+    let Some(asked) = &answered else {
         progress::step(format_args!(
             "wrote the User config {} with every setting at its default; \
              thirdshift setup changes it",
             path.display()
         ));
         return Ok(());
-    }
+    };
     progress::step(format_args!("wrote the User config {}", path.display()));
-    if send_test {
+    if let Some(key) = asked.answers.key() {
+        match asked.credentials.save(key) {
+            Ok(()) => progress::step(format_args!("wrote {}", asked.credentials)),
+            Err(error) => progress::step(format_args!("warning: {error:#}")),
+        }
+    }
+    if asked.answers.send_test() {
         let sent = UserConfig::load().and_then(|config| email::send_test(None, &config.email));
         match sent {
             Ok(sent) => progress::step(sent),
@@ -275,13 +294,29 @@ pub fn offer_setup() -> Result<()> {
     Ok(())
 }
 
+/// The Setup answers, and the Credentials read before asking, where a key
+/// the user gave is saved.
+struct Asked {
+    answers: Answers,
+    credentials: Credentials,
+}
+
 /// Ask the Setup questions, with the settings in `text`, the User config at
-/// `path`, as the default answers. Returns `text` with the answers, and the
-/// answers.
-fn answered(text: &str, path: &Path, home: &Path) -> Result<(String, Answers)> {
+/// `path`, and the key in the Credentials as the default answers. Credentials
+/// a Run would refuse are refused before any question. Returns `text` with
+/// the answers, and what was asked.
+fn ask(text: &str, path: &Path, home: &Path) -> Result<(String, Asked)> {
     let current = UserConfig::parse(text, path, home)?;
-    let answers = questions::ask(&current, || suggested_address(home))?;
-    Ok((with_answers(text, &answers)?, answers))
+    let credentials = Credentials::read()?;
+    let answers = questions::ask(&current, &credentials, || suggested_address(home))?;
+    let text = with_answers(text, &answers)?;
+    Ok((
+        text,
+        Asked {
+            answers,
+            credentials,
+        },
+    ))
 }
 
 /// Write `text` as the User config at `path`, where there is none yet,
@@ -404,7 +439,7 @@ fn set_email_to(document: &mut DocumentMut, to: &str) {
 
 /// Replace the file at `path` with `text` all at once, keeping its
 /// permissions, so a failed write leaves it as it was.
-fn replace(path: &Path, text: &str) -> std::io::Result<()> {
+pub fn replace(path: &Path, text: &str) -> std::io::Result<()> {
     let permissions = std::fs::metadata(path)?.permissions();
     let dir = path.parent().unwrap_or(Path::new("."));
     let mut file = tempfile::NamedTempFile::new_in(dir)?;
@@ -873,6 +908,7 @@ mod tests {
             notifications: Some(questions::Notifications {
                 to: to.to_string(),
                 from: crate::email::DEFAULT_FROM.to_string(),
+                key: None,
                 send_test: false,
             }),
         }

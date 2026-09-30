@@ -415,6 +415,11 @@ impl Scenario {
         path
     }
 
+    /// The Credentials, `~/.thirdshift/credentials.toml`, if there are any.
+    pub fn credentials(&self) -> Option<String> {
+        fs::read_to_string(self.path("home/.thirdshift/credentials.toml")).ok()
+    }
+
     /// Set issue `number`'s state on the fake GitHub: `"OPEN"` or `"CLOSED"`.
     pub fn issue_is(&self, number: u32, state: &str) {
         let mut gh = self.gh_state();

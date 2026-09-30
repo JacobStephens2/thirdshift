@@ -103,7 +103,8 @@ With email.always set, every Run sends a Run notification unless given --no-emai
     from = \"thirdshift@your-verified-domain.com\"
 
 The Resend API key comes from the RESEND_API_KEY environment variable, else from the
-Credentials, ~/.thirdshift/credentials.toml (mode 600), never from the User config:
+Credentials, ~/.thirdshift/credentials.toml (mode 600), never from the User config.
+With Run notifications on, thirdshift setup asks for it, hidden, and saves it there:
 
     [resend]
     key = \"re_...\"
