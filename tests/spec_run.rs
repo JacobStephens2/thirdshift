@@ -1354,3 +1354,229 @@ fn a_checklist_update_github_refuses_is_only_a_warning() {
     );
     assert_contains(&result.stderr, "thirdshift: #22 landed\n");
 }
+
+/// Run `args` against `resend`, with `RESEND_API_KEY` set.
+fn run_emailing(scenario: &Scenario, resend: &ResendStandIn, args: &[&str]) -> support::RunResult {
+    scenario.run_with_env(
+        args,
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    )
+}
+
+/// The subject and text of the one notification `resend` received.
+fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let body = &requests[0].body;
+    (
+        body["subject"].as_str().unwrap().to_string(),
+        body["text"].as_str().unwrap().to_string(),
+    )
+}
+
+#[test]
+fn a_ready_spec_run_sends_one_notification_with_a_line_per_ticket() {
+    let scenario = linear_spec();
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &["--email", "me@example.com", &spec_url(&scenario)],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: ready for review")
+    );
+    for part in [
+        "Pull request: https://github.com/acme/widgets/pull/2\n",
+        "Took:",
+        "#21 landed with https://github.com/acme/widgets/pull/1\n",
+        "#22 landed with https://github.com/acme/widgets/pull/3\n",
+    ] {
+        assert_contains(&text, part);
+    }
+    assert!(!text.contains("#23"), "{text}");
+}
+
+#[test]
+fn a_failed_spec_run_sends_one_notification_with_each_tickets_outcome() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[])]);
+    scenario.agent_does_for(21, "exit 1");
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &["--email", "me@example.com", &spec_url(&scenario)],
+    );
+
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        "- [ ] #21 failed: claude exited 1\n\
+         - [ ] #22 blocked by #21\n\
+         - [x] #23 landed with https://github.com/acme/widgets/pull/1\n",
+    );
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: failed")
+    );
+    for part in [
+        "Cause:        Tickets not done: #21, #22\n",
+        "#21 failed: claude exited 1 (session log: ",
+        "#22 blocked by #21\n",
+        "#23 landed with https://github.com/acme/widgets/pull/1\n",
+    ] {
+        assert_contains(&text, part);
+    }
+}
+
+#[test]
+fn an_interrupted_spec_run_sends_one_notification_with_each_tickets_outcome() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "touch {}\nsleep 30\n",
+            scenario.path("agent-started").display()
+        ),
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = scenario.run_and_signal_with_env(
+        &["--email", "me@example.com", &spec_url(&scenario)],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+        "agent-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: interrupted")
+    );
+    assert_contains(&text, "#21 interrupted\n");
+    assert_contains(&text, "#22 blocked by #21\n");
+}
+
+#[test]
+fn a_ready_ticket_an_interrupt_kept_from_starting_is_not_started_in_the_notification() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "touch {}\nsleep 30\n",
+            scenario.path("agent-started").display()
+        ),
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = scenario.run_and_signal_with_env(
+        &[
+            "--email",
+            "me@example.com",
+            "parallel",
+            "1",
+            &spec_url(&scenario),
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+        "agent-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert_contains(&text, "#21 interrupted\n");
+    assert_contains(&text, "#22 not started\n");
+}
+
+#[test]
+fn no_email_keeps_email_always_from_sending_for_a_spec_run() {
+    let scenario = linear_spec();
+    scenario.user_config_is("[email]\nalways = true\nto = \"me@example.com\"\n");
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = run_emailing(&scenario, &resend, &["--no-email", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(resend.requests().len(), 0);
+}
+
+#[test]
+fn a_missing_resend_api_key_stops_the_spec_run_before_any_ticket_starts() {
+    let scenario = linear_spec();
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = scenario.run_with_env(
+        &["--email", "me@example.com", &spec_url(&scenario)],
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "RESEND_API_KEY");
+    assert!(
+        !result.stderr.contains("starting #"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(resend.requests().len(), 0);
+}
+
+#[test]
+fn a_missing_address_stops_the_spec_run_before_any_ticket_starts() {
+    let scenario = linear_spec();
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = run_emailing(&scenario, &resend, &["--email", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "no email address");
+    assert!(
+        !result.stderr.contains("starting #"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(resend.requests().len(), 0);
+}
+
+#[test]
+fn a_resend_error_leaves_the_spec_runs_outcome_alone_with_a_warning() {
+    let scenario = linear_spec();
+    let resend = ResendStandIn::replying(401, r#"{"message":"API key is invalid"}"#);
+
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &["--email", "me@example.com", &spec_url(&scenario)],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/2\n");
+    assert_eq!(resend.requests().len(), 1);
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(
+            "thirdshift: warning: could not send the Run notification: \
+             Resend refused the email (401 Unauthorized): API key is invalid"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}

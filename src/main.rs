@@ -66,6 +66,9 @@ sets the default:
     [spec]
     parallel = 2
 
+A Spec run sends one Run notification for the whole Spec, with a line on each Ticket, and its
+Ticket Runs send none.
+
 Tickets always merge into the Spec branch, whatever the command or the User config says.
 merge on a Spec merges the Spec PR into the Base branch once it is ready, mergeable and green,
 as does merge.always; without either, or with --no-merge, the Spec PR is left ready for review.

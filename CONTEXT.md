@@ -62,7 +62,7 @@ _Avoid_: integration branch, feature branch
 The pull request from the **Spec branch** into the **Base branch** that closes the **Spec**. It is left ready for review once every **Ticket** is done, or merged by a **Self-merge** when the **Spec run** was asked to merge; a draft listing what is missing otherwise. It opens as a draft once the first Ticket lands, with the **Tickets checklist** in its body.
 
 **Tickets checklist**:
-The part of the **Spec PR**'s body, between fixed markers, that thirdshift writes: one line per **Ticket**, ticked once it is done, with its pull request, or saying whether it is to do, running, failed, interrupted, blocked, in a cycle or unready. It is rewritten as each Ticket starts and ends, and put back after the **Spec review** rewrites the body.
+The part of the **Spec PR**'s body, between fixed markers, that thirdshift writes: one line per **Ticket**, ticked once it is done, with its pull request, or saying whether it is not started, running, failed, interrupted, blocked, in a cycle or unready. It is rewritten as each Ticket starts and ends, and put back after the **Spec review** rewrites the body.
 
 **Unready Ticket**:
 An open **Ticket** labelled with a triage role that says it is not agent work: `ready-for-human`, `needs-info`, `wontfix` or `needs-triage`. A **Spec run** never starts a **Run** for one, nor for a Ticket it blocks. An open Ticket with no triage label is taken. A Ticket with sub-issues of its own is treated as one too.
@@ -78,7 +78,7 @@ A **Run** asked to end with its pull request merged rather than left for review,
 _Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
 
 **Run notification**:
-A message thirdshift sends when a **Run** ends, whatever its outcome (ready, merged, failed or interrupted), to the address given with the email flag or the default in the **User config**. A Run sends one only when asked to, by the flag or by the User config. Failing to send one never changes the Run's outcome.
+A message thirdshift sends when a **Run** or a **Spec run** ends, whatever its outcome (ready, merged, failed or interrupted), to the address given with the email flag or the default in the **User config**. A Run or Spec run sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. Failing to send one never changes the outcome.
 _Avoid_: completion email, alert
 
 **User config**:
