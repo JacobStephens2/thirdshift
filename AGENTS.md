@@ -14,4 +14,4 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ### Generated prompts
 
-`prompts/` is generated from the prompt module, `src/prompt.rs`: don't edit it. Edit the prompt module and regenerate with `UPDATE_PROMPTS=1 cargo test prompts_page`.
+`prompts/` is generated from the prompt module, `src/prompt.rs`, with each prompt's title and when sentence from `src/prompts_page.rs`: don't edit it. Edit the prompt module (or `src/prompts_page.rs`) and regenerate with `UPDATE_PROMPTS=1 cargo test prompts_page`.
