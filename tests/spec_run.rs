@@ -1644,3 +1644,130 @@ fn a_resend_error_leaves_the_spec_runs_outcome_alone_with_a_warning() {
         result.stderr
     );
 }
+
+/// Bash for Ticket #22's first session: it starts its work and opens its
+/// PR into the Spec branch, then fails. A Continuation's session updates
+/// that PR rather than opening another.
+const TICKET_22_STARTS_THEN_FAILS: &str = r#"
+echo started > started.txt
+git add started.txt
+git commit -q -m "Start on 22"
+gh pr create --base issue-20 --head issue-22 --title "Ticket 22" --body "Closes #22"
+exit 1
+"#;
+
+/// The PRs on the fake GitHub from `head`.
+fn prs_from(scenario: &Scenario, head: &str) -> Vec<serde_json::Value> {
+    scenario.gh_state()["prs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|pr| pr["head"] == head)
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn rerunning_a_failed_spec_run_continues_the_spec_branch_and_the_failed_tickets_issue_branch() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for_in_session(22, 1, TICKET_22_STARTS_THEN_FAILS);
+    scenario.agent_does_for_in_session(
+        22,
+        2,
+        "test -f started.txt\necho 22 > 22.txt\ngit add 22.txt\ngit commit -q -m 'Ticket 22'\n",
+    );
+    let first = scenario.run(&[&spec_url(&scenario)]);
+    assert_eq!(first.code, Some(1), "stderr: {}", first.stderr);
+    let spec_pr_url = "https://github.com/acme/widgets/pull/2";
+    assert_eq!(first.stdout, format!("{spec_pr_url}\n"));
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{spec_pr_url}\n"));
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "22", "20"]);
+    assert!(
+        !result.stderr.contains("starting #21"),
+        "stderr: {}",
+        result.stderr
+    );
+    let calls = scenario.claude_calls();
+    assert_contains(
+        calls[2]["prompt"].as_str().unwrap(),
+        "You are continuing work on branch issue-22",
+    );
+    assert_contains(
+        calls[2]["prompt"].as_str().unwrap(),
+        "The base branch is issue-20.",
+    );
+    assert_contains(
+        calls[3]["prompt"].as_str().unwrap(),
+        &format!("Update PR {spec_pr_url}"),
+    );
+
+    let spec_prs = prs_from(&scenario, "issue-20");
+    assert_eq!(spec_prs.len(), 1, "Spec PRs: {spec_prs:?}");
+    assert_eq!(spec_prs[0]["url"], spec_pr_url);
+    assert_eq!(spec_prs[0]["isDraft"], false);
+    let ticket_prs = prs_from(&scenario, "issue-22");
+    assert_eq!(ticket_prs.len(), 1, "#22's PRs: {ticket_prs:?}");
+    assert_eq!(ticket_prs[0]["base"], "issue-20");
+    assert_eq!(ticket_prs[0]["state"], "MERGED");
+    assert_eq!(scenario.gh_state()["issues"]["22"], "CLOSED");
+    for branch in ["issue-20-branch-2", "issue-22-branch-2"] {
+        assert_eq!(scenario.origin_log(branch), None, "{branch} was started");
+    }
+    for file in ["21.txt", "started.txt", "22.txt"] {
+        assert!(
+            scenario.origin_file("issue-20", file).is_some(),
+            "{file} is not on the Spec branch"
+        );
+    }
+}
+
+#[test]
+fn with_every_ticket_closed_and_a_spec_branch_the_spec_run_goes_straight_to_the_spec_review() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.issue_is(21, "CLOSED");
+    scenario.issue_is(22, "CLOSED");
+    scenario.origin_has_branch("issue-20", "main", &["Tickets 21 and 22"]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["20"]);
+    assert!(
+        !result.stderr.contains("starting #"),
+        "stderr: {}",
+        result.stderr
+    );
+    let spec = spec_pr(&scenario);
+    assert_eq!(
+        result.stdout,
+        format!("{}\n", spec["url"].as_str().unwrap())
+    );
+    assert_eq!(spec["base"], "main");
+    assert_eq!(spec["isDraft"], false);
+    assert_contains(spec["body"].as_str().unwrap(), "Closes #20");
+    assert_eq!(prs_from(&scenario, "issue-20").len(), 1);
+}
+
+#[test]
+fn with_every_ticket_closed_and_no_spec_branch_there_is_nothing_to_do() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.issue_is(21, "CLOSED");
+    scenario.issue_is(22, "CLOSED");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    scenario.assert_rejected_before_any_work(
+        &result,
+        "thirdshift: every Ticket is closed and there is no Spec branch; nothing to do\n",
+    );
+    assert_eq!(scenario.origin_log("issue-20"), None);
+    assert_eq!(scenario.launch_git(&["branch", "--list", "issue-20"]), "");
+    let gh = scenario.gh_state();
+    assert_eq!(gh["prs"], serde_json::json!([]));
+    assert_eq!(gh["issues"]["20"], "OPEN");
+}

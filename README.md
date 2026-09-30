@@ -340,6 +340,8 @@ thirdshift: 03:12:40 #27 in a cycle: #27 blocked by #26 blocked by #27
 thirdshift: 03:12:40 Tickets not done: #21, #22, #24, #25, #26, #27
 ```
 
+Running the Spec again picks up where the last Spec run stopped. The Spec branch is on `origin`, so the Spec run continues it ([ADR-0002](docs/adr/0002-existing-issue-branch-means-continue.md)) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Run is a [Continuation](#continuation) into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with `every Ticket is closed and there is no Spec branch; nothing to do` and exits `1`, creating no branch or pull request and leaving the Spec open.
+
 ## Building from source
 
 Building needs the Rust toolchain. From a clone of this repository:
