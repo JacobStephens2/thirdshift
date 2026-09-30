@@ -147,3 +147,59 @@ fn ask_once<T>(given: &mut Option<T>, asked: T, arg: &str, flags: &str) -> Resul
 fn is_address(arg: &str) -> bool {
     arg.contains('@') && !arg.starts_with("https://")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const URL: &str = "https://github.com/acme/widgets/issues/7";
+
+    /// The Run `args` parse to.
+    fn run_args(args: &[&str]) -> RunArgs {
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        match parse(&args) {
+            Ok(Command::Run(run_args)) => run_args,
+            Ok(_) => panic!("{args:?}: not a Run"),
+            Err(error) => panic!("{args:?}: {error:#}"),
+        }
+    }
+
+    #[test]
+    fn a_bare_flag_asks_for_email_to_and_an_address_after_the_flag_is_the_one_asked_for() {
+        let flag = || NotificationAsk::Send(Some("flag@example.com".to_string()));
+        for (args, asked) in [
+            (vec![URL, "--email"], NotificationAsk::Send(None)),
+            (vec![URL, "email"], NotificationAsk::Send(None)),
+            (vec![URL, "--email", "flag@example.com"], flag()),
+            (vec![URL, "email", "flag@example.com"], flag()),
+            (vec!["--email", "flag@example.com", URL], flag()),
+        ] {
+            let run_args = run_args(&args);
+            assert_eq!(run_args.email, Some(asked), "{args:?}");
+            assert_eq!(run_args.issue.url, URL, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn the_flag_goes_anywhere_around_a_merge_goal_and_never_takes_the_issue_url() {
+        let bare = || NotificationAsk::Send(None);
+        let me = || NotificationAsk::Send(Some("me@example.com".to_string()));
+        for (args, asked, goal) in [
+            (vec!["--email", URL], bare(), None),
+            (vec!["email", URL, "merge"], bare(), Some(Goal::Merged)),
+            (vec!["merge", "--email", URL], bare(), Some(Goal::Merged)),
+            (
+                vec!["--email", "me@example.com", URL, "merge"],
+                me(),
+                Some(Goal::Merged),
+            ),
+            (vec![URL, "merge", "email"], bare(), Some(Goal::Merged)),
+            (vec![URL, "--email", "merge"], bare(), Some(Goal::Merged)),
+        ] {
+            let run_args = run_args(&args);
+            assert_eq!(run_args.issue.url, URL, "{args:?}");
+            assert_eq!(run_args.email, Some(asked), "{args:?}");
+            assert_eq!(run_args.goal, goal, "{args:?}");
+        }
+    }
+}
