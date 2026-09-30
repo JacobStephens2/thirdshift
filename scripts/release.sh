@@ -205,7 +205,7 @@ refuse() {
 # the latest CI run on main is on <base> and succeeded.
 check_can_release() {
 	local current short=${3:0:7} latest sha status conclusion
-	if ! [[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+	if ! is_plain_version "$1"; then
 		refuse "it is not a plain X.Y.Z version, such as 0.4.0"
 	fi
 	current=$(git show "$3:Cargo.toml" | package_field version)
@@ -232,6 +232,12 @@ check_can_release() {
 	elif [ "$conclusion" != success ]; then
 		refuse "CI on main at $short ended in $conclusion"
 	fi
+}
+
+# is_plain_version <version>
+# Whether <version> is plain semver X.Y.Z, with no leading zeros.
+is_plain_version() {
+	[[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
 }
 
 # is_higher <version> <other>
@@ -427,4 +433,7 @@ merge_commit_of() {
 	echo "$merge"
 }
 
-main "$@"
+# Only when run, so the tests can source the script and call its functions.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

@@ -677,6 +677,26 @@ mod tests {
     }
 
     #[test]
+    fn each_unready_label_keeps_a_ticket_from_running_and_is_named_in_its_line() {
+        for label in UNREADY_LABELS {
+            let mut unready = ticket(21, true, &[], &[]);
+            unready.labels = vec!["ready-for-agent".to_string(), label.to_string()];
+            let tickets = [unready, ticket(22, true, &[], &[])];
+            let outcomes = BTreeMap::new();
+
+            assert_eq!(
+                next_ready(&tickets, &outcomes, &HashSet::new()),
+                Some(22),
+                "{label}"
+            );
+            assert_eq!(
+                summarize(&tickets, &outcomes)[0],
+                format!("#21 unready: labelled {label}")
+            );
+        }
+    }
+
+    #[test]
     fn the_checklist_ticks_done_tickets_and_says_where_each_other_stands() {
         let mut unready = ticket(26, true, &[], &[]);
         unready.labels = vec!["needs-info".to_string()];

@@ -491,6 +491,8 @@ fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
 
 #[test]
 fn repairs_exhausted_on_the_spec_pr_send_it_back_to_draft_and_exit_1() {
+    // Five real Repairs, as the cap runs out only after them. The Run's unit
+    // tests take the counting.
     let scenario = linear_spec();
     scenario.agent_does_for_in_session(SPEC, 1, &checks_on_head(RED));
     for session in 2..=6 {
@@ -1078,28 +1080,25 @@ fn a_needs_info_ticket_and_what_it_blocks_are_not_run_while_an_independent_ticke
 }
 
 #[test]
-fn each_unready_label_keeps_a_ticket_from_running() {
-    for label in ["ready-for-human", "wontfix", "needs-triage"] {
-        let scenario = spec_of(&[(21, &[]), (22, &[])]);
-        scenario.issue_labelled(21, &[label]);
-        scenario.issue_labelled(22, &["ready-for-agent"]);
+fn an_unready_label_keeps_a_ticket_from_running() {
+    // One label end to end; the Spec run's unit tests take each of them.
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(21, &["wontfix"]);
+    scenario.issue_labelled(22, &["ready-for-agent"]);
 
-        let result = scenario.run(&[&spec_url(&scenario)]);
+    let result = scenario.run(&[&spec_url(&scenario)]);
 
-        assert_failed_spec_run(
-            &scenario,
-            &result,
-            &format!(
-                "- [ ] #21 unready: labelled {label}\n\
-                 - [x] #22 landed with https://github.com/acme/widgets/pull/1\n"
-            ),
-        );
-        assert_eq!(sessions_by_issue(&scenario), ["22"], "{label}");
-        assert_contains(
-            &result.stderr,
-            &format!("thirdshift: #21 unready: labelled {label}\n"),
-        );
-    }
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        "- [ ] #21 unready: labelled wontfix\n\
+         - [x] #22 landed with https://github.com/acme/widgets/pull/1\n",
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["22"]);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: #21 unready: labelled wontfix\n",
+    );
 }
 
 #[test]
@@ -1237,25 +1236,13 @@ fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_r
     }
 }
 
+/// SIGTERM to the Spec run's process alone while #21's agent is at work,
+/// leaving it half done: #21's Run pushes that work as a failed run, #22
+/// never starts, and the Spec run ends only after, as interrupted. One
+/// signal end to end; the interrupt's unit tests take SIGINT, SIGTERM and
+/// SIGHUP alike.
 #[test]
-fn sigterm_while_a_ticket_runs_ends_it_through_its_failed_run_and_the_spec_run_as_interrupted() {
-    assert_interrupt_fails_the_spec_run("TERM");
-}
-
-#[test]
-fn sighup_while_a_ticket_runs_ends_it_through_its_failed_run_and_the_spec_run_as_interrupted() {
-    assert_interrupt_fails_the_spec_run("HUP");
-}
-
-#[test]
-fn sigint_to_the_spec_run_alone_is_passed_on_to_the_ticket_run() {
-    assert_interrupt_fails_the_spec_run("INT");
-}
-
-/// Send `signal` to the Spec run's process alone while #21's agent is at
-/// work, leaving it half done: #21's Run pushes that work as a failed run,
-/// #22 never starts, and the Spec run ends only after, as interrupted.
-fn assert_interrupt_fails_the_spec_run(signal: &str) {
+fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as_interrupted() {
     let scenario = linear_spec();
     let started = scenario.path("agent-started");
     scenario.agent_does_for(
@@ -1267,7 +1254,7 @@ fn assert_interrupt_fails_the_spec_run(signal: &str) {
     );
 
     let began = std::time::Instant::now();
-    let result = scenario.run_and_signal(&[&spec_url(&scenario)], "agent-started", signal);
+    let result = scenario.run_and_signal(&[&spec_url(&scenario)], "agent-started", "TERM");
 
     assert!(
         began.elapsed() < std::time::Duration::from_secs(20),
@@ -1664,6 +1651,7 @@ exit 1
 
 #[test]
 fn rerunning_a_failed_spec_run_continues_the_spec_branch_and_the_failed_tickets_issue_branch() {
+    // Two Spec runs, as the rerun is the behavior.
     let scenario = spec_of(&[(21, &[]), (22, &[21])]);
     scenario.agent_does_for_in_session(22, 1, TICKET_22_STARTS_THEN_FAILS);
     scenario.agent_does_for_in_session(
