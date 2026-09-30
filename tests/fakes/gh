@@ -167,7 +167,7 @@ def pr_view(state, positional, flags):
     wanted = flags["json"].split(",")
     fields = pr_fields(pr)
     if "headRefOid" in wanted:
-        fields["headRefOid"] = pr.get("headRefOid") or origin("rev-parse", f"refs/heads/{head}")
+        fields["headRefOid"] = head_ref_oid(pr)
     fields["closingIssuesReferences"] = [
         {"number": int(number)} for number in CLOSING_KEYWORD.findall(pr.get("body", ""))
     ]
@@ -176,6 +176,11 @@ def pr_view(state, positional, flags):
         save(state)
         fields["mergeable"] = "UNKNOWN"
     print(json.dumps({key: fields[key] for key in wanted}))
+
+
+def head_ref_oid(pr):
+    """The PR's head commit: as merged, else its head branch's tip on origin."""
+    return pr.get("headRefOid") or origin("rev-parse", f"refs/heads/{pr['head']}")
 
 
 def record(args):
@@ -204,7 +209,8 @@ def pr_fields(pr):
 
 def pr_list(state, flags):
     """Newest first. `--search head:<prefix>` matches head branches starting
-    with <prefix>, as GitHub's search does."""
+    with <prefix>, as GitHub's search does; `--head <branch>` matches that
+    branch exactly. `--jq` is supported only as `PR_LINE_OF_NEWEST`."""
     wanted_state = flags.get("state", "open").upper()
     search = flags.get("search", "")
     prefix = search[len("head:"):] if search.startswith("head:") else ""
@@ -214,10 +220,21 @@ def pr_list(state, flags):
         pr
         for pr in reversed(state["prs"])
         if pr["head"].startswith(prefix)
+        and flags.get("head", pr["head"]) == pr["head"]
         and (wanted_state == "ALL" or pr["state"] == wanted_state)
     ][: int(flags.get("limit", 30))]
     wanted = flags["json"].split(",")
-    print(json.dumps([{key: pr_fields(pr)[key] for key in wanted} for pr in prs]))
+    listed = [
+        {key: (head_ref_oid(pr) if key == "headRefOid" else pr_fields(pr)[key]) for key in wanted}
+        for pr in prs
+    ]
+    if "jq" not in flags:
+        print(json.dumps(listed))
+    elif flags["jq"] == PR_LINE_OF_NEWEST:
+        for pr in listed[:1]:
+            print(f"{pr['state']} {pr['headRefOid']} {pr['url']}")
+    else:
+        die(f"fake gh: unsupported --jq {flags['jq']}", 2)
 
 
 def pr_ready(state, positional, flags):
@@ -391,6 +408,8 @@ def read_checks(state, sha):
 
 
 GENERATE_NOTES = re.compile(r"repos/([^/]+/[^/]+)/releases/generate-notes")
+
+PR_LINE_OF_NEWEST = '.[0] // empty | "\\(.state) \\(.headRefOid) \\(.url)"'
 
 WORKFLOW_RUN_LINES = '.workflow_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'
 
