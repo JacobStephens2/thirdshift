@@ -58,6 +58,10 @@ needs-triage, is never run, nor is a Ticket with sub-issues, a Ticket in a cycle
 any Ticket that one of these, an open issue outside the Spec or a failed Ticket blocks. If any
 Ticket is not done, the Spec run fails, with a line on each saying why.
 
+Tickets always merge into the Spec branch, whatever the command or the User config says.
+merge on a Spec merges the Spec PR into the Base branch once it is ready, mergeable and green,
+as does merge.always; without either, or with --no-merge, the Spec PR is left ready for review.
+
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
 With merge.always set, every Run is a Merge run unless given --no-merge:
