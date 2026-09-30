@@ -55,6 +55,9 @@ with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
 with its state, its `labels`, how many sub-issues it has of its own, and the
 issues it is `blocked_by` with their states. Any other query exits 2.
 
+`gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
+PR's body. `gh pr view` names the PR by its head branch or its number.
+
 `gh issue close` closes the issue, recording its `--comment`; on an issue
 already closed it only warns, as gh does.
 
@@ -133,7 +136,7 @@ def save(state):
         json.dump(state, f, indent=2)
 
 
-BOOLEAN_FLAGS = {"draft", "undo", "paginate", "merge"}
+BOOLEAN_FLAGS = {"draft", "undo", "paginate", "merge", "silent"}
 
 
 def parse(args):
@@ -241,6 +244,7 @@ def pr_fields(pr, wanted=()):
         "number": pr["number"],
         "isCrossRepository": pr.get("isCrossRepository", False),
         "mergeable": pr.get("mergeable", "MERGEABLE"),
+        "body": pr.get("body", ""),
         "mergeCommit": {"oid": pr["mergeCommit"]} if "mergeCommit" in pr else None,
     }
     if "headRefOid" in wanted:
@@ -518,6 +522,25 @@ def generate_notes(state, args):
     print(f"\n**Full Changelog**: https://github.com/{state['repo']}/compare/{compare}")
 
 
+PULL = re.compile(r"repos/([^/]+/[^/]+)/pulls/(\d+)")
+
+
+def pr_patch(state, args):
+    """`gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>`:
+    set the PR's body, the only field thirdshift edits."""
+    positional, flags = parse(args)
+    match = PULL.fullmatch(positional[0]) if positional else None
+    fields = api_fields(args)
+    if not match or set(fields) != {"body"}:
+        die(f"fake gh: unsupported api PATCH {args}", 2)
+    check_repo(state, {"repo": match.group(1)})
+    matches = [pr for pr in state["prs"] if str(pr["number"]) == match.group(2)]
+    if not matches:
+        die("gh: Not Found (HTTP 404)")
+    matches[0]["body"] = fields["body"]
+    save(state)
+
+
 LATEST_RUN_LINE = '.[] | "\\(.headSha) \\(.status) \\(.conclusion)"'
 
 
@@ -668,6 +691,8 @@ def main():
         run_list(state, flags)
     elif args[:2] == ["api", "graphql"]:
         graphql(state, args[2:])
+    elif args[:3] == ["api", "--method", "PATCH"]:
+        pr_patch(state, args[3:])
     elif args[0] == "api" and GENERATE_NOTES.fullmatch(args[1]):
         generate_notes(state, args[1:])
     elif args[0] == "api":

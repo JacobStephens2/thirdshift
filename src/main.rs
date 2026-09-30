@@ -54,13 +54,14 @@ review, merged, failed or interrupted. --email <address> sends it to <address>; 
 after --email is the address only if it has an @ and isn't a URL.
 
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
-can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch, then
-opens one Spec PR. An Unready Ticket, one labelled ready-for-human, needs-info, wontfix or
+can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec
+PR opens as a draft, with a Tickets checklist, once the first Ticket lands, and is marked ready
+once every Ticket is done. An Unready Ticket, one labelled ready-for-human, needs-info, wontfix or
 needs-triage, is never run, nor is a Ticket with sub-issues, a Ticket in a cycle of blockers, or
 any Ticket that one of these, an open issue outside the Spec or a failed Ticket blocks. If any
-Ticket is not done, the Spec run fails, with a line on each saying why. It runs up to 3
-Tickets at once; parallel <n> runs up to <n> for one Spec run, and spec.parallel sets the
-default:
+Ticket is not done, the Spec run fails, with a line on each saying why, leaving the Spec PR a draft.
+It runs up to 3 Tickets at once; parallel <n> runs up to <n> for one Spec run, and spec.parallel
+sets the default:
 
     [spec]
     parallel = 2

@@ -216,12 +216,13 @@ impl PullRequest {
     }
 }
 
-/// The `fields` of the pull request whose head is `branch`, as JSON.
-fn pr_view(issue: &IssueUrl, branch: &str, fields: &str) -> Result<Value> {
+/// The `fields` of the pull request `pr`, its head branch or its number, as
+/// JSON.
+fn pr_view(issue: &IssueUrl, pr: &str, fields: &str) -> Result<Value> {
     gh_json(&[
         "pr",
         "view",
-        branch,
+        pr,
         "--repo",
         &issue.repo_slug(),
         "--json",
@@ -287,6 +288,29 @@ pub fn create_draft_pr(
         "--body",
         body,
         "--draft",
+    ])
+}
+
+/// The body of pull request `number`.
+pub fn pr_body(issue: &IssueUrl, number: u64) -> Result<String> {
+    let json = pr_view(issue, &number.to_string(), "body")?;
+    Ok(json["body"]
+        .as_str()
+        .context("gh output has no body")?
+        .to_string())
+}
+
+/// Set the body of pull request `number` to `body`, through the REST API:
+/// `gh pr edit` fails on the GitHub Projects (classic) sunset in older `gh`.
+pub fn set_pr_body(issue: &IssueUrl, number: u64, body: &str) -> Result<()> {
+    gh(&[
+        "api",
+        "--method",
+        "PATCH",
+        &format!("repos/{}/pulls/{number}", issue.repo_slug()),
+        "-f",
+        &format!("body={body}"),
+        "--silent",
     ])
 }
 
