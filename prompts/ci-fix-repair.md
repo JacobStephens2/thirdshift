@@ -15,5 +15,5 @@ Run the affected checks locally, commit, and push <branch>.
 
 If a failure is not caused by this branch (it is flaky, or also fails on <base>), do not change code for it. Instead, add it to a "CI notes" section of the pull request body with a one-line explanation.
 
-You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it.
 ```
