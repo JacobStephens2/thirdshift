@@ -559,6 +559,61 @@ fn a_foreign_commit_that_conflicts_with_local_work_gets_a_conflict_repair_then_a
 }
 
 #[test]
+fn foreign_commits_pushed_during_the_conflict_repair_are_merged_in_and_reviewed_too() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, &format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{}echo fixed > feature.txt\ngit commit -q -am \"Fix CI 1\"\n",
+            someone_pushes_to_issue_7("feature.txt", "theirs", "Their feature")
+        ),
+    );
+    // While the conflict Repair works, someone pushes to issue-7 again.
+    scenario.agent_does_in_session(
+        3,
+        &format!(
+            "echo both > feature.txt\ngit add feature.txt\ngit commit -q --no-edit\n{}",
+            someone_pushes_to_issue_7("late.txt", "late", "Late commit")
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let late = sha_of(&scenario, "main", "Late commit");
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: merging new commit {late} from origin/issue-7"
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    let calls = scenario.claude_calls();
+    assert_eq!(
+        calls.len(),
+        5,
+        "implement, CI fix, conflict, and a review for each round of Foreign commits"
+    );
+    let fix = sha_of(&scenario, "main", "Fix CI 1");
+    assert_review_repair_from(&calls[3]["prompt"], &fix);
+    // The second round reviews from the conflict Repair's merge commit.
+    let parents = format!("{fix} {}", sha_of(&scenario, "main", "Their feature"));
+    let resolution = scenario
+        .origin_git(&["log", "--format=%H %P", "main"])
+        .lines()
+        .find_map(|line| line.strip_suffix(&format!(" {parents}")).map(String::from))
+        .expect("no merge of Their feature into Fix CI 1");
+    assert_review_repair_from(&calls[4]["prompt"], &resolution);
+    assert_issue_7_merged_into(&scenario, "main");
+    assert_eq!(scenario.origin_file("main", "late.txt").unwrap(), "late\n");
+    assert_eq!(
+        scenario.origin_file("main", "feature.txt").unwrap(),
+        "both\n"
+    );
+}
+
+#[test]
 fn a_review_repair_whose_background_work_was_killed_gets_a_resume() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(
