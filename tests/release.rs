@@ -107,6 +107,7 @@ impl Release {
         release.merge_pr("after-tag", "Add the frobnicator");
 
         git(root, &["clone", "-q", "origin.git", "maintainer"]);
+        release.main_ci("completed", "success");
         release
     }
 
@@ -171,6 +172,25 @@ impl Release {
             "1",
             &format!("gh fake checks \"$FAKE_CI_SHA\" '{checks}'"),
         ]);
+    }
+
+    /// Records a CI run on main's tip on origin, newer than any before it.
+    fn main_ci(&self, status: &str, conclusion: &str) {
+        let run = json!({
+            "branch": "main",
+            "workflow": "ci.yml",
+            "event": "push",
+            "headSha": self.origin(&["rev-parse", "main"]),
+            "status": status,
+            "conclusion": conclusion,
+        });
+        self.gh(&["fake", "run", &run.to_string()]);
+    }
+
+    /// Every ref on origin with the commit it points at, to show a refusal
+    /// pushed nothing.
+    fn origin_refs(&self) -> String {
+        self.origin(&["for-each-ref", "--format=%(refname) %(objectname)"])
     }
 
     fn command(&self, program: &Path, dir: &Path) -> Command {
@@ -411,4 +431,127 @@ fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
         "{prs}"
     );
     assert_eq!(release.origin_tag("v0.2.0"), None);
+}
+
+/// Runs the script with `version` and asserts it refused before pushing
+/// anything, with a message on stderr containing each of `reasons`.
+fn assert_refused(release: &Release, version: &str, reasons: &[&str]) {
+    let refs_before = release.origin_refs();
+    let prs_before = release.gh_state()["prs"].clone();
+
+    let output = release.run_script(version);
+
+    assert!(!output.status.success(), "{version} was not refused");
+    let err = stderr(&output);
+    assert!(err.contains("refusing to release"), "{version}: {err}");
+    for reason in reasons {
+        assert!(err.contains(reason), "{version}: no {reason:?} in {err}");
+    }
+    assert!(!err.contains("release: opened"), "{version}: {err}");
+    assert_eq!(release.origin_refs(), refs_before, "{version}");
+    assert_eq!(release.gh_state()["prs"], prs_before, "{version}");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_version_that_is_not_plain_semver_is_refused() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    for version in [
+        "v0.4.0",
+        "0.4",
+        "abc",
+        "0.4.0-rc.1",
+        "01.4.0",
+        "0.4.0.1",
+        "",
+    ] {
+        assert_refused(&release, version, &["not a plain X.Y.Z version"]);
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_version_not_higher_than_the_one_on_main_is_refused() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    for version in ["0.1.0", "0.0.9", "0.0.10"] {
+        assert_refused(&release, version, &["not higher than 0.1.0 on main"]);
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn versions_are_compared_as_numbers_not_text() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.10.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(release.origin_tag("v0.10.0").is_some());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_tag_that_exists_locally_is_refused() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    git(&release.maintainer(), &["tag", "v0.2.0"]);
+
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists locally"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_tag_that_exists_on_origin_is_refused() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    // On a commit main never reaches, so fetching main doesn't bring it in.
+    let contributor = release.contributor();
+    git(
+        &contributor,
+        &["checkout", "-q", "-b", "stray", "origin/main"],
+    );
+    git(
+        &contributor,
+        &["commit", "-q", "--allow-empty", "-m", "Stray"],
+    );
+    git(&contributor, &["tag", "v0.2.0"]);
+    git(&contributor, &["push", "-q", "origin", "v0.2.0"]);
+
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists on origin"]);
+    assert!(git(&release.maintainer(), &["tag", "--list", "v0.2.0"]).is_empty());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_red_ci_run_on_main_is_refused() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.main_ci("completed", "failure");
+
+    assert_refused(&release, "0.2.0", &["CI on main", "failure"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn an_unfinished_ci_run_on_main_is_refused() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.main_ci("in_progress", "");
+
+    assert_refused(&release, "0.2.0", &["CI on main", "in_progress"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_main_whose_tip_ci_has_not_run_on_is_refused() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.merge_pr("untested", "Not yet built");
+
+    assert_refused(&release, "0.2.0", &["CI has not run on main at"]);
 }

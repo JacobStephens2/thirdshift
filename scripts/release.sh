@@ -10,8 +10,14 @@
 # a temporary worktree, so the branch checked out where it runs and any
 # uncommitted changes there are neither used nor changed.
 #
+# Before it pushes anything, it refuses a release that can't be cut: a version
+# that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
+# tag that already exists locally or on origin, or a latest CI run on main that
+# didn't succeed.
+#
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
-# pushed; if the PR's checks fail, it leaves the PR open and exits 1.
+# pushed; if it refuses, or the PR's checks fail, leaving the PR open, it exits
+# 1.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
 shopt -s inherit_errexit
@@ -28,8 +34,12 @@ main() {
 	tag=v$version
 	branch=release-$version
 
+	if ! is_plain_semver "$version"; then
+		refuse "it is not a plain X.Y.Z version, such as 0.4.0"
+	fi
 	fetch_main
 	base=$(git rev-parse --verify 'origin/main^{commit}')
+	check_can_release "$base"
 	repo=$PWD
 	work=$(mktemp -d)
 	trap 'git -C "$repo" worktree remove --force "$work" 2>/dev/null || rm -rf "$work"' EXIT
@@ -67,6 +77,65 @@ main() {
 
 progress() {
 	echo "release: $*" >&2
+}
+
+# refuse <reason>
+refuse() {
+	progress "refusing to release $version: $*"
+	exit 1
+}
+
+# is_plain_semver <version>
+is_plain_semver() {
+	[[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+}
+
+# check_can_release <base>
+# Refuses unless $version is higher than the version in the manifest at
+# <base>, main's tip, no $tag exists locally or on origin, and the latest CI
+# run on main is on <base> and succeeded.
+check_can_release() {
+	local current latest sha status conclusion
+	current=$(git show "$1:Cargo.toml" | awk -F '"' '
+		/^\[/ { section = $0 }
+		section == "[package]" && /^version = / { print $2; exit }')
+	if ! is_higher "$version" "$current"; then
+		refuse "it is not higher than $current on main"
+	fi
+
+	if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
+		refuse "$tag already exists locally"
+	fi
+	if [ -n "$(git ls-remote --tags origin "refs/tags/$tag")" ]; then
+		refuse "$tag already exists on origin"
+	fi
+
+	latest=$(gh run list --branch main --workflow ci.yml --event push --limit 1 \
+		--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
+	read -r sha status conclusion <<<"$latest"
+	if [ "$sha" != "$1" ]; then
+		refuse "CI has not run on main at ${1:0:7} yet"
+	elif [ "$status" != completed ]; then
+		refuse "CI on main at ${1:0:7} is $status, not finished"
+	elif [ "$conclusion" != success ]; then
+		refuse "CI on main at ${1:0:7} ended in $conclusion"
+	fi
+}
+
+# is_higher <version> <other>
+# Whether plain semver <version> is higher than <other>, part by part.
+is_higher() {
+	local -a ours theirs
+	local i
+	IFS=. read -ra ours <<<"$1"
+	IFS=. read -ra theirs <<<"$2"
+	for i in 0 1 2; do
+		if ((ours[i] != theirs[i])); then
+			((ours[i] > theirs[i]))
+			return
+		fi
+	done
+	return 1
 }
 
 fetch_main() {
