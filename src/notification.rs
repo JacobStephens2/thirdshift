@@ -1,5 +1,5 @@
-//! The Run notification: one email when a Run ends, whatever its outcome,
-//! through the same checks and the same send as `email-test`.
+//! The Run notification: one email when a Run or a Spec run ends, whatever
+//! its outcome, through the same checks and the same send as `email-test`.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -57,12 +57,13 @@ impl RunNotification {
     /// Send the notification for the Run that `ended`. A failed send is only
     /// a warning: it never changes the Run's outcome.
     pub fn send(self, ended: &Result<Reached, FailedRun>) {
-        let (outcome, pr_url, cause, log) = match ended {
+        let (outcome, pr_url, cause, log, tickets) = match ended {
             Ok(reached) => (
                 reached.goal.outcome(),
                 Some(reached.pr_url.as_str()),
                 None,
                 reached.log.as_deref(),
+                &reached.tickets[..],
             ),
             Err(failed) => {
                 let (outcome, cause) = if failed.interrupted {
@@ -75,6 +76,7 @@ impl RunNotification {
                     failed.pr_url.as_deref(),
                     cause,
                     failed.log.as_deref(),
+                    &failed.tickets[..],
                 )
             }
         };
@@ -85,6 +87,7 @@ impl RunNotification {
             log,
             host: host.as_deref().unwrap_or("unknown host"),
             took: self.started.elapsed(),
+            tickets,
         };
         let subject = subject(&self.issue, self.title.as_deref(), outcome);
         if let Err(error) = self.resend.send(&subject, &body.text()) {
@@ -113,6 +116,8 @@ struct Body<'a> {
     log: Option<&'a Path>,
     host: &'a str,
     took: Duration,
+    /// In a Spec run, a line on each Ticket, as in its summary on stderr.
+    tickets: &'a [String],
 }
 
 impl Body<'_> {
@@ -129,6 +134,12 @@ impl Body<'_> {
         }
         text += &format!("Host:         {}\n", self.host);
         text += &format!("Took:         {}\n", took(self.took));
+        if !self.tickets.is_empty() {
+            text += "\nTickets:\n";
+            for line in self.tickets {
+                text += &format!("{line}\n");
+            }
+        }
         text
     }
 }
@@ -174,6 +185,7 @@ mod tests {
             log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
+            tickets: &[],
         };
         assert_eq!(
             body.text(),
@@ -193,6 +205,32 @@ mod tests {
              Session log:  /home/me/.thirdshift/logs/x.jsonl\n\
              Host:         droplet-1\n\
              Took:         4s\n"
+        );
+    }
+
+    #[test]
+    fn a_spec_runs_body_ends_with_a_line_per_ticket() {
+        let tickets = [
+            "#21 failed: claude exited 1".to_string(),
+            "#22 blocked by #21".to_string(),
+        ];
+        let body = Body {
+            pr_url: None,
+            cause: Some("Tickets not done: #21, #22"),
+            log: None,
+            host: "droplet-1",
+            took: Duration::from_secs(4),
+            tickets: &tickets,
+        };
+        assert_eq!(
+            body.text(),
+            "Cause:        Tickets not done: #21, #22\n\
+             Host:         droplet-1\n\
+             Took:         4s\n\
+             \n\
+             Tickets:\n\
+             #21 failed: claude exited 1\n\
+             #22 blocked by #21\n"
         );
     }
 

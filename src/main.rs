@@ -57,6 +57,8 @@ opens one Spec PR. An Unready Ticket, one labelled ready-for-human, needs-info, 
 needs-triage, is never run, nor is a Ticket with sub-issues, a Ticket in a cycle of blockers, or
 any Ticket that one of these, an open issue outside the Spec or a failed Ticket blocks. If any
 Ticket is not done, the Spec run fails, with a line on each saying why.
+A Spec run sends one Run notification for the whole Spec, with a line on each Ticket, and its
+Ticket Runs send none.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.

@@ -45,7 +45,9 @@ const SPEC_REVIEW: &str = "spec-review";
 /// and the Spec review, logged in `logs`, reviews the Spec branch before the
 /// Spec PR is marked ready; a Spec review that fails goes through the Failed
 /// run path. The worktree is cleaned up when this returns, or kept by the
-/// Failed run path if its work did not reach origin.
+/// Failed run path if its work did not reach origin. However it ends, it
+/// carries a line on each Ticket it landed or did not get done, for the Run
+/// notification.
 pub fn run(
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
@@ -53,7 +55,31 @@ pub fn run(
     base: &str,
     logs: &Logs,
 ) -> Result<Reached, FailedRun> {
-    land_tickets(spec, tickets, &worktree)?;
+    let mut summary = Vec::new();
+    let ended = land_and_review(spec, tickets, worktree, base, logs, &mut summary);
+    match ended {
+        Ok(reached) => Ok(Reached {
+            tickets: summary,
+            ..reached
+        }),
+        Err(failed) => Err(FailedRun {
+            tickets: summary,
+            ..failed
+        }),
+    }
+}
+
+/// [`run`], leaving its line on each Ticket in `summary` once the Tickets
+/// are done with.
+fn land_and_review(
+    spec: &IssueUrl,
+    tickets: Vec<Ticket>,
+    worktree: Worktree,
+    base: &str,
+    logs: &Logs,
+    summary: &mut Vec<String>,
+) -> Result<Reached, FailedRun> {
+    land_tickets(spec, tickets, &worktree, summary)?;
     let pr_url = open_spec_pr(spec, worktree.branch(), base)?;
     let mut log = logs.path(SPEC_REVIEW);
     if let Err(error) = review(spec, &worktree, base, &pr_url, logs, &mut log) {
@@ -63,6 +89,7 @@ pub fn run(
         pr_url,
         goal: Goal::ReadyForReview,
         log: Some(log),
+        tickets: Vec::new(),
     })
 }
 
@@ -72,22 +99,25 @@ enum TicketOutcome {
     Landed(Option<String>),
     /// Why, and its session log, as the Run reported them.
     Failed { cause: String, log: Option<String> },
+    /// Ended by an interrupt passed on to it.
+    Interrupted,
 }
 
 /// Push the Spec branch, then run each ready Ticket, lowest number first,
-/// until none is ready. Fails, after a line on each Ticket that landed or is
-/// not done, if any Ticket is not done.
-fn land_tickets(spec: &IssueUrl, mut tickets: Vec<Ticket>, worktree: &Worktree) -> Result<()> {
+/// until none is ready, leaving a line on each Ticket that landed or is not
+/// done in `summary`. Fails if any Ticket is not done, after putting those
+/// lines on stderr unless interrupted.
+fn land_tickets(
+    spec: &IssueUrl,
+    mut tickets: Vec<Ticket>,
+    worktree: &Worktree,
+    summary: &mut Vec<String>,
+) -> Result<()> {
     worktree.push()?;
     let mut outcomes = BTreeMap::new();
-    while let Some(ticket) = next_ready(&tickets, &outcomes) {
-        if interrupt::requested() {
-            bail!("interrupted");
-        }
-        let outcome = run_ticket(spec, ticket, worktree.branch())?;
-        outcomes.insert(ticket, outcome);
-        tickets = github::tickets(spec)?;
-    }
+    let landing = run_ready_tickets(spec, &mut tickets, &mut outcomes, worktree.branch());
+    *summary = summarize(&tickets, &outcomes);
+    landing?;
     let not_done: Vec<String> = tickets
         .iter()
         .filter(|ticket| ticket.is_open)
@@ -96,8 +126,34 @@ fn land_tickets(spec: &IssueUrl, mut tickets: Vec<Ticket>, worktree: &Worktree) 
     if not_done.is_empty() {
         return Ok(());
     }
-    report(&tickets, &outcomes);
+    for line in summary.iter() {
+        progress::step(line);
+    }
     bail!("Tickets not done: {}", not_done.join(", "));
+}
+
+/// Run each ready Ticket, lowest number first, until none is ready, keeping
+/// `tickets` as last read and each Ticket's outcome in `outcomes`. An
+/// interrupt ends this, once the running Ticket's Run has ended.
+fn run_ready_tickets(
+    spec: &IssueUrl,
+    tickets: &mut Vec<Ticket>,
+    outcomes: &mut BTreeMap<u64, TicketOutcome>,
+    spec_branch: &str,
+) -> Result<()> {
+    while let Some(ticket) = next_ready(tickets, outcomes) {
+        if interrupt::requested() {
+            bail!("interrupted");
+        }
+        let outcome = run_ticket(spec, ticket, spec_branch)?;
+        let interrupted = matches!(outcome, TicketOutcome::Interrupted);
+        outcomes.insert(ticket, outcome);
+        if interrupted {
+            bail!("interrupted");
+        }
+        *tickets = github::tickets(spec)?;
+    }
+    Ok(())
 }
 
 /// The lowest-numbered Ticket that is open, not an Unready Ticket, has no
@@ -125,9 +181,10 @@ fn unready_label(ticket: &Ticket) -> Option<&str> {
 
 /// A line on each Ticket that landed in this Spec run, with its PR, and on
 /// each Ticket not done, with why, lowest number first.
-fn report(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) {
+fn summarize(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) -> Vec<String> {
     let mut sorted: Vec<&Ticket> = tickets.iter().collect();
     sorted.sort_by_key(|ticket| ticket.number);
+    let mut lines = Vec::new();
     for ticket in sorted {
         let number = ticket.number;
         let landed = match outcomes.get(&number) {
@@ -145,6 +202,8 @@ fn report(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) {
                 Some(log) => format!("failed: {cause} (session log: {log})"),
                 None => format!("failed: {cause}"),
             }
+        } else if let Some(TicketOutcome::Interrupted) = outcomes.get(&number) {
+            "interrupted".to_string()
         } else if let Some(landed) = landed {
             format!("{landed}, but is still open")
         } else if let Some(label) = unready_label(ticket) {
@@ -168,8 +227,9 @@ fn report(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) {
                 .collect();
             format!("blocked by {}", blockers.join(", "))
         };
-        progress::step(format_args!("#{number} {line}"));
+        lines.push(format!("#{number} {line}"));
     }
+    lines
 }
 
 /// The shortest cycle of "blocked by" links among `tickets` from Ticket
@@ -208,7 +268,7 @@ fn cycle_through(start: u64, tickets: &[Ticket]) -> Option<Vec<u64>> {
 /// Run Ticket `number` of `spec` as a child `thirdshift`, a Merge run into
 /// `spec_branch` from the same Launch directory, relaying its stderr with a
 /// `#<number>: ` prefix. An interrupt is passed on to the child, which is
-/// waited for as it goes down its Failed run path, and fails this. Otherwise
+/// waited for as it goes down its Failed run path, and is interrupted. Otherwise
 /// it landed if it exits 0, and failed otherwise, with the cause and session
 /// log it ended on.
 fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<TicketOutcome> {
@@ -275,7 +335,7 @@ fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<TicketO
     }
     if interrupt::requested() {
         progress::step(format_args!("#{number} interrupted"));
-        bail!("interrupted");
+        return Ok(TicketOutcome::Interrupted);
     }
     progress::step(format_args!("#{number} failed"));
     let [before, last] = last_lines;
