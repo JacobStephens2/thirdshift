@@ -37,8 +37,8 @@ pub struct UserConfig {
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
-/// API key is never here, only in `RESEND_API_KEY`, so the file holds no
-/// secret.
+/// API key is never here, only in `RESEND_API_KEY` or the Credentials, so the
+/// file holds no secret.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct EmailSettings {
     /// `email.always`: every Run sends a Run notification unless told
@@ -587,12 +587,17 @@ fn suggested_address(home: &Path) -> Option<String> {
 
 /// `$HOME`, and the User config's path under it.
 fn home_and_path() -> Result<(PathBuf, PathBuf)> {
-    let home = std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
-        .context("HOME is not set")?;
+    let home = home()?;
     let path = home.join(".thirdshift/config.toml");
     Ok((home, path))
+}
+
+/// The user's home folder, `$HOME`, where `~/.thirdshift` is.
+pub fn home() -> Result<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .context("HOME is not set")
 }
 
 /// `path` as an absolute path, with a leading `~` expanded to `home`, or

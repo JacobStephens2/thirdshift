@@ -404,6 +404,17 @@ impl Scenario {
         path
     }
 
+    /// Write `toml` as the Credentials, `~/.thirdshift/credentials.toml`,
+    /// readable only by the user, and return its path.
+    pub fn credentials_are(&self, toml: &str) -> PathBuf {
+        let dir = self.path("home/.thirdshift");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("credentials.toml");
+        fs::write(&path, toml).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
     /// Set issue `number`'s state on the fake GitHub: `"OPEN"` or `"CLOSED"`.
     pub fn issue_is(&self, number: u32, state: &str) {
         let mut gh = self.gh_state();

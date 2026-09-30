@@ -1564,6 +1564,26 @@ fn a_missing_resend_api_key_stops_the_spec_run_before_any_ticket_starts() {
 }
 
 #[test]
+fn without_resend_api_key_a_spec_run_sends_with_the_key_in_the_credentials() {
+    let scenario = linear_spec();
+    scenario.credentials_are("[resend]\nkey = \"re_file_456\"\n");
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = scenario.run_with_env(
+        &["--email", "me@example.com", &spec_url(&scenario)],
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some("Bearer re_file_456")
+    );
+}
+
+#[test]
 fn a_missing_address_stops_the_spec_run_before_any_ticket_starts() {
     let scenario = linear_spec();
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
@@ -1599,7 +1619,8 @@ fn a_resend_error_leaves_the_spec_runs_outcome_alone_with_a_warning() {
         result.stderr.lines().last(),
         Some(
             "thirdshift: warning: could not send the Run notification: \
-             Resend refused the email (401 Unauthorized): API key is invalid"
+             Resend refused the email (401 Unauthorized): API key is invalid; \
+             the key came from RESEND_API_KEY"
         ),
         "stderr: {}",
         result.stderr

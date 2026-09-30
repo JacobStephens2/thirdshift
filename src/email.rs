@@ -35,7 +35,8 @@ pub struct Resend {
 impl Resend {
     /// Resend, sending to `to`, else to `email.to`, from `email.from`, else
     /// from Resend's shared sender. Fails naming each thing that is missing:
-    /// the address, `RESEND_API_KEY`, or both.
+    /// the address, the Resend API key, or both, or naming what's wrong with
+    /// the Credentials.
     pub fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
         let to = to
             .or_else(|| settings.to.clone())
@@ -52,7 +53,7 @@ impl Resend {
                 if let Err(error) = key {
                     missing.push(format!("{error:#}"));
                 }
-                bail!("{}; nothing sent", missing.join("; "));
+                bail!("{}\nnothing sent", missing.join("\n"));
             }
         };
         let url = std::env::var("THIRDSHIFT_RESEND_URL")
@@ -73,7 +74,8 @@ impl Resend {
     }
 
     /// Send one plain-text email. Resend accepting it is all this can tell:
-    /// on a refusal, the error is Resend's own text, word for word.
+    /// on a refusal, the error is Resend's own text, word for word, and where
+    /// the key came from, since `RESEND_API_KEY` hides the Credentials' key.
     pub fn send(&self, subject: &str, text: &str) -> Result<()> {
         let client = reqwest::blocking::Client::builder()
             .timeout(TIMEOUT)
@@ -95,9 +97,14 @@ impl Resend {
             return Ok(());
         }
         let body = response.text().unwrap_or_default();
+        let source = &self.key.source;
         match error_text(&body) {
-            text if text.is_empty() => bail!("Resend refused the email ({status})"),
-            text => bail!("Resend refused the email ({status}): {text}"),
+            text if text.is_empty() => {
+                bail!("Resend refused the email ({status}), sent with the key from {source}")
+            }
+            text => {
+                bail!("Resend refused the email ({status}): {text}; the key came from {source}")
+            }
         }
     }
 }
