@@ -46,6 +46,8 @@ pub struct Reached {
     pub goal: Goal,
     /// The most recent session's log, if a session was started.
     pub log: Option<PathBuf>,
+    /// In a Spec run, a line on each Ticket it landed; empty in a Run.
+    pub ticket_lines: Vec<String>,
 }
 
 /// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure
@@ -136,6 +138,7 @@ pub fn run(
             pr_url,
             goal,
             log: Some(log),
+            ticket_lines: Vec::new(),
         }),
         Err(error) => Err(failed_run::fail(issue, worktree, &base, &log, error)),
     }
@@ -438,7 +441,9 @@ impl RepairLoop<'_> {
     /// Fetch the Issue branch from origin and merge in any Foreign commits on
     /// it (never rebase), counting that as a round and handing a conflict to
     /// a conflict Repair. Then a review Repair reviews them from the head the
-    /// Run last knew as its own, the local head before the merge.
+    /// Run last knew as its own, the local head before the merge. Goes round
+    /// again until origin has nothing new, since more may land during either
+    /// Repair, and the push after them would be rejected.
     fn take_in_foreign_commits(
         &mut self,
         run_session: &mut impl FnMut(&str, &str) -> Result<()>,
@@ -446,35 +451,37 @@ impl RepairLoop<'_> {
         let (issue, worktree, pr_url) = (self.issue, self.worktree, self.pr_url);
         let branch = worktree.branch();
         let upstream = worktree.upstream();
-        let foreign = worktree.new_commits_on_origin()?;
-        if foreign.is_empty() {
-            return Ok(());
-        }
-        let own_head = worktree.head()?;
-        self.budgets.count_upstream_move(
-            &upstream,
-            format_args!("{upstream} has new commits; merging them in"),
-        )?;
-        for sha in &foreign {
-            progress::step(format_args!("merging new commit {sha} from {upstream}"));
-        }
-        if let Merge::Conflicted(pending) = worktree.merge_new_commits()? {
+        loop {
+            let foreign = worktree.new_commits_on_origin()?;
+            if foreign.is_empty() {
+                return Ok(());
+            }
+            let own_head = worktree.head()?;
+            self.budgets.count_upstream_move(
+                &upstream,
+                format_args!("{upstream} has new commits; merging them in"),
+            )?;
+            for sha in &foreign {
+                progress::step(format_args!("merging new commit {sha} from {upstream}"));
+            }
+            if let Merge::Conflicted(pending) = worktree.merge_new_commits()? {
+                let kind = self
+                    .budgets
+                    .next_repair(&format!("conflict with new commits on {upstream}"))?;
+                run_session(
+                    &kind,
+                    &prompt::conflict_repair(issue, branch, branch, pr_url),
+                )?;
+                worktree.ensure_merged(&pending)?;
+            }
             let kind = self
                 .budgets
-                .next_repair(&format!("conflict with new commits on {upstream}"))?;
+                .next_repair(&format!("new commits on {upstream} to review"))?;
             run_session(
                 &kind,
-                &prompt::conflict_repair(issue, branch, branch, pr_url),
+                &prompt::review_repair(issue, branch, pr_url, &own_head),
             )?;
-            worktree.ensure_merged(&pending)?;
         }
-        let kind = self
-            .budgets
-            .next_repair(&format!("new commits on {upstream} to review"))?;
-        run_session(
-            &kind,
-            &prompt::review_repair(issue, branch, pr_url, &own_head),
-        )
     }
 
     /// Go round again after a merge of `watched` failed, counting a Base

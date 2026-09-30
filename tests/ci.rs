@@ -107,7 +107,7 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
          \n\
          If a failure is not caused by this branch (it is flaky, or also fails on main), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n\
          \n\
-         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.\n"
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it.\n"
     );
     assert_eq!(calls[1]["cwd"], calls[0]["cwd"]);
     // thirdshift pushes the fix even though the Repair didn't.

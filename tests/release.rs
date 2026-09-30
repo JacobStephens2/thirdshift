@@ -299,13 +299,9 @@ impl Release {
     }
 
     fn pr(&self, head: &str) -> Value {
-        self.gh_state()["prs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .rfind(|pr| pr["head"] == head)
+        self.prs_from(head)
+            .pop()
             .unwrap_or_else(|| panic!("no PR from {head}"))
-            .clone()
     }
 
     /// The head commit of `head`'s newest PR, as it was merged if it was.
@@ -318,11 +314,7 @@ impl Release {
     }
 
     fn pr_opened(&self, head: &str) -> bool {
-        self.gh_state()["prs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|pr| pr["head"] == head)
+        !self.prs_from(head).is_empty()
     }
 
     fn origin_branch(&self, branch: &str) -> bool {
@@ -332,6 +324,70 @@ impl Release {
     fn origin_tag(&self, tag: &str) -> Option<String> {
         let refs = self.origin(&["tag", "--list", tag]);
         (!refs.is_empty()).then(|| self.origin(&["rev-parse", &format!("{tag}^{{commit}}")]))
+    }
+
+    /// Pushes a `release-<version>` branch off main with the bump commit the
+    /// script makes, as a run interrupted after pushing it leaves it, and
+    /// returns that commit.
+    fn push_bump(&self, version: &str) -> String {
+        let contributor = self.contributor();
+        let branch = format!("release-{version}");
+        git(&contributor, &["fetch", "-q", "origin"]);
+        git(
+            &contributor,
+            &["checkout", "-q", "-b", &branch, "origin/main"],
+        );
+        for file in ["Cargo.toml", "Cargo.lock"] {
+            fs::write(contributor.join(file), with_version(file, version)).unwrap();
+        }
+        git(
+            &contributor,
+            &["commit", "-q", "-a", "-m", &format!("Release {version}")],
+        );
+        git(&contributor, &["push", "-q", "origin", &branch]);
+        let head = git(&contributor, &["rev-parse", "HEAD"]);
+        git(&contributor, &["checkout", "-q", "--detach", "origin/main"]);
+        head
+    }
+
+    /// Opens the bump PR for `version`'s pushed branch.
+    fn open_bump_pr(&self, version: &str) {
+        self.gh(&[
+            "pr",
+            "create",
+            "--head",
+            &format!("release-{version}"),
+            "--base",
+            "main",
+            "--title",
+            &format!("Release {version}"),
+            "--body",
+            "Summary from the first run",
+        ]);
+    }
+
+    /// Merges the bump PR at `head` with a merge commit and returns it.
+    fn merge_bump_pr(&self, version: &str, head: &str) -> String {
+        self.gh(&[
+            "pr",
+            "merge",
+            &format!("release-{version}"),
+            "--merge",
+            "--match-head-commit",
+            head,
+        ]);
+        self.origin(&["rev-parse", "main"])
+    }
+
+    /// The PRs from `head`, oldest first.
+    fn prs_from(&self, head: &str) -> Vec<Value> {
+        self.gh_state()["prs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|pr| pr["head"] == head)
+            .cloned()
+            .collect()
     }
 }
 
@@ -915,4 +971,205 @@ fn a_main_whose_tip_ci_has_not_run_on_is_refused() {
     release.merge_pr("untested", "Not yet built", "");
 
     assert_refused(&release, "0.2.0", &["CI has not run on main at"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_rerun_after_the_branch_was_pushed_opens_its_pr_then_merges_and_tags() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.prs_from("release-0.2.0").len(), 1);
+    assert_eq!(release.pr_head("release-0.2.0"), head);
+    let body = release.pr_body("release-0.2.0");
+    assert!(body.contains(AGENT_SUMMARY), "{body}");
+    assert!(
+        body.contains("-version = \"0.1.0\"\n+version = \"0.2.0\""),
+        "{body}"
+    );
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin(&["rev-parse", &format!("{merge}^2")]), head);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.prs_from("release-0.2.0").len(), 1);
+    let pr = release.pr("release-0.2.0");
+    assert_eq!(pr["state"], "MERGED");
+    assert_eq!(pr["body"], "Summary from the first run");
+    assert_eq!(release.pr_head("release-0.2.0"), head);
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin(&["rev-parse", &format!("{merge}^2")]), head);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    let err = stderr(&output);
+    assert!(
+        err.contains("release: waiting for CI on https://github.com/"),
+        "{err}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_rerun_after_the_merge_tags_the_merge_commit_and_pushes_the_tag() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.merge_pr("later", "Merged after the release", "");
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge.clone()));
+    assert_eq!(release.prs_from("release-0.2.0").len(), 1);
+    let err = stderr(&output);
+    assert!(
+        err.contains(&format!(
+            "release: tagged v0.2.0 on {} and pushed the tag",
+            &merge[..7]
+        )),
+        "{err}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_rerun_once_the_tag_is_on_the_merged_bump_reports_it_and_changes_nothing() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &merge]);
+    let refs_before = release.origin_refs();
+    let state_before = release.gh_state();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(err.contains("v0.2.0 is already tagged"), "{err}");
+    assert_eq!(release.origin_refs(), refs_before);
+    assert_eq!(release.gh_state(), state_before);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn an_annotated_tag_on_the_merged_bump_is_reported_as_already_tagged() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "-a", "-m", "Release 0.2.0", "v0.2.0", &merge]);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(err.contains("v0.2.0 is already tagged"), "{err}");
+    assert_eq!(release.origin_refs(), refs_before);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_tag_that_is_not_on_the_merged_bump_is_refused() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &format!("{merge}^1")]);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("v0.2.0 already exists"), "{err}");
+    assert_eq!(release.origin_refs(), refs_before);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_tag_while_the_bump_pr_is_open_is_refused() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.origin(&["tag", "v0.2.0", &head]);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("v0.2.0 already exists on origin"), "{err}");
+    assert_eq!(release.origin_refs(), refs_before);
+    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_tag_with_no_bump_pr_is_refused() {
+    let release = Release::new();
+    release.origin(&["tag", "v0.2.0", "main"]);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("v0.2.0 already exists"), "{err}");
+    assert_eq!(release.origin_refs(), refs_before);
+    assert_eq!(release.prs_from("release-0.2.0").len(), 0);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_bump_pr_closed_without_merging_is_refused() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.gh(&["fake", "pr", "release-0.2.0", "state", "\"CLOSED\""]);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("closed without merging"), "{err}");
+    assert_eq!(release.origin_refs(), refs_before);
+    assert_eq!(release.prs_from("release-0.2.0").len(), 1);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_no_on_a_rerun_after_the_branch_was_pushed_stops_with_no_pr_opened() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    release.ci_reports(GREEN);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script_with(&["--review", "0.2.0"], "n\n", &[]);
+
+    assert!(!output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains("stopped at the review, so no PR was opened"),
+        "{err}"
+    );
+    assert!(!release.pr_opened("release-0.2.0"));
+    assert_eq!(release.origin_refs(), refs_before);
 }

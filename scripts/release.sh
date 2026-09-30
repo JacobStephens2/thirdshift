@@ -21,9 +21,16 @@
 # tag that already exists locally or on origin, or a latest CI run on main that
 # didn't succeed.
 #
+# If a run is interrupted, running it again with the same version carries on
+# from the first step not yet done: it opens the PR for a pushed branch, waits
+# on and merges an open PR, or tags a merged one, without the refusals above,
+# which the first run passed. If v<version> is already on origin, on the merge
+# of the bump PR, it says so and exits 0; a v<version> tag anywhere else on
+# origin is refused.
+#
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
-# pushed. It exits 1 with nothing pushed if it refuses or the review says no,
-# and exits 1 leaving the PR open if the PR's checks fail.
+# pushed. It exits 1 with nothing more pushed if it refuses or the review says
+# no, and exits 1 leaving the PR open if the PR's checks fail.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
 shopt -s inherit_errexit
@@ -49,32 +56,126 @@ main() {
 	branch=release-$version
 
 	fetch_main
+	find_earlier_run
+	stop_if_tagged
+
+	case $pr_state in
+	"")
+		if [ -z "$head" ]; then
+			commit_bump
+			write_summary "nothing was pushed"
+			git push --quiet origin "$head:refs/heads/$branch"
+		else
+			progress "resuming: $branch is on origin at ${head:0:7} with no PR"
+			write_summary "no PR was opened"
+		fi
+		open_pr
+		wait_and_merge
+		;;
+	OPEN)
+		progress "resuming: $url is open"
+		wait_and_merge
+		;;
+	MERGED)
+		progress "resuming: $url was merged as ${merge:0:7}"
+		;;
+	*)
+		refuse "$url was closed without merging, so there is nothing to resume; reopen it or delete $branch to start over"
+		;;
+	esac
+
+	git push --quiet origin "$merge:refs/tags/$tag"
+	progress "tagged $tag on ${merge:0:7} and pushed the tag"
+}
+
+# find_earlier_run
+# Sets what an earlier run for this version got done: pr_state (OPEN, MERGED,
+# CLOSED, or empty with no PR), url, head and merge from the newest PR from
+# $branch, or with no PR, head from $branch on origin if it was pushed.
+find_earlier_run() {
+	local pr
+	pr=$(gh pr list --head "$branch" --base main --state all --limit 1 \
+		--json state,url,headRefOid,mergeCommit \
+		--jq '.[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")"')
+	read -r pr_state url head merge <<<"$pr"
+	if [ -z "$pr_state" ]; then
+		head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
+		if [ -n "$head" ]; then
+			git fetch --quiet origin "refs/heads/$branch"
+		fi
+	fi
+}
+
+# stop_if_tagged
+# After an earlier run, exits 0 if $tag is on origin at the merge of the bump
+# PR, and refuses if it is on origin anywhere else. With no earlier run,
+# check_can_release refuses an existing tag in its turn.
+stop_if_tagged() {
+	local tagged
+	if [ -z "$pr_state" ] && [ -z "$head" ]; then
+		return
+	fi
+	tagged=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}" | tail -n 1 | cut -f 1)
+	if [ -z "$tagged" ]; then
+		return
+	fi
+	if [ "$tagged" = "$merge" ]; then
+		progress "$tag is already tagged on ${merge:0:7}, the merge of $url, so there is nothing left to do"
+		exit 0
+	fi
+	refuse "$tag already exists on origin at ${tagged:0:7}, which is not the merge of a $branch PR"
+}
+
+# commit_bump
+# Refuses a release that can't be cut, then commits the version bump on main
+# in a temporary worktree and sets head to it.
+commit_bump() {
+	local base
 	base=$(git rev-parse --verify 'origin/main^{commit}')
 	check_can_release "$version" "$tag" "$base"
 	repo=$PWD
 	work=$(mktemp -d)
 	trap 'git -C "$repo" worktree remove --force "$work" 2>/dev/null || rm -rf "$work"' EXIT
 	git worktree add --quiet --detach "$work" "$base"
-	cd "$work"
 
 	progress "bumping the version to $version on $branch from main at ${base:0:7}"
-	bump_version "$version"
-	git commit --quiet --all --message "Release $version"
-	head=$(git rev-parse HEAD)
+	(
+		cd "$work"
+		bump_version "$version"
+		git commit --quiet --all --message "Release $version"
+	)
+	head=$(git -C "$work" rev-parse HEAD)
+}
 
+# write_summary <what stopping leaves undone>
+# Sets diff to the version diff of $head and summary to claude's summary of
+# it, then with --review, asks about the summary and exits 1 on no, saying
+# <what stopping leaves undone>.
+write_summary() {
+	local base
+	base=$(git merge-base "$head" origin/main)
 	progress "writing the summary with claude"
-	diff=$(version_diff "$base")
+	diff=$(version_diff "$base" "$head")
 	summary=$(release_summary "$base" "$tag" "$diff")
 	if [ -n "$review" ] && ! summary=$(review_summary "$summary"); then
-		progress "stopped at the review, so nothing was pushed"
+		progress "stopped at the review, so $1"
 		exit 1
 	fi
+}
 
-	git push --quiet origin "HEAD:refs/heads/$branch"
+# open_pr
+# Opens the bump PR for $branch with $summary and $diff and sets url to it.
+open_pr() {
 	url=$(gh pr create --base main --head "$branch" --title "Release $version" \
 		--body "$(pr_body "$summary" "$diff")" | tail -n 1)
 	progress "opened $url"
+}
 
+# wait_and_merge
+# Waits for CI on $head, then merges its PR and sets merge to the merge
+# commit, or leaves the PR open and exits 1 if CI failed.
+wait_and_merge() {
+	local failed
 	progress "waiting for CI on $url"
 	failed=$(wait_for_workflow_runs "$head")
 	if [ -n "$failed" ]; then
@@ -86,9 +187,6 @@ main() {
 	fetch_main
 	merge=$(merge_commit_of "$head")
 	progress "merged $url as ${merge:0:7}"
-
-	git push --quiet origin "$merge:refs/tags/$tag"
-	progress "tagged $tag on ${merge:0:7} and pushed the tag"
 }
 
 progress() {
@@ -242,14 +340,14 @@ review_summary() {
 	done
 }
 
-# version_diff <base>
-# The version diff section: HEAD's changes from <base>.
+# version_diff <base> <head>
+# The version diff section: <head>'s changes from <base>.
 version_diff() {
 	cat <<-EOF
 		## Version diff
 
 		\`\`\`diff
-		$(git diff --no-color --unified=1 "$1" HEAD)
+		$(git diff --no-color --unified=1 "$1" "$2")
 		\`\`\`
 	EOF
 }
