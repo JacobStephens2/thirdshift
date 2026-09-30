@@ -12,5 +12,5 @@ A **Run notification** is sent by thirdshift itself with one HTTPS POST to Resen
 ## Consequences
 
 - Each user needs a Resend account and an API key. With no verified domain, the default sender `onboarding@resend.dev` only delivers to the address of the user's own Resend account; any other recipient needs `email.from` set to an address on a verified domain.
-- The API key only ever comes from the environment, never from the User config, so the config file holds no secret and can be version controlled.
+- The API key never comes from the User config, so the config file holds no secret and can be version controlled. It first came only from the environment; [ADR 0007](0007-resend-key-in-a-credentials-file.md) adds the **Credentials** file as a fallback.
 - A Resend outage or a bad key costs only the Run notification. A failed send is a warning and never changes the Run's outcome, and `thirdshift email-test` exists so the setup can be checked without starting a Run.
