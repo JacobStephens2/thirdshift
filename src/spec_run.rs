@@ -122,14 +122,14 @@ fn land_tickets(
             .expect("a running Ticket's thread holds a sender");
         running.remove(&ticket);
         // Once there is an error, the rest are only waited for.
-        let read = result.and_then(|outcome| {
+        let reread = result.and_then(|outcome| {
             outcomes.insert(ticket, outcome);
             github::tickets(spec)
         });
-        match read {
-            Ok(read) => tickets = read,
-            Err(read_error) => {
-                error.get_or_insert(read_error);
+        match reread {
+            Ok(reread) => tickets = reread,
+            Err(reread_error) => {
+                error.get_or_insert(reread_error);
             }
         }
     }
