@@ -557,3 +557,66 @@ fn ensure_pr_ready_and_mergeable(issue: &IssueUrl, branch: &str) -> Result<()> {
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repairs_of_every_kind_share_one_cap_and_the_one_too_many_names_its_cause() {
+        let mut budgets = Budgets::default();
+        for n in 1..=MAX_REPAIRS {
+            let cause = if n % 2 == 0 { "conflict" } else { "CI red" };
+            assert_eq!(budgets.next_repair(cause).unwrap(), format!("repair-{n}"));
+        }
+
+        for cause in ["new commits on origin/issue-7 to review", "conflict"] {
+            let error = budgets.next_repair(cause).unwrap_err();
+            assert_eq!(error.to_string(), format!("repairs exhausted: {cause}"));
+        }
+        assert_eq!(budgets.repairs, MAX_REPAIRS);
+    }
+
+    #[test]
+    fn upstream_moves_of_the_base_or_the_issue_branch_share_one_budget() {
+        let mut budgets = Budgets::default();
+        for _ in 1..MAX_UPSTREAM_MOVES {
+            budgets.count_base_move("main", "while CI ran").unwrap();
+        }
+        budgets
+            .count_upstream_move("origin/issue-7", format_args!("new commits"))
+            .unwrap();
+
+        let error = budgets.count_base_move("main", "while CI ran").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("origin/main kept moving: merged it again {MAX_UPSTREAM_MOVES} times")
+        );
+        let error = budgets
+            .count_upstream_move("origin/issue-7", format_args!("new commits"))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("origin/issue-7 kept moving: merged it again {MAX_UPSTREAM_MOVES} times")
+        );
+    }
+
+    #[test]
+    fn the_repair_cap_and_the_upstream_move_budget_are_spent_apart() {
+        let mut budgets = Budgets::default();
+        for _ in 0..MAX_REPAIRS {
+            budgets.next_repair("CI red").unwrap();
+        }
+
+        for _ in 0..MAX_UPSTREAM_MOVES {
+            budgets.count_base_move("main", "while CI ran").unwrap();
+        }
+        assert_eq!(
+            budgets,
+            Budgets {
+                repairs: MAX_REPAIRS,
+                upstream_moves: MAX_UPSTREAM_MOVES
+            }
+        );
+    }
+}

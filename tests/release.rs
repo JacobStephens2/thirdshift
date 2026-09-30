@@ -1,7 +1,8 @@
 //! The maintainer's release script, `scripts/release.sh`, run as a black box
 //! against a bare local origin with the fake `gh` and `claude` on PATH and
 //! the user's git configuration kept out, as the site deploy tests run the
-//! publish script.
+//! publish script. Where a step has several cases, one goes through the whole
+//! script and the rest call the step's function, with the script sourced.
 //!
 //! The script, like the fake `gh` it drives here, relies on GNU tools, so its
 //! tests run on Linux only.
@@ -404,6 +405,25 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn stdout(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).unwrap()
+}
+
+/// Sources `script` from `scripts/` without running it, then runs the bash
+/// `code`, which calls its functions, in an empty directory. The cases of a
+/// step go here, and one case of each through the whole script.
+fn with_functions_of(script: &str, code: &str) -> Output {
+    let dir = TempDir::new().unwrap();
+    isolated(&mut Command::new("bash"))
+        .arg("-c")
+        .arg(format!("source \"$1\"\n{code}"))
+        .arg("bash")
+        .arg(manifest_dir().join("scripts").join(script))
+        .current_dir(dir.path())
+        .output()
+        .expect("could not run bash")
+}
+
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
 const AGENT_SUMMARY: &str = "The headline is the frobnicator (#2).";
@@ -530,37 +550,62 @@ fn the_pr_body_has_the_agents_summary_in_a_marked_section_then_the_version_diff(
 
 #[test]
 #[cfg(target_os = "linux")]
-fn when_the_agent_fails_or_prints_nothing_the_summary_is_the_generated_notes() {
-    for (case, script) in [
-        ("fails", "echo 'Not logged in' >&2; exit 1"),
-        ("prints nothing", "printf '\\n'"),
+fn when_the_agent_fails_the_summary_is_the_generated_notes() {
+    // One way to fail end to end; the summary step's own test takes the rest.
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.agent_runs("echo 'Not logged in' >&2; exit 1");
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.lines()
+            .any(|line| line.starts_with("release: warning:") && line.contains("agent summary")),
+        "{err}"
+    );
+    let body = release.pr_body("release-0.2.0");
+    let (summary, rest) = summary_and_rest(&body);
+    let (note, notes) = summary.split_once("\n\n").expect(&body);
+    assert!(
+        !note.contains('\n') && note.contains("agent summary was unavailable"),
+        "{body}"
+    );
+    assert!(notes.starts_with("## What's Changed\n"), "{body}");
+    assert!(notes.contains("Add the frobnicator"), "{body}");
+    assert!(!notes.contains("Shipped in 0.1.0"), "{body}");
+    assert!(rest.contains("```diff"), "{body}");
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_summary_is_the_agents_unless_it_fails_or_prints_only_blank_space() {
+    let notes = "_The agent summary was unavailable, so this is GitHub's generated notes._\n\n\
+                 notes: api repos/{owner}/{repo}/releases/generate-notes \
+                 -f tag_name=v0.2.0 -f target_commitish=main --jq .body\n";
+    for (agent, summary) in [
+        ("echo 'Not logged in' >&2; exit 1", notes),
+        ("printf '\\n'", notes),
+        ("printf ' \\n\\t\\n'", notes),
+        ("echo 'The headline.'", "The headline.\n"),
     ] {
-        let release = Release::new();
-        release.ci_reports(GREEN);
-        release.agent_runs(script);
-
-        let output = release.run_script("0.2.0");
-
-        assert!(output.status.success(), "{case}: {}", stderr(&output));
-        let err = stderr(&output);
-        assert!(
-            err.lines()
-                .any(|line| line.starts_with("release: warning:") && line.contains("agent summary")),
-            "{case}: {err}"
+        let output = with_functions_of(
+            "release.sh",
+            &format!(
+                "summary_input() {{ echo input; }}\n\
+                 gh() {{ echo \"notes: $*\"; }}\n\
+                 claude() {{ cat >/dev/null; {agent}; }}\n\
+                 release_summary main v0.2.0 diff\n"
+            ),
         );
-        let body = release.pr_body("release-0.2.0");
-        let (summary, rest) = summary_and_rest(&body);
-        let (note, notes) = summary.split_once("\n\n").expect(&body);
-        assert!(
-            !note.contains('\n') && note.contains("agent summary was unavailable"),
-            "{case}: {body}"
-        );
-        assert!(notes.starts_with("## What's Changed\n"), "{case}: {body}");
-        assert!(notes.contains("Add the frobnicator"), "{case}: {body}");
-        assert!(!notes.contains("Shipped in 0.1.0"), "{case}: {body}");
-        assert!(rest.contains("```diff"), "{case}: {body}");
-        let merge = release.origin(&["rev-parse", "main"]);
-        assert_eq!(release.origin_tag("v0.2.0"), Some(merge), "{case}");
+
+        assert!(output.status.success(), "{agent}: {}", stderr(&output));
+        assert_eq!(stdout(&output), summary, "{agent}");
+        let warned = stderr(&output).contains("release: warning: the agent summary is unavailable");
+        assert_eq!(warned, summary == notes, "{agent}: {}", stderr(&output));
     }
 }
 
@@ -760,6 +805,9 @@ fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
 #[cfg(target_os = "linux")]
 fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_install_instructions()
 {
+    // The release script cuts the release the notes are for, and the notes
+    // script runs twice, as the behavior includes that a rerun gives the same
+    // body.
     let release = Release::new();
     release.ci_reports(GREEN);
     let output = release.run_script("0.2.0");
@@ -769,7 +817,7 @@ fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_in
     let again = release.run_notes_script("v0.2.0");
 
     assert!(first.status.success(), "{}", stderr(&first));
-    let body = String::from_utf8(first.stdout).unwrap();
+    let body = stdout(&first);
     let notes = release.generated_notes("v0.2.0");
     assert!(notes.contains("Add the frobnicator"), "{notes}");
     assert_eq!(
@@ -777,49 +825,73 @@ fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_in
         format!("{AGENT_SUMMARY}\n\n{notes}\n\n{INSTALL_NOTES}\n")
     );
     assert!(again.status.success(), "{}", stderr(&again));
-    assert_eq!(String::from_utf8(again.stdout).unwrap(), body);
+    assert_eq!(stdout(&again), body);
 }
 
 #[test]
 #[cfg(target_os = "linux")]
 fn without_a_bump_pr_summary_the_release_body_is_the_generated_notes_and_install_instructions() {
+    // v0.1.0 is the merge of a PR without a summary section. The bump PR
+    // step's own test takes the other ways to have no summary.
     let release = Release::new();
-    // A PR with a summary section whose head commit, not its merge, is tagged.
-    release.merge_pr(
-        "summarised",
-        "Summarised",
-        "<!-- release-summary:start -->\nNot this release.\n<!-- release-summary:end -->",
-    );
-    let contributor = release.contributor();
-    git(&contributor, &["tag", "v0.1.2", "origin/summarised"]);
-    // A commit pushed straight to main, not through a PR.
-    fs::write(contributor.join("hand.txt"), "by hand").unwrap();
-    git(&contributor, &["add", "-A"]);
-    git(&contributor, &["commit", "-q", "-m", "By hand"]);
-    git(&contributor, &["push", "-q", "origin", "HEAD:main"]);
-    git(&contributor, &["tag", "v0.1.3"]);
-    git(&contributor, &["push", "-q", "origin", "v0.1.2", "v0.1.3"]);
 
-    for (case, tag) in [
-        ("the merge of a PR without a summary section", "v0.1.0"),
-        ("the head of a PR, not its merge", "v0.1.2"),
-        ("a commit with no PR", "v0.1.3"),
+    let output = release.run_notes_script("v0.1.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let notes = release.generated_notes("v0.1.0");
+    assert_eq!(stdout(&output), format!("{notes}\n\n{INSTALL_NOTES}\n"));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_summary_is_only_that_of_a_pr_merged_as_the_tagged_commit() {
+    const TAGGED: &str = "1111111111111111111111111111111111111111";
+    const OTHER: &str = "2222222222222222222222222222222222222222";
+    let with_summary = "Intro.\n<!-- release-summary:start -->\nThe headline.\n\
+                        <!-- release-summary:end -->\nRest.";
+    for (case, pulls, body, summary) in [
+        (
+            "the merge of a PR with a summary section",
+            format!("{OTHER} 4\n{TAGGED} 5"),
+            with_summary,
+            "The headline.\n",
+        ),
+        (
+            "the merge of a PR without a summary section",
+            format!("{TAGGED} 5"),
+            "Old news.",
+            "",
+        ),
+        (
+            "the head of a PR, not its merge",
+            format!("{OTHER} 5"),
+            with_summary,
+            "",
+        ),
+        ("a commit with no PR", String::new(), with_summary, ""),
     ] {
-        let output = release.run_notes_script(tag);
+        let output = with_functions_of(
+            "release-notes.sh",
+            &format!(
+                "gh() {{\n\
+                 \tcase $1 in\n\
+                 \tapi) printf '%s' '{pulls}' ;;\n\
+                 \tpr) [ \"$3\" = 5 ] && printf '%s\\n' '{body}' ;;\n\
+                 \tesac\n\
+                 }}\n\
+                 bump_summary {TAGGED}\n"
+            ),
+        );
 
         assert!(output.status.success(), "{case}: {}", stderr(&output));
-        let notes = release.generated_notes(tag);
-        assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
-            format!("{notes}\n\n{INSTALL_NOTES}\n"),
-            "{case}"
-        );
+        assert_eq!(stdout(&output), summary, "{case}");
     }
 }
 
 #[test]
 #[cfg(target_os = "linux")]
 fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_a_warning() {
+    // The release script only cuts the release the notes are for.
     let release = Release::new();
     release.ci_reports(GREEN);
     let output = release.run_script("0.2.0");
@@ -841,10 +913,7 @@ fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_
         "{err}"
     );
     let notes = release.generated_notes("v0.2.0");
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        format!("{notes}\n\n{INSTALL_NOTES}\n")
-    );
+    assert_eq!(stdout(&output), format!("{notes}\n\n{INSTALL_NOTES}\n"));
 }
 
 /// Runs the script with `version` and asserts it refused before pushing
@@ -868,29 +937,19 @@ fn assert_refused(release: &Release, version: &str, reasons: &[&str]) {
 #[test]
 #[cfg(target_os = "linux")]
 fn a_version_that_is_not_plain_semver_is_refused() {
+    // One version end to end; the version check's own test takes the rest.
     let release = Release::new();
 
-    for version in [
-        "v0.4.0",
-        "0.4",
-        "abc",
-        "0.4.0-rc.1",
-        "01.4.0",
-        "0.4.0.1",
-        "",
-    ] {
-        assert_refused(&release, version, &["not a plain X.Y.Z version"]);
-    }
+    assert_refused(&release, "0.4.0-rc.1", &["not a plain X.Y.Z version"]);
 }
 
 #[test]
 #[cfg(target_os = "linux")]
 fn a_version_not_higher_than_the_one_on_main_is_refused() {
+    // One version end to end; the comparison's own test takes the rest.
     let release = Release::new();
 
-    for version in ["0.1.0", "0.0.9", "0.0.10"] {
-        assert_refused(&release, version, &["not higher than 0.1.0 on main"]);
-    }
+    assert_refused(&release, "0.0.10", &["not higher than 0.1.0 on main"]);
 }
 
 #[test]
@@ -903,6 +962,44 @@ fn versions_are_compared_as_numbers_not_text() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(release.origin_tag("v0.10.0").is_some());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn only_plain_x_y_z_versions_with_no_leading_zeros_pass() {
+    for (version, plain) in [
+        ("0.4.0", true),
+        ("10.0.12", true),
+        ("v0.4.0", false),
+        ("0.4", false),
+        ("abc", false),
+        ("0.4.0-rc.1", false),
+        ("01.4.0", false),
+        ("0.4.0.1", false),
+        ("", false),
+    ] {
+        let output = with_functions_of("release.sh", &format!("is_plain_version '{version}'"));
+
+        assert_eq!(output.status.success(), plain, "{version:?}");
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_version_is_higher_only_by_its_parts_as_numbers() {
+    for (version, higher) in [
+        ("0.1.1", true),
+        ("0.2.0", true),
+        ("0.10.0", true),
+        ("1.0.0", true),
+        ("0.1.0", false),
+        ("0.0.9", false),
+        ("0.0.10", false),
+    ] {
+        let output = with_functions_of("release.sh", &format!("is_higher {version} 0.1.0"));
+
+        assert_eq!(output.status.success(), higher, "{version}");
+    }
 }
 
 #[test]

@@ -155,27 +155,27 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
 
 #[test]
 fn an_interrupted_run_sends_one_notification_that_it_was_interrupted() {
-    for signal in ["INT", "TERM", "HUP"] {
-        let scenario = Scenario::new();
-        let started = scenario.path("agent-started");
-        scenario.agent_does(&format!("touch {}\nsleep 30\n", started.display()));
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+    // One signal end to end; the interrupt's unit tests take SIGINT, SIGTERM
+    // and SIGHUP alike.
+    let scenario = Scenario::new();
+    let started = scenario.path("agent-started");
+    scenario.agent_does(&format!("touch {}\nsleep 30\n", started.display()));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = scenario.run_and_signal_with_env(
-            &[&scenario.issue_url(7), "--email", "me@example.com"],
-            &env(&resend, Some(KEY)),
-            "agent-started",
-            signal,
-        );
+    let result = scenario.run_and_signal_with_env(
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        &env(&resend, Some(KEY)),
+        "agent-started",
+        "TERM",
+    );
 
-        assert_eq!(result.code, Some(1), "{signal}: {}", result.stderr);
-        let request = the_one_request(&resend);
-        assert!(
-            subject(&request).ends_with(": interrupted"),
-            "{signal}: {}",
-            subject(&request)
-        );
-    }
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert!(
+        subject(&request).ends_with(": interrupted"),
+        "{}",
+        subject(&request)
+    );
 }
 
 #[test]
@@ -262,21 +262,20 @@ fn with_no_address_known_the_run_stops_before_any_work_and_sends_nothing() {
 
 #[test]
 fn without_resend_api_key_the_run_stops_before_any_work_and_sends_nothing() {
-    for key in [None, Some("")] {
-        let scenario = Scenario::new();
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+    // Unset end to end; the key lookup's unit tests take an empty one alike.
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run(
-            &scenario,
-            &resend,
-            &[&scenario.issue_url(7), "email", "me@example.com"],
-            key,
-        );
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "email", "me@example.com"],
+        None,
+    );
 
-        scenario.assert_rejected_before_any_work(&result, "RESEND_API_KEY");
-        assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
-        assert!(resend.requests().is_empty());
-    }
+    scenario.assert_rejected_before_any_work(&result, "RESEND_API_KEY");
+    assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
+    assert!(resend.requests().is_empty());
 }
 
 #[test]
@@ -294,40 +293,32 @@ fn a_run_without_the_flag_sends_nothing() {
 
 #[test]
 fn a_failed_send_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
-    for (status, reply, message) in [
-        (
-            401,
-            r#"{"statusCode":401,"message":"API key is invalid","name":"validation_error"}"#,
-            "API key is invalid",
-        ),
-        (500, "upstream exploded", "upstream exploded"),
-    ] {
-        for (agent, code, stdout) in [
-            (AGENT_OPENS_PR, 0, format!("{PR_URL}\n")),
-            ("exit 3", 1, String::new()),
-        ] {
-            let scenario = Scenario::new();
-            scenario.agent_does(agent);
-            let resend = ResendStandIn::replying(status, reply);
+    // One reply end to end; the email's unit tests take the other shapes of
+    // reply. The exit code and stdout are settled before the send, whatever
+    // the outcome.
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(
+        401,
+        r#"{"statusCode":401,"message":"API key is invalid","name":"validation_error"}"#,
+    );
 
-            let result = run(
-                &scenario,
-                &resend,
-                &[&scenario.issue_url(7), "--email", "me@example.com"],
-                Some(KEY),
-            );
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        Some(KEY),
+    );
 
-            assert_eq!(result.code, Some(code), "{status}: {}", result.stderr);
-            assert_eq!(result.stdout, stdout, "{status}");
-            assert_eq!(resend.requests().len(), 1, "{status}");
-            let warning = result
-                .stderr
-                .lines()
-                .find(|line| line.contains("warning:"))
-                .unwrap_or_else(|| panic!("no warning in stderr: {}", result.stderr));
-            assert_contains(warning, message);
-        }
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert_eq!(resend.requests().len(), 1);
+    let warning = result
+        .stderr
+        .lines()
+        .find(|line| line.contains("warning:"))
+        .unwrap_or_else(|| panic!("no warning in stderr: {}", result.stderr));
+    assert_contains(warning, "API key is invalid");
 }
 
 /// The User config of a machine where every Run sends a Run notification.
@@ -354,18 +345,17 @@ fn email_always_makes_a_run_without_the_flag_send_one_notification_to_email_to()
 
 #[test]
 fn no_email_skips_the_notification_email_always_asks_for() {
-    for no_email in ["no-email", "--no-email"] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(EMAIL_ALWAYS);
-        scenario.agent_does(AGENT_OPENS_PR);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
-        let url = scenario.issue_url(7);
+    // One spelling end to end; the argument parsing's unit tests take both.
+    let scenario = Scenario::new();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let url = scenario.issue_url(7);
 
-        let result = run(&scenario, &resend, &[no_email, &url], Some(KEY));
+    let result = run(&scenario, &resend, &["--no-email", &url], Some(KEY));
 
-        assert_eq!(result.code, Some(0), "{no_email}: {}", result.stderr);
-        assert!(resend.requests().is_empty(), "{no_email}");
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(resend.requests().is_empty());
 }
 
 #[test]
@@ -387,39 +377,33 @@ fn with_email_always_an_address_after_the_flag_still_wins() {
 }
 
 #[test]
-fn email_always_without_an_address_or_a_key_stops_the_run_before_any_work() {
-    for (config, key, named) in [
-        ("[email]\nalways = true\n", Some(KEY), "no email address"),
-        (EMAIL_ALWAYS, None, "RESEND_API_KEY"),
-    ] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(config);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+fn email_always_without_an_address_stops_the_run_before_any_work() {
+    // Without a key it stops as a Run with the flag does, shown above; the
+    // User config's unit tests show email.always asks for a notification.
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nalways = true\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run(&scenario, &resend, &[&scenario.issue_url(7)], key);
+    let result = run(&scenario, &resend, &[&scenario.issue_url(7)], Some(KEY));
 
-        scenario.assert_rejected_before_any_work(&result, named);
-        assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
-        assert!(resend.requests().is_empty());
-    }
+    scenario.assert_rejected_before_any_work(&result, "no email address");
+    assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
+    assert!(resend.requests().is_empty());
 }
 
 #[test]
-fn without_email_always_a_run_without_the_flag_sends_nothing() {
-    for config in [
-        "[email]\nalways = false\nto = \"me@example.com\"\n",
-        "[email]\nto = \"me@example.com\"\n",
-    ] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(config);
-        scenario.agent_does(AGENT_OPENS_PR);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+fn email_always_false_makes_a_run_without_the_flag_send_nothing() {
+    // With no email.always, a Run without the flag is shown sending nothing
+    // above; the User config's unit tests take both.
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nalways = false\nto = \"me@example.com\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run(&scenario, &resend, &[&scenario.issue_url(7)], Some(KEY));
+    let result = run(&scenario, &resend, &[&scenario.issue_url(7)], Some(KEY));
 
-        assert_eq!(result.code, Some(0), "{config}: {}", result.stderr);
-        assert!(resend.requests().is_empty(), "{config}");
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(resend.requests().is_empty());
 }
 
 /// Credentials holding the key `re_file_456`.
@@ -427,30 +411,25 @@ const CREDENTIALS: &str = "[resend]\nkey = \"re_file_456\"\n";
 
 #[test]
 fn without_resend_api_key_a_run_sends_with_the_key_in_the_credentials() {
-    for (config, key) in [(None, None), (None, Some("")), (Some(EMAIL_ALWAYS), None)] {
-        let scenario = Scenario::new();
-        if let Some(config) = config {
-            scenario.user_config_is(config);
-        }
-        scenario.credentials_are(CREDENTIALS);
-        scenario.agent_does(AGENT_OPENS_PR);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
-        let url = scenario.issue_url(7);
-        let args: &[&str] = match config {
-            Some(_) => &[&url],
-            None => &[&url, "--email", "me@example.com"],
-        };
+    // Unset end to end; the key lookup's unit tests take an empty one alike,
+    // and email.always finds the key the same way as the flag.
+    let scenario = Scenario::new();
+    scenario.credentials_are(CREDENTIALS);
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run(&scenario, &resend, args, key);
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        None,
+    );
 
-        assert_eq!(result.code, Some(0), "{key:?}: {}", result.stderr);
-        let request = the_one_request(&resend);
-        assert_eq!(
-            request.authorization.as_deref(),
-            Some("Bearer re_file_456"),
-            "{key:?}"
-        );
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        the_one_request(&resend).authorization.as_deref(),
+        Some("Bearer re_file_456")
+    );
 }
 
 #[test]
@@ -501,29 +480,25 @@ fn with_no_key_anywhere_the_run_stops_before_any_work_listing_every_way_to_give_
 
 #[test]
 fn broken_credentials_stop_a_run_that_asks_for_a_notification_before_any_work() {
-    for (credentials, named) in [
-        ("[resend\n", "can't parse"),
-        ("[resend]\nkye = \"re_file_456\"\n", "resend.kye"),
-        ("[resend]\nkey = true\n", "resend.key"),
-    ] {
-        let scenario = Scenario::new();
-        let path = scenario.credentials_are(credentials);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+    // One way to break them end to end; the key lookup's unit tests take the
+    // rest.
+    let scenario = Scenario::new();
+    let path = scenario.credentials_are("[resend]\nkye = \"re_file_456\"\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run(
-            &scenario,
-            &resend,
-            &[&scenario.issue_url(7), "--email", "me@example.com"],
-            None,
-        );
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        None,
+    );
 
-        assert_eq!(result.code, Some(1), "{credentials:?}: {}", result.stderr);
-        for part in [named, &path.display().to_string()] {
-            scenario.assert_rejected_before_any_work(&result, part);
-        }
-        assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
-        assert!(resend.requests().is_empty(), "{credentials:?}");
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    for part in ["resend.kye", &path.display().to_string()] {
+        scenario.assert_rejected_before_any_work(&result, part);
     }
+    assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
+    assert!(resend.requests().is_empty());
 }
 
 #[test]
@@ -570,6 +545,7 @@ fn a_run_without_a_notification_ignores_broken_credentials() {
 
 #[test]
 fn help_version_and_update_never_read_the_credentials() {
+    // One run of each command, as each is a behavior of its own.
     let scenario = Scenario::new();
     scenario.credentials_are("[resend]\nkye = \"re_file_456\"\n");
 

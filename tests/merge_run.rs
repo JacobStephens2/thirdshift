@@ -178,6 +178,7 @@ fn the_merge_flag_also_starts_a_merge_run() {
 
 #[test]
 fn a_merge_run_gives_the_agent_the_same_implement_prompt_as_a_run() {
+    // Two Runs, one of them a Merge run: the behavior is that they agree.
     let run = Scenario::new();
     run.agent_does(AGENT_OPENS_PR);
     let merge_run = Scenario::new();
@@ -668,6 +669,8 @@ echo '{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"
 
 #[test]
 fn foreign_commits_that_keep_coming_spend_the_upstream_move_budget() {
+    // Five real rounds, as the budget runs out only after them. The Run's unit
+    // tests take the counting.
     let scenario = Scenario::new();
     scenario.agent_does_in_session(
         1,
@@ -703,7 +706,8 @@ fn foreign_commits_that_keep_coming_spend_the_upstream_move_budget() {
 fn a_review_repair_counts_against_the_repair_cap() {
     let scenario = Scenario::new();
     // Five CI-fix Repairs leave none for reviewing the Foreign commit pushed
-    // while CI runs on the fifth fix.
+    // while CI runs on the fifth fix. They are real Repairs, as the cap runs
+    // out only after them; the Run's unit tests take the counting.
     scenario.agent_does_in_session(1, &format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
     for session in 2..=6 {
         let (checks, then) = if session == 6 {
@@ -897,6 +901,8 @@ fn a_merge_that_fails_then_finds_red_ci_on_a_new_head_gets_a_ci_fix_repair_then_
 
 #[test]
 fn merge_failures_that_keep_moving_the_base_branch_spend_the_base_move_budget() {
+    // Six real merge attempts, as the budget runs out only after them. The
+    // Run's unit tests take the counting.
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
         "{AGENT_OPENS_PR}{}{}",
@@ -931,7 +937,8 @@ fn merge_failures_that_keep_moving_the_base_branch_spend_the_base_move_budget() 
 fn a_repair_needed_after_a_failed_merge_counts_against_the_repair_cap() {
     let scenario = Scenario::new();
     // Five CI-fix Repairs before the first merge attempt leave none for the
-    // conflict the merge then runs into.
+    // conflict the merge then runs into. They are real Repairs, as the cap
+    // runs out only after them; the Run's unit tests take the counting.
     scenario.agent_does(&format!(
         "{AGENT_OPENS_PR}{}{}",
         checks_on_head(RED),

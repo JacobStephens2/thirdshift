@@ -726,7 +726,11 @@ mod tests {
     fn email_always_asks_for_a_notification_to_email_to() {
         let always = parse("[email]\nalways = true\n").unwrap();
         assert_eq!(always.email.default_ask(), NotificationAsk::Send(None));
-        for text in ["", "[email]\nalways = false\n"] {
+        for text in [
+            "",
+            "[email]\nalways = false\n",
+            "[email]\nto = \"me@example.com\"\n",
+        ] {
             let config = parse(text).unwrap();
             assert_eq!(
                 config.email.default_ask(),

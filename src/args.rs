@@ -202,4 +202,24 @@ mod tests {
             assert_eq!(run_args.goal, goal, "{args:?}");
         }
     }
+
+    #[test]
+    fn no_email_asks_for_no_notification_with_or_without_dashes() {
+        for flag in ["no-email", "--no-email"] {
+            assert_eq!(
+                run_args(&[flag, URL]).email,
+                Some(NotificationAsk::Skip),
+                "{flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_takes_the_number_after_it_with_or_without_dashes() {
+        for flag in ["parallel", "--parallel"] {
+            for args in [[flag, "1", URL], [URL, flag, "1"]] {
+                assert_eq!(run_args(&args).parallel, NonZeroUsize::new(1), "{args:?}");
+            }
+        }
+    }
 }
