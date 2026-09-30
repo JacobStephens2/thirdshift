@@ -189,3 +189,35 @@ fn still_logs_the_whole_stream() {
     assert!(log.contains("not json at all\n"), "log: {log}");
     assert!(log.contains(r#""type": "result""#), "log: {log}");
 }
+
+#[test]
+fn every_line_starts_with_the_local_time_it_was_printed() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{}{AGENT_COMMITS_AND_OPENS_PR}",
+        emits(tool_use("Read", json!({ "file_path": "src/lib.rs" }))),
+    ));
+
+    let before = chrono::Local::now().format("%H:%M:%S").to_string();
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    let after = chrono::Local::now().format("%H:%M:%S").to_string();
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stamped_stderr);
+    for line in result.stamped_stderr.lines() {
+        let rest = line
+            .strip_prefix("thirdshift: ")
+            .unwrap_or_else(|| panic!("unprefixed: {line}"));
+        let time = support::stamp(rest).unwrap_or_else(|| panic!("unstamped: {line}"));
+        // Unless the Run crossed midnight, it printed between the two times.
+        if before <= after {
+            assert!(before.as_str() <= time && time <= after.as_str(), "{line}");
+        }
+    }
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: implement: Read src/lib.rs\n"),
+        "stderr: {}",
+        result.stderr
+    );
+}

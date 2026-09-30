@@ -64,7 +64,7 @@ pub struct TerminalResult {
     /// What it wrote to stdout, which is not the terminal.
     pub stdout: String,
     /// Everything the terminal showed, stderr and the echoed keystrokes,
-    /// with the terminal's `\r\n` as `\n`.
+    /// with the terminal's `\r\n` as `\n` and progress lines unstamped.
     pub stderr: String,
     /// `None` if a signal ended it.
     pub code: Option<i32>,
@@ -74,18 +74,47 @@ pub struct TerminalResult {
 
 pub struct RunResult {
     pub stdout: String,
+    /// stderr with the time each progress line was printed removed, so it
+    /// can be matched exactly: see [`unstamped`].
     pub stderr: String,
+    /// stderr as printed, times and all.
+    pub stamped_stderr: String,
     pub code: Option<i32>,
 }
 
 impl From<Output> for RunResult {
     fn from(output: Output) -> Self {
+        let stamped_stderr = String::from_utf8(output.stderr).unwrap();
         RunResult {
             stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
+            stderr: unstamped(&stamped_stderr),
+            stamped_stderr,
             code: output.status.code(),
         }
     }
+}
+
+/// `stderr` with the `HH:MM:SS ` that starts each progress line, after its
+/// `thirdshift: `, removed.
+pub fn unstamped(stderr: &str) -> String {
+    stderr
+        .split_inclusive('\n')
+        .map(|line| match line.strip_prefix("thirdshift: ") {
+            Some(rest) if stamp(rest).is_some() => format!("thirdshift: {}", &rest[9..]),
+            _ => line.to_string(),
+        })
+        .collect()
+}
+
+/// The `HH:MM:SS` a progress line starts with, after its `thirdshift: `.
+pub fn stamp(rest: &str) -> Option<&str> {
+    let time = rest.get(..8)?;
+    let well_formed = rest[8..].starts_with(' ')
+        && time.bytes().enumerate().all(|(at, byte)| match at {
+            2 | 5 => byte == b':',
+            _ => byte.is_ascii_digit(),
+        });
+    well_formed.then_some(time)
 }
 
 impl Scenario {
@@ -329,7 +358,7 @@ impl Scenario {
         reader.join().unwrap();
         TerminalResult {
             stdout,
-            stderr: shown_text(),
+            stderr: unstamped(&shown_text()),
             code: status.code(),
             user_config: fs::read_to_string(self.path("home/.thirdshift/config.toml")).ok(),
         }

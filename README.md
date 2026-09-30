@@ -123,7 +123,7 @@ thirdshift --email you@example.com https://github.com/acme/widgets/issues/7
 It sends one [Run notification](#run-notifications), whatever the outcome. To have every Run on a machine send one, set `email.always` in the [User config](#user-config); `no-email` (or `--no-email`) then skips it for one Run.
 
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
-- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
+- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. Each line starts with the local time it was printed, as in `thirdshift: 12:14:49 pushing issue-7`, so a quiet terminal shows how long the Run has been on its last step. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
 - **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin` or closing the issue then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, a Run flag is repeated or contradicts another, or `parallel` isn't followed by a whole number from 1 up; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
 
 The other commands:
@@ -308,14 +308,14 @@ thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a tim
 When nothing is left to run and any Ticket is not done, the Spec run is a **Failed spec run**: it opens no Spec PR, exits `1`, and lists on stderr each Ticket that landed, with its pull request, and each one not done, with why:
 
 ```
-thirdshift: #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme-widgets-issue-21-….jsonl)
-thirdshift: #22 blocked by #21
-thirdshift: #23 landed with https://github.com/acme/widgets/pull/1
-thirdshift: #24 unready: labelled needs-info
-thirdshift: #25 blocked by #99 (outside the Spec)
-thirdshift: #26 in a cycle: #26 blocked by #27 blocked by #26
-thirdshift: #27 in a cycle: #27 blocked by #26 blocked by #27
-thirdshift: Tickets not done: #21, #22, #24, #25, #26, #27
+thirdshift: 03:12:40 #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme-widgets-issue-21-….jsonl)
+thirdshift: 03:12:40 #22 blocked by #21
+thirdshift: 03:12:40 #23 landed with https://github.com/acme/widgets/pull/1
+thirdshift: 03:12:40 #24 unready: labelled needs-info
+thirdshift: 03:12:40 #25 blocked by #99 (outside the Spec)
+thirdshift: 03:12:40 #26 in a cycle: #26 blocked by #27 blocked by #26
+thirdshift: 03:12:40 #27 in a cycle: #27 blocked by #26 blocked by #27
+thirdshift: 03:12:40 Tickets not done: #21, #22, #24, #25, #26, #27
 ```
 
 ## Building from source
