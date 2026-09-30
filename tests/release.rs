@@ -1,6 +1,7 @@
 //! The maintainer's release script, `scripts/release.sh`, run as a black box
-//! against a bare local origin with the fake `gh` and `claude` on PATH and the user's git
-//! configuration kept out, as the site deploy tests run the publish script.
+//! against a bare local origin with the fake `gh` and `claude` on PATH and
+//! the user's git configuration kept out, as the site deploy tests run the
+//! publish script.
 //!
 //! The script, like the fake `gh` it drives here, relies on GNU tools, so its
 //! tests run on Linux only.
@@ -270,8 +271,8 @@ fn stderr(output: &Output) -> String {
 }
 
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
-const AGENT_SUMMARY: &str = "The headline is the frobnicator (#2).";
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
+const AGENT_SUMMARY: &str = "The headline is the frobnicator (#2).";
 
 #[test]
 #[cfg(target_os = "linux")]

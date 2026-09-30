@@ -172,7 +172,7 @@ def pr_view(state, positional, flags):
     wanted = flags["json"].split(",")
     jq = flags.get("jq")
     if jq is not None:
-        if jq[1:] not in wanted or jq[0] != ".":
+        if not jq.startswith(".") or jq[1:] not in wanted:
             die(f"fake gh: unsupported --jq {jq}", 2)
         fields = dict(pr_fields(pr), title=pr["title"], body=pr.get("body", ""))
         print(fields[jq[1:]])

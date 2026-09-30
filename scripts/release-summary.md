@@ -3,7 +3,7 @@ Write the summary of a thirdshift release for its release pull request and its G
 Print only the summary, in GitHub Markdown, with no heading and nothing before or after it:
 
 1. A short headline paragraph on what the release is about: its biggest change for someone running `thirdshift`, in a sentence or two.
-2. What changes for someone running `thirdshift`, first: new commands, then behaviour that is new or changed. One bullet per change, most important first.
+2. What changes for someone running `thirdshift`, first: new commands, then behaviour that is new or changed, most important first.
 3. Site, docs and CI work in one short grouped line after that, such as "Also: site, docs and CI updates (#12, #14, #15)." Leave it out if there was none.
 
 Reference every change by its pull request number, as `#<number>`. Several pull requests that make one change can share a bullet.
