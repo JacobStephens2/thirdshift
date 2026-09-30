@@ -300,3 +300,212 @@ fn help_does_not_mention_the_ticket_runs_hidden_argument() {
     assert_eq!(result.code, Some(0));
     assert!(!result.stdout.contains("spec-branch"), "{}", result.stdout);
 }
+
+/// Bash that touches `started-<ticket>` in the scenario root, then waits up
+/// to ten seconds for `started-<other>` there, failing if it never appears:
+/// the session for `ticket` only ends once `other`'s has started too.
+fn waits_for_other_session(scenario: &Scenario, ticket: u32, other: u32) -> String {
+    let root = scenario.path("");
+    format!(
+        r#"
+touch {root}/started-{ticket}
+for _ in $(seq 200); do test -f {root}/started-{other} && break; sleep 0.05; done
+test -f {root}/started-{other}
+"#,
+        root = root.display()
+    )
+}
+
+/// A Spec #20 with two independent Tickets, #21 and #22, and #23, blocked by
+/// both, whose agent checks that both have landed on its branch.
+fn diamond_spec() -> Scenario {
+    let scenario = Scenario::new();
+    scenario.issue_titled(SPEC, SPEC_TITLE);
+    scenario.spec_has_tickets(SPEC, &[(21, &[]), (22, &[]), (23, &[21, 22])]);
+    scenario.agent_does_for(21, &agent_lands(21, "first.txt"));
+    scenario.agent_does_for(22, &agent_lands(22, "second.txt"));
+    scenario.agent_does_for(
+        23,
+        &format!(
+            "test -f first.txt\ntest -f second.txt\n{}",
+            agent_lands(23, "third.txt")
+        ),
+    );
+    scenario
+}
+
+/// Make #21's and #22's sessions each wait for the other's to start, so the
+/// Spec run only succeeds if both run at once.
+fn independent_tickets_wait_for_each_other(scenario: &Scenario) {
+    for (ticket, other, file) in [(21, 22, "first.txt"), (22, 21, "second.txt")] {
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                "{}{}",
+                waits_for_other_session(scenario, ticket, other),
+                agent_lands(ticket, file)
+            ),
+        );
+    }
+}
+
+/// Make #22's session check that #21 already landed on the Spec branch it
+/// branched off, as it has only if #21's Run ended before #22's started.
+fn second_ticket_needs_the_first_landed(scenario: &Scenario) {
+    scenario.agent_does_for(
+        22,
+        &format!("test -f first.txt\n{}", agent_lands(22, "second.txt")),
+    );
+}
+
+#[test]
+fn independent_tickets_run_at_once_and_the_ticket_they_block_waits_for_both() {
+    let scenario = diamond_spec();
+    independent_tickets_wait_for_each_other(&scenario);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let mut sessions = sessions_by_issue(&scenario);
+    assert_eq!(sessions.pop().as_deref(), Some("23"));
+    sessions.sort();
+    assert_eq!(sessions, ["21", "22"]);
+    let started = |ticket| {
+        result
+            .stderr
+            .find(&format!("starting #{ticket}\n"))
+            .unwrap()
+    };
+    let landed = |ticket| result.stderr.find(&format!("#{ticket} landed\n")).unwrap();
+    assert!(started(22) < landed(21), "stderr: {}", result.stderr);
+    assert!(started(21) < landed(22), "stderr: {}", result.stderr);
+    assert!(landed(21) < started(23), "stderr: {}", result.stderr);
+    assert!(landed(22) < started(23), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.origin_file("issue-20", "third.txt").as_deref(),
+        Some("23\n")
+    );
+    scenario.assert_cleaned_up("issue-20");
+}
+
+#[test]
+fn two_tickets_starting_together_in_one_launch_directory_both_get_their_worktrees() {
+    let scenario = diamond_spec();
+    independent_tickets_wait_for_each_other(&scenario);
+
+    let result = scenario.run(&[&spec_url(&scenario), "--parallel", "2"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    for ticket in [21, 22] {
+        assert_contains(
+            &result.stderr,
+            &format!("on issue-{ticket} from origin/issue-20\n"),
+        );
+    }
+    let cwds: Vec<String> = scenario
+        .claude_calls()
+        .iter()
+        .map(|call| call["cwd"].as_str().unwrap().to_string())
+        .collect();
+    for ticket in [21, 22] {
+        let worktree = scenario.path(&format!("work/widgets-issue-{ticket}"));
+        assert!(cwds.contains(&worktree.display().to_string()), "{cwds:?}");
+    }
+}
+
+#[test]
+fn parallel_1_runs_the_tickets_one_at_a_time() {
+    for args in [["parallel", "1"], ["--parallel", "1"]] {
+        let scenario = diamond_spec();
+        second_ticket_needs_the_first_landed(&scenario);
+        let url = spec_url(&scenario);
+
+        let result = scenario.run(&[args[0], args[1], &url]);
+
+        assert_eq!(result.code, Some(0), "{args:?} stderr: {}", result.stderr);
+        assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23"]);
+        let landed = result.stderr.find("#21 landed\n").unwrap();
+        let started = result.stderr.find("starting #22\n").unwrap();
+        assert!(landed < started, "stderr: {}", result.stderr);
+    }
+}
+
+#[test]
+fn spec_parallel_in_the_user_config_sets_how_many_tickets_run_at_once() {
+    let scenario = diamond_spec();
+    second_ticket_needs_the_first_landed(&scenario);
+    scenario.user_config_is("[spec]\nparallel = 1\n");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23"]);
+}
+
+#[test]
+fn the_parallel_flag_wins_over_spec_parallel() {
+    let scenario = diamond_spec();
+    independent_tickets_wait_for_each_other(&scenario);
+    scenario.user_config_is("[spec]\nparallel = 1\n");
+
+    let result = scenario.run(&[&spec_url(&scenario), "parallel", "2"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+}
+
+#[test]
+fn without_a_limit_at_most_three_tickets_run_at_once() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(SPEC, SPEC_TITLE);
+    let tickets = [21, 22, 23, 24, 25];
+    scenario.spec_has_tickets(SPEC, &tickets.map(|ticket| (ticket, &[][..])));
+    let root = scenario.path("").display().to_string();
+    for ticket in tickets {
+        // Each session waits, up to ten seconds, until three are running or
+        // have been, then for a moment more, and records how many it saw at
+        // once.
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                r#"
+mkdir -p {root}/running
+touch {root}/running/{ticket}
+for _ in $(seq 200); do
+  test -f {root}/three && break
+  test "$(ls {root}/running | wc -l)" -ge 3 && touch {root}/three && break
+  sleep 0.05
+done
+sleep 0.5
+ls {root}/running | wc -l >> {root}/seen
+rm {root}/running/{ticket}
+{}"#,
+                agent_lands(ticket, &format!("{ticket}.txt"))
+            ),
+        );
+    }
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let seen = std::fs::read_to_string(scenario.path("seen")).unwrap();
+    let most = seen
+        .split_whitespace()
+        .map(|n| n.parse::<u32>().unwrap())
+        .max();
+    assert_eq!(most, Some(3), "{seen}");
+}
+
+#[test]
+fn parallel_on_an_issue_with_no_sub_issues_stops_before_any_work_naming_the_flag() {
+    let scenario = Scenario::new();
+
+    let result = scenario.run(&["parallel", "2", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    scenario.assert_rejected_before_any_work(&result, "parallel");
+    assert!(
+        scenario.origin_log("issue-7").is_none(),
+        "stderr: {}",
+        result.stderr
+    );
+}

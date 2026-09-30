@@ -30,6 +30,7 @@ use args::{Command, RunArgs};
 use config::UserConfig;
 use notification::{NotificationAsk, RunNotification};
 use run::Goal;
+use spec_run::Parallel;
 
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, or a merged one, unattended.
@@ -44,7 +45,15 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
 
-merge, --no-merge, --email and --no-email go before or after the Issue URL, in any order.
+merge, --no-merge, --email, --no-email and --parallel <n> go before or after the Issue URL,
+in any order.
+
+An issue with sub-issues is a Spec: thirdshift runs its Tickets, each merged into the Spec
+branch, then opens the Spec PR. It runs up to 3 Tickets at once; --parallel <n> runs up to
+<n> for one Spec run, and spec.parallel sets the default:
+
+    [spec]
+    parallel = 2
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
@@ -84,6 +93,7 @@ fn main() -> ExitCode {
         issue,
         goal,
         email,
+        parallel,
         spec_branch,
     } = match args::parse(&args) {
         Ok(Command::Help) => {
@@ -137,11 +147,16 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let parallel = Parallel {
+        tickets: parallel.unwrap_or(config.spec_parallel),
+        asked: parallel.is_some(),
+    };
     let ended = run::run(
         &issue,
         goal,
         &config.logs_dir,
         launch_pull,
+        parallel,
         spec_branch.as_deref(),
     );
     let code = match &ended {

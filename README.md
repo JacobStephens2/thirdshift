@@ -124,7 +124,7 @@ It sends one [Run notification](#run-notifications), whatever the outcome. To ha
 
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
 - **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
-- **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin` or closing the issue then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, or a Run flag is repeated or contradicts another; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
+- **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin` or closing the issue then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, a Run flag is repeated or contradicts another, or `parallel` isn't followed by a whole number from 1 up; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
 
 The other commands:
 
@@ -158,6 +158,9 @@ from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.de
 
 [logs]
 dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/logs
+
+[spec]
+parallel = 2   # how many Tickets a Spec run runs at once, instead of 3
 ```
 
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
@@ -176,6 +179,9 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 
 [logs]
 dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
+
+[spec]
+parallel = 3   # how many Tickets a Spec run runs at once; default 3
 ```
 
 Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. `setup` asks nothing, prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its values, comments and key order stay, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
@@ -186,9 +192,11 @@ With `launch.pull = true`, every Run brings the Base branch checked out in the d
 
 With `email.always = true`, every Run sends a [Run notification](#run-notifications) to `email.to`, as if given `--email`, and `thirdshift --no-email <Issue URL>` (or `no-email`, before or after the URL) sends none for that one Run.
 
+`spec.parallel` sets how many Tickets a [Spec run](#spec-runs) runs at once, by default 3. It must be a whole number from 1 up; `parallel <n>` on the command line wins over it for one Spec run.
+
 `logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
-A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
+A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, or `0` for `spec.parallel`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
 
 ### Email
 
@@ -230,6 +238,21 @@ Each session's full transcript, as Claude Code's `stream-json` output, is writte
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.jsonl`.
 
 All sessions in a Run share the Run's UTC timestamp, so a Run's logs sort together. When a Run fails, stderr ends with the path of its most recent session log, the place to start looking.
+
+## Spec runs
+
+An issue with sub-issues is a **Spec**, and its sub-issues are its **Tickets**. `thirdshift <Spec URL>` is a **Spec run**: it pushes the **Spec branch** (the Spec's own Issue branch), then runs each ready Ticket as a Merge run into the Spec branch, in the order GitHub's "blocked by" links between them allow, lowest number first. A Ticket is ready once it is open, has no sub-issues of its own, has no triage label saying it isn't for an agent (`ready-for-human`, `needs-info`, `wontfix` or `needs-triage`), and every issue blocking it is closed. Once every Ticket is done, it opens the **Spec PR** from the Spec branch into the Base branch, ready for review. Each Ticket's progress lines are relayed on stderr prefixed with `#<n>: `.
+
+Independent Tickets run at once, up to 3 by default. Whenever a Ticket's Run ends, the Spec run reads the graph from GitHub again and starts ready Tickets until the limit is reached. To change the limit for one Spec run, add `parallel <n>` (or `--parallel <n>`) before or after the URL; `spec.parallel` in the [User config](#user-config) sets it for every Spec run on the machine:
+
+```sh
+thirdshift parallel 5 https://github.com/acme/widgets/issues/20   # up to 5 Tickets at once
+thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a time
+```
+
+`parallel` followed by `0`, a negative number or anything but a whole number, or given twice, is an argument error (exit `2`). `parallel` on an issue with no sub-issues stops the Run before any work, since there are no Tickets to run at once. The Tickets' Runs share the Launch directory: they create their worktrees there one at a time, and a git command that finds a lock file held by another waits and tries again.
+
+A Ticket that fails stops any more Tickets from starting; those already running are left to end, and then the Spec run fails without a Spec PR.
 
 ## Foreign commits in a Merge run
 

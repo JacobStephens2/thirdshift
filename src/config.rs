@@ -3,6 +3,7 @@
 //! can't block `update`, `version` or `help`.
 
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -28,6 +29,9 @@ pub struct UserConfig {
     pub logs_dir: PathBuf,
     /// The `[email]` section.
     pub email: EmailSettings,
+    /// `spec.parallel`: how many Tickets a Spec run runs at once, by
+    /// default 3.
+    pub spec_parallel: NonZeroUsize,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -64,6 +68,7 @@ impl UserConfig {
             launch_pull: false,
             logs_dir: home.join(".thirdshift/logs"),
             email: EmailSettings::default(),
+            spec_parallel: NonZeroUsize::new(3).unwrap(),
         }
     }
 
@@ -78,7 +83,10 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
-            let known = matches!(section.as_str(), "merge" | "launch" | "logs" | "email");
+            let known = matches!(
+                section.as_str(),
+                "merge" | "launch" | "logs" | "email" | "spec"
+            );
             let settings = match value {
                 Value::Table(settings) if known => settings,
                 Value::Table(_) => bail!("unknown section [{section}] in {file}"),
@@ -106,6 +114,18 @@ impl UserConfig {
                     }
                     ("email", "to" | "from", _) => {
                         bail!("{section}.{key} must be a quoted email address in {file}")
+                    }
+                    ("spec", "parallel", value) => {
+                        let parallel = value
+                            .as_integer()
+                            .and_then(|n| usize::try_from(n).ok())
+                            .and_then(NonZeroUsize::new);
+                        match parallel {
+                            Some(parallel) => config.spec_parallel = parallel,
+                            None => {
+                                bail!("spec.parallel must be a whole number from 1 up in {file}")
+                            }
+                        }
                     }
                     _ => bail!("unknown key {section}.{key} in {file}"),
                 }
@@ -306,6 +326,9 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 
 [logs]
 dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
+
+[spec]
+parallel = 3   # how many Tickets a Spec run runs at once; default 3
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -417,6 +440,15 @@ mod tests {
     }
 
     #[test]
+    fn spec_parallel_is_read_and_defaults_to_3() {
+        let config = parse("[spec]\nparallel = 5\n").unwrap();
+        assert_eq!(config.spec_parallel.get(), 5);
+        for text in ["", "[spec]\n"] {
+            assert_eq!(parse(text).unwrap().spec_parallel.get(), 3, "{text:?}");
+        }
+    }
+
+    #[test]
     fn email_settings_are_read() {
         let config = parse("[email]\nto = \"me@example.com\"\nfrom = \"ts@acme.dev\"\n").unwrap();
         assert_eq!(config.email.to.as_deref(), Some("me@example.com"));
@@ -505,6 +537,24 @@ mod tests {
             (
                 "[email]\nto = 1\n",
                 "email.to must be a quoted email address",
+            ),
+            ("[spec]\nparalel = 2\n", "unknown key spec.paralel"),
+            ("spec = 2\n", "spec must be the section [spec]"),
+            (
+                "[spec]\nparallel = 0\n",
+                "spec.parallel must be a whole number from 1 up",
+            ),
+            (
+                "[spec]\nparallel = -1\n",
+                "spec.parallel must be a whole number from 1 up",
+            ),
+            (
+                "[spec]\nparallel = 2.5\n",
+                "spec.parallel must be a whole number from 1 up",
+            ),
+            (
+                "[spec]\nparallel = \"2\"\n",
+                "spec.parallel must be a whole number from 1 up",
             ),
         ] {
             let error = format!("{:#}", parse(text).unwrap_err());

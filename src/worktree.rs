@@ -2,6 +2,7 @@
 //! branch, removed together with the local Issue branch when dropped unless
 //! it is kept.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -31,6 +32,7 @@ impl Worktree {
     /// Create `branch` fresh from `origin/<base>` in a new worktree next to the
     /// launch repository's root, named `<repo>-<branch>`.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;
         Self::add(
             launch,
@@ -46,6 +48,7 @@ impl Worktree {
     /// is fetched too, for the review fixed point. A local `branch`, if any, is
     /// reset to origin's: `branch::select` has checked they already match.
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base, branch])?;
         Self::add(
             launch,
@@ -236,6 +239,9 @@ impl Drop for Worktree {
             "cleaning up the worktree and local branch {}",
             self.branch
         ));
+        let _lock = lock_launch(&self.launch).inspect_err(|error| {
+            progress::step(format_args!("cleaning up without the lock: {error:#}"))
+        });
         // Each step is attempted even if the one before it failed.
         let steps: [&[&str]; 2] = [
             &["worktree", "remove", "--force", &path],
@@ -247,4 +253,19 @@ impl Drop for Worktree {
             }
         }
     }
+}
+
+/// Wait for, then hold until the file is dropped, the Launch directory's
+/// worktree lock, so the Runs of a Spec run's Tickets add and remove their
+/// worktrees and local Issue branches one at a time: `git worktree add -b`
+/// and `git branch -D` can fail partway on a lock file another holds.
+fn lock_launch(launch: &Git) -> Result<File> {
+    let common_dir = launch
+        .dir()
+        .join(launch.run(&["rev-parse", "--git-common-dir"])?);
+    let path = common_dir.join("thirdshift-worktrees.lock");
+    let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
+    file.lock()
+        .with_context(|| format!("can't lock {}", path.display()))?;
+    Ok(file)
 }

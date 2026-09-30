@@ -60,7 +60,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     let sections: Vec<&str> = text.lines().filter(|line| line.starts_with('[')).collect();
     assert_eq!(
         sections,
-        ["[merge]", "[launch]", "[email]", "[logs]"],
+        ["[merge]", "[launch]", "[email]", "[logs]", "[spec]"],
         "{text}"
     );
     assert_eq!(config["merge"]["always"].as_bool(), Some(false));
@@ -72,6 +72,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     );
     assert!(config["email"].get("to").is_none(), "{text}");
     assert_eq!(config["logs"]["dir"].as_str(), Some("~/.thirdshift/logs"));
+    assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert!(
         result.stderr.contains(".thirdshift/config.toml"),
         "stderr: {}",
@@ -103,7 +104,8 @@ fn every_key_is_written_with_a_comment_giving_what_it_does_and_its_default() {
             "email.always",
             "email.to",
             "email.from",
-            "logs.dir"
+            "logs.dir",
+            "spec.parallel"
         ],
         "{text}"
     );
@@ -197,13 +199,14 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
 }
 
 /// Every key this version knows, as `section.key`, sorted.
-const EVERY_KEY: [&str; 6] = [
+const EVERY_KEY: [&str; 7] = [
     "email.always",
     "email.from",
     "email.to",
     "launch.pull",
     "logs.dir",
     "merge.always",
+    "spec.parallel",
 ];
 
 /// The `section.key` names of the keys `text` sets, commented out or not, in

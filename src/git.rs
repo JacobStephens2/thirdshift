@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -22,9 +23,17 @@ impl Git {
 
     /// Run `git <args>` and return its trimmed stdout. If it exits non-zero,
     /// fail with the last lines of its stderr and then of its stdout, where a
-    /// hook's explanation can end up.
+    /// hook's explanation can end up. While it fails on a lock file another
+    /// git holds, as when a Spec run's Tickets fetch or create worktrees from
+    /// one Launch directory at once, it is run again, for up to
+    /// [`LOCK_WAIT`].
     pub fn run(&self, args: &[&str]) -> Result<String> {
-        let output = self.output(args)?;
+        let deadline = Instant::now() + LOCK_WAIT;
+        let mut output = self.output(args)?;
+        while !output.status.success() && held_lock(&output.stderr) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+            output = self.output(args)?;
+        }
         if !output.status.success() {
             let tail: Vec<String> = [&output.stderr, &output.stdout]
                 .into_iter()
@@ -52,6 +61,16 @@ impl Git {
             .output()
             .with_context(|| format!("could not run git {}", args.join(" ")))
     }
+}
+
+/// How long [`Git::run`] keeps trying a command that fails on a lock file.
+const LOCK_WAIT: Duration = Duration::from_secs(10);
+
+/// Whether git's `stderr` says it failed because a lock file, such as
+/// `config.lock` or a ref's, already exists.
+fn held_lock(stderr: &[u8]) -> bool {
+    let stderr = String::from_utf8_lossy(stderr);
+    stderr.contains(".lock': File exists") || stderr.contains("could not lock config file")
 }
 
 /// The most lines of each stream a failure reports.
@@ -145,6 +164,31 @@ mod tests {
 
         assert!(error.contains("\n100"), "{error}");
         assert!(!error.contains("\n50\n"), "{error}");
+    }
+
+    #[test]
+    fn a_lock_another_git_holds_is_waited_for() {
+        let commands: [(&str, &[&str]); 2] = [
+            (".git/config.lock", &["config", "thirdshift.test", "yes"]),
+            (
+                ".git/refs/heads/other.lock",
+                &["update-ref", "refs/heads/other", "HEAD"],
+            ),
+        ];
+        for (lock, args) in commands {
+            let (_temp, git) = repo_with_origin();
+            let lock = git.dir().join(lock);
+            std::fs::write(&lock, "").unwrap();
+            let released = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                std::fs::remove_file(lock).unwrap();
+            });
+
+            let result = git.run(args);
+
+            released.join().unwrap();
+            result.unwrap();
+        }
     }
 
     #[test]
