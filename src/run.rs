@@ -250,9 +250,10 @@ pub fn deliver(
 
 /// The Self-merge's steps after the merge: delete the Issue branch on origin,
 /// and close the issue unless it is closed already. GitHub may close it too, a
-/// moment after the merge, or may not, so thirdshift does not wait to see. The merge can't be undone, so
-/// these never fail the Run, and an interrupt no longer stops it: a step that
-/// fails is a warning naming the fix to make by hand.
+/// moment after the merge, or may not, so thirdshift does not wait to see.
+/// The merge can't be undone, so these never fail the Run, and an interrupt no
+/// longer stops it: a step that fails is a warning naming the fix to make by
+/// hand.
 fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
     let branch = worktree.branch();
     if let Err(error) = retry_if_interrupted(|| worktree.delete_from_origin()) {
