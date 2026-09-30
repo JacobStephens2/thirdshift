@@ -104,7 +104,7 @@ pub fn run(
         timestamp: &timestamp,
     };
     if !tickets.is_empty() {
-        return spec_run::run(issue, tickets, worktree, &base, &logs);
+        return spec_run::run(issue, tickets, worktree, &base, goal, &logs);
     }
     let prompt = match &selection {
         Selection::Fresh { .. } => prompt::fresh(issue, &base, &branch),
@@ -152,11 +152,8 @@ fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
     }
 }
 
-/// The implement session given `prompt`, the checks on the PR it opened or
-/// updated, keeping that PR mergeable and, in a Merge run, the Self-merge.
-/// A merge that fails goes back round the Repair loop and is tried again on
-/// the new head; if that round finds nothing to fix, the Run fails with a
-/// `PolicyRefusal`. `log` is left at the most recent session's log.
+/// The implement session given `prompt`, then [`deliver`] on the PR it
+/// opened or updated. `log` is left at the most recent session's log.
 fn implement(
     issue: &IssueUrl,
     worktree: &Worktree,
@@ -166,7 +163,6 @@ fn implement(
     logs: &Logs,
     log: &mut PathBuf,
 ) -> Result<String> {
-    let branch = worktree.branch();
     let plugin = Plugin::write()?;
     let sessions = Sessions {
         logs,
@@ -177,9 +173,25 @@ fn implement(
 
     run_session("implement", prompt)?;
     worktree.push()?;
+    let pr = mark_pr_ready(issue, worktree.branch(), base)?;
+    deliver(issue, worktree, base, &pr, goal, &mut run_session)
+}
 
-    let pr = mark_pr_ready(issue, branch, base)?;
-
+/// Take the ready PR `pr` for `issue`, from the branch checked out in
+/// `worktree` into `base`, to `goal`: keep it mergeable and its CI green
+/// through the Repair loop, starting each Repair through `run_session`, and
+/// for [`Goal::Merged`], Self-merge it. A merge that fails goes back round
+/// the Repair loop and is tried again on the new head; if that round finds
+/// nothing to fix, this fails with a `PolicyRefusal`. Returns the PR's URL.
+pub fn deliver(
+    issue: &IssueUrl,
+    worktree: &Worktree,
+    base: &str,
+    pr: &PullRequest,
+    goal: Goal,
+    run_session: &mut impl FnMut(&str, &str) -> Result<()>,
+) -> Result<String> {
+    let branch = worktree.branch();
     let mut repair_loop = RepairLoop {
         issue,
         worktree,
@@ -188,22 +200,22 @@ fn implement(
         goal,
         budgets: Budgets::default(),
     };
-    let mut watched = repair_loop.run(&mut run_session)?;
+    let mut watched = repair_loop.run(run_session)?;
     loop {
         ensure_pr_ready_and_mergeable(issue, branch)?;
         if interrupt::requested() {
             bail!("interrupted");
         }
         if goal == Goal::ReadyForReview {
-            return Ok(pr.url);
+            return Ok(pr.url.clone());
         }
         progress::step(format_args!("merging the PR into {base}"));
         let Err(error) = github::merge(issue, branch, &watched) else {
-            after_merge(issue, worktree, &pr);
-            return Ok(pr.url);
+            after_merge(issue, worktree, pr);
+            return Ok(pr.url.clone());
         };
         progress::step(format_args!("the merge failed: {error:#}"));
-        match repair_loop.round_after_failed_merge(&watched, &mut run_session)? {
+        match repair_loop.round_after_failed_merge(&watched, run_session)? {
             Round::NewHead(head) => watched = head,
             Round::NothingToFix => {
                 // Only a PR still ready and mergeable is left ready.
