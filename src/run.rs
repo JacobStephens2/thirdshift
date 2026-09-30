@@ -18,7 +18,7 @@ use crate::preflight;
 use crate::progress;
 use crate::prompt;
 use crate::session::{Logs, Sessions};
-use crate::spec_run;
+use crate::spec_run::{self, Parallel};
 use crate::worktree::{Merge, Worktree};
 
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
@@ -59,12 +59,15 @@ pub struct Reached {
 /// With `spec_branch`, this is a Ticket's Run in a Spec run, and the Spec
 /// branch stands in for the checked-out branch as the Base branch. Otherwise
 /// an issue with sub-issues is a Spec, taken on by a Spec run instead, whose
-/// Spec branch is picked like an Issue branch.
+/// Spec branch is picked like an Issue branch, running as many Tickets at once
+/// as `parallel` says. A `parallel` the command asked for on an issue with no
+/// sub-issues fails before any work.
 pub fn run(
     issue: &IssueUrl,
     goal: Goal,
     logs_dir: &Path,
     launch_pull: bool,
+    parallel: Parallel,
     spec_branch: Option<&str>,
 ) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
@@ -75,6 +78,13 @@ pub fn run(
         Some(_) => Vec::new(),
         None => github::tickets(issue)?,
     };
+    if parallel.asked && tickets.is_empty() {
+        return Err(anyhow!(
+            "parallel is only for a Spec, and #{} has no sub-issues",
+            issue.number
+        )
+        .into());
+    }
     let checked_out = match spec_branch {
         Some(spec_branch) => Some(spec_branch.to_string()),
         None => launch
@@ -104,7 +114,15 @@ pub fn run(
         timestamp: &timestamp,
     };
     if !tickets.is_empty() {
-        return spec_run::run(issue, tickets, worktree, &base, goal, &logs);
+        return spec_run::run(
+            issue,
+            tickets,
+            worktree,
+            &base,
+            goal,
+            &logs,
+            parallel.tickets,
+        );
     }
     let prompt = match &selection {
         Selection::Fresh { .. } => prompt::fresh(issue, &base, &branch),

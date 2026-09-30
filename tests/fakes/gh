@@ -90,16 +90,37 @@ command):
 
 Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
 
+Parallel child Runs call gh at once, so each call holds an exclusive lock on
+$FAKE_GH_STATE.lock while it reads and writes the state and the record. It lets
+go while a hook script runs, as the script may call gh itself.
+
 Only the subcommands thirdshift and the fake agents use are supported. Anything
 else exits 2 so an unexpected call fails loudly.
 """
 
+import fcntl
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+
+
+LOCK = None
+
+
+def lock():
+    """Wait for the state's lock and hold it until `unlock` or exit."""
+    global LOCK
+    LOCK = open(os.environ["FAKE_GH_STATE"] + ".lock", "w")
+    fcntl.flock(LOCK, fcntl.LOCK_EX)
+
+
+def unlock():
+    global LOCK
+    LOCK.close()
+    LOCK = None
 
 
 def load():
@@ -316,6 +337,7 @@ def pr_merge(state, positional, flags):
                 state["issues"][number] = "CLOSED"
     save(state)
     if "after_merge" in state:
+        unlock()
         subprocess.run(["bash", "-euc", state["after_merge"]], check=True, stdout=sys.stderr)
 
 
@@ -545,12 +567,16 @@ def run_hook(state, name, **env):
         return state
     hook["times"] -= 1
     save(state)
-    subprocess.run(
-        ["bash", "-euc", hook["script"]],
-        check=True,
-        stdout=sys.stderr,
-        env=dict(os.environ, **env),
-    )
+    unlock()
+    try:
+        subprocess.run(
+            ["bash", "-euc", hook["script"]],
+            check=True,
+            stdout=sys.stderr,
+            env=dict(os.environ, **env),
+        )
+    finally:
+        lock()
     return load()
 
 
@@ -584,6 +610,7 @@ def fake(state, args):
 
 def main():
     args = sys.argv[1:]
+    lock()
     record(args)
     state = load()
     if " ".join(args[:2]) in state.get("failing", []):
