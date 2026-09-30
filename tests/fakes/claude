@@ -17,6 +17,9 @@ of these files that exists:
     $FAKE_CLAUDE_SCRIPT.<n>     for the n-th call overall (1-based)
     $FAKE_CLAUDE_SCRIPT
 
+Parallel child Runs start sessions at once, so recording a call holds an
+exclusive lock on $FAKE_CLAUDE_RECORD.lock, and the script is chosen under it.
+
 The `init` line carries session id `fake-session-<n>` for the n-th call. Lines
 the script appends to the file named by $FAKE_CLAUDE_AFTER_RESULT are emitted
 after the closing `result` line, e.g. to kill a background task as the session
@@ -27,6 +30,7 @@ records stdin as `stdin` and prints only what the script prints, as print
 mode's plain text output does.
 """
 
+import fcntl
 import json
 import os
 import re
@@ -80,6 +84,8 @@ def main():
 
     text_mode = "--output-format" not in argv
     record_path = os.environ["FAKE_CLAUDE_RECORD"]
+    lock = open(record_path + ".lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
     records = []
     if os.path.exists(record_path):
         with open(record_path) as f:
@@ -98,6 +104,8 @@ def main():
     )
     with open(record_path, "w") as f:
         json.dump(records, f, indent=2)
+    script = script_for(records)
+    lock.close()
 
     script = script_for(records)
     if text_mode:
