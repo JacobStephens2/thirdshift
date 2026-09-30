@@ -8,6 +8,7 @@ mod support;
 
 use std::fs;
 
+use support::resend::ResendStandIn;
 use support::{CTRL_C, Scenario, TerminalResult};
 
 /// The agent commits its work and opens a PR that closes issue #7, into
@@ -25,6 +26,10 @@ const OFFER: &str = "Set your defaults now? [Y/n]";
 const MERGE: &str = "Merge run?";
 const PULL: &str = "fast-forward";
 const NOTIFY: &str = "Run notifications, an email";
+const TO: &str = "Send Run notifications to";
+const FROM: &str = "Send them from";
+const TEST_EMAIL: &str = "test email now?";
+const KEY: &str = "re_secret_123";
 
 /// The first line a Run prints once it starts its work.
 const FIRST_STEP: &str = "thirdshift: ";
@@ -90,6 +95,35 @@ fn no_merge_in_the_command_wins_over_a_fresh_merge_always() {
     assert_ended(&scenario, &result, "ready for review", "OPEN");
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
     assert_eq!(config["merge"]["always"].as_bool(), Some(true));
+}
+
+#[test]
+fn no_email_in_the_command_wins_over_fresh_run_notifications() {
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    scenario.agent_does(AGENT_OPENS_PR);
+
+    let result = scenario.run_on_terminal(
+        &["--no-email", &scenario.issue_url(7)],
+        &[
+            ("RESEND_API_KEY", KEY),
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ],
+        &[
+            (OFFER, "y"),
+            (MERGE, ""),
+            (PULL, ""),
+            (NOTIFY, "y"),
+            (TO, "me@example.com"),
+            (FROM, ""),
+            (TEST_EMAIL, "n"),
+        ],
+    );
+
+    assert_ended(&scenario, &result, "ready for review", "OPEN");
+    let config: toml::Table = result.user_config.unwrap().parse().unwrap();
+    assert_eq!(config["email"]["always"].as_bool(), Some(true));
+    assert!(resend.requests().is_empty(), "{:?}", resend.requests());
 }
 
 #[test]
@@ -184,7 +218,16 @@ fn ctrl_c_at_the_offer_writes_no_file_and_does_no_work() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_OPENS_PR);
 
-    let result = scenario.run_on_terminal(&[&scenario.issue_url(7)], &[], &[(OFFER, CTRL_C)]);
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = scenario.run_on_terminal(
+        &["--email", "me@example.com", &scenario.issue_url(7)],
+        &[
+            ("RESEND_API_KEY", KEY),
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ],
+        &[(OFFER, CTRL_C)],
+    );
 
     assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
     assert_eq!(result.stdout, "");
@@ -195,6 +238,7 @@ fn ctrl_c_at_the_offer_writes_no_file_and_does_no_work() {
         "thirdshift asked GitHub: {:?}",
         scenario.gh_calls()
     );
+    assert!(resend.requests().is_empty(), "a Run notification went");
 }
 
 #[test]

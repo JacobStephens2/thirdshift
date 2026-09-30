@@ -167,7 +167,9 @@ pub fn setup() -> Result<String> {
     let asked = questions::has_terminal();
     let mut send_test = false;
     if asked {
-        (text, send_test) = answered(&text, &path, &home)?;
+        let answers;
+        (text, answers) = answered(&text, &path, &home)?;
+        send_test = answers.send_test();
     }
     let written = match &existing {
         None => {
@@ -224,7 +226,9 @@ pub fn offer_setup() -> Result<()> {
     let mut text = with_email_to(suggested_address(&home));
     let mut send_test = false;
     if accepted {
-        (text, send_test) = answered(&text, &path, &home)?;
+        let answers;
+        (text, answers) = answered(&text, &path, &home)?;
+        send_test = answers.send_test();
     }
     if let Err(error) = write_new(&home, &path, &text) {
         progress::step(format_args!(
@@ -252,12 +256,12 @@ pub fn offer_setup() -> Result<()> {
 }
 
 /// Ask the Setup questions, with the settings in `text`, the User config at
-/// `path`, as the default answers. Returns `text` with the answers, and
-/// whether the user asked for a test email.
-fn answered(text: &str, path: &Path, home: &Path) -> Result<(String, bool)> {
+/// `path`, as the default answers. Returns `text` with the answers, and the
+/// answers.
+fn answered(text: &str, path: &Path, home: &Path) -> Result<(String, Answers)> {
     let current = UserConfig::parse(text, path, home)?;
     let answers = questions::ask(&current, || suggested_address(home))?;
-    Ok((with_answers(text, &answers)?, answers.send_test()))
+    Ok((with_answers(text, &answers)?, answers))
 }
 
 /// Write `text` as the User config at `path`, where there is none yet,
