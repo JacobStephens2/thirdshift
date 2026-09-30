@@ -27,13 +27,21 @@ default branch. It closes the issues the PR body closes (`Closes #<n>` and the
 like) only when the base is the default branch, as GitHub does.
 
 A PR's `headRefOid` is its head branch's tip on origin, frozen when it is
-merged. Its `closingIssuesReferences` are the issues its body closes.
+merged, and a merged PR records its merge commit as `mergeCommit`. Its
+`closingIssuesReferences` are the issues its body closes.
 `gh repo view` reports origin's HEAD as the default branch.
 
 An issue's title is its entry in `titles`, else `Issue <number>`.
 
 `gh api user` answers with the signed-in user's profile, whose public `email`
 is `user_email`, else null. `gh fake fails 'api user'` makes it fail.
+
+`gh api repos/<repo>/releases/generate-notes` answers with GitHub's
+generated notes: a line for each merged PR whose merge commit is reachable from
+`target_commitish` and not from `previous_tag_name`. `<repo>` may be gh's
+`{owner}/{repo}` placeholder, here and in the commit endpoints.
+`gh api repos/<repo>/actions/runs?head_sha=<sha>` answers with the workflow
+runs on <sha>: its check runs, read as the check-runs endpoint reads them.
 
 `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -142,8 +150,10 @@ def parse(args):
 
 
 def check_repo(state, flags):
+    """`{owner}/{repo}` is gh's placeholder for the current directory's repo,
+    which is always the fake's."""
     repo = flags.get("R") or flags.get("repo")
-    if repo is not None and repo.lower() != state["repo"].lower():
+    if repo is not None and repo != "{owner}/{repo}" and repo.lower() != state["repo"].lower():
         die(f"fake gh: unknown repo {repo}")
 
 
@@ -298,6 +308,7 @@ def pr_merge(state, positional, flags):
             die(f"fake gh: pushing the merge failed: {pushed.stderr}")
     pr["state"] = "MERGED"
     pr["headRefOid"] = head_sha
+    pr["mergeCommit"] = origin("rev-parse", f"refs/heads/{pr['base']}")
     default = origin("symbolic-ref", "--short", "HEAD")
     if pr["base"] == default:
         for number in CLOSING_KEYWORD.findall(pr.get("body", "")):
@@ -344,37 +355,30 @@ def issue_close(state, positional, flags):
 
 
 def api(state, positional, flags):
-    """The signed-in user, or the two commit endpoints thirdshift reads CI
-    from, one page, each item of the list `--jq '.<list>[]'` names on its own
-    line."""
+    """The signed-in user, the two commit endpoints thirdshift reads CI from,
+    or the workflow runs on a commit that the release script waits for. Each
+    answers one page, each item of the list `--jq '.<list>[]'` names on its
+    own line, or for the workflow runs one `<status> <conclusion> <name>` line
+    per run with `--jq` set to `WORKFLOW_RUN_LINES`."""
     if positional[0] == "user" and not flags:
         print(json.dumps({"login": "runner", "email": state.get("user_email")}))
         return
     match = re.fullmatch(
-        r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/(check-runs|status)(\?.*)?",
+        r"repos/([^/]+/[^/]+)/(?:commits/([0-9a-f]+)/(check-runs|status)|actions/(runs)\?head_sha=([0-9a-f]+))(&.*|\?.*)?",
         positional[0],
     )
     if not match:
         die(f"fake gh: unsupported api path {positional[0]}", 2)
-    repo, sha, endpoint, _ = match.groups()
+    repo, sha, endpoint, runs_endpoint, runs_sha, _ = match.groups()
     check_repo(state, {"repo": repo})
+    if runs_endpoint:
+        if flags.get("jq") != WORKFLOW_RUN_LINES:
+            die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
+        for run in read_checks(state, runs_sha):
+            print(f"{run['status']} {run['conclusion'] or 'null'} {run['name']}")
+        return
     if endpoint == "check-runs":
-        state = run_ci_read_hook(state, sha)
-        runs = []
-        for check in state.get("checks", {}).get(sha, []):
-            pending = check.get("pending_polls", 0) > 0
-            if pending:
-                check["pending_polls"] -= 1
-            runs.append(
-                {
-                    "name": check["name"],
-                    "status": "in_progress" if pending else "completed",
-                    "conclusion": None if pending else check["conclusion"],
-                    "details_url": check.get("url"),
-                }
-            )
-        save(state)
-        items, field = runs, "check_runs"
+        items, field = read_checks(state, sha), "check_runs"
     else:
         items = [
             {"context": s["context"], "state": s["state"], "target_url": s.get("url")}
@@ -387,13 +391,73 @@ def api(state, positional, flags):
         print(json.dumps(item))
 
 
-def graphql(state, args):
-    """The Tickets query: `-f query=...` plus `-f`/`-F` variables."""
-    variables = {}
+def read_checks(state, sha):
+    """The check runs on `sha`, each read once, after any `on-ci-read`
+    script."""
+    state = run_ci_read_hook(state, sha)
+    runs = []
+    for check in state.get("checks", {}).get(sha, []):
+        pending = check.get("pending_polls", 0) > 0
+        if pending:
+            check["pending_polls"] -= 1
+        runs.append(
+            {
+                "name": check["name"],
+                "status": "in_progress" if pending else "completed",
+                "conclusion": None if pending else check["conclusion"],
+                "details_url": check.get("url"),
+            }
+        )
+    save(state)
+    return runs
+
+
+GENERATE_NOTES = re.compile(r"repos/([^/]+/[^/]+)/releases/generate-notes")
+
+WORKFLOW_RUN_LINES = '.workflow_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'
+
+
+def api_fields(args):
+    """The `-f`/`-F` fields of a `gh api` call, by name."""
+    fields = {}
     for flag, pair in zip(args, args[1:]):
         if flag in ("-f", "-F", "--raw-field", "--field"):
             name, value = pair.split("=", 1)
-            variables[name] = value
+            fields[name] = value
+    return fields
+
+
+def generate_notes(state, args):
+    """GitHub's generated release notes for `tag_name` at `target_commitish`:
+    one line per merged PR whose merge commit is reachable from the target but
+    not from `previous_tag_name`, oldest first, then the compare link. Only
+    `--jq .body` is supported."""
+    fields = api_fields(args)
+    jq = next((value for flag, value in zip(args, args[1:]) if flag == "--jq"), None)
+    if jq != ".body":
+        die(f"fake gh: unsupported --jq {jq}", 2)
+    check_repo(state, {"repo": GENERATE_NOTES.fullmatch(args[0]).group(1)})
+    tag, target = fields["tag_name"], fields["target_commitish"]
+    previous = fields.get("previous_tag_name")
+
+    def reachable(commit, ref):
+        return git(origin_repo(), "merge-base", "--is-ancestor", commit, ref).returncode == 0
+
+    lines = [
+        f"* {pr['title']} by @runner in {pr['url']}"
+        for pr in state["prs"]
+        if "mergeCommit" in pr
+        and reachable(pr["mergeCommit"], target)
+        and not (previous and reachable(pr["mergeCommit"], previous))
+    ]
+    compare = f"{previous}...{tag}" if previous else f"commits/{tag}"
+    print("## What's Changed\n" + "\n".join(lines))
+    print(f"\n**Full Changelog**: https://github.com/{state['repo']}/compare/{compare}")
+
+
+def graphql(state, args):
+    """The Tickets query: `-f query=...` plus `-f`/`-F` variables."""
+    variables = api_fields(args)
     query = variables.pop("query", "")
     if not all(field in query for field in ("subIssues", "blockedBy", "labels", "totalCount")):
         die(f"fake gh: unsupported graphql query {query}", 2)
@@ -515,6 +579,8 @@ def main():
         issue_close(state, positional, flags)
     elif args[:2] == ["api", "graphql"]:
         graphql(state, args[2:])
+    elif args[0] == "api" and GENERATE_NOTES.fullmatch(args[1]):
+        generate_notes(state, args[1:])
     elif args[0] == "api":
         positional, flags = parse(args[1:])
         api(state, positional, flags)

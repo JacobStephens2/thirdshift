@@ -1,7 +1,8 @@
 //! Spec runs: `thirdshift <Issue URL>` on a Spec, an issue with sub-issues,
 //! works through its Tickets in dependency order, each a Merge run into the
 //! Spec branch, then opens the Spec PR from the Spec branch into the Base
-//! branch, ready for review.
+//! branch as a draft, has the Spec review review the Spec branch, and marks
+//! the Spec PR ready for review.
 
 mod support;
 
@@ -44,17 +45,32 @@ fn spec_url(scenario: &Scenario) -> String {
     scenario.issue_url(SPEC)
 }
 
-/// The issue number each agent session was for, in order.
+/// The issue number each agent session was for, the first Issue URL its
+/// prompt names, in order.
 fn sessions_by_issue(scenario: &Scenario) -> Vec<String> {
     scenario
         .claude_calls()
         .iter()
         .map(|call| {
             let prompt = call["prompt"].as_str().unwrap();
-            let url = prompt.split_whitespace().nth(1).unwrap();
-            url.rsplit('/').next().unwrap().to_string()
+            let (_, after) = prompt.split_once("/issues/").unwrap();
+            after.chars().take_while(char::is_ascii_digit).collect()
         })
         .collect()
+}
+
+/// The Spec review's session: the only one for the Spec.
+fn spec_review_call(scenario: &Scenario) -> serde_json::Value {
+    let calls = scenario.claude_calls();
+    let sessions = sessions_by_issue(scenario);
+    let reviews: Vec<_> = sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, issue)| *issue == &SPEC.to_string())
+        .map(|(i, _)| calls[i].clone())
+        .collect();
+    assert_eq!(reviews.len(), 1, "sessions: {sessions:?}");
+    reviews[0].clone()
 }
 
 fn assert_contains(text: &str, part: &str) {
@@ -76,7 +92,7 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(sessions_by_issue(&scenario), ["21", "22"]);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
 
     let gh = scenario.gh_state();
     for (i, ticket) in [21, 22].into_iter().enumerate() {
@@ -121,7 +137,7 @@ fn each_ticket_branches_off_the_spec_branch_and_its_prompts_name_it_as_the_base(
             &format!("on issue-{ticket} from origin/issue-20\n"),
         );
     }
-    for call in scenario.claude_calls() {
+    for call in &scenario.claude_calls()[..2] {
         assert_contains(
             call["prompt"].as_str().unwrap(),
             "The base branch is issue-20.",
@@ -271,6 +287,166 @@ fn a_failed_ticket_ends_the_spec_run_before_the_tickets_it_blocks() {
 }
 
 #[test]
+fn once_the_last_ticket_lands_the_spec_review_reviews_the_spec_branch_against_the_base_branch() {
+    let scenario = linear_spec();
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let review = spec_review_call(&scenario);
+    assert_eq!(review["branch"], "issue-20");
+    let prompt = review["prompt"].as_str().unwrap();
+    for part in [
+        "/thirdshift:code-review main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
+        &spec_url(&scenario),
+        "using main as the fixed point",
+        "/thirdshift:tdd",
+        "Update PR https://github.com/acme/widgets/pull/3 using /thirdshift:pr",
+        "\"Unaddressed findings\"",
+        "Include \"Closes #20\"",
+        "You run headless",
+    ] {
+        assert_contains(prompt, part);
+    }
+    let last_landed = result.stderr.find("thirdshift: #22 landed").unwrap();
+    let reviewing = result.stderr.find("spec-review: session started").unwrap();
+    assert!(last_landed < reviewing, "stderr: {}", result.stderr);
+}
+
+#[test]
+fn the_spec_reviews_commits_reach_the_spec_branch_on_origin() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        r#"
+echo "reviewed" > review.txt
+git add review.txt
+git commit -q -m "Fix a Spec finding"
+git push -q origin issue-20
+"#,
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.origin_file("issue-20", "review.txt").as_deref(),
+        Some("reviewed\n")
+    );
+}
+
+#[test]
+fn a_spec_review_that_commits_without_pushing_still_reaches_origin() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        r#"
+echo "reviewed" > review.txt
+git add review.txt
+git commit -q -m "Fix a Spec finding"
+"#,
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.origin_file("issue-20", "review.txt").as_deref(),
+        Some("reviewed\n")
+    );
+}
+
+#[test]
+fn the_spec_pr_is_a_draft_during_the_spec_review_and_marked_ready_after_it() {
+    let scenario = linear_spec();
+    // Fails the session unless the Spec PR is a draft while it runs.
+    scenario.agent_does_for(
+        SPEC,
+        "gh pr view issue-20 --repo acme/widgets --json isDraft | grep -q '\"isDraft\": true'\n",
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let spec = &scenario.gh_state()["prs"][2];
+    assert_eq!(spec["head"], "issue-20");
+    assert_eq!(spec["isDraft"], false);
+    let reviewed = result.stderr.find("spec-review: session ended").unwrap();
+    let ready = result
+        .stderr
+        .find("PR https://github.com/acme/widgets/pull/3 is ready")
+        .unwrap();
+    assert!(reviewed < ready, "stderr: {}", result.stderr);
+}
+
+#[test]
+fn the_spec_review_writes_the_spec_pr_body() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        r#"gh fake pr issue-20 body '"The whole Spec.\n\nUnaddressed findings: none\n\nCloses #20"'"#,
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let spec = &scenario.gh_state()["prs"][2];
+    assert_eq!(
+        spec["body"],
+        "The whole Spec.\n\nUnaddressed findings: none\n\nCloses #20"
+    );
+}
+
+#[test]
+fn the_spec_review_is_logged_under_the_specs_name() {
+    let scenario = linear_spec();
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let logged = result
+        .stderr
+        .lines()
+        .find(|line| line.ends_with("-spec-review.jsonl"))
+        .unwrap_or_else(|| panic!("no Spec review log in: {}", result.stderr));
+    assert_contains(logged, "/acme-widgets-issue-20-");
+}
+
+#[test]
+fn a_failed_spec_review_ends_the_spec_run_without_marking_the_spec_pr_ready() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(SPEC, "exit 1");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/3\n");
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
+    let spec = &scenario.gh_state()["prs"][2];
+    assert_eq!(spec["head"], "issue-20");
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], true);
+    assert!(
+        !result.stderr.contains("is ready for review"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_contains(&result.stderr, "thirdshift: session log: ");
+}
+
+#[test]
+fn a_spec_pr_closed_during_the_spec_review_fails_the_spec_run() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(SPEC, r#"gh fake pr issue-20 state '"CLOSED"'"#);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "is closed, not open");
+    assert_eq!(scenario.gh_state()["prs"][2]["isDraft"], true);
+}
+
+#[test]
 fn an_issue_with_no_sub_issues_is_an_ordinary_run() {
     let scenario = Scenario::new();
     scenario.agent_does(
@@ -358,6 +534,39 @@ fn second_ticket_needs_the_first_landed(scenario: &Scenario) {
     );
 }
 
+/// A Spec #20 whose Tickets are `tickets`, each with the issues it is
+/// blocked by, and whose open Tickets' agents each land their own file.
+fn spec_of(tickets: &[(u32, &[u32])]) -> Scenario {
+    let scenario = Scenario::new();
+    scenario.issue_titled(SPEC, SPEC_TITLE);
+    scenario.spec_has_tickets(SPEC, tickets);
+    for (ticket, _) in tickets {
+        scenario.agent_does_for(*ticket, &agent_lands(*ticket, &format!("{ticket}.txt")));
+    }
+    scenario
+}
+
+/// Assert the Spec run ended as a Failed spec run: exit 1, nothing on
+/// stdout, and no Spec PR or Spec review.
+fn assert_failed_spec_run(scenario: &Scenario, result: &support::RunResult) {
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert!(
+        !sessions_by_issue(scenario).contains(&SPEC.to_string()),
+        "a Spec review was started"
+    );
+    let gh = scenario.gh_state();
+    assert!(
+        gh["prs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|pr| pr["head"] != "issue-20"),
+        "a Spec PR was opened: {}",
+        gh["prs"]
+    );
+}
+
 #[test]
 fn independent_tickets_run_at_once_and_the_ticket_they_block_waits_for_both() {
     let scenario = diamond_spec();
@@ -367,6 +576,7 @@ fn independent_tickets_run_at_once_and_the_ticket_they_block_waits_for_both() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let mut sessions = sessions_by_issue(&scenario);
+    assert_eq!(sessions.pop().as_deref(), Some("20"));
     assert_eq!(sessions.pop().as_deref(), Some("23"));
     sessions.sort();
     assert_eq!(sessions, ["21", "22"]);
@@ -423,7 +633,7 @@ fn parallel_1_runs_the_tickets_one_at_a_time() {
         let result = scenario.run(&[args[0], args[1], &url]);
 
         assert_eq!(result.code, Some(0), "{args:?} stderr: {}", result.stderr);
-        assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23"]);
+        assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
         let landed = result.stderr.find("#21 landed\n").unwrap();
         let started = result.stderr.find("starting #22\n").unwrap();
         assert!(landed < started, "stderr: {}", result.stderr);
@@ -439,7 +649,7 @@ fn spec_parallel_in_the_user_config_sets_how_many_tickets_run_at_once() {
     let result = scenario.run(&[&spec_url(&scenario)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23"]);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
 }
 
 #[test]
@@ -508,6 +718,153 @@ fn parallel_on_an_issue_with_no_sub_issues_stops_before_any_work_naming_the_flag
         "stderr: {}",
         result.stderr
     );
+}
+
+#[test]
+fn a_needs_info_ticket_and_what_it_blocks_are_not_run_while_an_independent_ticket_lands() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[])]);
+    scenario.issue_labelled(21, &["needs-info"]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["23"]);
+    assert_eq!(scenario.gh_state()["issues"]["23"], "CLOSED");
+    for line in [
+        "thirdshift: #21 unready: labelled needs-info\n",
+        "thirdshift: #22 blocked by #21\n",
+        "thirdshift: #23 landed with https://github.com/acme/widgets/pull/1\n",
+    ] {
+        assert_contains(&result.stderr, line);
+    }
+}
+
+#[test]
+fn each_unready_label_keeps_a_ticket_from_running() {
+    for label in ["ready-for-human", "wontfix", "needs-triage"] {
+        let scenario = spec_of(&[(21, &[]), (22, &[])]);
+        scenario.issue_labelled(21, &[label]);
+        scenario.issue_labelled(22, &["ready-for-agent"]);
+
+        let result = scenario.run(&[&spec_url(&scenario)]);
+
+        assert_failed_spec_run(&scenario, &result);
+        assert_eq!(sessions_by_issue(&scenario), ["22"], "{label}");
+        assert_contains(
+            &result.stderr,
+            &format!("thirdshift: #21 unready: labelled {label}\n"),
+        );
+    }
+}
+
+#[test]
+fn a_failed_ticket_stops_only_its_dependents_and_is_not_started_again() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[]), (24, &[])]);
+    scenario.agent_does_for(21, "exit 1");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    let mut sessions = sessions_by_issue(&scenario);
+    sessions.sort();
+    assert_eq!(sessions, ["21", "23", "24"]);
+    let gh = scenario.gh_state();
+    assert_eq!(gh["issues"]["23"], "CLOSED");
+    assert_eq!(gh["issues"]["24"], "CLOSED");
+    let failed = result
+        .stderr
+        .lines()
+        .rfind(|line| line.starts_with("thirdshift: #21 failed: "))
+        .unwrap_or_else(|| panic!("no failed line for #21 in: {}", result.stderr));
+    assert!(
+        failed.starts_with("thirdshift: #21 failed: claude exited 1 (session log: "),
+        "{failed}"
+    );
+    let log = failed.rsplit("session log: ").next().unwrap();
+    assert!(
+        std::path::Path::new(log.trim_end_matches(')')).exists(),
+        "{failed}"
+    );
+    assert_contains(&result.stderr, "thirdshift: #22 blocked by #21\n");
+}
+
+#[test]
+fn an_open_outside_blocker_holds_a_ticket_back_and_a_closed_one_does_not() {
+    let scenario = spec_of(&[(21, &[99]), (22, &[98])]);
+    scenario.issue_is(98, "CLOSED");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["22"]);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: #21 blocked by #99 (outside the Spec)\n",
+    );
+}
+
+#[test]
+fn tickets_in_a_cycle_are_not_run_and_the_summary_names_the_cycle() {
+    let scenario = spec_of(&[(21, &[22]), (22, &[21]), (23, &[21]), (24, &[])]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["24"]);
+    for line in [
+        "thirdshift: #21 in a cycle: #21 blocked by #22 blocked by #21\n",
+        "thirdshift: #22 in a cycle: #22 blocked by #21 blocked by #22\n",
+        "thirdshift: #23 blocked by #21\n",
+    ] {
+        assert_contains(&result.stderr, line);
+    }
+}
+
+#[test]
+fn a_ticket_with_its_own_sub_issues_is_unready() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.spec_has_tickets(21, &[(30, &[])]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["22"]);
+    assert_contains(&result.stderr, "thirdshift: #21 unready: has sub-issues\n");
+}
+
+#[test]
+fn removing_a_needs_info_label_while_another_ticket_runs_lets_it_run() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(21, &["needs-info"]);
+    scenario.agent_does_for(
+        22,
+        &format!("gh fake labels 21 '[]'\n{}", agent_lands(22, "22.txt")),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["22", "21", "20"]);
+}
+
+#[test]
+fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_reach() {
+    let scenario = Scenario::new();
+
+    let result = scenario.run(&["help"]);
+
+    assert_eq!(result.code, Some(0));
+    for part in [
+        "Spec run",
+        "every Ticket",
+        "can reach",
+        "Unready Ticket",
+        "ready-for-human, needs-info, wontfix or\nneeds-triage",
+        "sub-issues",
+        "cycle",
+    ] {
+        assert_contains(&result.stdout, part);
+    }
 }
 
 #[test]

@@ -3,6 +3,7 @@
 //! by pressing Enter, is the current value.
 
 use std::io::{BufRead, IsTerminal, Write};
+use std::path::Path;
 
 use anyhow::{Result, bail};
 
@@ -42,6 +43,18 @@ pub struct Notifications {
 /// Whether there is someone to ask: stdin and stderr are both terminals.
 pub fn has_terminal() -> bool {
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// The first Run's offer of Setup, with no User config at `path`: whether
+/// the user wants to set their defaults now, yes unless they say no.
+pub fn offer(path: &Path) -> Result<bool> {
+    yes_or_no(
+        &format!(
+            "No User config at {}. Set your defaults now?",
+            path.display()
+        ),
+        true,
+    )
 }
 
 /// Ask the Setup questions, with the settings in `current` as the default

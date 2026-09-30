@@ -52,9 +52,14 @@ fn help_does_not_mention_the_flag_aliases() {
 
     let help = scenario.run(&["help"]);
 
+    // Whole words, as `-h` is also in `ready-for-human`.
+    let words: Vec<&str> = help
+        .stdout
+        .split(|c: char| c.is_whitespace() || ",.:;()[]<>".contains(c))
+        .collect();
     for alias in ["--help", "-h", "--version", "-V", "--merge"] {
         assert!(
-            !help.stdout.contains(alias),
+            !words.contains(&alias),
             "help mentions {alias}: {}",
             help.stdout
         );

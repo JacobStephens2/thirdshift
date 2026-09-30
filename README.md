@@ -193,6 +193,8 @@ Every key holds its real value, so a Run reading it does exactly what it does wi
 
 Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir` is not asked about. The answers are written like everything else below: in place, keeping your comments. Ctrl-C during the questions writes nothing. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
+The first Run on a machine with no User config, started from a terminal, offers Setup before any work, on stderr: `No User config at <path>. Set your defaults now? [Y/n]`. Yes (or Enter) asks the questions above, writes the file, and the Run carries on using your answers; a flag in the command, such as `--no-merge`, `--email` or `--no-email`, still wins over them. No writes every setting at its default, as `setup` with no terminal does, says that `thirdshift setup` changes it, and the Run carries on; later Runs find the file and don't offer again. If the file can't be written, stderr gets a `warning:` line and the Run carries on with the defaults. Ctrl-C during the offer or the questions writes nothing and ends the command before any work, with no Run notification. A command thirdshift can't parse exits `2` before any offer. A Run with no terminal, as from cron, CI, `nohup` or an agent's shell, offers nothing, writes nothing, and runs on the defaults, so a later Run from a terminal still gets the offer.
+
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
 
 With `launch.pull = true`, every Run brings the Base branch checked out in the directory you start it from (the **Launch directory**) up to date with `origin`, so you no longer `git pull` by hand before each Run. It happens after the pre-flight checks pass and before the worktree is created, as `git merge --ff-only origin/<Base branch>`: fast-forward only, never a merge commit or a rebase, always from `origin`, whatever the branch's upstream or your `pull.*` settings. A progress line on stderr says when it updates the branch; an already up-to-date branch is left quietly as it is. It is skipped when the checked-out branch isn't the Base branch, as in a Continuation whose open pull request targets another base, or on a detached HEAD. If the update can't happen, for example because uncommitted changes are in the way, stderr gets a `warning:` line with git's error and the command to run by hand, your changes are left as they were, and the Run carries on with the same outcome and exit code. The setting only affects your checkout: the Run's worktree starts from `origin/<Base branch>` either way.
@@ -203,7 +205,7 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 
 `logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
-A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, or `0` for `spec.parallel`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them.
+A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, or `0` for `spec.parallel`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them, and they never offer Setup; nor does `email-test`.
 
 ### Email
 
@@ -246,19 +248,6 @@ A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.
 
 All sessions in a Run share the Run's UTC timestamp, so a Run's logs sort together. When a Run fails, stderr ends with the path of its most recent session log, the place to start looking.
 
-## Spec runs
-
-An issue with sub-issues is a **Spec**, and its sub-issues are its **Tickets**. `thirdshift <Spec URL>` is a **Spec run**: it pushes the **Spec branch** (the Spec's own Issue branch), then runs each ready Ticket as a Merge run into the Spec branch, in the order GitHub's "blocked by" links between them allow, lowest number first. Once every Ticket is done, it opens the **Spec PR** from the Spec branch into the Base branch, ready for review. Each Ticket's progress lines are relayed on stderr prefixed with `#<n>: `.
-
-Independent Tickets run at once, up to 3 by default. Whenever a Ticket's Run ends, the Spec run reads the graph from GitHub again and starts ready Tickets until the limit is reached. To change the limit for one Spec run, add `parallel <n>` (or `--parallel <n>`) before or after the URL; `spec.parallel` in the [User config](#user-config) sets it for every Spec run on the machine:
-
-```sh
-thirdshift parallel 5 https://github.com/acme/widgets/issues/20   # up to 5 Tickets at once
-thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a time
-```
-
-`parallel` followed by `0`, a negative number or anything but a whole number, or given twice, is an argument error (exit `2`). `parallel` on an issue with no sub-issues stops the Run before any work, since there are no Tickets to run at once. The Tickets' Runs share the Launch directory: they create their worktrees there one at a time, and a git command that finds a lock file held by another waits and tries again.
-
 ## Foreign commits in a Merge run
 
 A Merge run merges only code an agent wrote or reviewed. If someone else pushes to the Issue branch during the Run, their **Foreign commits** are reviewed before they can be merged:
@@ -294,6 +283,36 @@ A Failed run:
 3. Cleans up as usual, prints the reason to stderr and exits non-zero. If the push failed, the worktree and local Issue branch are kept instead, and stderr names the branch, its head commit and the worktree path, so you can recover the work or push it by hand.
 
 Merges, never rebases or force-pushes: a branch worked on from several servers never loses history.
+
+## Spec runs
+
+A **Spec** is an issue with sub-issues, its **Tickets**. `thirdshift <Issue URL>` on a Spec is a **Spec run**: it works through the Tickets in the order their GitHub "blocked by" links allow, each Ticket's **Run** a **Merge run** into the **Spec branch**, then opens one **Spec PR** from the Spec branch into the Base branch, ready for review ([ADR-0006](docs/adr/0006-spec-runs-merge-tickets-into-a-spec-branch.md)). An issue with no sub-issues is an ordinary Run.
+
+A Spec run takes every Ticket it can reach. A Ticket runs once it is open, has every blocker closed, and is not an **Unready Ticket**: an open Ticket labelled `ready-for-human`, `needs-info`, `wontfix` or `needs-triage`. An open Ticket with no triage label is taken. A Ticket with sub-issues of its own is never run either, and is reported as unready. A blocker outside the Spec counts once it is closed. The graph is read again from GitHub whenever a Ticket's Run ends, so removing a label, adding a Ticket or closing one by hand takes effect in the same Spec run.
+
+A Ticket whose Run fails is not tried again in that Spec run, and stops only the Tickets it blocks; every other Ticket it can reach still runs. Nor do Unready Tickets, Tickets blocked by an open issue outside the Spec, or Tickets in a cycle of "blocked by" links run, nor any Ticket downstream of them.
+
+Independent Tickets run at once, up to 3 by default. Whenever a Ticket's Run ends, the Spec run reads the graph from GitHub again and starts ready Tickets until the limit is reached. To change the limit for one Spec run, add `parallel <n>` (or `--parallel <n>`) before or after the URL; `spec.parallel` in the [User config](#user-config) sets it for every Spec run on the machine:
+
+```sh
+thirdshift parallel 5 https://github.com/acme/widgets/issues/20   # up to 5 Tickets at once
+thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a time
+```
+
+`parallel` followed by `0`, a negative number or anything but a whole number, or given twice, is an argument error (exit `2`). `parallel` on an issue with no sub-issues stops the Run before any work, since there are no Tickets to run at once. The Tickets' Runs share the Launch directory: they create their worktrees there one at a time, and a git command that finds a lock file held by another waits and tries again.
+
+When nothing is left to run and any Ticket is not done, the Spec run is a **Failed spec run**: it opens no Spec PR, exits `1`, and lists on stderr each Ticket that landed, with its pull request, and each one not done, with why:
+
+```
+thirdshift: #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme-widgets-issue-21-….jsonl)
+thirdshift: #22 blocked by #21
+thirdshift: #23 landed with https://github.com/acme/widgets/pull/1
+thirdshift: #24 unready: labelled needs-info
+thirdshift: #25 blocked by #99 (outside the Spec)
+thirdshift: #26 in a cycle: #26 blocked by #27 blocked by #26
+thirdshift: #27 in a cycle: #27 blocked by #26 blocked by #27
+thirdshift: Tickets not done: #21, #22, #24, #25, #26, #27
+```
 
 ## Building from source
 
@@ -332,9 +351,13 @@ Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the in
 
 ## Releasing
 
-1. Bump `version` in `Cargo.toml` (and `Cargo.lock`) in a pull request.
-2. Merge it.
-3. Push a `v<version>` tag on the merge commit, e.g. `git tag v0.2.0 && git push origin v0.2.0`.
+From a clone of this repo, signed in to `gh`, run the release script with the new version:
+
+```sh
+scripts/release.sh 0.4.0
+```
+
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else, with GitHub's generated notes for the pull requests merged since the last tag and the version diff as its body. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. It prints a line on stderr for each step. If the checks fail, it stops before merging and leaves the pull request open.
 
 The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`. It builds the Linux and macOS binaries and the installer, checks that the Linux binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with notes generated from the merged pull requests.
 

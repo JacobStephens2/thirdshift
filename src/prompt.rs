@@ -58,6 +58,32 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
     )
 }
 
+/// The Spec review prompt, for the Spec branch `branch` of `spec` once every
+/// Ticket has landed on it, with the draft Spec PR `pr_url` into `base`.
+pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> String {
+    format!(
+        "/thirdshift:code-review {base}, with the Spec {url} as the spec\n\
+         \n\
+         Every Ticket of the Spec {url} has landed on branch {branch}, its Spec branch (see git log {base}..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.\n\
+         \n\
+         Review with /thirdshift:code-review using {base} as the fixed point and {url} as the spec.\n\
+         \n\
+         Address the Standards and Spec findings you agree with, using /thirdshift:tdd where it fits, and commit.\n\
+         \n\
+         Push branch {branch}. Do not rebase or force-push.\n\
+         \n\
+         Update PR {pr_url} using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave it a draft: thirdshift marks it ready once you are done.\n\
+         \n\
+         In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
+         \n\
+         Include \"Closes #{number}\" in the PR body.\n\
+         \n\
+         {HEADLESS}",
+        url = spec.url,
+        number = spec.number,
+    )
+}
+
 /// The conflict Repair prompt, for a merge of `origin/<merging>` left in
 /// progress with conflicts: the Base branch, or in a Merge run the Issue
 /// branch with Foreign commits on it.

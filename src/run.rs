@@ -108,19 +108,19 @@ pub fn run(
             Worktree::continue_existing(&launch, &issue.repo, &branch, &base)?
         }
     };
+    let logs = Logs {
+        issue,
+        dir: logs_dir,
+        timestamp: &timestamp,
+    };
     if !tickets.is_empty() {
-        return spec_run::run(issue, tickets, worktree, &base, parallel.tickets);
+        return spec_run::run(issue, tickets, worktree, &base, &logs, parallel.tickets);
     }
     let prompt = match &selection {
         Selection::Fresh { .. } => prompt::fresh(issue, &base, &branch),
         Selection::Continuation { pr, .. } => {
             prompt::continuation(issue, &base, &branch, pr.as_ref().map(|pr| pr.url.as_str()))
         }
-    };
-    let logs = Logs {
-        issue,
-        dir: logs_dir,
-        timestamp: &timestamp,
     };
     let mut log = logs.path("implement");
     match implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log) {
@@ -188,14 +188,7 @@ fn implement(
     run_session("implement", prompt)?;
     worktree.push()?;
 
-    progress::step("checking the PR");
-    let pr = open_pr(issue, branch)?;
-    if pr.base != base {
-        bail!("PR targets {}, not {base}", pr.base);
-    }
-    if pr.is_draft {
-        github::mark_ready(issue, branch)?;
-    }
+    let pr = mark_pr_ready(issue, branch, base)?;
 
     let mut repair_loop = RepairLoop {
         issue,
@@ -483,6 +476,20 @@ impl RepairLoop<'_> {
             Round::NewHead(head)
         })
     }
+}
+
+/// Mark the PR whose head is `branch` ready for review, failing unless it
+/// exists, is open and targets `base`.
+pub fn mark_pr_ready(issue: &IssueUrl, branch: &str, base: &str) -> Result<PullRequest> {
+    progress::step("checking the PR");
+    let pr = open_pr(issue, branch)?;
+    if pr.base != base {
+        bail!("PR targets {}, not {base}", pr.base);
+    }
+    if pr.is_draft {
+        github::mark_ready(issue, branch)?;
+    }
+    Ok(pr)
 }
 
 /// The PR whose head is `branch`, failing unless it exists and is open.
