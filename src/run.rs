@@ -46,6 +46,8 @@ pub struct Reached {
     pub goal: Goal,
     /// The most recent session's log, if a session was started.
     pub log: Option<PathBuf>,
+    /// In a Spec run, a line on each Ticket it landed; empty in a Run.
+    pub ticket_lines: Vec<String>,
 }
 
 /// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure
@@ -136,6 +138,7 @@ pub fn run(
             pr_url,
             goal,
             log: Some(log),
+            ticket_lines: Vec::new(),
         }),
         Err(error) => Err(failed_run::fail(issue, worktree, &base, &log, error)),
     }
