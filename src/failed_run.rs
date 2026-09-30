@@ -13,6 +13,10 @@ use crate::issue::IssueUrl;
 use crate::progress;
 use crate::worktree::Worktree;
 
+/// What starts the line naming a Failed run's session log on stderr, which
+/// a Spec run reads back from a Ticket's Run.
+pub const SESSION_LOG: &str = "session log: ";
+
 /// Why a Run did not end with a ready PR, and what the user should see.
 pub struct FailedRun {
     pub error: anyhow::Error,
@@ -38,15 +42,26 @@ impl fmt::Display for PolicyRefusal {
     }
 }
 
-/// A failure before the worktree exists: nothing to push or clean up.
+/// A failure with nothing to push or clean up, as before the worktree exists.
 impl From<anyhow::Error> for FailedRun {
     fn from(error: anyhow::Error) -> Self {
+        let interrupted = interrupt::requested();
         FailedRun {
-            error,
+            error: interrupted_or(error, interrupted),
             pr_url: None,
             log: None,
-            interrupted: interrupt::requested(),
+            interrupted,
         }
+    }
+}
+
+/// `interrupted` if the Run was, else `error`: an interrupt can surface as
+/// some other error, such as a killed git.
+fn interrupted_or(error: anyhow::Error, interrupted: bool) -> anyhow::Error {
+    if interrupted {
+        anyhow!("interrupted")
+    } else {
+        error
     }
 }
 
@@ -62,13 +77,8 @@ pub fn fail(
     log: &Path,
     error: anyhow::Error,
 ) -> FailedRun {
-    // An interrupt can surface as some other error, such as a killed git.
     let interrupted = interrupt::requested();
-    let error = if interrupted {
-        anyhow!("interrupted")
-    } else {
-        error
-    };
+    let error = interrupted_or(error, interrupted);
     // Only the first line: the reason goes in the failure commit's subject.
     let reason = error
         .to_string()

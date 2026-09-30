@@ -17,6 +17,7 @@ mod progress;
 mod prompt;
 #[cfg(test)]
 mod prompts_page;
+mod questions;
 mod run;
 mod session;
 mod spec_run;
@@ -39,7 +40,7 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift --no-merge <Issue URL>   Run the factory on the issue and leave its pull request for review
        thirdshift --email <Issue URL>      Run the factory on the issue, then email how the Run ended
        thirdshift email-test [<address>]   Send a test email through Resend, to check the email setup
-       thirdshift setup                    Write the User config, with every setting and its default
+       thirdshift setup                    Choose your defaults, then write the User config with every setting
        thirdshift update                   Update thirdshift to the latest release
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
@@ -50,8 +51,15 @@ merge, --no-merge, --email and --no-email go before or after the Issue URL, in a
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
 after --email is the address only if it has an @ and isn't a URL.
 
+On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
+can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch, then
+opens one Spec PR. An Unready Ticket, one labelled ready-for-human, needs-info, wontfix or
+needs-triage, is never run, nor is a Ticket with sub-issues, a Ticket in a cycle of blockers, or
+any Ticket that one of these, an open issue outside the Spec or a failed Ticket blocks. If any
+Ticket is not done, the Spec run fails, with a line on each saying why.
+
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
-thirdshift setup writes one listing every setting at its default, to edit.
+thirdshift setup asks for your defaults and writes one listing every setting, to edit.
 With merge.always set, every Run is a Merge run unless given --no-merge:
 
     [merge]
@@ -104,7 +112,7 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    let config = match UserConfig::load() {
+    let config = match config::offer_setup().and_then(|()| UserConfig::load()) {
         Ok(config) => config,
         Err(error) => {
             progress::step(format_args!("{error:#}"));
@@ -158,7 +166,7 @@ fn main() -> ExitCode {
         Err(failed) => {
             progress::step(format_args!("{:#}", failed.error));
             if let Some(log) = &failed.log {
-                progress::step(format_args!("session log: {}", log.display()));
+                progress::step(format_args!("{}{}", failed_run::SESSION_LOG, log.display()));
             }
             if let Some(pr_url) = &failed.pr_url {
                 print_pr_url(pr_url);
