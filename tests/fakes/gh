@@ -27,13 +27,22 @@ default branch. It closes the issues the PR body closes (`Closes #<n>` and the
 like) only when the base is the default branch, as GitHub does.
 
 A PR's `headRefOid` is its head branch's tip on origin, frozen when it is
-merged. Its `closingIssuesReferences` are the issues its body closes.
+merged, and a merged PR records its merge commit as `mergeCommit`. Its
+`closingIssuesReferences` are the issues its body closes.
 `gh repo view` reports origin's HEAD as the default branch.
 
 An issue's title is its entry in `titles`, else `Issue <number>`.
 
 `gh api user` answers with the signed-in user's profile, whose public `email`
 is `user_email`, else null. `gh fake fails 'api user'` makes it fail.
+
+`gh api repos/<repo>/releases/generate-notes` answers with GitHub's
+generated notes: a line for each merged PR whose merge commit is reachable from
+`target_commitish` and not from `previous_tag_name`. `<repo>` may be gh's
+`{owner}/{repo}` placeholder, here and in the commit endpoints. The
+check-runs endpoint also answers
+`--jq '.check_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'`, one run
+per line.
 
 `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -277,6 +286,7 @@ def pr_merge(state, positional, flags):
             die(f"fake gh: pushing the merge failed: {pushed.stderr}")
     pr["state"] = "MERGED"
     pr["headRefOid"] = head_sha
+    pr["mergeCommit"] = origin("rev-parse", f"refs/heads/{pr['base']}")
     default = origin("symbolic-ref", "--short", "HEAD")
     if pr["base"] == default:
         for number in CLOSING_KEYWORD.findall(pr.get("body", "")):
@@ -335,7 +345,8 @@ def api(state, positional, flags):
     if not match:
         die(f"fake gh: unsupported api path {positional[0]}", 2)
     repo, sha, endpoint, _ = match.groups()
-    check_repo(state, {"repo": repo})
+    if repo != "{owner}/{repo}":
+        check_repo(state, {"repo": repo})
     if endpoint == "check-runs":
         state = run_ci_read_hook(state, sha)
         runs = []
@@ -352,6 +363,10 @@ def api(state, positional, flags):
                 }
             )
         save(state)
+        if flags.get("jq") == CHECK_RUN_LINES:
+            for run in runs:
+                print(f"{run['status']} {run['conclusion'] or 'null'} {run['name']}")
+            return
         items, field = runs, "check_runs"
     else:
         items = [
@@ -363,6 +378,47 @@ def api(state, positional, flags):
         die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
     for item in items:
         print(json.dumps(item))
+
+
+# `{owner}/{repo}` is gh's placeholder for the current directory's repo.
+GENERATE_NOTES = re.compile(r"repos/(\{owner\}/\{repo\}|[^/]+/[^/]+)/releases/generate-notes")
+
+CHECK_RUN_LINES = '.check_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'
+
+
+def generate_notes(state, args):
+    """GitHub's generated release notes for `tag_name` at `target_commitish`:
+    one line per merged PR whose merge commit is reachable from the target but
+    not from `previous_tag_name`, oldest first, then the compare link. Only
+    `--jq .body` is supported."""
+    fields, jq = {}, None
+    for flag, value in zip(args, args[1:]):
+        if flag in ("-f", "-F", "--raw-field", "--field"):
+            name, value = value.split("=", 1)
+            fields[name] = value
+        elif flag == "--jq":
+            jq = value
+    if jq != ".body":
+        die(f"fake gh: unsupported --jq {jq}", 2)
+    repo = GENERATE_NOTES.fullmatch(args[0]).group(1)
+    if repo != "{owner}/{repo}":
+        check_repo(state, {"repo": repo})
+    tag, target = fields["tag_name"], fields["target_commitish"]
+    previous = fields.get("previous_tag_name")
+
+    def reachable(commit, ref):
+        return git(origin_repo(), "merge-base", "--is-ancestor", commit, ref).returncode == 0
+
+    lines = [
+        f"* {pr['title']} by @runner in {pr['url']}"
+        for pr in state["prs"]
+        if "mergeCommit" in pr
+        and reachable(pr["mergeCommit"], target)
+        and not (previous and reachable(pr["mergeCommit"], previous))
+    ]
+    compare = f"{previous}...{tag}" if previous else f"commits/{tag}"
+    print("## What's Changed\n" + "\n".join(lines))
+    print(f"\n**Full Changelog**: https://github.com/{state['repo']}/compare/{compare}")
 
 
 def graphql(state, args):
@@ -488,6 +544,8 @@ def main():
         issue_close(state, positional, flags)
     elif args[:2] == ["api", "graphql"]:
         graphql(state, args[2:])
+    elif args[0] == "api" and GENERATE_NOTES.fullmatch(args[1]):
+        generate_notes(state, args[1:])
     elif args[0] == "api":
         positional, flags = parse(args[1:])
         api(state, positional, flags)
