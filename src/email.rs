@@ -83,7 +83,7 @@ impl Resend {
             .context("can't set up the HTTPS client")?;
         let response = client
             .post(format!("{}/emails", self.url))
-            .bearer_auth(&self.key.key)
+            .bearer_auth(&self.key.secret)
             .json(&json!({
                 "from": self.from,
                 "to": self.to,

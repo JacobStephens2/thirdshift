@@ -84,6 +84,10 @@ _Avoid_: completion email, alert
 **User config**:
 The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, and whether a Run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
 
+**Credentials**:
+The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key a **Run notification** is sent with. The key in the environment wins over it; it is what lets a **Run** started from cron, `nohup` or an agent's shell find the key. Only commands that send email read it, so the User config holds no secret.
+_Avoid_: secrets file, key file
+
 **Setup**:
 Writing the **User config** by answering a few questions, one per setting that matters most, with every other setting written out at its default so the file shows everything that can be changed. Offered by the first **Run** on a machine with no User config, and run again at any time to change the answers.
 _Avoid_: init, onboarding, configure

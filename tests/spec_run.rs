@@ -1584,6 +1584,24 @@ fn without_resend_api_key_a_spec_run_sends_with_the_key_in_the_credentials() {
 }
 
 #[test]
+fn broken_credentials_stop_the_spec_run_before_any_ticket_starts() {
+    let scenario = linear_spec();
+    let path = scenario.credentials_are("[resend]\nkye = \"re_file_456\"\n");
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = scenario.run_with_env(
+        &["--email", "me@example.com", &spec_url(&scenario)],
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "resend.kye");
+    assert_contains(&result.stderr, &path.display().to_string());
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(resend.requests().len(), 0);
+}
+
+#[test]
 fn a_missing_address_stops_the_spec_run_before_any_ticket_starts() {
     let scenario = linear_spec();
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);

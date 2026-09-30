@@ -16,7 +16,7 @@ use crate::{config, progress};
 
 /// A Resend API key, and where it came from.
 pub struct ResendKey {
-    pub key: String,
+    pub secret: String,
     pub source: Source,
 }
 
@@ -51,7 +51,7 @@ impl ResendKey {
             .filter(|key| !key.is_empty());
         if let Some(key) = key {
             return Ok(Some(ResendKey {
-                key,
+                secret: key,
                 source: Source::Environment,
             }));
         }
@@ -63,12 +63,10 @@ impl ResendKey {
                 return Err(error).with_context(|| format!("can't read {}", path.display()));
             }
         };
-        let key = parse(&text, &path)?;
-        warn_if_others_can_read(&path);
-        Ok(key.map(|key| ResendKey {
-            key,
-            source: Source::Credentials(path),
-        }))
+        let source = Source::Credentials(path.clone());
+        let key = parse(&text, &source)?;
+        warn_if_others_can_read(&path, &source);
+        Ok(key.map(|secret| ResendKey { secret, source }))
     }
 
     /// The Resend API key, or an error listing every way to give one.
@@ -85,10 +83,9 @@ fn path() -> Result<PathBuf> {
     Ok(config::home()?.join(".thirdshift/credentials.toml"))
 }
 
-/// `resend.key` in `text`, the Credentials at `path`, if it is there and not
+/// `resend.key` in `text`, the contents of `file`, if it is there and not
 /// empty. Any other section or key is an error, as in the User config.
-fn parse(text: &str, path: &Path) -> Result<Option<String>> {
-    let file = format!("the Credentials {}", path.display());
+fn parse(text: &str, file: &Source) -> Result<Option<String>> {
     let table: Table = text
         .parse()
         .map_err(|error| anyhow!("{error}"))
@@ -112,12 +109,12 @@ fn parse(text: &str, path: &Path) -> Result<Option<String>> {
     Ok(found.filter(|key| !key.is_empty()))
 }
 
-/// Warn when the Credentials at `path` can be read by anyone but the user.
-fn warn_if_others_can_read(path: &Path) {
+/// Warn when `file`, at `path`, can be read by anyone but the user.
+fn warn_if_others_can_read(path: &Path, file: &Source) {
     let mode = std::fs::metadata(path).map(|metadata| metadata.permissions().mode());
     if mode.is_ok_and(|mode| mode & 0o077 != 0) {
         progress::step(format_args!(
-            "warning: others can read the Credentials {0}; chmod 600 {0}",
+            "warning: others can read {file}; chmod 600 {}",
             path.display()
         ));
     }
