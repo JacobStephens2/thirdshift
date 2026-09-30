@@ -53,9 +53,9 @@ after --email is the address only if it has an @ and isn't a URL.
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch, then
 opens one Spec PR. An Unready Ticket, one labelled ready-for-human, needs-info, wontfix or
-needs-triage, is never run, nor is a Ticket with sub-issues, nor any Ticket that one of these, an
-open issue outside the Spec or a failed Ticket blocks. If any Ticket is not done, the Spec run
-fails, with a line on each saying why.
+needs-triage, is never run, nor is a Ticket with sub-issues, a Ticket in a cycle of blockers, or
+any Ticket that one of these, an open issue outside the Spec or a failed Ticket blocks. If any
+Ticket is not done, the Spec run fails, with a line on each saying why.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup writes one listing every setting at its default, to edit.
@@ -165,7 +165,7 @@ fn main() -> ExitCode {
         Err(failed) => {
             progress::step(format_args!("{:#}", failed.error));
             if let Some(log) = &failed.log {
-                progress::step(format_args!("session log: {}", log.display()));
+                progress::step(format_args!("{}{}", failed_run::SESSION_LOG, log.display()));
             }
             if let Some(pr_url) = &failed.pr_url {
                 print_pr_url(pr_url);

@@ -13,6 +13,10 @@ use crate::issue::IssueUrl;
 use crate::progress;
 use crate::worktree::Worktree;
 
+/// What starts the line naming a Failed run's session log on stderr, which
+/// a Spec run reads back from a Ticket's Run.
+pub const SESSION_LOG: &str = "session log: ";
+
 /// Why a Run did not end with a ready PR, and what the user should see.
 pub struct FailedRun {
     pub error: anyhow::Error,

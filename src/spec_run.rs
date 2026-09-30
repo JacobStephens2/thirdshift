@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 
 use crate::args;
-use crate::failed_run::FailedRun;
+use crate::failed_run::{self, FailedRun};
 use crate::github::{self, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -43,7 +43,7 @@ pub fn run(
 }
 
 /// How a Ticket's Run in this Spec run ended.
-enum Ran {
+enum TicketOutcome {
     /// Its PR, as the Run printed it.
     Landed(Option<String>),
     /// Why, and its session log, as the Run reported them.
@@ -55,13 +55,13 @@ enum Ran {
 /// not done, if any Ticket is not done.
 fn land_tickets(spec: &IssueUrl, mut tickets: Vec<Ticket>, worktree: &Worktree) -> Result<()> {
     worktree.push()?;
-    let mut ran = BTreeMap::new();
-    while let Some(ticket) = next_ready(&tickets, &ran) {
+    let mut outcomes = BTreeMap::new();
+    while let Some(ticket) = next_ready(&tickets, &outcomes) {
         if interrupt::requested() {
             bail!("interrupted");
         }
         let outcome = run_ticket(spec, ticket, worktree.branch())?;
-        ran.insert(ticket, outcome);
+        outcomes.insert(ticket, outcome);
         tickets = github::tickets(spec)?;
     }
     let not_done: Vec<String> = tickets
@@ -72,20 +72,20 @@ fn land_tickets(spec: &IssueUrl, mut tickets: Vec<Ticket>, worktree: &Worktree) 
     if not_done.is_empty() {
         return Ok(());
     }
-    report(&tickets, &ran);
+    report(&tickets, &outcomes);
     bail!("Tickets not done: {}", not_done.join(", "));
 }
 
 /// The lowest-numbered Ticket that is open, not an Unready Ticket, has no
-/// sub-issues, has every blocker closed and hasn't `ran` yet.
-fn next_ready(tickets: &[Ticket], ran: &BTreeMap<u64, Ran>) -> Option<u64> {
+/// sub-issues, has every blocker closed and has no outcome in `outcomes` yet.
+fn next_ready(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) -> Option<u64> {
     tickets
         .iter()
         .filter(|ticket| {
             ticket.is_open
                 && !ticket.has_sub_issues
                 && ticket.open_blockers.is_empty()
-                && !ran.contains_key(&ticket.number)
+                && !outcomes.contains_key(&ticket.number)
                 && unready_label(ticket).is_none()
         })
         .map(|ticket| ticket.number)
@@ -101,14 +101,14 @@ fn unready_label(ticket: &Ticket) -> Option<&str> {
 
 /// A line on each Ticket that landed in this Spec run, with its PR, and on
 /// each Ticket not done, with why, lowest number first.
-fn report(tickets: &[Ticket], ran: &BTreeMap<u64, Ran>) {
+fn report(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) {
     let mut sorted: Vec<&Ticket> = tickets.iter().collect();
     sorted.sort_by_key(|ticket| ticket.number);
     for ticket in sorted {
         let number = ticket.number;
-        let landed = match ran.get(&number) {
-            Some(Ran::Landed(Some(pr_url))) => Some(format!("landed with {pr_url}")),
-            Some(Ran::Landed(None)) => Some("landed".to_string()),
+        let landed = match outcomes.get(&number) {
+            Some(TicketOutcome::Landed(Some(pr_url))) => Some(format!("landed with {pr_url}")),
+            Some(TicketOutcome::Landed(None)) => Some("landed".to_string()),
             _ => None,
         };
         let line = if !ticket.is_open {
@@ -116,7 +116,7 @@ fn report(tickets: &[Ticket], ran: &BTreeMap<u64, Ran>) {
                 Some(landed) => landed,
                 None => continue,
             }
-        } else if let Some(Ran::Failed { cause, log }) = ran.get(&number) {
+        } else if let Some(TicketOutcome::Failed { cause, log }) = outcomes.get(&number) {
             match log {
                 Some(log) => format!("failed: {cause} (session log: {log})"),
                 None => format!("failed: {cause}"),
@@ -185,7 +185,7 @@ fn cycle_through(start: u64, tickets: &[Ticket]) -> Option<Vec<u64>> {
 /// `spec_branch` from the same Launch directory, relaying its stderr with a
 /// `#<number>: ` prefix. It landed if it exits 0, and failed otherwise, with
 /// the cause and session log it ended on.
-fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<Ran> {
+fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<TicketOutcome> {
     progress::step(format_args!("starting #{number}"));
     let ticket = spec.sibling(number);
     let mut child = Command::new(std::env::current_exe().context("no thirdshift executable")?)
@@ -219,18 +219,20 @@ fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<Ran> {
         .with_context(|| format!("could not wait for the Run for #{number}"))?;
     if status.success() {
         progress::step(format_args!("#{number} landed"));
-        return Ok(Ran::Landed(stdout.lines().last().map(String::from)));
+        return Ok(TicketOutcome::Landed(
+            stdout.lines().last().map(String::from),
+        ));
     }
     progress::step(format_args!("#{number} failed"));
     let [before, last] = last_lines;
     let (cause, log) = match last {
-        Some(last) => match last.strip_prefix("session log: ") {
+        Some(last) => match last.strip_prefix(failed_run::SESSION_LOG) {
             Some(log) => (before, Some(log.to_string())),
             None => (Some(last), None),
         },
         None => (None, None),
     };
-    Ok(Ran::Failed {
+    Ok(TicketOutcome::Failed {
         cause: cause.unwrap_or_else(|| format!("the Run {status}")),
         log,
     })

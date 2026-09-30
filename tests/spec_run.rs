@@ -388,7 +388,10 @@ fn a_failed_ticket_stops_only_its_dependents_and_is_not_started_again() {
         .lines()
         .rfind(|line| line.starts_with("thirdshift: #21 failed: "))
         .unwrap_or_else(|| panic!("no failed line for #21 in: {}", result.stderr));
-    assert!(failed.contains("session log: "), "{failed}");
+    assert!(
+        failed.starts_with("thirdshift: #21 failed: claude exited 1 (session log: "),
+        "{failed}"
+    );
     let log = failed.rsplit("session log: ").next().unwrap();
     assert!(
         std::path::Path::new(log.trim_end_matches(')')).exists(),
@@ -470,6 +473,7 @@ fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_r
         "Unready Ticket",
         "ready-for-human, needs-info, wontfix or\nneeds-triage",
         "sub-issues",
+        "cycle",
     ] {
         assert_contains(&result.stdout, part);
     }
