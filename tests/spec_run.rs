@@ -2,7 +2,8 @@
 //! works through its Tickets in dependency order, each a Merge run into the
 //! Spec branch, then opens the Spec PR from the Spec branch into the Base
 //! branch as a draft, has the Spec review review the Spec branch, and marks
-//! the Spec PR ready for review.
+//! the Spec PR ready for review. The Spec PR then goes through the Repair
+//! loop, and with `merge`, the Self-merge.
 
 mod support;
 
@@ -250,17 +251,209 @@ fn ticket_runs_leave_the_launch_directory_to_the_spec_run() {
     );
 }
 
+/// Assert the Spec PR was merged into main with a merge commit, the Spec
+/// branch deleted on origin and the Spec closed.
+fn assert_spec_pr_merged(scenario: &Scenario, result: &support::RunResult) {
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let spec_pr = "https://github.com/acme/widgets/pull/3";
+    assert_eq!(result.stdout, format!("{spec_pr}\n"));
+    assert_contains(
+        &result.stderr,
+        &format!("thirdshift: PR {spec_pr} is merged\n"),
+    );
+    let gh = scenario.gh_state();
+    assert_eq!(gh["prs"][2]["head"], "issue-20");
+    assert_eq!(gh["prs"][2]["state"], "MERGED");
+    assert_eq!(gh["issues"]["20"], "CLOSED");
+    let parents = scenario.origin_git(&["log", "-1", "--format=%P", "refs/heads/main"]);
+    assert_eq!(
+        parents.split_whitespace().count(),
+        2,
+        "main's tip is not a merge commit"
+    );
+    assert_eq!(
+        scenario.origin_file("main", "second.txt").as_deref(),
+        Some("22\n")
+    );
+    assert_eq!(scenario.origin_log("issue-20"), None);
+    scenario.assert_cleaned_up("issue-20");
+}
+
 #[test]
-fn a_merge_ask_from_the_user_config_leaves_the_spec_pr_ready_for_review() {
+fn merge_on_a_spec_self_merges_the_spec_pr_into_the_base_branch() {
+    let scenario = linear_spec();
+
+    let result = scenario.run(&["merge", &spec_url(&scenario)]);
+
+    assert_spec_pr_merged(&scenario, &result);
+}
+
+#[test]
+fn a_merge_ask_from_the_user_config_self_merges_the_spec_pr() {
     let scenario = linear_spec();
     scenario.user_config_is("[merge]\nalways = true\n");
 
     let result = scenario.run(&[&spec_url(&scenario)]);
 
+    assert_spec_pr_merged(&scenario, &result);
+}
+
+#[test]
+fn no_merge_on_a_spec_leaves_the_spec_pr_ready_while_its_tickets_still_merge() {
+    let scenario = linear_spec();
+    scenario.user_config_is("[merge]\nalways = true\n");
+
+    let result = scenario.run(&["--no-merge", &spec_url(&scenario)]);
+
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let gh = scenario.gh_state();
+    assert_eq!(gh["prs"][0]["state"], "MERGED");
+    assert_eq!(gh["prs"][1]["state"], "MERGED");
+    let spec = &gh["prs"][2];
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], false);
+    assert_eq!(gh["issues"]["20"], "OPEN");
+    assert_eq!(scenario.origin_file("main", "first.txt"), None);
+}
+
+/// Bash that has someone else push `file` with `content` to main.
+fn base_moves_on(file: &str, content: &str) -> String {
+    format!(
+        r#"
+other="$(mktemp -d)"
+git clone -q https://github.com/acme/widgets.git "$other"
+echo "{content}" > "$other/{file}"
+git -C "$other" add -A
+git -C "$other" commit -q -m "Base moves on"
+git -C "$other" push -q origin main
+rm -rf "$other"
+"#
+    )
+}
+
+/// Bash that sets the check runs on the worktree's HEAD to `checks`.
+fn checks_on_head(checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse HEAD)\" '{checks}'\n")
+}
+
+/// Bash that commits a fix, `fix-<n>.txt`, as a CI-fix Repair would.
+fn commits_fix(n: usize) -> String {
+    format!("echo fix > fix-{n}.txt\ngit add fix-{n}.txt\ngit commit -q -m \"Fix CI {n}\"\n")
+}
+
+const GREEN: &str = r#"[{"name": "test", "conclusion": "success"}]"#;
+const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
+
+/// The prompts of the sessions for the Spec, in order.
+fn spec_prompts(scenario: &Scenario) -> Vec<String> {
+    let calls = scenario.claude_calls();
+    sessions_by_issue(scenario)
+        .iter()
+        .enumerate()
+        .filter(|(_, issue)| *issue == &SPEC.to_string())
+        .map(|(i, _)| calls[i]["prompt"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_base_branch_that_moved_into_a_conflict_gets_a_conflict_repair_and_the_spec_pr_ends_ready() {
+    let scenario = linear_spec();
+    scenario.agent_does_for_in_session(SPEC, 1, &base_moves_on("first.txt", "base first"));
+    scenario.agent_does_for_in_session(
+        SPEC,
+        2,
+        "printf '21\\nbase first\\n' > first.txt\ngit add first.txt\ngit commit -q --no-edit\n",
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let prompts = spec_prompts(&scenario);
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert_contains(&prompts[1], "/thirdshift:resolving-merge-conflicts");
+    assert_contains(&prompts[1], "A merge of origin/main into issue-20");
+    assert_contains(&prompts[1], &spec_url(&scenario));
     let spec = &scenario.gh_state()["prs"][2];
     assert_eq!(spec["state"], "OPEN");
     assert_eq!(spec["isDraft"], false);
+    assert_eq!(
+        scenario.origin_file("issue-20", "first.txt").as_deref(),
+        Some("21\nbase first\n")
+    );
+}
+
+#[test]
+fn red_ci_on_the_spec_prs_head_gets_a_ci_fix_repair() {
+    let scenario = linear_spec();
+    scenario.agent_does_for_in_session(SPEC, 1, &checks_on_head(RED));
+    scenario.agent_does_for_in_session(
+        SPEC,
+        2,
+        &format!("{}{}", commits_fix(1), checks_on_head(GREEN)),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let prompts = spec_prompts(&scenario);
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(
+        prompts[1].starts_with("CI failed on pull request https://github.com/acme/widgets/pull/3"),
+        "prompt: {}",
+        prompts[1]
+    );
+    assert_contains(&prompts[1], &spec_url(&scenario));
+    assert_eq!(scenario.gh_state()["prs"][2]["isDraft"], false);
+    assert_eq!(
+        scenario.origin_file("issue-20", "fix-1.txt").as_deref(),
+        Some("fix\n")
+    );
+}
+
+#[test]
+fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        "gh fake refuse-merges 1 'Merge commits are not allowed on this repository.'\n",
+    );
+
+    let result = scenario.run(&["merge", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/3\n");
+    assert_contains(
+        &result.stderr,
+        "Merge commits are not allowed on this repository.",
+    );
+    let gh = scenario.gh_state();
+    let spec = &gh["prs"][2];
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], false);
+    assert_eq!(gh["issues"]["20"], "OPEN");
+    assert_eq!(scenario.origin_file("main", "first.txt"), None);
+}
+
+#[test]
+fn repairs_exhausted_on_the_spec_pr_send_it_back_to_draft_and_exit_1() {
+    let scenario = linear_spec();
+    scenario.agent_does_for_in_session(SPEC, 1, &checks_on_head(RED));
+    for session in 2..=6 {
+        scenario.agent_does_for_in_session(
+            SPEC,
+            session,
+            &format!("{}{}", commits_fix(session - 1), checks_on_head(RED)),
+        );
+    }
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "repairs exhausted: CI red");
+    assert_eq!(spec_prompts(&scenario).len(), 6);
+    let spec = &scenario.gh_state()["prs"][2];
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], true);
 }
 
 #[test]
@@ -862,6 +1055,8 @@ fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_r
         "ready-for-human, needs-info, wontfix or\nneeds-triage",
         "sub-issues",
         "cycle",
+        "merge on a Spec merges the Spec PR",
+        "Tickets always merge into the Spec branch",
     ] {
         assert_contains(&result.stdout, part);
     }
