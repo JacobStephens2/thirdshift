@@ -47,7 +47,9 @@ pub struct Ticket {
     pub labels: Vec<String>,
     /// It has sub-issues of its own.
     pub has_sub_issues: bool,
-    /// The numbers of the open issues it is blocked by, in the Spec or not.
+    /// The numbers of the issues it is blocked by, in the Spec or not.
+    pub blockers: Vec<u64>,
+    /// The numbers of those blockers that are open.
     pub open_blockers: Vec<u64>,
 }
 
@@ -108,8 +110,10 @@ pub fn tickets(issue: &IssueUrl) -> Result<Vec<Ticket>> {
     )?
     .iter()
     .map(|node| {
+        let mut blockers = Vec::new();
         let mut open_blockers = Vec::new();
         for blocker in nodes(&node["blockedBy"], "blockedBy")? {
+            blockers.push(number(&blocker)?);
             if is_open(&blocker)? {
                 open_blockers.push(number(&blocker)?);
             }
@@ -125,6 +129,7 @@ pub fn tickets(issue: &IssueUrl) -> Result<Vec<Ticket>> {
                 .as_u64()
                 .context("gh api graphql output has an issue with no subIssues count")?
                 > 0,
+            blockers,
             open_blockers,
         })
     })

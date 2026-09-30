@@ -2,7 +2,8 @@
 //! works through its Tickets in dependency order, each a Merge run into the
 //! Spec branch, then opens the Spec PR from the Spec branch into the Base
 //! branch as a draft, has the Spec review review the Spec branch, and marks
-//! the Spec PR ready for review.
+//! the Spec PR ready for review. The Spec PR then goes through the Repair
+//! loop, and with `merge`, the Self-merge.
 
 mod support;
 
@@ -274,17 +275,209 @@ fn ticket_runs_leave_the_launch_directory_to_the_spec_run() {
     );
 }
 
+/// Assert the Spec PR was merged into main with a merge commit, the Spec
+/// branch deleted on origin and the Spec closed.
+fn assert_spec_pr_merged(scenario: &Scenario, result: &support::RunResult) {
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let spec_pr_url = "https://github.com/acme/widgets/pull/2";
+    assert_eq!(result.stdout, format!("{spec_pr_url}\n"));
+    assert_contains(
+        &result.stderr,
+        &format!("thirdshift: PR {spec_pr_url} is merged\n"),
+    );
+    assert_eq!(spec_pr(scenario)["state"], "MERGED");
+    let gh = scenario.gh_state();
+    assert_eq!(gh["issues"]["20"], "CLOSED");
+    let parents = scenario.origin_git(&["log", "-1", "--format=%P", "refs/heads/main"]);
+    assert_eq!(
+        parents.split_whitespace().count(),
+        2,
+        "main's tip is not a merge commit"
+    );
+    assert_eq!(
+        scenario.origin_file("main", "second.txt").as_deref(),
+        Some("22\n")
+    );
+    assert_eq!(scenario.origin_log("issue-20"), None);
+    scenario.assert_cleaned_up("issue-20");
+}
+
 #[test]
-fn a_merge_ask_from_the_user_config_leaves_the_spec_pr_ready_for_review() {
+fn merge_on_a_spec_self_merges_the_spec_pr_into_the_base_branch() {
+    let scenario = linear_spec();
+
+    let result = scenario.run(&["merge", &spec_url(&scenario)]);
+
+    assert_spec_pr_merged(&scenario, &result);
+}
+
+#[test]
+fn a_merge_ask_from_the_user_config_self_merges_the_spec_pr() {
     let scenario = linear_spec();
     scenario.user_config_is("[merge]\nalways = true\n");
 
     let result = scenario.run(&[&spec_url(&scenario)]);
 
+    assert_spec_pr_merged(&scenario, &result);
+}
+
+#[test]
+fn no_merge_on_a_spec_leaves_the_spec_pr_ready_while_its_tickets_still_merge() {
+    let scenario = linear_spec();
+    scenario.user_config_is("[merge]\nalways = true\n");
+
+    let result = scenario.run(&["--no-merge", &spec_url(&scenario)]);
+
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    for ticket in ["issue-21", "issue-22"] {
+        assert_eq!(pr_from(&scenario, ticket).unwrap()["state"], "MERGED");
+    }
+    let spec = spec_pr(&scenario);
+    let gh = scenario.gh_state();
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], false);
+    assert_eq!(gh["issues"]["20"], "OPEN");
+    assert_eq!(scenario.origin_file("main", "first.txt"), None);
+}
+
+/// Bash that has someone else push `file` with `content` to main.
+fn base_moves_on(file: &str, content: &str) -> String {
+    format!(
+        r#"
+other="$(mktemp -d)"
+git clone -q https://github.com/acme/widgets.git "$other"
+echo "{content}" > "$other/{file}"
+git -C "$other" add -A
+git -C "$other" commit -q -m "Base moves on"
+git -C "$other" push -q origin main
+rm -rf "$other"
+"#
+    )
+}
+
+/// Bash that sets the check runs on the worktree's HEAD to `checks`.
+fn checks_on_head(checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse HEAD)\" '{checks}'\n")
+}
+
+/// Bash that commits a fix, `fix-<n>.txt`, as a CI-fix Repair would.
+fn commits_fix(n: usize) -> String {
+    format!("echo fix > fix-{n}.txt\ngit add fix-{n}.txt\ngit commit -q -m \"Fix CI {n}\"\n")
+}
+
+const GREEN: &str = r#"[{"name": "test", "conclusion": "success"}]"#;
+const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
+
+/// The prompts of the sessions for the Spec, in order.
+fn spec_prompts(scenario: &Scenario) -> Vec<String> {
+    let calls = scenario.claude_calls();
+    sessions_by_issue(scenario)
+        .iter()
+        .enumerate()
+        .filter(|(_, issue)| *issue == &SPEC.to_string())
+        .map(|(i, _)| calls[i]["prompt"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_base_branch_that_moved_into_a_conflict_gets_a_conflict_repair_and_the_spec_pr_ends_ready() {
+    let scenario = linear_spec();
+    scenario.agent_does_for_in_session(SPEC, 1, &base_moves_on("first.txt", "base first"));
+    scenario.agent_does_for_in_session(
+        SPEC,
+        2,
+        "printf '21\\nbase first\\n' > first.txt\ngit add first.txt\ngit commit -q --no-edit\n",
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let prompts = spec_prompts(&scenario);
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert_contains(&prompts[1], "/thirdshift:resolving-merge-conflicts");
+    assert_contains(&prompts[1], "A merge of origin/main into issue-20");
+    assert_contains(&prompts[1], &spec_url(&scenario));
     let spec = spec_pr(&scenario);
     assert_eq!(spec["state"], "OPEN");
     assert_eq!(spec["isDraft"], false);
+    assert_eq!(
+        scenario.origin_file("issue-20", "first.txt").as_deref(),
+        Some("21\nbase first\n")
+    );
+}
+
+#[test]
+fn red_ci_on_the_spec_prs_head_gets_a_ci_fix_repair() {
+    let scenario = linear_spec();
+    scenario.agent_does_for_in_session(SPEC, 1, &checks_on_head(RED));
+    scenario.agent_does_for_in_session(
+        SPEC,
+        2,
+        &format!("{}{}", commits_fix(1), checks_on_head(GREEN)),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let prompts = spec_prompts(&scenario);
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(
+        prompts[1].starts_with("CI failed on pull request https://github.com/acme/widgets/pull/2"),
+        "prompt: {}",
+        prompts[1]
+    );
+    assert_contains(&prompts[1], &spec_url(&scenario));
+    assert_eq!(spec_pr(&scenario)["isDraft"], false);
+    assert_eq!(
+        scenario.origin_file("issue-20", "fix-1.txt").as_deref(),
+        Some("fix\n")
+    );
+}
+
+#[test]
+fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        "gh fake refuse-merges 1 'Merge commits are not allowed on this repository.'\n",
+    );
+
+    let result = scenario.run(&["merge", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/2\n");
+    assert_contains(
+        &result.stderr,
+        "Merge commits are not allowed on this repository.",
+    );
+    let gh = scenario.gh_state();
+    let spec = spec_pr(&scenario);
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], false);
+    assert_eq!(gh["issues"]["20"], "OPEN");
+    assert_eq!(scenario.origin_file("main", "first.txt"), None);
+}
+
+#[test]
+fn repairs_exhausted_on_the_spec_pr_send_it_back_to_draft_and_exit_1() {
+    let scenario = linear_spec();
+    scenario.agent_does_for_in_session(SPEC, 1, &checks_on_head(RED));
+    for session in 2..=6 {
+        scenario.agent_does_for_in_session(
+            SPEC,
+            session,
+            &format!("{}{}", commits_fix(session - 1), checks_on_head(RED)),
+        );
+    }
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "repairs exhausted: CI red");
+    assert_eq!(spec_prompts(&scenario).len(), 6);
+    let spec = spec_pr(&scenario);
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], true);
 }
 
 #[test]
@@ -582,6 +775,63 @@ fn help_does_not_mention_the_ticket_runs_hidden_argument() {
     assert!(!result.stdout.contains("spec-branch"), "{}", result.stdout);
 }
 
+/// Bash that touches `started-<ticket>` in the scenario root, then waits up
+/// to ten seconds for `started-<other>` there, failing if it never appears:
+/// the session for `ticket` only ends once `other`'s has started too.
+fn waits_for_other_session(scenario: &Scenario, ticket: u32, other: u32) -> String {
+    let root = scenario.path("");
+    format!(
+        r#"
+touch {root}/started-{ticket}
+for _ in $(seq 200); do test -f {root}/started-{other} && break; sleep 0.05; done
+test -f {root}/started-{other}
+"#,
+        root = root.display()
+    )
+}
+
+/// A Spec #20 with two independent Tickets, #21 and #22, and #23, blocked by
+/// both, whose agent checks that both have landed on its branch.
+fn diamond_spec() -> Scenario {
+    let scenario = Scenario::new();
+    scenario.issue_titled(SPEC, SPEC_TITLE);
+    scenario.spec_has_tickets(SPEC, &[(21, &[]), (22, &[]), (23, &[21, 22])]);
+    scenario.agent_does_for(21, &agent_lands(21, "first.txt"));
+    scenario.agent_does_for(22, &agent_lands(22, "second.txt"));
+    scenario.agent_does_for(
+        23,
+        &format!(
+            "test -f first.txt\ntest -f second.txt\n{}",
+            agent_lands(23, "third.txt")
+        ),
+    );
+    scenario
+}
+
+/// Make #21's and #22's sessions each wait for the other's to start, so the
+/// Spec run only succeeds if both run at once.
+fn independent_tickets_wait_for_each_other(scenario: &Scenario) {
+    for (ticket, other, file) in [(21, 22, "first.txt"), (22, 21, "second.txt")] {
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                "{}{}",
+                waits_for_other_session(scenario, ticket, other),
+                agent_lands(ticket, file)
+            ),
+        );
+    }
+}
+
+/// Make #22's session check that #21 already landed on the Spec branch it
+/// branched off, as it has only if #21's Run ended before #22's started.
+fn second_ticket_needs_the_first_landed(scenario: &Scenario) {
+    scenario.agent_does_for(
+        22,
+        &format!("test -f first.txt\n{}", agent_lands(22, "second.txt")),
+    );
+}
+
 /// A Spec #20 whose Tickets are `tickets`, each with the issues it is
 /// blocked by, and whose open Tickets' agents each land their own file.
 fn spec_of(tickets: &[(u32, &[u32])]) -> Scenario {
@@ -615,6 +865,159 @@ fn assert_failed_spec_run(scenario: &Scenario, result: &support::RunResult, chec
         format!(
             "<!-- thirdshift:tickets -->\n## Tickets\n\n{checklist}<!-- /thirdshift:tickets -->"
         )
+    );
+}
+
+#[test]
+fn independent_tickets_run_at_once_and_the_ticket_they_block_waits_for_both() {
+    let scenario = diamond_spec();
+    independent_tickets_wait_for_each_other(&scenario);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let mut sessions = sessions_by_issue(&scenario);
+    assert_eq!(sessions.pop().as_deref(), Some("20"));
+    assert_eq!(sessions.pop().as_deref(), Some("23"));
+    sessions.sort();
+    assert_eq!(sessions, ["21", "22"]);
+    let started = |ticket| {
+        result
+            .stderr
+            .find(&format!("starting #{ticket}\n"))
+            .unwrap()
+    };
+    let landed = |ticket| result.stderr.find(&format!("#{ticket} landed\n")).unwrap();
+    assert!(started(22) < landed(21), "stderr: {}", result.stderr);
+    assert!(started(21) < landed(22), "stderr: {}", result.stderr);
+    assert!(landed(21) < started(23), "stderr: {}", result.stderr);
+    assert!(landed(22) < started(23), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.origin_file("issue-20", "third.txt").as_deref(),
+        Some("23\n")
+    );
+    scenario.assert_cleaned_up("issue-20");
+}
+
+#[test]
+fn two_tickets_starting_together_in_one_launch_directory_both_get_their_worktrees() {
+    let scenario = diamond_spec();
+    independent_tickets_wait_for_each_other(&scenario);
+
+    let result = scenario.run(&[&spec_url(&scenario), "--parallel", "2"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    for ticket in [21, 22] {
+        assert_contains(
+            &result.stderr,
+            &format!("on issue-{ticket} from origin/issue-20\n"),
+        );
+    }
+    let cwds: Vec<String> = scenario
+        .claude_calls()
+        .iter()
+        .map(|call| call["cwd"].as_str().unwrap().to_string())
+        .collect();
+    for ticket in [21, 22] {
+        let worktree = scenario.path(&format!("work/widgets-issue-{ticket}"));
+        assert!(cwds.contains(&worktree.display().to_string()), "{cwds:?}");
+    }
+}
+
+#[test]
+fn parallel_1_runs_the_tickets_one_at_a_time() {
+    for args in [["parallel", "1"], ["--parallel", "1"]] {
+        let scenario = diamond_spec();
+        second_ticket_needs_the_first_landed(&scenario);
+        let url = spec_url(&scenario);
+
+        let result = scenario.run(&[args[0], args[1], &url]);
+
+        assert_eq!(result.code, Some(0), "{args:?} stderr: {}", result.stderr);
+        assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
+        let landed = result.stderr.find("#21 landed\n").unwrap();
+        let started = result.stderr.find("starting #22\n").unwrap();
+        assert!(landed < started, "stderr: {}", result.stderr);
+    }
+}
+
+#[test]
+fn spec_parallel_in_the_user_config_sets_how_many_tickets_run_at_once() {
+    let scenario = diamond_spec();
+    second_ticket_needs_the_first_landed(&scenario);
+    scenario.user_config_is("[spec]\nparallel = 1\n");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
+}
+
+#[test]
+fn the_parallel_flag_wins_over_spec_parallel() {
+    let scenario = diamond_spec();
+    independent_tickets_wait_for_each_other(&scenario);
+    scenario.user_config_is("[spec]\nparallel = 1\n");
+
+    let result = scenario.run(&[&spec_url(&scenario), "parallel", "2"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+}
+
+#[test]
+fn without_a_limit_at_most_three_tickets_run_at_once() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(SPEC, SPEC_TITLE);
+    let tickets = [21, 22, 23, 24, 25];
+    scenario.spec_has_tickets(SPEC, &tickets.map(|ticket| (ticket, &[][..])));
+    let root = scenario.path("").display().to_string();
+    for ticket in tickets {
+        // Each session waits, up to ten seconds, until three are running or
+        // have been, then for a moment more, and records how many it saw at
+        // once.
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                r#"
+mkdir -p {root}/running
+touch {root}/running/{ticket}
+for _ in $(seq 200); do
+  test -f {root}/three && break
+  test "$(ls {root}/running | wc -l)" -ge 3 && touch {root}/three && break
+  sleep 0.05
+done
+sleep 0.5
+ls {root}/running | wc -l >> {root}/seen
+rm {root}/running/{ticket}
+{}"#,
+                agent_lands(ticket, &format!("{ticket}.txt"))
+            ),
+        );
+    }
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let seen = std::fs::read_to_string(scenario.path("seen")).unwrap();
+    let most = seen
+        .split_whitespace()
+        .map(|n| n.parse::<u32>().unwrap())
+        .max();
+    assert_eq!(most, Some(3), "{seen}");
+}
+
+#[test]
+fn parallel_on_an_issue_with_no_sub_issues_stops_before_any_work_naming_the_flag() {
+    let scenario = Scenario::new();
+
+    let result = scenario.run(&["parallel", "2", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    scenario.assert_rejected_before_any_work(&result, "parallel");
+    assert!(
+        scenario.origin_log("issue-7").is_none(),
+        "stderr: {}",
+        result.stderr
     );
 }
 
@@ -673,7 +1076,8 @@ fn a_failed_ticket_stops_only_its_dependents_and_is_not_started_again() {
     let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[]), (24, &[])]);
     scenario.agent_does_for(21, "exit 1");
 
-    let result = scenario.run(&[&spec_url(&scenario)]);
+    // One at a time, so the pull requests are numbered in Ticket order.
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
 
     assert_failed_spec_run(
         &scenario,
@@ -795,6 +1199,8 @@ fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_r
         "ready-for-human, needs-info, wontfix or\nneeds-triage",
         "sub-issues",
         "cycle",
+        "merge on a Spec merges the Spec PR",
+        "Tickets always merge into the Spec branch",
     ] {
         assert_contains(&result.stdout, part);
     }
@@ -873,7 +1279,8 @@ fn a_ticket_that_fails_once_the_spec_pr_is_open_is_shown_failed_in_its_checklist
     let scenario = spec_of(&[(21, &[]), (22, &[])]);
     scenario.agent_does_for(22, "exit 1");
 
-    let result = scenario.run(&[&spec_url(&scenario)]);
+    // One at a time, so the Spec PR is open when #22 starts.
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
 
     assert_failed_spec_run(
         &scenario,
@@ -917,7 +1324,8 @@ fn a_checklist_update_github_refuses_is_only_a_warning() {
         ),
     );
 
-    let result = scenario.run(&[&spec_url(&scenario)]);
+    // One at a time, so the Spec PR is open when #22 starts.
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);

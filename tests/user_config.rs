@@ -142,6 +142,7 @@ fn an_unknown_key_or_section_stops_the_run_naming_it_and_the_file() {
         ("[merge]\nalway = true\n", "merge.alway"),
         ("[merges]\nalways = true\n", "[merges]"),
         ("colour = true\n", "colour"),
+        ("[spec]\nparalel = 2\n", "spec.paralel"),
     ] {
         let scenario = Scenario::new();
         let path = scenario.user_config_is(config);
@@ -154,6 +155,31 @@ fn an_unknown_key_or_section_stops_the_run_naming_it_and_the_file() {
         assert!(
             result.stderr.contains(named),
             "expected {named:?} in stderr for {config:?}: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn a_spec_parallel_that_is_not_a_whole_number_from_1_up_stops_the_run() {
+    for config in [
+        "[spec]\nparallel = 0\n",
+        "[spec]\nparallel = -2\n",
+        "[spec]\nparallel = 1.5\n",
+        "[spec]\nparallel = \"3\"\n",
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(config);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result
+                .stderr
+                .contains("spec.parallel must be a whole number from 1 up"),
+            "stderr: {}",
             result.stderr
         );
     }

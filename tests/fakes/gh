@@ -11,6 +11,7 @@ State lives in the JSON file named by $FAKE_GH_STATE:
               "mergeable"?, "unknown_polls"?}],
      "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
      "statuses": {"<sha>": [{"context", "state", "url"}]},
+     "runs"?: [{"branch", "workflow", "event", "headSha", "status", "conclusion"}],
      "on_ci_read"?: {"times", "script", "seen"},
      "on_merge"?: {"times", "script"},
      "refuse_merges"?: {"times", "error"},
@@ -42,6 +43,12 @@ generated notes: a line for each merged PR whose merge commit is reachable from
 `{owner}/{repo}` placeholder, here and in the commit endpoints.
 `gh api repos/<repo>/actions/runs?head_sha=<sha>` answers with the workflow
 runs on <sha>: its check runs, read as the check-runs endpoint reads them.
+`gh api repos/<repo>/commits/<sha>/pulls` answers with the PRs <sha> belongs
+to, as GitHub does: those merged as <sha> and those whose head is <sha>.
+
+`gh run list` answers with the workflow runs in `runs`, newest first, that
+match its `--branch`, `--workflow` and `--event`. Runs there are only ones a
+test records with `gh fake run`: they are separate from the check runs.
 
 `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -63,6 +70,8 @@ command):
 
     gh fake checks <sha> '<JSON list>'      set the check runs on <sha>
     gh fake statuses <sha> '<JSON list>'    set the commit statuses on <sha>
+    gh fake run '<JSON>'                    record a workflow run, newer than
+                                            any recorded before it
     gh fake pr <head> <field> '<JSON>'      set a field of <head>'s newest PR
     gh fake issue <number> <state>          set issue <number> OPEN or CLOSED
     gh fake on-ci-read <times> '<script>'   run <script> in bash the first time
@@ -84,16 +93,37 @@ command):
 
 Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
 
+Parallel child Runs call gh at once, so each call holds an exclusive lock on
+$FAKE_GH_STATE.lock while it reads and writes the state and the record. It lets
+go while a hook script runs, as the script may call gh itself.
+
 Only the subcommands thirdshift and the fake agents use are supported. Anything
 else exits 2 so an unexpected call fails loudly.
 """
 
+import fcntl
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+
+
+LOCK = None
+
+
+def lock():
+    """Wait for the state's lock and hold it until `unlock` or exit."""
+    global LOCK
+    LOCK = open(os.environ["FAKE_GH_STATE"] + ".lock", "w")
+    fcntl.flock(LOCK, fcntl.LOCK_EX)
+
+
+def unlock():
+    global LOCK
+    LOCK.close()
+    LOCK = None
 
 
 def load():
@@ -311,6 +341,7 @@ def pr_merge(state, positional, flags):
                 state["issues"][number] = "CLOSED"
     save(state)
     if "after_merge" in state:
+        unlock()
         subprocess.run(["bash", "-euc", state["after_merge"]], check=True, stdout=sys.stderr)
 
 
@@ -350,15 +381,18 @@ def issue_close(state, positional, flags):
 
 def api(state, positional, flags):
     """The signed-in user, the two commit endpoints thirdshift reads CI from,
-    or the workflow runs on a commit that the release script waits for. Each
+    the workflow runs on a commit that the release script waits for, or the
+    PRs a commit belongs to that the Release notes script looks through. Each
     answers one page, each item of the list `--jq '.<list>[]'` names on its
-    own line, or for the workflow runs one `<status> <conclusion> <name>` line
-    per run with `--jq` set to `WORKFLOW_RUN_LINES`."""
+    own line, for the workflow runs one `<status> <conclusion> <name>` line
+    per run with `--jq` set to `WORKFLOW_RUN_LINES`, and for the PRs one
+    `<merge commit> <number>` line per PR with `--jq` set to
+    `COMMIT_PR_LINES`."""
     if positional[0] == "user" and not flags:
         print(json.dumps({"login": "runner", "email": state.get("user_email")}))
         return
     match = re.fullmatch(
-        r"repos/([^/]+/[^/]+)/(?:commits/([0-9a-f]+)/(check-runs|status)|actions/(runs)\?head_sha=([0-9a-f]+))(&.*|\?.*)?",
+        r"repos/([^/]+/[^/]+)/(?:commits/([0-9a-f]+)/(check-runs|status|pulls)|actions/(runs)\?head_sha=([0-9a-f]+))(&.*|\?.*)?",
         positional[0],
     )
     if not match:
@@ -370,6 +404,12 @@ def api(state, positional, flags):
             die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
         for run in read_checks(state, runs_sha):
             print(f"{run['status']} {run['conclusion'] or 'null'} {run['name']}")
+        return
+    if endpoint == "pulls":
+        if flags.get("jq") != COMMIT_PR_LINES:
+            die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
+        for pr in commit_prs(state, sha):
+            print(f"{pr.get('mergeCommit') or 'null'} {pr['number']}")
         return
     if endpoint == "check-runs":
         items, field = read_checks(state, sha), "check_runs"
@@ -383,6 +423,18 @@ def api(state, positional, flags):
         die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
     for item in items:
         print(json.dumps(item))
+
+
+def commit_prs(state, sha):
+    """The PRs merged as `sha` or whose head is `sha`, oldest first."""
+
+    def head(pr):
+        if "headRefOid" in pr:
+            return pr["headRefOid"]
+        tip = git(origin_repo(), "rev-parse", f"refs/heads/{pr['head']}")
+        return tip.stdout.strip() if tip.returncode == 0 else None
+
+    return [pr for pr in state["prs"] if pr.get("mergeCommit") == sha or head(pr) == sha]
 
 
 def read_checks(state, sha):
@@ -410,6 +462,8 @@ GENERATE_NOTES = re.compile(r"repos/([^/]+/[^/]+)/releases/generate-notes")
 
 WORKFLOW_RUN_LINES = '.workflow_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'
 
+COMMIT_PR_LINES = '.[] | "\\(.merge_commit_sha) \\(.number)"'
+
 
 def api_fields(args):
     """The `-f`/`-F` fields of a `gh api` call, by name."""
@@ -422,7 +476,8 @@ def api_fields(args):
 
 
 def generate_notes(state, args):
-    """GitHub's generated release notes for `tag_name` at `target_commitish`:
+    """GitHub's generated release notes for `tag_name` at `target_commitish`,
+    or at the tag itself without one:
     one line per merged PR whose merge commit is reachable from the target but
     not from `previous_tag_name`, oldest first, then the compare link. Only
     `--jq .body` is supported."""
@@ -431,7 +486,9 @@ def generate_notes(state, args):
     if jq != ".body":
         die(f"fake gh: unsupported --jq {jq}", 2)
     check_repo(state, {"repo": GENERATE_NOTES.fullmatch(args[0]).group(1)})
-    tag, target = fields["tag_name"], fields["target_commitish"]
+    # GitHub ignores the target when the tag exists.
+    tag = fields["tag_name"]
+    target = fields.get("target_commitish", tag)
     previous = fields.get("previous_tag_name")
 
     def reachable(commit, ref):
@@ -466,6 +523,26 @@ def pr_patch(state, args):
         die("gh: Not Found (HTTP 404)")
     matches[0]["body"] = fields["body"]
     save(state)
+
+
+LATEST_RUN_LINE = '.[] | "\\(.headSha) \\(.status) \\(.conclusion)"'
+
+
+def run_list(state, flags):
+    """Only the flags the release script reads the latest CI run on a branch
+    with are supported, and only its one `--jq`."""
+    unsupported = set(flags) - {"branch", "workflow", "event", "limit", "json", "jq"}
+    if unsupported:
+        die(f"fake gh: unsupported run list flags {sorted(unsupported)}", 2)
+    if flags.get("jq") != LATEST_RUN_LINE:
+        die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
+    runs = [
+        run
+        for run in reversed(state.get("runs", []))
+        if all(run[field] == flags[field] for field in ("branch", "workflow", "event") if field in flags)
+    ][: int(flags.get("limit", 20))]
+    for run in runs:
+        print(f"{run['headSha']} {run['status']} {run['conclusion']}")
 
 
 def graphql(state, args):
@@ -513,18 +590,24 @@ def run_hook(state, name, **env):
         return state
     hook["times"] -= 1
     save(state)
-    subprocess.run(
-        ["bash", "-euc", hook["script"]],
-        check=True,
-        stdout=sys.stderr,
-        env=dict(os.environ, **env),
-    )
+    unlock()
+    try:
+        subprocess.run(
+            ["bash", "-euc", hook["script"]],
+            check=True,
+            stdout=sys.stderr,
+            env=dict(os.environ, **env),
+        )
+    finally:
+        lock()
     return load()
 
 
 def fake(state, args):
     if args[0] in ("checks", "statuses"):
         state.setdefault(args[0], {})[args[1]] = json.loads(args[2])
+    elif args[0] == "run":
+        state.setdefault("runs", []).append(json.loads(args[1]))
     elif args[0] == "on-ci-read":
         state["on_ci_read"] = {"times": int(args[1]), "script": args[2], "seen": []}
     elif args[0] == "on-merge":
@@ -550,6 +633,7 @@ def fake(state, args):
 
 def main():
     args = sys.argv[1:]
+    lock()
     record(args)
     state = load()
     if " ".join(args[:2]) in state.get("failing", []):
@@ -585,6 +669,10 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         issue_close(state, positional, flags)
+    elif args[:2] == ["run", "list"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        run_list(state, flags)
     elif args[:2] == ["api", "graphql"]:
         graphql(state, args[2:])
     elif args[:3] == ["api", "--method", "PATCH"]:

@@ -9,9 +9,10 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -59,9 +60,10 @@ fn with_version(file: &str, version: &str) -> String {
 }
 
 /// A bare origin whose main is at version 0.1.0, tagged `v0.1.0`, with one PR
-/// merged before the tag and two after; a contributor's clone that makes
-/// them; the maintainer's clone the script runs in; the fake `gh`'s state;
-/// and a fake `claude` that prints `AGENT_SUMMARY`.
+/// merged before the tag and two after, and a green CI run on main's tip; a
+/// contributor's clone that makes them; the maintainer's clone the script
+/// runs in; the fake `gh`'s state; and a fake `claude` that prints
+/// `AGENT_SUMMARY`.
 struct Release {
     temp: TempDir,
 }
@@ -115,6 +117,7 @@ impl Release {
         release.agent_runs(&format!("printf '%s\\n' '{AGENT_SUMMARY}'"));
 
         git(root, &["clone", "-q", "origin.git", "maintainer"]);
+        release.main_ci("completed", "success");
         release
     }
 
@@ -181,6 +184,25 @@ impl Release {
         ]);
     }
 
+    /// Records a CI run on main's tip on origin, newer than any before it.
+    fn main_ci(&self, status: &str, conclusion: &str) {
+        let run = json!({
+            "branch": "main",
+            "workflow": "ci.yml",
+            "event": "push",
+            "headSha": self.origin(&["rev-parse", "main"]),
+            "status": status,
+            "conclusion": conclusion,
+        });
+        self.gh(&["fake", "run", &run.to_string()]);
+    }
+
+    /// Every ref on origin with the commit it points at, to show a refusal
+    /// pushed nothing.
+    fn origin_refs(&self) -> String {
+        self.origin(&["for-each-ref", "--format=%(refname) %(objectname)"])
+    }
+
     /// Makes the fake `claude` run the bash `script`.
     fn agent_runs(&self, script: &str) {
         fs::write(self.root().join("claude-script.sh"), script).unwrap();
@@ -218,13 +240,57 @@ impl Release {
     }
 
     fn run_script(&self, version: &str) -> Output {
+        self.run_script_with(&[version], "", &[])
+    }
+
+    /// Runs the script with `args`, with `stdin` on its standard input and
+    /// `env` added to its environment.
+    fn run_script_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
+        let mut child = self
+            .command(
+                &manifest_dir().join("scripts/release.sh"),
+                &self.maintainer(),
+            )
+            .args(args)
+            .envs(env.iter().copied())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("could not run release.sh");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// Runs the Release notes script for `tag` in the maintainer's clone,
+    /// once it has fetched the tags, with `INSTALL_NOTES` as dist's install
+    /// instructions.
+    fn run_notes_script(&self, tag: &str) -> Output {
+        git(&self.maintainer(), &["fetch", "-q", "--tags", "origin"]);
         self.command(
-            &manifest_dir().join("scripts/release.sh"),
+            &manifest_dir().join("scripts/release-notes.sh"),
             &self.maintainer(),
         )
-        .arg(version)
+        .args([tag, INSTALL_NOTES])
         .output()
-        .expect("could not run release.sh")
+        .expect("could not run release-notes.sh")
+    }
+
+    /// GitHub's generated notes for `tag`, from the fake `gh`.
+    fn generated_notes(&self, tag: &str) -> String {
+        self.gh(&[
+            "api",
+            "repos/{owner}/{repo}/releases/generate-notes",
+            "-f",
+            &format!("tag_name={tag}"),
+            "--jq",
+            ".body",
+        ])
     }
 
     fn gh_state(&self) -> Value {
@@ -251,6 +317,18 @@ impl Release {
         self.pr(head)["body"].as_str().unwrap().to_owned()
     }
 
+    fn pr_opened(&self, head: &str) -> bool {
+        self.gh_state()["prs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pr| pr["head"] == head)
+    }
+
+    fn origin_branch(&self, branch: &str) -> bool {
+        !self.origin(&["branch", "--list", branch]).is_empty()
+    }
+
     fn origin_tag(&self, tag: &str) -> Option<String> {
         let refs = self.origin(&["tag", "--list", tag]);
         (!refs.is_empty()).then(|| self.origin(&["rev-parse", &format!("{tag}^{{commit}}")]))
@@ -273,6 +351,8 @@ fn stderr(output: &Output) -> String {
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
 const AGENT_SUMMARY: &str = "The headline is the frobnicator (#2).";
+const INSTALL_NOTES: &str =
+    "## Install thirdshift\n\n```sh\ncurl -LsSf https://example.com/install.sh | sh\n```";
 
 #[test]
 #[cfg(target_os = "linux")]
@@ -536,13 +616,303 @@ fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
     let output = release.run_script("0.2.0");
 
     assert!(!output.status.success());
-    let prs = release.gh_state()["prs"].clone();
-    assert!(
-        prs.as_array()
-            .unwrap()
-            .iter()
-            .all(|pr| pr["head"] != "release-0.2.0"),
-        "{prs}"
-    );
+    assert!(!release.pr_opened("release-0.2.0"));
+    assert!(!release.origin_branch("release-0.2.0"));
     assert_eq!(release.origin_tag("v0.2.0"), None);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_prints_the_summary_and_yes_carries_on_with_it_as_written() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    let output = release.run_script_with(&["--review", "0.2.0"], "y\n", &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let summary_at = err.find(AGENT_SUMMARY).expect(&err);
+    let prompt_at = err.find("[y]es / [e]dit / [n]o").expect(&err);
+    assert!(summary_at < prompt_at, "{err}");
+    let body = release.pr_body("release-0.2.0");
+    assert_eq!(
+        summary_and_rest(&body).0,
+        format!("{AGENT_SUMMARY}\n"),
+        "{body}"
+    );
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_edit_opens_the_summary_in_the_editor_and_carries_on_with_what_was_saved() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let editor = release.root().join("editor.sh");
+    fs::write(&editor, "#!/bin/sh\nsed -i 's/headline/big news/' \"$1\"\n").unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = release.run_script_with(
+        &["--review", "0.2.0"],
+        "e\n",
+        &[("EDITOR", editor.to_str().unwrap())],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = release.pr_body("release-0.2.0");
+    assert_eq!(
+        summary_and_rest(&body).0,
+        "The big news is the frobnicator (#2).\n",
+        "{body}"
+    );
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_no_stops_with_nothing_pushed() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let main_before = release.origin(&["rev-parse", "main"]);
+
+    let output = release.run_script_with(&["--review", "0.2.0"], "n\n", &[]);
+
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert!(!release.origin_branch("release-0.2.0"));
+    assert!(!release.pr_opened("release-0.2.0"));
+    assert_eq!(release.origin(&["rev-parse", "main"]), main_before);
+    assert_eq!(release.origin_tag("v0.2.0"), None);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    let output = release.run_script_with(&["0.2.0"], "n\n", &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("[y]es"), "{}", stderr(&output));
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_install_instructions()
+{
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let output = release.run_script("0.2.0");
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let first = release.run_notes_script("v0.2.0");
+    let again = release.run_notes_script("v0.2.0");
+
+    assert!(first.status.success(), "{}", stderr(&first));
+    let body = String::from_utf8(first.stdout).unwrap();
+    let notes = release.generated_notes("v0.2.0");
+    assert!(notes.contains("Add the frobnicator"), "{notes}");
+    assert_eq!(
+        body,
+        format!("{AGENT_SUMMARY}\n\n{notes}\n\n{INSTALL_NOTES}\n")
+    );
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert_eq!(String::from_utf8(again.stdout).unwrap(), body);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn without_a_bump_pr_summary_the_release_body_is_the_generated_notes_and_install_instructions() {
+    let release = Release::new();
+    // A PR with a summary section whose head commit, not its merge, is tagged.
+    release.merge_pr(
+        "summarised",
+        "Summarised",
+        "<!-- release-summary:start -->\nNot this release.\n<!-- release-summary:end -->",
+    );
+    let contributor = release.contributor();
+    git(&contributor, &["tag", "v0.1.2", "origin/summarised"]);
+    // A commit pushed straight to main, not through a PR.
+    fs::write(contributor.join("hand.txt"), "by hand").unwrap();
+    git(&contributor, &["add", "-A"]);
+    git(&contributor, &["commit", "-q", "-m", "By hand"]);
+    git(&contributor, &["push", "-q", "origin", "HEAD:main"]);
+    git(&contributor, &["tag", "v0.1.3"]);
+    git(&contributor, &["push", "-q", "origin", "v0.1.2", "v0.1.3"]);
+
+    for (case, tag) in [
+        ("the merge of a PR without a summary section", "v0.1.0"),
+        ("the head of a PR, not its merge", "v0.1.2"),
+        ("a commit with no PR", "v0.1.3"),
+    ] {
+        let output = release.run_notes_script(tag);
+
+        assert!(output.status.success(), "{case}: {}", stderr(&output));
+        let notes = release.generated_notes(tag);
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{notes}\n\n{INSTALL_NOTES}\n"),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_a_warning() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let output = release.run_script("0.2.0");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let merge = release.origin(&["rev-parse", "main"]);
+    release.gh(&[
+        "fake",
+        "fails",
+        &format!("api repos/{{owner}}/{{repo}}/commits/{merge}/pulls"),
+    ]);
+
+    let output = release.run_notes_script("v0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.lines()
+            .any(|line| line.starts_with("release-notes: warning:") && line.contains("summary")),
+        "{err}"
+    );
+    let notes = release.generated_notes("v0.2.0");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{notes}\n\n{INSTALL_NOTES}\n")
+    );
+}
+
+/// Runs the script with `version` and asserts it refused before pushing
+/// anything, with a message on stderr containing each of `reasons`.
+fn assert_refused(release: &Release, version: &str, reasons: &[&str]) {
+    let refs_before = release.origin_refs();
+    let prs_before = release.gh_state()["prs"].clone();
+
+    let output = release.run_script(version);
+
+    assert!(!output.status.success(), "{version} was not refused");
+    let err = stderr(&output);
+    assert!(err.contains("refusing to release"), "{version}: {err}");
+    for reason in reasons {
+        assert!(err.contains(reason), "{version}: no {reason:?} in {err}");
+    }
+    assert_eq!(release.origin_refs(), refs_before, "{version}");
+    assert_eq!(release.gh_state()["prs"], prs_before, "{version}");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_version_that_is_not_plain_semver_is_refused() {
+    let release = Release::new();
+
+    for version in [
+        "v0.4.0",
+        "0.4",
+        "abc",
+        "0.4.0-rc.1",
+        "01.4.0",
+        "0.4.0.1",
+        "",
+    ] {
+        assert_refused(&release, version, &["not a plain X.Y.Z version"]);
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_version_not_higher_than_the_one_on_main_is_refused() {
+    let release = Release::new();
+
+    for version in ["0.1.0", "0.0.9", "0.0.10"] {
+        assert_refused(&release, version, &["not higher than 0.1.0 on main"]);
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn versions_are_compared_as_numbers_not_text() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.10.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(release.origin_tag("v0.10.0").is_some());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_tag_that_exists_locally_is_refused() {
+    let release = Release::new();
+    git(&release.maintainer(), &["tag", "v0.2.0"]);
+
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists locally"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_tag_that_exists_on_origin_is_refused() {
+    let release = Release::new();
+    // On a commit main never reaches, so fetching main doesn't bring it in.
+    let contributor = release.contributor();
+    git(
+        &contributor,
+        &["checkout", "-q", "-b", "stray", "origin/main"],
+    );
+    git(
+        &contributor,
+        &["commit", "-q", "--allow-empty", "-m", "Stray"],
+    );
+    git(&contributor, &["tag", "v0.2.0"]);
+    git(&contributor, &["push", "-q", "origin", "v0.2.0"]);
+
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists on origin"]);
+    assert!(git(&release.maintainer(), &["tag", "--list", "v0.2.0"]).is_empty());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_tag_on_main_that_exists_on_origin_is_refused_as_on_origin() {
+    let release = Release::new();
+    let contributor = release.contributor();
+    git(&contributor, &["tag", "v0.2.0", "origin/main"]);
+    git(&contributor, &["push", "-q", "origin", "v0.2.0"]);
+
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists on origin"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_red_ci_run_on_main_is_refused() {
+    let release = Release::new();
+    release.main_ci("completed", "failure");
+
+    assert_refused(&release, "0.2.0", &["CI on main", "failure"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn an_unfinished_ci_run_on_main_is_refused() {
+    let release = Release::new();
+    release.main_ci("in_progress", "");
+
+    assert_refused(&release, "0.2.0", &["CI on main", "in_progress"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_main_whose_tip_ci_has_not_run_on_is_refused() {
+    let release = Release::new();
+    release.merge_pr("untested", "Not yet built", "");
+
+    assert_refused(&release, "0.2.0", &["CI has not run on main at"]);
 }
