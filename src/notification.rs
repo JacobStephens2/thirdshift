@@ -63,7 +63,7 @@ impl RunNotification {
                 Some(reached.pr_url.as_str()),
                 None,
                 reached.log.as_deref(),
-                &reached.tickets[..],
+                &reached.ticket_lines[..],
             ),
             Err(failed) => {
                 let (outcome, cause) = if failed.interrupted {
@@ -76,7 +76,7 @@ impl RunNotification {
                     failed.pr_url.as_deref(),
                     cause,
                     failed.log.as_deref(),
-                    &failed.tickets[..],
+                    &failed.ticket_lines[..],
                 )
             }
         };

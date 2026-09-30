@@ -724,11 +724,7 @@ fn assert_interrupt_fails_the_spec_run(signal: &str) {
 }
 
 /// Run `args` against `resend`, with `RESEND_API_KEY` set.
-fn run_emailing(
-    scenario: &Scenario,
-    resend: &ResendStandIn,
-    args: &[&str],
-) -> support::RunResult {
+fn run_emailing(scenario: &Scenario, resend: &ResendStandIn, args: &[&str]) -> support::RunResult {
     scenario.run_with_env(
         args,
         &[
@@ -861,7 +857,11 @@ fn a_missing_resend_api_key_stops_the_spec_run_before_any_ticket_starts() {
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_contains(&result.stderr, "RESEND_API_KEY");
-    assert!(!result.stderr.contains("starting #"), "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("starting #"),
+        "stderr: {}",
+        result.stderr
+    );
     assert!(scenario.claude_calls().is_empty());
     assert_eq!(resend.requests().len(), 0);
 }
@@ -875,7 +875,11 @@ fn a_missing_address_stops_the_spec_run_before_any_ticket_starts() {
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_contains(&result.stderr, "no email address");
-    assert!(!result.stderr.contains("starting #"), "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("starting #"),
+        "stderr: {}",
+        result.stderr
+    );
     assert!(scenario.claude_calls().is_empty());
     assert_eq!(resend.requests().len(), 0);
 }

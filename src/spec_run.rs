@@ -55,31 +55,30 @@ pub fn run(
     base: &str,
     logs: &Logs,
 ) -> Result<Reached, FailedRun> {
-    let mut summary = Vec::new();
-    let ended = land_and_review(spec, tickets, worktree, base, logs, &mut summary);
+    let (ticket_lines, landed) = land_tickets(spec, tickets, &worktree);
+    let ended = landed
+        .map_err(FailedRun::from)
+        .and_then(|()| open_and_review(spec, worktree, base, logs));
     match ended {
         Ok(reached) => Ok(Reached {
-            tickets: summary,
+            ticket_lines,
             ..reached
         }),
         Err(failed) => Err(FailedRun {
-            tickets: summary,
+            ticket_lines,
             ..failed
         }),
     }
 }
 
-/// [`run`], leaving its line on each Ticket in `summary` once the Tickets
-/// are done with.
-fn land_and_review(
+/// Once every Ticket has landed: open the Spec PR as a draft, run the Spec
+/// review and mark the Spec PR ready, as [`run`] does.
+fn open_and_review(
     spec: &IssueUrl,
-    tickets: Vec<Ticket>,
     worktree: Worktree,
     base: &str,
     logs: &Logs,
-    summary: &mut Vec<String>,
 ) -> Result<Reached, FailedRun> {
-    land_tickets(spec, tickets, &worktree, summary)?;
     let pr_url = open_spec_pr(spec, worktree.branch(), base)?;
     let mut log = logs.path(SPEC_REVIEW);
     if let Err(error) = review(spec, &worktree, base, &pr_url, logs, &mut log) {
@@ -89,7 +88,7 @@ fn land_and_review(
         pr_url,
         goal: Goal::ReadyForReview,
         log: Some(log),
-        tickets: Vec::new(),
+        ticket_lines: Vec::new(),
     })
 }
 
@@ -104,32 +103,36 @@ enum TicketOutcome {
 }
 
 /// Push the Spec branch, then run each ready Ticket, lowest number first,
-/// until none is ready, leaving a line on each Ticket that landed or is not
-/// done in `summary`. Fails if any Ticket is not done, after putting those
-/// lines on stderr unless interrupted.
+/// until none is ready. Returns a line on each Ticket that landed or is not
+/// done, none if the Spec branch could not be pushed, and whether every
+/// Ticket is done: if not, it fails, after putting those lines on stderr
+/// unless interrupted.
 fn land_tickets(
     spec: &IssueUrl,
     mut tickets: Vec<Ticket>,
     worktree: &Worktree,
-    summary: &mut Vec<String>,
-) -> Result<()> {
-    worktree.push()?;
+) -> (Vec<String>, Result<()>) {
+    if let Err(error) = worktree.push() {
+        return (Vec::new(), Err(error));
+    }
     let mut outcomes = BTreeMap::new();
     let landing = run_ready_tickets(spec, &mut tickets, &mut outcomes, worktree.branch());
-    *summary = summarize(&tickets, &outcomes);
-    landing?;
-    let not_done: Vec<String> = tickets
-        .iter()
-        .filter(|ticket| ticket.is_open)
-        .map(|ticket| format!("#{}", ticket.number))
-        .collect();
-    if not_done.is_empty() {
-        return Ok(());
-    }
-    for line in summary.iter() {
-        progress::step(line);
-    }
-    bail!("Tickets not done: {}", not_done.join(", "));
+    let lines = summarize(&tickets, &outcomes);
+    let landed = landing.and_then(|()| {
+        let not_done: Vec<String> = tickets
+            .iter()
+            .filter(|ticket| ticket.is_open)
+            .map(|ticket| format!("#{}", ticket.number))
+            .collect();
+        if not_done.is_empty() {
+            return Ok(());
+        }
+        for line in &lines {
+            progress::step(line);
+        }
+        bail!("Tickets not done: {}", not_done.join(", "));
+    });
+    (lines, landed)
 }
 
 /// Run each ready Ticket, lowest number first, until none is ready, keeping
@@ -268,7 +271,8 @@ fn cycle_through(start: u64, tickets: &[Ticket]) -> Option<Vec<u64>> {
 /// Run Ticket `number` of `spec` as a child `thirdshift`, a Merge run into
 /// `spec_branch` from the same Launch directory, relaying its stderr with a
 /// `#<number>: ` prefix. An interrupt is passed on to the child, which is
-/// waited for as it goes down its Failed run path, and is interrupted. Otherwise
+/// waited for as it goes down its Failed run path, and its outcome is
+/// `Interrupted`. Otherwise
 /// it landed if it exits 0, and failed otherwise, with the cause and session
 /// log it ended on.
 fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<TicketOutcome> {

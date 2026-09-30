@@ -71,7 +71,7 @@ A **Run** asked to end with its pull request merged rather than left for review,
 _Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
 
 **Run notification**:
-A message thirdshift sends when a **Run** ends, whatever its outcome (ready, merged, failed or interrupted), to the address given with the email flag or the default in the **User config**. A Run sends one only when asked to, by the flag or by the User config. Failing to send one never changes the Run's outcome.
+A message thirdshift sends when a **Run** or a **Spec run** ends, whatever its outcome (ready, merged, failed or interrupted), to the address given with the email flag or the default in the **User config**. A Run or Spec run sends one only when asked to, by the flag or by the User config; a Spec run's lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. Failing to send one never changes the outcome.
 _Avoid_: completion email, alert
 
 **User config**:

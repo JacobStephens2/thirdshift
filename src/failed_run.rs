@@ -28,7 +28,7 @@ pub struct FailedRun {
     pub interrupted: bool,
     /// In a Spec run, a line on each Ticket it landed or did not get done;
     /// empty in a Run.
-    pub tickets: Vec<String>,
+    pub ticket_lines: Vec<String>,
 }
 
 /// A merge GitHub refused when a round of the Repair loop found nothing to
@@ -54,7 +54,7 @@ impl From<anyhow::Error> for FailedRun {
             pr_url: None,
             log: None,
             interrupted,
-            tickets: Vec::new(),
+            ticket_lines: Vec::new(),
         }
     }
 }
@@ -120,7 +120,7 @@ pub fn fail(
         pr_url,
         log: log.exists().then(|| log.to_path_buf()),
         interrupted,
-        tickets: Vec::new(),
+        ticket_lines: Vec::new(),
     }
 }
 
