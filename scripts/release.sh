@@ -10,9 +10,9 @@
 # a temporary worktree, so the branch checked out where it runs and any
 # uncommitted changes there are neither used nor changed.
 #
-# Run again with the same version after an interruption, it carries on from
-# the first step not yet done: it opens the PR for a pushed branch, waits on
-# and merges an open PR, or tags a merged one. If v<version> is already on
+# If a run is interrupted, running it again with the same version carries on
+# from the first step not yet done: it opens the PR for a pushed branch, waits
+# on and merges an open PR, or tags a merged one. If v<version> is already on
 # origin, on the merge of the bump PR, it says so and exits 0; a v<version>
 # tag anywhere else is refused.
 #
@@ -35,8 +35,8 @@ main() {
 	branch=release-$version
 
 	fetch_main
-	find_release
-	check_tag
+	find_earlier_run
+	exit_if_tagged
 
 	case $pr_state in
 	"")
@@ -65,19 +65,17 @@ main() {
 	progress "tagged $tag on ${merge:0:7} and pushed the tag"
 }
 
-# find_release
-# Sets pr_state (OPEN, MERGED, CLOSED, or empty with no PR), url, head and
-# merge from the newest PR from $branch, or head from $branch on origin
-# with no PR, to what an earlier run got done.
-find_release() {
+# find_earlier_run
+# Sets what an earlier run for this version got done: pr_state (OPEN, MERGED,
+# CLOSED, or empty with no PR), url, head and merge from the newest PR from
+# $branch, or with no PR, head from $branch on origin if it was pushed.
+find_earlier_run() {
 	local pr
 	pr=$(gh pr list --head "$branch" --base main --state all --limit 1 \
-		--json state,headRefOid,url --jq '.[0] // empty | "\(.state) \(.headRefOid) \(.url)"')
-	read -r pr_state head url <<<"$pr"
-	merge=
-	if [ "$pr_state" = MERGED ]; then
-		merge=$(merge_commit_of "$head")
-	elif [ -z "$pr_state" ]; then
+		--json state,url,headRefOid,mergeCommit \
+		--jq '.[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")"')
+	read -r pr_state url head merge <<<"$pr"
+	if [ -z "$pr_state" ]; then
 		head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
 		if [ -n "$head" ]; then
 			git fetch --quiet origin "refs/heads/$branch"
@@ -85,10 +83,10 @@ find_release() {
 	fi
 }
 
-# check_tag
+# exit_if_tagged
 # Exits 0 if $tag is on origin at the merge of the bump PR, and 1 if it is on
 # origin anywhere else.
-check_tag() {
+exit_if_tagged() {
 	local tagged
 	tagged=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}" | tail -n 1 | cut -f 1)
 	if [ -z "$tagged" ]; then

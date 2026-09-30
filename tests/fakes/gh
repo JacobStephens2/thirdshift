@@ -165,9 +165,7 @@ def pr_view(state, positional, flags):
         die(f'no pull requests found for branch "{head}"')
     pr = matches[-1]
     wanted = flags["json"].split(",")
-    fields = pr_fields(pr)
-    if "headRefOid" in wanted:
-        fields["headRefOid"] = head_ref_oid(pr)
+    fields = pr_fields(pr, wanted)
     fields["closingIssuesReferences"] = [
         {"number": int(number)} for number in CLOSING_KEYWORD.findall(pr.get("body", ""))
     ]
@@ -176,11 +174,6 @@ def pr_view(state, positional, flags):
         save(state)
         fields["mergeable"] = "UNKNOWN"
     print(json.dumps({key: fields[key] for key in wanted}))
-
-
-def head_ref_oid(pr):
-    """The PR's head commit: as merged, else its head branch's tip on origin."""
-    return pr.get("headRefOid") or origin("rev-parse", f"refs/heads/{pr['head']}")
 
 
 def record(args):
@@ -194,8 +187,10 @@ def record(args):
         json.dump(calls, f, indent=2)
 
 
-def pr_fields(pr):
-    return {
+def pr_fields(pr, wanted=()):
+    """The PR's JSON fields. `headRefOid`, its head as merged or else its head
+    branch's tip on origin, is read only when `wanted`."""
+    fields = {
         "url": pr["url"],
         "state": pr["state"],
         "headRefName": pr["head"],
@@ -204,7 +199,11 @@ def pr_fields(pr):
         "number": pr["number"],
         "isCrossRepository": pr.get("isCrossRepository", False),
         "mergeable": pr.get("mergeable", "MERGEABLE"),
+        "mergeCommit": {"oid": pr["mergeCommit"]} if "mergeCommit" in pr else None,
     }
+    if "headRefOid" in wanted:
+        fields["headRefOid"] = pr.get("headRefOid") or origin("rev-parse", f"refs/heads/{pr['head']}")
+    return fields
 
 
 def pr_list(state, flags):
@@ -224,15 +223,13 @@ def pr_list(state, flags):
         and (wanted_state == "ALL" or pr["state"] == wanted_state)
     ][: int(flags.get("limit", 30))]
     wanted = flags["json"].split(",")
-    listed = [
-        {key: (head_ref_oid(pr) if key == "headRefOid" else pr_fields(pr)[key]) for key in wanted}
-        for pr in prs
-    ]
+    listed = [{key: pr_fields(pr, wanted)[key] for key in wanted} for pr in prs]
     if "jq" not in flags:
         print(json.dumps(listed))
     elif flags["jq"] == PR_LINE_OF_NEWEST:
         for pr in listed[:1]:
-            print(f"{pr['state']} {pr['headRefOid']} {pr['url']}")
+            merge = (pr["mergeCommit"] or {}).get("oid", "")
+            print(f"{pr['state']} {pr['url']} {pr['headRefOid']} {merge}".rstrip())
     else:
         die(f"fake gh: unsupported --jq {flags['jq']}", 2)
 
@@ -409,7 +406,7 @@ def read_checks(state, sha):
 
 GENERATE_NOTES = re.compile(r"repos/([^/]+/[^/]+)/releases/generate-notes")
 
-PR_LINE_OF_NEWEST = '.[0] // empty | "\\(.state) \\(.headRefOid) \\(.url)"'
+PR_LINE_OF_NEWEST = '.[0] // empty | "\\(.state) \\(.url) \\(.headRefOid) \\(.mergeCommit.oid // "")"'
 
 WORKFLOW_RUN_LINES = '.workflow_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'
 
