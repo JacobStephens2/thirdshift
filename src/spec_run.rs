@@ -1,7 +1,8 @@
 //! A Spec run: each of a Spec's Tickets, in dependency order, taken by a
 //! Ticket's Run, a Merge run into the Spec branch in a child `thirdshift`
 //! (ADR-0006), then the Spec review and the Spec PR from the Spec branch into
-//! the Base branch.
+//! the Base branch, kept mergeable and green like a Run's PR, and Self-merged
+//! when the Spec run was asked to merge.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -35,35 +36,38 @@ const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "
 const SPEC_REVIEW: &str = "spec-review";
 
 /// Take the Spec `spec`, whose Tickets were last read as `tickets`, from
-/// its Spec branch, checked out in `worktree`, to a Spec PR into `base`,
-/// ready for review. The Spec branch is pushed before any Ticket starts, and
+/// its Spec branch, checked out in `worktree`, to a Spec PR into `base` that
+/// reaches `goal`. The Spec branch is pushed before any Ticket starts, and
 /// the Tickets run one at a time, the graph read again after each. A Ticket
 /// that fails stops only the Tickets it blocks; with any Ticket not done,
 /// this is a Failed spec run. An interrupt ends it too, once the running
 /// Ticket's Run has ended, starting nothing more and leaving the Spec PR
 /// not ready. Once every Ticket has landed, the Spec PR is opened as a draft
 /// and the Spec review, logged in `logs`, reviews the Spec branch before the
-/// Spec PR is marked ready; a Spec review that fails goes through the Failed
-/// run path. The worktree is cleaned up when this returns, or kept by the
-/// Failed run path if its work did not reach origin.
+/// Spec PR is marked ready. The Spec PR then goes through the same Repair
+/// loop as a Run's PR, and for [`Goal::Merged`] the Self-merge. A failure
+/// from the Spec review on goes through the Failed run path. The worktree is
+/// cleaned up when this returns, or kept by the Failed run path if its work
+/// did not reach origin.
 pub fn run(
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
     worktree: Worktree,
     base: &str,
+    goal: Goal,
     logs: &Logs,
 ) -> Result<Reached, FailedRun> {
     land_tickets(spec, tickets, &worktree)?;
     let pr_url = open_spec_pr(spec, worktree.branch(), base)?;
     let mut log = logs.path(SPEC_REVIEW);
-    if let Err(error) = review(spec, &worktree, base, &pr_url, logs, &mut log) {
-        return Err(failed_run::fail(spec, worktree, base, &log, error));
+    match review_and_deliver(spec, &worktree, base, &pr_url, goal, logs, &mut log) {
+        Ok(()) => Ok(Reached {
+            pr_url,
+            goal,
+            log: Some(log),
+        }),
+        Err(error) => Err(failed_run::fail(spec, worktree, base, &log, error)),
     }
-    Ok(Reached {
-        pr_url,
-        goal: Goal::ReadyForReview,
-        log: Some(log),
-    })
 }
 
 /// How a Ticket's Run in this Spec run ended.
@@ -312,14 +316,16 @@ fn open_spec_pr(spec: &IssueUrl, spec_branch: &str, base: &str) -> Result<String
 }
 
 /// Bring the Spec branch in `worktree` up to date with the Tickets landed on
-/// origin, and run the Spec review on it, pointing `log` at its session's
-/// log. Then push the Spec branch, for any commit the session left unpushed,
-/// and mark the Spec PR `pr_url` into `base` ready.
-fn review(
+/// origin, and run the Spec review on it. Then push the Spec branch, for any
+/// commit the session left unpushed, mark the Spec PR `pr_url` into `base`
+/// ready, and [`run::deliver`] it to `goal`, with the Spec as the issue.
+/// `log` is left at the most recent session's log.
+fn review_and_deliver(
     spec: &IssueUrl,
     worktree: &Worktree,
     base: &str,
     pr_url: &str,
+    goal: Goal,
     logs: &Logs,
     log: &mut PathBuf,
 ) -> Result<()> {
@@ -331,9 +337,12 @@ fn review(
         worktree: worktree.path(),
         plugin_dir: plugin.path(),
     };
-    let prompt = prompt::spec_review(spec, base, spec_branch, pr_url);
-    sessions.run(SPEC_REVIEW, &prompt, log)?;
+    let mut run_session = |kind: &str, prompt: &str| sessions.run(kind, prompt, log);
+    run_session(
+        SPEC_REVIEW,
+        &prompt::spec_review(spec, base, spec_branch, pr_url),
+    )?;
     worktree.push()?;
-    run::mark_pr_ready(spec, spec_branch, base)?;
-    Ok(())
+    let pr = run::mark_pr_ready(spec, spec_branch, base)?;
+    run::deliver(spec, worktree, base, &pr, goal, &mut run_session)
 }

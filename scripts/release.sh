@@ -16,9 +16,14 @@
 # it then prints the summary and asks whether to carry on with it, edit it in
 # $EDITOR first, or stop with nothing pushed. Without it, it never reads stdin.
 #
+# Before it pushes anything, it refuses a release that can't be cut: a version
+# that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
+# tag that already exists locally or on origin, or a latest CI run on main that
+# didn't succeed.
+#
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
-# pushed; if the PR's checks fail, it leaves the PR open and exits 1; if the
-# review says no, it exits 1 with nothing pushed.
+# pushed. It exits 1 with nothing pushed if it refuses or the review says no,
+# and exits 1 leaving the PR open if the PR's checks fail.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
 shopt -s inherit_errexit
@@ -45,6 +50,7 @@ main() {
 
 	fetch_main
 	base=$(git rev-parse --verify 'origin/main^{commit}')
+	check_can_release "$version" "$tag" "$base"
 	repo=$PWD
 	work=$(mktemp -d)
 	trap 'git -C "$repo" worktree remove --force "$work" 2>/dev/null || rm -rf "$work"' EXIT
@@ -89,8 +95,73 @@ progress() {
 	echo "release: $*" >&2
 }
 
+# refuse <reason>
+refuse() {
+	progress "refusing to release $version: $*"
+	exit 1
+}
+
+# check_can_release <version> <tag> <base>
+# Refuses unless <version> is plain X.Y.Z and higher than the version in the
+# manifest at <base>, main's tip, no <tag> exists on origin or locally, and
+# the latest CI run on main is on <base> and succeeded.
+check_can_release() {
+	local current short=${3:0:7} latest sha status conclusion
+	if ! [[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+		refuse "it is not a plain X.Y.Z version, such as 0.4.0"
+	fi
+	current=$(git show "$3:Cargo.toml" | package_field version)
+	if ! is_higher "$1" "$current"; then
+		refuse "it is not higher than $current on main"
+	fi
+
+	# Origin first: fetching main brings in the tags on it, so a tag found
+	# locally may have come from origin.
+	if [ -n "$(git ls-remote --tags origin "refs/tags/$2")" ]; then
+		refuse "$2 already exists on origin"
+	fi
+	if git rev-parse --quiet --verify "refs/tags/$2" >/dev/null; then
+		refuse "$2 already exists locally"
+	fi
+
+	latest=$(gh run list --branch main --workflow ci.yml --event push --limit 1 \
+		--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
+	read -r sha status conclusion <<<"$latest"
+	if [ "$sha" != "$3" ]; then
+		refuse "CI has not run on main at $short yet"
+	elif [ "$status" != completed ]; then
+		refuse "CI on main at $short is $status, not finished"
+	elif [ "$conclusion" != success ]; then
+		refuse "CI on main at $short ended in $conclusion"
+	fi
+}
+
+# is_higher <version> <other>
+# Whether plain semver <version> is higher than <other>, part by part.
+is_higher() {
+	local -a ours theirs
+	local i
+	IFS=. read -ra ours <<<"$1"
+	IFS=. read -ra theirs <<<"$2"
+	for i in 0 1 2; do
+		if ((ours[i] != theirs[i])); then
+			((ours[i] > theirs[i]))
+			return
+		fi
+	done
+	return 1
+}
+
 fetch_main() {
 	git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+}
+
+# package_field <key>
+# The value of <key> in the [package] section of the manifest on stdin.
+package_field() {
+	awk -F '"' -v key="$1" '
+		/^\[/ { section = $0 }
+		section == "[package]" && $1 == key " = " { print $2; exit }'
 }
 
 # bump_version <version>
@@ -99,14 +170,14 @@ fetch_main() {
 # shellcheck disable=SC2016 # the $0 in the awk programs is awk's
 bump_version() {
 	local name
-	name=$(awk '/^\[/ { section = $0 } section == "[package]" && /^name = / { print; exit }' Cargo.toml)
+	name=$(package_field name <Cargo.toml)
 	rewrite Cargo.toml -v version="$1" '
 		/^\[/ { section = $0 }
 		section == "[package]" && /^version = / && !done { $0 = "version = \"" version "\""; done = 1 }
 		{ print }'
 	rewrite Cargo.lock -v version="$1" -v name="$name" '
 		/^\[\[package\]\]/ { ours = 0 }
-		$0 == name { ours = 1 }
+		$0 == "name = \"" name "\"" { ours = 1 }
 		ours && /^version = / { $0 = "version = \"" version "\""; ours = 0 }
 		{ print }'
 }
