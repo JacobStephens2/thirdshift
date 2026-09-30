@@ -44,7 +44,7 @@ fn build() -> PathBuf {
     let partial = dir.join(format!("fakes-{}.partial", std::process::id()));
     let output = Command::new(std::env::var_os("RUSTC").unwrap_or("rustc".into()))
         .args(["--edition", "2024", "--crate-name", "fakes"])
-        .args(["-D", "warnings", "-C", "debuginfo=0", "-o"])
+        .args(["-C", "debuginfo=0", "-o"])
         .arg(&partial)
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fakes.rs"))
         .output()

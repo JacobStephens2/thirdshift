@@ -124,7 +124,7 @@ impl Json {
     pub fn items_mut(&mut self) -> &mut Vec<Json> {
         match self {
             Json::Array(items) => items,
-            _ => panic!("not a list"),
+            _ => panic!("{self} is not a list"),
         }
     }
 
@@ -433,5 +433,68 @@ impl Parser<'_> {
             .ok_or_else(|| self.error("bad \\u escape"))?;
         self.at += 4;
         Ok(digits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STATE: &str = r#"{"repo": "acme/widgets", "prs": [], "checks": {"abc": [{"name": "build", "pending_polls": 2, "url": null, "ok": true}]}, "note": "caf\u00e9 \ud83d\ude00 \"q\"\n"}"#;
+
+    #[test]
+    fn prints_json_on_one_line_as_python_json_dumps_does() {
+        let state = parse(STATE).unwrap();
+        assert_eq!(state.to_string(), STATE);
+    }
+
+    #[test]
+    fn dumps_json_with_an_indent_of_two_as_python_json_dump_does() {
+        let state = parse(STATE).unwrap();
+        assert_eq!(
+            state.dump(),
+            r#"{
+  "repo": "acme/widgets",
+  "prs": [],
+  "checks": {
+    "abc": [
+      {
+        "name": "build",
+        "pending_polls": 2,
+        "url": null,
+        "ok": true
+      }
+    ]
+  },
+  "note": "caf\u00e9 \ud83d\ude00 \"q\"\n"
+}"#
+        );
+    }
+
+    #[test]
+    fn reads_escapes_back_as_the_characters_they_stand_for() {
+        let state = parse(STATE).unwrap();
+        assert_eq!(state.at("note").str(), "café 😀 \"q\"\n");
+        assert_eq!(parse(r#""a\/b\tc""#).unwrap(), string("a/b\tc"));
+    }
+
+    #[test]
+    fn setting_a_key_keeps_its_place_and_a_new_key_goes_last() {
+        let mut state = parse(STATE).unwrap();
+        state.set("repo", string("acme/gadgets"));
+        state.set("user_email", Json::Null);
+        let renamed = STATE.replace("widgets", "gadgets");
+        let expected = format!(
+            "{}, \"user_email\": null}}",
+            renamed.strip_suffix('}').unwrap()
+        );
+        assert_eq!(state.to_string(), expected);
+    }
+
+    #[test]
+    fn rejects_text_that_is_not_one_json_value() {
+        assert!(parse("{\"a\": 1} x").is_err());
+        assert!(parse("[1, ]").is_err());
+        assert!(parse("\"open").is_err());
     }
 }

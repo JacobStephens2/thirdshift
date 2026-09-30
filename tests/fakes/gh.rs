@@ -119,9 +119,7 @@ static LOCK: Mutex<Option<File>> = Mutex::new(None);
 
 /// Wait for the state's lock and hold it until `unlock` or exit.
 fn lock() {
-    let file = File::create(format!("{}.lock", state_path().display())).unwrap();
-    file.lock().unwrap();
-    *LOCK.lock().unwrap() = Some(file);
+    *LOCK.lock().unwrap() = Some(crate::lock_beside(&state_path()));
 }
 
 fn unlock() {
@@ -177,8 +175,7 @@ fn flag<'a>(flags: &'a Flags, name: &str) -> Option<&'a str> {
     flags.get(name).and_then(Option::as_deref)
 }
 
-/// `{owner}/{repo}` is gh's placeholder for the current directory's repo,
-/// which is always the fake's.
+/// Fail unless `-R`/`--repo`, if given, names the fake's repo.
 fn check_repo(state: &Json, flags: &Flags) {
     let repo = flag(flags, "R")
         .filter(|repo| !repo.is_empty())
@@ -186,6 +183,8 @@ fn check_repo(state: &Json, flags: &Flags) {
     check_repo_is(state, repo);
 }
 
+/// Fail unless `repo`, if any, is the fake's. `{owner}/{repo}` is gh's
+/// placeholder for the current directory's repo, which is always the fake's.
 fn check_repo_is(state: &Json, repo: Option<&str>) {
     if let Some(repo) = repo
         && repo != "{owner}/{repo}"
@@ -204,7 +203,25 @@ fn newest_pr_from(state: &Json, head: &str) -> usize {
     prs(state)
         .iter()
         .rposition(|pr| pr.at("head").str() == head)
-        .unwrap_or_else(|| die(&format!("no pull requests found for branch \"{head}\""), 1))
+        .unwrap_or_else(|| no_pr_for(head))
+}
+
+fn no_pr_for(name: &str) -> ! {
+    die(&format!("no pull requests found for branch \"{name}\""), 1)
+}
+
+/// gh's error for acting on a PR that isn't open.
+fn ensure_open(pr: &Json) {
+    if pr.at("state").str() != "OPEN" {
+        die(&format!("pull request #{} is not open", pr.at("number")), 1);
+    }
+}
+
+fn unsupported_jq(jq: Option<&str>) -> ! {
+    die(
+        &format!("fake gh: unsupported --jq {}", jq.unwrap_or("None")),
+        2,
+    )
 }
 
 fn pr_create(state: &mut Json, flags: &Flags) {
@@ -227,23 +244,19 @@ fn pr_create(state: &mut Json, flags: &Flags) {
 /// By head branch, its newest PR, or by number. `--jq .<field>` prints that
 /// one field raw, as gh does for a string.
 fn pr_view(state: &mut Json, positional: &[String], flags: &Flags) {
-    let head = &positional[0];
-    let found = if !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()) {
+    let name = &positional[0];
+    let at = if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
         prs(state)
             .iter()
-            .rposition(|pr| pr.at("number").as_i64() == head.parse().ok())
+            .rposition(|pr| pr.at("number").as_i64() == name.parse().ok())
+            .unwrap_or_else(|| no_pr_for(name))
     } else {
-        prs(state)
-            .iter()
-            .rposition(|pr| pr.at("head").str() == head)
+        newest_pr_from(state, name)
     };
-    let at =
-        found.unwrap_or_else(|| die(&format!("no pull requests found for branch \"{head}\""), 1));
     let pr = &prs(state)[at];
     let wanted = wanted_fields(flags);
     let mut fields = pr_fields(pr, &wanted);
     fields.set("title", pr.at("title").clone());
-    fields.set("body", pr.get("body").cloned().unwrap_or(string("")));
     let mut fields = json_fields(&fields, &wanted);
     if let Some(jq) = flag(flags, "jq") {
         match jq.strip_prefix('.') {
@@ -251,7 +264,7 @@ fn pr_view(state: &mut Json, positional: &[String], flags: &Flags) {
                 println!("{}", fields.at(field).python());
                 return;
             }
-            _ => die(&format!("fake gh: unsupported --jq {jq}"), 2),
+            _ => unsupported_jq(Some(jq)),
         }
     }
     let pr = &mut state.at_mut("prs").items_mut()[at];
@@ -301,15 +314,7 @@ fn json_fields(fields: &Json, wanted: &[String]) -> Json {
 fn record(args: &[String]) {
     let path =
         PathBuf::from(std::env::var_os("FAKE_GH_RECORD").expect("FAKE_GH_RECORD is not set"));
-    let mut calls = if path.exists() {
-        crate::read_json(&path)
-    } else {
-        Array(Vec::new())
-    };
-    calls
-        .items_mut()
-        .push(Array(args.iter().map(string).collect()));
-    fs::write(&path, calls.dump()).unwrap();
+    crate::append_record(&path, Array(args.iter().map(string).collect()));
 }
 
 /// The PR's JSON fields. `headRefOid`, its head as merged or else its head
@@ -342,10 +347,7 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
     if wanted.iter().any(|w| w == "headRefOid") {
         let head = match pr.get("headRefOid") {
             Some(head) if head.truthy() => head.clone(),
-            _ => string(origin(&[
-                "rev-parse",
-                &format!("refs/heads/{}", pr.at("head").str()),
-            ])),
+            _ => string(branch_tip(pr.at("head").str())),
         };
         fields.set("headRefOid", head);
     }
@@ -404,16 +406,14 @@ fn pr_list(state: &Json, flags: &Flags) {
                 println!("{}", line.trim_end());
             }
         }
-        Some(jq) => die(&format!("fake gh: unsupported --jq {jq}"), 2),
+        jq => unsupported_jq(jq),
     }
 }
 
 fn pr_ready(state: &mut Json, positional: &[String], flags: &Flags) {
     let at = newest_pr_from(state, &positional[0]);
     let pr = &mut state.at_mut("prs").items_mut()[at];
-    if pr.at("state").str() != "OPEN" {
-        die(&format!("pull request #{} is not open", pr.at("number")), 1);
-    }
+    ensure_open(pr);
     pr.set("isDraft", Bool(flags.contains_key("undo")));
     save(state);
 }
@@ -436,15 +436,20 @@ fn git(repo: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
-/// Run git in the bare origin repo and return its stdout.
-fn origin(args: &[&str]) -> String {
-    let output = git(&origin_repo(), args);
-    assert!(
-        output.status.success(),
-        "git {args:?} in origin failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+/// The tip of `branch` on origin, if origin has it.
+fn origin_tip(branch: &str) -> Option<String> {
+    let tip = git(
+        &origin_repo(),
+        &["rev-parse", &format!("refs/heads/{branch}")],
     );
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    tip.status
+        .success()
+        .then(|| String::from_utf8(tip.stdout).unwrap().trim().to_owned())
+}
+
+/// The tip of `branch` on origin, which the fake's contract says it has.
+fn branch_tip(branch: &str) -> String {
+    origin_tip(branch).unwrap_or_else(|| panic!("origin has no branch {branch}"))
 }
 
 /// Only a merge commit on a matching head is supported: anything else, such
@@ -455,7 +460,7 @@ fn pr_merge(state: &mut Json, positional: &[String], flags: &Flags) {
         || !flags.contains_key("match-head-commit")
         || flags.keys().any(|name| !supported.contains(&name.as_str()))
     {
-        let names: Vec<String> = flags.keys().cloned().collect();
+        let names: Vec<&String> = flags.keys().collect();
         die(
             &format!(
                 "fake gh: unsupported pr merge flags {}",
@@ -478,11 +483,9 @@ fn pr_merge(state: &mut Json, positional: &[String], flags: &Flags) {
     let head = &positional[0];
     let at = newest_pr_from(state, head);
     let pr = &prs(state)[at];
-    if pr.at("state").str() != "OPEN" {
-        die(&format!("pull request #{} is not open", pr.at("number")), 1);
-    }
+    ensure_open(pr);
     let base = pr.at("base").str().to_owned();
-    let head_sha = origin(&["rev-parse", &format!("refs/heads/{head}")]);
+    let head_sha = branch_tip(head);
     if Some(head_sha.as_str()) != flag(flags, "match-head-commit") {
         die(
             "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)",
@@ -501,7 +504,7 @@ fn pr_merge(state: &mut Json, positional: &[String], flags: &Flags) {
     if let Err(error) = merged {
         die(&error, 1);
     }
-    let merge_commit = origin(&["rev-parse", &format!("refs/heads/{base}")]);
+    let merge_commit = branch_tip(&base);
     let pr = &mut state.at_mut("prs").items_mut()[at];
     pr.set("state", string("MERGED"));
     pr.set("headRefOid", string(head_sha));
@@ -661,16 +664,11 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     };
     check_repo_is(state, Some(repo));
     let jq = flag(flags, "jq");
-    let unsupported_jq = || {
-        die(
-            &format!("fake gh: unsupported --jq {}", jq.unwrap_or("None")),
-            2,
-        )
-    };
+
     let (items, field) = match endpoint {
         Endpoint::Runs => {
             if jq != Some(WORKFLOW_RUN_LINES) {
-                unsupported_jq();
+                unsupported_jq(jq);
             }
             for run in read_checks(state, sha) {
                 let conclusion = run.at("conclusion");
@@ -689,7 +687,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         }
         Endpoint::Pulls => {
             if jq != Some(COMMIT_PR_LINES) {
-                unsupported_jq();
+                unsupported_jq(jq);
             }
             for pr in commit_prs(state, sha) {
                 let merge = match pr.get("mergeCommit") {
@@ -721,7 +719,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         }
     };
     if jq != Some(format!(".{field}[]").as_str()) {
-        unsupported_jq();
+        unsupported_jq(jq);
     }
     for item in items {
         println!("{item}");
@@ -732,15 +730,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
 fn commit_prs<'a>(state: &'a Json, sha: &str) -> Vec<&'a Json> {
     let head = |pr: &Json| match pr.get("headRefOid") {
         Some(head) => head.as_str().map(str::to_owned),
-        None => {
-            let tip = git(
-                &origin_repo(),
-                &["rev-parse", &format!("refs/heads/{}", pr.at("head").str())],
-            );
-            tip.status
-                .success()
-                .then(|| String::from_utf8(tip.stdout).unwrap().trim().to_owned())
-        }
+        None => origin_tip(pr.at("head").str()),
     };
     prs(state)
         .iter()
@@ -814,17 +804,12 @@ fn generate_notes_repo(path: &str) -> Option<&str> {
 /// first, then the compare link. Only `--jq .body` is supported.
 fn generate_notes(state: &Json, args: &[&str]) {
     let fields = api_fields(args);
-    let jq = args
-        .windows(2)
-        .find(|pair| pair[0] == "--jq")
-        .map(|pair| pair[1]);
+    let (positional, flags) = parse(args);
+    let jq = flag(&flags, "jq");
     if jq != Some(".body") {
-        die(
-            &format!("fake gh: unsupported --jq {}", jq.unwrap_or("None")),
-            2,
-        );
+        unsupported_jq(jq);
     }
-    check_repo_is(state, generate_notes_repo(args[0]));
+    check_repo_is(state, generate_notes_repo(&positional[0]));
     // GitHub ignores the target when the tag exists.
     let tag = &fields["tag_name"];
     let target = fields.get("target_commitish").unwrap_or(tag);
@@ -876,9 +861,8 @@ fn pr_patch(state: &mut Json, args: &[&str]) {
     });
     let fields = api_fields(args);
     let (Some((repo, n)), true) = (pull, fields.keys().eq(["body"])) else {
-        let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
         die(
-            &format!("fake gh: unsupported api PATCH {}", python_list(&args)),
+            &format!("fake gh: unsupported api PATCH {}", python_list(args)),
             2,
         )
     };
@@ -915,10 +899,7 @@ fn run_list(state: &Json, flags: &Flags) {
     }
     let jq = flag(flags, "jq");
     if jq != Some(LATEST_RUN_LINE) {
-        die(
-            &format!("fake gh: unsupported --jq {}", jq.unwrap_or("None")),
-            2,
-        );
+        unsupported_jq(jq);
     }
     let limit: usize = flag(flags, "limit").unwrap_or("20").parse().unwrap();
     let runs = state.get("runs").map(Json::items).unwrap_or_default();
@@ -1097,13 +1078,10 @@ fn fake(state: &mut Json, args: &[&str]) {
             let at = newest_pr_from(state, head);
             state.at_mut("prs").items_mut()[at].set(field, parse_json(value));
         }
-        _ => {
-            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            die(
-                &format!("fake gh: unsupported fake command {}", python_list(&args)),
-                2,
-            )
-        }
+        _ => die(
+            &format!("fake gh: unsupported fake command {}", python_list(args)),
+            2,
+        ),
     }
     save(state);
 }
@@ -1169,12 +1147,9 @@ pub fn main(args: Vec<String>) {
             api(&mut state, &positional, &flags);
         }
         ["fake", rest @ ..] => fake(&mut state, rest),
-        _ => {
-            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            die(
-                &format!("fake gh: unsupported command: {}", python_list(&args)),
-                2,
-            )
-        }
+        _ => die(
+            &format!("fake gh: unsupported command: {}", python_list(&args)),
+            2,
+        ),
     }
 }

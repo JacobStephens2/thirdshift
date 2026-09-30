@@ -31,7 +31,7 @@
 //! it records stdin as `stdin` and prints only what the script prints, as
 //! print mode's plain text output does.
 
-use std::fs::{self, File};
+use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -104,7 +104,7 @@ fn script_for(records: &[Json]) -> PathBuf {
 
 /// `git` in the working directory, with its stdout trimmed, and whether it
 /// succeeded.
-fn git(args: &[&str]) -> (String, bool) {
+fn git_here(args: &[&str]) -> (String, bool) {
     let output = Command::new("git").args(args).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     (stdout, output.status.success())
@@ -123,18 +123,14 @@ pub fn main(argv: Vec<String>) {
         .iter()
         .position(|arg| arg == "--plugin-dir")
         .map(|at| PathBuf::from(&argv[at + 1]));
-    let (branch, _) = git(&["branch", "--show-current"]);
-    let (_, merging) = git(&["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
+    let (branch, _) = git_here(&["branch", "--show-current"]);
+    let (_, merging) = git_here(&["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
     let text_mode = !argv.iter().any(|arg| arg == "--output-format");
     let record_path = std::env::var("FAKE_CLAUDE_RECORD").expect("FAKE_CLAUDE_RECORD is not set");
+    let record_path = Path::new(&record_path);
 
-    let lock = File::create(format!("{record_path}.lock")).unwrap();
-    lock.lock().unwrap();
-    let mut records = if Path::new(&record_path).exists() {
-        crate::read_json(Path::new(&record_path))
-    } else {
-        Array(Vec::new())
-    };
+    let lock = crate::lock_beside(record_path);
+
     let stdin = if text_mode {
         let mut stdin = Vec::new();
         std::io::stdin().read_to_end(&mut stdin).unwrap();
@@ -144,29 +140,31 @@ pub fn main(argv: Vec<String>) {
     };
     let cwd = std::env::current_dir().unwrap();
     let cwd = cwd.to_str().unwrap();
-    records.items_mut().push(object([
-        ("argv", Array(argv.iter().map(string).collect())),
-        ("prompt", argv.last().map(string).unwrap_or(Null)),
-        ("cwd", string(cwd)),
-        ("branch", string(branch)),
-        ("merging", Bool(merging)),
-        (
-            "plugin_dir",
-            plugin_dir
-                .as_ref()
-                .map(|dir| string(dir.to_str().unwrap()))
-                .unwrap_or(Null),
-        ),
-        (
-            "plugin_files",
-            plugin_dir
-                .as_deref()
-                .map(plugin_snapshot)
-                .unwrap_or(object([])),
-        ),
-        ("stdin", stdin),
-    ]));
-    fs::write(&record_path, records.dump()).unwrap();
+    let records = crate::append_record(
+        record_path,
+        object([
+            ("argv", Array(argv.iter().map(string).collect())),
+            ("prompt", argv.last().map(string).unwrap_or(Null)),
+            ("cwd", string(cwd)),
+            ("branch", string(branch)),
+            ("merging", Bool(merging)),
+            (
+                "plugin_dir",
+                plugin_dir
+                    .as_ref()
+                    .map(|dir| string(dir.to_str().unwrap()))
+                    .unwrap_or(Null),
+            ),
+            (
+                "plugin_files",
+                plugin_dir
+                    .as_deref()
+                    .map(plugin_snapshot)
+                    .unwrap_or(object([])),
+            ),
+            ("stdin", stdin),
+        ]),
+    );
     let records = records.items();
     let script = script_for(records);
     drop(lock);
@@ -189,7 +187,7 @@ pub fn main(argv: Vec<String>) {
     ]);
     println!("{init}");
     // Beside the record, not in $TMPDIR, which tests expect to be left empty.
-    let after_result = format!("{record_path}.after-result.{session}");
+    let after_result = format!("{}.after-result.{session}", record_path.display());
     let status = bash()
         .env("FAKE_CLAUDE_AFTER_RESULT", &after_result)
         .status()
