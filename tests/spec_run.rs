@@ -74,14 +74,20 @@ fn spec_review_call(scenario: &Scenario) -> serde_json::Value {
     reviews[0].clone()
 }
 
-/// The newest pull request from `head`, if there is one.
-fn pr_from(scenario: &Scenario, head: &str) -> Option<serde_json::Value> {
+/// The pull requests from `head`, oldest first.
+fn prs_from(scenario: &Scenario, head: &str) -> Vec<serde_json::Value> {
     scenario.gh_state()["prs"]
         .as_array()
         .into_iter()
         .flatten()
-        .rfind(|pr| pr["head"] == head)
+        .filter(|pr| pr["head"] == head)
         .cloned()
+        .collect()
+}
+
+/// The newest pull request from `head`, if there is one.
+fn pr_from(scenario: &Scenario, head: &str) -> Option<serde_json::Value> {
+    prs_from(scenario, head).pop()
 }
 
 /// The Spec PR.
@@ -1656,17 +1662,6 @@ gh pr create --base issue-20 --head issue-22 --title "Ticket 22" --body "Closes 
 exit 1
 "#;
 
-/// The PRs on the fake GitHub from `head`.
-fn prs_from(scenario: &Scenario, head: &str) -> Vec<serde_json::Value> {
-    scenario.gh_state()["prs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|pr| pr["head"] == head)
-        .cloned()
-        .collect()
-}
-
 #[test]
 fn rerunning_a_failed_spec_run_continues_the_spec_branch_and_the_failed_tickets_issue_branch() {
     let scenario = spec_of(&[(21, &[]), (22, &[21])]);
@@ -1701,7 +1696,7 @@ fn rerunning_a_failed_spec_run_continues_the_spec_branch_and_the_failed_tickets_
         "The base branch is issue-20.",
     );
     assert_contains(
-        calls[3]["prompt"].as_str().unwrap(),
+        spec_review_call(&scenario)["prompt"].as_str().unwrap(),
         &format!("Update PR {spec_pr_url}"),
     );
 
@@ -1726,11 +1721,13 @@ fn rerunning_a_failed_spec_run_continues_the_spec_branch_and_the_failed_tickets_
 }
 
 #[test]
-fn with_every_ticket_closed_and_a_spec_branch_the_spec_run_goes_straight_to_the_spec_review() {
+fn with_every_ticket_closed_and_a_spec_branch_the_spec_run_goes_straight_to_the_spec_review_of_its_spec_pr()
+ {
     let scenario = spec_of(&[(21, &[]), (22, &[21])]);
     scenario.issue_is(21, "CLOSED");
     scenario.issue_is(22, "CLOSED");
     scenario.origin_has_branch("issue-20", "main", &["Tickets 21 and 22"]);
+    let spec_pr_url = scenario.github_has_pr("issue-20", "main", "OPEN");
 
     let result = scenario.run(&[&spec_url(&scenario)]);
 
@@ -1741,14 +1738,15 @@ fn with_every_ticket_closed_and_a_spec_branch_the_spec_run_goes_straight_to_the_
         "stderr: {}",
         result.stderr
     );
+    assert_eq!(result.stdout, format!("{spec_pr_url}\n"));
     let spec = spec_pr(&scenario);
-    assert_eq!(
-        result.stdout,
-        format!("{}\n", spec["url"].as_str().unwrap())
-    );
+    assert_eq!(spec["url"], spec_pr_url);
     assert_eq!(spec["base"], "main");
     assert_eq!(spec["isDraft"], false);
-    assert_contains(spec["body"].as_str().unwrap(), "Closes #20");
+    assert_eq!(
+        checklist_in(spec["body"].as_str().unwrap()),
+        "<!-- thirdshift:tickets -->\n## Tickets\n\n- [x] #21 done\n- [x] #22 done\n<!-- /thirdshift:tickets -->"
+    );
     assert_eq!(prs_from(&scenario, "issue-20").len(), 1);
 }
 

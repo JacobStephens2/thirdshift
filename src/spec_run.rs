@@ -50,7 +50,7 @@ pub struct Parallel {
     pub asked: bool,
 }
 
-/// Whether `tickets` are a Spec's, every one of them closed.
+/// Whether there are `tickets`, as a Spec has, and every one is closed.
 pub fn all_closed(tickets: &[Ticket]) -> bool {
     !tickets.is_empty() && tickets.iter().all(|ticket| !ticket.is_open)
 }
