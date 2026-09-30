@@ -15,7 +15,7 @@ Address the Standards and Spec findings you agree with, using /thirdshift:tdd wh
 
 Push branch <Spec branch>. Do not rebase or force-push.
 
-Update PR <pull request URL> using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave it a draft: thirdshift marks it ready once you are done.
+Update PR <pull request URL> using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.
 
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 
