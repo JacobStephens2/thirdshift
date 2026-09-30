@@ -6,15 +6,23 @@
 #
 # Usage: scripts/release.sh <version>
 #
-# Run it in a clone of this repo, signed in to gh. It works from origin/main in
+# Run it in a clone of this repo, signed in to gh and with claude logged in.
+# It works from origin/main in
 # a temporary worktree, so the branch checked out where it runs and any
 # uncommitted changes there are neither used nor changed.
+#
+# claude, with no tools, writes the PR's summary from the prompt in
+# release-summary.md beside this script. If it fails, the summary is GitHub's
+# generated notes instead, and the script warns and carries on.
 #
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
 # pushed; if the PR's checks fail, it leaves the PR open and exits 1.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
 shopt -s inherit_errexit
+
+# The prompt the summary agent gets ahead of the release's input.
+summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
 
 # Seconds between reads of the PR's workflow runs.
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
@@ -42,6 +50,7 @@ main() {
 	head=$(git rev-parse HEAD)
 	git push --quiet origin "HEAD:refs/heads/$branch"
 
+	progress "writing the summary with claude"
 	# Built first so a failure to build it stops the script, as it would not
 	# inside the gh command line.
 	body=$(pr_body "$base" "$tag")
@@ -102,27 +111,70 @@ rewrite() {
 # pr_body <base> <tag>
 # The body of the bump PR on HEAD, which <tag> will name, off <base>: the
 # summary, between markers the Release page step can find, then the version
-# diff. For now the summary is GitHub's generated notes for the PRs merged
-# since the last tag.
+# diff.
 pr_body() {
-	local previous notes
+	local previous diff summary
 	previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$1" 2>/dev/null || true)
-	notes=$(gh api 'repos/{owner}/{repo}/releases/generate-notes' \
-		-f tag_name="$2" -f target_commitish="$1" \
-		${previous:+-f previous_tag_name="$previous"} --jq .body)
+	diff=$(git diff --no-color --unified=1 "$1" HEAD)
+	summary=$(summary "$1" "$2" "$previous" "$diff")
 	cat <<-EOF
 		## Summary
 
 		<!-- release-summary:start -->
-		$notes
+		$summary
 		<!-- release-summary:end -->
 
 		## Version diff
 
 		\`\`\`diff
-		$(git diff --no-color --unified=1 "$1" HEAD)
+		$diff
 		\`\`\`
 	EOF
+}
+
+# summary <base> <tag> <previous tag> <version diff>
+# The agent's summary of the release, or, if the agent fails or prints
+# nothing, a note saying so and GitHub's generated notes.
+summary() {
+	local input summary
+	input=$(summary_input "$1" "$3" "$4")
+	# In an if, so the agent failing falls back rather than stopping the script.
+	if summary=$({ cat "$summary_prompt" && echo && echo "$input"; } |
+		claude -p --tools '' --strict-mcp-config) &&
+		[ -n "${summary//[[:space:]]/}" ]; then
+		echo "$summary"
+		return
+	fi
+	progress "warning: the agent summary is unavailable, so the summary is GitHub's generated notes"
+	echo "_The agent summary was unavailable, so this is GitHub's generated notes._"
+	echo
+	gh api 'repos/{owner}/{repo}/releases/generate-notes' \
+		-f tag_name="$2" -f target_commitish="$1" \
+		${3:+-f previous_tag_name="$3"} --jq .body
+}
+
+# summary_input <base> <previous tag> <version diff>
+# What the agent summarises: the version diff, then the title, number and body
+# of each PR merged into <base> since <previous tag>, oldest first. The bump PR
+# isn't merged yet, so it isn't among them.
+summary_input() {
+	local number title body
+	cat <<-EOF
+		## Version diff
+
+		\`\`\`diff
+		$3
+		\`\`\`
+
+		## Pull requests merged since ${2:-the first commit}
+	EOF
+	git log --reverse --merges --format=%s "${2:+$2..}$1" |
+		sed -n 's/^Merge pull request #\([0-9][0-9]*\) from .*/\1/p' |
+		while read -r number; do
+			title=$(gh pr view "$number" --json title --jq .title)
+			body=$(gh pr view "$number" --json body --jq .body)
+			printf '\n### #%s: %s\n\n%s\n' "$number" "$title" "$body"
+		done
 }
 
 # wait_for_workflow_runs <sha>
