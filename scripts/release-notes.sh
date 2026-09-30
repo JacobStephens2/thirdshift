@@ -61,4 +61,7 @@ summary_section() {
 		$0 == "<!-- release-summary:start -->" && !done { inside = 1 }'
 }
 
-main "$@"
+# Only when run, so the tests can source the script and call its functions.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

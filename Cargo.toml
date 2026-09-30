@@ -12,6 +12,12 @@ include = ["/src", "/skills", "/README.md", "/LICENSE"]
 
 [dependencies]
 anyhow = "1.0.104"
+# axoupdater needs axoasset's `remote` feature, which always pulls in `image`
+# (with moxcms and pxfm) and turns on reqwest's `default-tls`, which is rustls
+# with aws-lc. No flag turns either off, and features unify, so switching
+# reqwest below to ring (`rustls-no-provider` plus rustls's `ring`) would
+# build ring as well as aws-lc, not instead of it. Dropping either stack
+# needs an axoasset change or another updater (#174).
 axoupdater = { version = "0.10.2", default-features = false, features = ["github_releases", "blocking"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 include_dir = "0.7.4"
@@ -22,6 +28,15 @@ signal-hook = "0.4.4"
 tempfile = "3.27.0"
 toml = "1.1.6"
 toml_edit = "0.25.15"
+
+# Line tables keep file and line in the crate's backtraces, and dependencies
+# get no debuginfo, so their frames show no file or line. Full debuginfo made
+# the debug binary 108MB and target/ 1.5GB per worktree.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 # The profile that 'dist' will build with
 [profile.dist]

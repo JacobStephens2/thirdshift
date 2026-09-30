@@ -29,6 +29,7 @@
 
 #![allow(dead_code)]
 
+pub mod fakes;
 pub mod resend;
 
 use std::fs;
@@ -135,7 +136,7 @@ impl Scenario {
             fs::create_dir_all(scenario.path(dir)).unwrap();
         }
         scenario.write_gitconfig();
-        scenario.install_fakes();
+        fakes::install(&scenario.path("bin"));
         scenario.write_gh_state(&json!({
             "repo": format!("{OWNER}/{REPO}"),
             "issues": { "7": "OPEN" },
@@ -388,9 +389,11 @@ impl Scenario {
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
-            // Seconds of waiting for CI become milliseconds.
+            // Seconds of waiting for CI become milliseconds. Each poll starts
+            // the fake gh; at 100ms the grace period holds about three reads,
+            // enough for the absent state.
             .env("THIRDSHIFT_CI_GRACE_MS", "300")
-            .env("THIRDSHIFT_POLL_MS", "10");
+            .env("THIRDSHIFT_POLL_MS", "100");
         command
     }
 
@@ -718,15 +721,6 @@ impl Scenario {
             github = self.github_url(),
         );
         fs::write(self.path("home/.gitconfig"), config).unwrap();
-    }
-
-    fn install_fakes(&self) {
-        let fakes = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fakes");
-        for name in ["gh", "claude"] {
-            let target = self.path("bin").join(name);
-            fs::copy(fakes.join(name), &target).unwrap();
-            fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
-        }
     }
 }
 
