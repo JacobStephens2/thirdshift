@@ -505,11 +505,6 @@ fn notifications_on<'a>(rest: &[Keystrokes<'a>]) -> Vec<Keystrokes<'a>> {
     keystrokes
 }
 
-/// The Credentials Setup left, if any.
-fn credentials(scenario: &Scenario) -> Option<String> {
-    fs::read_to_string(scenario.path("home/.thirdshift/credentials.toml")).ok()
-}
-
 fn table(result: &TerminalResult) -> toml::Table {
     let text = result.user_config.as_ref().expect("no User config written");
     text.parse().unwrap()
@@ -757,7 +752,7 @@ fn on_a_terminal_with_notifications_off_nothing_about_email_is_asked() {
         &[(MERGE, ""), (PULL, ""), (NOTIFY, "n")],
     );
 
-    assert_eq!(credentials(&scenario).as_deref(), Some(saved));
+    assert_eq!(scenario.credentials().as_deref(), Some(saved));
     for asked in [TO, FROM, KEY_QUESTION, "RESEND_API_KEY", TEST_EMAIL] {
         assert!(
             !result.stderr.contains(asked),
@@ -792,7 +787,7 @@ fn on_a_terminal_with_no_key_skipping_it_writes_no_credentials_and_says_how_to_a
                 result.stderr
             );
         }
-        assert_eq!(credentials(&scenario), None, "{key:?}");
+        assert_eq!(scenario.credentials(), None, "{key:?}");
         assert_eq!(table(&result)["email"]["always"].as_bool(), Some(true));
     }
 }
@@ -815,11 +810,13 @@ fn on_a_terminal_an_entered_key_is_written_to_the_credentials_and_never_shown() 
         "terminal: {}",
         result.stderr
     );
-    let credentials: toml::Table = credentials(&scenario).unwrap().parse().unwrap();
+    let credentials: toml::Table = scenario.credentials().unwrap().parse().unwrap();
     assert_eq!(credentials["resend"]["key"].as_str(), Some(KEY));
     let mode = fs::metadata(&path).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600, "{mode:o}");
-    assert!(!result.stderr.contains(&KEY[..6]), "{}", result.stderr);
+    for part in [&KEY[..6], &KEY[KEY.len() - 6..]] {
+        assert!(!result.stderr.contains(part), "{part}: {}", result.stderr);
+    }
     assert!(!result.user_config.unwrap().contains(KEY));
 }
 
@@ -848,7 +845,7 @@ fn on_a_terminal_a_key_not_starting_with_re_is_asked_again() {
         "{}",
         result.stderr
     );
-    let credentials: toml::Table = credentials(&scenario).unwrap().parse().unwrap();
+    let credentials: toml::Table = scenario.credentials().unwrap().parse().unwrap();
     assert_eq!(credentials["resend"]["key"].as_str(), Some(KEY));
 }
 
@@ -864,7 +861,7 @@ fn on_a_terminal_pressing_enter_keeps_the_saved_key() {
         &notifications_on(&[(KEPT, ""), (TEST_EMAIL, "")]),
     );
 
-    assert_eq!(credentials(&scenario).as_deref(), Some(saved));
+    assert_eq!(scenario.credentials().as_deref(), Some(saved));
     assert!(
         !result.stderr.contains(WROTE_CREDENTIALS),
         "{}",
@@ -887,7 +884,7 @@ fn on_a_terminal_a_new_key_replaces_the_saved_one_keeping_the_rest_of_the_file()
     );
 
     assert_eq!(
-        credentials(&scenario).as_deref(),
+        scenario.credentials().as_deref(),
         Some(
             "# My secrets.\n[resend]\n# Rotated monthly.\nkey = \"re_secret_123\"   # from the dashboard\n"
         )
@@ -905,7 +902,7 @@ fn on_a_terminal_a_key_is_added_to_credentials_that_hold_none() {
         &notifications_on(&[(KEY_PROMPT, KEY), (TEST_EMAIL, "")]),
     );
 
-    let text = credentials(&scenario).unwrap();
+    let text = scenario.credentials().unwrap();
     assert!(text.starts_with("# Keys go here.\n"), "{text}");
     assert!(!text.contains("# key"), "{text}");
     let credentials: toml::Table = text.parse().unwrap();
@@ -933,7 +930,7 @@ fn on_a_terminal_with_resend_api_key_set_no_key_is_asked_and_its_source_is_said(
     );
     assert!(!result.stderr.contains(KEY_QUESTION), "{}", result.stderr);
     assert!(!result.stderr.contains(KEY), "{}", result.stderr);
-    assert_eq!(credentials(&scenario).as_deref(), Some(saved));
+    assert_eq!(scenario.credentials().as_deref(), Some(saved));
 }
 
 #[test]
@@ -971,7 +968,7 @@ fn ctrl_c_at_the_key_prompt_writes_neither_file() {
     assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
     assert_eq!(result.stdout, "");
     assert_eq!(result.user_config, None);
-    assert_eq!(credentials(&scenario), None);
+    assert_eq!(scenario.credentials(), None);
 }
 
 #[test]
@@ -984,7 +981,7 @@ fn ctrl_c_at_the_key_prompt_leaves_saved_credentials_unchanged() {
 
     assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
     assert_eq!(result.user_config, None);
-    assert_eq!(credentials(&scenario).as_deref(), Some(saved));
+    assert_eq!(scenario.credentials().as_deref(), Some(saved));
 }
 
 #[test]
@@ -1011,7 +1008,7 @@ fn on_a_terminal_setup_refuses_broken_credentials_before_asking() {
             result.stderr
         );
         assert_eq!(result.user_config, None);
-        assert_eq!(credentials(&scenario).as_deref(), Some(broken));
+        assert_eq!(scenario.credentials().as_deref(), Some(broken));
     }
 }
 

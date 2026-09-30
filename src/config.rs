@@ -221,14 +221,15 @@ pub fn setup() -> Result<String> {
             }
         }
     };
-    let Some((answers, credentials)) = &answered else {
+    let Some(asked) = &answered else {
         return Ok(written);
     };
-    if let Some(saved) = save_key(answers, credentials)? {
+    if let Some(key) = asked.answers.key() {
         progress::step(written);
-        written = saved;
+        asked.credentials.save(key)?;
+        written = format!("wrote {}", asked.credentials);
     }
-    if !answers.send_test() {
+    if !asked.answers.send_test() {
         return Ok(written);
     }
     progress::step(written);
@@ -268,7 +269,7 @@ pub fn offer_setup() -> Result<()> {
         ));
         return Ok(());
     }
-    let Some((answers, credentials)) = &answered else {
+    let Some(asked) = &answered else {
         progress::step(format_args!(
             "wrote the User config {} with every setting at its default; \
              thirdshift setup changes it",
@@ -277,12 +278,13 @@ pub fn offer_setup() -> Result<()> {
         return Ok(());
     };
     progress::step(format_args!("wrote the User config {}", path.display()));
-    match save_key(answers, credentials) {
-        Ok(Some(saved)) => progress::step(saved),
-        Ok(None) => {}
-        Err(error) => progress::step(format_args!("warning: {error:#}")),
+    if let Some(key) = asked.answers.key() {
+        match asked.credentials.save(key) {
+            Ok(()) => progress::step(format_args!("wrote {}", asked.credentials)),
+            Err(error) => progress::step(format_args!("warning: {error:#}")),
+        }
     }
-    if answers.send_test() {
+    if asked.answers.send_test() {
         let sent = UserConfig::load().and_then(|config| email::send_test(None, &config.email));
         match sent {
             Ok(sent) => progress::step(sent),
@@ -292,28 +294,29 @@ pub fn offer_setup() -> Result<()> {
     Ok(())
 }
 
+/// The Setup answers, and the Credentials read before asking, where a key
+/// the user gave is saved.
+struct Asked {
+    answers: Answers,
+    credentials: Credentials,
+}
+
 /// Ask the Setup questions, with the settings in `text`, the User config at
 /// `path`, and the key in the Credentials as the default answers. Credentials
 /// a Run would refuse are refused before any question. Returns `text` with
-/// the answers, the answers, and the Credentials to save a new key in.
-fn ask(text: &str, path: &Path, home: &Path) -> Result<(String, (Answers, Credentials))> {
+/// the answers, and what was asked.
+fn ask(text: &str, path: &Path, home: &Path) -> Result<(String, Asked)> {
     let current = UserConfig::parse(text, path, home)?;
     let credentials = Credentials::read()?;
     let answers = questions::ask(&current, &credentials, || suggested_address(home))?;
-    Ok((with_answers(text, &answers)?, (answers, credentials)))
-}
-
-/// Save the Resend API key in `answers`, if the user gave one, in
-/// `credentials`. Returns the line that says so.
-fn save_key(answers: &Answers, credentials: &Credentials) -> Result<Option<String>> {
-    let Some(key) = answers.key() else {
-        return Ok(None);
-    };
-    credentials.save(key)?;
-    Ok(Some(format!(
-        "wrote the Credentials {}",
-        credentials.path().display()
-    )))
+    let text = with_answers(text, &answers)?;
+    Ok((
+        text,
+        Asked {
+            answers,
+            credentials,
+        },
+    ))
 }
 
 /// Write `text` as the User config at `path`, where there is none yet,

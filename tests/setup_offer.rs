@@ -33,11 +33,6 @@ const KEY_QUESTION: &str = "Resend API key (input hidden";
 const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip):";
 const KEY: &str = "re_secret_123";
 
-/// The Credentials the Run left, if any.
-fn credentials(scenario: &Scenario) -> Option<String> {
-    fs::read_to_string(scenario.path("home/.thirdshift/credentials.toml")).ok()
-}
-
 /// The first line a Run prints once it starts its work.
 const FIRST_STEP: &str = "thirdshift: ";
 
@@ -166,7 +161,7 @@ fn accepting_asks_for_the_key_saves_it_and_the_run_notification_goes_with_it() {
         result.stderr
     );
     assert!(!result.stderr.contains(KEY), "terminal: {}", result.stderr);
-    let credentials: toml::Table = credentials(&scenario).unwrap().parse().unwrap();
+    let credentials: toml::Table = scenario.credentials().unwrap().parse().unwrap();
     assert_eq!(credentials["resend"]["key"].as_str(), Some(KEY));
     let requests = resend.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
@@ -174,6 +169,31 @@ fn accepting_asks_for_the_key_saves_it_and_the_run_notification_goes_with_it() {
         requests[0].authorization.as_deref(),
         Some(format!("Bearer {KEY}").as_str())
     );
+}
+
+#[test]
+fn accepting_with_broken_credentials_ends_the_command_before_any_question_or_work() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_OPENS_PR);
+    let broken = "[resend]\nkye = \"re_saved_456\"\n";
+    scenario.credentials_are(broken);
+
+    let result = scenario.run_on_terminal(&[&scenario.issue_url(7)], &[], &[(OFFER, "y")]);
+
+    assert_eq!(result.code, Some(1), "terminal: {}", result.stderr);
+    assert!(
+        result.stderr.contains("unknown key resend.kye"),
+        "terminal: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains(MERGE),
+        "terminal: {}",
+        result.stderr
+    );
+    assert_eq!(result.user_config, None);
+    assert_eq!(scenario.credentials().as_deref(), Some(broken));
+    assert!(scenario.claude_calls().is_empty(), "the Run started");
 }
 
 #[test]
@@ -199,7 +219,7 @@ fn declining_writes_the_defaults_and_a_second_run_does_not_offer() {
         "terminal: {}",
         first.stderr
     );
-    assert_eq!(credentials(&scenario), None);
+    assert_eq!(scenario.credentials(), None);
 
     scenario.issue_is(8, "OPEN");
     let second = scenario.run_on_terminal(&[&scenario.issue_url(8)], &[], &[]);
@@ -240,7 +260,7 @@ fn with_no_terminal_a_run_offers_nothing_and_writes_nothing() {
     assert_eq!(result.stdout, format!("{PR_URL}\n"));
     assert!(!result.stderr.contains(OFFER), "stderr: {}", result.stderr);
     assert!(!scenario.path("home/.thirdshift/config.toml").exists());
-    assert_eq!(credentials(&scenario), None);
+    assert_eq!(scenario.credentials(), None);
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
 }
 

@@ -4,7 +4,7 @@
 //! here, so they can't disagree about whether there is one, and Setup saves
 //! the key it is given here too. Only they call it, so a broken Credentials
 //! file can't block a Run that sends no email, nor `update`, `version` or
-//! `help`.
+//! `help`; a first Run's Setup offer, once accepted, is Setup, and reads it.
 
 use std::fmt;
 use std::io::Write;
@@ -126,11 +126,6 @@ impl Credentials {
         })
     }
 
-    /// Where the Credentials are.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     /// Save `secret` as `resend.key`. With no file yet, it is created with
     /// mode 0600, and `~/.thirdshift` with it if missing, holding just the
     /// key. Otherwise the file is edited in place: its comments and anything
@@ -142,6 +137,17 @@ impl Credentials {
         };
         written.with_context(|| format!("can't write {}", self.path.display()))
     }
+}
+
+impl fmt::Display for Credentials {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "the Credentials {}", self.path.display())
+    }
+}
+
+/// Whether `text` looks like a Resend API key, which starts with `re_`.
+pub fn is_key(text: &str) -> bool {
+    text.starts_with("re_")
 }
 
 /// `text`, Credentials that parse, with `resend.key` set to `secret`,

@@ -13,7 +13,7 @@ use signal_hook::low_level;
 
 use crate::config::UserConfig;
 use crate::email::DEFAULT_FROM;
-use crate::resend_key::{Credentials, Source};
+use crate::resend_key::{self, Credentials, Source};
 
 /// What the user chose.
 pub struct Answers {
@@ -114,8 +114,8 @@ pub fn ask(
             say("The Resend API key comes from RESEND_API_KEY.");
             None
         }
-        Some(Source::Credentials(_)) => key("Enter keeps the saved one")?,
-        None => key("Enter to skip")?,
+        Some(Source::Credentials(_)) => ask_key("Enter keeps the saved one")?,
+        None => ask_key("Enter to skip")?,
     };
     let send_test = if found.is_some() || key.is_some() {
         yes_or_no("Send a test email now?", false)?
@@ -170,13 +170,13 @@ fn answer(question: &str, default: Option<&str>) -> Result<String> {
     }
 }
 
-/// Ask for a Resend API key, hidden, until the answer starts with `re_` or
-/// is nothing, which `enter` says what it does, and is `None`.
-fn key(enter: &str) -> Result<Option<String>> {
+/// Ask for a Resend API key, hidden, until the answer is one or is nothing.
+/// `on_enter` says, in the prompt, what nothing does; it is `None`.
+fn ask_key(on_enter: &str) -> Result<Option<String>> {
     loop {
-        match read_hidden(&format!("Resend API key (input hidden, {enter}): "))? {
+        match read_hidden(&format!("Resend API key (input hidden, {on_enter}): "))? {
             key if key.is_empty() => return Ok(None),
-            key if key.starts_with("re_") => return Ok(Some(key)),
+            key if resend_key::is_key(&key) => return Ok(Some(key)),
             _ => say("That isn't a Resend API key, which starts with re_."),
         }
     }
