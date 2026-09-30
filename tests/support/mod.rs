@@ -99,22 +99,26 @@ impl From<Output> for RunResult {
 pub fn unstamped(stderr: &str) -> String {
     stderr
         .split_inclusive('\n')
-        .map(|line| match line.strip_prefix("thirdshift: ") {
-            Some(rest) if stamp(rest).is_some() => format!("thirdshift: {}", &rest[9..]),
-            _ => line.to_string(),
-        })
+        .map(
+            |line| match line.strip_prefix("thirdshift: ").and_then(split_stamp) {
+                Some((_, message)) => format!("thirdshift: {message}"),
+                None => line.to_string(),
+            },
+        )
         .collect()
 }
 
-/// The `HH:MM:SS` a progress line starts with, after its `thirdshift: `.
-pub fn stamp(rest: &str) -> Option<&str> {
-    let time = rest.get(..8)?;
-    let well_formed = rest[8..].starts_with(' ')
-        && time.bytes().enumerate().all(|(at, byte)| match at {
-            2 | 5 => byte == b':',
-            _ => byte.is_ascii_digit(),
-        });
-    well_formed.then_some(time)
+/// A progress line after its `thirdshift: ` split into the `HH:MM:SS` it
+/// starts with and the message after it, if it starts with one. Mirrors
+/// `progress::split_stamp`, which the binary keeps to itself.
+pub fn split_stamp(unprefixed: &str) -> Option<(&str, &str)> {
+    let (time, message) = unprefixed.split_at_checked(8)?;
+    let message = message.strip_prefix(' ')?;
+    let is_stamp = time.bytes().enumerate().all(|(at, byte)| match at {
+        2 | 5 => byte == b':',
+        _ => byte.is_ascii_digit(),
+    });
+    is_stamp.then_some((time, message))
 }
 
 impl Scenario {

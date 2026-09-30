@@ -204,10 +204,11 @@ fn every_line_starts_with_the_local_time_it_was_printed() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stamped_stderr);
     for line in result.stamped_stderr.lines() {
-        let rest = line
+        let unprefixed = line
             .strip_prefix("thirdshift: ")
             .unwrap_or_else(|| panic!("unprefixed: {line}"));
-        let time = support::stamp(rest).unwrap_or_else(|| panic!("unstamped: {line}"));
+        let (time, _) =
+            support::split_stamp(unprefixed).unwrap_or_else(|| panic!("unstamped: {line}"));
         // Unless the Run crossed midnight, it printed between the two times.
         if before <= after {
             assert!(before.as_str() <= time && time <= after.as_str(), "{line}");

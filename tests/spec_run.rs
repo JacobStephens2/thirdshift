@@ -218,10 +218,14 @@ fn each_relayed_ticket_line_has_exactly_one_time() {
         .collect();
     assert!(!relayed.is_empty(), "stderr: {}", result.stamped_stderr);
     for line in relayed {
-        let rest = line.strip_prefix("thirdshift: ").unwrap();
-        assert!(support::stamp(rest).is_some(), "unstamped: {line}");
-        let message = rest[9..].strip_prefix("#21: ").unwrap();
-        assert!(support::stamp(message).is_none(), "stamped twice: {line}");
+        let unprefixed = line.strip_prefix("thirdshift: ").unwrap();
+        let (_, message) =
+            support::split_stamp(unprefixed).unwrap_or_else(|| panic!("unstamped: {line}"));
+        let message = message.strip_prefix("#21: ").unwrap();
+        assert!(
+            support::split_stamp(message).is_none(),
+            "stamped twice: {line}"
+        );
     }
 }
 

@@ -16,19 +16,22 @@ const MAX_DETAIL: usize = 100;
 /// What every progress line starts with.
 const PREFIX: &str = "thirdshift: ";
 
+/// The local time that follows the prefix, as `HH:MM:SS`.
+const STAMP: &str = "%H:%M:%S";
+
 /// Print one of thirdshift's own steps, stamped with the time now.
 pub fn step(message: impl Display) {
-    print(&Local::now().format("%H:%M:%S"), message);
+    write_line(Local::now().format(STAMP), message);
 }
 
 /// Print `line`, from the stderr of a child thirdshift, under `label`,
 /// keeping the time the child stamped it with (or stamping it now, if it
 /// has none), and return its message: the line without prefix or time.
-pub fn relay<'a>(label: impl Display, line: &'a str) -> &'a str {
+pub fn relay(label: impl Display, line: &str) -> &str {
     let line = line.strip_prefix(PREFIX).unwrap_or(line);
     match split_stamp(line) {
         Some((time, message)) => {
-            print(&time, format_args!("{label}: {message}"));
+            write_line(time, format_args!("{label}: {message}"));
             message
         }
         None => {
@@ -38,7 +41,7 @@ pub fn relay<'a>(label: impl Display, line: &'a str) -> &'a str {
     }
 }
 
-fn print(time: &impl Display, message: impl Display) {
+fn write_line(time: impl Display, message: impl Display) {
     // Ignored if it fails, as it does once the terminal has closed: the Run
     // still has to clean up and send its Run notification.
     let _ = writeln!(std::io::stderr(), "{PREFIX}{time} {message}");
