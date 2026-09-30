@@ -24,6 +24,10 @@ The `init` line carries session id `fake-session-<n>` for the n-th call. Lines
 the script appends to the file named by $FAKE_CLAUDE_AFTER_RESULT are emitted
 after the closing `result` line, e.g. to kill a background task as the session
 ends.
+
+Called without --output-format, as `claude -p` with its prompt on stdin, it
+records stdin as `stdin` and prints only what the script prints, as print
+mode's plain text output does.
 """
 
 import fcntl
@@ -78,6 +82,7 @@ def main():
         == 0
     )
 
+    text_mode = "--output-format" not in argv
     record_path = os.environ["FAKE_CLAUDE_RECORD"]
     lock = open(record_path + ".lock", "w")
     fcntl.flock(lock, fcntl.LOCK_EX)
@@ -94,12 +99,17 @@ def main():
             "merging": merging,
             "plugin_dir": plugin_dir,
             "plugin_files": plugin_snapshot(plugin_dir) if plugin_dir else {},
+            "stdin": sys.stdin.read() if text_mode else None,
         }
     )
     with open(record_path, "w") as f:
         json.dump(records, f, indent=2)
     script = script_for(records)
     lock.close()
+
+    script = script_for(records)
+    if text_mode:
+        sys.exit(subprocess.run(["bash", "-e", script]).returncode)
 
     init = {
         "type": "system",

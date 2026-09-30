@@ -180,15 +180,27 @@ def pr_create(state, flags):
 
 
 def pr_view(state, positional, flags):
+    """By head branch, its newest PR, or by number. `--jq .<field>` prints
+    that one field raw, as gh does for a string."""
     head = positional[0]
-    matches = [pr for pr in state["prs"] if pr["head"] == head]
+    if head.isdigit():
+        matches = [pr for pr in state["prs"] if pr["number"] == int(head)]
+    else:
+        matches = [pr for pr in state["prs"] if pr["head"] == head]
     if not matches:
         die(f'no pull requests found for branch "{head}"')
     pr = matches[-1]
     wanted = flags["json"].split(",")
+    jq = flags.get("jq")
+    if jq is not None:
+        if not jq.startswith(".") or jq[1:] not in wanted:
+            die(f"fake gh: unsupported --jq {jq}", 2)
+        fields = dict(pr_fields(pr), title=pr["title"], body=pr.get("body", ""))
+        print(fields[jq[1:]])
+        return
     fields = pr_fields(pr)
     if "headRefOid" in wanted:
-        fields["headRefOid"] = pr.get("headRefOid") or origin("rev-parse", f"refs/heads/{head}")
+        fields["headRefOid"] = pr.get("headRefOid") or origin("rev-parse", f"refs/heads/{pr['head']}")
     fields["closingIssuesReferences"] = [
         {"number": int(number)} for number in CLOSING_KEYWORD.findall(pr.get("body", ""))
     ]
