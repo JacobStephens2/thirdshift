@@ -1,6 +1,7 @@
 //! The User config: `~/.thirdshift/config.toml`, this machine's defaults for
 //! every Run. Only a Run, `email-test` and `setup` read it, so a broken one
-//! can't block `update`, `version` or `help`.
+//! can't block `update`, `version` or `help`, and only a Run offers Setup
+//! when there is none.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -166,16 +167,13 @@ pub fn setup() -> Result<String> {
     let asked = questions::has_terminal();
     let mut send_test = false;
     if asked {
-        let current = UserConfig::parse(&text, &path, &home)?;
-        let answers = questions::ask(&current, || suggested_address(&home))?;
+        let answers;
+        (text, answers) = answered(&text, &path, &home)?;
         send_test = answers.send_test();
-        text = with_answers(&text, &answers)?;
     }
     let written = match &existing {
         None => {
-            std::fs::create_dir_all(home.join(".thirdshift"))
-                .and_then(|()| std::fs::write(&path, &text))
-                .with_context(|| format!("can't write {}", path.display()))?;
+            write_new(&home, &path, &text)?;
             format!("wrote the User config {}", path.display())
         }
         Some(existing) if *existing == text && asked => {
@@ -206,6 +204,72 @@ pub fn setup() -> Result<String> {
     progress::step(written);
     let config = UserConfig::load()?;
     Ok(email::send_test(None, &config.email)?.to_string())
+}
+
+/// The first Run's offer of Setup, made only from a terminal and only when
+/// there is no User config. Yes asks the Setup questions and writes the
+/// answers; no writes every setting at its default, as `setup` with no
+/// terminal does. Either way the Run then loads what was written. A User
+/// config that can't be written, or a test email that can't go, is a
+/// warning, so the Run carries on with the defaults; stdin closing before
+/// the last answer ends the command before any work, with nothing written.
+pub fn offer_setup() -> Result<()> {
+    if !questions::has_terminal() {
+        return Ok(());
+    }
+    let (home, path) = home_and_path()?;
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Ok(()),
+    }
+    let accepted = questions::offer(&path)?;
+    let mut text = with_email_to(suggested_address(&home));
+    let mut send_test = false;
+    if accepted {
+        let answers;
+        (text, answers) = answered(&text, &path, &home)?;
+        send_test = answers.send_test();
+    }
+    if let Err(error) = write_new(&home, &path, &text) {
+        progress::step(format_args!(
+            "warning: {error:#}; carrying on with the defaults"
+        ));
+        return Ok(());
+    }
+    if !accepted {
+        progress::step(format_args!(
+            "wrote the User config {} with every setting at its default; \
+             thirdshift setup changes it",
+            path.display()
+        ));
+        return Ok(());
+    }
+    progress::step(format_args!("wrote the User config {}", path.display()));
+    if send_test {
+        let sent = UserConfig::load().and_then(|config| email::send_test(None, &config.email));
+        match sent {
+            Ok(sent) => progress::step(sent),
+            Err(error) => progress::step(format_args!("warning: {error:#}")),
+        }
+    }
+    Ok(())
+}
+
+/// Ask the Setup questions, with the settings in `text`, the User config at
+/// `path`, as the default answers. Returns `text` with the answers, and the
+/// answers.
+fn answered(text: &str, path: &Path, home: &Path) -> Result<(String, Answers)> {
+    let current = UserConfig::parse(text, path, home)?;
+    let answers = questions::ask(&current, || suggested_address(home))?;
+    Ok((with_answers(text, &answers)?, answers))
+}
+
+/// Write `text` as the User config at `path`, where there is none yet,
+/// creating `~/.thirdshift` under `home` if it is missing.
+fn write_new(home: &Path, path: &Path, text: &str) -> Result<()> {
+    std::fs::create_dir_all(home.join(".thirdshift"))
+        .and_then(|()| std::fs::write(path, text))
+        .with_context(|| format!("can't write {}", path.display()))
 }
 
 /// `text`, a User config with every key, or a commented-out `email.to`, with
