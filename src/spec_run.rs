@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 
 use crate::args;
-use crate::failed_run::FailedRun;
+use crate::failed_run::{self, FailedRun};
 use crate::github::{self, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -34,8 +34,9 @@ const SPEC_REVIEW: &str = "spec-review";
 /// the Tickets run one at a time, the graph read again after each. A Ticket
 /// that fails ends the Spec run. Once every Ticket has landed, the Spec PR is
 /// opened as a draft and the Spec review, logged in `logs`, reviews the Spec
-/// branch before the Spec PR is marked ready. The worktree is cleaned up when
-/// this returns.
+/// branch before the Spec PR is marked ready; a Spec review that fails goes
+/// through the Failed run path. The worktree is cleaned up when this returns,
+/// or kept by the Failed run path if its work did not reach origin.
 pub fn run(
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
@@ -47,12 +48,7 @@ pub fn run(
     let pr_url = open_spec_pr(spec, worktree.branch(), base)?;
     let mut log = logs.path(SPEC_REVIEW);
     if let Err(error) = review(spec, &worktree, base, &pr_url, logs, &mut log) {
-        return Err(FailedRun {
-            error,
-            pr_url: None,
-            log: Some(log),
-            interrupted: interrupt::requested(),
-        });
+        return Err(failed_run::fail(spec, worktree, base, &log, error));
     }
     Ok(Reached {
         pr_url,
@@ -149,11 +145,10 @@ fn open_spec_pr(spec: &IssueUrl, spec_branch: &str, base: &str) -> Result<String
     github::create_draft_pr(spec, spec_branch, base, &title, &body)
 }
 
-/// The Spec review of the Spec branch in `worktree`, brought up to date with
-/// the Tickets landed on origin, whose draft Spec PR into `base` is `pr_url`,
-/// pointing `log` at its session's log. Then the Spec
-/// branch is pushed, for any commit the session left unpushed, and the Spec
-/// PR marked ready, failing unless it is still open and targets `base`.
+/// Bring the Spec branch in `worktree` up to date with the Tickets landed on
+/// origin, and run the Spec review on it, pointing `log` at its session's
+/// log. Then push the Spec branch, for any commit the session left unpushed,
+/// and mark the Spec PR `pr_url` into `base` ready.
 fn review(
     spec: &IssueUrl,
     worktree: &Worktree,
@@ -173,14 +168,6 @@ fn review(
     let prompt = prompt::spec_review(spec, base, spec_branch, pr_url);
     sessions.run(SPEC_REVIEW, &prompt, log)?;
     worktree.push()?;
-
-    progress::step("checking the Spec PR");
-    let pr = run::open_pr(spec, spec_branch)?;
-    if pr.base != base {
-        bail!("Spec PR targets {}, not {base}", pr.base);
-    }
-    if pr.is_draft {
-        github::mark_ready(spec, spec_branch)?;
-    }
+    run::mark_pr_ready(spec, spec_branch, base)?;
     Ok(())
 }

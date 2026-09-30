@@ -161,7 +161,7 @@ impl Worktree {
     }
 
     /// Fetch the Issue branch from origin and fast-forward the local one to
-    /// it, as a Spec run does to its Spec branch once Tickets have landed there.
+    /// it, failing if the two have diverged.
     pub fn fast_forward_to_origin(&self) -> Result<()> {
         let upstream = self.upstream();
         progress::step(format_args!("updating {} from {upstream}", self.branch));

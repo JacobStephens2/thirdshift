@@ -62,7 +62,7 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
 /// Ticket has landed on it, with the draft Spec PR `pr_url` into `base`.
 pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> String {
     format!(
-        "/thirdshift:code-review {base}\n\
+        "/thirdshift:code-review {base}, with the Spec {url} as the spec\n\
          \n\
          Every Ticket of the Spec {url} has landed on branch {branch}, its Spec branch (see git log {base}..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.\n\
          \n\

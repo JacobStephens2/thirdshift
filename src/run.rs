@@ -178,14 +178,7 @@ fn implement(
     run_session("implement", prompt)?;
     worktree.push()?;
 
-    progress::step("checking the PR");
-    let pr = open_pr(issue, branch)?;
-    if pr.base != base {
-        bail!("PR targets {}, not {base}", pr.base);
-    }
-    if pr.is_draft {
-        github::mark_ready(issue, branch)?;
-    }
+    let pr = mark_pr_ready(issue, branch, base)?;
 
     let mut repair_loop = RepairLoop {
         issue,
@@ -475,8 +468,22 @@ impl RepairLoop<'_> {
     }
 }
 
+/// Mark the PR whose head is `branch` ready for review, failing unless it
+/// exists, is open and targets `base`.
+pub fn mark_pr_ready(issue: &IssueUrl, branch: &str, base: &str) -> Result<PullRequest> {
+    progress::step("checking the PR");
+    let pr = open_pr(issue, branch)?;
+    if pr.base != base {
+        bail!("PR targets {}, not {base}", pr.base);
+    }
+    if pr.is_draft {
+        github::mark_ready(issue, branch)?;
+    }
+    Ok(pr)
+}
+
 /// The PR whose head is `branch`, failing unless it exists and is open.
-pub fn open_pr(issue: &IssueUrl, branch: &str) -> Result<PullRequest> {
+fn open_pr(issue: &IssueUrl, branch: &str) -> Result<PullRequest> {
     let pr = github::pull_request_for(issue, branch)?.context("no PR found")?;
     if !pr.is_open() {
         bail!("PR {} is {}, not open", pr.url, pr.state);

@@ -297,7 +297,7 @@ fn once_the_last_ticket_lands_the_spec_review_reviews_the_spec_branch_against_th
     assert_eq!(review["branch"], "issue-20");
     let prompt = review["prompt"].as_str().unwrap();
     for part in [
-        "/thirdshift:code-review main\n",
+        "/thirdshift:code-review main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
         &spec_url(&scenario),
         "using main as the fixed point",
         "/thirdshift:tdd",
@@ -420,6 +420,7 @@ fn a_failed_spec_review_ends_the_spec_run_without_marking_the_spec_pr_ready() {
     let result = scenario.run(&[&spec_url(&scenario)]);
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/3\n");
     assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
     let spec = &scenario.gh_state()["prs"][2];
     assert_eq!(spec["head"], "issue-20");
