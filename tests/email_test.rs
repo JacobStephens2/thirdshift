@@ -3,6 +3,8 @@
 
 mod support;
 
+use std::os::unix::fs::PermissionsExt;
+
 use support::resend::{Request, ResendStandIn};
 use support::{RunResult, Scenario};
 
@@ -206,4 +208,165 @@ fn a_second_address_is_an_argument_error() {
         result.stderr
     );
     assert!(resend.requests().is_empty());
+}
+
+/// Credentials holding the key `re_file_456`.
+const CREDENTIALS: &str = "[resend]\nkey = \"re_file_456\"\n";
+
+#[test]
+fn without_resend_api_key_it_sends_with_the_key_in_the_credentials() {
+    for key in [None, Some("")] {
+        let scenario = Scenario::new();
+        scenario.credentials_are(CREDENTIALS);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = email_test(&scenario, &resend, &["me@example.com"], key);
+
+        let request = the_one_request(&resend, &result);
+        assert_eq!(
+            request.authorization.as_deref(),
+            Some("Bearer re_file_456"),
+            "{key:?}"
+        );
+        assert!(!result.stderr.contains("warning:"), "{}", result.stderr);
+    }
+}
+
+#[test]
+fn resend_api_key_wins_over_the_credentials() {
+    let scenario = Scenario::new();
+    scenario.credentials_are(CREDENTIALS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = email_test(&scenario, &resend, &["me@example.com"], Some(KEY));
+
+    let request = the_one_request(&resend, &result);
+    assert_eq!(request.authorization.as_deref(), Some("Bearer re_test_123"));
+}
+
+#[test]
+fn with_resend_api_key_set_broken_credentials_are_never_read() {
+    let scenario = Scenario::new();
+    scenario.credentials_are("[resend]\nkye = \"re_file_456\"\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = email_test(&scenario, &resend, &["me@example.com"], Some(KEY));
+
+    let request = the_one_request(&resend, &result);
+    assert_eq!(request.authorization.as_deref(), Some("Bearer re_test_123"));
+}
+
+#[test]
+fn with_no_key_anywhere_it_lists_every_way_to_give_one() {
+    for credentials in [None, Some("[resend]\n"), Some("# no key yet\n")] {
+        let scenario = Scenario::new();
+        if let Some(credentials) = credentials {
+            scenario.credentials_are(credentials);
+        }
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = email_test(&scenario, &resend, &["me@example.com"], None);
+
+        assert_eq!(result.code, Some(1), "{credentials:?}: {}", result.stderr);
+        let path = scenario.path("home/.thirdshift/credentials.toml");
+        for part in [
+            "no Resend API key. Either:",
+            "run `thirdshift setup`",
+            &format!("add it to {} (mode 600):", path.display()),
+            "[resend]",
+            "key = \"re_...\"",
+            "set RESEND_API_KEY in the environment the Run starts from",
+            "(a crontab line, CI secret, or a shell profile the Run's shell reads)",
+        ] {
+            assert!(
+                result.stderr.contains(part),
+                "{credentials:?}: expected {part:?} in: {}",
+                result.stderr
+            );
+        }
+        assert!(
+            !result.stderr.contains("unset or empty"),
+            "{}",
+            result.stderr
+        );
+        assert!(resend.requests().is_empty(), "{credentials:?}");
+    }
+}
+
+#[test]
+fn broken_credentials_stop_it_naming_the_file_and_the_key() {
+    for (credentials, named) in [
+        ("[resend\nkey = \"re_file_456\"\n", "can't parse"),
+        ("[resend]\nkye = \"re_file_456\"\n", "resend.kye"),
+        ("[resnd]\nkey = \"re_file_456\"\n", "[resnd]"),
+        ("key = \"re_file_456\"\n", "key"),
+        ("[resend]\nkey = 456\n", "resend.key"),
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.credentials_are(credentials);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = email_test(&scenario, &resend, &["me@example.com"], None);
+
+        assert_eq!(result.code, Some(1), "{credentials:?}: {}", result.stderr);
+        for part in [named, &path.display().to_string()] {
+            assert!(
+                result.stderr.contains(part),
+                "{credentials:?}: expected {part:?} in: {}",
+                result.stderr
+            );
+        }
+        assert!(resend.requests().is_empty(), "{credentials:?}");
+    }
+}
+
+#[test]
+fn credentials_others_can_read_are_used_with_a_warning() {
+    for mode in [0o640, 0o604, 0o644] {
+        let scenario = Scenario::new();
+        let path = scenario.credentials_are(CREDENTIALS);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = email_test(&scenario, &resend, &["me@example.com"], None);
+
+        let request = the_one_request(&resend, &result);
+        assert_eq!(request.authorization.as_deref(), Some("Bearer re_file_456"));
+        let warning = result
+            .stderr
+            .lines()
+            .find(|line| line.contains("warning:"))
+            .unwrap_or_else(|| panic!("{mode:o}: no warning in: {}", result.stderr));
+        let chmod = format!("chmod 600 {}", path.display());
+        assert!(warning.contains(&chmod), "{mode:o}: {warning}");
+    }
+}
+
+#[test]
+fn a_refusal_says_where_the_key_came_from() {
+    for from_file in [false, true] {
+        let scenario = Scenario::new();
+        let path = scenario.credentials_are(CREDENTIALS);
+        let resend = ResendStandIn::replying(
+            401,
+            r#"{"statusCode":401,"message":"API key is invalid","name":"validation_error"}"#,
+        );
+        let key = if from_file { None } else { Some(KEY) };
+
+        let result = email_test(&scenario, &resend, &["me@example.com"], key);
+
+        assert_eq!(result.code, Some(1), "{from_file}: {}", result.stderr);
+        let source = if from_file {
+            format!("the Credentials {}", path.display())
+        } else {
+            "RESEND_API_KEY".to_string()
+        };
+        assert!(
+            result
+                .stderr
+                .contains(&format!("the key came from {source}")),
+            "{from_file}: {}",
+            result.stderr
+        );
+    }
 }

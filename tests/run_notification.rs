@@ -4,6 +4,7 @@
 
 mod support;
 
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use support::resend::{Request, ResendStandIn};
@@ -429,4 +430,165 @@ fn without_email_always_a_run_without_the_flag_sends_nothing() {
         assert_eq!(result.code, Some(0), "{config}: {}", result.stderr);
         assert!(resend.requests().is_empty(), "{config}");
     }
+}
+
+/// Credentials holding the key `re_file_456`.
+const CREDENTIALS: &str = "[resend]\nkey = \"re_file_456\"\n";
+
+#[test]
+fn without_resend_api_key_a_run_sends_with_the_key_in_the_credentials() {
+    for (config, key) in [(None, None), (None, Some("")), (Some(EMAIL_ALWAYS), None)] {
+        let scenario = Scenario::new();
+        if let Some(config) = config {
+            scenario.user_config_is(config);
+        }
+        scenario.credentials_are(CREDENTIALS);
+        scenario.agent_does(AGENT_OPENS_PR);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+        let url = scenario.issue_url(7);
+        let args: &[&str] = match config {
+            Some(_) => &[&url],
+            None => &[&url, "--email", "me@example.com"],
+        };
+
+        let result = run(&scenario, &resend, args, key);
+
+        assert_eq!(result.code, Some(0), "{key:?}: {}", result.stderr);
+        let request = the_one_request(&resend);
+        assert_eq!(
+            request.authorization.as_deref(),
+            Some("Bearer re_file_456"),
+            "{key:?}"
+        );
+    }
+}
+
+#[test]
+fn resend_api_key_wins_over_the_credentials_for_a_run() {
+    let scenario = Scenario::new();
+    scenario.credentials_are(CREDENTIALS);
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        the_one_request(&resend).authorization.as_deref(),
+        Some("Bearer re_test_123")
+    );
+}
+
+#[test]
+fn with_no_key_anywhere_the_run_stops_before_any_work_listing_every_way_to_give_one() {
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        None,
+    );
+
+    let path = scenario.path("home/.thirdshift/credentials.toml");
+    for part in [
+        "no Resend API key. Either:",
+        "run `thirdshift setup`",
+        &format!("add it to {} (mode 600):", path.display()),
+        "key = \"re_...\"",
+        "set RESEND_API_KEY in the environment the Run starts from",
+    ] {
+        scenario.assert_rejected_before_any_work(&result, part);
+    }
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn broken_credentials_stop_a_run_that_asks_for_a_notification_before_any_work() {
+    for (credentials, named) in [
+        ("[resend\n", "can't parse"),
+        ("[resend]\nkye = \"re_file_456\"\n", "resend.kye"),
+        ("[resend]\nkey = true\n", "resend.key"),
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.credentials_are(credentials);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run(
+            &scenario,
+            &resend,
+            &[&scenario.issue_url(7), "--email", "me@example.com"],
+            None,
+        );
+
+        assert_eq!(result.code, Some(1), "{credentials:?}: {}", result.stderr);
+        for part in [named, &path.display().to_string()] {
+            scenario.assert_rejected_before_any_work(&result, part);
+        }
+        assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
+        assert!(resend.requests().is_empty(), "{credentials:?}");
+    }
+}
+
+#[test]
+fn credentials_others_can_read_still_send_the_notification_with_a_warning() {
+    let scenario = Scenario::new();
+    let path = scenario.credentials_are(CREDENTIALS);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        None,
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        the_one_request(&resend).authorization.as_deref(),
+        Some("Bearer re_file_456")
+    );
+    let warning = result
+        .stderr
+        .lines()
+        .find(|line| line.contains("warning:"))
+        .unwrap_or_else(|| panic!("no warning in stderr: {}", result.stderr));
+    assert_contains(warning, &format!("chmod 600 {}", path.display()));
+}
+
+#[test]
+fn a_run_without_a_notification_ignores_broken_credentials() {
+    let scenario = Scenario::new();
+    scenario.credentials_are("[resend]\nkye = \"re_file_456\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(&scenario, &resend, &[&scenario.issue_url(7)], None);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(!result.stderr.contains("Credentials"), "{}", result.stderr);
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn help_version_and_update_never_read_the_credentials() {
+    let scenario = Scenario::new();
+    scenario.credentials_are("[resend]\nkye = \"re_file_456\"\n");
+
+    for command in ["help", "version"] {
+        let result = scenario.run(&[command]);
+
+        assert_eq!(result.code, Some(0), "{command}: {}", result.stderr);
+        assert_eq!(result.stderr, "", "{command}");
+    }
+    let result = scenario.run(&["update"]);
+    assert!(!result.stderr.contains("Credentials"), "{}", result.stderr);
 }

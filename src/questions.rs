@@ -9,6 +9,7 @@ use anyhow::{Result, bail};
 
 use crate::config::UserConfig;
 use crate::email::DEFAULT_FROM;
+use crate::resend_key::ResendKey;
 
 /// What the user chose.
 pub struct Answers {
@@ -91,7 +92,7 @@ pub fn ask(
         "Send them from",
         Some(current.email.from.as_deref().unwrap_or(DEFAULT_FROM)),
     )?;
-    let has_key = std::env::var("RESEND_API_KEY").is_ok_and(|key| !key.is_empty());
+    let has_key = ResendKey::find()?.is_some();
     let send_test = if has_key {
         yes_or_no("Send a test email now?", false)?
     } else {
