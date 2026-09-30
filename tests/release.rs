@@ -58,8 +58,9 @@ fn with_version(file: &str, version: &str) -> String {
 }
 
 /// A bare origin whose main is at version 0.1.0, tagged `v0.1.0`, with one PR
-/// merged before the tag and one after; a contributor's clone that makes
-/// them; the maintainer's clone the script runs in; and the fake `gh`'s state.
+/// merged before the tag and one after, and a green CI run on main's tip; a
+/// contributor's clone that makes them; the maintainer's clone the script
+/// runs in; and the fake `gh`'s state.
 struct Release {
     temp: TempDir,
 }
@@ -447,7 +448,6 @@ fn assert_refused(release: &Release, version: &str, reasons: &[&str]) {
     for reason in reasons {
         assert!(err.contains(reason), "{version}: no {reason:?} in {err}");
     }
-    assert!(!err.contains("release: opened"), "{version}: {err}");
     assert_eq!(release.origin_refs(), refs_before, "{version}");
     assert_eq!(release.gh_state()["prs"], prs_before, "{version}");
 }
@@ -456,7 +456,6 @@ fn assert_refused(release: &Release, version: &str, reasons: &[&str]) {
 #[cfg(target_os = "linux")]
 fn a_version_that_is_not_plain_semver_is_refused() {
     let release = Release::new();
-    release.ci_reports(GREEN);
 
     for version in [
         "v0.4.0",
@@ -475,7 +474,6 @@ fn a_version_that_is_not_plain_semver_is_refused() {
 #[cfg(target_os = "linux")]
 fn a_version_not_higher_than_the_one_on_main_is_refused() {
     let release = Release::new();
-    release.ci_reports(GREEN);
 
     for version in ["0.1.0", "0.0.9", "0.0.10"] {
         assert_refused(&release, version, &["not higher than 0.1.0 on main"]);
@@ -498,7 +496,6 @@ fn versions_are_compared_as_numbers_not_text() {
 #[cfg(target_os = "linux")]
 fn a_tag_that_exists_locally_is_refused() {
     let release = Release::new();
-    release.ci_reports(GREEN);
     git(&release.maintainer(), &["tag", "v0.2.0"]);
 
     assert_refused(&release, "0.2.0", &["v0.2.0 already exists locally"]);
@@ -508,7 +505,6 @@ fn a_tag_that_exists_locally_is_refused() {
 #[cfg(target_os = "linux")]
 fn a_tag_that_exists_on_origin_is_refused() {
     let release = Release::new();
-    release.ci_reports(GREEN);
     // On a commit main never reaches, so fetching main doesn't bring it in.
     let contributor = release.contributor();
     git(
@@ -528,9 +524,19 @@ fn a_tag_that_exists_on_origin_is_refused() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn a_tag_on_main_that_exists_on_origin_is_refused_as_on_origin() {
+    let release = Release::new();
+    let contributor = release.contributor();
+    git(&contributor, &["tag", "v0.2.0", "origin/main"]);
+    git(&contributor, &["push", "-q", "origin", "v0.2.0"]);
+
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists on origin"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn a_red_ci_run_on_main_is_refused() {
     let release = Release::new();
-    release.ci_reports(GREEN);
     release.main_ci("completed", "failure");
 
     assert_refused(&release, "0.2.0", &["CI on main", "failure"]);
@@ -540,7 +546,6 @@ fn a_red_ci_run_on_main_is_refused() {
 #[cfg(target_os = "linux")]
 fn an_unfinished_ci_run_on_main_is_refused() {
     let release = Release::new();
-    release.ci_reports(GREEN);
     release.main_ci("in_progress", "");
 
     assert_refused(&release, "0.2.0", &["CI on main", "in_progress"]);
@@ -550,7 +555,6 @@ fn an_unfinished_ci_run_on_main_is_refused() {
 #[cfg(target_os = "linux")]
 fn a_main_whose_tip_ci_has_not_run_on_is_refused() {
     let release = Release::new();
-    release.ci_reports(GREEN);
     release.merge_pr("untested", "Not yet built");
 
     assert_refused(&release, "0.2.0", &["CI has not run on main at"]);
