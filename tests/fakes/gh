@@ -43,6 +43,8 @@ generated notes: a line for each merged PR whose merge commit is reachable from
 `{owner}/{repo}` placeholder, here and in the commit endpoints.
 `gh api repos/<repo>/actions/runs?head_sha=<sha>` answers with the workflow
 runs on <sha>: its check runs, read as the check-runs endpoint reads them.
+`gh api repos/<repo>/commits/<sha>/pulls` answers with the PRs <sha> belongs
+to, as GitHub does: those merged as <sha> and those whose head is <sha>.
 
 `gh run list` answers with the workflow runs in `runs`, newest first, that
 match its `--branch`, `--workflow` and `--event`. Runs there are only ones a
@@ -353,15 +355,18 @@ def issue_close(state, positional, flags):
 
 def api(state, positional, flags):
     """The signed-in user, the two commit endpoints thirdshift reads CI from,
-    or the workflow runs on a commit that the release script waits for. Each
+    the workflow runs on a commit that the release script waits for, or the
+    PRs a commit belongs to that the Release notes script looks through. Each
     answers one page, each item of the list `--jq '.<list>[]'` names on its
-    own line, or for the workflow runs one `<status> <conclusion> <name>` line
-    per run with `--jq` set to `WORKFLOW_RUN_LINES`."""
+    own line, for the workflow runs one `<status> <conclusion> <name>` line
+    per run with `--jq` set to `WORKFLOW_RUN_LINES`, and for the PRs one
+    `<merge commit> <number>` line per PR with `--jq` set to
+    `COMMIT_PR_LINES`."""
     if positional[0] == "user" and not flags:
         print(json.dumps({"login": "runner", "email": state.get("user_email")}))
         return
     match = re.fullmatch(
-        r"repos/([^/]+/[^/]+)/(?:commits/([0-9a-f]+)/(check-runs|status)|actions/(runs)\?head_sha=([0-9a-f]+))(&.*|\?.*)?",
+        r"repos/([^/]+/[^/]+)/(?:commits/([0-9a-f]+)/(check-runs|status|pulls)|actions/(runs)\?head_sha=([0-9a-f]+))(&.*|\?.*)?",
         positional[0],
     )
     if not match:
@@ -373,6 +378,12 @@ def api(state, positional, flags):
             die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
         for run in read_checks(state, runs_sha):
             print(f"{run['status']} {run['conclusion'] or 'null'} {run['name']}")
+        return
+    if endpoint == "pulls":
+        if flags.get("jq") != COMMIT_PR_LINES:
+            die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
+        for pr in commit_prs(state, sha):
+            print(f"{pr.get('mergeCommit') or 'null'} {pr['number']}")
         return
     if endpoint == "check-runs":
         items, field = read_checks(state, sha), "check_runs"
@@ -386,6 +397,18 @@ def api(state, positional, flags):
         die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
     for item in items:
         print(json.dumps(item))
+
+
+def commit_prs(state, sha):
+    """The PRs merged as `sha` or whose head is `sha`, oldest first."""
+
+    def head(pr):
+        if "headRefOid" in pr:
+            return pr["headRefOid"]
+        tip = git(origin_repo(), "rev-parse", f"refs/heads/{pr['head']}")
+        return tip.stdout.strip() if tip.returncode == 0 else None
+
+    return [pr for pr in state["prs"] if pr.get("mergeCommit") == sha or head(pr) == sha]
 
 
 def read_checks(state, sha):
@@ -413,6 +436,8 @@ GENERATE_NOTES = re.compile(r"repos/([^/]+/[^/]+)/releases/generate-notes")
 
 WORKFLOW_RUN_LINES = '.workflow_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'
 
+COMMIT_PR_LINES = '.[] | "\\(.merge_commit_sha) \\(.number)"'
+
 
 def api_fields(args):
     """The `-f`/`-F` fields of a `gh api` call, by name."""
@@ -425,7 +450,8 @@ def api_fields(args):
 
 
 def generate_notes(state, args):
-    """GitHub's generated release notes for `tag_name` at `target_commitish`:
+    """GitHub's generated release notes for `tag_name` at `target_commitish`,
+    or at the tag itself without one:
     one line per merged PR whose merge commit is reachable from the target but
     not from `previous_tag_name`, oldest first, then the compare link. Only
     `--jq .body` is supported."""
@@ -434,7 +460,9 @@ def generate_notes(state, args):
     if jq != ".body":
         die(f"fake gh: unsupported --jq {jq}", 2)
     check_repo(state, {"repo": GENERATE_NOTES.fullmatch(args[0]).group(1)})
-    tag, target = fields["tag_name"], fields["target_commitish"]
+    # GitHub ignores the target when the tag exists.
+    tag = fields["tag_name"]
+    target = fields.get("target_commitish", tag)
     previous = fields.get("previous_tag_name")
 
     def reachable(commit, ref):

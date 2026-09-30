@@ -191,8 +191,8 @@ rewrite() {
 }
 
 # pr_body <summary> <version diff section>
-# The body of the bump PR: the summary, between markers the Release page step
-# can find, then the version diff.
+# The body of the bump PR: the summary, between markers release-notes.sh finds
+# to head the Release page with it, then the version diff.
 pr_body() {
 	cat <<-EOF
 		## Summary

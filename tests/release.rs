@@ -267,6 +267,32 @@ impl Release {
         child.wait_with_output().unwrap()
     }
 
+    /// Runs the Release notes script for `tag` in the maintainer's clone,
+    /// once it has fetched the tags, with `INSTALL_NOTES` as dist's install
+    /// instructions.
+    fn run_notes_script(&self, tag: &str) -> Output {
+        git(&self.maintainer(), &["fetch", "-q", "--tags", "origin"]);
+        self.command(
+            &manifest_dir().join("scripts/release-notes.sh"),
+            &self.maintainer(),
+        )
+        .args([tag, INSTALL_NOTES])
+        .output()
+        .expect("could not run release-notes.sh")
+    }
+
+    /// GitHub's generated notes for `tag`, from the fake `gh`.
+    fn generated_notes(&self, tag: &str) -> String {
+        self.gh(&[
+            "api",
+            "repos/{owner}/{repo}/releases/generate-notes",
+            "-f",
+            &format!("tag_name={tag}"),
+            "--jq",
+            ".body",
+        ])
+    }
+
     fn gh_state(&self) -> Value {
         serde_json::from_str(&fs::read_to_string(self.root().join("gh-state.json")).unwrap())
             .unwrap()
@@ -325,6 +351,8 @@ fn stderr(output: &Output) -> String {
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
 const AGENT_SUMMARY: &str = "The headline is the frobnicator (#2).";
+const INSTALL_NOTES: &str =
+    "## Install thirdshift\n\n```sh\ncurl -LsSf https://example.com/install.sh | sh\n```";
 
 #[test]
 #[cfg(target_os = "linux")]
@@ -670,6 +698,97 @@ fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
     assert!(!stderr(&output).contains("[y]es"), "{}", stderr(&output));
     let merge = release.origin(&["rev-parse", "main"]);
     assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_install_instructions()
+{
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let output = release.run_script("0.2.0");
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let first = release.run_notes_script("v0.2.0");
+    let again = release.run_notes_script("v0.2.0");
+
+    assert!(first.status.success(), "{}", stderr(&first));
+    let body = String::from_utf8(first.stdout).unwrap();
+    let notes = release.generated_notes("v0.2.0");
+    assert!(notes.contains("Add the frobnicator"), "{notes}");
+    assert_eq!(
+        body,
+        format!("{AGENT_SUMMARY}\n\n{notes}\n\n{INSTALL_NOTES}\n")
+    );
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert_eq!(String::from_utf8(again.stdout).unwrap(), body);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn without_a_bump_pr_summary_the_release_body_is_the_generated_notes_and_install_instructions() {
+    let release = Release::new();
+    // A PR with a summary section whose head commit, not its merge, is tagged.
+    release.merge_pr(
+        "summarised",
+        "Summarised",
+        "<!-- release-summary:start -->\nNot this release.\n<!-- release-summary:end -->",
+    );
+    let contributor = release.contributor();
+    git(&contributor, &["tag", "v0.1.2", "origin/summarised"]);
+    // A commit pushed straight to main, not through a PR.
+    fs::write(contributor.join("hand.txt"), "by hand").unwrap();
+    git(&contributor, &["add", "-A"]);
+    git(&contributor, &["commit", "-q", "-m", "By hand"]);
+    git(&contributor, &["push", "-q", "origin", "HEAD:main"]);
+    git(&contributor, &["tag", "v0.1.3"]);
+    git(&contributor, &["push", "-q", "origin", "v0.1.2", "v0.1.3"]);
+
+    for (case, tag) in [
+        ("the merge of a PR without a summary section", "v0.1.0"),
+        ("the head of a PR, not its merge", "v0.1.2"),
+        ("a commit with no PR", "v0.1.3"),
+    ] {
+        let output = release.run_notes_script(tag);
+
+        assert!(output.status.success(), "{case}: {}", stderr(&output));
+        let notes = release.generated_notes(tag);
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{notes}\n\n{INSTALL_NOTES}\n"),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_a_warning() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let output = release.run_script("0.2.0");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let merge = release.origin(&["rev-parse", "main"]);
+    release.gh(&[
+        "fake",
+        "fails",
+        &format!("api repos/{{owner}}/{{repo}}/commits/{merge}/pulls"),
+    ]);
+
+    let output = release.run_notes_script("v0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.lines()
+            .any(|line| line.starts_with("release-notes: warning:") && line.contains("summary")),
+        "{err}"
+    );
+    let notes = release.generated_notes("v0.2.0");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{notes}\n\n{INSTALL_NOTES}\n")
+    );
 }
 
 /// Runs the script with `version` and asserts it refused before pushing
