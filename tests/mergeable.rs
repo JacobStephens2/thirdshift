@@ -114,7 +114,7 @@ fn hands_a_conflicting_merge_to_a_conflict_repair_and_pushes_its_resolution() {
          \n\
          Resolve the conflicts, finish the merge, and push issue-7. Do not rebase or force-push.\n\
          \n\
-         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.\n"
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it.\n"
     );
     assert_eq!(repair["merging"], true);
     assert_eq!(repair["branch"], "issue-7");
