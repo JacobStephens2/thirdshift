@@ -160,6 +160,17 @@ impl Worktree {
         Ok(commits.lines().map(String::from).collect())
     }
 
+    /// Fetch the Issue branch from origin and fast-forward the local one to
+    /// it, as a Spec run does to its Spec branch once Tickets have landed there.
+    pub fn fast_forward_to_origin(&self) -> Result<()> {
+        let upstream = self.upstream();
+        progress::step(format_args!("updating {} from {upstream}", self.branch));
+        self.git.run(&["fetch", "origin", &self.branch])?;
+        self.git
+            .run(&["merge", "--ff-only", "--quiet", &upstream])?;
+        Ok(())
+    }
+
     /// Merge the Issue branch as last fetched from origin into the local one.
     pub fn merge_new_commits(&self) -> Result<Merge> {
         self.merge(&self.upstream())

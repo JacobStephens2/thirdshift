@@ -98,19 +98,19 @@ pub fn run(
             Worktree::continue_existing(&launch, &issue.repo, &branch, &base)?
         }
     };
+    let logs = Logs {
+        issue,
+        dir: logs_dir,
+        timestamp: &timestamp,
+    };
     if !tickets.is_empty() {
-        return spec_run::run(issue, tickets, worktree, &base);
+        return spec_run::run(issue, tickets, worktree, &base, &logs);
     }
     let prompt = match &selection {
         Selection::Fresh { .. } => prompt::fresh(issue, &base, &branch),
         Selection::Continuation { pr, .. } => {
             prompt::continuation(issue, &base, &branch, pr.as_ref().map(|pr| pr.url.as_str()))
         }
-    };
-    let logs = Logs {
-        issue,
-        dir: logs_dir,
-        timestamp: &timestamp,
     };
     let mut log = logs.path("implement");
     match implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log) {
@@ -476,7 +476,7 @@ impl RepairLoop<'_> {
 }
 
 /// The PR whose head is `branch`, failing unless it exists and is open.
-fn open_pr(issue: &IssueUrl, branch: &str) -> Result<PullRequest> {
+pub fn open_pr(issue: &IssueUrl, branch: &str) -> Result<PullRequest> {
     let pr = github::pull_request_for(issue, branch)?.context("no PR found")?;
     if !pr.is_open() {
         bail!("PR {} is {}, not open", pr.url, pr.state);

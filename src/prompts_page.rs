@@ -37,10 +37,12 @@ const FINISH: Unit = Unit {
 /// The placeholder values the prompts are rendered with, highlighted on the
 /// page. The issue number can't be text, so a sentinel stands in for it.
 const ISSUE_URL: &str = "<Issue URL>";
+const SPEC_URL: &str = "<Spec URL>";
 const ISSUE_NUMBER: u64 = u64::MAX;
 const NUMBER: &str = "<n>";
 const BASE: &str = "<base>";
 const BRANCH: &str = "<branch>";
+const SPEC_BRANCH: &str = "<Spec branch>";
 const PR_URL: &str = "<pull request URL>";
 const OWN_HEAD: &str = "<own head>";
 const CHECK: &str = "<failing check>";
@@ -49,11 +51,13 @@ const BACKGROUND_WORK: &str = "<background work>";
 const PLUGIN_DIR: &str = "<plugin dir>";
 const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
-const PLACEHOLDERS: [&str; 12] = [
+const PLACEHOLDERS: [&str; 14] = [
     ISSUE_URL,
+    SPEC_URL,
     NUMBER,
     BASE,
     BRANCH,
+    SPEC_BRANCH,
     PR_URL,
     OWN_HEAD,
     CHECK,
@@ -81,6 +85,10 @@ fn prompts() -> Vec<Prompt> {
         repo: "<repo>".to_string(),
         number: ISSUE_NUMBER,
     };
+    let spec = IssueUrl {
+        url: SPEC_URL.to_string(),
+        ..issue.clone()
+    };
     let failed = [Check {
         name: CHECK.to_string(),
         state: CheckState::Failed,
@@ -107,6 +115,13 @@ fn prompts() -> Vec<Prompt> {
             when: "Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.",
             units: &[IMPLEMENT],
             text: prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
+        },
+        Prompt {
+            id: "prompt-spec-review",
+            title: "Spec review",
+            when: "In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.",
+            units: &[REVIEW],
+            text: prompt::spec_review(&spec, BASE, SPEC_BRANCH, PR_URL),
         },
         Prompt {
             id: "prompt-conflict-repair",

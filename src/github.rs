@@ -260,9 +260,8 @@ pub fn pull_requests_with_head_prefix(issue: &IssueUrl, prefix: &str) -> Result<
         .collect()
 }
 
-/// Open a pull request, ready for review, from `head` into `base`, and
-/// return its URL.
-pub fn create_pr(
+/// Open a draft pull request from `head` into `base`, and return its URL.
+pub fn create_draft_pr(
     issue: &IssueUrl,
     head: &str,
     base: &str,
@@ -282,6 +281,7 @@ pub fn create_pr(
         title,
         "--body",
         body,
+        "--draft",
     ])
 }
 
