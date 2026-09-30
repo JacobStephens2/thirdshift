@@ -1241,6 +1241,40 @@ fn an_interrupted_spec_run_sends_one_notification_with_each_tickets_outcome() {
 }
 
 #[test]
+fn a_ready_ticket_an_interrupt_kept_from_starting_is_not_started_in_the_notification() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "touch {}\nsleep 30\n",
+            scenario.path("agent-started").display()
+        ),
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = scenario.run_and_signal_with_env(
+        &[
+            "--email",
+            "me@example.com",
+            "parallel",
+            "1",
+            &spec_url(&scenario),
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+        "agent-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert_contains(&text, "#21 interrupted\n");
+    assert_contains(&text, "#22 not started\n");
+}
+
+#[test]
 fn no_email_keeps_email_always_from_sending_for_a_spec_run() {
     let scenario = linear_spec();
     scenario.user_config_is("[email]\nalways = true\nto = \"me@example.com\"\n");

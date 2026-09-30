@@ -122,7 +122,7 @@ enum TicketOutcome {
 /// ready and none is running. Returns a line on each Ticket that landed or is
 /// not done, none if the Spec branch could not be pushed, and whether every
 /// Ticket is done: if not, it fails, after putting those lines on stderr
-/// unless interrupted.
+/// unless an interrupt or another error ended it first.
 fn land_tickets(
     spec: &IssueUrl,
     mut tickets: Vec<Ticket>,
@@ -281,6 +281,9 @@ fn summarize(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) -> Vec
         } else if let Some(cycle) = cycle_through(number, tickets) {
             let cycle: Vec<String> = cycle.iter().map(|number| format!("#{number}")).collect();
             format!("in a cycle: {}", cycle.join(" blocked by "))
+        } else if ticket.open_blockers.is_empty() {
+            // Ready, but the Spec run ended before it could start.
+            "not started".to_string()
         } else {
             let blockers: Vec<String> = ticket
                 .open_blockers
