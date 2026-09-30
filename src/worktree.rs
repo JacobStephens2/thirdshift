@@ -11,7 +11,7 @@ use crate::progress;
 
 /// How merging the Base branch, or new commits on origin, into the Issue
 /// branch went.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Merge {
     /// Merged, or nothing to merge.
     Clean,
@@ -22,7 +22,7 @@ pub enum Merge {
 /// A conflicted merge left for a conflict Repair: `upstream` as it was when
 /// the merge began, pinned to `commit` because another Run's fetch may move
 /// the shared remote-tracking ref before the Repair finishes.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct PendingMerge {
     upstream: String,
     commit: String,
@@ -221,10 +221,10 @@ impl Worktree {
         Ok(!self.merged(&format!("origin/{base}"))?)
     }
 
-    /// Whether `commit` is fully merged into the Issue branch.
-    fn merged(&self, commit: &str) -> Result<bool> {
+    /// Whether `rev` is fully merged into the Issue branch.
+    fn merged(&self, rev: &str) -> Result<bool> {
         self.git
-            .succeeds(&["merge-base", "--is-ancestor", commit, "HEAD"])
+            .succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"])
     }
 
     /// Whether a merge is in progress in the worktree.
