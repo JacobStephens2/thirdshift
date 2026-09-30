@@ -10,9 +10,10 @@ use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::git::Git;
-use crate::github;
 use crate::notification::NotificationAsk;
+use crate::questions::{self, Answers};
 use crate::run::Goal;
+use crate::{email, github, progress};
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
@@ -136,38 +137,185 @@ impl EmailSettings {
     }
 }
 
-/// Setup with no terminal: write the User config with every setting at its
-/// default, asking nothing, and `email.to` as the suggested address, if there
-/// is one. An existing User config is edited in place, once it parses as a Run
-/// would parse it: its values, comments and key order stay, and each key it
-/// lacks is added at its default, so Setup never resets a configured machine.
+/// Setup: write the User config. From a terminal, the Setup questions come
+/// first, each with the current value as its default answer, and the answers
+/// are written; with no terminal, nothing is asked, and every setting is at
+/// its default, with `email.to` as the suggested address, if there is one.
+/// An existing User config is edited in place, once it parses as a Run would
+/// parse it: its comments and key order stay, as do the values Setup didn't
+/// ask about, and each key it lacks is added at its default, so Setup with no
+/// terminal never resets a configured machine. Nothing is written until the
+/// last answer is in. A test email, if the user asked for one, goes once the
+/// User config is written, as `email-test` sends it.
 pub fn setup() -> Result<String> {
     let (home, path) = home_and_path()?;
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir_all(home.join(".thirdshift"))
-                .and_then(|()| std::fs::write(&path, with_email_to(suggested_address(&home))))
-                .with_context(|| format!("can't write {}", path.display()))?;
-            return Ok(format!("wrote the User config {}", path.display()));
-        }
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             return Err(error).with_context(|| format!("can't read {}", path.display()));
         }
     };
-    UserConfig::parse(&text, &path, &home)?;
-    let completed = complete(&text)?;
-    if completed == text {
-        return Ok(format!(
+    let mut text = match &existing {
+        Some(text) => {
+            UserConfig::parse(text, &path, &home)?;
+            complete(text)?
+        }
+        None => with_email_to(suggested_address(&home)),
+    };
+    let asked = questions::has_terminal();
+    let mut send_test = false;
+    if asked {
+        let current = UserConfig::parse(&text, &path, &home)?;
+        let answers = questions::ask(&current, || suggested_address(&home))?;
+        send_test = answers.send_test();
+        text = with_answers(&text, &answers)?;
+    }
+    let written = match &existing {
+        None => {
+            std::fs::create_dir_all(home.join(".thirdshift"))
+                .and_then(|()| std::fs::write(&path, &text))
+                .with_context(|| format!("can't write {}", path.display()))?;
+            format!("wrote the User config {}", path.display())
+        }
+        Some(existing) if *existing == text && asked => {
+            format!(
+                "the User config {} already holds your answers",
+                path.display()
+            )
+        }
+        Some(existing) if *existing == text => format!(
             "the User config {} already lists every setting",
             path.display()
+        ),
+        Some(_) => {
+            replace(&path, &text).with_context(|| format!("can't write {}", path.display()))?;
+            if asked {
+                format!("wrote your answers to the User config {}", path.display())
+            } else {
+                format!(
+                    "added the missing settings to the User config {}",
+                    path.display()
+                )
+            }
+        }
+    };
+    if !send_test {
+        return Ok(written);
+    }
+    progress::step(written);
+    let config = UserConfig::load()?;
+    Ok(email::send_test(None, &config.email)?.to_string())
+}
+
+/// `text`, a User config with every key, or a commented-out `email.to`, with
+/// the values `answers` gives. Only those values change: the spacing and
+/// comments around each stay, as does everything else in `text`.
+fn with_answers(text: &str, answers: &Answers) -> Result<String> {
+    let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
+    set(&mut document, "merge", "always", answers.merge_always);
+    set(&mut document, "launch", "pull", answers.launch_pull);
+    set(
+        &mut document,
+        "email",
+        "always",
+        answers.notifications.is_some(),
+    );
+    if let Some(notifications) = &answers.notifications {
+        set(&mut document, "email", "from", notifications.from.as_str());
+        set_email_to(&mut document, &notifications.to);
+    }
+    Ok(document.to_string())
+}
+
+/// Set `section.key`, which `document` holds, to `value`, keeping the
+/// spacing and comment around the old value, and the comment in the same
+/// column where the spaces before it allow. An equal value is left as it was
+/// written.
+fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<toml_edit::Value>) {
+    let value = value.into();
+    let old = document[section]
+        .as_table_like_mut()
+        .and_then(|settings| settings.get_mut(key))
+        .and_then(Item::as_value_mut)
+        .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
+    let same = match (old.as_bool(), old.as_str()) {
+        (Some(old), _) => value.as_bool() == Some(old),
+        (_, Some(old)) => value.as_str() == Some(old),
+        _ => false,
+    };
+    if same {
+        return;
+    }
+    let mut decor = old.decor().clone();
+    let suffix = decor_suffix(&decor);
+    let spaces = suffix.len() - suffix.trim_start_matches(' ').len();
+    if spaces > 0 && suffix[spaces..].starts_with('#') {
+        let width = |value: &toml_edit::Value| value.clone().decorated("", "").to_string().len();
+        let spaces = (spaces + width(old)).saturating_sub(width(&value)).max(1);
+        decor.set_suffix(format!(
+            "{}{}",
+            " ".repeat(spaces),
+            suffix.trim_start_matches(' ')
         ));
     }
-    replace(&path, &completed).with_context(|| format!("can't write {}", path.display()))?;
-    Ok(format!(
-        "added the missing settings to the User config {}",
-        path.display()
-    ))
+    *old = value;
+    *old.decor_mut() = decor;
+}
+
+/// Set `email.to` in `document` to `to`. With no `email.to` there yet, it
+/// takes the place of the commented-out one, if there is one, written as
+/// `DEFAULTS` would write it, with its comment.
+fn set_email_to(document: &mut DocumentMut, to: &str) {
+    let email = &mut document["email"];
+    let has_to = email
+        .as_table_like()
+        .is_some_and(|settings| settings.contains_key("to"));
+    if has_to {
+        set(document, "email", "to", to);
+        return;
+    }
+    let Some(email) = email.as_table_mut().filter(|email| !email.is_dotted()) else {
+        let settings = email.as_table_like_mut().expect("[email] is a section");
+        settings.insert("to", Item::Value(to.into()));
+        return;
+    };
+    let example: DocumentMut = with_email_to(Some(to.to_string()))
+        .parse()
+        .expect("DEFAULTS is valid TOML");
+    let (key, item) = example["email"]
+        .as_table()
+        .and_then(|example| example.get_key_value("to"))
+        .expect("the example sets email.to");
+    let mut key = key.clone();
+    key.leaf_decor_mut().set_prefix("");
+    let keys: Vec<String> = email.iter().map(|(key, _)| key.to_string()).collect();
+    let mut place = keys.len();
+    for (at, name) in keys.iter().enumerate() {
+        let mut next = email.key_mut(name).expect("the key is in [email]");
+        let prefix = decor_prefix(next.leaf_decor());
+        let mut end = 0;
+        let found = prefix.split_inclusive('\n').find_map(|line| {
+            let start = end;
+            end += line.len();
+            is_commented_out_email_to(line).then_some((start, end))
+        });
+        let Some((start, end)) = found else {
+            continue;
+        };
+        next.leaf_decor_mut().set_prefix(&prefix[end..]);
+        key.leaf_decor_mut().set_prefix(&prefix[..start]);
+        place = at;
+        break;
+    }
+    email.insert_formatted(&key, item.clone());
+    // Each key keeps its place, and `to` goes just before the key at `place`,
+    // or last: odd ranks for the keys that were there, an even one for `to`.
+    let rank = |name: &str| match keys.iter().position(|key| key == name) {
+        Some(at) => 2 * at + 1,
+        None => 2 * place,
+    };
+    email.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
 }
 
 /// Replace the file at `path` with `text` all at once, keeping its
@@ -270,6 +418,16 @@ fn decor_prefix(decor: &toml_edit::Decor) -> String {
         .to_string()
 }
 
+/// The text `decor` puts after a value: the spaces and comment that end its
+/// line.
+fn decor_suffix(decor: &toml_edit::Decor) -> String {
+    decor
+        .suffix()
+        .and_then(|suffix| suffix.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 /// Whether the `[email]` section of `text` holds a commented-out `to` line.
 fn has_commented_out_email_to(text: &str) -> bool {
     let mut in_email = false;
@@ -277,17 +435,19 @@ fn has_commented_out_email_to(text: &str) -> bool {
         if let Some(header) = line.strip_prefix('[') {
             let header = header.split('#').next().unwrap_or("").trim_end();
             in_email = header.strip_suffix(']').map(str::trim) == Some("email");
-        } else if in_email && let Some(comment) = line.strip_prefix('#') {
-            let comment = comment.trim_start();
-            if comment
-                .strip_prefix("to")
-                .is_some_and(|rest| rest.trim_start().starts_with('='))
-            {
-                return true;
-            }
+        } else if in_email && is_commented_out_email_to(line) {
+            return true;
         }
     }
     false
+}
+
+/// Whether `line`, in the `[email]` section, is a commented-out `to` line.
+fn is_commented_out_email_to(line: &str) -> bool {
+    line.trim()
+        .strip_prefix('#')
+        .and_then(|comment| comment.trim_start().strip_prefix("to"))
+        .is_some_and(|rest| rest.trim_start().starts_with('='))
 }
 
 /// The User config Setup writes with no answers: every key at its default,
@@ -585,5 +745,53 @@ mod tests {
         }
         let completed = completed("[email]\nto = \"me@example.com\"\n");
         assert!(!completed.contains("# to ="), "{completed}");
+    }
+
+    fn notifications_to(to: &str) -> Answers {
+        Answers {
+            merge_always: false,
+            launch_pull: false,
+            notifications: Some(questions::Notifications {
+                to: to.to_string(),
+                from: crate::email::DEFAULT_FROM.to_string(),
+                send_test: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn an_answered_address_takes_the_place_of_the_commented_out_line() {
+        let answered = with_answers(DEFAULTS, &notifications_to("me@example.com")).unwrap();
+        let expected = with_email_to(Some("me@example.com".to_string())).replace(
+            "always = false                  #",
+            "always = true                   #",
+        );
+        assert_eq!(answered, expected);
+    }
+
+    #[test]
+    fn an_answered_address_keeps_the_lines_around_the_commented_out_one() {
+        let text =
+            "[email]\nalways = false\n\n# mine\n# to = \"x@y.z\"\n# more\nfrom = \"a@b.c\"\n";
+        let answered = with_answers(
+            &complete(text).unwrap(),
+            &notifications_to("me@example.com"),
+        )
+        .unwrap();
+        let lines: Vec<&str> = answered.lines().collect();
+        assert_eq!(
+            lines[..4],
+            ["[email]", "always = true", "", "# mine"],
+            "{answered}"
+        );
+        assert!(
+            lines[4].starts_with("to = \"me@example.com\""),
+            "{answered}"
+        );
+        assert_eq!(
+            lines[5..7],
+            ["# more", "from = \"onboarding@resend.dev\""],
+            "{answered}"
+        );
     }
 }

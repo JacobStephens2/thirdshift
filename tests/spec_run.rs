@@ -478,3 +478,71 @@ fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_r
         assert_contains(&result.stdout, part);
     }
 }
+
+#[test]
+fn sigterm_while_a_ticket_runs_ends_it_through_its_failed_run_and_the_spec_run_as_interrupted() {
+    assert_interrupt_fails_the_spec_run("TERM");
+}
+
+#[test]
+fn sighup_while_a_ticket_runs_ends_it_through_its_failed_run_and_the_spec_run_as_interrupted() {
+    assert_interrupt_fails_the_spec_run("HUP");
+}
+
+#[test]
+fn sigint_to_the_spec_run_alone_is_passed_on_to_the_ticket_run() {
+    assert_interrupt_fails_the_spec_run("INT");
+}
+
+/// Send `signal` to the Spec run's process alone while #21's agent is at
+/// work, leaving it half done: #21's Run pushes that work as a failed run,
+/// #22 never starts, and the Spec run ends only after, as interrupted.
+fn assert_interrupt_fails_the_spec_run(signal: &str) {
+    let scenario = linear_spec();
+    let started = scenario.path("agent-started");
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "echo 'half done' > wip.txt\ntouch {}\nsleep 30\n",
+            started.display()
+        ),
+    );
+
+    let began = std::time::Instant::now();
+    let result = scenario.run_and_signal(&[&spec_url(&scenario)], "agent-started", signal);
+
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(20),
+        "the Ticket's session was not stopped"
+    );
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_eq!(sessions_by_issue(&scenario), ["21"]);
+    assert_eq!(
+        scenario.origin_log("issue-21").unwrap()[0],
+        "thirdshift: failed run (interrupted)"
+    );
+    assert_eq!(
+        scenario.origin_file("issue-21", "wip.txt").as_deref(),
+        Some("half done\n")
+    );
+    assert_contains(&result.stderr, "thirdshift: #21: interrupted\n");
+    assert_contains(&result.stderr, "thirdshift: #21 interrupted\n");
+    assert!(!result.stderr.contains("#22"), "stderr: {}", result.stderr);
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some("thirdshift: interrupted"),
+        "stderr: {}",
+        result.stderr
+    );
+    let gh = scenario.gh_state();
+    assert!(
+        gh["prs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|pr| pr["head"] != "issue-20"),
+        "a Spec PR was opened: {}",
+        gh["prs"]
+    );
+}
