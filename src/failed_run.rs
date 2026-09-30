@@ -38,15 +38,26 @@ impl fmt::Display for PolicyRefusal {
     }
 }
 
-/// A failure before the worktree exists: nothing to push or clean up.
+/// A failure with nothing to push or clean up, as before the worktree exists.
 impl From<anyhow::Error> for FailedRun {
     fn from(error: anyhow::Error) -> Self {
+        let interrupted = interrupt::requested();
         FailedRun {
-            error,
+            error: interrupted_or(error, interrupted),
             pr_url: None,
             log: None,
-            interrupted: interrupt::requested(),
+            interrupted,
         }
+    }
+}
+
+/// `interrupted` if the Run was, else `error`: an interrupt can surface as
+/// some other error, such as a killed git.
+fn interrupted_or(error: anyhow::Error, interrupted: bool) -> anyhow::Error {
+    if interrupted {
+        anyhow!("interrupted")
+    } else {
+        error
     }
 }
 
@@ -62,13 +73,8 @@ pub fn fail(
     log: &Path,
     error: anyhow::Error,
 ) -> FailedRun {
-    // An interrupt can surface as some other error, such as a killed git.
     let interrupted = interrupt::requested();
-    let error = if interrupted {
-        anyhow!("interrupted")
-    } else {
-        error
-    };
+    let error = interrupted_or(error, interrupted);
     // Only the first line: the reason goes in the failure commit's subject.
     let reason = error
         .to_string()

@@ -4,9 +4,10 @@
 mod support;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::thread;
 
 use serde_json::json;
 use support::{RunResult, Scenario};
@@ -14,9 +15,10 @@ use tempfile::TempDir;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// A local stand-in for the GitHub API and its release downloads.
+/// A local stand-in for the GitHub API and its release downloads: a thread
+/// in the test process serving the files under `root`. It serves until the
+/// test process exits.
 struct FakeReleases {
-    server: Child,
     root: TempDir,
     url: String,
 }
@@ -25,25 +27,15 @@ impl FakeReleases {
     /// Serve an empty directory: no releases yet.
     fn start() -> Self {
         let root = TempDir::new().unwrap();
-        let mut server = Command::new("python3")
-            .args(["-u", "-m", "http.server", "0", "--bind", "127.0.0.1"])
-            .arg("--directory")
-            .arg(root.path())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        // "Serving HTTP on 127.0.0.1 port <port> (http://127.0.0.1:<port>/) ..."
-        let mut line = String::new();
-        BufReader::new(server.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        let url = line
-            .split_whitespace()
-            .find_map(|word| word.strip_prefix('(')?.strip_suffix(')'))
-            .unwrap_or_else(|| panic!("unexpected http.server output: {line}"))
-            .to_string();
-        FakeReleases { server, root, url }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let served = root.path().to_path_buf();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                serve(&served, stream);
+            }
+        });
+        FakeReleases { root, url }
     }
 
     /// Publish `version` as the latest stable release, with an installer
@@ -84,10 +76,34 @@ impl FakeReleases {
     }
 }
 
-impl Drop for FakeReleases {
-    fn drop(&mut self) {
-        let _ = self.server.kill();
-        let _ = self.server.wait();
+/// Answer one HTTP request with the file under `root` at its path, or 404.
+fn serve(root: &Path, mut stream: TcpStream) {
+    let mut reader = BufReader::new(&stream);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() {
+        return;
+    }
+    // Skip the headers; the fake needs only the method and path.
+    let mut header = String::new();
+    while reader.read_line(&mut header).is_ok_and(|n| n > 0) && header != "\r\n" {
+        header.clear();
+    }
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("/");
+    let path = path.split('?').next().unwrap().trim_start_matches('/');
+    let file = (!path.split('/').any(|part| part == "..")).then(|| root.join(path));
+    let (status, body) = match file.map(fs::read) {
+        Some(Ok(body)) => ("200 OK", body),
+        _ => ("404 Not Found", b"not found".to_vec()),
+    };
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    if method != "HEAD" {
+        let _ = stream.write_all(&body);
     }
 }
 
