@@ -105,6 +105,10 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
+    if let Err(error) = config::offer_setup() {
+        progress::step(format_args!("{error:#}"));
+        return ExitCode::FAILURE;
+    }
     let config = match UserConfig::load() {
         Ok(config) => config,
         Err(error) => {
