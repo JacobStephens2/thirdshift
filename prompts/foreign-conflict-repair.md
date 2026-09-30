@@ -1,0 +1,16 @@
+<!-- Generated from src/prompt.rs by src/prompts_page.rs; don't edit. Regenerate with UPDATE_PROMPTS=1 cargo test prompts_page -->
+
+# Conflict Repair, on Foreign commits
+
+In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.
+
+```
+/thirdshift:resolving-merge-conflicts
+
+A merge of origin/<branch> into <branch> is in progress in this worktree and has conflicts.
+<branch> implements <Issue URL>; its pull request is <pull request URL>.
+
+Resolve the conflicts, finish the merge, and push <branch>. Do not rebase or force-push.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+```

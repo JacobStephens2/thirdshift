@@ -1,0 +1,25 @@
+<!-- Generated from src/prompt.rs by src/prompts_page.rs; don't edit. Regenerate with UPDATE_PROMPTS=1 cargo test prompts_page -->
+
+# Spec review
+
+In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.
+
+```
+/thirdshift:code-review <base>, with the Spec <Spec URL> as the spec
+
+Every Ticket of the Spec <Spec URL> has landed on branch <Spec branch>, its Spec branch (see git log <base>..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.
+
+Review with /thirdshift:code-review using <base> as the fixed point and <Spec URL> as the spec.
+
+Address the Standards and Spec findings you agree with, using /thirdshift:tdd where it fits, and commit.
+
+Push branch <Spec branch>. Do not rebase or force-push.
+
+Update PR <pull request URL> using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave it a draft: thirdshift marks it ready once you are done.
+
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+
+Include "Closes #<n>" in the PR body.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+```

@@ -1,8 +1,9 @@
 //! The Prompts and skills page's generated fragment: the `claude` command
 //! line, every prompt a Run sends, and every Factory skill, rendered from the
 //! same functions and embedded files the binary uses, so the page can't drift
-//! from what it does. Test-only: the golden-file test below keeps the
-//! checked-in fragment in `site/prompts/index.html` up to date.
+//! from what it does. Each prompt is also rendered as a Markdown file in
+//! `prompts/`. Test-only: the golden-file tests below keep the checked-in
+//! fragment in `site/prompts/index.html` and the `prompts/` files up to date.
 
 use std::ffi::OsStr;
 use std::fmt::Write;
@@ -94,7 +95,7 @@ fn prompts() -> Vec<Prompt> {
         state: CheckState::Failed,
         url: Some(CHECK_URL.to_string()),
     }];
-    vec![
+    let sent = vec![
         Prompt {
             id: "prompt-fresh",
             title: "Fresh",
@@ -158,7 +159,51 @@ fn prompts() -> Vec<Prompt> {
             units: &[IMPLEMENT, REVIEW, FINISH],
             text: prompt::resume(&[BACKGROUND_WORK]),
         },
-    ]
+    ];
+    sent
+        .into_iter()
+        .map(|prompt| Prompt {
+            text: prompt
+                .text
+                .replace(&format!("#{ISSUE_NUMBER}"), &format!("#{NUMBER}")),
+            ..prompt
+        })
+        .collect()
+}
+
+/// The note heading each `prompts/` file.
+const NOTE: &str = "<!-- Generated from src/prompt.rs by src/prompts_page.rs; don't edit. Regenerate with UPDATE_PROMPTS=1 cargo test prompts_page -->\n";
+
+/// Each prompt as a Markdown file for `prompts/`: its name, after the
+/// prompt's id, and its contents.
+fn prompt_files() -> Vec<(String, String)> {
+    prompts()
+        .iter()
+        .map(|prompt| {
+            let name = prompt
+                .id
+                .strip_prefix("prompt-")
+                .unwrap_or_else(|| panic!("the prompt id {} has no prompt- prefix", prompt.id));
+            (format!("{name}.md"), markdown(prompt))
+        })
+        .collect()
+}
+
+/// A prompt as Markdown: its title, when it is sent, and its text, fenced.
+fn markdown(prompt: &Prompt) -> String {
+    let fence = fence(&prompt.text);
+    format!(
+        "{NOTE}\n# {title}\n\n{when}\n\n{fence}\n{text}\n{fence}\n",
+        title = prompt.title,
+        when = prompt.when,
+        text = prompt.text.trim_end_matches('\n'),
+    )
+}
+
+/// A code fence longer than any run of backticks in `text`, so none closes it.
+fn fence(text: &str) -> String {
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    "`".repeat(longest.max(2) + 1)
 }
 
 /// The unit whose session uses each Factory skill, and when, if not always.
@@ -215,9 +260,6 @@ fn prompt_section(html: &mut String) {
 "##,
     );
     for prompt in prompts() {
-        let text = prompt
-            .text
-            .replace(&format!("#{ISSUE_NUMBER}"), &format!("#{NUMBER}"));
         let _ = write!(
             html,
             r##"      <article class="job-sheet" id="{id}" aria-labelledby="{id}-title">
@@ -231,7 +273,7 @@ fn prompt_section(html: &mut String) {
             title = prompt.title,
             when = prompt.when,
             units = unit_links(prompt.units),
-            text = highlighted(&text),
+            text = highlighted(&prompt.text),
         );
     }
     html.push_str("    </div>\n  </div>\n</section>\n");
@@ -357,12 +399,13 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::io::ErrorKind;
+    use std::path::{Path, PathBuf};
 
     use super::*;
 
-    const UPDATE: &str = "UPDATE_PROMPTS_PAGE=1 cargo test prompts_page";
-    const BEGIN: &str = "<!-- Generated from the source by src/prompts_page.rs; don't edit. Regenerate with UPDATE_PROMPTS_PAGE=1 cargo test prompts_page -->\n";
+    const UPDATE: &str = "UPDATE_PROMPTS=1 cargo test prompts_page";
+    const BEGIN: &str = "<!-- Generated from the source by src/prompts_page.rs; don't edit. Regenerate with UPDATE_PROMPTS=1 cargo test prompts_page -->\n";
     const END: &str = "<!-- End of the generated fragment -->\n";
 
     /// The golden-file test: the page carries the fragment as rendered now.
@@ -387,7 +430,7 @@ mod tests {
             .split_once(END)
             .unwrap_or_else(|| panic!("{} has no line {END}", page_path.display()));
         let rendered = render();
-        if std::env::var_os("UPDATE_PROMPTS_PAGE").is_some() {
+        if std::env::var_os("UPDATE_PROMPTS").is_some() {
             fs::write(&page_path, format!("{before}{BEGIN}{rendered}{END}{after}"))
                 .unwrap_or_else(|error| panic!("could not write {}: {error}", page_path.display()));
             return;
@@ -398,6 +441,95 @@ mod tests {
             page_path.display(),
             diff(checked_in, &rendered, before.lines().count() + 2),
         );
+    }
+
+    /// The golden-file test for `prompts/`: a file for each prompt, as
+    /// rendered now, and no other. The crates.io package leaves `prompts/`
+    /// out, so it skips there.
+    #[test]
+    fn prompt_files_show_what_the_binary_sends() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("prompts");
+        if !dir.is_dir() {
+            eprintln!(
+                "skipping: no {} (the crates.io package leaves it out)",
+                dir.display()
+            );
+            return;
+        }
+        let files = prompt_files();
+        if std::env::var_os("UPDATE_PROMPTS").is_some() {
+            write_prompt_files(&dir, &files);
+            return;
+        }
+        let problems = check_prompt_files(&dir, &files);
+        assert!(
+            problems.is_empty(),
+            "{}\nRegenerate them with: {UPDATE}",
+            problems.join("\n"),
+        );
+    }
+
+    /// What is wrong with the files in `dir`, compared with `files`: each
+    /// file that differs or is missing, with a diff, and each stale one.
+    fn check_prompt_files(dir: &Path, files: &[(String, String)]) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (name, rendered) in files {
+            let path = dir.join(name);
+            match fs::read_to_string(&path) {
+                Ok(checked_in) if checked_in == *rendered => {}
+                Ok(checked_in) => problems.push(format!(
+                    "{} is out of date with the prompts:\n{}",
+                    path.display(),
+                    diff(&checked_in, rendered, 1),
+                )),
+                Err(error) if error.kind() == ErrorKind::NotFound => problems.push(format!(
+                    "{} is missing:\n{}",
+                    path.display(),
+                    diff("", rendered, 1),
+                )),
+                Err(error) => panic!("could not read {}: {error}", path.display()),
+            }
+        }
+        for path in stale_files(dir, files) {
+            problems.push(format!(
+                "{} is stale: no prompt produces it",
+                path.display()
+            ));
+        }
+        problems
+    }
+
+    /// Writes `files` into `dir` and deletes the stale ones.
+    fn write_prompt_files(dir: &Path, files: &[(String, String)]) {
+        for (name, rendered) in files {
+            let path = dir.join(name);
+            fs::write(&path, rendered)
+                .unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
+        }
+        for path in stale_files(dir, files) {
+            fs::remove_file(&path)
+                .unwrap_or_else(|error| panic!("could not delete {}: {error}", path.display()));
+        }
+    }
+
+    /// The entries in `dir` that none of `files` is named after.
+    fn stale_files(dir: &Path, files: &[(String, String)]) -> Vec<PathBuf> {
+        let entries = fs::read_dir(dir)
+            .unwrap_or_else(|error| panic!("could not read {}: {error}", dir.display()));
+        let mut stale: Vec<_> = entries
+            .map(|entry| {
+                entry
+                    .unwrap_or_else(|error| panic!("could not read {}: {error}", dir.display()))
+                    .path()
+            })
+            .filter(|path| {
+                !files
+                    .iter()
+                    .any(|(name, _)| path.file_name() == Some(OsStr::new(name)))
+            })
+            .collect();
+        stale.sort();
+        stale
     }
 
     /// The lines of `old` and `new` that differ, as `-` and `+` lines by
@@ -436,6 +568,55 @@ mod tests {
             diff("a\nb\nc\n", "a\nB\nc\nd\n", 1),
             "    2 - b\n    2 + B\n    4 + d\n"
         );
+    }
+
+    #[test]
+    fn a_fence_is_longer_than_any_run_of_backticks_in_the_text() {
+        assert_eq!(fence("no backticks"), "```");
+        assert_eq!(fence("see `gh run view`"), "```");
+        assert_eq!(fence("a block:\n```sh\nls\n```\n"), "````");
+        assert_eq!(fence("``` then `````"), "``````");
+    }
+
+    #[test]
+    fn a_prompt_file_carries_the_title_the_when_and_the_fenced_text() {
+        let prompt = Prompt {
+            id: "prompt-example",
+            title: "Example",
+            when: "When an example runs.",
+            units: &[IMPLEMENT],
+            text: "Say ```hi```.\n".to_string(),
+        };
+        assert_eq!(
+            markdown(&prompt),
+            format!("{NOTE}\n# Example\n\nWhen an example runs.\n\n````\nSay ```hi```.\n````\n")
+        );
+    }
+
+    #[test]
+    fn checking_prompts_names_each_missing_differing_and_stale_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path();
+        fs::write(dir.join("same.md"), "same\n").unwrap();
+        fs::write(dir.join("changed.md"), "old\n").unwrap();
+        fs::write(dir.join("stray.md"), "stray\n").unwrap();
+        let files = [
+            ("same.md".to_string(), "same\n".to_string()),
+            ("changed.md".to_string(), "new\n".to_string()),
+            ("missing.md".to_string(), "missing\n".to_string()),
+        ];
+        let problems = check_prompt_files(dir, &files);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(
+            problems[0].contains("changed.md")
+                && problems[0].contains("    1 - old\n    1 + new\n")
+        );
+        assert!(problems[1].contains("missing.md") && problems[1].contains("    1 + missing\n"));
+        assert!(problems[2].contains("stray.md") && problems[2].contains("no prompt"));
+
+        write_prompt_files(dir, &files);
+        assert!(check_prompt_files(dir, &files).is_empty());
+        assert!(!dir.join("stray.md").exists());
     }
 
     #[test]

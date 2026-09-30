@@ -349,7 +349,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md)).
 
-The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` arguments and the skills, and `cargo test` fails until it is regenerated after a change to any of them. Regenerate it with `UPDATE_PROMPTS_PAGE=1 cargo test prompts_page`.
+The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` arguments and the skills, and each Session prompt is also generated as a Markdown file in [`prompts/`](prompts/). `cargo test` fails until they are regenerated after a change to any of them. Regenerate the page and `prompts/` with `UPDATE_PROMPTS=1 cargo test prompts_page`, which also deletes any file in `prompts/` that no prompt produces.
 
 Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the integration tests swap in fake `gh` and `claude`, which are Python scripts in `tests/fakes/`.
 
