@@ -554,6 +554,11 @@ LATEST_RUN_LINE = '.[] | "\\(.headSha) \\(.status) \\(.conclusion)"'
 
 RELEASE_RUN_LINE = '.[] | "\\(.databaseId) \\(.url) \\(.status) \\(.conclusion)"'
 
+RUN_LINES = {
+    LATEST_RUN_LINE: lambda run: f"{run['headSha']} {run['status']} {run['conclusion']}",
+    RELEASE_RUN_LINE: lambda run: f"{run['databaseId']} {run['url']} {run['status']} {run['conclusion']}",
+}
+
 FAILED_JOB_NAMES = (
     '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" '
     'and .conclusion != "neutral") | .name] | join(", ")'
@@ -567,7 +572,8 @@ def run_list(state, flags):
     unsupported = set(flags) - {"branch", "workflow", "event", "commit", "limit", "json", "jq"}
     if unsupported:
         die(f"fake gh: unsupported run list flags {sorted(unsupported)}", 2)
-    if flags.get("jq") not in (LATEST_RUN_LINE, RELEASE_RUN_LINE):
+    line = RUN_LINES.get(flags.get("jq"))
+    if line is None:
         die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
     filters = {"branch": "branch", "workflow": "workflow", "event": "event", "commit": "headSha"}
     runs = []
@@ -585,10 +591,7 @@ def run_list(state, flags):
         )
     save(state)
     for run in runs[: int(flags.get("limit", 20))]:
-        if flags["jq"] == LATEST_RUN_LINE:
-            print(f"{run['headSha']} {run['status']} {run['conclusion']}")
-        else:
-            print(f"{run['databaseId']} {run['url']} {run['status']} {run['conclusion']}")
+        print(line(run))
 
 
 def run_view(state, positional, flags):

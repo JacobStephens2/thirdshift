@@ -478,7 +478,10 @@ fn assert_release_failed(release: &Release, output: &Output, merge: &str) {
     assert_eq!(release.origin_tag("v0.2.0").as_deref(), Some(merge));
 }
 
-const RELEASE_URL: &str = "https://github.com/JacobStephens2/thirdshift/releases/tag/v0.2.0";
+/// The GitHub Release's URL for v0.2.0, as the fake `gh` gives it.
+fn release_url() -> String {
+    format!("https://github.com/{REPO}/releases/tag/v0.2.0")
+}
 
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
@@ -664,7 +667,7 @@ fn each_step_prints_a_progress_line_on_stderr() {
             "release: waiting for the release workflow at {}",
             release.release_run()["url"].as_str().unwrap()
         ),
-        format!("release: released v0.2.0 at {RELEASE_URL}"),
+        format!("release: released v0.2.0 at {}", release_url()),
     ];
     let err = stderr(&output);
     let lines: Vec<&str> = err.lines().collect();
@@ -694,9 +697,18 @@ fn after_the_tag_the_script_waits_for_the_release_workflow_run_to_be_listed_and_
     assert_eq!(run["hidden_polls"], 0);
     assert_eq!(run["pending_polls"], 0);
     let err = stderr(&output);
+    let waiting = [
+        "release: waiting for the release workflow on v0.2.0 to start".to_owned(),
+        format!(
+            "release: waiting for the release workflow at {}",
+            run["url"].as_str().unwrap()
+        ),
+    ];
+    let lines: Vec<&str> = err.lines().collect();
+    assert!(lines.windows(2).any(|pair| pair == waiting), "{lines:#?}");
     assert_eq!(
         err.lines().last(),
-        Some(format!("release: released v0.2.0 at {RELEASE_URL}").as_str()),
+        Some(format!("release: released v0.2.0 at {}", release_url()).as_str()),
         "{err}"
     );
 }
@@ -712,7 +724,7 @@ fn a_failed_release_workflow_run_exits_1_naming_the_failed_jobs_and_leaves_the_t
 
     let merge = release.origin(&["rev-parse", "main"]);
     assert_release_failed(&release, &output, &merge);
-    assert!(!stderr(&output).contains(RELEASE_URL));
+    assert!(!stderr(&output).contains(&release_url()));
 }
 
 #[test]
@@ -729,7 +741,7 @@ fn ci_on_main_for_the_merge_neither_holds_up_nor_fails_the_release() {
 
         assert!(output.status.success(), "{status}: {}", stderr(&output));
         let err = stderr(&output);
-        assert!(err.contains(RELEASE_URL), "{status}: {err}");
+        assert!(err.contains(&release_url()), "{status}: {err}");
     }
 }
 
@@ -1199,7 +1211,7 @@ fn a_rerun_once_the_release_workflow_succeeded_prints_the_release_and_changes_no
     assert!(err.contains("v0.2.0 is already tagged"), "{err}");
     assert_eq!(
         err.lines().last(),
-        Some(format!("release: released v0.2.0 at {RELEASE_URL}").as_str()),
+        Some(format!("release: released v0.2.0 at {}", release_url()).as_str()),
         "{err}"
     );
     assert_eq!(release.origin_refs(), refs_before);
@@ -1223,7 +1235,7 @@ fn a_rerun_while_the_release_workflow_runs_waits_for_it_then_succeeds() {
     assert_eq!(release.release_run()["pending_polls"], 0);
     let err = stderr(&output);
     assert!(err.contains("waiting for the release workflow at"), "{err}");
-    assert!(err.contains(RELEASE_URL), "{err}");
+    assert!(err.contains(&release_url()), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
 }
 
@@ -1265,7 +1277,11 @@ fn a_rerun_after_the_failed_jobs_were_rerun_reports_the_new_attempt() {
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains(RELEASE_URL), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(&release_url()),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -1283,7 +1299,7 @@ fn an_annotated_tag_on_the_merged_bump_is_reported_as_already_tagged() {
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     assert!(err.contains("v0.2.0 is already tagged"), "{err}");
-    assert!(err.contains(RELEASE_URL), "{err}");
+    assert!(err.contains(&release_url()), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
 }
 

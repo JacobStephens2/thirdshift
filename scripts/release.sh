@@ -209,6 +209,9 @@ wait_and_merge() {
 wait_for_release() {
 	local run id run_url status conclusion failed
 	run=$(release_run)
+	if [ -z "$run" ]; then
+		progress "waiting for the release workflow on $tag to start"
+	fi
 	while [ -z "$run" ]; do
 		sleep "$poll_seconds"
 		run=$(release_run)
@@ -222,7 +225,7 @@ wait_for_release() {
 
 	if [ "$conclusion" != success ]; then
 		failed=$(gh run view "$id" --json jobs --jq '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | .name] | join(", ")')
-		progress "the release workflow ended in $conclusion (${failed:-no failed jobs}) at $run_url, so $tag is left in place; rerun the failed jobs with gh run rerun --failed $id, then run this again"
+		progress "the release workflow ended in $conclusion${failed:+ ($failed)} at $run_url, so $tag is left in place; rerun the failed jobs with gh run rerun --failed $id, then run this again"
 		exit 1
 	fi
 	progress "released $tag at $(gh release view "$tag" --json url --jq .url)"
