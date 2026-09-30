@@ -4,7 +4,7 @@
 # that merge commit v<version>. Pushing the tag starts the dist release
 # workflow.
 #
-# Usage: scripts/release.sh <version>
+# Usage: scripts/release.sh [--review] <version>
 #
 # Run it in a clone of this repo, signed in to gh and with claude logged in. It
 # works from origin/main in a temporary worktree, so the branch checked out
@@ -12,7 +12,9 @@
 #
 # claude, with no tools, writes the PR's summary from the prompt in
 # release-summary.md beside this script. If it fails, the summary is GitHub's
-# generated notes instead, and the script warns and carries on.
+# generated notes instead, and the script warns and carries on. With --review,
+# it then prints the summary and asks whether to carry on with it, edit it in
+# $EDITOR first, or stop with nothing pushed. Without it, it never reads stdin.
 #
 # Before it pushes anything, it refuses a release that can't be cut: a version
 # that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
@@ -20,8 +22,8 @@
 # didn't succeed.
 #
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
-# pushed. It exits 1 if it refuses, or if the PR's checks fail, in which case it
-# leaves the PR open.
+# pushed. It exits 1 with nothing pushed if it refuses or the review says no,
+# and exits 1 leaving the PR open if the PR's checks fail.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
 shopt -s inherit_errexit
@@ -33,8 +35,13 @@ summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
+	review=
+	if [ "${1-}" = --review ]; then
+		review=1
+		shift
+	fi
 	if [ "$#" -ne 1 ]; then
-		echo "usage: release.sh <version>" >&2
+		echo "usage: release.sh [--review] <version>" >&2
 		exit 2
 	fi
 	version=$1
@@ -54,14 +61,18 @@ main() {
 	bump_version "$version"
 	git commit --quiet --all --message "Release $version"
 	head=$(git rev-parse HEAD)
-	git push --quiet origin "HEAD:refs/heads/$branch"
 
 	progress "writing the summary with claude"
-	# Built first so a failure to build it stops the script, as it would not
-	# inside the gh command line.
-	body=$(pr_body "$base" "$tag")
+	diff=$(version_diff "$base")
+	summary=$(release_summary "$base" "$tag" "$diff")
+	if [ -n "$review" ] && ! summary=$(review_summary "$summary"); then
+		progress "stopped at the review, so nothing was pushed"
+		exit 1
+	fi
+
+	git push --quiet origin "HEAD:refs/heads/$branch"
 	url=$(gh pr create --base main --head "$branch" --title "Release $version" \
-		--body "$body" | tail -n 1)
+		--body "$(pr_body "$summary" "$diff")" | tail -n 1)
 	progress "opened $url"
 
 	progress "waiting for CI on $url"
@@ -179,23 +190,56 @@ rewrite() {
 	mv "$file.new" "$file"
 }
 
-# pr_body <base> <tag>
-# The body of the bump PR on HEAD, which <tag> will name, off <base>: the
-# summary, between markers release-notes.sh finds to head the Release page
-# with it, then the version diff.
+# pr_body <summary> <version diff section>
+# The body of the bump PR: the summary, between markers release-notes.sh finds
+# to head the Release page with it, then the version diff.
 pr_body() {
-	local diff summary
-	diff=$(version_diff "$1")
-	summary=$(release_summary "$1" "$2" "$diff")
 	cat <<-EOF
 		## Summary
 
 		<!-- release-summary:start -->
-		$summary
+		$1
 		<!-- release-summary:end -->
 
-		$diff
+		$2
 	EOF
+}
+
+# review_summary <summary>
+# Prints <summary> on stderr and asks on stdin whether to carry on with it,
+# edit it in $EDITOR, or stop. Prints the summary to carry on with; returns
+# non-zero to stop, on no, at the end of stdin, or if the editor fails.
+# Called in a condition, where set -e is off, so each step's failure is
+# handled here.
+review_summary() {
+	local answer file status
+	printf '\n%s\n\n' "$1" >&2
+	while :; do
+		printf 'release: open the PR with this summary? [y]es / [e]dit / [n]o ' >&2
+		read -r answer || return
+		case $answer in
+		y | yes)
+			echo "$1"
+			return
+			;;
+		e | edit)
+			file=$(mktemp --suffix=.md) || return
+			status=0
+			# $EDITOR runs as git runs it, so it may carry arguments. Its
+			# output goes to stderr, as stdout is the summary.
+			{
+				echo "$1" >"$file" &&
+					sh -c "${EDITOR:-vi} \"\$1\"" "${EDITOR:-vi}" "$file" >&2 &&
+					cat "$file"
+			} || status=$?
+			rm -f "$file"
+			return "$status"
+			;;
+		n | no)
+			return 1
+			;;
+		esac
+	done
 }
 
 # version_diff <base>
