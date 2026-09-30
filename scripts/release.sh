@@ -25,8 +25,8 @@
 # from the first step not yet done: it opens the PR for a pushed branch, waits
 # on and merges an open PR, or tags a merged one, without the refusals above,
 # which the first run passed. If v<version> is already on origin, on the merge
-# of the bump PR, it says so and exits 0; a v<version> tag anywhere else is
-# refused.
+# of the bump PR, it says so and exits 0; a v<version> tag anywhere else on
+# origin is refused.
 #
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
 # pushed. It exits 1 with nothing more pushed if it refuses or the review says
@@ -57,7 +57,7 @@ main() {
 
 	fetch_main
 	find_earlier_run
-	exit_if_tagged
+	stop_if_tagged
 
 	case $pr_state in
 	"")
@@ -80,8 +80,7 @@ main() {
 		progress "resuming: $url was merged as ${merge:0:7}"
 		;;
 	*)
-		progress "$url was closed without merging, so there is nothing to resume; reopen it or delete $branch to start over"
-		exit 1
+		refuse "$url was closed without merging, so there is nothing to resume; reopen it or delete $branch to start over"
 		;;
 	esac
 
@@ -107,11 +106,11 @@ find_earlier_run() {
 	fi
 }
 
-# exit_if_tagged
+# stop_if_tagged
 # After an earlier run, exits 0 if $tag is on origin at the merge of the bump
 # PR, and refuses if it is on origin anywhere else. With no earlier run,
 # check_can_release refuses an existing tag in its turn.
-exit_if_tagged() {
+stop_if_tagged() {
 	local tagged
 	if [ -z "$pr_state" ] && [ -z "$head" ]; then
 		return

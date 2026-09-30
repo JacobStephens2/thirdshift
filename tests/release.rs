@@ -1104,6 +1104,24 @@ fn a_tag_that_is_not_on_the_merged_bump_is_refused() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn a_tag_while_the_bump_pr_is_open_is_refused() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.origin(&["tag", "v0.2.0", &head]);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("v0.2.0 already exists on origin"), "{err}");
+    assert_eq!(release.origin_refs(), refs_before);
+    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn a_tag_with_no_bump_pr_is_refused() {
     let release = Release::new();
     release.origin(&["tag", "v0.2.0", "main"]);
