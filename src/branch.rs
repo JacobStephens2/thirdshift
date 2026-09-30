@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use crate::git::Git;
 use crate::github::{self, PrState, PullRequest};
 use crate::issue::IssueUrl;
+use crate::progress;
 
 pub enum Selection {
     /// No Issue branch has been used yet, or the highest-numbered one's PR is
@@ -36,10 +37,10 @@ impl Selection {
         } = self
         {
             if let Some(checked_out) = checked_out.filter(|&c| c != pr.base) {
-                eprintln!(
-                    "thirdshift: continuing {branch} and its PR {}, so the Base branch is {}, not the checked-out {checked_out}",
+                progress::step(format_args!(
+                    "continuing {branch} and its PR {}, so the Base branch is {}, not the checked-out {checked_out}",
                     pr.url, pr.base
-                );
+                ));
             }
             return Ok(pr.base.clone());
         }

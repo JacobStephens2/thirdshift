@@ -64,7 +64,7 @@ pub struct TerminalResult {
     /// What it wrote to stdout, which is not the terminal.
     pub stdout: String,
     /// Everything the terminal showed, stderr and the echoed keystrokes,
-    /// with the terminal's `\r\n` as `\n`.
+    /// with the terminal's `\r\n` as `\n` and progress lines unstamped.
     pub stderr: String,
     /// `None` if a signal ended it.
     pub code: Option<i32>,
@@ -74,18 +74,51 @@ pub struct TerminalResult {
 
 pub struct RunResult {
     pub stdout: String,
+    /// stderr with the time each progress line was printed removed, so it
+    /// can be matched exactly: see [`unstamped`].
     pub stderr: String,
+    /// stderr as printed, times and all.
+    pub stamped_stderr: String,
     pub code: Option<i32>,
 }
 
 impl From<Output> for RunResult {
     fn from(output: Output) -> Self {
+        let stamped_stderr = String::from_utf8(output.stderr).unwrap();
         RunResult {
             stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
+            stderr: unstamped(&stamped_stderr),
+            stamped_stderr,
             code: output.status.code(),
         }
     }
+}
+
+/// `stderr` with the `HH:MM:SS ` that starts each progress line, after its
+/// `thirdshift: `, removed.
+pub fn unstamped(stderr: &str) -> String {
+    stderr
+        .split_inclusive('\n')
+        .map(
+            |line| match line.strip_prefix("thirdshift: ").and_then(split_stamp) {
+                Some((_, message)) => format!("thirdshift: {message}"),
+                None => line.to_string(),
+            },
+        )
+        .collect()
+}
+
+/// A progress line after its `thirdshift: ` split into the `HH:MM:SS` it
+/// starts with and the message after it, if it starts with one. Mirrors
+/// `progress::split_stamp`, which the binary keeps to itself.
+pub fn split_stamp(unprefixed: &str) -> Option<(&str, &str)> {
+    let (time, message) = unprefixed.split_at_checked(8)?;
+    let message = message.strip_prefix(' ')?;
+    let is_stamp = time.bytes().enumerate().all(|(at, byte)| match at {
+        2 | 5 => byte == b':',
+        _ => byte.is_ascii_digit(),
+    });
+    is_stamp.then_some((time, message))
 }
 
 impl Scenario {
@@ -329,7 +362,7 @@ impl Scenario {
         reader.join().unwrap();
         TerminalResult {
             stdout,
-            stderr: shown_text(),
+            stderr: unstamped(&shown_text()),
             code: status.code(),
             user_config: fs::read_to_string(self.path("home/.thirdshift/config.toml")).ok(),
         }
