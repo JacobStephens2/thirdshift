@@ -62,7 +62,8 @@ fn with_version(file: &str, version: &str) -> String {
 /// A bare origin whose main is at version 0.1.0, tagged `v0.1.0`, with one PR
 /// merged before the tag and two after, and a green CI run on main's tip; a
 /// contributor's clone that makes them; the maintainer's clone the script
-/// runs in; the fake `gh`'s state; and a fake `claude` that prints
+/// runs in; the fake `gh`'s state, where each bump PR merged starts a release
+/// workflow run that succeeds; and a fake `claude` that prints
 /// `AGENT_SUMMARY`.
 struct Release {
     temp: TempDir,
@@ -118,6 +119,7 @@ impl Release {
 
         git(root, &["clone", "-q", "origin.git", "maintainer"]);
         release.main_ci("completed", "success");
+        release.release_workflow(json!({}));
         release
     }
 
@@ -186,11 +188,54 @@ impl Release {
 
     /// Records a CI run on main's tip on origin, newer than any before it.
     fn main_ci(&self, status: &str, conclusion: &str) {
+        self.main_ci_on(&self.origin(&["rev-parse", "main"]), status, conclusion);
+    }
+
+    /// Makes each bump PR merged from now on record a release workflow run
+    /// on its merge commit, as pushing its tag starts one: a run that
+    /// succeeded, with `fields` set over it. Merging the PR stands in for the
+    /// tag push, which the fake `gh` doesn't see.
+    fn release_workflow(&self, fields: Value) {
+        let mut run = json!({
+            "workflow": "release.yml",
+            "event": "push",
+            "branch": "@TAG@",
+            "headSha": "@SHA@",
+            "status": "completed",
+            "conclusion": "success",
+            "jobs": [{"name": "host", "conclusion": "success"}],
+        });
+        run.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let script = format!(
+            "case $FAKE_MERGE_HEAD in release-*)\n\
+             run='{run}'\n\
+             run=${{run//@SHA@/$FAKE_MERGE_SHA}}\n\
+             gh fake run \"${{run//@TAG@/v${{FAKE_MERGE_HEAD#release-}}}}\"\n\
+             esac"
+        );
+        self.gh(&["fake", "after-merge", &script]);
+    }
+
+    /// The newest release workflow run recorded.
+    fn release_run(&self) -> Value {
+        self.gh_state()["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|run| run["workflow"] == "release.yml")
+            .expect("no release workflow run")
+            .clone()
+    }
+
+    /// Records a CI run on main at `sha`, newer than any before it.
+    fn main_ci_on(&self, sha: &str, status: &str, conclusion: &str) {
         let run = json!({
             "branch": "main",
             "workflow": "ci.yml",
             "event": "push",
-            "headSha": self.origin(&["rev-parse", "main"]),
+            "headSha": sha,
             "status": status,
             "conclusion": conclusion,
         });
@@ -404,6 +449,40 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// A release workflow run that failed in the Rocky Linux smoke check.
+fn failed_release() -> Value {
+    json!({
+        "conclusion": "failure",
+        "jobs": [
+            {"name": "plan", "conclusion": "success"},
+            {"name": "custom-release-smoke / rocky", "conclusion": "failure"},
+            {"name": "host", "conclusion": "skipped"},
+        ],
+    })
+}
+
+/// Asserts the script exited 1 on the failed release workflow run, naming
+/// the failed job and the run and how to rerun it, with `v0.2.0` left on
+/// `merge`.
+fn assert_release_failed(release: &Release, output: &Output, merge: &str) {
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(output));
+    let err = stderr(output);
+    let run = release.release_run();
+    assert!(err.contains("custom-release-smoke / rocky"), "{err}");
+    assert!(!err.contains("plan"), "{err}");
+    assert!(err.contains(run["url"].as_str().unwrap()), "{err}");
+    assert!(
+        err.contains(&format!("gh run rerun --failed {}", run["databaseId"])),
+        "{err}"
+    );
+    assert_eq!(release.origin_tag("v0.2.0").as_deref(), Some(merge));
+}
+
+/// The GitHub Release's URL for v0.2.0, as the fake `gh` gives it.
+fn release_url() -> String {
+    format!("https://github.com/{REPO}/releases/tag/v0.2.0")
+}
+
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
 const AGENT_SUMMARY: &str = "The headline is the frobnicator (#2).";
@@ -584,6 +663,11 @@ fn each_step_prints_a_progress_line_on_stderr() {
             "release: tagged v0.2.0 on {} and pushed the tag",
             &merge[..7]
         ),
+        format!(
+            "release: waiting for the release workflow at {}",
+            release.release_run()["url"].as_str().unwrap()
+        ),
+        format!("release: released v0.2.0 at {}", release_url()),
     ];
     let err = stderr(&output);
     let lines: Vec<&str> = err.lines().collect();
@@ -595,7 +679,70 @@ fn each_step_prints_a_progress_line_on_stderr() {
             .unwrap_or_else(|| panic!("no {line:?} in order in {lines:#?}"))
             + 1;
     }
+    assert_eq!(at, lines.len(), "{lines:#?}");
     assert!(output.stdout.is_empty());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn after_the_tag_the_script_waits_for_the_release_workflow_run_to_be_listed_and_finish() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.release_workflow(json!({"hidden_polls": 3, "pending_polls": 2}));
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let run = release.release_run();
+    assert_eq!(run["hidden_polls"], 0);
+    assert_eq!(run["pending_polls"], 0);
+    let err = stderr(&output);
+    let waiting = [
+        "release: waiting for the release workflow on v0.2.0 to start".to_owned(),
+        format!(
+            "release: waiting for the release workflow at {}",
+            run["url"].as_str().unwrap()
+        ),
+    ];
+    let lines: Vec<&str> = err.lines().collect();
+    assert!(lines.windows(2).any(|pair| pair == waiting), "{lines:#?}");
+    assert_eq!(
+        err.lines().last(),
+        Some(format!("release: released v0.2.0 at {}", release_url()).as_str()),
+        "{err}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_failed_release_workflow_run_exits_1_naming_the_failed_jobs_and_leaves_the_tag() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.release_workflow(failed_release());
+
+    let output = release.run_script("0.2.0");
+
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_release_failed(&release, &output, &merge);
+    assert!(!stderr(&output).contains(&release_url()));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn ci_on_main_for_the_merge_neither_holds_up_nor_fails_the_release() {
+    for (status, conclusion) in [("in_progress", ""), ("completed", "failure")] {
+        let release = Release::new();
+        let head = release.push_bump("0.2.0");
+        release.open_bump_pr("0.2.0");
+        let merge = release.merge_bump_pr("0.2.0", &head);
+        release.main_ci_on(&merge, status, conclusion);
+
+        let output = release.run_script("0.2.0");
+
+        assert!(output.status.success(), "{status}: {}", stderr(&output));
+        let err = stderr(&output);
+        assert!(err.contains(&release_url()), "{status}: {err}");
+    }
 }
 
 #[test]
@@ -1048,7 +1195,7 @@ fn a_rerun_after_the_merge_tags_the_merge_commit_and_pushes_the_tag() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn a_rerun_once_the_tag_is_on_the_merged_bump_reports_it_and_changes_nothing() {
+fn a_rerun_once_the_release_workflow_succeeded_prints_the_release_and_changes_nothing() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
@@ -1062,8 +1209,79 @@ fn a_rerun_once_the_tag_is_on_the_merged_bump_reports_it_and_changes_nothing() {
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     assert!(err.contains("v0.2.0 is already tagged"), "{err}");
+    assert_eq!(
+        err.lines().last(),
+        Some(format!("release: released v0.2.0 at {}", release_url()).as_str()),
+        "{err}"
+    );
     assert_eq!(release.origin_refs(), refs_before);
     assert_eq!(release.gh_state(), state_before);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_rerun_while_the_release_workflow_runs_waits_for_it_then_succeeds() {
+    let release = Release::new();
+    release.release_workflow(json!({"pending_polls": 3}));
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &merge]);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.release_run()["pending_polls"], 0);
+    let err = stderr(&output);
+    assert!(err.contains("waiting for the release workflow at"), "{err}");
+    assert!(err.contains(&release_url()), "{err}");
+    assert_eq!(release.origin_refs(), refs_before);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_rerun_after_the_release_workflow_failed_fails_the_same_way() {
+    let release = Release::new();
+    release.release_workflow(failed_release());
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &merge]);
+    let refs_before = release.origin_refs();
+
+    let output = release.run_script("0.2.0");
+
+    assert_release_failed(&release, &output, &merge);
+    assert_eq!(release.origin_refs(), refs_before);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_rerun_after_the_failed_jobs_were_rerun_reports_the_new_attempt() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.release_workflow(failed_release());
+    let first = release.run_script("0.2.0");
+    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    // `gh run rerun --failed`: a new attempt of the same run, in progress for
+    // the script's first reads, whose rerun smoke check passes.
+    let attempt = json!({
+        "databaseId": release.release_run()["databaseId"],
+        "conclusion": "success",
+        "pending_polls": 2,
+        "jobs": [{"name": "custom-release-smoke / rocky", "conclusion": "success"}],
+    });
+    release.gh(&["fake", "run", &attempt.to_string()]);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(&release_url()),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -1081,6 +1299,7 @@ fn an_annotated_tag_on_the_merged_bump_is_reported_as_already_tagged() {
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     assert!(err.contains("v0.2.0 is already tagged"), "{err}");
+    assert!(err.contains(&release_url()), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
 }
 
