@@ -2,12 +2,15 @@
 //! and no User config, it writes every setting at its default without asking,
 //! and `email.to` as the GitHub email it suggests, if it finds one; over an
 //! existing one, it keeps its values and comments and adds the keys it lacks.
+//! From a terminal, it first asks the Setup questions on stderr, each with the
+//! current value as its default answer.
 
 mod support;
 
 use std::fs;
 
-use support::Scenario;
+use support::resend::ResendStandIn;
+use support::{CTRL_C, Keystrokes, Scenario, TerminalResult};
 
 /// The agent commits its work and opens a PR that closes issue #7, into
 /// `main`.
@@ -455,4 +458,388 @@ fn setup_never_replaces_an_existing_email_to() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(email_to(&scenario).as_deref(), Some("mine@example.net"));
+}
+
+// Setup from a terminal.
+
+const MERGE: &str = "Merge run?";
+const PULL: &str = "fast-forward";
+const NOTIFY: &str = "Run notifications, an email";
+const TO: &str = "Send Run notifications to";
+const FROM: &str = "Send them from";
+const TEST_EMAIL: &str = "test email now?";
+const KEY_HINT: &str = "export RESEND_API_KEY=";
+const KEY: &str = "re_secret_123";
+const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
+
+/// Run `thirdshift setup` on a terminal, typing `keystrokes`, and check it
+/// succeeded with nothing on stdout.
+fn setup_on_terminal(
+    scenario: &Scenario,
+    env: &[(&str, &str)],
+    keystrokes: &[Keystrokes],
+) -> TerminalResult {
+    let result = scenario.run_on_terminal(&["setup"], env, keystrokes);
+    assert_eq!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    result
+}
+
+fn table(result: &TerminalResult) -> toml::Table {
+    let text = result.user_config.as_ref().expect("no User config written");
+    text.parse().unwrap()
+}
+
+#[test]
+fn on_a_terminal_pressing_enter_throughout_writes_what_setup_with_no_terminal_writes() {
+    let unattended = Scenario::new();
+    unattended.git_email_is(None);
+    assert_eq!(unattended.run(&["setup"]).code, Some(0));
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+
+    let result = setup_on_terminal(&scenario, &[], &[(MERGE, ""), (PULL, ""), (NOTIFY, "")]);
+
+    assert_eq!(result.user_config, user_config(&unattended));
+    for prompt in [MERGE, PULL, NOTIFY] {
+        assert!(
+            result.stderr.contains(prompt),
+            "terminal: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn on_a_terminal_the_answers_are_written_with_the_comments_on_each_key() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[("RESEND_API_KEY", KEY)],
+        &[
+            (MERGE, "y"),
+            (PULL, "yes"),
+            (NOTIFY, "y"),
+            (TO, "me@example.com"),
+            (FROM, "ts@acme.dev"),
+            (TEST_EMAIL, ""),
+        ],
+    );
+
+    let config = table(&result);
+    assert_eq!(config["merge"]["always"].as_bool(), Some(true));
+    assert_eq!(config["launch"]["pull"].as_bool(), Some(true));
+    assert_eq!(config["email"]["always"].as_bool(), Some(true));
+    assert_eq!(config["email"]["to"].as_str(), Some("me@example.com"));
+    assert_eq!(config["email"]["from"].as_str(), Some("ts@acme.dev"));
+    let text = result.user_config.unwrap();
+    assert_eq!(
+        key_names(&text),
+        [
+            "merge.always",
+            "launch.pull",
+            "email.always",
+            "email.to",
+            "email.from",
+            "logs.dir",
+            "spec.parallel"
+        ],
+        "{text}"
+    );
+    for (section, line) in key_lines(&text) {
+        assert!(
+            !line.starts_with('#'),
+            "[{section}] {line:?} is commented out"
+        );
+        let Some((_, comment)) = line.split_once(" # ") else {
+            panic!("no trailing comment on [{section}] {line:?}");
+        };
+        assert!(comment.contains("default"), "[{section}] {line:?}");
+    }
+    assert!(!text.contains(KEY), "{text}");
+    assert!(
+        !result.stderr.contains(KEY_HINT),
+        "terminal: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn on_a_terminal_the_address_defaults_to_the_suggested_github_email() {
+    let scenario = Scenario::new();
+    scenario.github_email_is(Some("octo@example.com"));
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &[(MERGE, ""), (PULL, ""), (NOTIFY, "y"), (TO, ""), (FROM, "")],
+    );
+
+    assert!(
+        result.stderr.contains("octo@example.com"),
+        "terminal: {}",
+        result.stderr
+    );
+    let config = table(&result);
+    assert_eq!(config["email"]["always"].as_bool(), Some(true));
+    assert_eq!(config["email"]["to"].as_str(), Some("octo@example.com"));
+    assert_eq!(
+        config["email"]["from"].as_str(),
+        Some("onboarding@resend.dev")
+    );
+}
+
+#[test]
+fn on_a_terminal_pressing_enter_throughout_keeps_an_existing_user_config() {
+    let scenario = Scenario::new();
+    scenario.github_email_is(Some("octo@example.com"));
+    let mine = "\
+[merge]
+always = true
+
+[launch]
+pull = true
+
+[email]
+always = true
+to = \"mine@example.net\"
+from = \"ts@acme.dev\"
+
+[logs]
+dir = \"/var/log/thirdshift\"
+
+[spec]
+parallel = 5
+";
+    scenario.user_config_is(mine);
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[("RESEND_API_KEY", KEY)],
+        &[
+            (MERGE, ""),
+            (PULL, ""),
+            (NOTIFY, ""),
+            (TO, ""),
+            (FROM, ""),
+            (TEST_EMAIL, ""),
+        ],
+    );
+
+    assert_eq!(result.user_config.as_deref(), Some(mine));
+    for current in ["[Y/n]", "mine@example.net", "ts@acme.dev"] {
+        assert!(
+            result.stderr.contains(current),
+            "terminal: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn on_a_terminal_setup_over_a_hand_commented_user_config_keeps_the_comments() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    let mine = "\
+# My machine.
+[merge]
+# Merging is for later.
+always = false   # not yet
+
+[email]
+# to = \"someday@example.com\"
+always = false # quiet, please
+";
+    scenario.user_config_is(mine);
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &[
+            (MERGE, "y"),
+            (PULL, ""),
+            (NOTIFY, "y"),
+            (TO, "me@example.com"),
+            (FROM, ""),
+        ],
+    );
+
+    let text = result.user_config.clone().unwrap();
+    for kept in [
+        "# My machine.\n[merge]\n# Merging is for later.\nalways = true    # not yet\n",
+        "always = true  # quiet, please\n",
+    ] {
+        assert!(text.contains(kept), "{text}");
+    }
+    assert!(!text.contains("# to = "), "{text}");
+    let config = table(&result);
+    assert_eq!(config["merge"]["always"].as_bool(), Some(true));
+    assert_eq!(config["email"]["to"].as_str(), Some("me@example.com"));
+    let mut names = key_names(&text);
+    names.sort();
+    assert_eq!(names, EVERY_KEY, "{text}");
+}
+
+#[test]
+fn on_a_terminal_an_address_without_an_at_is_asked_again() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &[
+            (MERGE, ""),
+            (PULL, ""),
+            (NOTIFY, "y"),
+            (TO, ""),
+            (TO, "me.example.com"),
+            (TO, "me@example.com"),
+            (FROM, ""),
+        ],
+    );
+
+    assert_eq!(result.stderr.matches(TO).count(), 3, "{}", result.stderr);
+    assert_eq!(
+        table(&result)["email"]["to"].as_str(),
+        Some("me@example.com")
+    );
+}
+
+#[test]
+fn on_a_terminal_with_notifications_off_nothing_about_email_is_asked() {
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    scenario.git_email_is(None);
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+        &[(MERGE, ""), (PULL, ""), (NOTIFY, "n")],
+    );
+
+    for asked in [TO, FROM, KEY_HINT, TEST_EMAIL] {
+        assert!(
+            !result.stderr.contains(asked),
+            "terminal: {}",
+            result.stderr
+        );
+    }
+    assert_eq!(table(&result)["email"]["always"].as_bool(), Some(false));
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn on_a_terminal_the_key_hint_shows_only_when_resend_api_key_is_unset_or_empty() {
+    for (key, hinted) in [(None, true), (Some(""), true), (Some(KEY), false)] {
+        let scenario = Scenario::new();
+        let env: Vec<(&str, &str)> = key.map(|key| ("RESEND_API_KEY", key)).into_iter().collect();
+        let mut keystrokes = vec![
+            (MERGE, ""),
+            (PULL, ""),
+            (NOTIFY, "y"),
+            (TO, "me@example.com"),
+            (FROM, ""),
+        ];
+        if !hinted {
+            keystrokes.push((TEST_EMAIL, "n"));
+        }
+
+        let result = setup_on_terminal(&scenario, &env, &keystrokes);
+
+        assert_eq!(
+            result.stderr.contains(KEY_HINT),
+            hinted,
+            "{key:?}: {}",
+            result.stderr
+        );
+        assert_eq!(result.stderr.contains(TEST_EMAIL), !hinted, "{key:?}");
+        assert!(!result.user_config.unwrap().contains(KEY));
+        assert!(!result.stderr.contains(KEY), "{key:?}: {}", result.stderr);
+    }
+}
+
+#[test]
+fn on_a_terminal_accepting_the_test_email_sends_one_and_declining_sends_none() {
+    for (answer, sent) in [("y", 1), ("n", 0), ("", 0)] {
+        let scenario = Scenario::new();
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = setup_on_terminal(
+            &scenario,
+            &[
+                ("RESEND_API_KEY", KEY),
+                ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ],
+            &[
+                (MERGE, ""),
+                (PULL, ""),
+                (NOTIFY, "y"),
+                (TO, "me@example.com"),
+                (FROM, ""),
+                (TEST_EMAIL, answer),
+            ],
+        );
+
+        let requests = resend.requests();
+        assert_eq!(requests.len(), sent, "{answer:?}: {requests:?}");
+        if sent == 1 {
+            assert_eq!(requests[0].body["to"], "me@example.com");
+            assert!(
+                result
+                    .stderr
+                    .contains("accepted by Resend; check your inbox"),
+                "terminal: {}",
+                result.stderr
+            );
+        }
+        assert!(result.user_config.is_some(), "{answer:?}");
+    }
+}
+
+#[test]
+fn ctrl_c_during_the_questions_writes_no_user_config() {
+    let scenario = Scenario::new();
+
+    let result = scenario.run_on_terminal(&["setup"], &[], &[(MERGE, "y"), (PULL, CTRL_C)]);
+
+    assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_eq!(result.user_config, None);
+}
+
+#[test]
+fn ctrl_c_during_the_questions_leaves_an_existing_user_config_unchanged() {
+    let scenario = Scenario::new();
+    let mine = "[merge]\nalways = true # mine\n";
+    scenario.user_config_is(mine);
+
+    let result = scenario.run_on_terminal(
+        &["setup"],
+        &[],
+        &[(MERGE, "n"), (PULL, "y"), (NOTIFY, "y"), (TO, CTRL_C)],
+    );
+
+    assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.user_config.as_deref(), Some(mine));
+}
+
+#[test]
+fn on_a_terminal_setup_still_refuses_a_broken_user_config_before_asking() {
+    let scenario = Scenario::new();
+    let broken = "[merge]\nalway = true\n";
+    scenario.user_config_is(broken);
+
+    let result = scenario.run_on_terminal(&["setup"], &[], &[]);
+
+    assert_eq!(result.code, Some(1), "terminal: {}", result.stderr);
+    assert!(result.stderr.contains("unknown key merge.alway"));
+    assert!(
+        !result.stderr.contains(MERGE),
+        "terminal: {}",
+        result.stderr
+    );
+    assert_eq!(result.user_config.as_deref(), Some(broken));
 }

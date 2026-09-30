@@ -27,4 +27,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
+      # nextest runs tests from every test binary in parallel, where cargo test
+      # runs the binaries one after another; that matters on the slower macOS
+      # runners. Without a lib target there are no doctests for it to miss.
+      # The Linux job keeps plain cargo test, so the suite also runs the way
+      # a contributor runs it locally.
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run
