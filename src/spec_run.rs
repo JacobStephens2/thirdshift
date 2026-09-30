@@ -152,8 +152,9 @@ fn land_tickets(
 }
 
 /// The lowest-numbered Ticket that is open, not an Unready Ticket, has no
-/// sub-issues, has every blocker closed, isn't `running` and has no outcome
-/// in `outcomes` yet.
+/// sub-issues, has every blocker closed and none `running`, isn't `running`
+/// and has no outcome in `outcomes` yet. A blocker's Run closes its issue
+/// before it ends, so a closed blocker may still be running.
 fn next_ready(
     tickets: &[Ticket],
     outcomes: &BTreeMap<u64, TicketOutcome>,
@@ -165,6 +166,10 @@ fn next_ready(
             ticket.is_open
                 && !ticket.has_sub_issues
                 && ticket.open_blockers.is_empty()
+                && !ticket
+                    .blockers
+                    .iter()
+                    .any(|blocker| running.contains(blocker))
                 && !outcomes.contains_key(&ticket.number)
                 && !running.contains(&ticket.number)
                 && unready_label(ticket).is_none()
@@ -407,4 +412,34 @@ fn review(
     worktree.push()?;
     run::mark_pr_ready(spec, spec_branch, base)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ticket(number: u64, is_open: bool, blockers: &[u64], open_blockers: &[u64]) -> Ticket {
+        Ticket {
+            number,
+            is_open,
+            labels: Vec::new(),
+            has_sub_issues: false,
+            blockers: blockers.to_vec(),
+            open_blockers: open_blockers.to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_ticket_waits_for_a_blocker_whose_run_closed_its_issue_but_has_not_ended() {
+        // #22's Run closed #22 but is still cleaning up; #21 has landed.
+        let tickets = [
+            ticket(21, false, &[], &[]),
+            ticket(22, false, &[], &[]),
+            ticket(23, true, &[21, 22], &[]),
+        ];
+        let outcomes = BTreeMap::from([(21, TicketOutcome::Landed(None))]);
+
+        assert_eq!(next_ready(&tickets, &outcomes, &HashSet::from([22])), None);
+        assert_eq!(next_ready(&tickets, &outcomes, &HashSet::new()), Some(23));
+    }
 }
