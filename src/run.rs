@@ -440,7 +440,7 @@ impl RepairLoop<'_> {
     /// a conflict Repair. Then a review Repair reviews them from the head the
     /// Run last knew as its own, the local head before the merge. Goes round
     /// again until origin has nothing new, since more may land during either
-    /// Repair and would otherwise make the push fail.
+    /// Repair, and the push after them would be rejected.
     fn take_in_foreign_commits(
         &mut self,
         run_session: &mut impl FnMut(&str, &str) -> Result<()>,
