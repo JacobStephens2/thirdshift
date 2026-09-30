@@ -197,60 +197,50 @@ fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
     assert_contains(text(&request), "origin mismatch");
 }
 
+// Where `email` and `--email` can go, and when an address follows them, are
+// covered by the unit tests in `args`. These two Runs check that what they
+// parse to reaches the Run notification.
+
 #[test]
-fn a_bare_flag_sends_to_email_to_and_an_address_after_the_flag_wins() {
-    for (args, to) in [
-        (vec!["--email"], "config@example.com"),
-        (vec!["email"], "config@example.com"),
-        (vec!["--email", "flag@example.com"], "flag@example.com"),
-    ] {
-        let scenario = Scenario::new();
-        scenario.user_config_is("[email]\nto = \"config@example.com\"\n");
-        scenario.agent_does(AGENT_OPENS_PR);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
-        let url = scenario.issue_url(7);
-        let mut argv = vec![url.as_str()];
-        argv.extend(args.iter().copied());
+fn a_bare_flag_sends_to_email_to() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nto = \"config@example.com\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run(&scenario, &resend, &argv, Some(KEY));
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email"],
+        Some(KEY),
+    );
 
-        assert_eq!(result.code, Some(0), "{args:?}: {}", result.stderr);
-        assert_eq!(the_one_request(&resend).body["to"], to, "{args:?}");
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(the_one_request(&resend).body["to"], "config@example.com");
 }
 
 #[test]
-fn the_flag_works_in_any_position_and_never_takes_the_issue_url_as_its_address() {
-    let url = Scenario::new().issue_url(7);
-    for args in [
-        vec!["--email", url.as_str()],
-        vec!["email", url.as_str(), "merge"],
-        vec!["merge", "--email", url.as_str()],
-        vec!["--email", "me@example.com", url.as_str(), "merge"],
-        vec![url.as_str(), "merge", "email"],
-        vec![url.as_str(), "--email", "merge"],
-    ] {
-        let scenario = Scenario::new();
-        scenario.user_config_is("[email]\nto = \"me@example.com\"\n");
-        scenario.agent_does(AGENT_OPENS_PR);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+fn merge_after_a_bare_flag_reaches_the_run_notification_as_the_goal() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nto = \"me@example.com\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run(&scenario, &resend, &args, Some(KEY));
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "merge"],
+        Some(KEY),
+    );
 
-        assert_eq!(result.code, Some(0), "{args:?}: {}", result.stderr);
-        let request = the_one_request(&resend);
-        assert_eq!(request.body["to"], "me@example.com", "{args:?}");
-        let outcome = if args.contains(&"merge") {
-            "merged"
-        } else {
-            "ready for review"
-        };
-        assert!(
-            subject(&request).ends_with(&format!(": {outcome}")),
-            "{args:?}: {}",
-            subject(&request)
-        );
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_eq!(request.body["to"], "me@example.com");
+    assert!(
+        subject(&request).ends_with(": merged"),
+        "{}",
+        subject(&request)
+    );
 }
 
 #[test]
