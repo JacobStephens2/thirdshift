@@ -241,8 +241,7 @@ impl Release {
         .expect("could not run release-notes.sh")
     }
 
-    /// GitHub's generated notes for `tag`, as release-notes.yml asked for them
-    /// before the summary headed the Release.
+    /// GitHub's generated notes for `tag`, from the fake `gh`.
     fn generated_notes(&self, tag: &str) -> String {
         self.gh(&[
             "api",
@@ -635,4 +634,34 @@ fn without_a_bump_pr_summary_the_release_body_is_the_generated_notes_and_install
             "{case}"
         );
     }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_a_warning() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let output = release.run_script("0.2.0");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let merge = release.origin(&["rev-parse", "main"]);
+    release.gh(&[
+        "fake",
+        "fails",
+        &format!("api repos/{{owner}}/{{repo}}/commits/{merge}/pulls"),
+    ]);
+
+    let output = release.run_notes_script("v0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.lines()
+            .any(|line| line.starts_with("release-notes: warning:") && line.contains("summary")),
+        "{err}"
+    );
+    let notes = release.generated_notes("v0.2.0");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{notes}\n\n{INSTALL_NOTES}\n")
+    );
 }

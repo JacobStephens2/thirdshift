@@ -21,7 +21,12 @@ main() {
 	fi
 	local commit summary
 	commit=$(git rev-parse --verify "$1^{commit}")
-	summary=$(bump_summary "$commit")
+	# In an if, so failing to read the PR falls back rather than stopping the
+	# script and leaving the Release with dist's body.
+	if ! summary=$(bump_summary "$commit"); then
+		echo "release-notes: warning: could not read the bump PR, so the body has no summary" >&2
+		summary=
+	fi
 	if [ -n "${summary//[[:space:]]/}" ]; then
 		printf '%s\n\n' "$summary"
 	fi
@@ -35,17 +40,19 @@ main() {
 # is, so only a PR whose merge commit it is counts.
 bump_summary() {
 	local number
+	# Errors are returned explicitly, as the caller's if turns errexit off.
 	number=$(gh api "repos/{owner}/{repo}/commits/$1/pulls" \
 		--jq '.[] | "\(.merge_commit_sha) \(.number)"' |
-		awk -v commit="$1" '$1 == commit && !number { number = $2 } END { print number }')
+		awk -v commit="$1" '$1 == commit && !number { number = $2 } END { print number }') ||
+		return
 	if [ -n "$number" ]; then
 		gh pr view "$number" --json body --jq .body | summary_section
 	fi
 }
 
 # summary_section
-# The lines of the PR body on stdin between the markers release.sh writes
-# around the summary, or nothing if either marker is missing.
+# The lines of the PR body on stdin between the markers release.sh's pr_body
+# writes around the summary, or nothing if either marker is missing.
 summary_section() {
 	awk '
 		{ sub(/\r$/, "") }
