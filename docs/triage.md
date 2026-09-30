@@ -72,3 +72,17 @@ thirdshift: cleaning up the worktree and local branch issue-158
 thirdshift: origin/main is not merged into issue-158
 thirdshift: session log: /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-158-20260930T015208Z-repair-1.jsonl
 jacob@tracewake:~/repos/thirdshift$
+
+# Sep 30 2026, merged PR without closing issue
+/triage thirdshift in a run on this machine merged https://github.com/JacobStephens2/thirdshift/pull/168 but despite that PR having Closes #158 in its body, it did not close https://github.com/JacobStephens2/thirdshift/issues/158
+
+part of the run stderr: "  statusCheckRollup
+  title
+  updatedAt
+  url
+thirdshift: warning: could not close issue #158, so if it is still open, close it by hand: gh issue close 158 --repo JacobStephens2/thirdshift --comment 'Closed by #168, merged into main by a thirdshift Merge run.'
+thirdshift: cleaning up the worktree and local branch issue-158
+thirdshift: PR https://github.com/JacobStephens2/thirdshift/pull/168 is merged
+https://github.com/JacobStephens2/thirdshift/pull/168"
+
+And I suppose thirdshift should be able to close the issue programmatically if the PR itself merging doesn't close it when doing a merge run.
