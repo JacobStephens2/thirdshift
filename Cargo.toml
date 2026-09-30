@@ -23,6 +23,15 @@ tempfile = "3.27.0"
 toml = "1.1.6"
 toml_edit = "0.25.15"
 
+# Line tables keep file and line in the crate's backtraces, and dependencies
+# get no debuginfo, so their frames show no file or line. Full debuginfo made
+# the debug binary 108MB and target/ 1.5GB per worktree.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
