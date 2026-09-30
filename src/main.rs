@@ -50,6 +50,13 @@ merge, --no-merge, --email and --no-email go before or after the Issue URL, in a
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
 after --email is the address only if it has an @ and isn't a URL.
 
+On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
+can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch, then
+opens one Spec PR. An Unready Ticket, one labelled ready-for-human, needs-info, wontfix or
+needs-triage, is never run, nor is a Ticket with sub-issues, nor any Ticket that one of these, an
+open issue outside the Spec or a failed Ticket blocks. If any Ticket is not done, the Spec run
+fails, with a line on each saying why.
+
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup writes one listing every setting at its default, to edit.
 With merge.always set, every Run is a Merge run unless given --no-merge:

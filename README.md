@@ -267,6 +267,27 @@ A Failed run:
 
 Merges, never rebases or force-pushes: a branch worked on from several servers never loses history.
 
+## Spec runs
+
+A **Spec** is an issue with sub-issues, its **Tickets**. `thirdshift <Issue URL>` on a Spec is a **Spec run**: it works through the Tickets in the order their GitHub "blocked by" links allow, each Ticket's **Run** a **Merge run** into the **Spec branch**, then opens one **Spec PR** from the Spec branch into the Base branch, ready for review ([ADR-0006](docs/adr/0006-spec-runs-merge-tickets-into-a-spec-branch.md)). An issue with no sub-issues is an ordinary Run.
+
+A Spec run takes every Ticket it can reach. A Ticket runs once it is open, has every blocker closed, and is not an **Unready Ticket**: an open Ticket labelled `ready-for-human`, `needs-info`, `wontfix` or `needs-triage`. An open Ticket with no triage label is taken. A Ticket with sub-issues of its own is never run either, and is reported as unready. A blocker outside the Spec counts once it is closed. The graph is read again from GitHub whenever a Ticket's Run ends, so removing a label, adding a Ticket or closing one by hand takes effect in the same Spec run.
+
+A Ticket whose Run fails is not tried again in that Spec run, and stops only the Tickets it blocks; every other Ticket it can reach still runs. Nor do Unready Tickets, Tickets blocked by an open issue outside the Spec, or Tickets in a cycle of "blocked by" links run, nor any Ticket downstream of them.
+
+When nothing is left to run and any Ticket is not done, the Spec run is a **Failed spec run**: it opens no Spec PR, exits `1`, and lists on stderr each Ticket that landed, with its pull request, and each one not done, with why:
+
+```
+thirdshift: #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme-widgets-issue-21-….jsonl)
+thirdshift: #22 blocked by #21
+thirdshift: #23 landed with https://github.com/acme/widgets/pull/1
+thirdshift: #24 unready: labelled needs-info
+thirdshift: #25 blocked by #99 (outside the Spec)
+thirdshift: #26 in a cycle: #26 blocked by #27 blocked by #26
+thirdshift: #27 in a cycle: #27 blocked by #26 blocked by #27
+thirdshift: Tickets not done: #21, #22, #24, #25, #26, #27
+```
+
 ## Building from source
 
 Building needs the Rust toolchain. From a clone of this repository:

@@ -300,3 +300,177 @@ fn help_does_not_mention_the_ticket_runs_hidden_argument() {
     assert_eq!(result.code, Some(0));
     assert!(!result.stdout.contains("spec-branch"), "{}", result.stdout);
 }
+
+/// A Spec #20 whose Tickets are `tickets`, each with the issues it is
+/// blocked by, and whose open Tickets' agents each land their own file.
+fn spec_of(tickets: &[(u32, &[u32])]) -> Scenario {
+    let scenario = Scenario::new();
+    scenario.issue_titled(SPEC, SPEC_TITLE);
+    scenario.spec_has_tickets(SPEC, tickets);
+    for (ticket, _) in tickets {
+        scenario.agent_does_for(*ticket, &agent_lands(*ticket, &format!("{ticket}.txt")));
+    }
+    scenario
+}
+
+/// Assert the Spec run ended as a Failed spec run: exit 1, nothing on
+/// stdout, and no Spec PR or Spec review.
+fn assert_failed_spec_run(scenario: &Scenario, result: &support::RunResult) {
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert!(
+        !sessions_by_issue(scenario).contains(&SPEC.to_string()),
+        "a Spec review was started"
+    );
+    let gh = scenario.gh_state();
+    assert!(
+        gh["prs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|pr| pr["head"] != "issue-20"),
+        "a Spec PR was opened: {}",
+        gh["prs"]
+    );
+}
+
+#[test]
+fn a_needs_info_ticket_and_what_it_blocks_are_not_run_while_an_independent_ticket_lands() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[])]);
+    scenario.issue_labelled(21, &["needs-info"]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["23"]);
+    assert_eq!(scenario.gh_state()["issues"]["23"], "CLOSED");
+    for line in [
+        "thirdshift: #21 unready: labelled needs-info\n",
+        "thirdshift: #22 blocked by #21\n",
+        "thirdshift: #23 landed with https://github.com/acme/widgets/pull/1\n",
+    ] {
+        assert_contains(&result.stderr, line);
+    }
+}
+
+#[test]
+fn each_unready_label_keeps_a_ticket_from_running() {
+    for label in ["ready-for-human", "wontfix", "needs-triage"] {
+        let scenario = spec_of(&[(21, &[]), (22, &[])]);
+        scenario.issue_labelled(21, &[label]);
+        scenario.issue_labelled(22, &["ready-for-agent"]);
+
+        let result = scenario.run(&[&spec_url(&scenario)]);
+
+        assert_failed_spec_run(&scenario, &result);
+        assert_eq!(sessions_by_issue(&scenario), ["22"], "{label}");
+        assert_contains(
+            &result.stderr,
+            &format!("thirdshift: #21 unready: labelled {label}\n"),
+        );
+    }
+}
+
+#[test]
+fn a_failed_ticket_stops_only_its_dependents_and_is_not_started_again() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[]), (24, &[])]);
+    scenario.agent_does_for(21, "exit 1");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "23", "24"]);
+    let gh = scenario.gh_state();
+    assert_eq!(gh["issues"]["23"], "CLOSED");
+    assert_eq!(gh["issues"]["24"], "CLOSED");
+    let failed = result
+        .stderr
+        .lines()
+        .rfind(|line| line.starts_with("thirdshift: #21 failed: "))
+        .unwrap_or_else(|| panic!("no failed line for #21 in: {}", result.stderr));
+    assert!(failed.contains("session log: "), "{failed}");
+    let log = failed.rsplit("session log: ").next().unwrap();
+    assert!(
+        std::path::Path::new(log.trim_end_matches(')')).exists(),
+        "{failed}"
+    );
+    assert_contains(&result.stderr, "thirdshift: #22 blocked by #21\n");
+}
+
+#[test]
+fn an_open_outside_blocker_holds_a_ticket_back_and_a_closed_one_does_not() {
+    let scenario = spec_of(&[(21, &[99]), (22, &[98])]);
+    scenario.issue_is(98, "CLOSED");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["22"]);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: #21 blocked by #99 (outside the Spec)\n",
+    );
+}
+
+#[test]
+fn tickets_in_a_cycle_are_not_run_and_the_summary_names_the_cycle() {
+    let scenario = spec_of(&[(21, &[22]), (22, &[21]), (23, &[21]), (24, &[])]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["24"]);
+    for line in [
+        "thirdshift: #21 in a cycle: #21 blocked by #22 blocked by #21\n",
+        "thirdshift: #22 in a cycle: #22 blocked by #21 blocked by #22\n",
+        "thirdshift: #23 blocked by #21\n",
+    ] {
+        assert_contains(&result.stderr, line);
+    }
+}
+
+#[test]
+fn a_ticket_with_its_own_sub_issues_is_unready() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.spec_has_tickets(21, &[(30, &[])]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(&scenario, &result);
+    assert_eq!(sessions_by_issue(&scenario), ["22"]);
+    assert_contains(&result.stderr, "thirdshift: #21 unready: has sub-issues\n");
+}
+
+#[test]
+fn removing_a_needs_info_label_while_another_ticket_runs_lets_it_run() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(21, &["needs-info"]);
+    scenario.agent_does_for(
+        22,
+        &format!("gh fake labels 21 '[]'\n{}", agent_lands(22, "22.txt")),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["22", "21"]);
+}
+
+#[test]
+fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_reach() {
+    let scenario = Scenario::new();
+
+    let result = scenario.run(&["help"]);
+
+    assert_eq!(result.code, Some(0));
+    for part in [
+        "Spec run",
+        "every Ticket",
+        "can reach",
+        "Unready Ticket",
+        "ready-for-human, needs-info, wontfix or\nneeds-triage",
+        "sub-issues",
+    ] {
+        assert_contains(&result.stdout, part);
+    }
+}
