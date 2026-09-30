@@ -11,7 +11,8 @@ State lives in the JSON file named by $FAKE_GH_STATE:
               "mergeable"?, "unknown_polls"?}],
      "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
      "statuses": {"<sha>": [{"context", "state", "url"}]},
-     "runs"?: [{"branch", "workflow", "event", "headSha", "status", "conclusion"}],
+     "runs"?: [{"databaseId", "url", "branch", "workflow", "event", "headSha", "status",
+                "conclusion", "jobs"?, "hidden_polls"?, "pending_polls"?}],
      "on_ci_read"?: {"times", "script", "seen"},
      "on_merge"?: {"times", "script"},
      "refuse_merges"?: {"times", "error"},
@@ -46,8 +47,16 @@ runs on <sha>: its check runs, read as the check-runs endpoint reads them.
 to, as GitHub does: those merged as <sha> and those whose head is <sha>.
 
 `gh run list` answers with the workflow runs in `runs`, newest first, that
-match its `--branch`, `--workflow` and `--event`. Runs there are only ones a
-test records with `gh fake run`: they are separate from the check runs.
+match its `--branch`, `--workflow`, `--event` and `--commit` (their `headSha`).
+Runs there are only ones a test records with `gh fake run`: they are separate
+from the check runs. A run is not listed for its first `hidden_polls` reads
+that match it, as GitHub lists a run a moment after the push that starts it,
+then reports as in progress for its first `pending_polls` reads, then as
+`status` with `conclusion`. `gh run view <id> --json jobs` answers with the
+run's `jobs`, each `{"name", "conclusion"}`, for its current attempt.
+
+`gh release view <tag> --json url` answers with the GitHub Release's URL for
+a tag on origin.
 
 `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -70,7 +79,11 @@ command):
     gh fake checks <sha> '<JSON list>'      set the check runs on <sha>
     gh fake statuses <sha> '<JSON list>'    set the commit statuses on <sha>
     gh fake run '<JSON>'                    record a workflow run, newer than
-                                            any recorded before it
+                                            any recorded before it, numbered
+                                            with the next `databaseId` if it
+                                            has none; one with the `databaseId`
+                                            of a recorded run is a new attempt
+                                            of it, replacing the fields it has
     gh fake pr <head> <field> '<JSON>'      set a field of <head>'s newest PR
     gh fake issue <number> <state>          set issue <number> OPEN or CLOSED
     gh fake on-ci-read <times> '<script>'   run <script> in bash the first time
@@ -83,7 +96,10 @@ command):
                                             calls with <error> on stderr, after
                                             any on-merge script
     gh fake after-merge '<script>'          run <script> in bash after each
-                                            successful `gh pr merge`
+                                            successful `gh pr merge`, with the
+                                            PR's head branch in
+                                            $FAKE_MERGE_HEAD and the merge
+                                            commit in $FAKE_MERGE_SHA
     gh fake fails '<command> <subcommand>'  make every such call fail, e.g.
                                             'issue close'
     gh fake user-email '<JSON>'             set the public profile email, an
@@ -353,7 +369,12 @@ def pr_merge(state, positional, flags):
     save(state)
     if "after_merge" in state:
         unlock()
-        subprocess.run(["bash", "-euc", state["after_merge"]], check=True, stdout=sys.stderr)
+        subprocess.run(
+            ["bash", "-euc", state["after_merge"]],
+            check=True,
+            stdout=sys.stderr,
+            env=dict(os.environ, FAKE_MERGE_HEAD=head, FAKE_MERGE_SHA=pr["mergeCommit"]),
+        )
 
 
 def issue_view(state, positional, flags):
@@ -531,22 +552,80 @@ def pr_patch(state, args):
 
 LATEST_RUN_LINE = '.[] | "\\(.headSha) \\(.status) \\(.conclusion)"'
 
+RELEASE_RUN_LINE = '.[] | "\\(.databaseId) \\(.url) \\(.status) \\(.conclusion)"'
+
+FAILED_JOB_NAMES = (
+    '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" '
+    'and .conclusion != "neutral") | .name] | join(", ")'
+)
+
 
 def run_list(state, flags):
-    """Only the flags the release script reads the latest CI run on a branch
-    with are supported, and only its one `--jq`."""
-    unsupported = set(flags) - {"branch", "workflow", "event", "limit", "json", "jq"}
+    """Only the flags the release script reads workflow runs with are
+    supported, and only its two `--jq`s: the latest CI run on a branch and
+    the release workflow run on a commit."""
+    unsupported = set(flags) - {"branch", "workflow", "event", "commit", "limit", "json", "jq"}
     if unsupported:
         die(f"fake gh: unsupported run list flags {sorted(unsupported)}", 2)
-    if flags.get("jq") != LATEST_RUN_LINE:
+    if flags.get("jq") not in (LATEST_RUN_LINE, RELEASE_RUN_LINE):
         die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
-    runs = [
-        run
-        for run in reversed(state.get("runs", []))
-        if all(run[field] == flags[field] for field in ("branch", "workflow", "event") if field in flags)
-    ][: int(flags.get("limit", 20))]
-    for run in runs:
-        print(f"{run['headSha']} {run['status']} {run['conclusion']}")
+    filters = {"branch": "branch", "workflow": "workflow", "event": "event", "commit": "headSha"}
+    runs = []
+    for run in reversed(state.get("runs", [])):
+        if not all(run[field] == flags[flag] for flag, field in filters.items() if flag in flags):
+            continue
+        if run.get("hidden_polls", 0) > 0:
+            run["hidden_polls"] -= 1
+            continue
+        pending = run.get("pending_polls", 0) > 0
+        if pending:
+            run["pending_polls"] -= 1
+        runs.append(
+            dict(run, status="in_progress", conclusion="") if pending else run
+        )
+    save(state)
+    for run in runs[: int(flags.get("limit", 20))]:
+        if flags["jq"] == LATEST_RUN_LINE:
+            print(f"{run['headSha']} {run['status']} {run['conclusion']}")
+        else:
+            print(f"{run['databaseId']} {run['url']} {run['status']} {run['conclusion']}")
+
+
+def run_view(state, positional, flags):
+    """`gh run view <id> --json jobs`, with only the release script's `--jq`:
+    the names of the jobs of its current attempt that did not succeed."""
+    if flags.get("json") != "jobs" or flags.get("jq") != FAILED_JOB_NAMES:
+        die(f"fake gh: unsupported run view flags {flags}", 2)
+    matches = [run for run in state.get("runs", []) if str(run["databaseId"]) == positional[0]]
+    if not matches:
+        die(f"could not find any workflow run with ID {positional[0]}")
+    jobs = matches[0].get("jobs", [])
+    print(", ".join(job["name"] for job in jobs if job["conclusion"] not in ("success", "skipped", "neutral")))
+
+
+def release_view(state, positional, flags):
+    """`gh release view <tag> --json url --jq .url`: the Release's URL, for a
+    tag on origin."""
+    if flags.get("json") != "url" or flags.get("jq") != ".url":
+        die(f"fake gh: unsupported release view flags {flags}", 2)
+    tag = positional[0]
+    if git(origin_repo(), "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}").returncode != 0:
+        die("release not found")
+    print(f"https://github.com/{state['repo']}/releases/tag/{tag}")
+
+
+def record_run(state, run):
+    """Record `run`, numbered with the next `databaseId` if it has none, or
+    replace the fields `run` has of the recorded run with its `databaseId`,
+    as a new attempt of that run."""
+    runs = state.setdefault("runs", [])
+    for recorded in runs:
+        if "databaseId" in run and recorded.get("databaseId") == run["databaseId"]:
+            recorded.update(run)
+            return
+    run.setdefault("databaseId", max((r.get("databaseId", 0) for r in runs), default=0) + 1)
+    run.setdefault("url", f"https://github.com/{state['repo']}/actions/runs/{run['databaseId']}")
+    runs.append(run)
 
 
 def graphql(state, args):
@@ -611,7 +690,7 @@ def fake(state, args):
     if args[0] in ("checks", "statuses"):
         state.setdefault(args[0], {})[args[1]] = json.loads(args[2])
     elif args[0] == "run":
-        state.setdefault("runs", []).append(json.loads(args[1]))
+        record_run(state, json.loads(args[1]))
     elif args[0] == "on-ci-read":
         state["on_ci_read"] = {"times": int(args[1]), "script": args[2], "seen": []}
     elif args[0] == "on-merge":
@@ -674,6 +753,14 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         run_list(state, flags)
+    elif args[:2] == ["run", "view"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        run_view(state, positional, flags)
+    elif args[:2] == ["release", "view"]:
+        positional, flags = parse(args[2:])
+        check_repo(state, flags)
+        release_view(state, positional, flags)
     elif args[:2] == ["api", "graphql"]:
         graphql(state, args[2:])
     elif args[:3] == ["api", "--method", "PATCH"]:
