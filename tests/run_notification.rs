@@ -345,18 +345,17 @@ fn email_always_makes_a_run_without_the_flag_send_one_notification_to_email_to()
 
 #[test]
 fn no_email_skips_the_notification_email_always_asks_for() {
-    for no_email in ["no-email", "--no-email"] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(EMAIL_ALWAYS);
-        scenario.agent_does(AGENT_OPENS_PR);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
-        let url = scenario.issue_url(7);
+    // One spelling end to end; the argument parsing's unit tests take both.
+    let scenario = Scenario::new();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let url = scenario.issue_url(7);
 
-        let result = run(&scenario, &resend, &[no_email, &url], Some(KEY));
+    let result = run(&scenario, &resend, &["--no-email", &url], Some(KEY));
 
-        assert_eq!(result.code, Some(0), "{no_email}: {}", result.stderr);
-        assert!(resend.requests().is_empty(), "{no_email}");
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(resend.requests().is_empty());
 }
 
 #[test]

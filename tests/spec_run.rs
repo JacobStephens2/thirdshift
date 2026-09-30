@@ -959,19 +959,18 @@ fn two_tickets_starting_together_in_one_launch_directory_both_get_their_worktree
 
 #[test]
 fn parallel_1_runs_the_tickets_one_at_a_time() {
-    for args in [["parallel", "1"], ["--parallel", "1"]] {
-        let scenario = diamond_spec();
-        second_ticket_needs_the_first_landed(&scenario);
-        let url = spec_url(&scenario);
+    // One spelling end to end; the argument parsing's unit tests take both.
+    let scenario = diamond_spec();
+    second_ticket_needs_the_first_landed(&scenario);
+    let url = spec_url(&scenario);
 
-        let result = scenario.run(&[args[0], args[1], &url]);
+    let result = scenario.run(&["--parallel", "1", &url]);
 
-        assert_eq!(result.code, Some(0), "{args:?} stderr: {}", result.stderr);
-        assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
-        let landed = result.stderr.find("#21 landed\n").unwrap();
-        let started = result.stderr.find("starting #22\n").unwrap();
-        assert!(landed < started, "stderr: {}", result.stderr);
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
+    let landed = result.stderr.find("#21 landed\n").unwrap();
+    let started = result.stderr.find("starting #22\n").unwrap();
+    assert!(landed < started, "stderr: {}", result.stderr);
 }
 
 #[test]
