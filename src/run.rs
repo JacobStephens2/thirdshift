@@ -368,10 +368,10 @@ impl RepairLoop<'_> {
             if self.goal == Goal::Merged {
                 self.take_in_foreign_commits(run_session)?;
             }
-            if worktree.merge_base_branch(base)? == Merge::Conflicted {
+            if let Merge::Conflicted(pending) = worktree.merge_base_branch(base)? {
                 let kind = self.budgets.next_repair("conflict")?;
                 run_session(&kind, &prompt::conflict_repair(issue, base, branch, pr_url))?;
-                worktree.ensure_base_branch_merged(base)?;
+                worktree.ensure_merged(&pending)?;
                 continue;
             }
             worktree.push()?;
@@ -427,7 +427,7 @@ impl RepairLoop<'_> {
         for sha in &foreign {
             progress::step(format_args!("merging new commit {sha} from {upstream}"));
         }
-        if worktree.merge_new_commits()? == Merge::Conflicted {
+        if let Merge::Conflicted(pending) = worktree.merge_new_commits()? {
             let kind = self
                 .budgets
                 .next_repair(&format!("conflict with new commits on {upstream}"))?;
@@ -435,7 +435,7 @@ impl RepairLoop<'_> {
                 &kind,
                 &prompt::conflict_repair(issue, branch, branch, pr_url),
             )?;
-            worktree.ensure_new_commits_merged()?;
+            worktree.ensure_merged(&pending)?;
         }
         let kind = self
             .budgets

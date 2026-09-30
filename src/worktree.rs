@@ -16,7 +16,16 @@ pub enum Merge {
     /// Merged, or nothing to merge.
     Clean,
     /// Conflicted; the merge is left in progress for a conflict Repair.
-    Conflicted,
+    Conflicted(PendingMerge),
+}
+
+/// A conflicted merge left for a conflict Repair: `upstream` as it was when
+/// the merge began, pinned to `commit` because another Run's fetch may move
+/// the shared remote-tracking ref before the Repair finishes.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PendingMerge {
+    upstream: String,
+    commit: String,
 }
 
 pub struct Worktree {
@@ -182,28 +191,24 @@ impl Worktree {
     fn merge(&self, upstream: &str) -> Result<Merge> {
         match self.git.run(&["merge", "--no-edit", "--ff", upstream]) {
             Ok(_) => Ok(Merge::Clean),
-            Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted),
+            Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge {
+                upstream: upstream.to_string(),
+                commit: self.git.run(&["rev-parse", "MERGE_HEAD"])?,
+            })),
             Err(error) => Err(error),
         }
     }
 
-    /// Fail unless `origin/<base>` is fully merged into the Issue branch, e.g.
-    /// after a conflict Repair that left the merge unfinished or aborted it.
-    pub fn ensure_base_branch_merged(&self, base: &str) -> Result<()> {
-        self.ensure_merged(&format!("origin/{base}"))
-    }
-
-    /// Like [`Worktree::ensure_base_branch_merged`], for the Issue branch as
-    /// last fetched from origin.
-    pub fn ensure_new_commits_merged(&self) -> Result<()> {
-        self.ensure_merged(&self.upstream())
-    }
-
-    fn ensure_merged(&self, upstream: &str) -> Result<()> {
+    /// Fail unless the commit of a conflicted merge is merged into the Issue
+    /// branch, e.g. after a conflict Repair that left the merge unfinished or
+    /// aborted it. The upstream may have moved on since; merging that is the
+    /// next round's work.
+    pub fn ensure_merged(&self, pending: &PendingMerge) -> Result<()> {
+        let upstream = &pending.upstream;
         if self.merge_in_progress()? {
             bail!("the merge of {upstream} is still in progress");
         }
-        if !self.merged(upstream)? {
+        if !self.merged(&pending.commit)? {
             bail!("{upstream} is not merged into {}", self.branch);
         }
         Ok(())
@@ -216,11 +221,10 @@ impl Worktree {
         Ok(!self.merged(&format!("origin/{base}"))?)
     }
 
-    /// Whether `upstream`, as last fetched, is fully merged into the Issue
-    /// branch.
-    fn merged(&self, upstream: &str) -> Result<bool> {
+    /// Whether `commit` is fully merged into the Issue branch.
+    fn merged(&self, commit: &str) -> Result<bool> {
         self.git
-            .succeeds(&["merge-base", "--is-ancestor", upstream, "HEAD"])
+            .succeeds(&["merge-base", "--is-ancestor", commit, "HEAD"])
     }
 
     /// Whether a merge is in progress in the worktree.
