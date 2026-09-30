@@ -181,35 +181,20 @@ mod tests {
     }
 
     #[test]
-    fn the_flag_works_in_any_position_and_never_takes_the_issue_url_as_its_address() {
+    fn the_flag_goes_anywhere_around_a_merge_goal_and_never_takes_the_issue_url() {
+        let bare = || NotificationAsk::Send(None);
         let me = || NotificationAsk::Send(Some("me@example.com".to_string()));
         for (args, asked, goal) in [
-            (vec!["--email", URL], NotificationAsk::Send(None), None),
-            (
-                vec!["email", URL, "merge"],
-                NotificationAsk::Send(None),
-                Some(Goal::Merged),
-            ),
-            (
-                vec!["merge", "--email", URL],
-                NotificationAsk::Send(None),
-                Some(Goal::Merged),
-            ),
+            (vec!["--email", URL], bare(), None),
+            (vec!["email", URL, "merge"], bare(), Some(Goal::Merged)),
+            (vec!["merge", "--email", URL], bare(), Some(Goal::Merged)),
             (
                 vec!["--email", "me@example.com", URL, "merge"],
                 me(),
                 Some(Goal::Merged),
             ),
-            (
-                vec![URL, "merge", "email"],
-                NotificationAsk::Send(None),
-                Some(Goal::Merged),
-            ),
-            (
-                vec![URL, "--email", "merge"],
-                NotificationAsk::Send(None),
-                Some(Goal::Merged),
-            ),
+            (vec![URL, "merge", "email"], bare(), Some(Goal::Merged)),
+            (vec![URL, "--email", "merge"], bare(), Some(Goal::Merged)),
         ] {
             let run_args = run_args(&args);
             assert_eq!(run_args.issue.url, URL, "{args:?}");

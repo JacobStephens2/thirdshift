@@ -197,8 +197,10 @@ fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
     assert_contains(text(&request), "origin mismatch");
 }
 
-/// Where `email` and `--email` can go, and when an address follows, are
-/// `args`' unit tests: this is that what they parse to reaches the Run.
+// Where `email` and `--email` can go, and when an address follows them, are
+// covered by the unit tests in `args`. These two Runs check that what they
+// parse to reaches the Run notification.
+
 #[test]
 fn a_bare_flag_sends_to_email_to() {
     let scenario = Scenario::new();
@@ -218,7 +220,7 @@ fn a_bare_flag_sends_to_email_to() {
 }
 
 #[test]
-fn a_merge_after_a_bare_flag_is_the_goal_not_the_address() {
+fn merge_after_a_bare_flag_reaches_the_run_notification_as_the_goal() {
     let scenario = Scenario::new();
     scenario.user_config_is("[email]\nto = \"me@example.com\"\n");
     scenario.agent_does(AGENT_OPENS_PR);
