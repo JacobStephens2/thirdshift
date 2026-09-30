@@ -63,7 +63,8 @@ pub struct Reached {
 /// an issue with sub-issues is a Spec, taken on by a Spec run instead, whose
 /// Spec branch is picked like an Issue branch, running as many Tickets at once
 /// as `parallel` says. A `parallel` the command asked for on an issue with no
-/// sub-issues fails before any work.
+/// sub-issues fails before any work, as does a Spec whose Tickets are all
+/// closed with no Spec branch to continue.
 pub fn run(
     issue: &IssueUrl,
     goal: Goal,
@@ -94,6 +95,12 @@ pub fn run(
             .ok(),
     };
     let selection = branch::select(&launch, issue)?;
+    // A Spec implemented some other way: the Spec run leaves it be.
+    if matches!(selection, Selection::Fresh { .. }) && spec_run::all_closed(&tickets) {
+        return Err(
+            anyhow!("every Ticket is closed and there is no Spec branch; nothing to do").into(),
+        );
+    }
     let branch = selection.branch().to_string();
     let base = selection.base_branch(checked_out.as_deref())?;
     preflight::check_base_branch(&launch, &base)?;

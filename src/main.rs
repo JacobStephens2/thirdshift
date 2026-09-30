@@ -61,6 +61,8 @@ once every Ticket is done. An Unready Ticket, one labelled ready-for-human, need
 needs-triage, is never run, nor is a Ticket with sub-issues, a Ticket in a cycle of blockers, or
 any Ticket that one of these, an open issue outside the Spec or a failed Ticket blocks. If any
 Ticket is not done, the Spec run fails, with a line on each saying why, leaving the Spec PR a draft.
+Running the Spec again continues its Spec branch, its Spec PR and each failed Ticket's Issue branch;
+with every Ticket closed and no Spec branch, there is nothing to do.
 It runs up to 3 Tickets at once; parallel <n> runs up to <n> for one Spec run, and spec.parallel
 sets the default:
 
