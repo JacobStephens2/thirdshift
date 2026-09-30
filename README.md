@@ -334,13 +334,13 @@ Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the in
 
 ## Releasing
 
-From a clone of this repo, signed in to `gh`, run the release script with the new version:
+From a clone of this repo, signed in to `gh` and with `claude` logged in, run the release script with the new version:
 
 ```sh
 scripts/release.sh 0.4.0
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else, with GitHub's generated notes for the pull requests merged since the last tag and the version diff as its body. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. It prints a line on stderr for each step. If the checks fail, it stops before merging and leaves the pull request open.
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. `claude -p`, with no tools, writes the summary from the version diff and the title, number and body of each pull request merged since the last tag, following the prompt in [`scripts/release-summary.md`](scripts/release-summary.md). If `claude` fails or prints nothing, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. It prints a line on stderr for each step. If the checks fail, it stops before merging and leaves the pull request open.
 
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, a `v<version>` tag that already exists locally or on origin, or a latest CI run on `origin/main` that failed or hasn't finished.
 

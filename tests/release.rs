@@ -1,6 +1,7 @@
 //! The maintainer's release script, `scripts/release.sh`, run as a black box
-//! against a bare local origin with the fake `gh` on PATH and the user's git
-//! configuration kept out, as the site deploy tests run the publish script.
+//! against a bare local origin with the fake `gh` and `claude` on PATH and
+//! the user's git configuration kept out, as the site deploy tests run the
+//! publish script.
 //!
 //! The script, like the fake `gh` it drives here, relies on GNU tools, so its
 //! tests run on Linux only.
@@ -58,9 +59,10 @@ fn with_version(file: &str, version: &str) -> String {
 }
 
 /// A bare origin whose main is at version 0.1.0, tagged `v0.1.0`, with one PR
-/// merged before the tag and one after, and a green CI run on main's tip; a
+/// merged before the tag and two after, and a green CI run on main's tip; a
 /// contributor's clone that makes them; the maintainer's clone the script
-/// runs in; and the fake `gh`'s state.
+/// runs in; the fake `gh`'s state; and a fake `claude` that prints
+/// `AGENT_SUMMARY`.
 struct Release {
     temp: TempDir,
 }
@@ -101,11 +103,17 @@ impl Release {
         git(&contributor, &["commit", "-q", "-m", "Initial"]);
         git(&contributor, &["push", "-q", "origin", "HEAD:main"]);
 
-        release.merge_pr("before-tag", "Shipped in 0.1.0");
+        release.merge_pr("before-tag", "Shipped in 0.1.0", "Old news.");
         git(&contributor, &["pull", "-q", "origin", "main"]);
         git(&contributor, &["tag", "v0.1.0"]);
         git(&contributor, &["push", "-q", "origin", "v0.1.0"]);
-        release.merge_pr("after-tag", "Add the frobnicator");
+        release.merge_pr(
+            "after-tag",
+            "Add the frobnicator",
+            "It frobs.\n\nCloses #7.",
+        );
+        release.merge_pr("site", "Tidy the site", "");
+        release.agent_runs(&format!("printf '%s\\n' '{AGENT_SUMMARY}'"));
 
         git(root, &["clone", "-q", "origin.git", "maintainer"]);
         release.main_ci("completed", "success");
@@ -147,9 +155,9 @@ impl Release {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
-    /// Opens a PR titled `title` from a new branch `head` off main and merges
-    /// it with a merge commit, through the fake `gh`.
-    fn merge_pr(&self, head: &str, title: &str) {
+    /// Opens a PR titled `title` with `body` from a new branch `head` off main
+    /// and merges it with a merge commit, through the fake `gh`.
+    fn merge_pr(&self, head: &str, title: &str, body: &str) {
         let contributor = self.contributor();
         git(&contributor, &["checkout", "-q", "-b", head, "origin/main"]);
         fs::write(contributor.join(format!("{head}.txt")), head).unwrap();
@@ -158,7 +166,7 @@ impl Release {
         git(&contributor, &["push", "-q", "origin", head]);
         let sha = git(&contributor, &["rev-parse", "HEAD"]);
         self.gh(&[
-            "pr", "create", "--head", head, "--base", "main", "--title", title, "--body", "",
+            "pr", "create", "--head", head, "--base", "main", "--title", title, "--body", body,
         ]);
         self.gh(&["pr", "merge", head, "--merge", "--match-head-commit", &sha]);
         git(&contributor, &["fetch", "-q", "origin"]);
@@ -194,6 +202,24 @@ impl Release {
         self.origin(&["for-each-ref", "--format=%(refname) %(objectname)"])
     }
 
+    /// Makes the fake `claude` run the bash `script`.
+    fn agent_runs(&self, script: &str) {
+        fs::write(self.root().join("claude-script.sh"), script).unwrap();
+    }
+
+    /// The fake `claude`'s calls, oldest first.
+    fn agent_calls(&self) -> Vec<Value> {
+        let path = self.root().join("claude-calls.json");
+        if !path.exists() {
+            return Vec::new();
+        }
+        serde_json::from_str::<Value>(&fs::read_to_string(path).unwrap())
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
     fn command(&self, program: &Path, dir: &Path) -> Command {
         let path = format!(
             "{}:{}",
@@ -206,6 +232,8 @@ impl Release {
             .env("PATH", path)
             .env("FAKE_GH_STATE", self.root().join("gh-state.json"))
             .env("FAKE_GH_RECORD", self.root().join("gh-calls.json"))
+            .env("FAKE_CLAUDE_SCRIPT", self.root().join("claude-script.sh"))
+            .env("FAKE_CLAUDE_RECORD", self.root().join("claude-calls.json"))
             .env("RELEASE_POLL_SECONDS", "0");
         command
     }
@@ -240,10 +268,23 @@ impl Release {
         self.pr(head)["headRefOid"].as_str().unwrap().to_owned()
     }
 
+    fn pr_body(&self, head: &str) -> String {
+        self.pr(head)["body"].as_str().unwrap().to_owned()
+    }
+
     fn origin_tag(&self, tag: &str) -> Option<String> {
         let refs = self.origin(&["tag", "--list", tag]);
         (!refs.is_empty()).then(|| self.origin(&["rev-parse", &format!("{tag}^{{commit}}")]))
     }
+}
+
+/// The summary section of a bump PR's `body`, between its markers, and what
+/// follows it.
+fn summary_and_rest(body: &str) -> (&str, &str) {
+    let start_marker = "<!-- release-summary:start -->\n";
+    let start = body.find(start_marker).expect(body) + start_marker.len();
+    let end = body.find("<!-- release-summary:end -->").expect(body);
+    (&body[start..end], &body[end..])
 }
 
 fn stderr(output: &Output) -> String {
@@ -252,6 +293,7 @@ fn stderr(output: &Output) -> String {
 
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
+const AGENT_SUMMARY: &str = "The headline is the frobnicator (#2).";
 
 #[test]
 #[cfg(target_os = "linux")]
@@ -293,28 +335,118 @@ fn a_release_bumps_only_the_version_merges_the_pr_and_tags_the_merge_commit() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn the_pr_body_has_a_marked_summary_of_the_generated_notes_then_the_version_diff() {
+fn the_agent_gets_the_prompt_file_then_the_version_diff_and_the_prs_merged_since_the_last_tag() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let main_before = release.origin(&["rev-parse", "main"]);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let calls = release.agent_calls();
+    assert_eq!(calls.len(), 1, "{calls:#?}");
+    let head = release.pr_head("release-0.2.0");
+    let diff = release.origin(&["diff", "--no-color", "--unified=1", &main_before, &head]);
+    let prompt = fs::read_to_string(manifest_dir().join("scripts/release-summary.md")).unwrap();
+    let expected = format!(
+        "{prompt}
+## Version diff
+
+```diff
+{diff}
+```
+
+## Pull requests merged since v0.1.0
+
+### #2: Add the frobnicator
+
+It frobs.
+
+Closes #7.
+
+### #3: Tidy the site
+"
+    );
+    assert_eq!(calls[0]["stdin"].as_str().unwrap(), expected);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_agent_runs_in_print_mode_with_tools_disabled() {
     let release = Release::new();
     release.ci_reports(GREEN);
 
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let body = release.pr("release-0.2.0")["body"]
-        .as_str()
+    let argv: Vec<String> = release.agent_calls()[0]["argv"]
+        .as_array()
         .unwrap()
-        .to_owned();
-    let start = body.find("<!-- release-summary:start -->").expect(&body);
-    let end = body.find("<!-- release-summary:end -->").expect(&body);
-    let summary = &body[start..end];
-    assert!(summary.contains("Add the frobnicator"), "{body}");
-    assert!(!summary.contains("Shipped in 0.1.0"), "{body}");
-    let diff = &body[end..];
-    assert!(diff.contains("```diff"), "{body}");
+        .iter()
+        .map(|arg| arg.as_str().unwrap().to_owned())
+        .collect();
+    assert!(argv.contains(&"-p".to_owned()), "{argv:?}");
+    let tools = argv
+        .iter()
+        .position(|arg| arg == "--tools")
+        .expect("no --tools");
+    assert_eq!(argv[tools + 1], "", "{argv:?}");
+    assert!(argv.contains(&"--strict-mcp-config".to_owned()), "{argv:?}");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_pr_body_has_the_agents_summary_in_a_marked_section_then_the_version_diff() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = release.pr_body("release-0.2.0");
+    let (summary, rest) = summary_and_rest(&body);
+    assert_eq!(summary, format!("{AGENT_SUMMARY}\n"), "{body}");
+    assert!(rest.contains("## Version diff\n\n```diff"), "{body}");
     assert!(
-        diff.contains("-version = \"0.1.0\"\n+version = \"0.2.0\""),
+        rest.contains("-version = \"0.1.0\"\n+version = \"0.2.0\""),
         "{body}"
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn when_the_agent_fails_or_prints_nothing_the_summary_is_the_generated_notes() {
+    for (case, script) in [
+        ("fails", "echo 'Not logged in' >&2; exit 1"),
+        ("prints nothing", "printf '\\n'"),
+    ] {
+        let release = Release::new();
+        release.ci_reports(GREEN);
+        release.agent_runs(script);
+
+        let output = release.run_script("0.2.0");
+
+        assert!(output.status.success(), "{case}: {}", stderr(&output));
+        let err = stderr(&output);
+        assert!(
+            err.lines()
+                .any(|line| line.starts_with("release: warning:") && line.contains("agent summary")),
+            "{case}: {err}"
+        );
+        let body = release.pr_body("release-0.2.0");
+        let (summary, rest) = summary_and_rest(&body);
+        let (note, notes) = summary.split_once("\n\n").expect(&body);
+        assert!(
+            !note.contains('\n') && note.contains("agent summary was unavailable"),
+            "{case}: {body}"
+        );
+        assert!(notes.starts_with("## What's Changed\n"), "{case}: {body}");
+        assert!(notes.contains("Add the frobnicator"), "{case}: {body}");
+        assert!(!notes.contains("Shipped in 0.1.0"), "{case}: {body}");
+        assert!(rest.contains("```diff"), "{case}: {body}");
+        let merge = release.origin(&["rev-parse", "main"]);
+        assert_eq!(release.origin_tag("v0.2.0"), Some(merge), "{case}");
+    }
 }
 
 #[test]
@@ -327,8 +459,9 @@ fn each_step_prints_a_progress_line_on_stderr() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     let merge = release.origin(&["rev-parse", "main"]);
-    let url = format!("https://github.com/{REPO}/pull/3");
+    let url = format!("https://github.com/{REPO}/pull/4");
     let expected = [
+        "release: writing the summary with claude".to_owned(),
         format!("release: opened {url}"),
         format!("release: waiting for CI on {url}"),
         format!("release: merged {url} as {}", &merge[..7]),
@@ -414,6 +547,7 @@ fn the_maintainers_checkout_neither_affects_the_release_nor_is_changed() {
 fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
     let release = Release::new();
     release.ci_reports(GREEN);
+    release.agent_runs("exit 1");
     release.gh(&[
         "fake",
         "fails",
@@ -555,7 +689,7 @@ fn an_unfinished_ci_run_on_main_is_refused() {
 #[cfg(target_os = "linux")]
 fn a_main_whose_tip_ci_has_not_run_on_is_refused() {
     let release = Release::new();
-    release.merge_pr("untested", "Not yet built");
+    release.merge_pr("untested", "Not yet built", "");
 
     assert_refused(&release, "0.2.0", &["CI has not run on main at"]);
 }
