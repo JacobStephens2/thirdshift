@@ -26,6 +26,10 @@ The branch the work branches off and the pull request targets. Normally the bran
 The skills in `skills/`, loaded into the session as the `thirdshift` plugin: adapted copies of Matt Pocock's skills, designed to run headless with no human in the loop.
 _Avoid_: the skills (ambiguous with `.claude/skills/`)
 
+**Session prompt**:
+The message thirdshift starts or resumes an agent session with. It carries the **Run**'s facts (issue, **Base branch**, **Issue branch**, pull request) and names the **Factory skills** to use. Written by thirdshift, not by a human.
+_Avoid_: instructions, system prompt
+
 **Standards finding**:
 A finding from the Standards axis of a code review: the change breaks a documented coding standard or shows a baseline code smell.
 

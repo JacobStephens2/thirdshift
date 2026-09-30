@@ -208,6 +208,37 @@ fn fails_when_the_conflict_repair_aborts_the_merge() {
     );
 }
 
+#[test]
+fn merges_a_base_branch_that_moved_again_during_the_conflict_repair() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        base_moves_on("feature.txt", "base feature")
+    ));
+    // Another Run's fetch moves origin/main, which every worktree shares,
+    // after the Repair has resolved the merge it was given.
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{REPAIR_RESOLVES_CONFLICT}{}git fetch -q origin main\n",
+            base_moves_on("other.txt", "other")
+        ),
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_eq!(
+        scenario.origin_git(&["rev-parse", "issue-7^2"]),
+        scenario.origin_git(&["rev-parse", "main"])
+    );
+    assert_eq!(
+        scenario.origin_git(&["show", "issue-7:feature.txt"]),
+        "feature\nbase feature\n"
+    );
+}
+
 /// While thirdshift waits for CI on each of the next `times` new head commits,
 /// someone else pushes `file` with `content` to main. The script goes inside
 /// single quotes, so it must not contain one.
