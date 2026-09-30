@@ -9,9 +9,10 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -227,6 +228,30 @@ impl Release {
         .expect("could not run release.sh")
     }
 
+    /// Runs the script with `args`, with `stdin` on its standard input and
+    /// `env` added to its environment.
+    fn run_script_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
+        let mut child = self
+            .command(
+                &manifest_dir().join("scripts/release.sh"),
+                &self.maintainer(),
+            )
+            .args(args)
+            .envs(env.iter().copied())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("could not run release.sh");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
     fn gh_state(&self) -> Value {
         serde_json::from_str(&fs::read_to_string(self.root().join("gh-state.json")).unwrap())
             .unwrap()
@@ -249,6 +274,10 @@ impl Release {
 
     fn pr_body(&self, head: &str) -> String {
         self.pr(head)["body"].as_str().unwrap().to_owned()
+    }
+
+    fn origin_branch(&self, branch: &str) -> bool {
+        !self.origin(&["branch", "--list", branch]).is_empty()
     }
 
     fn origin_tag(&self, tag: &str) -> Option<String> {
@@ -544,5 +573,92 @@ fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
             .all(|pr| pr["head"] != "release-0.2.0"),
         "{prs}"
     );
+    assert!(!release.origin_branch("release-0.2.0"));
     assert_eq!(release.origin_tag("v0.2.0"), None);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_prints_the_summary_and_yes_carries_on_with_it_as_written() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    let output = release.run_script_with(&["--review", "0.2.0"], "y\n", &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let summary_at = err.find(AGENT_SUMMARY).expect(&err);
+    let prompt_at = err.find("[y]es / [e]dit / [n]o").expect(&err);
+    assert!(summary_at < prompt_at, "{err}");
+    let body = release.pr_body("release-0.2.0");
+    assert_eq!(
+        summary_and_rest(&body).0,
+        format!("{AGENT_SUMMARY}\n"),
+        "{body}"
+    );
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_edit_opens_the_summary_in_the_editor_and_carries_on_with_what_was_saved() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let editor = release.root().join("editor.sh");
+    fs::write(&editor, "#!/bin/sh\nsed -i 's/headline/big news/' \"$1\"\n").unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = release.run_script_with(
+        &["--review", "0.2.0"],
+        "e\n",
+        &[("EDITOR", editor.to_str().unwrap())],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = release.pr_body("release-0.2.0");
+    assert_eq!(
+        summary_and_rest(&body).0,
+        "The big news is the frobnicator (#2).\n",
+        "{body}"
+    );
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_no_stops_with_nothing_pushed() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let main_before = release.origin(&["rev-parse", "main"]);
+
+    let output = release.run_script_with(&["--review", "0.2.0"], "n\n", &[]);
+
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert!(!release.origin_branch("release-0.2.0"));
+    let prs = release.gh_state()["prs"].clone();
+    assert!(
+        prs.as_array()
+            .unwrap()
+            .iter()
+            .all(|pr| pr["head"] != "release-0.2.0"),
+        "{prs}"
+    );
+    assert_eq!(release.origin(&["rev-parse", "main"]), main_before);
+    assert_eq!(release.origin_tag("v0.2.0"), None);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+
+    let output = release.run_script_with(&["0.2.0"], "n\n", &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("[y]es"), "{}", stderr(&output));
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
 }

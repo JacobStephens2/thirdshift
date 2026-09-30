@@ -4,7 +4,7 @@
 # that merge commit v<version>. Pushing the tag starts the dist release
 # workflow.
 #
-# Usage: scripts/release.sh <version>
+# Usage: scripts/release.sh [--review] <version>
 #
 # Run it in a clone of this repo, signed in to gh and with claude logged in. It
 # works from origin/main in a temporary worktree, so the branch checked out
@@ -12,10 +12,13 @@
 #
 # claude, with no tools, writes the PR's summary from the prompt in
 # release-summary.md beside this script. If it fails, the summary is GitHub's
-# generated notes instead, and the script warns and carries on.
+# generated notes instead, and the script warns and carries on. With --review,
+# it then prints the summary and asks whether to carry on with it, edit it in
+# $EDITOR first, or stop with nothing pushed. Without it, it never reads stdin.
 #
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
-# pushed; if the PR's checks fail, it leaves the PR open and exits 1.
+# pushed; if the PR's checks fail, it leaves the PR open and exits 1; if the
+# review says no, it exits 1 with nothing pushed.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
 shopt -s inherit_errexit
@@ -27,8 +30,13 @@ summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
+	review=
+	if [ "${1-}" = --review ]; then
+		review=1
+		shift
+	fi
 	if [ "$#" -ne 1 ]; then
-		echo "usage: release.sh <version>" >&2
+		echo "usage: release.sh [--review] <version>" >&2
 		exit 2
 	fi
 	version=$1
@@ -47,12 +55,18 @@ main() {
 	bump_version "$version"
 	git commit --quiet --all --message "Release $version"
 	head=$(git rev-parse HEAD)
-	git push --quiet origin "HEAD:refs/heads/$branch"
 
 	progress "writing the summary with claude"
+	diff=$(version_diff "$base")
+	summary=$(release_summary "$base" "$tag" "$diff")
+	if [ -n "$review" ]; then
+		summary=$(review_summary "$summary")
+	fi
+
+	git push --quiet origin "HEAD:refs/heads/$branch"
 	# Built first so a failure to build it stops the script, as it would not
 	# inside the gh command line.
-	body=$(pr_body "$base" "$tag")
+	body=$(pr_body "$summary" "$diff")
 	url=$(gh pr create --base main --head "$branch" --title "Release $version" \
 		--body "$body" | tail -n 1)
 	progress "opened $url"
@@ -107,23 +121,54 @@ rewrite() {
 	mv "$file.new" "$file"
 }
 
-# pr_body <base> <tag>
-# The body of the bump PR on HEAD, which <tag> will name, off <base>: the
-# summary, between markers the Release page step can find, then the version
-# diff.
+# pr_body <summary> <version diff section>
+# The body of the bump PR: the summary, between markers the Release page step
+# can find, then the version diff.
 pr_body() {
-	local diff summary
-	diff=$(version_diff "$1")
-	summary=$(release_summary "$1" "$2" "$diff")
 	cat <<-EOF
 		## Summary
 
 		<!-- release-summary:start -->
-		$summary
+		$1
 		<!-- release-summary:end -->
 
-		$diff
+		$2
 	EOF
+}
+
+# review_summary <summary>
+# Prints <summary> on stderr and asks on stdin whether to carry on with it,
+# edit it in $EDITOR, or stop. Prints the summary to carry on with; on no, or
+# at the end of stdin, stops the script, which has pushed nothing yet.
+review_summary() {
+	local answer file
+	printf '\n%s\n\n' "$1" >&2
+	while :; do
+		printf 'release: open the PR with this summary? [y]es / [e]dit / [n]o ' >&2
+		if ! read -r answer; then
+			answer=n
+		fi
+		case $answer in
+		y | yes)
+			echo "$1"
+			return
+			;;
+		e | edit)
+			file=$(mktemp --suffix=.md)
+			echo "$1" >"$file"
+			# As git runs it, so $EDITOR may carry arguments. Its output goes
+			# to stderr, as stdout is the summary.
+			sh -c "${EDITOR:-vi} \"\$1\"" "${EDITOR:-vi}" "$file" >&2
+			cat "$file"
+			rm -f "$file"
+			return
+			;;
+		n | no)
+			progress "stopped at the review, so nothing was pushed"
+			exit 1
+			;;
+		esac
+	done
 }
 
 # version_diff <base>
