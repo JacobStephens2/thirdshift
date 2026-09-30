@@ -89,7 +89,7 @@ The per-machine secrets file next to the **User config**, readable only by its o
 _Avoid_: secrets file, key file
 
 **Setup**:
-Writing the **User config** by answering a few questions, one per setting that matters most, with every other setting written out at its default so the file shows everything that can be changed. With **Run notifications** on, it also asks for the Resend API key and saves it in the **Credentials**. Offered by the first **Run** on a machine with no User config, and run again at any time to change the answers.
+Writing the **User config** by answering a few questions, one per setting that matters most, with every other setting written out at its default so the file shows everything that can be changed. With **Run notifications** on, it also asks for the Resend API key and writes the **Credentials** when one is entered. Offered by the first **Run** on a machine with no User config, and run again at any time to change the answers.
 _Avoid_: init, onboarding, configure
 
 **Self-merge**:
