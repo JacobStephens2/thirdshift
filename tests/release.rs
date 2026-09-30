@@ -189,7 +189,7 @@ impl Release {
         command
     }
 
-    fn release(&self, version: &str) -> Output {
+    fn run_script(&self, version: &str) -> Output {
         self.command(
             &manifest_dir().join("scripts/release.sh"),
             &self.maintainer(),
@@ -214,6 +214,11 @@ impl Release {
             .clone()
     }
 
+    /// The head commit of `head`'s newest PR, as it was merged if it was.
+    fn pr_head(&self, head: &str) -> String {
+        self.pr(head)["headRefOid"].as_str().unwrap().to_owned()
+    }
+
     fn origin_tag(&self, tag: &str) -> Option<String> {
         let refs = self.origin(&["tag", "--list", tag]);
         (!refs.is_empty()).then(|| self.origin(&["rev-parse", &format!("{tag}^{{commit}}")]))
@@ -234,13 +239,10 @@ fn a_release_bumps_only_the_version_merges_the_pr_and_tags_the_merge_commit() {
     release.ci_reports(GREEN);
     let main_before = release.origin(&["rev-parse", "main"]);
 
-    let output = release.release("0.2.0");
+    let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let head = release.pr("release-0.2.0")["headRefOid"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let head = release.pr_head("release-0.2.0");
     assert_eq!(
         release.origin(&["diff", "--numstat", &main_before, &head]),
         "1\t1\tCargo.lock\n1\t1\tCargo.toml"
@@ -274,7 +276,7 @@ fn the_pr_body_has_a_marked_summary_of_the_generated_notes_then_the_version_diff
     let release = Release::new();
     release.ci_reports(GREEN);
 
-    let output = release.release("0.2.0");
+    let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let body = release.pr("release-0.2.0")["body"]
@@ -300,7 +302,7 @@ fn each_step_prints_a_progress_line_on_stderr() {
     let release = Release::new();
     release.ci_reports(GREEN);
 
-    let output = release.release("0.2.0");
+    let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let merge = release.origin(&["rev-parse", "main"]);
@@ -334,7 +336,7 @@ fn failing_checks_leave_the_pr_open_with_no_tag() {
     release.ci_reports(RED);
     let main_before = release.origin(&["rev-parse", "main"]);
 
-    let output = release.release("0.2.0");
+    let output = release.run_script("0.2.0");
 
     assert!(!output.status.success());
     let err = stderr(&output);
@@ -361,13 +363,10 @@ fn the_maintainers_checkout_neither_affects_the_release_nor_is_changed() {
     let status_before = git(&maintainer, &["status", "--porcelain"]);
     let branches_before = git(&maintainer, &["branch", "--list"]);
 
-    let output = release.release("0.2.0");
+    let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let head = release.pr("release-0.2.0")["headRefOid"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let head = release.pr_head("release-0.2.0");
     let diff = release.origin(&["diff", "--name-only", &format!("{head}^"), &head]);
     assert_eq!(diff, "Cargo.lock\nCargo.toml");
     assert!(
@@ -387,4 +386,29 @@ fn the_maintainers_checkout_neither_affects_the_release_nor_is_changed() {
     );
     assert_eq!(git(&maintainer, &["branch", "--list"]), branches_before);
     assert_eq!(git(&maintainer, &["worktree", "list"]).lines().count(), 1);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.gh(&[
+        "fake",
+        "fails",
+        "api repos/{owner}/{repo}/releases/generate-notes",
+    ]);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(!output.status.success());
+    let prs = release.gh_state()["prs"].clone();
+    assert!(
+        prs.as_array()
+            .unwrap()
+            .iter()
+            .all(|pr| pr["head"] != "release-0.2.0"),
+        "{prs}"
+    );
+    assert_eq!(release.origin_tag("v0.2.0"), None);
 }

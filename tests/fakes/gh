@@ -39,10 +39,9 @@ is `user_email`, else null. `gh fake fails 'api user'` makes it fail.
 `gh api repos/<repo>/releases/generate-notes` answers with GitHub's
 generated notes: a line for each merged PR whose merge commit is reachable from
 `target_commitish` and not from `previous_tag_name`. `<repo>` may be gh's
-`{owner}/{repo}` placeholder, here and in the commit endpoints. The
-check-runs endpoint also answers
-`--jq '.check_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'`, one run
-per line.
+`{owner}/{repo}` placeholder, here and in the commit endpoints.
+`gh api repos/<repo>/actions/runs?head_sha=<sha>` answers with the workflow
+runs on <sha>: its check runs, read as the check-runs endpoint reads them.
 
 `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -130,8 +129,10 @@ def parse(args):
 
 
 def check_repo(state, flags):
+    """`{owner}/{repo}` is gh's placeholder for the current directory's repo,
+    which is always the fake's."""
     repo = flags.get("R") or flags.get("repo")
-    if repo is not None and repo.lower() != state["repo"].lower():
+    if repo is not None and repo != "{owner}/{repo}" and repo.lower() != state["repo"].lower():
         die(f"fake gh: unknown repo {repo}")
 
 
@@ -332,42 +333,30 @@ def issue_close(state, positional, flags):
 
 
 def api(state, positional, flags):
-    """The signed-in user, or the two commit endpoints thirdshift reads CI
-    from, one page, each item of the list `--jq '.<list>[]'` names on its own
-    line."""
+    """The signed-in user, the two commit endpoints thirdshift reads CI from,
+    or the workflow runs on a commit that the release script waits for. Each
+    answers one page, each item of the list `--jq '.<list>[]'` names on its
+    own line, or for the workflow runs one `<status> <conclusion> <name>` line
+    per run with `--jq` set to `WORKFLOW_RUN_LINES`."""
     if positional[0] == "user" and not flags:
         print(json.dumps({"login": "runner", "email": state.get("user_email")}))
         return
     match = re.fullmatch(
-        r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/(check-runs|status)(\?.*)?",
+        r"repos/([^/]+/[^/]+)/(?:commits/([0-9a-f]+)/(check-runs|status)|actions/(runs)\?head_sha=([0-9a-f]+))(&.*|\?.*)?",
         positional[0],
     )
     if not match:
         die(f"fake gh: unsupported api path {positional[0]}", 2)
-    repo, sha, endpoint, _ = match.groups()
-    if repo != "{owner}/{repo}":
-        check_repo(state, {"repo": repo})
+    repo, sha, endpoint, runs_endpoint, runs_sha, _ = match.groups()
+    check_repo(state, {"repo": repo})
+    if runs_endpoint:
+        if flags.get("jq") != WORKFLOW_RUN_LINES:
+            die(f"fake gh: unsupported --jq {flags.get('jq')}", 2)
+        for run in read_checks(state, runs_sha):
+            print(f"{run['status']} {run['conclusion'] or 'null'} {run['name']}")
+        return
     if endpoint == "check-runs":
-        state = run_ci_read_hook(state, sha)
-        runs = []
-        for check in state.get("checks", {}).get(sha, []):
-            pending = check.get("pending_polls", 0) > 0
-            if pending:
-                check["pending_polls"] -= 1
-            runs.append(
-                {
-                    "name": check["name"],
-                    "status": "in_progress" if pending else "completed",
-                    "conclusion": None if pending else check["conclusion"],
-                    "details_url": check.get("url"),
-                }
-            )
-        save(state)
-        if flags.get("jq") == CHECK_RUN_LINES:
-            for run in runs:
-                print(f"{run['status']} {run['conclusion'] or 'null'} {run['name']}")
-            return
-        items, field = runs, "check_runs"
+        items, field = read_checks(state, sha), "check_runs"
     else:
         items = [
             {"context": s["context"], "state": s["state"], "target_url": s.get("url")}
@@ -380,10 +369,40 @@ def api(state, positional, flags):
         print(json.dumps(item))
 
 
-# `{owner}/{repo}` is gh's placeholder for the current directory's repo.
-GENERATE_NOTES = re.compile(r"repos/(\{owner\}/\{repo\}|[^/]+/[^/]+)/releases/generate-notes")
+def read_checks(state, sha):
+    """The check runs on `sha`, each read once, after any `on-ci-read`
+    script."""
+    state = run_ci_read_hook(state, sha)
+    runs = []
+    for check in state.get("checks", {}).get(sha, []):
+        pending = check.get("pending_polls", 0) > 0
+        if pending:
+            check["pending_polls"] -= 1
+        runs.append(
+            {
+                "name": check["name"],
+                "status": "in_progress" if pending else "completed",
+                "conclusion": None if pending else check["conclusion"],
+                "details_url": check.get("url"),
+            }
+        )
+    save(state)
+    return runs
 
-CHECK_RUN_LINES = '.check_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'
+
+GENERATE_NOTES = re.compile(r"repos/([^/]+/[^/]+)/releases/generate-notes")
+
+WORKFLOW_RUN_LINES = '.workflow_runs[] | "\\(.status) \\(.conclusion) \\(.name)"'
+
+
+def api_fields(args):
+    """The `-f`/`-F` fields of a `gh api` call, by name."""
+    fields = {}
+    for flag, pair in zip(args, args[1:]):
+        if flag in ("-f", "-F", "--raw-field", "--field"):
+            name, value = pair.split("=", 1)
+            fields[name] = value
+    return fields
 
 
 def generate_notes(state, args):
@@ -391,18 +410,11 @@ def generate_notes(state, args):
     one line per merged PR whose merge commit is reachable from the target but
     not from `previous_tag_name`, oldest first, then the compare link. Only
     `--jq .body` is supported."""
-    fields, jq = {}, None
-    for flag, value in zip(args, args[1:]):
-        if flag in ("-f", "-F", "--raw-field", "--field"):
-            name, value = value.split("=", 1)
-            fields[name] = value
-        elif flag == "--jq":
-            jq = value
+    fields = api_fields(args)
+    jq = next((value for flag, value in zip(args, args[1:]) if flag == "--jq"), None)
     if jq != ".body":
         die(f"fake gh: unsupported --jq {jq}", 2)
-    repo = GENERATE_NOTES.fullmatch(args[0]).group(1)
-    if repo != "{owner}/{repo}":
-        check_repo(state, {"repo": repo})
+    check_repo(state, {"repo": GENERATE_NOTES.fullmatch(args[0]).group(1)})
     tag, target = fields["tag_name"], fields["target_commitish"]
     previous = fields.get("previous_tag_name")
 
@@ -423,11 +435,7 @@ def generate_notes(state, args):
 
 def graphql(state, args):
     """The Tickets query: `-f query=...` plus `-f`/`-F` variables."""
-    variables = {}
-    for flag, pair in zip(args, args[1:]):
-        if flag in ("-f", "-F", "--raw-field", "--field"):
-            name, value = pair.split("=", 1)
-            variables[name] = value
+    variables = api_fields(args)
     query = variables.pop("query", "")
     if not all(field in query for field in ("subIssues", "blockedBy", "labels", "totalCount")):
         die(f"fake gh: unsupported graphql query {query}", 2)

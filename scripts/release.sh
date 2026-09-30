@@ -13,8 +13,10 @@
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
 # pushed; if the PR's checks fail, it leaves the PR open and exits 1.
 set -euo pipefail
+# So a failure inside $(…) stops the script too.
+shopt -s inherit_errexit
 
-# Seconds between reads of the PR's checks.
+# Seconds between reads of the PR's workflow runs.
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
@@ -26,7 +28,7 @@ main() {
 	tag=v$version
 	branch=release-$version
 
-	git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+	fetch_main
 	base=$(git rev-parse --verify 'origin/main^{commit}')
 	repo=$PWD
 	work=$(mktemp -d)
@@ -40,19 +42,22 @@ main() {
 	head=$(git rev-parse HEAD)
 	git push --quiet origin "HEAD:refs/heads/$branch"
 
+	# Built first so a failure to build it stops the script, as it would not
+	# inside the gh command line.
+	body=$(pr_body "$base" "$tag")
 	url=$(gh pr create --base main --head "$branch" --title "Release $version" \
-		--body "$(pr_body)" | tail -n 1)
+		--body "$body" | tail -n 1)
 	progress "opened $url"
 
 	progress "waiting for CI on $url"
-	failed=$(wait_for_checks "$head")
+	failed=$(wait_for_workflow_runs "$head")
 	if [ -n "$failed" ]; then
 		progress "CI failed on $url ($failed), so the PR is left open, unmerged and untagged"
 		exit 1
 	fi
 
 	gh pr merge "$branch" --merge --match-head-commit "$head" >/dev/null
-	git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+	fetch_main
 	merge=$(merge_commit_of "$head")
 	progress "merged $url as ${merge:0:7}"
 
@@ -62,6 +67,10 @@ main() {
 
 progress() {
 	echo "release: $*" >&2
+}
+
+fetch_main() {
+	git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
 }
 
 # bump_version <version>
@@ -90,14 +99,16 @@ rewrite() {
 	mv "$file.new" "$file"
 }
 
-# The bump PR's body: the summary, between markers the Release page step can
-# find, then the version diff. For now the summary is GitHub's generated notes
-# for the PRs merged since the last tag.
+# pr_body <base> <tag>
+# The body of the bump PR on HEAD, which <tag> will name, off <base>: the
+# summary, between markers the Release page step can find, then the version
+# diff. For now the summary is GitHub's generated notes for the PRs merged
+# since the last tag.
 pr_body() {
 	local previous notes
-	previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$base" 2>/dev/null || true)
+	previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$1" 2>/dev/null || true)
 	notes=$(gh api 'repos/{owner}/{repo}/releases/generate-notes' \
-		-f tag_name="$tag" -f target_commitish="$base" \
+		-f tag_name="$2" -f target_commitish="$1" \
 		${previous:+-f previous_tag_name="$previous"} --jq .body)
 	cat <<-EOF
 		## Summary
@@ -109,19 +120,21 @@ pr_body() {
 		## Version diff
 
 		\`\`\`diff
-		$(git diff --no-color --unified=1 "$base" HEAD)
+		$(git diff --no-color --unified=1 "$1" HEAD)
 		\`\`\`
 	EOF
 }
 
-# wait_for_checks <sha>
-# Waits until <sha> has check runs and all of them have completed, then prints
-# the names of those that did not succeed, comma-separated, or nothing.
-wait_for_checks() {
+# wait_for_workflow_runs <sha>
+# Waits until <sha> has workflow runs and all of them have completed, then
+# prints the names of those that did not succeed, comma-separated, or nothing.
+# A workflow run completes only once all its jobs have, including jobs that
+# start after others finish, which a commit's check runs would not show yet.
+wait_for_workflow_runs() {
 	local runs
 	while :; do
-		runs=$(gh api "repos/{owner}/{repo}/commits/$1/check-runs?per_page=100" \
-			--jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"')
+		runs=$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$1&per_page=100" \
+			--jq '.workflow_runs[] | "\(.status) \(.conclusion) \(.name)"')
 		if [ -n "$runs" ] && ! grep -qv '^completed ' <<<"$runs"; then
 			break
 		fi
