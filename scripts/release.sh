@@ -2,7 +2,8 @@
 # Cuts a thirdshift release: opens a PR into main that bumps the version and
 # nothing else, waits for its checks, merges it with a merge commit, and tags
 # that merge commit v<version>. Pushing the tag starts the dist release
-# workflow.
+# workflow, and the script waits for that workflow run to publish the GitHub
+# Release.
 #
 # Usage: scripts/release.sh [--review] <version>
 #
@@ -25,12 +26,18 @@
 # from the first step not yet done: it opens the PR for a pushed branch, waits
 # on and merges an open PR, or tags a merged one, without the refusals above,
 # which the first run passed. If v<version> is already on origin, on the merge
-# of the bump PR, it says so and exits 0; a v<version> tag anywhere else on
-# origin is refused.
+# of the bump PR, it says so and waits on or reports the release workflow run
+# instead; a v<version> tag anywhere else on origin is refused.
 #
-# Prints a progress line on stderr for each step. Exits 0 once the tag is
-# pushed. It exits 1 with nothing more pushed if it refuses or the review says
-# no, and exits 1 leaving the PR open if the PR's checks fail.
+# Prints a progress line on stderr for each step, with the release workflow
+# run's URL once it waits for that run, and the GitHub Release's URL last.
+# Exits 0 once the release workflow run for the tag has succeeded: the GitHub
+# Release is published with its final body and the crate is on crates.io. It
+# exits 1 with nothing more pushed if it refuses or the review says no, exits
+# 1 leaving the PR open if the PR's checks fail, and exits 1 leaving the tag in
+# place if the release workflow run fails, naming its failed jobs and how to
+# rerun them. It waits with no overall timeout, so Ctrl-C and running it again
+# with the same version carries on waiting.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
 shopt -s inherit_errexit
@@ -38,7 +45,7 @@ shopt -s inherit_errexit
 # The prompt the summary agent gets ahead of the release's input.
 summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
 
-# Seconds between reads of the PR's workflow runs.
+# Seconds between reads of the PR's workflow runs and the release workflow run.
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
@@ -57,7 +64,7 @@ main() {
 
 	fetch_main
 	find_earlier_run
-	stop_if_tagged
+	finish_if_tagged
 
 	case $pr_state in
 	"")
@@ -86,6 +93,7 @@ main() {
 
 	git push --quiet origin "$merge:refs/tags/$tag"
 	progress "tagged $tag on ${merge:0:7} and pushed the tag"
+	wait_for_release
 }
 
 # find_earlier_run
@@ -106,11 +114,12 @@ find_earlier_run() {
 	fi
 }
 
-# stop_if_tagged
-# After an earlier run, exits 0 if $tag is on origin at the merge of the bump
-# PR, and refuses if it is on origin anywhere else. With no earlier run,
+# finish_if_tagged
+# After an earlier run, if $tag is on origin at the merge of the bump PR,
+# waits for its release workflow run and exits as wait_for_release does, and
+# refuses if $tag is on origin anywhere else. With no earlier run,
 # check_can_release refuses an existing tag in its turn.
-stop_if_tagged() {
+finish_if_tagged() {
 	local tagged
 	if [ -z "$pr_state" ] && [ -z "$head" ]; then
 		return
@@ -120,7 +129,8 @@ stop_if_tagged() {
 		return
 	fi
 	if [ "$tagged" = "$merge" ]; then
-		progress "$tag is already tagged on ${merge:0:7}, the merge of $url, so there is nothing left to do"
+		progress "$tag is already tagged on ${merge:0:7}, the merge of $url"
+		wait_for_release
 		exit 0
 	fi
 	refuse "$tag already exists on origin at ${tagged:0:7}, which is not the merge of a $branch PR"
@@ -187,6 +197,47 @@ wait_and_merge() {
 	fetch_main
 	merge=$(merge_commit_of "$head")
 	progress "merged $url as ${merge:0:7}"
+}
+
+# wait_for_release
+# Waits for the release workflow run that pushing $tag started on $merge to
+# be listed, then to complete, and prints the GitHub Release's URL if it
+# succeeded. If it failed, exits 1 naming the jobs that failed, leaving the
+# tag in place: it is public, so rerunning the failed jobs beats moving it.
+# The run's status is that of its current attempt, so after gh run rerun
+# --failed, the rerun's. CI's run on main for $merge is not waited for.
+wait_for_release() {
+	local run id run_url status conclusion failed
+	run=$(release_run)
+	if [ -z "$run" ]; then
+		progress "waiting for the release workflow on $tag to start"
+	fi
+	while [ -z "$run" ]; do
+		sleep "$poll_seconds"
+		run=$(release_run)
+	done
+	read -r id run_url status conclusion <<<"$run"
+	progress "waiting for the release workflow at $run_url"
+	while [ "$status" != completed ]; do
+		sleep "$poll_seconds"
+		read -r id run_url status conclusion <<<"$(release_run)"
+	done
+
+	if [ "$conclusion" != success ]; then
+		failed=$(gh run view "$id" --json jobs --jq '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | .name] | join(", ")')
+		progress "the release workflow ended in $conclusion${failed:+ ($failed)} at $run_url, so $tag is left in place; rerun the failed jobs with gh run rerun --failed $id, then run this again"
+		exit 1
+	fi
+	progress "released $tag at $(gh release view "$tag" --json url --jq .url)"
+}
+
+# release_run
+# The newest release workflow run on $merge from a push, as
+# "<id> <url> <status> <conclusion>", or nothing if it isn't listed yet.
+release_run() {
+	gh run list --workflow release.yml --event push --commit "$merge" --limit 1 \
+		--json databaseId,url,status,conclusion \
+		--jq '.[] | "\(.databaseId) \(.url) \(.status) \(.conclusion)"'
 }
 
 progress() {

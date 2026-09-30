@@ -11,7 +11,8 @@
 //!           "mergeable"?, "unknown_polls"?}],
 //!  "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
 //!  "statuses": {"<sha>": [{"context", "state", "url"}]},
-//!  "runs"?: [{"branch", "workflow", "event", "headSha", "status", "conclusion"}],
+//!  "runs"?: [{"databaseId", "url", "branch", "workflow", "event", "headSha", "status",
+//!             "conclusion", "jobs"?, "hidden_polls"?, "pending_polls"?}],
 //!  "on_ci_read"?: {"times", "script", "seen"},
 //!  "on_merge"?: {"times", "script"},
 //!  "refuse_merges"?: {"times", "error"},
@@ -50,8 +51,17 @@
 //! <sha>.
 //!
 //! `gh run list` answers with the workflow runs in `runs`, newest first, that
-//! match its `--branch`, `--workflow` and `--event`. Runs there are only ones
-//! a test records with `gh fake run`: they are separate from the check runs.
+//! match its `--branch`, `--workflow`, `--event` and `--commit` (their
+//! `headSha`). Runs there are only ones a test records with `gh fake run`:
+//! they are separate from the check runs. A run is not listed for its first
+//! `hidden_polls` reads that match it, as GitHub lists a run a moment after
+//! the push that starts it, then reports as in progress for its first
+//! `pending_polls` reads, then as `status` with `conclusion`. `gh run view
+//! <id> --json jobs` answers with the run's `jobs`, each `{"name",
+//! "conclusion"}`, for its current attempt.
+//!
+//! `gh release view <tag> --json url` answers with the GitHub Release's URL
+//! for a tag on origin.
 //!
 //! `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 //! with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -75,7 +85,11 @@
 //! gh fake checks <sha> '<JSON list>'      set the check runs on <sha>
 //! gh fake statuses <sha> '<JSON list>'    set the commit statuses on <sha>
 //! gh fake run '<JSON>'                    record a workflow run, newer than
-//!                                         any recorded before it
+//!                                         any recorded before it, numbered
+//!                                         with the next `databaseId` if it
+//!                                         has none; one with the `databaseId`
+//!                                         of a recorded run is a new attempt
+//!                                         of it, replacing the fields it has
 //! gh fake pr <head> <field> '<JSON>'      set a field of <head>'s newest PR
 //! gh fake issue <number> <state>          set issue <number> OPEN or CLOSED
 //! gh fake on-ci-read <times> '<script>'   run <script> in bash the first time
@@ -88,7 +102,10 @@
 //!                                         calls with <error> on stderr, after
 //!                                         any on-merge script
 //! gh fake after-merge '<script>'          run <script> in bash after each
-//!                                         successful `gh pr merge`
+//!                                         successful `gh pr merge`, with the
+//!                                         PR's head branch in
+//!                                         $FAKE_MERGE_HEAD and the merge
+//!                                         commit in $FAKE_MERGE_SHA
 //! gh fake fails '<command> <subcommand>'  make every such call fail, e.g.
 //!                                         'issue close'
 //! gh fake user-email '<JSON>'             set the public profile email, an
@@ -362,6 +379,10 @@ const COMMIT_PR_LINES: &str = r#".[] | "\(.merge_commit_sha) \(.number)""#;
 
 const LATEST_RUN_LINE: &str = r#".[] | "\(.headSha) \(.status) \(.conclusion)""#;
 
+const RELEASE_RUN_LINE: &str = r#".[] | "\(.databaseId) \(.url) \(.status) \(.conclusion)""#;
+
+const FAILED_JOB_NAMES: &str = r#"[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | .name] | join(", ")"#;
+
 /// Newest first. `--search head:<prefix>` matches head branches starting with
 /// <prefix>, as GitHub's search does; `--head <branch>` matches that branch
 /// exactly. `--jq` is supported only as `PR_LINE_OF_NEWEST`.
@@ -497,12 +518,16 @@ fn pr_merge(state: &mut Json, positional: &[String], flags: &Flags) {
     let pr = &mut state.at_mut("prs").items_mut()[at];
     pr.set("state", string("MERGED"));
     pr.set("headRefOid", string(head_sha));
-    pr.set("mergeCommit", string(merge_commit));
+    pr.set("mergeCommit", string(&merge_commit));
     save(state);
     if let Some(script) = state.get("after_merge") {
         unlock();
+        let env = [
+            ("FAKE_MERGE_HEAD", head.as_str()),
+            ("FAKE_MERGE_SHA", merge_commit.as_str()),
+        ];
         assert!(
-            run_script(script.str(), &[]),
+            run_script(script.str(), &env),
             "the after-merge script failed"
         );
     }
@@ -868,10 +893,13 @@ fn pr_patch(state: &mut Json, args: &[&str]) {
     save(state);
 }
 
-/// Only the flags the release script reads the latest CI run on a branch
-/// with are supported, and only its one `--jq`.
-fn run_list(state: &Json, flags: &Flags) {
-    let supported = ["branch", "workflow", "event", "limit", "json", "jq"];
+/// Only the flags the release script reads workflow runs with are
+/// supported, and only its two `--jq`s: the latest CI run on a branch and the
+/// release workflow run on a commit.
+fn run_list(state: &mut Json, flags: &Flags) {
+    let supported = [
+        "branch", "workflow", "event", "commit", "limit", "json", "jq",
+    ];
     let unsupported: Vec<String> = flags
         .keys()
         .filter(|name| !supported.contains(&name.as_str()))
@@ -886,25 +914,132 @@ fn run_list(state: &Json, flags: &Flags) {
             2,
         );
     }
-    let jq = flag(flags, "jq");
-    if jq != Some(LATEST_RUN_LINE) {
-        unsupported_jq(jq);
-    }
+    let fields: &[&str] = match flag(flags, "jq") {
+        Some(LATEST_RUN_LINE) => &["headSha", "status", "conclusion"],
+        Some(RELEASE_RUN_LINE) => &["databaseId", "url", "status", "conclusion"],
+        jq => unsupported_jq(jq),
+    };
+    let filters = [
+        ("branch", "branch"),
+        ("workflow", "workflow"),
+        ("event", "event"),
+        ("commit", "headSha"),
+    ];
     let limit: usize = flag(flags, "limit").unwrap_or("20").parse().unwrap();
+    let mut listed = Vec::new();
+    let runs = state.get_mut("runs").map(Json::items_mut);
+    for run in runs.into_iter().flatten().rev() {
+        let matches = filters.iter().all(|(flag_name, field)| {
+            flag(flags, flag_name).is_none_or(|wanted| run.at(field).as_str() == Some(wanted))
+        });
+        if !matches {
+            continue;
+        }
+        let polls = |run: &Json, name: &str| run.get(name).and_then(Json::as_i64).unwrap_or(0);
+        let hidden_polls = polls(run, "hidden_polls");
+        if hidden_polls > 0 {
+            run.set("hidden_polls", number(hidden_polls - 1));
+            continue;
+        }
+        let pending_polls = polls(run, "pending_polls");
+        let mut shown = run.clone();
+        if pending_polls > 0 {
+            run.set("pending_polls", number(pending_polls - 1));
+            shown.set("status", string("in_progress"));
+            shown.set("conclusion", string(""));
+        }
+        listed.push(shown);
+    }
+    save(state);
+    for run in listed.iter().take(limit) {
+        let line: Vec<String> = fields.iter().map(|field| run.at(field).python()).collect();
+        println!("{}", line.join(" "));
+    }
+}
+
+/// `gh run view <id> --json jobs`, with only the release script's `--jq`: the
+/// names of the jobs of its current attempt that did not succeed.
+fn run_view(state: &Json, positional: &[String], flags: &Flags) {
+    if flag(flags, "json") != Some("jobs") || flag(flags, "jq") != Some(FAILED_JOB_NAMES) {
+        die(&format!("fake gh: unsupported run view flags {flags:?}"), 2);
+    }
+    let id = &positional[0];
     let runs = state.get("runs").map(Json::items).unwrap_or_default();
-    let matching = runs.iter().rev().filter(|run| {
-        ["branch", "workflow", "event"].iter().all(|field| {
-            flag(flags, field).is_none_or(|wanted| run.at(field).as_str() == Some(wanted))
-        })
-    });
-    for run in matching.take(limit) {
-        println!(
-            "{} {} {}",
-            run.at("headSha").python(),
-            run.at("status").python(),
-            run.at("conclusion").python()
+    let Some(run) = runs.iter().find(|run| run.at("databaseId").python() == *id) else {
+        die(&format!("could not find any workflow run with ID {id}"), 1)
+    };
+    let jobs = run.get("jobs").map(Json::items).unwrap_or_default();
+    let failed: Vec<String> = jobs
+        .iter()
+        .filter(|job| !["success", "skipped", "neutral"].contains(&job.at("conclusion").str()))
+        .map(|job| job.at("name").python())
+        .collect();
+    println!("{}", failed.join(", "));
+}
+
+/// `gh release view <tag> --json url --jq .url`: the Release's URL, for a tag
+/// on origin.
+fn release_view(state: &Json, positional: &[String], flags: &Flags) {
+    if flag(flags, "json") != Some("url") || flag(flags, "jq") != Some(".url") {
+        die(
+            &format!("fake gh: unsupported release view flags {flags:?}"),
+            2,
         );
     }
+    let tag = &positional[0];
+    let tagged = git(
+        &origin_repo(),
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/tags/{tag}"),
+        ],
+    );
+    if !tagged.status.success() {
+        die("release not found", 1);
+    }
+    println!(
+        "https://github.com/{}/releases/tag/{tag}",
+        state.at("repo").str()
+    );
+}
+
+/// Record `run`, numbered with the next `databaseId` if it has none, or
+/// replace the fields `run` has of the recorded run with its `databaseId`, as
+/// a new attempt of that run.
+fn record_run(state: &mut Json, mut run: Json) {
+    let repo = state.at("repo").str().to_owned();
+    let runs = state.entry("runs", Array(Vec::new())).items_mut();
+    if let Some(id) = run.get("databaseId").cloned()
+        && let Some(recorded) = runs
+            .iter_mut()
+            .find(|recorded| recorded.get("databaseId") == Some(&id))
+    {
+        let Json::Object(fields) = run else {
+            panic!("a run is an object")
+        };
+        for (key, value) in fields {
+            recorded.set(&key, value);
+        }
+        return;
+    }
+    if !run.has("databaseId") {
+        let newest = runs
+            .iter()
+            .filter_map(|recorded| recorded.get("databaseId").and_then(Json::as_i64))
+            .max()
+            .unwrap_or(0);
+        run.set("databaseId", number(newest + 1));
+    }
+    if !run.has("url") {
+        let url = format!(
+            "https://github.com/{repo}/actions/runs/{}",
+            run.at("databaseId").python()
+        );
+        run.set("url", string(url));
+    }
+    runs.push(run);
 }
 
 /// The Tickets query: `-f query=...` plus `-f`/`-F` variables.
@@ -1037,10 +1172,7 @@ fn fake_command(state: &mut Json, args: &[&str]) {
         [kind @ ("checks" | "statuses"), sha, list] => {
             state.entry(kind, object([])).set(sha, parse_json(list));
         }
-        ["run", run] => state
-            .entry("runs", Array(Vec::new()))
-            .items_mut()
-            .push(parse_json(run)),
+        ["run", run] => record_run(state, parse_json(run)),
         ["on-ci-read", n, script] => state.set(
             "on_ci_read",
             object([
@@ -1126,7 +1258,15 @@ pub fn main(args: Vec<String>) {
         }
         ["run", "list", rest @ ..] => {
             let (_, flags) = parsed(rest);
-            run_list(&state, &flags);
+            run_list(&mut state, &flags);
+        }
+        ["run", "view", rest @ ..] => {
+            let (positional, flags) = parsed(rest);
+            run_view(&state, &positional, &flags);
+        }
+        ["release", "view", rest @ ..] => {
+            let (positional, flags) = parsed(rest);
+            release_view(&state, &positional, &flags);
         }
         ["api", "graphql", rest @ ..] => graphql(&state, rest),
         ["api", "--method", "PATCH", rest @ ..] => pr_patch(&mut state, rest),
