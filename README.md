@@ -278,13 +278,15 @@ Merges, never rebases or force-pushes: a branch worked on from several servers n
 
 ## Spec runs
 
-A **Spec** is an issue with sub-issues, its **Tickets**. `thirdshift <Issue URL>` on a Spec is a **Spec run**: it works through the Tickets in the order their GitHub "blocked by" links allow, each Ticket's **Run** a **Merge run** into the **Spec branch**, then opens one **Spec PR** from the Spec branch into the Base branch, ready for review ([ADR-0006](docs/adr/0006-spec-runs-merge-tickets-into-a-spec-branch.md)). An issue with no sub-issues is an ordinary Run.
+A **Spec** is an issue with sub-issues, its **Tickets**. `thirdshift <Issue URL>` on a Spec is a **Spec run**: it works through the Tickets in the order their GitHub "blocked by" links allow, each Ticket's **Run** a **Merge run** into the **Spec branch**, then leaves one **Spec PR** from the Spec branch into the Base branch ready for review ([ADR-0006](docs/adr/0006-spec-runs-merge-tickets-into-a-spec-branch.md)). An issue with no sub-issues is an ordinary Run.
+
+The Spec PR opens as a draft as soon as the first Ticket lands, titled from the Spec, with `Closes #<spec>` and a Tickets checklist: one line per Ticket, ticked once it is done, with its pull request, or saying it is running, failed, blocked or unready. thirdshift rewrites the checklist between its `<!-- thirdshift:tickets -->` markers as each Ticket starts and ends, leaving the rest of the body as it is. Once every Ticket is done, the **Spec review** rewrites the body, and thirdshift puts the checklist back, appending it if the markers are gone, before marking the Spec PR ready.
 
 A Spec run takes every Ticket it can reach. A Ticket runs once it is open, has every blocker closed, and is not an **Unready Ticket**: an open Ticket labelled `ready-for-human`, `needs-info`, `wontfix` or `needs-triage`. An open Ticket with no triage label is taken. A Ticket with sub-issues of its own is never run either, and is reported as unready. A blocker outside the Spec counts once it is closed. The graph is read again from GitHub whenever a Ticket's Run ends, so removing a label, adding a Ticket or closing one by hand takes effect in the same Spec run.
 
 A Ticket whose Run fails is not tried again in that Spec run, and stops only the Tickets it blocks; every other Ticket it can reach still runs. Nor do Unready Tickets, Tickets blocked by an open issue outside the Spec, or Tickets in a cycle of "blocked by" links run, nor any Ticket downstream of them.
 
-When nothing is left to run and any Ticket is not done, the Spec run is a **Failed spec run**: it opens no Spec PR, exits `1`, and lists on stderr each Ticket that landed, with its pull request, and each one not done, with why:
+When nothing is left to run and any Ticket is not done, the Spec run is a **Failed spec run**: it leaves the Spec PR a draft, its checklist showing what's missing, prints its URL on stdout (if any Ticket has landed, so there is one), exits `1`, and lists on stderr each Ticket that landed, with its pull request, and each one not done, with why:
 
 ```
 thirdshift: #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme-widgets-issue-21-….jsonl)

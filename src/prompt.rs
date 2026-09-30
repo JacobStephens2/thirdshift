@@ -72,7 +72,7 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          \n\
          Push branch {branch}. Do not rebase or force-push.\n\
          \n\
-         Update PR {pr_url} using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave it a draft: thirdshift marks it ready once you are done.\n\
+         Update PR {pr_url} using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.\n\
          \n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
          \n\
