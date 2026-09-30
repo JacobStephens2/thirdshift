@@ -189,7 +189,7 @@ Every key holds its real value, so a Run reading it does exactly what it does wi
 1. Every Run a Merge run? (`merge.always`)
 2. Every Run first fast-forwards your checkout of the Base branch? (`launch.pull`)
 3. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
-4. With notifications on and `RESEND_API_KEY` unset or empty, it prints the `export RESEND_API_KEY=...` line to add to your shell profile; the key is never written anywhere. With the key set, it offers to send a test email (default No), as `thirdshift email-test` does, once the file is written.
+4. With notifications on and no key in `RESEND_API_KEY` or the [Credentials](#email), it prints the `export RESEND_API_KEY=...` line to add to your shell profile; the key is never written anywhere. With a key found, it offers to send a test email (default No), as `thirdshift email-test` does, once the file is written.
 
 Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir` is not asked about. The answers are written like everything else below: in place, keeping your comments. Ctrl-C during the questions writes nothing. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
@@ -211,24 +211,42 @@ A Run reads the file before any work. One that isn't valid TOML, or that has a k
 
 thirdshift sends email itself, with one HTTPS request to [Resend](https://resend.com)'s API, so it needs no mail server on the machine and works where SMTP ports are blocked ([ADR 0005](docs/adr/0005-run-notifications-through-resend.md)). It needs a Resend account and an API key:
 
-- **`RESEND_API_KEY`**, an environment variable, holds the API key. thirdshift reads the key only from there, never from the User config, so the config file holds no secret.
+- **The API key** comes from the **`RESEND_API_KEY`** environment variable when it is set and not empty, and otherwise from the **Credentials**, `~/.thirdshift/credentials.toml`, a file only you should be able to read (mode 600):
+
+  ```toml
+  [resend]
+  key = "re_..."
+  ```
+
+  The environment variable wins, so a CI secret or an `export` overrides the saved key for one command. The Credentials are what let a Run started from cron, `nohup` or an agent's shell find the key, since those read no shell profile. thirdshift never reads the key from the User config, so that file holds no secret.
 - **`email.to`** in the [User config](#user-config) is the address email goes to when the command gives none.
 - **`email.from`** is the sender. Without it, email comes from **`onboarding@resend.dev`**, Resend's shared sender, which only delivers to the address of your own Resend account. To send to any other address, set `email.from` to an address on a domain you have verified with Resend.
 
 To check the setup without starting a Run:
 
 ```sh
-export RESEND_API_KEY=re_...
 thirdshift email-test you@example.com   # or just `thirdshift email-test`, to send to email.to
 ```
 
-It sends one test email, whose subject marks it as a test and whose body names the host, the time and the sender. Before sending, it checks that it has an address (the argument, else `email.to`) and a non-empty `RESEND_API_KEY`; if either is missing, it exits `1` naming what's missing and sends nothing. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word and exits `1`. It gives up after 30 seconds without an answer.
+It sends one test email, whose subject marks it as a test and whose body names the host, the time and the sender. Before sending, it checks that it has an address (the argument, else `email.to`) and a key (`RESEND_API_KEY`, else the Credentials); if either is missing, it exits `1` naming what's missing and sends nothing. With no key anywhere, it lists every way to give one:
+
+```
+no Resend API key. Either:
+  - run `thirdshift setup`, or
+  - add it to /home/you/.thirdshift/credentials.toml (mode 600):
+        [resend]
+        key = "re_..."
+  - or set RESEND_API_KEY in the environment the Run starts from
+    (a crontab line, CI secret, or a shell profile the Run's shell reads)
+```
+
+The Credentials are read only when `RESEND_API_KEY` is unset or empty, and only by `email-test`, `setup`, and a Run that asks for a notification. A missing file just means no key from it. One that isn't valid TOML, or holds anything but a quoted `resend.key`, such as a typo like `kye`, stops the command with exit `1`, naming the file and the offending key, and nothing is sent. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
 
 #### Run notifications
 
 `--email` (or `email`) asks a Run for a **Run notification**: one email, sent when the Run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to `email.to`. With `email.always = true` in the [User config](#user-config), a Run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Run; an address after `--email` still wins over `email.to`. Giving a flag twice, or `--email` together with `--no-email`, is an argument error.
 
-A Run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and `RESEND_API_KEY` is set and not empty. If either fails, the Run stops, exits `1` naming what's missing, and sends nothing. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
+A Run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and a key is found, in `RESEND_API_KEY` or else the Credentials. If either fails, or the Credentials are broken, the Run stops, exits `1` naming what's wrong (with no key, the message above listing every way to give one), and sends nothing. A Run that asks for no notification never reads the Credentials, so a broken file can't stop it, and `update`, `version` and `help` never read it either. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
 
 - **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
 - **Body**, plain text: the pull request URL (if any), the failure cause (if failed), the session log path (if any), the hostname and how long the Run took.
@@ -353,7 +371,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR-0001](docs/adr/0001-rust-binary-with-embedded-skills.md)).
 
-The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` arguments and the skills, and `cargo test` fails until it is regenerated after a change to any of them. Regenerate it with `UPDATE_PROMPTS_PAGE=1 cargo test prompts_page`.
+The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` arguments and the skills, and each Session prompt is also generated as a Markdown file in [`prompts/`](prompts/). `cargo test` fails until they are regenerated after a change to any of them. Regenerate the page and `prompts/` with `UPDATE_PROMPTS=1 cargo test prompts_page`, which also deletes any file in `prompts/` that no prompt produces.
 
 Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the integration tests swap in fake `gh` and `claude`, which are Python scripts in `tests/fakes/`.
 

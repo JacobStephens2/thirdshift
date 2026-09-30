@@ -1,5 +1,5 @@
 //! Email through Resend's HTTP API (ADR 0005): one HTTPS POST per email, with
-//! the key from `RESEND_API_KEY`. `thirdshift email-test` and Run
+//! the key `resend_key` finds. `thirdshift email-test` and Run
 //! notifications both send through it, after the same checks.
 
 use std::time::Duration;
@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::config::EmailSettings;
 use crate::host;
+use crate::resend_key::ResendKey;
 
 /// Resend's shared sender, used when `email.from` isn't set. Resend only lets
 /// it send to the address of the user's own Resend account.
@@ -23,7 +24,7 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// Resend, ready to send to one address. Making one checks everything that
 /// can be checked locally; nothing is sent to validate the key.
 pub struct Resend {
-    key: String,
+    key: ResendKey,
     /// The API's base URL: Resend's own, unless `THIRDSHIFT_RESEND_URL`
     /// overrides it, which only the tests do.
     url: String,
@@ -34,25 +35,25 @@ pub struct Resend {
 impl Resend {
     /// Resend, sending to `to`, else to `email.to`, from `email.from`, else
     /// from Resend's shared sender. Fails naming each thing that is missing:
-    /// the address, `RESEND_API_KEY`, or both.
+    /// the address, the Resend API key, or both, or naming what's wrong with
+    /// the Credentials.
     pub fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
         let to = to
             .or_else(|| settings.to.clone())
             .filter(|to| !to.is_empty());
-        let key = std::env::var("RESEND_API_KEY")
-            .ok()
-            .filter(|key| !key.is_empty());
-        let (to, key) = match (to, key) {
-            (Some(to), Some(key)) => (to, key),
+        let (to, key) = match (to, ResendKey::require()) {
+            (Some(to), Ok(key)) => (to, key),
             (to, key) => {
                 let mut missing = Vec::new();
                 if to.is_none() {
-                    missing.push("no email address: give one, or set email.to in the User config");
+                    missing.push(
+                        "no email address: give one, or set email.to in the User config".into(),
+                    );
                 }
-                if key.is_none() {
-                    missing.push("RESEND_API_KEY is unset or empty: set it to a Resend API key");
+                if let Err(error) = key {
+                    missing.push(format!("{error:#}"));
                 }
-                bail!("{}; nothing sent", missing.join("; "));
+                bail!("{}\nnothing sent", missing.join("\n"));
             }
         };
         let url = std::env::var("THIRDSHIFT_RESEND_URL")
@@ -73,7 +74,8 @@ impl Resend {
     }
 
     /// Send one plain-text email. Resend accepting it is all this can tell:
-    /// on a refusal, the error is Resend's own text, word for word.
+    /// on a refusal, the error is Resend's own text, word for word, and where
+    /// the key came from, since `RESEND_API_KEY` hides the Credentials' key.
     pub fn send(&self, subject: &str, text: &str) -> Result<()> {
         let client = reqwest::blocking::Client::builder()
             .timeout(TIMEOUT)
@@ -81,7 +83,7 @@ impl Resend {
             .context("can't set up the HTTPS client")?;
         let response = client
             .post(format!("{}/emails", self.url))
-            .bearer_auth(&self.key)
+            .bearer_auth(&self.key.secret)
             .json(&json!({
                 "from": self.from,
                 "to": self.to,
@@ -95,9 +97,14 @@ impl Resend {
             return Ok(());
         }
         let body = response.text().unwrap_or_default();
+        let source = &self.key.source;
         match error_text(&body) {
-            text if text.is_empty() => bail!("Resend refused the email ({status})"),
-            text => bail!("Resend refused the email ({status}): {text}"),
+            text if text.is_empty() => {
+                bail!("Resend refused the email ({status}), sent with the key from {source}")
+            }
+            text => {
+                bail!("Resend refused the email ({status}): {text}; the key came from {source}")
+            }
         }
     }
 }

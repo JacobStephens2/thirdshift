@@ -18,6 +18,7 @@ mod prompt;
 #[cfg(test)]
 mod prompts_page;
 mod questions;
+mod resend_key;
 mod run;
 mod session;
 mod spec_run;
@@ -92,13 +93,18 @@ logs.dir sets where session logs go instead of ~/.thirdshift/logs: an absolute p
 
 --email and email-test send to their <address>, else to email.to, from email.from, else
 from onboarding@resend.dev, which only delivers to your own Resend account's address.
-With email.always set, every Run sends a Run notification unless given --no-email.
-The Resend API key comes only from the RESEND_API_KEY environment variable:
+With email.always set, every Run sends a Run notification unless given --no-email:
 
     [email]
     always = true
     to = \"you@example.com\"
     from = \"thirdshift@your-verified-domain.com\"
+
+The Resend API key comes from the RESEND_API_KEY environment variable, else from the
+Credentials, ~/.thirdshift/credentials.toml (mode 600), never from the User config:
+
+    [resend]
+    key = \"re_...\"
 ";
 
 fn main() -> ExitCode {

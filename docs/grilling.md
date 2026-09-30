@@ -734,4 +734,80 @@ PR the glossary and adr 006 updates and anything else currently to pr
 ## 5
 12 - Does the B pause only when you pass --review, otherwise no review
 13 - agree
+
+
+# Sep 30 2026: prompts dir, spec 176
+/grill-with-docs where are the prompts in this codebase? I like how easy it is to find the factory skills in the skills dir. I'm considering even a prompts dir.
+
+## 2
+1 - a, I think one of the things that engineers would want to look at most in this system to understand it and evaluate it would be the inputs to the agents, which is a nice thing about having the skills top level in their own directory and part of what attracts me to a prompts directory as well. I'm fine with the prompts staying in Rust.
+2 - agree
+3 - agree
+
+## 3
+4 - agree
+
+## 4
+5 - agree
+6 - agree
+7 - agree
+8 - agree
+
+## 5
+/to-spec
+
 ## 6
+Yes
+
+## 7
+/to-tickets
+
+## 8
+Either commit to main and push or PR the CONTEXT.md change.
+
+
+# Sep 30 2026, shorten test suite time, issue 174
+/grill-with-docs on 174
+
+## 2
+And I want to focus here on reducing the tests for thirdshift specifically, but make sure to keep the tool thirdshift open for use across a variety of repos. 
+
+1 - agree
+2 - agree
+3 - agree
+4 - agree
+
+# Sep 30 2026, make email setup easier
+1 - agree
+2 -  Is env-only still saving the key to a file? If so, does the question become which file to save the key to? 
+
+## 2
+2 - agree
+
+## 3
+3 - agree
+4 - b
+5 - agree
+6 - agree
+7 - agree, though note where to set RESEND_API_KEY int this message with a brief formatting note
+8 - agree
+9 - agree
+
+## 4
+10 - agree
+11 - agree
+12 - agree
+13 - agree
+14 - agree
+
+## 5
+15 - agree
+16 - agree
+17 - agree, file the github issue using /to-spec
+
+
+## 6
+That matches
+
+## 7
+/to-tickets
