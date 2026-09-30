@@ -25,7 +25,8 @@ global-artifacts-jobs = ["./release-smoke"]
 # Runs once the Release is created, which is only after the Rocky and WSL
 # checks pass; publishes the tagged version to crates.io.
 publish-jobs = ["./publish-crates"]
-# Replaces the Release body with notes generated from the merged pull requests.
+# Replaces the Release body with the bump PR's summary and notes generated from
+# the merged pull requests.
 post-announce-jobs = ["./release-notes"]
 
 # The runner images are pinned to the platforms thirdshift supports, as in ci.yml.

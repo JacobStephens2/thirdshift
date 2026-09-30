@@ -181,8 +181,8 @@ rewrite() {
 
 # pr_body <base> <tag>
 # The body of the bump PR on HEAD, which <tag> will name, off <base>: the
-# summary, between markers the Release page step can find, then the version
-# diff.
+# summary, between markers release-notes.sh finds to head the Release page
+# with it, then the version diff.
 pr_body() {
 	local diff summary
 	diff=$(version_diff "$1")
