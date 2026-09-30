@@ -67,10 +67,13 @@ impl Git {
 const LOCK_WAIT: Duration = Duration::from_secs(10);
 
 /// Whether git's `stderr` says it failed because a lock file, such as
-/// `config.lock` or a ref's, already exists.
+/// `config.lock` or a ref's, already exists, or because another git moved a
+/// ref between reading and updating it, as two fetches of one branch can.
 fn held_lock(stderr: &[u8]) -> bool {
     let stderr = String::from_utf8_lossy(stderr);
-    stderr.contains(".lock': File exists") || stderr.contains("could not lock config file")
+    stderr.contains(".lock': File exists")
+        || stderr.contains("could not lock config file")
+        || (stderr.contains("cannot lock ref") && stderr.contains("but expected"))
 }
 
 /// The most lines of each stream a failure reports.
@@ -189,6 +192,20 @@ mod tests {
             released.join().unwrap();
             result.unwrap();
         }
+    }
+
+    #[test]
+    fn a_ref_another_git_moved_meanwhile_is_tried_again() {
+        let (temp, git) = repo_with_origin();
+        let moved = temp.path().join("moved");
+        let alias = format!(
+            "alias.race=!test -f {0} && exit 0; touch {0}; \
+             echo \"error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2\" >&2; \
+             exit 1",
+            moved.display()
+        );
+
+        git.run(&["-c", &alias, "race"]).unwrap();
     }
 
     #[test]
