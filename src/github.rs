@@ -369,27 +369,6 @@ fn merged_head(issue: &IssueUrl, branch: &str) -> Result<Option<String>> {
     Ok(Some(head.to_string()))
 }
 
-/// Whether merging the pull request whose head is `branch` closes `issue` by
-/// itself. GitHub closes the issues a pull request links for closing, but
-/// only when it merges into the repository's default branch, and a moment
-/// after the merge rather than with it.
-pub fn merge_closes_issue(issue: &IssueUrl, branch: &str) -> Result<bool> {
-    let pr = pr_view(issue, branch, "baseRefName,closingIssuesReferences")?;
-    let repo = gh_json(&[
-        "repo",
-        "view",
-        &issue.repo_slug(),
-        "--json",
-        "defaultBranchRef",
-    ])?;
-    let links_issue = pr["closingIssuesReferences"]
-        .as_array()
-        .context("gh output has no closingIssuesReferences")?
-        .iter()
-        .any(|linked| linked["number"].as_u64() == Some(issue.number));
-    Ok(links_issue && pr["baseRefName"] == repo["defaultBranchRef"]["name"])
-}
-
 /// Whether a pull request can be merged into its base.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mergeable {

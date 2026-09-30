@@ -249,9 +249,11 @@ pub fn deliver(
 }
 
 /// The Self-merge's steps after the merge: delete the Issue branch on origin,
-/// and close the issue if the merge does not. The merge can't be undone, so
-/// these never fail the Run, and an interrupt no longer stops it: a step that
-/// fails is a warning naming the fix to make by hand.
+/// and close the issue unless it is closed already. GitHub may close it too, a
+/// moment after the merge, or may not, so thirdshift does not wait to see.
+/// The merge can't be undone, so these never fail the Run, and an interrupt no
+/// longer stops it: a step that fails is a warning naming the fix to make by
+/// hand.
 fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
     let branch = worktree.branch();
     if let Err(error) = retry_if_interrupted(|| worktree.delete_from_origin()) {
@@ -267,7 +269,7 @@ fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
         "Closed by #{}, merged into {} by a thirdshift Merge run.",
         pr.number, pr.base
     );
-    if let Err(error) = retry_if_interrupted(|| close_unless_merge_does(issue, branch, &comment)) {
+    if let Err(error) = retry_if_interrupted(|| close_unless_closed(issue, &comment)) {
         warn(
             &error,
             format_args!(
@@ -281,10 +283,9 @@ fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
     }
 }
 
-/// Close `issue` with `comment`, unless it is closed already or merging the
-/// PR for `branch` closes it.
-fn close_unless_merge_does(issue: &IssueUrl, branch: &str, comment: &str) -> Result<()> {
-    if github::merge_closes_issue(issue, branch)? || !github::issue_is_open(issue)? {
+/// Close `issue` with `comment`, unless it is closed already.
+fn close_unless_closed(issue: &IssueUrl, comment: &str) -> Result<()> {
+    if !github::issue_is_open(issue)? {
         return Ok(());
     }
     progress::step(format_args!("closing issue #{}", issue.number));

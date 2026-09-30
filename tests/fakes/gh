@@ -23,14 +23,13 @@ State lives in the JSON file named by $FAKE_GH_STATE:
      "blocked_by"?: {"<number>": [<number>, ...]}}
 
 `gh pr merge` makes a real merge commit of the PR's head into its base in the
-bare origin repo beside $FAKE_GH_STATE (`origin.git`), whose HEAD names the
-default branch. It closes the issues the PR body closes (`Closes #<n>` and the
-like) only when the base is the default branch, as GitHub does.
+bare origin repo beside $FAKE_GH_STATE (`origin.git`). It closes no issues,
+whatever the PR body says: GitHub may close them a moment later, or may not.
 
 A PR's `headRefOid` is its head branch's tip on origin, frozen when it is
-merged, and a merged PR records its merge commit as `mergeCommit`. Its
-`closingIssuesReferences` are the issues its body closes.
-`gh repo view` reports origin's HEAD as the default branch.
+merged, and a merged PR records its merge commit as `mergeCommit`.
+`--json` rejects a field the fake does not have, such as a PR's
+`closingIssuesReferences`, with gh's `Unknown JSON field`, as gh 2.45 does.
 
 An issue's title is its entry in `titles`, else `Issue <number>`.
 
@@ -203,22 +202,28 @@ def pr_view(state, positional, flags):
         die(f'no pull requests found for branch "{head}"')
     pr = matches[-1]
     wanted = flags["json"].split(",")
+    fields = dict(pr_fields(pr, wanted), title=pr["title"], body=pr.get("body", ""))
+    fields = json_fields(fields, wanted)
     jq = flags.get("jq")
     if jq is not None:
         if not jq.startswith(".") or jq[1:] not in wanted:
             die(f"fake gh: unsupported --jq {jq}", 2)
-        fields = dict(pr_fields(pr, wanted), title=pr["title"], body=pr.get("body", ""))
         print(fields[jq[1:]])
         return
-    fields = pr_fields(pr, wanted)
-    fields["closingIssuesReferences"] = [
-        {"number": int(number)} for number in CLOSING_KEYWORD.findall(pr.get("body", ""))
-    ]
     if "mergeable" in wanted and pr.get("unknown_polls", 0) > 0:
         pr["unknown_polls"] -= 1
         save(state)
         fields["mergeable"] = "UNKNOWN"
-    print(json.dumps({key: fields[key] for key in wanted}))
+    print(json.dumps(fields))
+
+
+def json_fields(fields, wanted):
+    """The `wanted` ones of `fields`, as `--json` selects them. A field the
+    fake does not have fails as gh 2.45 fails one it does not know."""
+    unknown = [key for key in wanted if key not in fields]
+    if unknown:
+        die(f'Unknown JSON field: "{unknown[0]}"\nAvailable fields:\n  ' + "\n  ".join(sorted(fields)))
+    return {key: fields[key] for key in wanted}
 
 
 def record(args):
@@ -269,7 +274,7 @@ def pr_list(state, flags):
         and (wanted_state == "ALL" or pr["state"] == wanted_state)
     ][: int(flags.get("limit", 30))]
     wanted = flags["json"].split(",")
-    listed = [{key: pr_fields(pr, wanted)[key] for key in wanted} for pr in prs]
+    listed = [json_fields(pr_fields(pr, wanted), wanted) for pr in prs]
     if "jq" not in flags:
         print(json.dumps(listed))
     elif flags["jq"] == PR_LINE_OF_NEWEST:
@@ -312,9 +317,6 @@ def origin(*args):
     return result.stdout.strip()
 
 
-CLOSING_KEYWORD = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?) #(\d+)", re.I)
-
-
 def pr_merge(state, positional, flags):
     """Only a merge commit on a matching head is supported: anything else,
     such as --auto or --delete-branch, is an unexpected call."""
@@ -348,11 +350,6 @@ def pr_merge(state, positional, flags):
     pr["state"] = "MERGED"
     pr["headRefOid"] = head_sha
     pr["mergeCommit"] = origin("rev-parse", f"refs/heads/{pr['base']}")
-    default = origin("symbolic-ref", "--short", "HEAD")
-    if pr["base"] == default:
-        for number in CLOSING_KEYWORD.findall(pr.get("body", "")):
-            if number in state["issues"]:
-                state["issues"][number] = "CLOSED"
     save(state)
     if "after_merge" in state:
         unlock()
@@ -368,16 +365,7 @@ def issue_view(state, positional, flags):
         "state": state["issues"][number],
         "title": state.get("titles", {}).get(number, f"Issue {number}"),
     }
-    wanted = flags["json"].split(",")
-    print(json.dumps({key: fields[key] for key in wanted}))
-
-
-def repo_view(state, positional, flags):
-    if positional and positional[0].lower() != state["repo"].lower():
-        die(f"fake gh: unknown repo {positional[0]}")
-    fields = {"defaultBranchRef": {"name": origin("symbolic-ref", "--short", "HEAD")}}
-    wanted = flags["json"].split(",")
-    print(json.dumps({key: fields[key] for key in wanted}))
+    print(json.dumps(json_fields(fields, flags["json"].split(","))))
 
 
 def issue_close(state, positional, flags):
@@ -678,9 +666,6 @@ def main():
         positional, flags = parse(args[2:])
         check_repo(state, flags)
         issue_view(state, positional, flags)
-    elif args[:2] == ["repo", "view"]:
-        positional, flags = parse(args[2:])
-        repo_view(state, positional, flags)
     elif args[:2] == ["issue", "close"]:
         positional, flags = parse(args[2:])
         check_repo(state, flags)

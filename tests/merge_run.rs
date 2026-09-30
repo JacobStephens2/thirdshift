@@ -1,7 +1,7 @@
 //! The Merge run: `thirdshift merge <Issue URL>` does everything a Run does,
 //! then the Self-merge: it merges the ready, mergeable, green PR with a merge
 //! commit on exactly the head commit whose CI it watched, then deletes the
-//! Issue branch on origin and closes the issue if the merge did not.
+//! Issue branch on origin and closes the issue unless it is already closed.
 
 mod support;
 
@@ -81,7 +81,7 @@ fn a_clean_merge_run_merges_the_pr_and_says_so() {
 }
 
 #[test]
-fn a_merge_into_the_default_branch_leaves_closing_the_issue_to_the_merge() {
+fn a_merge_into_the_default_branch_closes_the_issue_github_leaves_open() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_OPENS_PR);
 
@@ -89,8 +89,47 @@ fn a_merge_into_the_default_branch_leaves_closing_the_issue_to_the_merge() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
+    assert_eq!(
+        scenario.gh_state()["comments"]["7"],
+        serde_json::json!(["Closed by #1, merged into main by a thirdshift Merge run."])
+    );
+    assert!(
+        !result.stderr.contains("warning"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn an_issue_already_closed_after_the_merge_is_not_closed_again() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake after-merge 'gh fake issue 7 CLOSED'\n"
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
     assert!(gh_calls_of(&scenario, "issue", "close").is_empty());
     assert_eq!(scenario.gh_state()["comments"], serde_json::Value::Null);
+}
+
+#[test]
+fn no_gh_call_asks_for_the_prs_closing_issue_references() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_OPENS_PR);
+
+    scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    for call in scenario.gh_calls() {
+        assert!(
+            !call
+                .iter()
+                .any(|arg| arg.contains("closingIssuesReferences")),
+            "gh {call:?} asks for a field gh 2.45 does not have"
+        );
+    }
 }
 
 #[test]
@@ -167,34 +206,6 @@ fn a_run_without_merge_leaves_the_pr_open_and_ready() {
     assert_eq!(pr["state"], "OPEN");
     assert_eq!(pr["isDraft"], false);
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
-}
-
-#[test]
-fn an_issue_github_has_yet_to_close_after_the_merge_is_left_to_github() {
-    let scenario = Scenario::new();
-    scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}gh fake after-merge 'gh fake issue 7 OPEN'\n"
-    ));
-
-    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert!(gh_calls_of(&scenario, "issue", "close").is_empty());
-}
-
-#[test]
-fn a_merge_into_the_default_branch_of_a_pr_that_does_not_close_the_issue_closes_it() {
-    let scenario = Scenario::new();
-    scenario.agent_does(&AGENT_OPENS_PR.replace("Closes #7", "Work on 7"));
-
-    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
-    assert_eq!(
-        scenario.gh_state()["comments"]["7"],
-        serde_json::json!(["Closed by #1, merged into main by a thirdshift Merge run."])
-    );
 }
 
 #[test]
