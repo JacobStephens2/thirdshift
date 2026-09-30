@@ -50,6 +50,11 @@ pub struct Parallel {
     pub asked: bool,
 }
 
+/// Whether there are `tickets`, as a Spec has, and every one is closed.
+pub fn all_closed(tickets: &[Ticket]) -> bool {
+    !tickets.is_empty() && tickets.iter().all(|ticket| !ticket.is_open)
+}
+
 /// Take the Spec `spec`, whose Tickets were last read as `tickets`, from
 /// its Spec branch, checked out in `worktree`, to a Spec PR into `base` that
 /// reaches `goal`. The Spec branch is pushed before any Ticket starts, and
