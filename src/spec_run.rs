@@ -492,12 +492,8 @@ fn finish_ticket(number: u64, mut child: Child) -> Result<TicketOutcome> {
         let mut last_lines: [Option<String>; 2] = [None, None];
         for line in BufReader::new(stderr).lines() {
             let line = line?;
-            let line = line
-                .strip_prefix("thirdshift: ")
-                .unwrap_or(&line)
-                .to_string();
-            progress::step(format_args!("#{number}: {line}"));
-            last_lines = [last_lines[1].take(), Some(line)];
+            let message = progress::relay(format_args!("#{number}"), &line).to_string();
+            last_lines = [last_lines[1].take(), Some(message)];
         }
         Ok(last_lines)
     });

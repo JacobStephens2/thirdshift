@@ -1,20 +1,62 @@
 //! Progress lines on stderr: thirdshift's own steps, and a session's
-//! stream-json output condensed to one short line per notable event.
+//! stream-json output condensed to one short line per notable event. Each
+//! line is stamped with the local time it was printed, so a stalled Run can
+//! be told from a busy one.
 
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::Write;
 
+use chrono::Local;
 use serde_json::Value;
 
 /// The longest detail a session line shows before it is cut short.
 const MAX_DETAIL: usize = 100;
 
-/// Print one of thirdshift's own steps.
+/// What every progress line starts with.
+const PREFIX: &str = "thirdshift: ";
+
+/// The local time that follows the prefix, as `HH:MM:SS`.
+const STAMP: &str = "%H:%M:%S";
+
+/// Print one of thirdshift's own steps, stamped with the time now.
 pub fn step(message: impl Display) {
+    write_line(Local::now().format(STAMP), message);
+}
+
+/// Print `line`, from the stderr of a child thirdshift, under `label`,
+/// keeping the time the child stamped it with (or stamping it now, if it
+/// has none), and return its message: the line without prefix or time.
+pub fn relay(label: impl Display, line: &str) -> &str {
+    let line = line.strip_prefix(PREFIX).unwrap_or(line);
+    match split_stamp(line) {
+        Some((time, message)) => {
+            write_line(time, format_args!("{label}: {message}"));
+            message
+        }
+        None => {
+            step(format_args!("{label}: {line}"));
+            line
+        }
+    }
+}
+
+fn write_line(time: impl Display, message: impl Display) {
     // Ignored if it fails, as it does once the terminal has closed: the Run
     // still has to clean up and send its Run notification.
-    let _ = writeln!(std::io::stderr(), "thirdshift: {message}");
+    let _ = writeln!(std::io::stderr(), "{PREFIX}{time} {message}");
+}
+
+/// A line without its prefix split into its `HH:MM:SS` stamp and message,
+/// if it starts with one.
+fn split_stamp(line: &str) -> Option<(&str, &str)> {
+    let (time, message) = line.split_at_checked(8)?;
+    let message = message.strip_prefix(' ')?;
+    let is_stamp = time.bytes().enumerate().all(|(at, byte)| match at {
+        2 | 5 => byte == b':',
+        _ => byte.is_ascii_digit(),
+    });
+    is_stamp.then_some((time, message))
 }
 
 /// Condenses one session's stream, a line at a time. Unknown and malformed
@@ -482,6 +524,29 @@ mod tests {
     fn an_init_without_a_session_id_gives_none() {
         let (progress, _) = lines(&[init("/a")]);
         assert_eq!(progress.session_id(), None);
+    }
+
+    #[test]
+    fn a_stamped_line_splits_into_its_time_and_message() {
+        assert_eq!(
+            split_stamp("12:14:49 pushing issue-7"),
+            Some(("12:14:49", "pushing issue-7"))
+        );
+    }
+
+    #[test]
+    fn a_line_without_a_stamp_does_not_split() {
+        for line in [
+            "pushing issue-7",
+            "12:14:49",
+            "12:14:49pushing",
+            "12-14-49 pushing",
+            "1:14:49 pushing",
+            "#21: 12:14:49 pushing",
+            "é2:14:49 pushing",
+        ] {
+            assert_eq!(split_stamp(line), None, "{line}");
+        }
     }
 
     #[test]
