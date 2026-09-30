@@ -104,6 +104,29 @@ Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
 </code></pre>
       </article>
+      <article class="job-sheet" id="prompt-spec-review" aria-labelledby="prompt-spec-review-title">
+        <h3 id="prompt-spec-review-title">Spec review</h3>
+        <p>In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.</p>
+        <p class="sent-by">Sent by <a href="/#unit-3">3 · Y · Review</a></p>
+        <pre class="job-text"><code>/thirdshift:code-review <mark class="ph">&lt;base&gt;</mark>, with the Spec <mark class="ph">&lt;Spec URL&gt;</mark> as the spec
+
+Every Ticket of the Spec <mark class="ph">&lt;Spec URL&gt;</mark> has landed on branch <mark class="ph">&lt;Spec branch&gt;</mark>, its Spec branch (see git log <mark class="ph">&lt;base&gt;</mark>..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.
+
+Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point and <mark class="ph">&lt;Spec URL&gt;</mark> as the spec.
+
+Address the Standards and Spec findings you agree with, using /thirdshift:tdd where it fits, and commit.
+
+Push branch <mark class="ph">&lt;Spec branch&gt;</mark>. Do not rebase or force-push.
+
+Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave it a draft: thirdshift marks it ready once you are done.
+
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+
+Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
       <article class="job-sheet" id="prompt-conflict-repair" aria-labelledby="prompt-conflict-repair-title">
         <h3 id="prompt-conflict-repair-title">Conflict Repair</h3>
         <p>Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.</p>

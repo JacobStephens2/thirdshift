@@ -1,10 +1,12 @@
 //! A Spec run: each of a Spec's Tickets, in dependency order, taken by a
 //! Ticket's Run, a Merge run into the Spec branch in a child `thirdshift`
-//! (ADR-0006), then the Spec PR from the Spec branch into the Base branch.
+//! (ADR-0006), then the Spec review and the Spec PR from the Spec branch into
+//! the Base branch.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -16,8 +18,11 @@ use crate::failed_run::{self, FailedRun};
 use crate::github::{self, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::plugin::Plugin;
 use crate::progress;
-use crate::run::{Goal, Reached};
+use crate::prompt;
+use crate::run::{self, Goal, Reached};
+use crate::session::{Logs, Sessions};
 use crate::worktree::Worktree;
 
 /// How often to check whether a Ticket's Run has ended, or been interrupted.
@@ -26,6 +31,9 @@ const POLL: Duration = Duration::from_millis(100);
 /// The triage labels that make an open Ticket an Unready Ticket.
 const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "needs-triage"];
 
+/// The Spec review session's kind, in its progress lines and log name.
+const SPEC_REVIEW: &str = "spec-review";
+
 /// Take the Spec `spec`, whose Tickets were last read as `tickets`, from
 /// its Spec branch, checked out in `worktree`, to a Spec PR into `base`,
 /// ready for review. The Spec branch is pushed before any Ticket starts, and
@@ -33,19 +41,28 @@ const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "
 /// that fails stops only the Tickets it blocks; with any Ticket not done,
 /// this is a Failed spec run. An interrupt ends it too, once the running
 /// Ticket's Run has ended, starting nothing more and leaving the Spec PR
-/// not ready. The worktree is cleaned up when this returns.
+/// not ready. Once every Ticket has landed, the Spec PR is opened as a draft
+/// and the Spec review, logged in `logs`, reviews the Spec branch before the
+/// Spec PR is marked ready; a Spec review that fails goes through the Failed
+/// run path. The worktree is cleaned up when this returns, or kept by the
+/// Failed run path if its work did not reach origin.
 pub fn run(
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
     worktree: Worktree,
     base: &str,
+    logs: &Logs,
 ) -> Result<Reached, FailedRun> {
-    let pr_url = land_tickets(spec, tickets, &worktree)
-        .and_then(|()| open_spec_pr(spec, worktree.branch(), base))?;
+    land_tickets(spec, tickets, &worktree)?;
+    let pr_url = open_spec_pr(spec, worktree.branch(), base)?;
+    let mut log = logs.path(SPEC_REVIEW);
+    if let Err(error) = review(spec, &worktree, base, &pr_url, logs, &mut log) {
+        return Err(failed_run::fail(spec, worktree, base, &log, error));
+    }
     Ok(Reached {
         pr_url,
         goal: Goal::ReadyForReview,
-        log: None,
+        log: Some(log),
     })
 }
 
@@ -275,24 +292,48 @@ fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<TicketO
     })
 }
 
-/// The Spec PR from `spec_branch` into `base`, ready for review: the open
-/// one if there is one, else a new one titled from the Spec that closes it.
+/// The Spec PR from `spec_branch` into `base`: the open one if there is one,
+/// else a new draft titled from the Spec that closes it.
 fn open_spec_pr(spec: &IssueUrl, spec_branch: &str, base: &str) -> Result<String> {
     if interrupt::requested() {
         bail!("interrupted");
     }
     if let Some(pr) = github::pull_request_for(spec, spec_branch)?.filter(|pr| pr.is_open()) {
-        if pr.is_draft {
-            github::mark_ready(spec, spec_branch)?;
-        }
         return Ok(pr.url);
     }
-    progress::step(format_args!("opening the Spec PR into {base}"));
+    progress::step(format_args!("opening the Spec PR into {base} as a draft"));
     let title = github::issue_title(spec)?;
     let body = format!(
         "The work on Spec #{number}, gathered from its Tickets on {spec_branch}.\n\n\
          Closes #{number}\n",
         number = spec.number
     );
-    github::create_pr(spec, spec_branch, base, &title, &body)
+    github::create_draft_pr(spec, spec_branch, base, &title, &body)
+}
+
+/// Bring the Spec branch in `worktree` up to date with the Tickets landed on
+/// origin, and run the Spec review on it, pointing `log` at its session's
+/// log. Then push the Spec branch, for any commit the session left unpushed,
+/// and mark the Spec PR `pr_url` into `base` ready.
+fn review(
+    spec: &IssueUrl,
+    worktree: &Worktree,
+    base: &str,
+    pr_url: &str,
+    logs: &Logs,
+    log: &mut PathBuf,
+) -> Result<()> {
+    let spec_branch = worktree.branch();
+    worktree.fast_forward_to_origin()?;
+    let plugin = Plugin::write()?;
+    let sessions = Sessions {
+        logs,
+        worktree: worktree.path(),
+        plugin_dir: plugin.path(),
+    };
+    let prompt = prompt::spec_review(spec, base, spec_branch, pr_url);
+    sessions.run(SPEC_REVIEW, &prompt, log)?;
+    worktree.push()?;
+    run::mark_pr_ready(spec, spec_branch, base)?;
+    Ok(())
 }

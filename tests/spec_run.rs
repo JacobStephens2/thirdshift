@@ -1,7 +1,8 @@
 //! Spec runs: `thirdshift <Issue URL>` on a Spec, an issue with sub-issues,
 //! works through its Tickets in dependency order, each a Merge run into the
 //! Spec branch, then opens the Spec PR from the Spec branch into the Base
-//! branch, ready for review.
+//! branch as a draft, has the Spec review review the Spec branch, and marks
+//! the Spec PR ready for review.
 
 mod support;
 
@@ -44,17 +45,32 @@ fn spec_url(scenario: &Scenario) -> String {
     scenario.issue_url(SPEC)
 }
 
-/// The issue number each agent session was for, in order.
+/// The issue number each agent session was for, the first Issue URL its
+/// prompt names, in order.
 fn sessions_by_issue(scenario: &Scenario) -> Vec<String> {
     scenario
         .claude_calls()
         .iter()
         .map(|call| {
             let prompt = call["prompt"].as_str().unwrap();
-            let url = prompt.split_whitespace().nth(1).unwrap();
-            url.rsplit('/').next().unwrap().to_string()
+            let (_, after) = prompt.split_once("/issues/").unwrap();
+            after.chars().take_while(char::is_ascii_digit).collect()
         })
         .collect()
+}
+
+/// The Spec review's session: the only one for the Spec.
+fn spec_review_call(scenario: &Scenario) -> serde_json::Value {
+    let calls = scenario.claude_calls();
+    let sessions = sessions_by_issue(scenario);
+    let reviews: Vec<_> = sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, issue)| *issue == &SPEC.to_string())
+        .map(|(i, _)| calls[i].clone())
+        .collect();
+    assert_eq!(reviews.len(), 1, "sessions: {sessions:?}");
+    reviews[0].clone()
 }
 
 fn assert_contains(text: &str, part: &str) {
@@ -76,7 +92,7 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(sessions_by_issue(&scenario), ["21", "22"]);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
 
     let gh = scenario.gh_state();
     for (i, ticket) in [21, 22].into_iter().enumerate() {
@@ -121,7 +137,7 @@ fn each_ticket_branches_off_the_spec_branch_and_its_prompts_name_it_as_the_base(
             &format!("on issue-{ticket} from origin/issue-20\n"),
         );
     }
-    for call in scenario.claude_calls() {
+    for call in &scenario.claude_calls()[..2] {
         assert_contains(
             call["prompt"].as_str().unwrap(),
             "The base branch is issue-20.",
@@ -268,6 +284,166 @@ fn a_failed_ticket_ends_the_spec_run_before_the_tickets_it_blocks() {
         "a Spec PR was opened: {}",
         gh["prs"]
     );
+}
+
+#[test]
+fn once_the_last_ticket_lands_the_spec_review_reviews_the_spec_branch_against_the_base_branch() {
+    let scenario = linear_spec();
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let review = spec_review_call(&scenario);
+    assert_eq!(review["branch"], "issue-20");
+    let prompt = review["prompt"].as_str().unwrap();
+    for part in [
+        "/thirdshift:code-review main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
+        &spec_url(&scenario),
+        "using main as the fixed point",
+        "/thirdshift:tdd",
+        "Update PR https://github.com/acme/widgets/pull/3 using /thirdshift:pr",
+        "\"Unaddressed findings\"",
+        "Include \"Closes #20\"",
+        "You run headless",
+    ] {
+        assert_contains(prompt, part);
+    }
+    let last_landed = result.stderr.find("thirdshift: #22 landed").unwrap();
+    let reviewing = result.stderr.find("spec-review: session started").unwrap();
+    assert!(last_landed < reviewing, "stderr: {}", result.stderr);
+}
+
+#[test]
+fn the_spec_reviews_commits_reach_the_spec_branch_on_origin() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        r#"
+echo "reviewed" > review.txt
+git add review.txt
+git commit -q -m "Fix a Spec finding"
+git push -q origin issue-20
+"#,
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.origin_file("issue-20", "review.txt").as_deref(),
+        Some("reviewed\n")
+    );
+}
+
+#[test]
+fn a_spec_review_that_commits_without_pushing_still_reaches_origin() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        r#"
+echo "reviewed" > review.txt
+git add review.txt
+git commit -q -m "Fix a Spec finding"
+"#,
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.origin_file("issue-20", "review.txt").as_deref(),
+        Some("reviewed\n")
+    );
+}
+
+#[test]
+fn the_spec_pr_is_a_draft_during_the_spec_review_and_marked_ready_after_it() {
+    let scenario = linear_spec();
+    // Fails the session unless the Spec PR is a draft while it runs.
+    scenario.agent_does_for(
+        SPEC,
+        "gh pr view issue-20 --repo acme/widgets --json isDraft | grep -q '\"isDraft\": true'\n",
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let spec = &scenario.gh_state()["prs"][2];
+    assert_eq!(spec["head"], "issue-20");
+    assert_eq!(spec["isDraft"], false);
+    let reviewed = result.stderr.find("spec-review: session ended").unwrap();
+    let ready = result
+        .stderr
+        .find("PR https://github.com/acme/widgets/pull/3 is ready")
+        .unwrap();
+    assert!(reviewed < ready, "stderr: {}", result.stderr);
+}
+
+#[test]
+fn the_spec_review_writes_the_spec_pr_body() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        r#"gh fake pr issue-20 body '"The whole Spec.\n\nUnaddressed findings: none\n\nCloses #20"'"#,
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let spec = &scenario.gh_state()["prs"][2];
+    assert_eq!(
+        spec["body"],
+        "The whole Spec.\n\nUnaddressed findings: none\n\nCloses #20"
+    );
+}
+
+#[test]
+fn the_spec_review_is_logged_under_the_specs_name() {
+    let scenario = linear_spec();
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let logged = result
+        .stderr
+        .lines()
+        .find(|line| line.ends_with("-spec-review.jsonl"))
+        .unwrap_or_else(|| panic!("no Spec review log in: {}", result.stderr));
+    assert_contains(logged, "/acme-widgets-issue-20-");
+}
+
+#[test]
+fn a_failed_spec_review_ends_the_spec_run_without_marking_the_spec_pr_ready() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(SPEC, "exit 1");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/3\n");
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
+    let spec = &scenario.gh_state()["prs"][2];
+    assert_eq!(spec["head"], "issue-20");
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], true);
+    assert!(
+        !result.stderr.contains("is ready for review"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_contains(&result.stderr, "thirdshift: session log: ");
+}
+
+#[test]
+fn a_spec_pr_closed_during_the_spec_review_fails_the_spec_run() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(SPEC, r#"gh fake pr issue-20 state '"CLOSED"'"#);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "is closed, not open");
+    assert_eq!(scenario.gh_state()["prs"][2]["isDraft"], true);
 }
 
 #[test]
@@ -456,7 +632,7 @@ fn removing_a_needs_info_label_while_another_ticket_runs_lets_it_run() {
     let result = scenario.run(&[&spec_url(&scenario)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(sessions_by_issue(&scenario), ["22", "21"]);
+    assert_eq!(sessions_by_issue(&scenario), ["22", "21", "20"]);
 }
 
 #[test]
