@@ -229,6 +229,31 @@ fn ticket_lines_are_relayed_with_the_ticket_number_and_the_spec_run_says_what_it
 }
 
 #[test]
+fn each_relayed_ticket_line_has_exactly_one_time() {
+    let scenario = linear_spec();
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let relayed: Vec<&str> = result
+        .stamped_stderr
+        .lines()
+        .filter(|line| line.contains(" #21: "))
+        .collect();
+    assert!(!relayed.is_empty(), "stderr: {}", result.stamped_stderr);
+    for line in relayed {
+        let unprefixed = line.strip_prefix("thirdshift: ").unwrap();
+        let (_, message) =
+            support::split_stamp(unprefixed).unwrap_or_else(|| panic!("unstamped: {line}"));
+        let message = message.strip_prefix("#21: ").unwrap();
+        assert!(
+            support::split_stamp(message).is_none(),
+            "stamped twice: {line}"
+        );
+    }
+}
+
+#[test]
 fn ticket_runs_send_no_run_notification() {
     let scenario = linear_spec();
     scenario.user_config_is("[email]\nalways = true\nto = \"me@example.com\"\n");
