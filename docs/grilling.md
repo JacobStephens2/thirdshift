@@ -714,3 +714,24 @@ PR the glossary and adr 006 updates and anything else currently to pr
 /to-tickets
 ## 9
  These tickets look good. File them as sub-issues
+# Sep 29 2026, release program, spec 150
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/150 - do we
+  already have a program to create a new release?
+## 2
+1 - agree
+2 - agree
+3 - agree
+## 3
+4 - agree
+5 - I'm considering even bringing an agent into this release process / program to write the PR body
+6 - agree
+7 - agree
+## 4
+8 - agreed - what is `claude -p`?
+9 - agree
+10 - A - what are GitHub's generated notes plus the diff? Would they be sufficient? Or might the agent add real value here?
+11 - agree
+## 5
+12 - Does the B pause only when you pass --review, otherwise no review
+13 - agree
+## 6
