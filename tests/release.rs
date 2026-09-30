@@ -9,6 +9,8 @@
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+mod support;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -77,11 +79,7 @@ impl Release {
         let root = release.root();
         git(root, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
         fs::create_dir(release.bin()).unwrap();
-        for name in ["gh", "claude"] {
-            let fake = release.bin().join(name);
-            fs::copy(manifest_dir().join("tests/fakes").join(name), &fake).unwrap();
-            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        support::fakes::install(&release.bin());
         fs::write(
             root.join("gh-state.json"),
             json!({"repo": REPO, "issues": {}, "prs": [], "checks": {}, "statuses": {}})
@@ -126,7 +124,7 @@ impl Release {
         self.temp.path()
     }
 
-    /// The fakes, copied out executable.
+    /// Where the fakes are.
     fn bin(&self) -> PathBuf {
         self.root().join("bin")
     }

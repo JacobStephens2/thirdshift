@@ -17,8 +17,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
-      # The tests run the binary against real git and fake gh and claude
-      # (Python scripts in tests/fakes), all present on the runner image.
+      # The tests run the binary against real git and fake gh and claude,
+      # which the tests build from tests/fakes.rs with rustc.
       - run: cargo test
 
   test-macos:
