@@ -219,13 +219,7 @@ impl Release {
     }
 
     fn run_script(&self, version: &str) -> Output {
-        self.command(
-            &manifest_dir().join("scripts/release.sh"),
-            &self.maintainer(),
-        )
-        .arg(version)
-        .output()
-        .expect("could not run release.sh")
+        self.run_script_with(&[version], "", &[])
     }
 
     /// Runs the script with `args`, with `stdin` on its standard input and
@@ -274,6 +268,14 @@ impl Release {
 
     fn pr_body(&self, head: &str) -> String {
         self.pr(head)["body"].as_str().unwrap().to_owned()
+    }
+
+    fn pr_opened(&self, head: &str) -> bool {
+        self.gh_state()["prs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pr| pr["head"] == head)
     }
 
     fn origin_branch(&self, branch: &str) -> bool {
@@ -565,14 +567,7 @@ fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
     let output = release.run_script("0.2.0");
 
     assert!(!output.status.success());
-    let prs = release.gh_state()["prs"].clone();
-    assert!(
-        prs.as_array()
-            .unwrap()
-            .iter()
-            .all(|pr| pr["head"] != "release-0.2.0"),
-        "{prs}"
-    );
+    assert!(!release.pr_opened("release-0.2.0"));
     assert!(!release.origin_branch("release-0.2.0"));
     assert_eq!(release.origin_tag("v0.2.0"), None);
 }
@@ -637,14 +632,7 @@ fn review_no_stops_with_nothing_pushed() {
 
     assert!(!output.status.success(), "{}", stderr(&output));
     assert!(!release.origin_branch("release-0.2.0"));
-    let prs = release.gh_state()["prs"].clone();
-    assert!(
-        prs.as_array()
-            .unwrap()
-            .iter()
-            .all(|pr| pr["head"] != "release-0.2.0"),
-        "{prs}"
-    );
+    assert!(!release.pr_opened("release-0.2.0"));
     assert_eq!(release.origin(&["rev-parse", "main"]), main_before);
     assert_eq!(release.origin_tag("v0.2.0"), None);
 }

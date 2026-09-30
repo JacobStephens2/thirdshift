@@ -59,16 +59,14 @@ main() {
 	progress "writing the summary with claude"
 	diff=$(version_diff "$base")
 	summary=$(release_summary "$base" "$tag" "$diff")
-	if [ -n "$review" ]; then
-		summary=$(review_summary "$summary")
+	if [ -n "$review" ] && ! summary=$(review_summary "$summary"); then
+		progress "stopped at the review, so nothing was pushed"
+		exit 1
 	fi
 
 	git push --quiet origin "HEAD:refs/heads/$branch"
-	# Built first so a failure to build it stops the script, as it would not
-	# inside the gh command line.
-	body=$(pr_body "$summary" "$diff")
 	url=$(gh pr create --base main --head "$branch" --title "Release $version" \
-		--body "$body" | tail -n 1)
+		--body "$(pr_body "$summary" "$diff")" | tail -n 1)
 	progress "opened $url"
 
 	progress "waiting for CI on $url"
@@ -138,34 +136,36 @@ pr_body() {
 
 # review_summary <summary>
 # Prints <summary> on stderr and asks on stdin whether to carry on with it,
-# edit it in $EDITOR, or stop. Prints the summary to carry on with; on no, or
-# at the end of stdin, stops the script, which has pushed nothing yet.
+# edit it in $EDITOR, or stop. Prints the summary to carry on with; returns
+# non-zero to stop, on no, at the end of stdin, or if the editor fails.
+# Called in a condition, where set -e is off, so each step's failure is
+# handled here.
 review_summary() {
-	local answer file
+	local answer file status
 	printf '\n%s\n\n' "$1" >&2
 	while :; do
 		printf 'release: open the PR with this summary? [y]es / [e]dit / [n]o ' >&2
-		if ! read -r answer; then
-			answer=n
-		fi
+		read -r answer || return
 		case $answer in
 		y | yes)
 			echo "$1"
 			return
 			;;
 		e | edit)
-			file=$(mktemp --suffix=.md)
-			echo "$1" >"$file"
-			# As git runs it, so $EDITOR may carry arguments. Its output goes
-			# to stderr, as stdout is the summary.
-			sh -c "${EDITOR:-vi} \"\$1\"" "${EDITOR:-vi}" "$file" >&2
-			cat "$file"
+			file=$(mktemp --suffix=.md) || return
+			status=0
+			# $EDITOR runs as git runs it, so it may carry arguments. Its
+			# output goes to stderr, as stdout is the summary.
+			{
+				echo "$1" >"$file" &&
+					sh -c "${EDITOR:-vi} \"\$1\"" "${EDITOR:-vi}" "$file" >&2 &&
+					cat "$file"
+			} || status=$?
 			rm -f "$file"
-			return
+			return "$status"
 			;;
 		n | no)
-			progress "stopped at the review, so nothing was pushed"
-			exit 1
+			return 1
 			;;
 		esac
 	done
