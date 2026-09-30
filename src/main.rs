@@ -18,6 +18,7 @@ mod prompt;
 #[cfg(test)]
 mod prompts_page;
 mod questions;
+mod resend_key;
 mod run;
 mod session;
 mod spec_run;
