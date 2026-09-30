@@ -29,7 +29,14 @@ const NOTIFY: &str = "Run notifications, an email";
 const TO: &str = "Send Run notifications to";
 const FROM: &str = "Send them from";
 const TEST_EMAIL: &str = "test email now?";
+const KEY_QUESTION: &str = "Resend API key (input hidden";
+const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip):";
 const KEY: &str = "re_secret_123";
+
+/// The Credentials the Run left, if any.
+fn credentials(scenario: &Scenario) -> Option<String> {
+    fs::read_to_string(scenario.path("home/.thirdshift/credentials.toml")).ok()
+}
 
 /// The first line a Run prints once it starts its work.
 const FIRST_STEP: &str = "thirdshift: ";
@@ -127,6 +134,49 @@ fn no_email_in_the_command_wins_over_fresh_run_notifications() {
 }
 
 #[test]
+fn accepting_asks_for_the_key_saves_it_and_the_run_notification_goes_with_it() {
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    scenario.agent_does(AGENT_OPENS_PR);
+
+    let result = scenario.run_on_terminal(
+        &[&scenario.issue_url(7)],
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+        &[
+            (OFFER, "y"),
+            (MERGE, ""),
+            (PULL, ""),
+            (NOTIFY, "y"),
+            (TO, "me@example.com"),
+            (FROM, ""),
+            (KEY_PROMPT, KEY),
+            (TEST_EMAIL, "n"),
+        ],
+    );
+
+    assert_ended(&scenario, &result, "ready for review", "OPEN");
+    let path = scenario.path("home/.thirdshift/credentials.toml");
+    let wrote = result
+        .stderr
+        .find(&format!("wrote the Credentials {}", path.display()))
+        .expect(&result.stderr);
+    assert!(
+        wrote < result.stderr.find("creating worktree").unwrap(),
+        "terminal: {}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains(KEY), "terminal: {}", result.stderr);
+    let credentials: toml::Table = credentials(&scenario).unwrap().parse().unwrap();
+    assert_eq!(credentials["resend"]["key"].as_str(), Some(KEY));
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some(format!("Bearer {KEY}").as_str())
+    );
+}
+
+#[test]
 fn declining_writes_the_defaults_and_a_second_run_does_not_offer() {
     let unattended = Scenario::new();
     assert_eq!(unattended.run(&["setup"]).code, Some(0));
@@ -144,6 +194,12 @@ fn declining_writes_the_defaults_and_a_second_run_does_not_offer() {
         first.stderr
     );
     assert!(!first.stderr.contains(MERGE), "terminal: {}", first.stderr);
+    assert!(
+        !first.stderr.contains(KEY_QUESTION),
+        "terminal: {}",
+        first.stderr
+    );
+    assert_eq!(credentials(&scenario), None);
 
     scenario.issue_is(8, "OPEN");
     let second = scenario.run_on_terminal(&[&scenario.issue_url(8)], &[], &[]);
@@ -184,6 +240,7 @@ fn with_no_terminal_a_run_offers_nothing_and_writes_nothing() {
     assert_eq!(result.stdout, format!("{PR_URL}\n"));
     assert!(!result.stderr.contains(OFFER), "stderr: {}", result.stderr);
     assert!(!scenario.path("home/.thirdshift/config.toml").exists());
+    assert_eq!(credentials(&scenario), None);
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
 }
 

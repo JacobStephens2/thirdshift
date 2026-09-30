@@ -1,16 +1,19 @@
 //! The Resend API key, and where it came from: `RESEND_API_KEY` when it is
 //! set and not empty, else `resend.key` in the Credentials,
 //! `~/.thirdshift/credentials.toml`. The email sender and Setup both find it
-//! here, so they can't disagree about whether there is one. Only they call
-//! it, so a broken Credentials file can't block a Run that sends no email,
-//! nor `update`, `version` or `help`.
+//! here, so they can't disagree about whether there is one, and Setup saves
+//! the key it is given here too. Only they call it, so a broken Credentials
+//! file can't block a Run that sends no email, nor `update`, `version` or
+//! `help`.
 
 use std::fmt;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use toml::{Table, Value};
+use toml_edit::{DocumentMut, Item};
 
 use crate::{config, progress};
 
@@ -46,27 +49,10 @@ impl ResendKey {
     /// or hold anything but a string `resend.key`, so a typo can't quietly
     /// leave a Run without its notification.
     pub fn find() -> Result<Option<Self>> {
-        let key = std::env::var("RESEND_API_KEY")
-            .ok()
-            .filter(|key| !key.is_empty());
-        if let Some(key) = key {
-            return Ok(Some(ResendKey {
-                secret: key,
-                source: Source::Environment,
-            }));
+        match from_environment() {
+            Some(key) => Ok(Some(key)),
+            None => Ok(Credentials::read()?.key()),
         }
-        let path = path()?;
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(error).with_context(|| format!("can't read {}", path.display()));
-            }
-        };
-        let source = Source::Credentials(path.clone());
-        let key = parse(&text, &source)?;
-        warn_if_others_can_read(&path, &source);
-        Ok(key.map(|secret| ResendKey { secret, source }))
     }
 
     /// The Resend API key, or an error listing every way to give one.
@@ -76,6 +62,134 @@ impl ResendKey {
             None => bail!("{}", missing(&path()?)),
         }
     }
+}
+
+/// The key in `RESEND_API_KEY`, if it is set and not empty.
+fn from_environment() -> Option<ResendKey> {
+    std::env::var("RESEND_API_KEY")
+        .ok()
+        .filter(|key| !key.is_empty())
+        .map(|secret| ResendKey {
+            secret,
+            source: Source::Environment,
+        })
+}
+
+/// The Credentials, as read: the file's text, if there is one, and the key
+/// it holds, if any. Setup reads them before asking anything, so it can
+/// refuse a broken file, and edits them to save the key it is given.
+pub struct Credentials {
+    path: PathBuf,
+    text: Option<String>,
+    key: Option<String>,
+}
+
+impl Credentials {
+    /// Read the Credentials, as strictly as [`ResendKey::find`] does, with
+    /// the same warning if others can read them. A missing file is no key.
+    pub fn read() -> Result<Self> {
+        let path = path()?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Credentials {
+                    path,
+                    text: None,
+                    key: None,
+                });
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("can't read {}", path.display()));
+            }
+        };
+        let source = Source::Credentials(path.clone());
+        let key = parse(&text, &source)?;
+        warn_if_others_can_read(&path, &source);
+        Ok(Credentials {
+            path,
+            text: Some(text),
+            key,
+        })
+    }
+
+    /// The Resend API key the lookup finds with these Credentials:
+    /// `RESEND_API_KEY` if it is set and not empty, else theirs, if any.
+    pub fn lookup(&self) -> Option<ResendKey> {
+        from_environment().or_else(|| self.key())
+    }
+
+    /// The key these Credentials hold, if any.
+    fn key(&self) -> Option<ResendKey> {
+        self.key.clone().map(|secret| ResendKey {
+            secret,
+            source: Source::Credentials(self.path.clone()),
+        })
+    }
+
+    /// Where the Credentials are.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Save `secret` as `resend.key`. With no file yet, it is created with
+    /// mode 0600, and `~/.thirdshift` with it if missing, holding just the
+    /// key. Otherwise the file is edited in place: its comments and anything
+    /// else in it stay, and only `resend.key` changes.
+    pub fn save(&self, secret: &str) -> Result<()> {
+        let written = match &self.text {
+            None => create(&self.path, &with_key("", secret)?),
+            Some(text) => config::replace(&self.path, &with_key(text, secret)?),
+        };
+        written.with_context(|| format!("can't write {}", self.path.display()))
+    }
+}
+
+/// `text`, Credentials that parse, with `resend.key` set to `secret`,
+/// keeping the spacing and comment around the old key, if there was one.
+/// With no `[resend]` section, one goes after the last line of `text`.
+fn with_key(text: &str, secret: &str) -> Result<String> {
+    let mut document: DocumentMut = text.parse().context("can't parse the Credentials")?;
+    let Some(resend) = document.get_mut("resend") else {
+        let mut section = DocumentMut::new();
+        section["resend"]["key"] = toml_edit::value(secret);
+        let mut text = text.to_string();
+        if !text.trim().is_empty() {
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push('\n');
+        }
+        text.push_str(&section.to_string());
+        return Ok(text);
+    };
+    let resend = resend
+        .as_table_like_mut()
+        .context("resend must be a section in the Credentials")?;
+    match resend.get_mut("key").and_then(Item::as_value_mut) {
+        Some(old) => {
+            let decor = old.decor().clone();
+            *old = secret.into();
+            *old.decor_mut() = decor;
+        }
+        None => {
+            resend.insert("key", toml_edit::value(secret));
+        }
+    }
+    Ok(document.to_string())
+}
+
+/// Create the file at `path` holding `text`, readable only by the user,
+/// and the folder it goes in if that is missing.
+fn create(path: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?
+        .write_all(text.as_bytes())
 }
 
 /// The Credentials' path, next to the User config.
