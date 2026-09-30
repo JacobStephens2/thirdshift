@@ -5,8 +5,13 @@ use crate::issue::IssueUrl;
 
 /// Every prompt ends with this. Sessions run with `claude -p`, which exits
 /// once the agent ends its turn, killing any background task still running.
+/// Other sessions on the same machine run the same commands, so a wait on a
+/// process name can match theirs and outlast the session's own task.
 const HEADLESS: &str = "You run headless: nobody is watching, and ending your turn ends the session. \
     Run tests and other long commands in the foreground, raising the Bash timeout if needed. \
+    If a command is moved to the background, wait for that task by its own task id or output file, \
+    never by process names or patterns (`pgrep`, `ps | grep`, and the like): \
+    other sessions on this machine run the same commands. \
     Never end your turn while a background task you depend on is still running: ending the turn kills it.\n";
 
 /// The fresh prompt, for a run that starts a new Issue branch.
