@@ -59,8 +59,8 @@ any Ticket that one of these, an open issue outside the Spec or a failed Ticket 
 Ticket is not done, the Spec run fails, with a line on each saying why.
 
 Tickets always merge into the Spec branch, whatever the command or the User config says.
-merge on a Spec merges the Spec PR into the Base branch once it is ready, mergeable and green;
-without merge, or with --no-merge, the Spec PR is left ready for review.
+merge on a Spec merges the Spec PR into the Base branch once it is ready, mergeable and green,
+as does merge.always; without either, or with --no-merge, the Spec PR is left ready for review.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.

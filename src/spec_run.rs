@@ -61,7 +61,7 @@ pub fn run(
     let pr_url = open_spec_pr(spec, worktree.branch(), base)?;
     let mut log = logs.path(SPEC_REVIEW);
     match review_and_deliver(spec, &worktree, base, &pr_url, goal, logs, &mut log) {
-        Ok(pr_url) => Ok(Reached {
+        Ok(()) => Ok(Reached {
             pr_url,
             goal,
             log: Some(log),
@@ -328,7 +328,7 @@ fn review_and_deliver(
     goal: Goal,
     logs: &Logs,
     log: &mut PathBuf,
-) -> Result<String> {
+) -> Result<()> {
     let spec_branch = worktree.branch();
     worktree.fast_forward_to_origin()?;
     let plugin = Plugin::write()?;

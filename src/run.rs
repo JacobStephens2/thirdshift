@@ -174,7 +174,8 @@ fn implement(
     run_session("implement", prompt)?;
     worktree.push()?;
     let pr = mark_pr_ready(issue, worktree.branch(), base)?;
-    deliver(issue, worktree, base, &pr, goal, &mut run_session)
+    deliver(issue, worktree, base, &pr, goal, &mut run_session)?;
+    Ok(pr.url)
 }
 
 /// Take the ready PR `pr` for `issue`, from the branch checked out in
@@ -182,7 +183,7 @@ fn implement(
 /// through the Repair loop, starting each Repair through `run_session`, and
 /// for [`Goal::Merged`], Self-merge it. A merge that fails goes back round
 /// the Repair loop and is tried again on the new head; if that round finds
-/// nothing to fix, this fails with a `PolicyRefusal`. Returns the PR's URL.
+/// nothing to fix, this fails with a `PolicyRefusal`.
 pub fn deliver(
     issue: &IssueUrl,
     worktree: &Worktree,
@@ -190,7 +191,7 @@ pub fn deliver(
     pr: &PullRequest,
     goal: Goal,
     run_session: &mut impl FnMut(&str, &str) -> Result<()>,
-) -> Result<String> {
+) -> Result<()> {
     let branch = worktree.branch();
     let mut repair_loop = RepairLoop {
         issue,
@@ -207,12 +208,12 @@ pub fn deliver(
             bail!("interrupted");
         }
         if goal == Goal::ReadyForReview {
-            return Ok(pr.url.clone());
+            return Ok(());
         }
         progress::step(format_args!("merging the PR into {base}"));
         let Err(error) = github::merge(issue, branch, &watched) else {
             after_merge(issue, worktree, pr);
-            return Ok(pr.url.clone());
+            return Ok(());
         };
         progress::step(format_args!("the merge failed: {error:#}"));
         match repair_loop.round_after_failed_merge(&watched, run_session)? {
