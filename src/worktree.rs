@@ -2,6 +2,7 @@
 //! branch, removed together with the local Issue branch when dropped unless
 //! it is kept.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -31,6 +32,7 @@ impl Worktree {
     /// Create `branch` fresh from `origin/<base>` in a new worktree next to the
     /// launch repository's root, named `<repo>-<branch>`.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;
         Self::add(
             launch,
@@ -46,6 +48,7 @@ impl Worktree {
     /// is fetched too, for the review fixed point. A local `branch`, if any, is
     /// reset to origin's: `branch::select` has checked they already match.
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base, branch])?;
         Self::add(
             launch,
@@ -247,6 +250,9 @@ impl Drop for Worktree {
             "cleaning up the worktree and local branch {}",
             self.branch
         ));
+        let _lock = lock_launch(&self.launch).inspect_err(|error| {
+            progress::step(format_args!("cleaning up without the lock: {error:#}"))
+        });
         // Each step is attempted even if the one before it failed.
         let steps: [&[&str]; 2] = [
             &["worktree", "remove", "--force", &path],
@@ -257,5 +263,84 @@ impl Drop for Worktree {
                 progress::step(format_args!("cleanup incomplete: {error:#}"));
             }
         }
+    }
+}
+
+/// Wait for, then hold until the file is dropped, the Launch directory's
+/// worktree lock, so the Runs of a Spec run's Tickets add and remove their
+/// worktrees and local Issue branches one at a time: `git worktree add -b`
+/// and `git branch -D` can fail partway on a lock file another holds.
+fn lock_launch(launch: &Git) -> Result<File> {
+    let common_dir = launch
+        .dir()
+        .join(launch.run(&["rev-parse", "--git-common-dir"])?);
+    let path = common_dir.join("thirdshift-worktrees.lock");
+    let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
+    file.lock()
+        .with_context(|| format!("can't lock {}", path.display()))?;
+    Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A clone `work` of a bare `origin.git` with one commit on `main`, both
+    /// in a temp directory. No global or system config is read.
+    fn launch_directory() -> (tempfile::TempDir, Git) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(
+            temp.path(),
+            &["init", "-q", "--bare", "-b", "main", "origin.git"],
+        );
+        git(temp.path(), &["clone", "-q", "origin.git", "work"]);
+        let work = temp.path().join("work");
+        git(
+            &work,
+            &[
+                "-c",
+                "user.name=Test Runner",
+                "-c",
+                "user.email=runner@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "Initial",
+            ],
+        );
+        git(&work, &["push", "-q", "origin", "HEAD:main"]);
+        (temp, Git::new(work))
+    }
+
+    #[test]
+    fn a_worktree_is_created_only_once_another_run_lets_go_of_the_launch_directory() {
+        let (temp, launch) = launch_directory();
+        let held = lock_launch(&launch).unwrap();
+        let path = temp.path().join("work-issue-1");
+
+        let creating = std::thread::spawn(move || {
+            Worktree::create_fresh(&launch, "work", "issue-1", "main").unwrap()
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        let created_while_held = path.exists();
+        drop(held);
+        let worktree = creating.join().unwrap();
+
+        assert!(!created_while_held);
+        assert_eq!(worktree.path(), path.canonicalize().unwrap());
     }
 }

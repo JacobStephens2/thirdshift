@@ -31,6 +31,7 @@ use args::{Command, RunArgs};
 use config::UserConfig;
 use notification::{NotificationAsk, RunNotification};
 use run::Goal;
+use spec_run::Parallel;
 
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, or a merged one, unattended.
@@ -45,7 +46,8 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
 
-merge, --no-merge, --email and --no-email go before or after the Issue URL, in any order.
+merge, --no-merge, --email, --no-email and parallel <n> (or --parallel <n>) go before or
+after the Issue URL, in any order.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
@@ -56,7 +58,16 @@ can reach, in the order their \"blocked by\" links allow, each merged into the S
 opens one Spec PR. An Unready Ticket, one labelled ready-for-human, needs-info, wontfix or
 needs-triage, is never run, nor is a Ticket with sub-issues, a Ticket in a cycle of blockers, or
 any Ticket that one of these, an open issue outside the Spec or a failed Ticket blocks. If any
-Ticket is not done, the Spec run fails, with a line on each saying why.
+Ticket is not done, the Spec run fails, with a line on each saying why. It runs up to 3
+Tickets at once; parallel <n> runs up to <n> for one Spec run, and spec.parallel sets the
+default:
+
+    [spec]
+    parallel = 2
+
+Tickets always merge into the Spec branch, whatever the command or the User config says.
+merge on a Spec merges the Spec PR into the Base branch once it is ready, mergeable and green,
+as does merge.always; without either, or with --no-merge, the Spec PR is left ready for review.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
@@ -92,6 +103,7 @@ fn main() -> ExitCode {
         issue,
         goal,
         email,
+        parallel,
         spec_branch,
     } = match args::parse(&args) {
         Ok(Command::Help) => {
@@ -145,11 +157,16 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let parallel = Parallel {
+        tickets: parallel.unwrap_or(config.spec_parallel),
+        asked: parallel.is_some(),
+    };
     let ended = run::run(
         &issue,
         goal,
         &config.logs_dir,
         launch_pull,
+        parallel,
         spec_branch.as_deref(),
     );
     let code = match &ended {

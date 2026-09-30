@@ -4,7 +4,7 @@
 # that merge commit v<version>. Pushing the tag starts the dist release
 # workflow.
 #
-# Usage: scripts/release.sh <version>
+# Usage: scripts/release.sh [--review] <version>
 #
 # Run it in a clone of this repo, signed in to gh and with claude logged in. It
 # works from origin/main in a temporary worktree, so the branch checked out
@@ -12,16 +12,25 @@
 #
 # claude, with no tools, writes the PR's summary from the prompt in
 # release-summary.md beside this script. If it fails, the summary is GitHub's
-# generated notes instead, and the script warns and carries on.
+# generated notes instead, and the script warns and carries on. With --review,
+# it then prints the summary and asks whether to carry on with it, edit it in
+# $EDITOR first, or stop with nothing pushed. Without it, it never reads stdin.
+#
+# Before it pushes anything, it refuses a release that can't be cut: a version
+# that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
+# tag that already exists locally or on origin, or a latest CI run on main that
+# didn't succeed.
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
-# on and merges an open PR, or tags a merged one. If v<version> is already on
-# origin, on the merge of the bump PR, it says so and exits 0; a v<version>
-# tag anywhere else is refused.
+# on and merges an open PR, or tags a merged one, without the refusals above,
+# which the first run passed. If v<version> is already on origin, on the merge
+# of the bump PR, it says so and exits 0; a v<version> tag anywhere else is
+# refused.
 #
 # Prints a progress line on stderr for each step. Exits 0 once the tag is
-# pushed; if the PR's checks fail, it leaves the PR open and exits 1.
+# pushed. It exits 1 with nothing more pushed if it refuses or the review says
+# no, and exits 1 leaving the PR open if the PR's checks fail.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
 shopt -s inherit_errexit
@@ -33,8 +42,13 @@ summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
+	review=
+	if [ "${1-}" = --review ]; then
+		review=1
+		shift
+	fi
 	if [ "$#" -ne 1 ]; then
-		echo "usage: release.sh <version>" >&2
+		echo "usage: release.sh [--review] <version>" >&2
 		exit 2
 	fi
 	version=$1
@@ -48,9 +62,12 @@ main() {
 	case $pr_state in
 	"")
 		if [ -z "$head" ]; then
-			push_bump
+			commit_bump
+			write_summary "nothing was pushed"
+			git push --quiet origin "$head:refs/heads/$branch"
 		else
 			progress "resuming: $branch is on origin at ${head:0:7} with no PR"
+			write_summary "no PR was opened"
 		fi
 		open_pr
 		wait_and_merge
@@ -91,10 +108,14 @@ find_earlier_run() {
 }
 
 # exit_if_tagged
-# Exits 0 if $tag is on origin at the merge of the bump PR, and 1 if it is on
-# origin anywhere else.
+# After an earlier run, exits 0 if $tag is on origin at the merge of the bump
+# PR, and refuses if it is on origin anywhere else. With no earlier run,
+# check_can_release refuses an existing tag in its turn.
 exit_if_tagged() {
 	local tagged
+	if [ -z "$pr_state" ] && [ -z "$head" ]; then
+		return
+	fi
 	tagged=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}" | tail -n 1 | cut -f 1)
 	if [ -z "$tagged" ]; then
 		return
@@ -103,16 +124,16 @@ exit_if_tagged() {
 		progress "$tag is already tagged on ${merge:0:7}, the merge of $url, so there is nothing left to do"
 		exit 0
 	fi
-	progress "$tag already exists on origin at ${tagged:0:7}, which is not the merge of a $branch PR, so it is left alone"
-	exit 1
+	refuse "$tag already exists on origin at ${tagged:0:7}, which is not the merge of a $branch PR"
 }
 
-# push_bump
-# Commits the version bump on main in a temporary worktree, pushes it to
-# $branch and sets head to it.
-push_bump() {
+# commit_bump
+# Refuses a release that can't be cut, then commits the version bump on main
+# in a temporary worktree and sets head to it.
+commit_bump() {
 	local base
 	base=$(git rev-parse --verify 'origin/main^{commit}')
+	check_can_release "$version" "$tag" "$base"
 	repo=$PWD
 	work=$(mktemp -d)
 	trap 'git -C "$repo" worktree remove --force "$work" 2>/dev/null || rm -rf "$work"' EXIT
@@ -125,20 +146,29 @@ push_bump() {
 		git commit --quiet --all --message "Release $version"
 	)
 	head=$(git -C "$work" rev-parse HEAD)
-	git push --quiet origin "$head:refs/heads/$branch"
+}
+
+# write_summary <what stopping leaves undone>
+# Sets diff to the version diff of $head and summary to claude's summary of
+# it, then with --review, asks about the summary and exits 1 on no, saying
+# <what stopping leaves undone>.
+write_summary() {
+	local base
+	base=$(git merge-base "$head" origin/main)
+	progress "writing the summary with claude"
+	diff=$(version_diff "$base" "$head")
+	summary=$(release_summary "$base" "$tag" "$diff")
+	if [ -n "$review" ] && ! summary=$(review_summary "$summary"); then
+		progress "stopped at the review, so $1"
+		exit 1
+	fi
 }
 
 # open_pr
-# Opens the bump PR for $head and sets url to it.
+# Opens the bump PR for $branch with $summary and $diff and sets url to it.
 open_pr() {
-	local base body
-	base=$(git merge-base "$head" origin/main)
-	progress "writing the summary with claude"
-	# Built first so a failure to build it stops the script, as it would not
-	# inside the gh command line.
-	body=$(pr_body "$base" "$head" "$tag")
 	url=$(gh pr create --base main --head "$branch" --title "Release $version" \
-		--body "$body" | tail -n 1)
+		--body "$(pr_body "$summary" "$diff")" | tail -n 1)
 	progress "opened $url"
 }
 
@@ -164,8 +194,73 @@ progress() {
 	echo "release: $*" >&2
 }
 
+# refuse <reason>
+refuse() {
+	progress "refusing to release $version: $*"
+	exit 1
+}
+
+# check_can_release <version> <tag> <base>
+# Refuses unless <version> is plain X.Y.Z and higher than the version in the
+# manifest at <base>, main's tip, no <tag> exists on origin or locally, and
+# the latest CI run on main is on <base> and succeeded.
+check_can_release() {
+	local current short=${3:0:7} latest sha status conclusion
+	if ! [[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+		refuse "it is not a plain X.Y.Z version, such as 0.4.0"
+	fi
+	current=$(git show "$3:Cargo.toml" | package_field version)
+	if ! is_higher "$1" "$current"; then
+		refuse "it is not higher than $current on main"
+	fi
+
+	# Origin first: fetching main brings in the tags on it, so a tag found
+	# locally may have come from origin.
+	if [ -n "$(git ls-remote --tags origin "refs/tags/$2")" ]; then
+		refuse "$2 already exists on origin"
+	fi
+	if git rev-parse --quiet --verify "refs/tags/$2" >/dev/null; then
+		refuse "$2 already exists locally"
+	fi
+
+	latest=$(gh run list --branch main --workflow ci.yml --event push --limit 1 \
+		--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
+	read -r sha status conclusion <<<"$latest"
+	if [ "$sha" != "$3" ]; then
+		refuse "CI has not run on main at $short yet"
+	elif [ "$status" != completed ]; then
+		refuse "CI on main at $short is $status, not finished"
+	elif [ "$conclusion" != success ]; then
+		refuse "CI on main at $short ended in $conclusion"
+	fi
+}
+
+# is_higher <version> <other>
+# Whether plain semver <version> is higher than <other>, part by part.
+is_higher() {
+	local -a ours theirs
+	local i
+	IFS=. read -ra ours <<<"$1"
+	IFS=. read -ra theirs <<<"$2"
+	for i in 0 1 2; do
+		if ((ours[i] != theirs[i])); then
+			((ours[i] > theirs[i]))
+			return
+		fi
+	done
+	return 1
+}
+
 fetch_main() {
 	git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+}
+
+# package_field <key>
+# The value of <key> in the [package] section of the manifest on stdin.
+package_field() {
+	awk -F '"' -v key="$1" '
+		/^\[/ { section = $0 }
+		section == "[package]" && $1 == key " = " { print $2; exit }'
 }
 
 # bump_version <version>
@@ -174,14 +269,14 @@ fetch_main() {
 # shellcheck disable=SC2016 # the $0 in the awk programs is awk's
 bump_version() {
 	local name
-	name=$(awk '/^\[/ { section = $0 } section == "[package]" && /^name = / { print; exit }' Cargo.toml)
+	name=$(package_field name <Cargo.toml)
 	rewrite Cargo.toml -v version="$1" '
 		/^\[/ { section = $0 }
 		section == "[package]" && /^version = / && !done { $0 = "version = \"" version "\""; done = 1 }
 		{ print }'
 	rewrite Cargo.lock -v version="$1" -v name="$name" '
 		/^\[\[package\]\]/ { ours = 0 }
-		$0 == name { ours = 1 }
+		$0 == "name = \"" name "\"" { ours = 1 }
 		ours && /^version = / { $0 = "version = \"" version "\""; ours = 0 }
 		{ print }'
 }
@@ -194,23 +289,56 @@ rewrite() {
 	mv "$file.new" "$file"
 }
 
-# pr_body <base> <head> <tag>
-# The body of the bump PR on <head>, which <tag> will name, off <base>: the
-# summary, between markers the Release page step can find, then the version
-# diff.
+# pr_body <summary> <version diff section>
+# The body of the bump PR: the summary, between markers release-notes.sh finds
+# to head the Release page with it, then the version diff.
 pr_body() {
-	local diff summary
-	diff=$(version_diff "$1" "$2")
-	summary=$(release_summary "$1" "$3" "$diff")
 	cat <<-EOF
 		## Summary
 
 		<!-- release-summary:start -->
-		$summary
+		$1
 		<!-- release-summary:end -->
 
-		$diff
+		$2
 	EOF
+}
+
+# review_summary <summary>
+# Prints <summary> on stderr and asks on stdin whether to carry on with it,
+# edit it in $EDITOR, or stop. Prints the summary to carry on with; returns
+# non-zero to stop, on no, at the end of stdin, or if the editor fails.
+# Called in a condition, where set -e is off, so each step's failure is
+# handled here.
+review_summary() {
+	local answer file status
+	printf '\n%s\n\n' "$1" >&2
+	while :; do
+		printf 'release: open the PR with this summary? [y]es / [e]dit / [n]o ' >&2
+		read -r answer || return
+		case $answer in
+		y | yes)
+			echo "$1"
+			return
+			;;
+		e | edit)
+			file=$(mktemp --suffix=.md) || return
+			status=0
+			# $EDITOR runs as git runs it, so it may carry arguments. Its
+			# output goes to stderr, as stdout is the summary.
+			{
+				echo "$1" >"$file" &&
+					sh -c "${EDITOR:-vi} \"\$1\"" "${EDITOR:-vi}" "$file" >&2 &&
+					cat "$file"
+			} || status=$?
+			rm -f "$file"
+			return "$status"
+			;;
+		n | no)
+			return 1
+			;;
+		esac
+	done
 }
 
 # version_diff <base> <head>
