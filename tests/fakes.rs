@@ -22,7 +22,8 @@ mod json;
 
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 use json::{Array, Json};
 
@@ -36,6 +37,23 @@ fn die(message: &str, code: i32) -> ! {
 fn exit(code: i32) -> ! {
     std::io::stdout().flush().unwrap();
     std::process::exit(code)
+}
+
+/// The path in the environment variable `name`, which the harness always sets.
+fn env_path(name: &str) -> PathBuf {
+    std::env::var_os(name)
+        .unwrap_or_else(|| panic!("{name} is not set"))
+        .into()
+}
+
+/// Run git in `repo`, returning the completed process.
+fn git(repo: &Path, args: &[&str]) -> Output {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .unwrap()
 }
 
 fn read_json(path: &Path) -> Json {

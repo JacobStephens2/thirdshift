@@ -294,8 +294,7 @@ fn a_run_without_the_flag_sends_nothing() {
 #[test]
 fn a_failed_send_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
     // One reply end to end; the email's unit tests take the other shapes of
-    // reply. The exit code and stdout are settled before the send, whatever
-    // the outcome.
+    // reply.
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_OPENS_PR);
     let resend = ResendStandIn::replying(
@@ -313,12 +312,35 @@ fn a_failed_send_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, format!("{PR_URL}\n"));
     assert_eq!(resend.requests().len(), 1);
-    let warning = result
+    assert_contains(the_warning(&result), "API key is invalid");
+}
+
+#[test]
+fn a_failed_send_after_a_failed_run_is_a_warning_that_keeps_its_exit_code() {
+    let scenario = Scenario::new();
+    scenario.agent_does("exit 3");
+    let resend = ResendStandIn::replying(500, "upstream exploded");
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_eq!(resend.requests().len(), 1);
+    assert_contains(the_warning(&result), "upstream exploded");
+}
+
+/// The first line of the Run's stderr that is a warning.
+fn the_warning(result: &RunResult) -> &str {
+    result
         .stderr
         .lines()
         .find(|line| line.contains("warning:"))
-        .unwrap_or_else(|| panic!("no warning in stderr: {}", result.stderr));
-    assert_contains(warning, "API key is invalid");
+        .unwrap_or_else(|| panic!("no warning in stderr: {}", result.stderr))
 }
 
 /// The User config of a machine where every Run sends a Run notification.

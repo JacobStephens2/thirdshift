@@ -84,7 +84,7 @@ fn prompt_of(record: &Json) -> &str {
 
 /// The script for the session just recorded last in `records`.
 fn script_for(records: &[Json]) -> PathBuf {
-    let script = std::env::var("FAKE_CLAUDE_SCRIPT").expect("FAKE_CLAUDE_SCRIPT is not set");
+    let script = crate::env_path("FAKE_CLAUDE_SCRIPT").display().to_string();
     let mut candidates = Vec::new();
     if let Some(issue) = issue_of(prompt_of(records.last().unwrap())) {
         let count = records
@@ -105,7 +105,7 @@ fn script_for(records: &[Json]) -> PathBuf {
 /// `git` in the working directory, with its stdout trimmed, and whether it
 /// succeeded.
 fn git_here(args: &[&str]) -> (String, bool) {
-    let output = Command::new("git").args(args).output().unwrap();
+    let output = crate::git(Path::new("."), args);
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     (stdout, output.status.success())
 }
@@ -126,8 +126,7 @@ pub fn main(argv: Vec<String>) {
     let (branch, _) = git_here(&["branch", "--show-current"]);
     let (_, merging) = git_here(&["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
     let text_mode = !argv.iter().any(|arg| arg == "--output-format");
-    let record_path = std::env::var("FAKE_CLAUDE_RECORD").expect("FAKE_CLAUDE_RECORD is not set");
-    let record_path = Path::new(&record_path);
+    let record_path = &crate::env_path("FAKE_CLAUDE_RECORD");
 
     let lock = crate::lock_beside(record_path);
 

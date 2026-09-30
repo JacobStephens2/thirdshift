@@ -109,11 +109,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use crate::json::{self, Array, Bool, Json, Null, number, object, string};
-use crate::{die, python_list};
+use crate::{die, git, python_list};
 
 static LOCK: Mutex<Option<File>> = Mutex::new(None);
 
@@ -127,9 +127,7 @@ fn unlock() {
 }
 
 fn state_path() -> PathBuf {
-    std::env::var_os("FAKE_GH_STATE")
-        .expect("FAKE_GH_STATE is not set")
-        .into()
+    crate::env_path("FAKE_GH_STATE")
 }
 
 fn load() -> Json {
@@ -312,9 +310,10 @@ fn json_fields(fields: &Json, wanted: &[String]) -> Json {
 }
 
 fn record(args: &[String]) {
-    let path =
-        PathBuf::from(std::env::var_os("FAKE_GH_RECORD").expect("FAKE_GH_RECORD is not set"));
-    crate::append_record(&path, Array(args.iter().map(string).collect()));
+    crate::append_record(
+        &crate::env_path("FAKE_GH_RECORD"),
+        Array(args.iter().map(string).collect()),
+    );
 }
 
 /// The PR's JSON fields. `headRefOid`, its head as merged or else its head
@@ -424,16 +423,6 @@ fn scenario_root() -> PathBuf {
 
 fn origin_repo() -> PathBuf {
     scenario_root().join("origin.git")
-}
-
-/// Run git in `repo`, returning the completed process.
-fn git(repo: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .unwrap()
 }
 
 /// The tip of `branch` on origin, if origin has it.
@@ -1040,7 +1029,9 @@ fn parse_json(text: &str) -> Json {
     json::parse(text).unwrap_or_else(|error| panic!("{error}: {text}"))
 }
 
-fn fake(state: &mut Json, args: &[&str]) {
+/// `gh fake …`, through which the tests set up the state: checks, runs,
+/// hooks and failing commands.
+fn fake_command(state: &mut Json, args: &[&str]) {
     let times = |text: &str| number(text.parse::<i64>().unwrap());
     match args {
         [kind @ ("checks" | "statuses"), sha, list] => {
@@ -1146,7 +1137,7 @@ pub fn main(args: Vec<String>) {
             let (positional, flags) = parse(rest);
             api(&mut state, &positional, &flags);
         }
-        ["fake", rest @ ..] => fake(&mut state, rest),
+        ["fake", rest @ ..] => fake_command(&mut state, rest),
         _ => die(
             &format!("fake gh: unsupported command: {}", python_list(&args)),
             2,
