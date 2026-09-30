@@ -55,7 +55,7 @@ pub struct Parallel {
 /// reaches `goal`. The Spec branch is pushed before any Ticket starts, and
 /// up to `parallel` Tickets run at once, the graph read again whenever one
 /// ends. The Spec PR is opened as a draft once the first Ticket lands, or
-/// taken as it is if it is already open, and its Tickets checklist rewritten
+/// turned back into a draft if it is already open, and its Tickets checklist rewritten
 /// as Tickets start and end. A Ticket that fails stops only the Tickets it
 /// blocks; with any Ticket not done, this is a Failed spec run, which leaves
 /// the Spec PR, if there is one, a draft. An interrupt ends it too, once the
@@ -167,21 +167,31 @@ fn land_tickets(
             .recv()
             .expect("a running Ticket's thread holds a sender");
         running.remove(&ticket);
-        // Once there is an error, the rest are only waited for.
-        let reread = result.and_then(|outcome| {
-            let landed = matches!(outcome, TicketOutcome::Landed(_));
-            outcomes.insert(ticket, outcome);
-            tickets = github::tickets(spec)?;
-            let list = checklist(&tickets, &outcomes);
-            match spec_pr {
-                Some(pr) => write_checklist_or_warn(spec, pr, &list),
-                None if landed => *spec_pr = Some(open_spec_pr(spec, spec_branch, base, &list)?),
-                None => {}
-            }
-            Ok(())
+        // Once there is an error, the rest are only waited for, but each
+        // still has its line in the checklist, from the last graph read.
+        let outcome = result.unwrap_or_else(|finish_error| {
+            let cause = format!("{finish_error:#}");
+            error.get_or_insert(finish_error);
+            TicketOutcome::Failed { cause, log: None }
         });
-        if let Err(reread_error) = reread {
-            error.get_or_insert(reread_error);
+        let landed = matches!(outcome, TicketOutcome::Landed(_));
+        outcomes.insert(ticket, outcome);
+        match github::tickets(spec) {
+            Ok(reread) => tickets = reread,
+            Err(reread_error) => {
+                error.get_or_insert(reread_error);
+            }
+        }
+        let list = checklist(&tickets, &outcomes);
+        match spec_pr {
+            Some(pr) => write_checklist_or_warn(spec, pr, &list),
+            None if landed => match open_spec_pr(spec, spec_branch, base, &list) {
+                Ok(pr) => *spec_pr = Some(pr),
+                Err(open_error) => {
+                    error.get_or_insert(open_error);
+                }
+            },
+            None => {}
         }
     }
     if let Some(error) = error {
@@ -407,8 +417,8 @@ fn start_ticket(
 
 /// Relay the stderr of Ticket `number`'s Run `child` with a `#<number>: `
 /// prefix until it exits. An interrupt is passed on to the child, which is
-/// waited for as it goes down its Failed run path, and then it was
-/// interrupted. Otherwise it landed if it exits 0, and failed otherwise, with
+/// waited for as it goes down its Failed run path, and ends Interrupted.
+/// Otherwise it landed if it exits 0, and failed otherwise, with
 /// the cause and session log it ended on.
 fn finish_ticket(number: u64, mut child: Child) -> Result<TicketOutcome> {
     // Relay on its own thread, so this one can watch for an interrupt.
@@ -529,9 +539,9 @@ fn write_checklist(spec: &IssueUrl, pr: &PullRequest, checklist: &str) -> Result
 /// [`write_checklist`], only warning if it fails: the Spec run goes on
 /// without it.
 fn write_checklist_or_warn(spec: &IssueUrl, pr: &PullRequest, checklist: &str) {
-    if let Err(problem) = write_checklist(spec, pr, checklist) {
+    if let Err(error) = write_checklist(spec, pr, checklist) {
         progress::step(format_args!(
-            "could not update the Spec PR's Tickets checklist: {problem:#}"
+            "could not update the Spec PR's Tickets checklist: {error:#}"
         ));
     }
 }

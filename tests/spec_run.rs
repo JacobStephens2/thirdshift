@@ -1295,6 +1295,25 @@ fn a_ticket_that_fails_once_the_spec_pr_is_open_is_shown_failed_in_its_checklist
 }
 
 #[test]
+fn a_ticket_that_lands_just_before_github_stops_answering_still_gets_the_draft_spec_pr() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(
+        21,
+        &format!("gh fake fails 'api graphql'\n{}", agent_lands(21, "21.txt")),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        "- [ ] #21 landed with https://github.com/acme/widgets/pull/1, but is still open\n\
+         - [ ] #22 blocked by #21\n",
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["21"]);
+}
+
+#[test]
 fn a_failed_spec_review_that_rewrote_the_body_has_the_checklist_put_back_in_the_draft() {
     let scenario = linear_spec();
     scenario.agent_does_for(
