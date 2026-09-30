@@ -94,8 +94,8 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 }
                 let n = args.next();
                 let Some(n) = n.and_then(|n| n.parse::<NonZeroUsize>().ok()) else {
-                    let not = n.map(|n| format!(", not {n}")).unwrap_or_default();
-                    bail!("{arg} must be followed by a whole number from 1 up{not}");
+                    let given = n.map(|n| format!(", not {n}")).unwrap_or_default();
+                    bail!("{arg} must be followed by a whole number from 1 up{given}");
                 };
                 parallel = Some(n);
             }

@@ -241,7 +241,7 @@ All sessions in a Run share the Run's UTC timestamp, so a Run's logs sort togeth
 
 ## Spec runs
 
-An issue with sub-issues is a **Spec**, and its sub-issues are its **Tickets**. `thirdshift <Spec URL>` is a **Spec run**: it pushes the **Spec branch** (the Spec's own Issue branch), then runs each ready Ticket as a Merge run into the Spec branch, in the order GitHub's "blocked by" links between them allow, lowest number first. A Ticket is ready once it is open, has no sub-issues of its own, has no triage label saying it isn't for an agent (`ready-for-human`, `needs-info`, `wontfix` or `needs-triage`), and every issue blocking it is closed. Once every Ticket is done, it opens the **Spec PR** from the Spec branch into the Base branch, ready for review. Each Ticket's progress lines are relayed on stderr prefixed with `#<n>: `.
+An issue with sub-issues is a **Spec**, and its sub-issues are its **Tickets**. `thirdshift <Spec URL>` is a **Spec run**: it pushes the **Spec branch** (the Spec's own Issue branch), then runs each ready Ticket as a Merge run into the Spec branch, in the order GitHub's "blocked by" links between them allow, lowest number first. Once every Ticket is done, it opens the **Spec PR** from the Spec branch into the Base branch, ready for review. Each Ticket's progress lines are relayed on stderr prefixed with `#<n>: `.
 
 Independent Tickets run at once, up to 3 by default. Whenever a Ticket's Run ends, the Spec run reads the graph from GitHub again and starts ready Tickets until the limit is reached. To change the limit for one Spec run, add `parallel <n>` (or `--parallel <n>`) before or after the URL; `spec.parallel` in the [User config](#user-config) sets it for every Spec run on the machine:
 
@@ -251,8 +251,6 @@ thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a tim
 ```
 
 `parallel` followed by `0`, a negative number or anything but a whole number, or given twice, is an argument error (exit `2`). `parallel` on an issue with no sub-issues stops the Run before any work, since there are no Tickets to run at once. The Tickets' Runs share the Launch directory: they create their worktrees there one at a time, and a git command that finds a lock file held by another waits and tries again.
-
-A Ticket that fails stops any more Tickets from starting; those already running are left to end, and then the Spec run fails without a Spec PR.
 
 ## Foreign commits in a Merge run
 

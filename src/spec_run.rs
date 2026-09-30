@@ -169,6 +169,8 @@ fn finish_ticket(number: u64, mut child: Child) -> Result<()> {
     Ok(())
 }
 
+/// Print each line of the Run `child`'s stderr as a step, prefixed with
+/// `#<number>: `, until the stream closes.
 fn relay(number: u64, child: &mut Child) -> Result<()> {
     let stderr = child.stderr.take().context("no stderr from the Run")?;
     for line in BufReader::new(stderr).lines() {

@@ -269,3 +269,67 @@ fn lock_launch(launch: &Git) -> Result<File> {
         .with_context(|| format!("can't lock {}", path.display()))?;
     Ok(file)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A clone `work` of a bare `origin.git` with one commit on `main`, both
+    /// in a temp directory. No global or system config is read.
+    fn launch_directory() -> (tempfile::TempDir, Git) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(
+            temp.path(),
+            &["init", "-q", "--bare", "-b", "main", "origin.git"],
+        );
+        git(temp.path(), &["clone", "-q", "origin.git", "work"]);
+        let work = temp.path().join("work");
+        git(
+            &work,
+            &[
+                "-c",
+                "user.name=Test Runner",
+                "-c",
+                "user.email=runner@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "Initial",
+            ],
+        );
+        git(&work, &["push", "-q", "origin", "HEAD:main"]);
+        (temp, Git::new(work))
+    }
+
+    #[test]
+    fn a_worktree_is_created_only_once_another_run_lets_go_of_the_launch_directory() {
+        let (temp, launch) = launch_directory();
+        let held = lock_launch(&launch).unwrap();
+        let path = temp.path().join("work-issue-1");
+
+        let creating = std::thread::spawn(move || {
+            Worktree::create_fresh(&launch, "work", "issue-1", "main").unwrap()
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        let created_while_held = path.exists();
+        drop(held);
+        let worktree = creating.join().unwrap();
+
+        assert!(!created_while_held);
+        assert_eq!(worktree.path(), path.canonicalize().unwrap());
+    }
+}
