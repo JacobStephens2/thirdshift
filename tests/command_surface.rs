@@ -186,6 +186,14 @@ fn a_repeated_flag_prints_an_error_and_the_help_to_stderr() {
             vec![url.as_str(), "email", "--email", "b@example.com"],
             "--email",
         ),
+        (
+            vec!["parallel", "2", url.as_str(), "parallel", "2"],
+            "parallel",
+        ),
+        (
+            vec!["parallel", "2", "--parallel", "3", url.as_str()],
+            "--parallel",
+        ),
     ] {
         let result = scenario.run(&args);
 
@@ -278,6 +286,51 @@ fn help_lists_the_email_settings() {
         "onboarding@resend.dev",
         "RESEND_API_KEY",
     ] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+}
+
+#[test]
+fn parallel_without_a_positive_whole_number_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+    let url = scenario.issue_url(7);
+
+    for (args, error) in [
+        (
+            vec!["parallel", "0", url.as_str()],
+            "parallel must be followed by a whole number from 1 up, not 0",
+        ),
+        (
+            vec!["--parallel", "-1", url.as_str()],
+            "--parallel must be followed by a whole number from 1 up, not -1",
+        ),
+        (
+            vec![url.as_str(), "parallel", "x"],
+            "parallel must be followed by a whole number from 1 up, not x",
+        ),
+        (
+            vec!["parallel", url.as_str()],
+            "parallel must be followed by a whole number from 1 up, not https://github.com/acme/widgets/issues/7",
+        ),
+        (
+            vec![url.as_str(), "parallel"],
+            "parallel must be followed by a whole number from 1 up",
+        ),
+    ] {
+        let result = scenario.run(&args);
+
+        assert_argument_error(&scenario, &result, error);
+        assert!(scenario.claude_calls().is_empty(), "{args:?} started a Run");
+    }
+}
+
+#[test]
+fn help_lists_parallel_and_spec_parallel() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    for mention in ["parallel <n>", "spec.parallel", "Spec"] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");
     }
 }

@@ -1,14 +1,16 @@
-//! A Spec run: each of a Spec's Tickets, in dependency order, taken by a
-//! Ticket's Run, a Merge run into the Spec branch in a child `thirdshift`
+//! A Spec run: each of a Spec's Tickets, in dependency order and several at
+//! once, taken by a Ticket's Run, a Merge run into the Spec branch in a child `thirdshift`
 //! (ADR-0006), then the Spec review and the Spec PR from the Spec branch into
 //! the Base branch, kept mergeable and green like a Run's PR, and Self-merged
 //! when the Spec run was asked to merge.
 
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
 
@@ -35,13 +37,21 @@ const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "
 /// The Spec review session's kind, in its progress lines and log name.
 const SPEC_REVIEW: &str = "spec-review";
 
+/// How many Tickets a Spec run runs at once.
+pub struct Parallel {
+    pub tickets: NonZeroUsize,
+    /// Whether the command asked for it with `parallel <n>`, rather than the
+    /// User config or the default deciding.
+    pub asked: bool,
+}
+
 /// Take the Spec `spec`, whose Tickets were last read as `tickets`, from
 /// its Spec branch, checked out in `worktree`, to a Spec PR into `base` that
 /// reaches `goal`. The Spec branch is pushed before any Ticket starts, and
-/// the Tickets run one at a time, the graph read again after each. A Ticket
-/// that fails stops only the Tickets it blocks; with any Ticket not done,
-/// this is a Failed spec run. An interrupt ends it too, once the running
-/// Ticket's Run has ended, starting nothing more and leaving the Spec PR
+/// up to `parallel` Tickets run at once, the graph read again whenever one
+/// ends. A Ticket that fails stops only the Tickets it blocks; with any
+/// Ticket not done, this is a Failed spec run. An interrupt ends it too, once
+/// the running Tickets' Runs have ended, starting nothing more and leaving the Spec PR
 /// not ready. Once every Ticket has landed, the Spec PR is opened as a draft
 /// and the Spec review, logged in `logs`, reviews the Spec branch before the
 /// Spec PR is marked ready. The Spec PR then goes through the same Repair
@@ -57,8 +67,9 @@ pub fn run(
     base: &str,
     goal: Goal,
     logs: &Logs,
+    parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
-    let (ticket_lines, landed) = land_tickets(spec, tickets, &worktree);
+    let (ticket_lines, landed) = land_tickets(spec, tickets, &worktree, parallel);
     let ended = landed
         .map_err(FailedRun::from)
         .and_then(|()| open_and_review(spec, worktree, base, goal, logs));
@@ -106,21 +117,29 @@ enum TicketOutcome {
     Interrupted,
 }
 
-/// Push the Spec branch, then run each ready Ticket, lowest number first,
-/// until none is ready. Returns a line on each Ticket that landed or is not
-/// done, none if the Spec branch could not be pushed, and whether every
+/// Push the Spec branch, then keep up to `parallel` Tickets running, each
+/// time one ends starting ready ones, lowest number first, until none is
+/// ready and none is running. Returns a line on each Ticket that landed or is
+/// not done, none if the Spec branch could not be pushed, and whether every
 /// Ticket is done: if not, it fails, after putting those lines on stderr
 /// unless interrupted.
 fn land_tickets(
     spec: &IssueUrl,
     mut tickets: Vec<Ticket>,
     worktree: &Worktree,
+    parallel: NonZeroUsize,
 ) -> (Vec<String>, Result<()>) {
     if let Err(error) = worktree.push() {
         return (Vec::new(), Err(error));
     }
     let mut outcomes = BTreeMap::new();
-    let landing = run_ready_tickets(spec, &mut tickets, &mut outcomes, worktree.branch());
+    let landing = run_ready_tickets(
+        spec,
+        &mut tickets,
+        &mut outcomes,
+        worktree.branch(),
+        parallel,
+    );
     let lines = summarize(&tickets, &outcomes);
     let landed = landing.and_then(|()| {
         let not_done: Vec<String> = tickets
@@ -139,40 +158,82 @@ fn land_tickets(
     (lines, landed)
 }
 
-/// Run each ready Ticket, lowest number first, until none is ready, keeping
-/// `tickets` as last read and each Ticket's outcome in `outcomes`. An
-/// interrupt ends this, once the running Ticket's Run has ended.
+/// Keep up to `parallel` ready Tickets running, lowest number first, until
+/// none is ready and none is running, keeping `tickets` as last read and each
+/// Ticket's outcome in `outcomes`. An interrupt, or an error other than a
+/// Ticket failing, stops any more from starting, and fails this once those
+/// running have ended.
 fn run_ready_tickets(
     spec: &IssueUrl,
     tickets: &mut Vec<Ticket>,
     outcomes: &mut BTreeMap<u64, TicketOutcome>,
     spec_branch: &str,
+    parallel: NonZeroUsize,
 ) -> Result<()> {
-    while let Some(ticket) = next_ready(tickets, outcomes) {
-        if interrupt::requested() {
-            bail!("interrupted");
+    let (ended, endings) = mpsc::channel();
+    let mut running = HashSet::new();
+    let mut error = None;
+    loop {
+        while error.is_none() && !interrupt::requested() && running.len() < parallel.get() {
+            let Some(ticket) = next_ready(tickets, outcomes, &running) else {
+                break;
+            };
+            match start_ticket(spec, ticket, spec_branch, ended.clone()) {
+                Ok(()) => {
+                    running.insert(ticket);
+                }
+                Err(start_error) => error = Some(start_error),
+            }
         }
-        let outcome = run_ticket(spec, ticket, spec_branch)?;
-        let interrupted = matches!(outcome, TicketOutcome::Interrupted);
-        outcomes.insert(ticket, outcome);
-        if interrupted {
-            bail!("interrupted");
+        if running.is_empty() {
+            break;
         }
-        *tickets = github::tickets(spec)?;
+        let (ticket, result) = endings
+            .recv()
+            .expect("a running Ticket's thread holds a sender");
+        running.remove(&ticket);
+        // Once there is an error, the rest are only waited for.
+        let reread = result.and_then(|outcome| {
+            outcomes.insert(ticket, outcome);
+            github::tickets(spec)
+        });
+        match reread {
+            Ok(reread) => *tickets = reread,
+            Err(reread_error) => {
+                error.get_or_insert(reread_error);
+            }
+        }
+    }
+    if let Some(error) = error {
+        return Err(error);
+    }
+    if interrupt::requested() {
+        bail!("interrupted");
     }
     Ok(())
 }
 
 /// The lowest-numbered Ticket that is open, not an Unready Ticket, has no
-/// sub-issues, has every blocker closed and has no outcome in `outcomes` yet.
-fn next_ready(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) -> Option<u64> {
+/// sub-issues, has every blocker closed and none `running`, isn't `running`
+/// and has no outcome in `outcomes` yet. A blocker's Run closes its issue
+/// before it ends, so a closed blocker may still be running.
+fn next_ready(
+    tickets: &[Ticket],
+    outcomes: &BTreeMap<u64, TicketOutcome>,
+    running: &HashSet<u64>,
+) -> Option<u64> {
     tickets
         .iter()
         .filter(|ticket| {
             ticket.is_open
                 && !ticket.has_sub_issues
                 && ticket.open_blockers.is_empty()
+                && !ticket
+                    .blockers
+                    .iter()
+                    .any(|blocker| running.contains(blocker))
                 && !outcomes.contains_key(&ticket.number)
+                && !running.contains(&ticket.number)
                 && unready_label(ticket).is_none()
         })
         .map(|ticket| ticket.number)
@@ -272,23 +333,36 @@ fn cycle_through(start: u64, tickets: &[Ticket]) -> Option<Vec<u64>> {
     None
 }
 
-/// Run Ticket `number` of `spec` as a child `thirdshift`, a Merge run into
-/// `spec_branch` from the same Launch directory, relaying its stderr with a
-/// `#<number>: ` prefix. An interrupt is passed on to the child, which is
-/// waited for as it goes down its Failed run path, and its outcome is
-/// `Interrupted`. Otherwise
-/// it landed if it exits 0, and failed otherwise, with the cause and session
-/// log it ended on.
-fn run_ticket(spec: &IssueUrl, number: u64, spec_branch: &str) -> Result<TicketOutcome> {
+/// Start Ticket `number` of `spec` as a child `thirdshift`, a Merge run into
+/// `spec_branch` from the same Launch directory, and a thread that sends
+/// `number` and how it ended on `ended`.
+fn start_ticket(
+    spec: &IssueUrl,
+    number: u64,
+    spec_branch: &str,
+    ended: Sender<(u64, Result<TicketOutcome>)>,
+) -> Result<()> {
     progress::step(format_args!("starting #{number}"));
     let ticket = spec.sibling(number);
-    let mut child = Command::new(std::env::current_exe().context("no thirdshift executable")?)
+    let child = Command::new(std::env::current_exe().context("no thirdshift executable")?)
         .args([args::SPEC_BRANCH, spec_branch, &ticket.url])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("could not start the Run for #{number}"))?;
+    thread::spawn(move || {
+        let _ = ended.send((number, finish_ticket(number, child)));
+    });
+    Ok(())
+}
+
+/// Relay the stderr of Ticket `number`'s Run `child` with a `#<number>: `
+/// prefix until it exits. An interrupt is passed on to the child, which is
+/// waited for as it goes down its Failed run path, and its outcome is
+/// `Interrupted`. Otherwise it landed if it exits 0, and failed otherwise,
+/// with the cause and session log it ended on.
+fn finish_ticket(number: u64, mut child: Child) -> Result<TicketOutcome> {
     // Relay on its own thread, so this one can watch for an interrupt.
     let stderr = child.stderr.take().context("no stderr from the Run")?;
     // A failed Run ends on its error, then its session log if it has one.
@@ -409,4 +483,34 @@ fn review_and_deliver(
     worktree.push()?;
     let pr = run::mark_pr_ready(spec, spec_branch, base)?;
     run::deliver(spec, worktree, base, &pr, goal, &mut run_session)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ticket(number: u64, is_open: bool, blockers: &[u64], open_blockers: &[u64]) -> Ticket {
+        Ticket {
+            number,
+            is_open,
+            labels: Vec::new(),
+            has_sub_issues: false,
+            blockers: blockers.to_vec(),
+            open_blockers: open_blockers.to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_ticket_waits_for_a_blocker_whose_run_closed_its_issue_but_has_not_ended() {
+        // #22's Run closed #22 but is still cleaning up; #21 has landed.
+        let tickets = [
+            ticket(21, false, &[], &[]),
+            ticket(22, false, &[], &[]),
+            ticket(23, true, &[21, 22], &[]),
+        ];
+        let outcomes = BTreeMap::from([(21, TicketOutcome::Landed(None))]);
+
+        assert_eq!(next_ready(&tickets, &outcomes, &HashSet::from([22])), None);
+        assert_eq!(next_ready(&tickets, &outcomes, &HashSet::new()), Some(23));
+    }
 }

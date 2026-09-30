@@ -1,6 +1,7 @@
 //! The command line: which command, and for a Run, its Issue URL and flags.
 
 use std::mem::discriminant;
+use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result, bail};
 
@@ -34,6 +35,9 @@ pub struct RunArgs {
     /// What `email` or `no-email` asked for, if either was given; without
     /// one, the User config decides.
     pub email: Option<NotificationAsk>,
+    /// How many Tickets a Spec run runs at once, if `parallel <n>` was
+    /// given; without it, the User config decides.
+    pub parallel: Option<NonZeroUsize>,
     /// The Spec branch, given with [`SPEC_BRANCH`] to a Ticket's Run.
     pub spec_branch: Option<String>,
 }
@@ -42,7 +46,8 @@ pub struct RunArgs {
 /// `setup` and `email-test` are commands only as the first argument.
 /// Otherwise it is a Run: one Issue URL, with each Run flag at most once,
 /// before or after it.
-/// `email` may be followed by the address to send the Run notification to.
+/// `email` may be followed by the address to send the Run notification to,
+/// and `parallel` must be followed by a whole number from 1 up.
 /// `merge` and `no-merge` contradict each other, as do `email` and `no-email`.
 pub fn parse(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
@@ -67,6 +72,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let mut issue = None;
     let mut goal = None;
     let mut email = None;
+    let mut parallel = None;
     let mut spec_branch = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
@@ -81,6 +87,17 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             "no-email" | "--no-email" => {
                 ask_once(&mut email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
+            }
+            "parallel" | "--parallel" => {
+                if parallel.is_some() {
+                    bail!("repeated argument: {arg}");
+                }
+                let n = args.next();
+                let Some(n) = n.and_then(|n| n.parse::<NonZeroUsize>().ok()) else {
+                    let given = n.map(|n| format!(", not {n}")).unwrap_or_default();
+                    bail!("{arg} must be followed by a whole number from 1 up{given}");
+                };
+                parallel = Some(n);
             }
             SPEC_BRANCH => {
                 if spec_branch.is_some() {
@@ -103,6 +120,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         issue,
         goal,
         email,
+        parallel,
         spec_branch,
     }))
 }
