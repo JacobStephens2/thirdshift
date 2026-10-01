@@ -19,6 +19,9 @@ use crate::resend_key::{self, Credentials, Source};
 pub struct Answers {
     /// `merge.always`.
     pub merge_always: bool,
+    /// `base.fix`, asked only with `merge.always` on; otherwise `None`, and
+    /// the setting stays as it was.
+    pub base_fix: Option<bool>,
     /// `launch.pull`.
     pub launch_pull: bool,
     /// With Run notifications on, `email.always`, their settings; with them
@@ -73,6 +76,7 @@ pub fn offer(path: &Path) -> Result<bool> {
 
 /// Ask the Setup questions, with the settings in `current` as the default
 /// answers, and `suggested_address` for `email.to` when `current` has none.
+/// Base fixes are asked about only with every Run a Merge run.
 /// The address is re-asked until it has an `@`. With Run notifications on,
 /// the Resend API key is asked for too, unless `RESEND_API_KEY` gives it,
 /// with Enter keeping the one in `credentials`, if any. Ends in an error if
@@ -83,6 +87,14 @@ pub fn ask(
     suggested_address: impl FnOnce() -> Option<String>,
 ) -> Result<Answers> {
     let merge_always = yes_or_no("Every Run a Merge run?", current.merge_always)?;
+    let base_fix = if merge_always {
+        Some(yes_or_no(
+            "Every Run may start a Base fix when the Base branch's CI is red?",
+            current.base_fix,
+        )?)
+    } else {
+        None
+    };
     let launch_pull = yes_or_no(
         "Every Run first fast-forwards your checkout of the Base branch?",
         current.launch_pull,
@@ -93,6 +105,7 @@ pub fn ask(
     )? {
         return Ok(Answers {
             merge_always,
+            base_fix,
             launch_pull,
             notifications: None,
         });
@@ -128,6 +141,7 @@ pub fn ask(
     };
     Ok(Answers {
         merge_always,
+        base_fix,
         launch_pull,
         notifications: Some(Notifications {
             to,

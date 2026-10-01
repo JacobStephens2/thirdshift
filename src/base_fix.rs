@@ -17,6 +17,16 @@ const LABELS: [(&str, &str); 2] = [
     ("ready-for-agent", "Ready for an agent to take on"),
 ];
 
+/// What a Run asks about a Base fix, by its command or, without `base-fix`
+/// or `no-base-fix`, by the User config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseFixAsk {
+    /// The Run may start one.
+    Allow,
+    /// The Run starts none.
+    Forbid,
+}
+
 /// What a Run does when its only red checks are Inherited failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OnInheritedFailures {
@@ -43,13 +53,13 @@ struct Started {
 
 impl BaseFix {
     /// The Base fix of a Run that is the child Run `child`, if it is one,
-    /// and that, with `asked`, was given `base-fix`. A Base fix starts none
-    /// of its own, whatever it was given.
-    pub fn new(child: Option<&Kind>, asked: bool) -> Self {
-        let on_inherited_failures = match (child, asked) {
+    /// and that asked `ask` about a Base fix. A Base fix starts none of its
+    /// own, whatever it asked.
+    pub fn new(child: Option<&Kind>, ask: BaseFixAsk) -> Self {
+        let on_inherited_failures = match (child, ask) {
             (Some(Kind::BaseFix { .. }), _) => OnInheritedFailures::IsBaseFix,
-            (_, true) => OnInheritedFailures::StartBaseFix,
-            (_, false) => OnInheritedFailures::FailTheRun,
+            (_, BaseFixAsk::Allow) => OnInheritedFailures::StartBaseFix,
+            (_, BaseFixAsk::Forbid) => OnInheritedFailures::FailTheRun,
         };
         BaseFix {
             on_inherited_failures,

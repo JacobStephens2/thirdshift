@@ -1,7 +1,8 @@
 //! The User config, `~/.thirdshift/config.toml`: `merge.always` makes every
-//! Run a Merge run unless the command says `no-merge`, `logs.dir` moves the
-//! session logs, and a config thirdshift can't use stops the Run before any
-//! work.
+//! Run a Merge run unless the command says `no-merge`, `base.fix` lets every
+//! Run start a Base fix unless the command says `no-base-fix`, `logs.dir`
+//! moves the session logs, and a config thirdshift can't use stops the Run
+//! before any work.
 
 mod support;
 
@@ -317,4 +318,134 @@ fn a_relative_or_mistyped_logs_dir_stops_the_run_naming_the_setting() {
         );
         assert!(scenario.gh_calls().is_empty(), "thirdshift called gh");
     }
+}
+
+/// The agent adds feature.txt and opens the PR for #7, with `test` red on its
+/// head and on `main`'s tip: an Inherited failure.
+const RUN_OPENS_PR_WITH_INHERITED_FAILURE: &str = r#"
+echo "feature" > feature.txt
+git add feature.txt
+git commit -q -m "Add feature"
+gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
+gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "failure"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "failure"}]'
+"#;
+
+/// The agent, on the Base fix issue #8, commits a fix and opens its PR into
+/// `main`, with `test` green on its head.
+const BASE_FIX_OPENS_PR: &str = r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on main"
+gh pr create --base main --head issue-8 --title "Fix CI on main" --body "Closes #8"
+gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "success"}]'
+"#;
+
+/// Assert the Run on #7 started a Base fix on #8 that merged, and ended with
+/// its own PR ready for review.
+fn assert_base_fix_merged(scenario: &Scenario, result: &RunResult) {
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let gh = scenario.gh_state();
+    assert_eq!(gh["titles"]["8"], "CI red on main: test");
+    assert_eq!(gh["prs"][1]["base"], "main");
+    assert_eq!(gh["prs"][1]["state"], "MERGED");
+    assert_eq!(gh["prs"][0]["state"], "OPEN");
+    assert_eq!(gh["prs"][0]["isDraft"], false);
+}
+
+/// Assert the Run on #7 failed on its Inherited failure, with no Base fix
+/// issue written.
+fn assert_failed_with_no_base_fix(scenario: &Scenario, result: &RunResult) {
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("CI red on test, which also fails on main at ")
+            && result.stderr.contains("; fix main first"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+    assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn base_fix_lets_a_run_without_the_base_fix_word_start_a_base_fix() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[base]\nfix = true\n");
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    scenario.agent_does_for(8, BASE_FIX_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_base_fix_merged(&scenario, &result);
+}
+
+#[test]
+fn no_base_fix_overrides_base_fix_for_one_run() {
+    for flag in ["no-base-fix", "--no-base-fix"] {
+        for flag_first in [true, false] {
+            let scenario = Scenario::new();
+            scenario.user_config_is("[base]\nfix = true\n");
+            scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+            let url = scenario.issue_url(7);
+            let args = if flag_first {
+                [flag, url.as_str()]
+            } else {
+                [url.as_str(), flag]
+            };
+
+            let result = scenario.run(&args);
+
+            assert_failed_with_no_base_fix(&scenario, &result);
+        }
+    }
+}
+
+#[test]
+fn a_base_fix_that_is_not_true_or_false_stops_the_run_naming_the_file() {
+    for (config, named) in [
+        ("[base]\nfix = \"yes\"\n", "base.fix must be true or false"),
+        ("[base]\nfix = 1\n", "base.fix must be true or false"),
+        ("base = true\n", "base must be the section [base]"),
+        ("[base]\nfixes = true\n", "unknown key base.fixes"),
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(config);
+        scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains(named),
+            "expected {named:?} in stderr for {config:?}: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn a_config_that_says_nothing_about_base_fixes_leaves_an_inherited_failure_to_fail_the_run() {
+    for config in ["", "[base]\n", "[base]\nfix = false\n"] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_failed_with_no_base_fix(&scenario, &result);
+    }
+}
+
+#[test]
+fn base_fix_and_no_base_fix_together_are_an_argument_error_before_the_config_is_read() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[base\n");
+
+    let result = scenario.run(&["base-fix", "no-base-fix", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(2), "stderr: {}", result.stderr);
+    assert!(scenario.claude_calls().is_empty(), "the Run started");
 }

@@ -51,8 +51,8 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
 
-merge, --no-merge, --email, --no-email, base-fix and parallel <n> (or --parallel <n>) go
-before or after the Issue URL, in any order.
+merge, --no-merge, --email, --no-email, base-fix, --no-base-fix and parallel <n> (or
+--parallel <n>) go before or after the Issue URL, in any order.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
@@ -94,6 +94,12 @@ With merge.always set, every Run is a Merge run unless given --no-merge:
 
     [merge]
     always = true
+
+With base.fix set, every Run may start a Base fix, as if given base-fix, unless given
+--no-base-fix:
+
+    [base]
+    fix = true
 
 With launch.pull set, every Run first fast-forwards the checked-out Base branch to origin:
 
@@ -184,7 +190,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut base_fix = BaseFix::new(child.as_ref(), base_fix);
+    let mut base_fix = BaseFix::new(
+        child.as_ref(),
+        base_fix.unwrap_or(config.default_base_fix()),
+    );
     let parallel = Parallel {
         tickets: parallel.unwrap_or(config.spec_parallel),
         asked: parallel.is_some(),

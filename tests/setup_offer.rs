@@ -24,6 +24,7 @@ const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
 const OFFER: &str = "Set your defaults now? [Y/n]";
 const MERGE: &str = "Merge run?";
+const BASE_FIX: &str = "Base fix";
 const PULL: &str = "fast-forward";
 const NOTIFY: &str = "Run notifications, an email";
 const TO: &str = "Send Run notifications to";
@@ -75,7 +76,13 @@ fn accepting_and_choosing_merge_always_makes_that_run_a_merge_run() {
     let result = scenario.run_on_terminal(
         &[&scenario.issue_url(7)],
         &[],
-        &[(OFFER, ""), (MERGE, "y"), (PULL, ""), (NOTIFY, "")],
+        &[
+            (OFFER, ""),
+            (MERGE, "y"),
+            (BASE_FIX, ""),
+            (PULL, ""),
+            (NOTIFY, ""),
+        ],
     );
 
     assert_ended(&scenario, &result, "merged", "MERGED");
@@ -91,7 +98,13 @@ fn no_merge_in_the_command_wins_over_a_fresh_merge_always() {
     let result = scenario.run_on_terminal(
         &["--no-merge", &scenario.issue_url(7)],
         &[],
-        &[(OFFER, "y"), (MERGE, "y"), (PULL, ""), (NOTIFY, "")],
+        &[
+            (OFFER, "y"),
+            (MERGE, "y"),
+            (BASE_FIX, ""),
+            (PULL, ""),
+            (NOTIFY, ""),
+        ],
     );
 
     assert_ended(&scenario, &result, "ready for review", "OPEN");
@@ -277,7 +290,13 @@ fn an_unwritable_user_config_is_a_warning_and_the_run_completes_on_the_defaults(
     let result = scenario.run_on_terminal(
         &[&scenario.issue_url(7)],
         &[],
-        &[(OFFER, "y"), (MERGE, "y"), (PULL, ""), (NOTIFY, "")],
+        &[
+            (OFFER, "y"),
+            (MERGE, "y"),
+            (BASE_FIX, ""),
+            (PULL, ""),
+            (NOTIFY, ""),
+        ],
     );
 
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
@@ -326,7 +345,7 @@ fn ctrl_c_during_the_questions_writes_no_file_and_does_no_work() {
     let result = scenario.run_on_terminal(
         &[&scenario.issue_url(7)],
         &[],
-        &[(OFFER, "y"), (MERGE, "y"), (PULL, CTRL_C)],
+        &[(OFFER, "y"), (MERGE, "y"), (BASE_FIX, ""), (PULL, CTRL_C)],
     );
 
     assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);

@@ -586,6 +586,69 @@ gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22
 }
 
 #[test]
+fn base_fix_in_the_user_config_gives_a_tickets_inherited_failure_a_base_fix() {
+    let scenario = spec_of(&[(21, &[])]);
+    scenario.user_config_is("[base]\nfix = true\n");
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}{}{}",
+            agent_lands(21, "first.txt"),
+            checks_on_head(RED),
+            checks_on_origin("issue-20", RED)
+        ),
+    );
+    scenario.agent_does_for(
+        22,
+        &format!(
+            r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let fix = pr_from(&scenario, "issue-22").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "issue-20");
+    assert_eq!(fix["state"], "MERGED");
+    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "MERGED");
+}
+
+#[test]
+fn no_base_fix_on_a_spec_reaches_its_tickets_whatever_the_user_config_says() {
+    let scenario = spec_of(&[(21, &[])]);
+    scenario.user_config_is("[base]\nfix = true\n");
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}{}{}",
+            agent_lands(21, "first.txt"),
+            checks_on_head(RED),
+            checks_on_origin("issue-20", RED)
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "no-base-fix"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        &format!(
+            "thirdshift: #21 failed: {}",
+            inherited_failure(&scenario, "issue-20")
+        ),
+    );
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "OPEN");
+}
+
+#[test]
 fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
     let scenario = linear_spec();
     scenario.agent_does_for(

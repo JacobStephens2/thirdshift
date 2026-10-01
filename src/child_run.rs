@@ -60,11 +60,11 @@ pub enum Ended {
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
 /// Launch directory. With `base_fix`, it is given `base-fix`, so it may start
-/// a Base fix.
+/// a Base fix; without, `no-base-fix`, so the User config can't let it.
 pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: bool) -> Result<Child> {
     Command::new(std::env::current_exe().context("no thirdshift executable")?)
         .args([kind.hidden_argument(), kind.base()])
-        .args(base_fix.then_some("base-fix"))
+        .arg(if base_fix { "base-fix" } else { "no-base-fix" })
         .arg(&issue.url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
