@@ -56,10 +56,11 @@ impl RunNotification {
         })
     }
 
-    /// Send the notification for the Run that `ended`. A failed send is only
-    /// a warning: it never changes the Run's outcome.
-    pub fn send(self, ended: &Result<Reached, FailedRun>) {
-        let ending = Ending::of(ended);
+    /// Send the notification for the Run that `ended`, with `base_fix`, what
+    /// became of the Base fix it started or waited on, if any. A failed send is
+    /// only a warning: it never changes the Run's outcome.
+    pub fn send(self, ended: &Result<Reached, FailedRun>, base_fix: Option<&str>) {
+        let ending = Ending::of(ended, base_fix);
         let subject = subject(&self.issue, self.title.as_deref(), ending.outcome);
         send(&self.resend, &subject, self.started, None, &ending);
     }
@@ -92,23 +93,25 @@ impl ArchitectNotification {
 
     /// Send the one notification for the Architect run whose Architecture
     /// review ended as `reviewed` and, if its plan was dispatched, whose Spec
-    /// run or Run `dispatched`. A failed send is only a warning: it never
-    /// changes the Architect run's outcome.
+    /// run or Run `dispatched`, with what became of the Base fix that took,
+    /// if any. A failed send is only a warning: it never changes the
+    /// Architect run's outcome.
     pub fn send(
         self,
         reviewed: &Result<architect::Outcome, FailedRun>,
-        dispatched: Option<&Result<Reached, FailedRun>>,
+        dispatched: Option<(&Result<Reached, FailedRun>, Option<&str>)>,
     ) {
         let review = match reviewed {
             Ok(outcome) => format!("{}: {}", outcome.review(), outcome.url()),
             Err(failed) => failure_outcome(failed, "failed").to_string(),
         };
         let ending = match (reviewed, dispatched) {
-            (_, Some(ended)) => Ending::of(ended),
+            (_, Some((ended, base_fix))) => Ending::of(ended, base_fix),
             (Ok(outcome), None) => Ending {
                 outcome: outcome.review(),
                 pr_url: None,
                 cause: None,
+                base_fix: None,
                 log: None,
                 tickets: &[],
             },
@@ -132,22 +135,30 @@ struct Ending<'a> {
     outcome: &'static str,
     pr_url: Option<&'a str>,
     cause: Option<String>,
+    /// What became of the Base fix the Run started or waited on, if any.
+    base_fix: Option<&'a str>,
     log: Option<&'a Path>,
     /// In a Spec run, a line on each Ticket, as in its summary on stderr.
     tickets: &'a [String],
 }
 
 impl<'a> Ending<'a> {
-    fn of(ended: &'a Result<Reached, FailedRun>) -> Self {
+    /// How the Run or Spec run that `ended` did, with `base_fix`, what
+    /// became of the Base fix it started or waited on, if any.
+    fn of(ended: &'a Result<Reached, FailedRun>, base_fix: Option<&'a str>) -> Self {
         match ended {
             Ok(reached) => Ending {
                 outcome: reached.goal.outcome(),
                 pr_url: Some(&reached.pr_url),
                 cause: None,
+                base_fix,
                 log: reached.log.as_deref(),
                 tickets: &reached.ticket_lines,
             },
-            Err(failed) => Ending::of_failure(failed),
+            Err(failed) => Ending {
+                base_fix,
+                ..Ending::of_failure(failed)
+            },
         }
     }
 
@@ -156,6 +167,7 @@ impl<'a> Ending<'a> {
             outcome: failure_outcome(failed, "failed"),
             pr_url: failed.pr_url.as_deref(),
             cause: (!failed.interrupted).then(|| format!("{:#}", failed.error)),
+            base_fix: None,
             log: failed.log.as_deref(),
             tickets: &failed.ticket_lines,
         }
@@ -186,6 +198,7 @@ fn send(
         architect,
         pr_url: ending.pr_url,
         cause: ending.cause.as_deref(),
+        base_fix: ending.base_fix,
         log: ending.log,
         host: host.as_deref().unwrap_or("unknown host"),
         took: started.elapsed(),
@@ -231,6 +244,8 @@ struct Body<'a> {
     architect: Option<ArchitectLines<'a>>,
     pr_url: Option<&'a str>,
     cause: Option<&'a str>,
+    /// What became of the Base fix the Run started or waited on, if any.
+    base_fix: Option<&'a str>,
     log: Option<&'a Path>,
     host: &'a str,
     took: Duration,
@@ -252,6 +267,9 @@ impl Body<'_> {
         }
         if let Some(cause) = self.cause {
             text += &format!("Cause:        {cause}\n");
+        }
+        if let Some(base_fix) = self.base_fix {
+            text += &format!("Base fix:     {base_fix}\n");
         }
         if let Some(log) = self.log {
             text += &format!("Session log:  {}\n", log.display());
@@ -307,6 +325,7 @@ mod tests {
             architect: None,
             pr_url: None,
             cause: Some("origin mismatch"),
+            base_fix: None,
             log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
@@ -334,6 +353,28 @@ mod tests {
     }
 
     #[test]
+    fn the_body_reports_the_base_fix_after_the_cause() {
+        let body = Body {
+            architect: None,
+            pr_url: Some("https://github.com/acme/widgets/pull/1"),
+            cause: Some("claude exited 1"),
+            base_fix: Some("https://github.com/acme/widgets/issues/8 merged"),
+            log: None,
+            host: "droplet-1",
+            took: Duration::from_secs(4),
+            tickets: &[],
+        };
+        assert_eq!(
+            body.text(),
+            "Pull request: https://github.com/acme/widgets/pull/1\n\
+             Cause:        claude exited 1\n\
+             Base fix:     https://github.com/acme/widgets/issues/8 merged\n\
+             Host:         droplet-1\n\
+             Took:         4s\n"
+        );
+    }
+
+    #[test]
     fn a_spec_runs_body_ends_with_a_line_per_ticket() {
         let tickets = [
             "#21 failed: claude exited 1".to_string(),
@@ -343,6 +384,7 @@ mod tests {
             architect: None,
             pr_url: None,
             cause: Some("Tickets not done: #21, #22"),
+            base_fix: None,
             log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
@@ -382,6 +424,7 @@ mod tests {
             }),
             pr_url: Some("https://github.com/acme/widgets/pull/1"),
             cause: None,
+            base_fix: None,
             log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),

@@ -849,7 +849,7 @@ I see now that at 3:38p EDT V0.5.0 was released to GitHub. And at 3:39p EDT I go
 7 - agree
 
 
-# 2026-09-30, responding to red ci checks on base branch, 103
+# 2026-09-30, responding to red ci checks on base branch, spec 221
 /grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/103#issuecomment-5920787837
 
 ## 2
@@ -892,7 +892,50 @@ i merged pr 220. /to-tickets
 those tickets look good. File them as sub-issues under the parent spec issue.
 and post that comment.
 
-# 2026-09-30, improve-codebase-architecture, 27
+# 2026-09-30, improve-codebase-architecture, spec 27
 /grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/27 - I'm thinking about some kind of setup where the first candidate run of this skill is implemented automatically - perhaps even a to-spec and to-tickets calls are made for it, and then there is a spec run for it. So this will probably involve a new factory skill version of the improve-codebase-architecture that's already installed here.
 
 ## 2
+1 - agree, and this process could even use a worktree to plan in if beneficial, or if useful to be able to change code in the planning process, otherwise scanning in the launch directory may be sufficient if not preferable, as it may have things which may not get copied over into a worktree possibly - check me on that if that seems unlikely though.
+
+2 - agree, though maybe --spec-only as the flag instead of --plan-only. Hm, on second thought though I'm thinking a valuable part of --plan-only could be that it can mean spec and tickets, so running --plan-only could create a spec and tickets for it.
+
+3 - agreed
+
+4 - a, as I would want for another improve-codebase-architecture run / architect run to do a fresh analysis of the codebase given how it has since changed, so the other ideas could become stale. Only end the architect run with filing an issue but no spec pr and pec run if none of the candidates are Strong, then file an issue for the top recommendation which in this case is either worth exploring or speculative. That gives an idea for the day shift to flesh out and consider, but by default just works the codebase through Strong ideas until they are not found anymore.
+
+5 - agree
+
+6 - agree
+
+## 3
+7 - agree
+8 - One pass per command by default - let's leave the loop idea out for now.
+9 - agree
+10 - agree
+11 - agree
+12 - agree
+13 - agree, though I'm thinking it could be possible to result in just one spec issue ready-for-agent with no ticket sub-issues if the change is small enough, so not finding any sub-issues I'm not sure whether or not to call a failure.
+
+## 4
+14 - agree
+15 - agree, though I'm thinking to allow a Base fix to be run by a `thirdshift architect` run, as is being worked on in the https://github.com/JacobStephens2/thirdshift/issues/221 spec at this very moment on this server.
+16 - agreed
+17 - agree
+18 - agreed - and is it the thirdshift program or agent applying ready-for-agent here?
+19 - agree
+
+## 5
+18' - agree, and file the issue
+15' - agree
+20 - agree
+/to-spec
+
+## 6
+These seams match my expectation.
+
+## 7
+These are good. File them as sub-issue tickets on spec issue 27.
+
+## 8
+pr the context change

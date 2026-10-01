@@ -1,6 +1,8 @@
 mod architect;
 mod args;
+mod base_fix;
 mod branch;
+mod child_run;
 mod ci;
 mod config;
 mod email;
@@ -30,6 +32,8 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use args::{ArchitectArgs, Command, RunArgs};
+use base_fix::{BaseFix, BaseFixAsk};
+use child_run::Kind;
 use config::UserConfig;
 use failed_run::FailedRun;
 use notification::{ArchitectNotification, NotificationAsk, RunNotification};
@@ -51,12 +55,23 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift version                             Print thirdshift's version
        thirdshift help                                Print this help
 
-merge, --no-merge, --email, --no-email and parallel <n> (or --parallel <n>) go before or
-after the Issue URL, in any order.
+merge, --no-merge, --email, --no-email, base-fix, --no-base-fix and parallel <n> (or
+--parallel <n>) go before or after the Issue URL, in any order.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
 after --email is the address only if it has an @ and isn't a URL.
+
+A check that fails on the pull request and also on the Base branch commit it last merged in
+is an Inherited failure, not the branch's to fix: a Run whose only red checks are Inherited
+failures fails, saying to fix the Base branch first. With base-fix, it starts a Base fix
+instead, once: it opens an issue for those checks, labelled base-fix and ready-for-agent,
+runs a Merge run on it into the Base branch, waits for it to merge, then merges the Base
+branch in and watches CI again. If the Base fix fails, or the checks still fail on the Base
+branch once it has merged, the Run fails, naming the Base fix issue. A Run that finds an
+open base-fix issue for the same Base branch and checks waits for that one to close
+instead of starting another, and a Spec run's Tickets that meet the same Inherited failure
+share one Base fix.
 
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec
@@ -117,6 +132,12 @@ With merge.always set, every Run is a Merge run unless given --no-merge:
     [merge]
     always = true
 
+With base.fix set, every Run may start a Base fix, as if given base-fix, unless given
+--no-base-fix:
+
+    [base]
+    fix = true
+
 With launch.pull set, every Run first fast-forwards the checked-out Base branch to origin:
 
     [launch]
@@ -151,7 +172,8 @@ fn main() -> ExitCode {
         goal,
         email,
         parallel,
-        spec_branch,
+        base_fix,
+        child,
     } = match args::parse(&args) {
         Ok(Command::Help) => {
             print!("{HELP}");
@@ -176,14 +198,21 @@ fn main() -> ExitCode {
         Ok(config) => config,
         Err(failure) => return failure,
     };
-    // A Ticket's Run in a Spec run is always a Merge run, and leaves the Run
-    // notification and the Launch directory to the Spec run.
-    let (goal, email, launch_pull) = match spec_branch {
-        Some(_) => (Goal::Merged, NotificationAsk::Skip, false),
+    // A child Run, a Ticket's Run in a Spec run or a Base fix, is always a
+    // Merge run, and leaves the Run notification, the Launch directory and
+    // whether it may start a Base fix to what started it.
+    let (goal, email, launch_pull, base_fix) = match child {
+        Some(_) => (
+            Goal::Merged,
+            NotificationAsk::Skip,
+            false,
+            base_fix.unwrap_or(BaseFixAsk::Forbid),
+        ),
         None => (
             goal.unwrap_or(config.default_goal()),
             email.unwrap_or(config.email.default_ask()),
             config.launch_pull,
+            base_fix.unwrap_or(config.default_base_fix()),
         ),
     };
     // First, so no interrupt can end the Run once its notification is checked.
@@ -194,17 +223,20 @@ fn main() -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
+    let mut base_fix = BaseFix::new(child.as_ref(), base_fix);
     let ended = run::run(
         &issue,
         goal,
         &config.logs_dir,
         launch_pull,
         Parallel::new(parallel, config.spec_parallel),
-        spec_branch.as_deref(),
+        child.as_ref().map(Kind::base),
+        &mut base_fix,
     );
-    let code = run_outcome(&ended);
+    let base_fix = base_fix.report();
+    let code = run_outcome(&ended, base_fix.as_deref());
     if let Some(notification) = notification {
-        notification.send(&ended);
+        notification.send(&ended, base_fix.as_deref());
     }
     code
 }
@@ -241,19 +273,27 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
             ));
-            Some(run::run(
+            // An Architect run takes no Base fix flags, so the run it
+            // dispatches starts none.
+            let mut base_fix = BaseFix::new(None, BaseFixAsk::Forbid);
+            let ended = run::run(
                 plan,
                 dispatch.goal.unwrap_or(config.default_goal()),
                 &config.logs_dir,
                 config.launch_pull,
                 Parallel::new(dispatch.parallel, config.spec_parallel),
                 None,
-            ))
+                &mut base_fix,
+            );
+            Some((ended, base_fix.report()))
         }
         _ => None,
     };
-    let code = match (&reviewed, &dispatched) {
-        (_, Some(ended)) => run_outcome(ended),
+    let dispatched = dispatched
+        .as_ref()
+        .map(|(ended, base_fix)| (ended, base_fix.as_deref()));
+    let code = match (&reviewed, dispatched) {
+        (_, Some((ended, base_fix))) => run_outcome(ended, base_fix),
         (Ok(outcome), None) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("{outcome}"));
@@ -263,7 +303,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         (Err(failed), None) => report(failed),
     };
     if let Some(notification) = notification {
-        notification.send(&reviewed, dispatched.as_ref());
+        notification.send(&reviewed, dispatched);
     }
     code
 }
@@ -280,9 +320,14 @@ fn asked<N>(
     }
 }
 
-/// How a Run or a Spec run that `ended` shows: its pull request's URL on
-/// stdout once it reached its goal, or as a Failed run does.
-fn run_outcome(ended: &Result<Reached, FailedRun>) -> ExitCode {
+/// How a Run or a Spec run that `ended` shows: what became of its Base fix,
+/// `base_fix`, if it took one, then its pull request's URL on stdout once it
+/// reached its goal, or as a Failed run does.
+fn run_outcome(ended: &Result<Reached, FailedRun>, base_fix: Option<&str>) -> ExitCode {
+    // Before the outcome, which a failed child Run's last lines are read as.
+    if let Some(report) = base_fix {
+        progress::step(format_args!("{}{report}", base_fix::REPORT));
+    }
     match ended {
         Ok(reached) => {
             // Also on stderr, so the outcome shows even when stdout is captured.

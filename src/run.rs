@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::base_fix::BaseFix;
 use crate::branch::{self, Selection};
 use crate::ci::{self, Ci};
 use crate::failed_run::{self, FailedRun, PolicyRefusal};
@@ -58,26 +59,31 @@ pub struct Reached {
 /// branch. With `launch_pull`, the Launch directory's checkout of the
 /// Base branch is first brought up to date with origin.
 ///
-/// With `spec_branch`, this is a Ticket's Run in a Spec run, and the Spec
-/// branch stands in for the checked-out branch as the Base branch. Otherwise
-/// an issue with sub-issues is a Spec, taken on by a Spec run instead, whose
-/// Spec branch is picked like an Issue branch, running as many Tickets at once
-/// as `parallel` says. A `parallel` the command asked for on an issue with no
-/// sub-issues fails before any work, as does a Spec whose Tickets are all
-/// closed with no Spec branch to continue.
+/// With `given_base`, this is a Run another thirdshift started, a Ticket's Run
+/// in a Spec run or a Base fix, and `given_base`, the Spec branch or that
+/// Run's Base branch, stands in for the checked-out branch as the Base branch.
+/// Otherwise an issue with sub-issues is a Spec, taken on by a Spec run
+/// instead, whose Spec branch is picked like an Issue branch, running as many
+/// Tickets at once as `parallel` says. A `parallel` the command asked for on
+/// an issue with no sub-issues fails before any work, as does a Spec whose
+/// Tickets are all closed with no Spec branch to continue.
+///
+/// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
+/// start, or wait on, when its only red checks are Inherited failures.
 pub fn run(
     issue: &IssueUrl,
     goal: Goal,
     logs_dir: &Path,
     launch_pull: bool,
     parallel: Parallel,
-    spec_branch: Option<&str>,
+    given_base: Option<&str>,
+    base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
     preflight::check(&launch, issue)?;
-    let tickets = match spec_branch {
+    let tickets = match given_base {
         Some(_) => Vec::new(),
         None => github::tickets(issue)?,
     };
@@ -88,8 +94,8 @@ pub fn run(
         )
         .into());
     }
-    let checked_out = match spec_branch {
-        Some(spec_branch) => Some(spec_branch.to_string()),
+    let checked_out = match given_base {
+        Some(given_base) => Some(given_base.to_string()),
         None => launch
             .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
             .ok(),
@@ -125,6 +131,7 @@ pub fn run(
             worktree,
             &base,
             goal,
+            base_fix,
             &logs,
             parallel.tickets,
         );
@@ -136,7 +143,10 @@ pub fn run(
         }
     };
     let mut log = logs.path("implement");
-    match implement(issue, &worktree, &base, &prompt, goal, &logs, &mut log) {
+    let implemented = implement(
+        issue, &worktree, &base, &prompt, goal, base_fix, &logs, &mut log,
+    );
+    match implemented {
         Ok(pr_url) => Ok(Reached {
             pr_url,
             goal,
@@ -178,12 +188,14 @@ pub fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
 
 /// The implement session given `prompt`, then [`deliver`] on the PR it
 /// opened or updated. `log` is left at the most recent session's log.
+#[allow(clippy::too_many_arguments)]
 fn implement(
     issue: &IssueUrl,
     worktree: &Worktree,
     base: &str,
     prompt: &str,
     goal: Goal,
+    base_fix: &mut BaseFix,
     logs: &Logs,
     log: &mut PathBuf,
 ) -> Result<String> {
@@ -198,13 +210,14 @@ fn implement(
     run_session("implement", prompt)?;
     worktree.push()?;
     let pr = mark_pr_ready(issue, worktree.branch(), base)?;
-    deliver(issue, worktree, base, &pr, goal, &mut run_session)?;
+    deliver(issue, worktree, base, &pr, goal, base_fix, &mut run_session)?;
     Ok(pr.url)
 }
 
 /// Take the ready PR `pr` for `issue`, from the branch checked out in
 /// `worktree` into `base`, to `goal`: keep it mergeable and its CI green
-/// through the Repair loop, starting each Repair through `run_session`, and
+/// through the Repair loop, starting each Repair through `run_session` and
+/// its one Base fix, if any, through `base_fix`, and
 /// for [`Goal::Merged`], Self-merge it. A merge that fails goes back round
 /// the Repair loop and is tried again on the new head; if that round finds
 /// nothing to fix, this fails with a `PolicyRefusal`.
@@ -214,6 +227,7 @@ pub fn deliver(
     base: &str,
     pr: &PullRequest,
     goal: Goal,
+    base_fix: &mut BaseFix,
     run_session: &mut impl FnMut(&str, &str) -> Result<()>,
 ) -> Result<()> {
     let branch = worktree.branch();
@@ -224,6 +238,7 @@ pub fn deliver(
         pr_url: &pr.url,
         goal,
         budgets: Budgets::default(),
+        base_fix,
     };
     let mut watched = repair_loop.run(run_session)?;
     loop {
@@ -383,6 +398,8 @@ struct RepairLoop<'a> {
     pr_url: &'a str,
     goal: Goal,
     budgets: Budgets,
+    /// The Run's one Base fix, kept apart from its budgets.
+    base_fix: &'a mut BaseFix,
 }
 
 impl RepairLoop<'_> {
@@ -392,6 +409,13 @@ impl RepairLoop<'_> {
     /// CI and then going round again, since the Base branch may have moved
     /// meanwhile. Green or absent CI also goes round again if the Base branch
     /// moved while CI ran, or, in a Merge run, if Foreign commits arrived.
+    /// A red check that also fails on the Base branch commit the head last
+    /// merged in is an Inherited failure, which no Repair is started for: the
+    /// CI-fix Repair is given the branch's own failures, and when there are
+    /// none, the loop goes round again if the Base branch moved since, counted
+    /// as a Base move, and otherwise once its Base fix has merged, or fails
+    /// naming the checks and the Base branch commit: see [`BaseFix::fix`]. A
+    /// Base fix's own Run sees no Inherited failures.
     /// Returns the head commit whose CI was last watched and found green or
     /// absent. Fails with a Declined CI fix if, after a CI-fix Repair and the
     /// Base branch merged again, the head is still the one whose CI failed,
@@ -420,7 +444,12 @@ impl RepairLoop<'_> {
                     ci::short(&head)
                 );
             }
-            match ci::watch(issue, &head)? {
+            let base_commit = worktree.merged_base_commit(base)?;
+            let compared_with = self
+                .base_fix
+                .sees_inherited_failures()
+                .then_some(base_commit.as_str());
+            match ci::watch(issue, &head, compared_with)? {
                 Ci::Absent | Ci::Passed => {
                     if worktree.base_branch_moved(base)? {
                         self.budgets.count_base_move(base, "while CI ran")?;
@@ -431,6 +460,29 @@ impl RepairLoop<'_> {
                     }
                 }
                 Ci::Failed(failed) => {
+                    if !failed.inherited.is_empty() {
+                        progress::step(format_args!(
+                            "Inherited failures (also failing on {base} at {}): {}",
+                            ci::short(&base_commit),
+                            ci::check_names(&failed.inherited)
+                        ));
+                    }
+                    if failed.own.is_empty() {
+                        // Someone may have fixed the Base branch since.
+                        if worktree.base_branch_moved(base)? {
+                            self.budgets.count_base_move(base, "while CI ran")?;
+                            continue;
+                        }
+                        self.base_fix.fix(
+                            worktree.launch(),
+                            issue,
+                            pr_url,
+                            base,
+                            &base_commit,
+                            &failed.inherited,
+                        )?;
+                        continue;
+                    }
                     let kind = self.budgets.next_repair("CI red")?;
                     run_session(
                         &kind,

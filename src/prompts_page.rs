@@ -11,6 +11,7 @@ use std::fmt::Write;
 
 use include_dir::{Dir, File};
 
+use crate::ci::FailedChecks;
 use crate::github::{Check, CheckState};
 use crate::issue::IssueUrl;
 use crate::plugin::SKILLS;
@@ -49,12 +50,13 @@ const PR_URL: &str = "<pull request URL>";
 const OWN_HEAD: &str = "<own head>";
 const CHECK: &str = "<failing check>";
 const CHECK_URL: &str = "<check URL>";
+const INHERITED_CHECK: &str = "<Inherited failure>";
 const BACKGROUND_WORK: &str = "<background work>";
 const FOCUS: &str = "<focus>";
 const PLUGIN_DIR: &str = "<plugin dir>";
 const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
-const PLACEHOLDERS: [&str; 15] = [
+const PLACEHOLDERS: [&str; 16] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -65,6 +67,7 @@ const PLACEHOLDERS: [&str; 15] = [
     OWN_HEAD,
     CHECK,
     CHECK_URL,
+    INHERITED_CHECK,
     BACKGROUND_WORK,
     FOCUS,
     PLUGIN_DIR,
@@ -95,11 +98,19 @@ fn prompts() -> Vec<Prompt> {
         url: SPEC_URL.to_string(),
         ..issue.clone()
     };
-    let failed = [Check {
-        name: CHECK.to_string(),
+    let check = |name: &str| Check {
+        name: name.to_string(),
         state: CheckState::Failed,
         url: Some(CHECK_URL.to_string()),
-    }];
+    };
+    let failed = FailedChecks {
+        own: vec![check(CHECK)],
+        inherited: Vec::new(),
+    };
+    let failed_with_inherited = FailedChecks {
+        own: vec![check(CHECK)],
+        inherited: vec![check(INHERITED_CHECK)],
+    };
     let with_sentinel = vec![
         Prompt {
             id: "prompt-fresh",
@@ -163,6 +174,13 @@ fn prompts() -> Vec<Prompt> {
             when: "Starts a Repair session when CI fails on the pull request's head commit, listing each failed check.",
             units: &[FINISH],
             text: prompt::ci_fix_repair(&issue, BASE, BRANCH, PR_URL, &failed),
+        },
+        Prompt {
+            id: "prompt-ci-fix-repair-inherited",
+            title: "CI-fix Repair, with Inherited failures",
+            when: "Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix.",
+            units: &[FINISH],
+            text: prompt::ci_fix_repair(&issue, BASE, BRANCH, PR_URL, &failed_with_inherited),
         },
         Prompt {
             id: "prompt-resume",

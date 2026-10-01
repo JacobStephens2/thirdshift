@@ -465,6 +465,309 @@ fn red_ci_on_the_spec_prs_head_gets_a_ci_fix_repair() {
     );
 }
 
+/// Bash that sets the check runs on `origin/<branch>`'s tip, as the worktree
+/// last fetched it, to `checks`.
+fn checks_on_origin(branch: &str, checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse origin/{branch})\" '{checks}'\n")
+}
+
+/// The cause of a Failed run whose red check `test` is an Inherited failure
+/// from `base`, as its tip on origin is now.
+fn inherited_failure(scenario: &Scenario, base: &str) -> String {
+    let base_commit = scenario.origin_git(&["rev-parse", base]);
+    format!(
+        "CI red on test, which also fails on {base} at {}; fix {base} first",
+        &base_commit[..7]
+    )
+}
+
+#[test]
+fn a_spec_pr_whose_red_check_also_fails_on_the_base_branch_commit_gets_no_repair() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        &format!("{}{}", checks_on_head(RED), checks_on_origin("main", RED)),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, &inherited_failure(&scenario, "main"));
+    assert_eq!(spec_prompts(&scenario).len(), 1, "only the Spec review");
+    let spec = spec_pr(&scenario);
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], true);
+}
+
+#[test]
+fn with_base_fix_the_spec_prs_inherited_failure_gets_a_base_fix_into_the_base_branch() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        &format!("{}{}", checks_on_head(RED), checks_on_origin("main", RED)),
+    );
+    // The Base fix issue is the next after the Tickets.
+    scenario.agent_does_for(
+        24,
+        &format!(
+            r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on main"
+gh pr create --base main --head issue-24 --title "Fix CI on main" --body "Closes #24"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: starting Base fix #24 into main: https://github.com/acme/widgets/issues/24\n",
+    );
+    let gh = scenario.gh_state();
+    assert_eq!(gh["titles"]["24"], "CI red on main: test");
+    let fix = pr_from(&scenario, "issue-24").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "main");
+    assert_eq!(fix["state"], "MERGED");
+    let spec = spec_pr(&scenario);
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], false);
+    assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_some());
+}
+
+/// A Spec #20 whose one Ticket, #21, lands with `test` red on its head and
+/// on the Spec branch: an Inherited failure.
+fn spec_whose_ticket_inherits_a_failure() -> Scenario {
+    let scenario = spec_of(&[(21, &[])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}{}{}",
+            agent_lands(21, "first.txt"),
+            checks_on_head(RED),
+            checks_on_origin("issue-20", RED)
+        ),
+    );
+    scenario
+}
+
+/// The agent, on the Base fix issue #22, the next after the Ticket, commits
+/// a fix and opens its PR into the Spec branch, with `test` green on its head.
+fn base_fix_lands_on_the_spec_branch(scenario: &Scenario) {
+    scenario.agent_does_for(
+        22,
+        &format!(
+            r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+}
+
+#[test]
+fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    base_fix_lands_on_the_spec_branch(&scenario);
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "#21: starting Base fix #22 into issue-20: https://github.com/acme/widgets/issues/22\n",
+    );
+    assert_eq!(
+        scenario.gh_state()["titles"]["22"],
+        "CI red on issue-20: test"
+    );
+    let fix = pr_from(&scenario, "issue-22").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "issue-20");
+    assert_eq!(fix["state"], "MERGED");
+    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "MERGED");
+    for file in ["first.txt", "ci-fix.txt"] {
+        assert!(scenario.origin_file("issue-20", file).is_some(), "{file}");
+    }
+    assert_eq!(spec_pr(&scenario)["isDraft"], false);
+}
+
+#[test]
+fn a_ticket_that_landed_after_a_base_fix_says_so_in_the_notification_and_the_checklist() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    base_fix_lands_on_the_spec_branch(&scenario);
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[
+            "--email",
+            "me@example.com",
+            "base-fix",
+            &spec_url(&scenario),
+        ],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let landed = "#21 landed with https://github.com/acme/widgets/pull/1, \
+                  after Base fix https://github.com/acme/widgets/issues/22 merged\n";
+    let (_, text) = the_one_notification(&resend);
+    assert_contains(&text, landed);
+    // The Spec PR's own Repair loop took no Base fix.
+    assert!(!text.contains("Base fix:"), "{text}");
+    let body = spec_pr(&scenario)["body"].as_str().unwrap().to_string();
+    assert_contains(&body, &format!("- [x] {landed}"));
+}
+
+/// A Spec #20 whose Tickets #21 and #22, neither blocked, each land a file
+/// and meet `test` red on their head and on the Spec branch.
+fn two_tickets_with_the_same_inherited_failure() -> Scenario {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    for ticket in [21, 22] {
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                "{}{}{}",
+                agent_lands(ticket, &format!("{ticket}.txt")),
+                checks_on_head(RED),
+                checks_on_origin("issue-20", RED)
+            ),
+        );
+    }
+    scenario
+}
+
+/// Bash that waits until both Tickets have looked for an open Base fix
+/// issue, so neither meets a Spec branch already fixed.
+const BOTH_TICKETS_HAVE_LOOKED: &str = r#"
+for _ in $(seq 200); do
+    looked="$(grep -A1 '"issue",' "$FAKE_GH_RECORD" | grep -c '"list",' || true)"
+    [ "$looked" -ge 2 ] && break
+    sleep 0.05
+done
+[ "$looked" -ge 2 ]
+"#;
+
+const BASE_FIX_23: &str = "https://github.com/acme/widgets/issues/23";
+
+#[test]
+fn two_tickets_meeting_the_same_inherited_failure_share_one_base_fix() {
+    let scenario = two_tickets_with_the_same_inherited_failure();
+    // The Base fix issue is the next after the Tickets.
+    scenario.agent_does_for(
+        23,
+        &format!(
+            r#"{BOTH_TICKETS_HAVE_LOOKED}
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-23 --title "Fix CI" --body "Closes #23"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix", "parallel", "2"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    for line in [
+        format!(": starting Base fix #23 into issue-20: {BASE_FIX_23}\n"),
+        format!(": waiting on Base fix #23, already open: {BASE_FIX_23}\n"),
+        ": Base fix #23 closed; merging issue-20 in again\n".to_string(),
+    ] {
+        assert_eq!(
+            result.stderr.matches(&line).count(),
+            1,
+            "{line:?} in stderr: {}",
+            result.stderr
+        );
+    }
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
+    let sessions = sessions_by_issue(&scenario);
+    assert_eq!(
+        sessions.iter().filter(|issue| *issue == "23").count(),
+        1,
+        "one Base fix Run: {sessions:?}"
+    );
+    let fix = pr_from(&scenario, "issue-23").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "issue-20");
+    assert_eq!(fix["state"], "MERGED");
+    for ticket in [21, 22] {
+        let pr = pr_from(&scenario, &format!("issue-{ticket}")).unwrap();
+        assert_eq!(pr["state"], "MERGED", "#{ticket}");
+    }
+    for file in ["21.txt", "22.txt", "ci-fix.txt"] {
+        assert!(scenario.origin_file("issue-20", file).is_some(), "{file}");
+    }
+    assert_eq!(spec_pr(&scenario)["isDraft"], false);
+}
+
+#[test]
+fn a_shared_base_fix_that_fails_fails_the_ticket_that_started_it_and_the_one_waiting_on_it() {
+    let scenario = two_tickets_with_the_same_inherited_failure();
+    scenario.agent_does_for(23, &format!("{BOTH_TICKETS_HAVE_LOOKED}exit 3\n"));
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix", "parallel", "2"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
+    assert_eq!(scenario.gh_state()["issues"]["23"], "OPEN");
+    let failed = |cause: &str| {
+        let line = format!(" failed: Base fix {BASE_FIX_23} {cause}");
+        let lines = result.stderr.lines();
+        lines
+            .filter(|at| at.starts_with("thirdshift: #2") && at.contains(&line))
+            .count()
+    };
+    assert_eq!(failed("failed: "), 1, "stderr: {}", result.stderr);
+    assert_eq!(
+        failed("ended with its issue still open"),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn base_fix_in_the_user_config_gives_a_tickets_inherited_failure_a_base_fix() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    scenario.user_config_is("[base]\nfix = true\n");
+    base_fix_lands_on_the_spec_branch(&scenario);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let fix = pr_from(&scenario, "issue-22").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "issue-20");
+    assert_eq!(fix["state"], "MERGED");
+    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "MERGED");
+}
+
+#[test]
+fn no_base_fix_on_a_spec_reaches_its_tickets_whatever_the_user_config_says() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    scenario.user_config_is("[base]\nfix = true\n");
+
+    let result = scenario.run(&[&spec_url(&scenario), "no-base-fix"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        &format!(
+            "thirdshift: #21 failed: {}",
+            inherited_failure(&scenario, "issue-20")
+        ),
+    );
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "OPEN");
+}
+
 #[test]
 fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
     let scenario = linear_spec();
@@ -1312,6 +1615,52 @@ fn a_ticket_that_fails_once_the_spec_pr_is_open_is_shown_failed_in_its_checklist
         &result.stderr,
         "thirdshift: updating the Spec PR's Tickets checklist\n",
     );
+}
+
+#[test]
+fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the_checklist_and_the_notification()
+ {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "{}{}{}",
+            agent_lands(22, "22.txt"),
+            checks_on_head(RED),
+            checks_on_origin("issue-20", RED)
+        ),
+    );
+
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    // One at a time, so #22 branches off a Spec branch #21 has landed on.
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[
+            "--email",
+            "me@example.com",
+            "parallel",
+            "1",
+            &spec_url(&scenario),
+        ],
+    );
+
+    let cause = inherited_failure(&scenario, "issue-20");
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        &format!(
+            "- [x] #21 landed with https://github.com/acme/widgets/pull/1\n\
+             - [ ] #22 failed: {cause}\n"
+        ),
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22"], "no Repair");
+    assert_contains(&result.stderr, &format!("thirdshift: #22 failed: {cause}"));
+    let (_, text) = the_one_notification(&resend);
+    assert_contains(&text, &format!("#22 failed: {cause}"));
+    assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "OPEN");
+    assert_eq!(scenario.origin_file("issue-20", "22.txt"), None);
 }
 
 #[test]
