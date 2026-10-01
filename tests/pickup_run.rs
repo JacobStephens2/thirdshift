@@ -7,13 +7,15 @@
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
 //! way gets a line saying why. With no Ready issue, or while an Architect run
 //! or another Pickup run on the repository is still running, it is skipped.
+//! Asked for a Run notification, a pass that took an issue sends one, the
+//! dispatched run's, and a skipped one sends none.
 
 mod support;
 
 use std::fs;
 
 use support::resend::ResendStandIn;
-use support::{REPO, RunResult, Scenario, TimelineEvent};
+use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent};
 
 /// The label of an issue a Pickup run may take.
 const READY_FOR_AGENT: &str = "ready-for-agent";
@@ -949,20 +951,43 @@ const KEY: &str = "re_test_123";
 
 const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
 
+/// The environment for a Pickup run against `resend`, with a Resend API key.
+fn resend_env(resend: &ResendStandIn) -> [(&str, &str); 2] {
+    [
+        ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ("RESEND_API_KEY", KEY),
+    ]
+}
+
 /// Run thirdshift with `args` against `resend`, with a Resend API key in the
 /// environment.
 fn run_with_resend(scenario: &Scenario, resend: &ResendStandIn, args: &[&str]) -> RunResult {
-    let env = [
-        ("THIRDSHIFT_RESEND_URL", resend.url()),
-        ("RESEND_API_KEY", KEY),
-    ];
-    scenario.run_with_env(args, &env)
+    scenario.run_with_env(args, &resend_env(resend))
 }
 
+/// The subject and the text of the one Run notification `resend` received.
+fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let body = &requests[0].body;
+    let part = |name: &str| body[name].as_str().unwrap().to_string();
+    (part("subject"), part("text"))
+}
+
+/// A Ready issue, #7, titled, with no sub-issues, whose session opens its PR
+/// into `main`.
+fn titled_ready_ticket() -> Scenario {
+    let scenario = ready_ticket();
+    scenario.issue_titled(7, "Sharpen the widgets");
+    scenario
+}
+
+/// The User config of a machine where every Run and every Pickup run that
+/// takes an issue sends a Run notification.
 const EMAIL_ALWAYS: &str = "[email]\nalways = true\nto = \"config@example.com\"\n";
 
 #[test]
-fn the_dispatched_run_sends_its_run_notification_as_it_would_by_hand() {
+fn a_pass_that_took_an_issue_sends_one_notification_when_the_command_or_the_user_config_asks() {
     for (config, args, to) in [
         (
             "",
@@ -970,11 +995,25 @@ fn the_dispatched_run_sends_its_run_notification_as_it_would_by_hand() {
             Some("me@example.com"),
         ),
         (EMAIL_ALWAYS, vec!["pickup"], Some("config@example.com")),
+        (
+            EMAIL_ALWAYS,
+            vec!["pickup", "--email", "me@example.com"],
+            Some("me@example.com"),
+        ),
+        (
+            "[email]\nto = \"config@example.com\"\n",
+            vec!["pickup", "email"],
+            Some("config@example.com"),
+        ),
+        (EMAIL_ALWAYS, vec!["pickup", "no-email"], None),
         (EMAIL_ALWAYS, vec!["pickup", "--no-email"], None),
-        ("", vec!["pickup"], None),
+        (
+            "[email]\nto = \"config@example.com\"\n",
+            vec!["pickup"],
+            None,
+        ),
     ] {
-        let scenario = ready_ticket();
-        scenario.issue_titled(7, "Sharpen the widgets");
+        let scenario = titled_ready_ticket();
         scenario.user_config_is(config);
         let resend = ResendStandIn::replying(200, ACCEPTED);
 
@@ -984,13 +1023,10 @@ fn the_dispatched_run_sends_its_run_notification_as_it_would_by_hand() {
         let requests = resend.requests();
         let sent: Vec<_> = requests.iter().map(|request| &request.body).collect();
         match to {
+            // Exactly one: the dispatched run sends none of its own.
             Some(to) => {
                 assert_eq!(sent.len(), 1, "{args:?} with {config:?}: {sent:?}");
-                assert_eq!(sent[0]["to"], to);
-                assert_eq!(
-                    sent[0]["subject"],
-                    "[thirdshift] acme/widgets#7 Sharpen the widgets: ready for review"
-                );
+                assert_eq!(sent[0]["to"], to, "{args:?} with {config:?}");
             }
             None => assert!(sent.is_empty(), "{args:?} with {config:?}: {sent:?}"),
         }
@@ -998,33 +1034,321 @@ fn the_dispatched_run_sends_its_run_notification_as_it_would_by_hand() {
 }
 
 #[test]
-fn a_skipped_pickup_run_sends_no_run_notification() {
-    let scenario = Scenario::new();
+fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
+    let scenario = titled_ready_ticket();
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
     let result = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
 
-    assert_skipped(&scenario, &result, NO_READY_ISSUE);
+    let pr = pr_from(&scenario, "issue-7");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets#7 Sharpen the widgets: ready for review"
+    );
+    let logs = scenario.entries("home/.thirdshift/logs");
+    assert_eq!(logs.len(), 1, "logs: {logs:?}");
+    let log = scenario.path("home/.thirdshift/logs").join(&logs[0]);
+    assert!(
+        text.starts_with(&format!(
+            "Pull request: {}\n\
+             Session log:  {}\n\
+             Host:         ",
+            pr["url"].as_str().unwrap(),
+            log.display()
+        )),
+        "{text}"
+    );
+    assert!(text.contains("\nTook:         "), "{text}");
+}
+
+#[test]
+fn the_notification_of_a_merge_run_says_it_merged() {
+    let scenario = titled_ready_ticket();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup", "merge"]);
+
+    let pr = pr_from(&scenario, "issue-7");
+    assert_ended_with_pr(&result, &pr, "merged");
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets#7 Sharpen the widgets: merged"
+    );
+    let pull_request = format!("Pull request: {}\n", pr["url"].as_str().unwrap());
+    assert!(text.starts_with(&pull_request), "{text}");
+}
+
+#[test]
+fn the_notification_of_a_failed_run_has_its_pull_request_and_its_cause() {
+    let scenario = titled_ready_ticket();
+    scenario.agent_does_for(7, &format!("{}exit 3\n", agent_opens_pr(7, "main")));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup", "--email", "me@example.com"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets#7 Sharpen the widgets: failed"
+    );
+    assert!(
+        text.starts_with(&format!(
+            "Pull request: {}\n\
+             Cause:        claude exited 3\n\
+             Session log:  ",
+            pr_from(&scenario, "issue-7")["url"].as_str().unwrap()
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_notification_of_an_interrupted_run_says_it_was_interrupted() {
+    let scenario = titled_ready_ticket();
+    scenario.agent_does_for(
+        7,
+        r#"touch "$(dirname "$FAKE_CLAUDE_RECORD")/started"
+sleep 60"#,
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_and_signal_with_env(
+        &["pickup", "--email", "me@example.com"],
+        &resend_env(&resend),
+        "started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets#7 Sharpen the widgets: interrupted"
+    );
+    assert!(!text.contains("Cause:"), "{text}");
+}
+
+#[test]
+fn the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket() {
+    let scenario = ready_spec("");
+    scenario.issue_titled(7, "Sharpen every widget");
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup"]);
+
+    let spec_pr = pr_from(&scenario, "issue-7");
+    assert_ended_with_pr(&result, &spec_pr, "ready for review");
+    // Exactly one: neither the Spec run nor a Ticket's Run sends its own.
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets#7 Sharpen every widget: ready for review"
+    );
+    let pull_request = format!("Pull request: {}\n", spec_pr["url"].as_str().unwrap());
+    assert!(text.starts_with(&pull_request), "{text}");
+    let (_, tickets) = text.split_once("\nTickets:\n").expect(&text);
+    for ticket in [8, 9] {
+        let pr = pr_from(&scenario, &format!("issue-{ticket}"));
+        let line = format!("#{ticket} landed with {}\n", pr["url"].as_str().unwrap());
+        assert!(tickets.contains(&line), "expected {line:?} in: {text}");
+    }
+}
+
+#[test]
+fn the_notification_of_a_failed_spec_run_has_each_tickets_outcome() {
+    let scenario = ready_spec("exit 3");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": failed"), "{subject}");
+    let (_, tickets) = text.split_once("\nTickets:\n").expect(&text);
+    let landed = pr_from(&scenario, "issue-8");
+    let landed = format!("#8 landed with {}\n", landed["url"].as_str().unwrap());
+    assert!(tickets.contains(&landed), "expected {landed:?} in: {text}");
+    assert!(tickets.contains("#9 failed: "), "{text}");
+}
+
+#[test]
+fn a_pass_skipped_for_having_no_ready_issue_sends_no_notification() {
+    for (config, args) in [
+        ("", vec!["pickup", "email", "me@example.com"]),
+        (EMAIL_ALWAYS, vec!["pickup"]),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run_with_resend(&scenario, &resend, &args);
+
+        assert_skipped(&scenario, &result, NO_READY_ISSUE);
+        assert!(resend.requests().is_empty(), "{args:?} with {config:?}");
+    }
+}
+
+/// Start a Pickup run that takes #7, made a Ready issue here, and holds the
+/// repository's lock until [`release`], its session waiting once started.
+fn pickup_run_held_on_issue_7(scenario: &Scenario) -> HeldRun {
+    ready_issue(scenario, 7, &[]);
+    scenario.agent_does_for(
+        7,
+        &format!("{AGENT_WAITS_FOR_RELEASE}{}", agent_opens_pr(7, "main")),
+    );
+    scenario.run_until(&["pickup"], &[], "started")
+}
+
+#[test]
+fn a_pass_skipped_for_the_lock_sends_no_notification() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 9, &[]);
+    let first = pickup_run_held_on_issue_7(&scenario);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let skipped = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
+
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(skipped.stderr, ALREADY_RUNNING);
+    assert_eq!(skipped.stdout, "");
+    release(&scenario);
+    first.finish();
     assert!(resend.requests().is_empty());
 }
 
 #[test]
-fn asked_for_a_notification_with_no_address_known_the_issue_taken_is_left_as_it_was() {
+fn asked_for_a_notification_with_no_address_known_the_pass_stops_before_any_work() {
+    for (config, args) in [
+        ("", ["pickup", "--email"]),
+        ("[email]\nalways = true\n", ["pickup", "merge"]),
+    ] {
+        let scenario = ready_ticket();
+        scenario.user_config_is(config);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run_with_resend(&scenario, &resend, &args);
+
+        assert_stopped_by_preflight(&scenario, &result, "no email address");
+        assert!(resend.requests().is_empty());
+    }
+}
+
+#[test]
+fn asked_for_a_notification_with_no_resend_api_key_the_pass_stops_before_any_work() {
     let scenario = ready_ticket();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_with_env(
+        &["pickup", "email", "me@example.com"],
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+    );
+
+    assert_stopped_by_preflight(&scenario, &result, "no Resend API key");
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn a_pass_that_would_be_skipped_for_having_no_ready_issue_still_stops_on_the_notifications_checks()
+{
+    let scenario = Scenario::new();
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
     let result = run_with_resend(&scenario, &resend, &["pickup", "--email"]);
 
+    scenario.assert_rejected_before_any_work(&result, "no email address");
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn a_pass_that_would_be_skipped_for_the_lock_still_stops_on_the_notifications_checks() {
+    let scenario = Scenario::new();
+    let first = pickup_run_held_on_issue_7(&scenario);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let stopped = run_with_resend(&scenario, &resend, &["pickup", "--email"]);
+
+    assert_eq!(stopped.code, Some(1), "stderr: {}", stopped.stderr);
     assert!(
-        result.stderr.contains("no email address"),
+        stopped.stderr.contains("no email address"),
+        "stderr: {}",
+        stopped.stderr
+    );
+    assert_eq!(stopped.stdout, "");
+    release(&scenario);
+    first.finish();
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn the_notifications_checks_come_before_the_checks_on_the_clone() {
+    let scenario = ready_ticket();
+    scenario.launch_git(&["checkout", "-q", "--detach"]);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup", "--email"]);
+
+    assert_stopped_by_preflight(&scenario, &result, "no email address");
+    assert!(
+        !result.stderr.contains("HEAD is detached"),
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(result.stdout, "");
+}
+
+#[test]
+fn a_pass_that_cant_tell_whether_its_issue_is_a_spec_fails_before_saying_it_took_it() {
+    let scenario = titled_ready_ticket();
+    scenario.gh_fails("api graphql");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("taking Ready issue"),
+        "stderr: {}",
+        result.stderr
+    );
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     assert!(scenario.claude_calls().is_empty(), "a session was started");
     assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn a_notification_that_cant_be_sent_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
+    for (script, code) in [(agent_opens_pr(7, "main"), 0), ("exit 3".to_string(), 1)] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.agent_does_for(7, &script);
+        let unasked = scenario.run(&["pickup"]);
+        assert_eq!(unasked.code, Some(code), "stderr: {}", unasked.stderr);
+
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.agent_does_for(7, &script);
+        let resend = ResendStandIn::replying(500, "upstream exploded");
+
+        let result = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
+
+        assert_eq!(result.code, Some(code), "stderr: {}", result.stderr);
+        assert_eq!(result.stdout, unasked.stdout);
+        assert_eq!(resend.requests().len(), 1);
+        let last = result.stderr.lines().last().unwrap();
+        assert!(
+            last.contains("warning: could not send the Run notification")
+                && last.contains("upstream exploded"),
+            "stderr: {}",
+            result.stderr
+        );
+    }
 }
 
 #[test]
