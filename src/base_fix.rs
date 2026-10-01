@@ -31,10 +31,6 @@ const LABELS: [(&str, &str); 2] = [
     (READY_FOR_AGENT, "Ready for an agent to take on"),
 ];
 
-/// What starts the line on stderr saying what became of the Base fix a Run
-/// took, which a Spec run reads back from a Ticket's Run.
-pub const REPORT: &str = "Base fix: ";
-
 /// What a Run asks about a Base fix, by its command or, without `base-fix`
 /// or `no-base-fix`, by the User config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
