@@ -55,9 +55,9 @@ pub fn watch(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<C
 /// The Check re-run of `sha`: ask GitHub to re-run the branch's own checks
 /// in `failed`, once for each GitHub Actions workflow run they belong to,
 /// then [`watch`] CI on `sha` again, from the new attempt on: it waits up to
-/// the grace period for GitHub to list none of the check runs that failed,
-/// so what the attempt before came to is never taken for the re-run's.
-/// Inherited failures are left as they are.
+/// the grace period for GitHub to list none of the failed check runs of
+/// those workflow runs, so what the attempt before came to is never taken
+/// for the re-run's. No workflow run is re-run for an Inherited failure.
 ///
 /// `None` if there is no re-run to watch, each for a reason told in a
 /// progress line: one of those checks is no GitHub Actions job, so nothing
@@ -70,40 +70,42 @@ pub fn rerun(
     failed: &FailedChecks,
 ) -> Result<Option<Ci>> {
     let short = short(sha);
-    let (jobs, others): (Vec<&Check>, Vec<&Check>) =
-        failed.own.iter().partition(|check| check.job.is_some());
-    if !others.is_empty() {
+    let not_jobs = failed.own.iter().filter(|check| check.job.is_none());
+    let not_jobs = check_names(not_jobs);
+    if !not_jobs.is_empty() {
         progress::step(format_args!(
-            "the failed checks on {short} can't be re-run: not GitHub Actions jobs: {}",
-            names(&others)
+            "the failed checks on {short} can't be re-run: not GitHub Actions jobs: {not_jobs}"
         ));
         return Ok(None);
     }
-    let jobs: Vec<ActionsJob> = jobs.iter().filter_map(|check| check.job).collect();
     progress::step(format_args!(
         "re-running the failed checks on {short}: {}",
         check_names(&failed.own)
     ));
-    let mut workflow_runs: Vec<u64> = jobs.iter().map(|job| job.workflow_run).collect();
+    let mut workflow_runs: Vec<u64> = jobs_of(&failed.own).map(|job| job.workflow_run).collect();
     workflow_runs.sort_unstable();
     workflow_runs.dedup();
-    for workflow_run in workflow_runs {
-        if let Err(error) = github::rerun_failed_jobs(issue, workflow_run) {
+    for workflow_run in &workflow_runs {
+        if let Err(error) = github::rerun_failed_jobs(issue, *workflow_run) {
             progress::step(format_args!("GitHub refused the re-run: {error:#}"));
             return Ok(None);
         }
     }
 
+    // GitHub re-runs every failed job of a workflow run, so an Inherited
+    // failure that shares one with the branch's own gets a new attempt too.
+    let before_rerun: Vec<u64> = jobs_of(&failed.own)
+        .chain(jobs_of(&failed.inherited))
+        .filter(|job| workflow_runs.contains(&job.workflow_run))
+        .map(|job| job.check_run)
+        .collect();
     let grace = poll::grace_period();
-    let appeared = poll::within(grace, || {
+    let new_attempt = poll::within(grace, || {
         let checks = github::checks_on(issue, sha)?;
-        let stale = checks
-            .iter()
-            .filter_map(|check| check.job)
-            .any(|job| jobs.iter().any(|failed| failed.check_run == job.check_run));
-        Ok((!stale).then_some(()))
+        let still_listed = jobs_of(&checks).any(|job| before_rerun.contains(&job.check_run));
+        Ok((!still_listed).then_some(()))
     })?;
-    if appeared.is_none() {
+    if new_attempt.is_none() {
         progress::step(format_args!(
             "no re-run appeared on {short} within {}s",
             grace.as_secs()
@@ -158,13 +160,17 @@ fn watch_to_end(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Resul
 }
 
 /// The names of `checks`, as in "test, lint".
-pub fn check_names(checks: &[Check]) -> String {
-    names(&checks.iter().collect::<Vec<_>>())
+pub fn check_names<'a>(checks: impl IntoIterator<Item = &'a Check>) -> String {
+    let names: Vec<&str> = checks
+        .into_iter()
+        .map(|check| check.name.as_str())
+        .collect();
+    names.join(", ")
 }
 
-fn names(checks: &[&Check]) -> String {
-    let names: Vec<&str> = checks.iter().map(|check| check.name.as_str()).collect();
-    names.join(", ")
+/// The GitHub Actions jobs among `checks`.
+fn jobs_of(checks: &[Check]) -> impl Iterator<Item = ActionsJob> + '_ {
+    checks.iter().filter_map(|check| check.job)
 }
 
 /// `checks` as a list, a line each: its name, and its URL if it has one.

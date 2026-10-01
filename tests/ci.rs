@@ -348,41 +348,6 @@ fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_succe
     scenario.assert_cleaned_up("issue-7");
 }
 
-#[test]
-fn a_check_re_run_that_fails_again_is_a_failed_run_with_no_second_repair_or_re_run() {
-    let scenario = Scenario::new();
-    scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
-        checks_on_head(&format!("[{}]", actions_failure("test", 900, 1, "null")))
-    ));
-    scenario.agent_does_in_session(2, "true\n");
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_ne!(result.code, Some(0));
-    assert_one_repair(&scenario, &result);
-    assert_eq!(rerun_requests(&scenario), ["900"]);
-    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
-    let cause = declined_ci_fix(watched.trim());
-    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
-    assert_eq!(
-        result.stderr.matches("CI failed on").count(),
-        2,
-        "before the Repair and after the Check re-run; stderr: {}",
-        result.stderr
-    );
-    assert_session_log_is(&result, "repair-1");
-    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
-    assert_eq!(
-        scenario.origin_log("issue-7"),
-        Some(vec![
-            format!("thirdshift: failed run ({cause})"),
-            "Add feature".to_string(),
-            "Initial commit".to_string(),
-        ])
-    );
-}
-
 /// Assert that the Run ended as a Declined CI fix with no Check re-run asked
 /// for, or with only `requests`.
 fn assert_declined_ci_fix(scenario: &Scenario, result: &support::RunResult, requests: &[&str]) {
@@ -398,6 +363,30 @@ fn assert_declined_ci_fix(scenario: &Scenario, result: &support::RunResult, requ
         result.stderr
     );
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+}
+
+#[test]
+fn a_check_re_run_that_fails_again_is_a_failed_run_with_no_second_repair_or_re_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(&format!("[{}]", actions_failure("test", 900, 1, "null")))
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_declined_ci_fix(&scenario, &result, &["900"]);
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    let cause = declined_ci_fix(watched.trim());
+    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    assert_eq!(
+        result.stderr.matches("CI failed on").count(),
+        2,
+        "before the Repair and after the Check re-run; stderr: {}",
+        result.stderr
+    );
+    assert_session_log_is(&result, "repair-1");
 }
 
 #[test]
@@ -494,6 +483,44 @@ fn a_check_re_run_leaves_inherited_failures_alone() {
     assert!(
         !result.stderr.contains("nothing to fix on the branch"),
         "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn an_inherited_failure_re_run_along_with_the_branchs_own_is_waited_for_too() {
+    let scenario = Scenario::new();
+    // lint shares test's workflow run, so GitHub re-runs it too, and goes on
+    // listing its failed attempt for a few reads after test's new one.
+    let inherited = actions_failure(
+        "lint",
+        900,
+        1,
+        r#"{"conclusion": "success", "stale_polls": 3}"#,
+    );
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        checks_on_head(&format!(
+            "[{}, {inherited}]",
+            actions_failure("test", 900, 2, RERUN_PASSES)
+        )),
+        checks_on_base(r#"[{"name": "lint", "conclusion": "failure"}]"#)
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    // The default 300ms grace period holds only about three reads.
+    let result = scenario.run_with_env(
+        &[&scenario.issue_url(7)],
+        &[("THIRDSHIFT_CI_GRACE_MS", "5000")],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_one_repair(&scenario, &result);
+    assert_eq!(rerun_requests(&scenario), ["900"]);
+    assert_eq!(
+        result.stderr.matches("CI failed on").count(),
+        1,
+        "only before the Repair; stderr: {}",
         result.stderr
     );
 }

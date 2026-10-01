@@ -374,8 +374,8 @@ fn ctrl_c_before_the_merge_is_a_failed_run() {
 #[test]
 fn a_check_re_run_that_passes_after_a_ci_fix_repair_made_no_commit_lets_the_merge_run_merge() {
     let scenario = Scenario::new();
-    // A flaky check: it fails, the Repair commits nothing, and its Check
-    // re-run passes.
+    // A check with a flaky test: it fails, the Repair commits nothing, and
+    // its Check re-run passes.
     scenario.agent_does(&format!(
         "{AGENT_OPENS_PR}{}",
         checks_on_head(

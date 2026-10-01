@@ -1084,18 +1084,15 @@ fn run_rerun(state: &mut Json, positional: &[String], flags: &Flags) {
             continue;
         }
         rerun_any = true;
+        let rerun = check.get("rerun").filter(|rerun| rerun.truthy()).cloned();
         let polls = |name: &str| {
-            let rerun = check.get("rerun").filter(|rerun| rerun.truthy());
-            let polls = rerun
-                .and_then(|rerun| rerun.get(name))
-                .and_then(Json::as_i64);
-            number(polls.unwrap_or(0))
+            let polls = rerun.as_ref().and_then(|rerun| rerun.get(name));
+            number(polls.and_then(Json::as_i64).unwrap_or(0))
         };
-        let (stale_polls, pending_polls) = (polls("stale_polls"), polls("pending_polls"));
-        if let Some(rerun) = check.get("rerun").filter(|rerun| rerun.truthy()) {
-            let comes_to = rerun.at("conclusion").clone();
-            check.set("conclusion", comes_to);
+        if let Some(rerun) = &rerun {
+            check.set("conclusion", rerun.at("conclusion").clone());
         }
+        let (stale_polls, pending_polls) = (polls("stale_polls"), polls("pending_polls"));
         let before = check.at("id").clone();
         check.set(
             "stale",
