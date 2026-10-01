@@ -12,7 +12,7 @@ mod support;
 use std::fs;
 
 use support::resend::ResendStandIn;
-use support::{REPO, RunResult, Scenario};
+use support::{HeldRun, REPO, RunResult, Scenario};
 
 /// The label of an issue a Pickup run may take.
 const READY_FOR_AGENT: &str = "ready-for-agent";
@@ -922,16 +922,22 @@ fn a_pass_skipped_for_having_no_ready_issue_sends_no_notification() {
     }
 }
 
-#[test]
-fn a_pass_skipped_for_the_lock_sends_no_notification() {
-    let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &[]);
-    ready_issue(&scenario, 9, &[]);
+/// Start a Pickup run that takes #7, made a Ready issue here, and holds the
+/// repository's lock until [`release`], its session waiting once started.
+fn pickup_run_held_on_issue_7(scenario: &Scenario) -> HeldRun {
+    ready_issue(scenario, 7, &[]);
     scenario.agent_does_for(
         7,
         &format!("{AGENT_WAITS_FOR_RELEASE}{}", agent_opens_pr(7, "main")),
     );
-    let first = scenario.run_until(&["pickup"], &[], "started");
+    scenario.run_until(&["pickup"], &[], "started")
+}
+
+#[test]
+fn a_pass_skipped_for_the_lock_sends_no_notification() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 9, &[]);
+    let first = pickup_run_held_on_issue_7(&scenario);
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
     let skipped = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
@@ -992,12 +998,7 @@ fn a_pass_that_would_be_skipped_for_having_no_ready_issue_still_stops_on_the_not
 #[test]
 fn a_pass_that_would_be_skipped_for_the_lock_still_stops_on_the_notifications_checks() {
     let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &[]);
-    scenario.agent_does_for(
-        7,
-        &format!("{AGENT_WAITS_FOR_RELEASE}{}", agent_opens_pr(7, "main")),
-    );
-    let first = scenario.run_until(&["pickup"], &[], "started");
+    let first = pickup_run_held_on_issue_7(&scenario);
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
     let stopped = run_with_resend(&scenario, &resend, &["pickup", "--email"]);
@@ -1011,6 +1012,41 @@ fn a_pass_that_would_be_skipped_for_the_lock_still_stops_on_the_notifications_ch
     assert_eq!(stopped.stdout, "");
     release(&scenario);
     first.finish();
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn the_notifications_checks_come_before_the_checks_on_the_clone() {
+    let scenario = ready_ticket();
+    scenario.launch_git(&["checkout", "-q", "--detach"]);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup", "--email"]);
+
+    assert_stopped_by_preflight(&scenario, &result, "no email address");
+    assert!(
+        !result.stderr.contains("HEAD is detached"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_pass_that_cant_tell_whether_its_issue_is_a_spec_fails_before_saying_it_took_it() {
+    let scenario = titled_ready_ticket();
+    scenario.gh_fails("api graphql");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("taking Ready issue"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert!(scenario.claude_calls().is_empty(), "a session was started");
     assert!(resend.requests().is_empty());
 }
 

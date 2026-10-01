@@ -421,8 +421,7 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
         Err(error) => return failure(&error),
     };
-    let notification =
-        notification.map(|notification| notification.of_taken(&taken.issue, taken.title));
+    let notification = notification.map(|checked| checked.of_taken(&taken.issue, taken.title));
     // Ignored for an issue that is not a Spec: the command can't know which
     // it will take. Left out of the command a Base fix is offered with too,
     // as the issue is retried as a Run of its own: another Pickup run never

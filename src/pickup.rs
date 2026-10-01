@@ -29,6 +29,7 @@ pub enum Outcome {
 /// The Ready issue a Pickup run took.
 pub struct Taken {
     pub issue: IssueUrl,
+    /// Its title, as the search listed it.
     pub title: String,
     /// The Pickup run's Base branch, which the run the issue is dispatched
     /// as takes.
@@ -89,11 +90,13 @@ pub fn run(base: Option<&str>) -> Result<Outcome> {
     let Some(ready) = ready else {
         return Ok(Outcome::Skipped(Skipped::NoReadyIssue(repo)));
     };
+    // Before the issue is said to be taken, so a pass that can't tell fails
+    // having taken none.
+    let is_spec = !github::tickets(&ready.issue)?.is_empty();
     progress::step(format_args!(
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
         ready.issue.number, ready.title, ready.issue.url
     ));
-    let is_spec = !github::tickets(&ready.issue)?.is_empty();
     Ok(Outcome::Taken(Taken {
         issue: ready.issue,
         title: ready.title,
