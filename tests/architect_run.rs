@@ -597,6 +597,14 @@ fn a_plan_with_tickets_starts_a_spec_run_on_it_and_ends_as_that_spec_run_does() 
     assert_eq!(spec_pr["state"], "OPEN");
     assert_eq!(spec_pr["isDraft"], false);
     assert_eq!(scenario.issue_labels(8), ["ready-for-agent"]);
+    let dispatch = format!("dispatching the plan {PLAN_URL}, as thirdshift {PLAN_URL} would\n");
+    let dispatched = result.stderr.find(&dispatch);
+    let started = result.stderr.find("thirdshift: starting #9\n");
+    assert!(
+        dispatched.is_some() && dispatched < started,
+        "stderr: {}",
+        result.stderr
+    );
     let mut sessions = dispatched_sessions(&scenario);
     assert_eq!(sessions.pop().as_deref(), Some("8"), "the Spec review");
     sessions.sort();
@@ -617,13 +625,10 @@ fn a_plan_with_tickets_starts_a_spec_run_on_it_and_ends_as_that_spec_run_does() 
 
 #[test]
 fn merge_merges_the_runs_pull_request_or_the_spec_pr() {
-    for (scenario, head) in [
-        (single_ticket_plan(), "issue-8"),
-        (spec_plan(""), "issue-8"),
-    ] {
+    for scenario in [single_ticket_plan(), spec_plan("")] {
         let result = scenario.run(&["architect", "merge"]);
 
-        let pr = pr_from(&scenario, head);
+        let pr = pr_from(&scenario, "issue-8");
         assert_ended_with_pr(&result, &pr, "merged");
         assert_eq!(pr["base"], "main");
         assert_eq!(pr["state"], "MERGED");
@@ -636,18 +641,20 @@ fn merge_merges_the_runs_pull_request_or_the_spec_pr() {
 
 #[test]
 fn the_user_configs_merge_default_applies_unless_no_merge_is_given() {
-    for (args, outcome, state) in [
-        (vec!["architect"], "merged", "MERGED"),
-        (vec!["architect", "--no-merge"], "ready for review", "OPEN"),
-    ] {
-        let scenario = single_ticket_plan();
-        scenario.user_config_is("[merge]\nalways = true\n");
+    for plan in [single_ticket_plan, || spec_plan("")] {
+        for (args, outcome, state) in [
+            (vec!["architect"], "merged", "MERGED"),
+            (vec!["architect", "--no-merge"], "ready for review", "OPEN"),
+        ] {
+            let scenario = plan();
+            scenario.user_config_is("[merge]\nalways = true\n");
 
-        let result = scenario.run(&args);
+            let result = scenario.run(&args);
 
-        let pr = pr_from(&scenario, "issue-8");
-        assert_ended_with_pr(&result, &pr, outcome);
-        assert_eq!(pr["state"], state, "{args:?}");
+            let pr = pr_from(&scenario, "issue-8");
+            assert_ended_with_pr(&result, &pr, outcome);
+            assert_eq!(pr["state"], state, "{args:?}");
+        }
     }
 }
 

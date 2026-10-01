@@ -54,6 +54,17 @@ pub struct Parallel {
     pub asked: bool,
 }
 
+impl Parallel {
+    /// As many Tickets at once as the command `asked` for with
+    /// `parallel <n>`, else as the User config's `default` says.
+    pub fn new(asked: Option<NonZeroUsize>, default: NonZeroUsize) -> Self {
+        Parallel {
+            tickets: asked.unwrap_or(default),
+            asked: asked.is_some(),
+        }
+    }
+}
+
 /// Whether there are `tickets`, as a Spec has, and every one is closed.
 pub fn all_closed(tickets: &[Ticket]) -> bool {
     !tickets.is_empty() && tickets.iter().all(|ticket| !ticket.is_open)

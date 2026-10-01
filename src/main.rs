@@ -27,13 +27,11 @@ mod update;
 mod worktree;
 
 use std::io::Write;
-use std::num::NonZeroUsize;
 use std::process::ExitCode;
 
 use args::{ArchitectArgs, Command, RunArgs};
 use config::UserConfig;
 use failed_run::FailedRun;
-use issue::IssueUrl;
 use notification::{NotificationAsk, RunNotification};
 use run::{Goal, Reached};
 use spec_run::Parallel;
@@ -89,7 +87,8 @@ a single Ticket. thirdshift then checks that the plan is open, new and not label
 ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
 and dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single
 Ticket. The Architect run ends as that run does, with its exit code and its PR's URL.
-merge, --no-merge and parallel <n> apply to that run, as do the User config's defaults;
+merge, --no-merge and parallel <n> apply to that run, as do the User config's defaults,
+except that it sends no Run notification, whatever email.always says;
 parallel <n> fails it if the plan is a single Ticket. With --plan-only, the Architect run
 prints the plan's URL and stops instead, for you to read, edit and run with
 thirdshift <Issue URL>, and takes none of those flags. <focus> is free text, one argument,
@@ -189,15 +188,15 @@ fn main() -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let ended = run_issue(
+    let ended = run::run(
         &issue,
         goal,
-        parallel,
+        &config.logs_dir,
         launch_pull,
+        Parallel::new(parallel, config.spec_parallel),
         spec_branch.as_deref(),
-        &config,
     );
-    let code = show(&ended);
+    let code = run_outcome(&ended);
     if let Some(notification) = notification {
         notification.send(&ended);
     }
@@ -207,8 +206,9 @@ fn main() -> ExitCode {
 /// An Architect run: the Architecture review and its plan marked ready, then,
 /// unless the command asked to stop at the plan, the plan dispatched as
 /// `thirdshift <plan URL>` with the same flags would be, whose ending is the
-/// Architect run's. One that stops at the plan puts the plan's URL on stdout;
-/// one whose review or plan fails, the cause and the session log on stderr.
+/// Architect run's, though it sends no Run notification. One that stops at
+/// the plan puts the plan's URL on stdout; one whose review or plan fails,
+/// the cause and the session log on stderr.
 fn architect(args: &ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -231,44 +231,19 @@ fn architect(args: &ArchitectArgs) -> ExitCode {
         "dispatching the plan {url}, as thirdshift {url} would",
         url = plan.url
     ));
-    show(&run_issue(
+    run_outcome(&run::run(
         &plan,
         dispatch.goal.unwrap_or(config.default_goal()),
-        dispatch.parallel,
-        config.launch_pull,
-        None,
-        &config,
-    ))
-}
-
-/// The Run on `issue`, or the Spec run if it is a Spec, to `goal`, running as
-/// many Tickets at once as `parallel` asked for, else as the User config
-/// says. `spec_branch` makes it a Ticket's Run in a Spec run.
-fn run_issue(
-    issue: &IssueUrl,
-    goal: Goal,
-    parallel: Option<NonZeroUsize>,
-    launch_pull: bool,
-    spec_branch: Option<&str>,
-    config: &UserConfig,
-) -> Result<Reached, FailedRun> {
-    let parallel = Parallel {
-        tickets: parallel.unwrap_or(config.spec_parallel),
-        asked: parallel.is_some(),
-    };
-    run::run(
-        issue,
-        goal,
         &config.logs_dir,
-        launch_pull,
-        parallel,
-        spec_branch,
-    )
+        config.launch_pull,
+        Parallel::new(dispatch.parallel, config.spec_parallel),
+        None,
+    ))
 }
 
 /// How a Run or a Spec run that `ended` shows: its pull request's URL on
 /// stdout once it reached its goal, or as a Failed run does.
-fn show(ended: &Result<Reached, FailedRun>) -> ExitCode {
+fn run_outcome(ended: &Result<Reached, FailedRun>) -> ExitCode {
     match ended {
         Ok(reached) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
