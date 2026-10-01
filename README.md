@@ -131,6 +131,7 @@ The other commands:
 ```sh
 thirdshift architect [<focus>]      # review the Base branch's architecture, publish a plan and run it (see Architect runs)
 thirdshift architect [<focus>] --plan-only   # publish the plan, mark it ready and stop there
+thirdshift architect base <branch> [<focus>]   # do either with <branch> as the Base branch, from a clone on any branch
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift update                   # update to the latest release (see Updating)
@@ -138,7 +139,7 @@ thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print every form of the command, each with a one-line description
 ```
 
-`version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan.
+`version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), and the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time).
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
@@ -260,7 +261,7 @@ The Credentials are read only when `RESEND_API_KEY` is unset or empty, and only 
 A Run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and a key is found, in `RESEND_API_KEY` or else the Credentials. If either fails, or the Credentials are broken, the Run stops, exits `1` naming what's wrong (with no key, the message above listing every way to give one), and sends nothing. A Run that asks for no notification never reads the Credentials, so a broken file can't stop it, and `update`, `version` and `help` never read it either. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
 
 - **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
-- **Body**, plain text: the pull request URL (if any), the failure cause (if failed), the session log path (if any), the hostname and how long the Run took.
+- **Body**, plain text: the pull request URL (if any), the failure cause (if failed), after an Inherited failure with no Base fix taken its [`Base check:`, `Retry with:` and `Or set:` lines](#an-inherited-failure-links-the-base-branchs-checks), the session log path (if any), the hostname and how long the Run took.
 
 A [Spec run](#spec-runs) sends at most one notification for the whole Spec, under the same rules, with its checks made once before any Ticket starts. Its subject names the Spec, its outcome is the Spec run's, and its body, after what a Run's holds (the Spec PR, if any), lists each Ticket's outcome, one line per Ticket as in the summary on stderr, such as `#21 landed with https://github.com/acme/widgets/pull/1` or `#22 blocked by #21`. The Ticket Runs inside it never send a notification of their own, whatever the User config says.
 
@@ -328,7 +329,7 @@ Runs from one Launch directory, as a Spec run's Tickets are, look for the issue 
 
 Across clones and machines the look is only a best-effort lock, and two Runs that look at the same moment may each start a Base fix.
 
-Without `base-fix` or `base.fix`, or with `no-base-fix`, an Inherited failure fails the Run as described in [What a Run does](#what-a-run-does).
+Without `base-fix` or `base.fix`, or with `no-base-fix`, an Inherited failure fails the Run as described in [What a Run does](#what-a-run-does), and the Run says [where the checks fail on the Base branch](#an-inherited-failure-links-the-base-branchs-checks), offering a Base fix if nobody decided against one.
 
 ## Continuation
 
@@ -353,6 +354,22 @@ A Failed run:
 3. Cleans up as usual, prints the reason to stderr and exits non-zero. If the push failed, the worktree and local Issue branch are kept instead, and stderr names the branch, its head commit and the worktree path, so you can recover the work or push it by hand.
 
 Merges, never rebases or force-pushes: a branch worked on from several servers never loses history.
+
+### An Inherited failure links the Base branch's checks
+
+A Run that fails on Inherited failures with no Base fix taken says more after its cause, on stderr and in its [Run notification](#run-notifications): a `Base check:` line for each of those checks, with its URL on the Base branch commit, as a [Base fix](#base-fix) issue lists them, or the name alone for a check with no URL. If nobody decided against a Base fix, with neither `base-fix` nor `no-base-fix` given and no `base.fix = true` in the [User config](#user-config), it also offers one: a `Retry with:` line with the command that starts the Run again with `base-fix` added, keeping the `merge`, `email` and `parallel` flags it was given, and an `Or set:` line naming `base.fix`:
+
+```
+thirdshift: 03:12:40 CI red on test, which also fails on main at 362b9ca; fix main first
+thirdshift: 03:12:40 Base check: test: https://github.com/acme/widgets/actions/runs/1/job/2
+thirdshift: 03:12:40 Retry with: thirdshift https://github.com/acme/widgets/issues/7 base-fix
+thirdshift: 03:12:40 Or set: base.fix = true in ~/.thirdshift/config.toml, to allow a Base fix for every Run on this machine
+thirdshift: 03:12:40 session log: ~/.thirdshift/logs/acme-widgets-issue-7-….jsonl
+```
+
+A Run given `no-base-fix` gets the `Base check:` lines and no offer. A Run that had its one Base fix gets neither: its `Base fix:` line already says what happened. The cause itself, and so the failure commit's message, is the same in every case, and no other cause adds a line.
+
+In a [Spec run](#spec-runs), a Ticket's Run says this on its own stderr, relayed with its `#<n>: ` prefix, and the command it offers is the Spec run's, with `base-fix` added. The Spec run's summary and its Run notification show the Ticket's cause alone. After an [Architect run](#architect-runs), the command offered is `thirdshift <plan URL>` with the dispatched run's flags and `base-fix`, since another Architect run would start a new review rather than take that plan up again.
 
 ## Spec runs
 
@@ -394,7 +411,7 @@ Running the Spec again picks up where the last Spec run stopped. The Spec branch
 
 ## Architect runs
 
-`thirdshift architect` starts an **Architect run**: the factory looks for architecture work itself, with no **Issue URL**, publishes a plan for the top opportunity, and implements it. Start it from a clone of the repository, on the **Base branch**:
+`thirdshift architect` starts an **Architect run**: the factory looks for architecture work itself, with no **Issue URL**, publishes a plan for the top opportunity, and implements it. Start it from a clone of the repository, on the **Base branch**, or name the Base branch with `base <branch>`:
 
 ```sh
 cd ~/repos/widgets
@@ -403,6 +420,7 @@ thirdshift architect "the Spec run"               # point the review at an area
 thirdshift architect merge parallel 2             # merge the plan's pull request, two Tickets at once
 thirdshift architect base-fix                     # the run the plan is dispatched as may start a Base fix
 thirdshift architect "the Spec run" --plan-only   # publish the plan, mark it ready and stop
+thirdshift architect base main                    # review main and run the plan on it, whatever branch the clone is on
 thirdshift architect --email you@example.com      # email how the Architect run ended
 ```
 
@@ -410,32 +428,34 @@ The focus is optional free text, given as one argument, anywhere among the flags
 
 `merge`, `no-merge`, `base-fix`, `no-base-fix` and `parallel <n>` (or `--merge`, `--no-merge`, `--base-fix`, `--no-base-fix` and `--parallel <n>`) are for the run the plan is dispatched as, and mean what they do for `thirdshift <Issue URL>`, so none of them is ever read as the focus. `--plan-only` stops the Architect run once the plan is marked ready, and dispatches nothing. `email`, optionally followed by an address, and `no-email` (or `--email` and `--no-email`) are for the Architect run's own [Run notification](#one-run-notification), with or without `--plan-only`. The word after `email` is the address only if it contains `@`, so a focus without one is never taken for it.
 
-A second focus, a repeated flag, `merge` with `no-merge`, `base-fix` with `no-base-fix`, `email` with `no-email`, `parallel` without a whole number from 1 up, any other argument starting with a dash, or an empty focus is an argument error (exit `2`). So is `merge`, `no-merge`, `base-fix`, `no-base-fix` or `parallel` with `--plan-only`, since nothing is dispatched for them to apply to.
+`base <branch>` (or `--base <branch>`) names the Architect run's **Base branch**, so the branch your clone has checked out stops mattering: start it from a clone on another branch, on a detached HEAD, or with uncommitted changes. The Architecture review's worktree starts at the head of `<branch>` on `origin`, and the run the plan is dispatched as takes `<branch>` as its Base branch too: a Run's **Issue branch**, or a Spec run's **Spec branch**, is branched off it, and the pull request or **Spec PR** targets it. It goes before or after the focus and the other flags, `--plan-only` included, and the word after it is always the branch, never the focus. Without `base`, the Base branch is the branch checked out. `base` is a flag of `architect` only: `thirdshift <Issue URL>` doesn't take it. It is what lets an Architect run be started [on a schedule](#on-a-schedule).
+
+A second focus, a repeated flag, `merge` with `no-merge`, `base-fix` with `no-base-fix`, `email` with `no-email`, `parallel` without a whole number from 1 up, `base` with no branch after it, any other argument starting with a dash, or an empty focus is an argument error (exit `2`). So is `merge`, `no-merge`, `base-fix`, `no-base-fix` or `parallel` with `--plan-only`, since nothing is dispatched for them to apply to.
 
 An Architect run:
 
-1. Makes the checks a Run makes that don't need an issue, before creating anything: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached, and the Base branch exists on `origin` with your local copy not ahead of it. There is no **Origin match**, since there is no Issue URL: the repository is the one `origin` names. With `launch.pull = true` in the [User config](#user-config), it then fast-forwards your checkout of the Base branch, as a Run does.
+1. Makes the checks a Run makes that don't need an issue, before creating anything: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached, and the Base branch exists on `origin` with your local copy not ahead of it. With `base <branch>`, a detached HEAD is fine, since the checkout no longer picks the Base branch, and the other two checks are made on `<branch>`: `base branch <branch> does not exist on origin; push it first`, or `local <branch> is <n> commit(s) ahead of origin/<branch>; push them first`. There is no **Origin match**, since there is no Issue URL: the repository is the one `origin` names. If another Architect run on the repository is still running, it is [skipped](#one-at-a-time) here, and if not, it is skipped when an earlier [Architect plan is still open](#one-architect-plan-at-a-time). With `launch.pull = true` in the [User config](#user-config), it then fast-forwards your checkout of the Base branch, as a Run does, and so only when the Base branch is the branch checked out: with `base <branch>` from a clone on another branch, your checkout is left alone.
 2. Creates a git worktree next to your clone, named `<repo>-architect`, detached at the head of the Base branch on `origin`, with no **Issue branch**. Your checkout, its uncommitted changes and its untracked files are never touched or scanned.
 3. Runs the **Architecture review** there: a headless Claude Code session with the **Factory skills** loaded, started with the [Architecture review prompt](prompts/architecture-review.md). It looks for deepening opportunities, skips any an open issue already covers, and takes the top recommendation. If it is Strong, the review publishes it as the plan, labelled `needs-triage`: a **Spec** with **Tickets**, or a single Ticket when one session is enough. It may edit files in the worktree to check an idea, but commits and pushes nothing. It ends its final message with one line naming the plan: `Architecture review plan: <Issue URL>`. thirdshift reads only that line. With [no Strong candidate](#no-strong-candidate) the line names another issue, and steps 5 to 7 are skipped.
 4. Removes the worktree and the temporary plugin directory once the session ends, whatever the outcome.
 5. Checks the plan: the issue is in this repository, is open, was created after the Architect run started, and carries no other label that says it is not agent work (`ready-for-human`, `needs-info` or `wontfix`).
-6. Marks the plan ready, in one request: `needs-triage` is swapped for `ready-for-agent`, and its other labels are kept. A Spec's Tickets are left as the review labelled them.
-7. Dispatches the plan, unless given `--plan-only`, exactly as `thirdshift <plan URL>` would from the same clone: a [Spec run](#spec-runs) when the plan has sub-issues, a Run otherwise. `merge` and `no-merge` apply to the Spec PR or the Run's pull request, `parallel <n>` to the Spec run, and `base-fix` and `no-base-fix` to whether that run may start a [Base fix](#base-fix), as if given to that command, and the [User config](#user-config) sets what they leave unsaid: `merge.always`, `spec.parallel`, `base.fix`, `launch.pull` and `logs.dir`. The Architecture review itself never watches CI, so a Base fix can only happen in the dispatched run. The one difference is that it sends no [Run notification](#run-notifications) of its own, whatever `email.always` says: the Architect run sends [the one](#one-run-notification).
+6. Marks the plan ready, in one request: `needs-triage` is swapped for `ready-for-agent`, the plan is labelled `architect-plan`, the mark a later Architect run finds an open **Architect plan** by, and its other labels are kept. thirdshift adds that label, never the agent, and first creates it if the repository has none. A Spec's Tickets are left as the review labelled them, without `architect-plan`.
+7. Dispatches the plan, unless given `--plan-only`, exactly as `thirdshift <plan URL>` would from the same clone on the Architect run's Base branch: a [Spec run](#spec-runs) when the plan has sub-issues, a Run otherwise. Its Base branch is the Architect run's, so with `base <branch>` it is `<branch>`, not the branch checked out. `merge` and `no-merge` apply to the Spec PR or the Run's pull request, `parallel <n>` to the Spec run, and `base-fix` and `no-base-fix` to whether that run may start a [Base fix](#base-fix), as if given to that command, and the [User config](#user-config) sets what they leave unsaid: `merge.always`, `spec.parallel`, `base.fix`, `launch.pull` and `logs.dir`. The Architecture review itself never watches CI, so a Base fix can only happen in the dispatched run. The one difference is that it sends no [Run notification](#run-notifications) of its own, whatever `email.always` says: the Architect run sends [the one](#one-run-notification).
 
-The dispatched run's ending is the Architect run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Architect run fails as that Failed run or Failed spec run does, with the cause and the session log on stderr and the pull request's URL on stdout if it left one. The plan stays `ready-for-agent`, for `thirdshift <plan URL>` to take up again. `parallel <n>` on a plan that is a single Ticket fails the same way as it does for `thirdshift <Issue URL>` on an issue that isn't a Spec: `parallel is only for a Spec, and #<n> has no sub-issues`, exit `1`, before any implementing, with the plan left ready to run without it.
+The dispatched run's ending is the Architect run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Architect run fails as that Failed run or Failed spec run does, with the cause and the session log on stderr and the pull request's URL on stdout if it left one. The plan stays open, `ready-for-agent` and `architect-plan`, for `thirdshift <plan URL>` to take up again: no later Architect run [retries it](#one-architect-plan-at-a-time). `parallel <n>` on a plan that is a single Ticket fails the same way as it does for `thirdshift <Issue URL>` on an issue that isn't a Spec: `parallel is only for a Spec, and #<n> has no sub-issues`, exit `1`, before any implementing, with the plan left ready to run without it.
 
-With `--plan-only`, it instead exits `0` with the plan's URL alone on stdout, and `plan <url> is ready for an agent` as stderr's last line. Read or edit the plan, then run it with `thirdshift <Issue URL>`.
+With `--plan-only`, it instead exits `0` with the plan's URL alone on stdout, and `plan <url> is ready for an agent` as stderr's last line. Read or edit the plan, then run it with `thirdshift <Issue URL>`. The plan is labelled `architect-plan` here too, so until it is finished or closed the next Architect run is [skipped](#one-architect-plan-at-a-time).
 
 Progress lines on stderr say when the review starts, which plan it reported, when the labels are swapped, and when the plan is dispatched: `dispatching the plan <url>, as thirdshift <url> would`. The dispatched run's own progress lines follow. With no Strong candidate, the last line says which issue the Architect run ended on instead.
 
-A review session that fails or is interrupted, a final message without one of the lines the prompt asks for, or a plan that fails a check ends the Architect run as a failure: exit `1`, nothing on stdout, the cause on stderr and then the path of the session log. Nothing is dispatched and no label is changed, so a plan the review did publish stays `needs-triage` for you to finish or close. A review that finds no deepening opportunity at all has no issue to name, so it ends without one of those lines and the Architect run fails this way too; its session log says what it looked at.
+A review session that fails or is interrupted, a final message without one of the lines the prompt asks for, or a plan that fails a check ends the Architect run as a failure: exit `1`, nothing on stdout, the cause on stderr and then the path of the session log. Nothing is dispatched and no label is changed, so a plan the review did publish stays `needs-triage`, without `architect-plan`, for you to finish or close, and doesn't skip the next Architect run. A review that finds no deepening opportunity at all has no issue to name, so it ends without one of those lines and the Architect run fails this way too; its session log says what it looked at.
 
 ### One Run notification
 
-An Architect run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one, whatever its outcome and with or without `--plan-only`. It makes a Run's checks before any other work, an address and a Resend API key, and stops with exit `1` if either is missing. The email goes after the outcome is final and printed, and a failed send is only a `warning:` line on stderr: it changes neither the exit code nor stdout.
+An Architect run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one, whatever its outcome, skipped included, [either](#one-at-a-time) [way](#one-architect-plan-at-a-time), and with or without `--plan-only`. It makes a Run's checks before any other work, an address and a Resend API key, and stops with exit `1` if either is missing. The email goes after the outcome is final and printed, and a failed send is only a `warning:` line on stderr: it changes neither the exit code nor stdout.
 
-- **Subject**: `[thirdshift] <owner>/<repo> Architect run: <outcome>`. With a dispatched run, the outcome is that run's: `ready for review`, `merged`, `failed` or `interrupted`. Without one, it is the review's: `plan published` (with `--plan-only`), `idea filed`, `idea already filed`, `review failed` (also for a plan that fails a check) or `interrupted`. The repository is left out if `origin` doesn't name one on GitHub.
-- **Body**, plain text: a `Review:` line saying how the Architecture review ended, with the URL of the plan or idea issue it named (`plan published: <url>`, `idea filed: <url>`, `idea already filed: <url>`, `failed` or `interrupted`); when the plan was dispatched, a `Dispatched:` line with that run's outcome; then what a Run's notification holds, for the dispatched run or else the failed review: the pull request URL (if any), the failure cause (if failed), a `Base fix:` line for a dispatched run that started or waited on a [Base fix](#base-fix), the session log path (if any), the hostname and how long the Architect run took. After a dispatched Spec run, it ends with a line per Ticket, as a Spec run's notification does.
+- **Subject**: `[thirdshift] <owner>/<repo> Architect run: <outcome>`. With a dispatched run, the outcome is that run's: `ready for review`, `merged`, `failed` or `interrupted`. Without one, it is the review's: `plan published` (with `--plan-only`), `idea filed`, `idea already filed`, `review failed` (also for a plan that fails a check) or `interrupted`. For a skipped run, it is `skipped`. The repository is left out if `origin` doesn't name one on GitHub.
+- **Body**, plain text: a `Review:` line saying how the Architecture review ended, with the URL of the plan or idea issue it named (`plan published: <url>`, `idea filed: <url>`, `idea already filed: <url>`, `failed` or `interrupted`); when the plan was dispatched, a `Dispatched:` line with that run's outcome; then what a Run's notification holds, for the dispatched run or else the failed review: the pull request URL (if any), the failure cause (if failed), with the [lines after it](#an-inherited-failure-links-the-base-branchs-checks) of a dispatched run that failed on an Inherited failure, a `Base fix:` line for a dispatched run that started or waited on a [Base fix](#base-fix), the session log path (if any), the hostname and how long the Architect run took. After a dispatched Spec run, it ends with a line per Ticket, as a Spec run's notification does. A skipped run's body has a `Skipped:` line giving the reason in place of the `Review:` line, then the hostname and how long it took. The reason is `an Architect run is already running on <owner>/<repo>`, or each open Architect plan with the command that picks it up: `Architect plan #<n> "<title>" is still open: pick it up with thirdshift <plan URL>`.
 
 ### No Strong candidate
 
@@ -444,7 +464,59 @@ Only a Strong top recommendation becomes a plan. When the review's top recommend
 - **An idea issue.** The review files its top recommendation as one issue labelled `needs-triage`, for the **Day shift** to flesh out, and ends its final message with `Architecture review idea: <Issue URL>`. stdout carries the idea issue's URL, and stderr's last line is `no Strong candidate: the Architecture review filed the idea <url>`.
 - **Already filed.** An open issue already covers that recommendation, so the review files nothing and ends its final message with `Architecture review already filed: <Issue URL>`. stdout carries that issue's URL, and stderr's last line is `no Strong candidate: <url> already covers the Architecture review's top recommendation, so it filed nothing`.
 
-Start one Architect run per repository at a time. Nothing stops a second one, but two at once may pick the same opportunity and publish the same plan, and the second can't create its worktree while the first's is there.
+### One at a time
+
+Only one Architect run per repository runs at a time on a machine. A `thirdshift architect` started while another on the same repository is still running, the Spec run or Run it dispatched included, is **skipped**: it prints `an Architect run is already running on <owner>/<repo>` as a progress line on stderr, prints nothing on stdout, and exits `0`. Skipped is not a failure. A skipped run does nothing else: no launch pull, no worktree, no agent session, and no issue filed or labelled. This holds for every Architect run, however it was started, so two can never plan the same refactor.
+
+The repository is the one `origin` names, so two clones of one repository count as the same, and Architect runs on different repositories run at the same time. A Run or a Spec run started on an **Issue URL** is never skipped this way, and never makes an Architect run skip.
+
+thirdshift holds the rule with an operating-system lock on a file under `~/.thirdshift/architect-locks/`, which the Architect run's process takes without waiting, after its checks in step 1, and holds until it exits. The operating system releases the lock when that process ends for any reason, a crash, a kill or a reboot included, so there is never a stale lock to clear: the next Architect run on the repository runs normally. The file itself stays, and means nothing on its own. A review worktree that a killed Architect run left behind is removed by the next one.
+
+A skipped run asked for a [Run notification](#one-run-notification) still sends its one: the notification's checks are made before the lock is tried, so a skip is always notified.
+
+### One Architect plan at a time
+
+An Architect run is also skipped while an earlier **Architect plan** is still open, so a new refactor is never planned while the last one is unfinished: its pull request waiting for review, its run failed, or its plan published with `--plan-only` and not started.
+
+thirdshift marks every Architect plan with the label `architect-plan`, in step 6: the Spec, or the standalone Ticket, never a Spec's Tickets. Once the one-at-a-time lock is its own, and before the launch pull, the worktree and the Architecture review, an Architect run lists the repository's open issues labelled `architect-plan`. If there are any, it is skipped:
+
+- **stdout** carries each open Architect plan's URL, one a line, newest first.
+- **stderr** carries one progress line naming each of them with the command that picks it up, several joined by `; `: `Architect plan #<n> "<title>" is still open: pick it up with thirdshift <plan URL>`.
+- **Exit code** `0`: skipped is not a failure. No agent session starts, and nothing else is done.
+
+It applies to every Architect run, with or without `--plan-only`, and no flag overrides it. The rule is released by finishing the Architect plan, since merging its work closes the issue, by closing the issue, or by removing its `architect-plan` label. The check reads GitHub, so unlike the lock it holds across machines.
+
+An Architect run never retries or dispatches an existing Architect plan. One whose dispatched run failed stays open, and picking it up is yours to do, with `thirdshift <plan URL>`, which continues whatever branch and pull request the failed run left. What isn't labelled `architect-plan` never counts: an idea issue a review filed with [no Strong candidate](#no-strong-candidate), or a plan that a failed or interrupted review left `needs-triage`.
+
+The check comes after the lock so that the plan of an Architect run that is still running, labelled already while its Spec run or Run goes on, is reported as [already running](#one-at-a-time), not as an unfinished plan. A skipped run asked for a [Run notification](#one-run-notification) sends its one, with the open Architect plans and their commands in its `Skipped:` line.
+
+### On a schedule
+
+thirdshift has no scheduler of its own: the operating system's scheduler runs the ordinary command. This crontab entry, written for a Linux machine with cron, starts an Architect run every night at 02:00. Add it with `crontab -e`, with your own paths in place of `/home/you` and `~/repos/thirdshift`:
+
+```
+PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main >> ~/.thirdshift/logs/architect-cron.log 2>&1
+```
+
+- **`PATH`** is set because cron doesn't read your shell profile, and `thirdshift`, `claude`, `gh`, `git` and the repository's build tools must all be found. List every directory that holds one, written out in full: cron expands neither `~` nor `$HOME` on that line. `type thirdshift claude gh git` in your own shell shows where they are.
+- **`cd`** makes a clone of the repository the **Launch directory**, as for a hand-typed Architect run, and **`base main`** names the [Base branch](#architect-runs), so the branch checked out in the clone doesn't matter: it runs from the clone you work in, whatever you left it on.
+- **One line per repository, at different hours**, so the Architect runs don't compete for the machine. thirdshift keeps no list of repositories.
+- **The log file** takes everything the command prints. A failure before the [Run notification](#one-run-notification)'s checks have passed, such as a broken [User config](#user-config), a missing Resend key or a bad argument, shows up only there: no email is sent for it. Make its directory first, with `mkdir -p ~/.thirdshift/logs`, or the shell can't open the log and never starts the command.
+- **`claude` and `gh` must already be logged in** for the user the schedule runs as, with git able to push, as the [Prerequisites](#prerequisites) say. Without a terminal an Architect run behaves as it does from one, except that it never offers Setup.
+
+The command's flags and the User config decide what a scheduled Architect run does, as for a hand-typed one: with `merge.always` it merges the Architect plan's pull request, and without it the pull request is left for review. These are the cautious variants, whatever the User config says:
+
+```
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main no-merge >> ~/.thirdshift/logs/architect-cron.log 2>&1
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/architect-cron.log 2>&1
+```
+
+The first leaves the pull request for you to review, and the second stops at the Architect plan, for you to read and run with `thirdshift <Issue URL>`.
+
+A scheduled Architect run is skipped when another on the repository is [still running](#one-at-a-time), the Spec run or Run it dispatched included, or when an [Architect plan is still open](#one-architect-plan-at-a-time): no new refactor is planned until last night's Architect plan is closed or loses its `architect-plan` label. Merging its pull request closes it; if its run failed, pick it up with `thirdshift <plan URL>` first. Closing the pull request alone leaves the Architect plan open. A skip exits `0`, so the scheduler sees no failure, and the log has the line that says why. With Run notifications on, by `email.always = true` in the User config or `email` on the line, every night sends one email, a skipped night included, so a night without one means something is wrong: look in the log file.
+
+Any scheduler that runs the command works; a systemd user timer needs lingering on (`loginctl enable-linger`) to fire while you are logged out.
 
 ## Building from source
 
@@ -480,6 +552,18 @@ Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR
 The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` arguments and the skills, and each Session prompt is also generated as a Markdown file in [`prompts/`](prompts/), with a [`README.md`](prompts/README.md) that lists them with the `claude` command lines. `cargo test` fails until they are regenerated after a change to any of them. Regenerate the page and `prompts/` with `UPDATE_PROMPTS=1 cargo test prompts_page`, which also deletes any file in `prompts/` that it doesn't generate.
 
 The integration tests swap in a fake `gh` and `claude`, from [`tests/fakes.rs`](tests/fakes.rs). The first test that needs them builds them with `rustc` (the one on `PATH`, or `$RUSTC`), so the suite needs nothing else on `PATH` beyond `git` and `bash`.
+
+### The Rust version
+
+[`rust-toolchain.toml`](rust-toolchain.toml) pins the exact Rust version this repository builds with, and the `rustfmt` and `clippy` components CI runs. `rustup` reads it, so `cargo` in a checkout, CI, the release builds and the crates.io publish all use that version, and `rustup` installs it the first time it is needed. No workflow names a version of its own. The file is not in the crates.io package, so `cargo install thirdshift` builds with whatever Rust the machine has.
+
+A newer Rust arrives as a pull request that changes `channel` in that file, so it runs through CI before `main` builds with it. Dependabot opens that pull request within a week of a stable release ([`.github/dependabot.yml`](.github/dependabot.yml)). To move the pin by hand, set `channel` to the new version in full, patch number included, run the three checks CI runs, and open a pull request with the change and whatever the new compiler's lints asked for:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
 
 ## Releasing
 

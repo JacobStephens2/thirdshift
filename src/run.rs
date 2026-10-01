@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::base_fix::{BaseFix, BaseFixAsk};
+use crate::base_fix::{Advice, BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
 use crate::ci::{self, Ci};
@@ -58,33 +58,70 @@ pub struct Ended {
     /// What became of the Base fix it started or waited on, if any, as
     /// [`BaseFix::report`] tells it.
     pub base_fix: Option<String>,
+    /// What it says after its cause, if Inherited failures failed it with no
+    /// Base fix taken, as [`BaseFix::into_advice`] gives it.
+    pub advice: Vec<Advice>,
 }
 
-/// [`run`] the Run on `issue` that asked `base_fix` about a Base fix, as the
-/// child Run `child` if another thirdshift started it, whose Base branch is
-/// then the one it was given, to its end.
+/// What started a Run, or a Spec run, which says where its Base branch comes
+/// from when it isn't a Continuation's open pull request that says.
+#[derive(Clone, Copy)]
+pub enum StartedBy<'a> {
+    /// `thirdshift <Issue URL>`: the Base branch is the branch checked out
+    /// in the Launch directory.
+    Command,
+    /// An Architect run, dispatching its plan: the Base branch is the
+    /// Architect run's, whatever the Launch directory has checked out.
+    ArchitectRun { base: &'a str },
+    /// Another thirdshift, as this child Run, a Ticket's Run in a Spec run or
+    /// a Base fix: the Base branch is the one the child Run was given.
+    Child(&'a Kind),
+}
+
+impl<'a> StartedBy<'a> {
+    /// The child Run this is, if another thirdshift started it.
+    fn child(self) -> Option<&'a Kind> {
+        match self {
+            StartedBy::Child(kind) => Some(kind),
+            StartedBy::Command | StartedBy::ArchitectRun { .. } => None,
+        }
+    }
+
+    /// The Base branch the Run was given, if what started it gave one.
+    fn given_base(self) -> Option<&'a str> {
+        match self {
+            StartedBy::Command => None,
+            StartedBy::ArchitectRun { base } => Some(base),
+            StartedBy::Child(kind) => Some(kind.base()),
+        }
+    }
+}
+
+/// [`run`] the Run on `issue` that `started_by` started and that asked
+/// `base_fix` about a Base fix, to its end.
 pub fn run_to_end(
     issue: &IssueUrl,
     goal: Goal,
     logs_dir: &Path,
     launch_pull: bool,
     parallel: Parallel,
-    child: Option<&Kind>,
+    started_by: StartedBy,
     base_fix: BaseFixAsk,
 ) -> Ended {
-    let mut base_fix = BaseFix::new(child, base_fix);
+    let mut base_fix = BaseFix::new(started_by.child(), base_fix);
     let outcome = run(
         issue,
         goal,
         logs_dir,
         launch_pull,
         parallel,
-        child.map(Kind::base),
+        started_by,
         &mut base_fix,
     );
     Ended {
         outcome,
         base_fix: base_fix.report(),
+        advice: base_fix.into_advice(),
     }
 }
 
@@ -94,16 +131,18 @@ pub fn run_to_end(
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch. With `launch_pull`, the Launch directory's checkout of the
-/// Base branch is first brought up to date with origin.
+/// Base branch, if that is the branch checked out, is first brought up to
+/// date with origin.
 ///
-/// With `given_base`, this is a Run another thirdshift started, a Ticket's Run
-/// in a Spec run or a Base fix, and `given_base`, the Spec branch or that
-/// Run's Base branch, stands in for the checked-out branch as the Base branch.
-/// Otherwise an issue with sub-issues is a Spec, taken on by a Spec run
-/// instead, whose Spec branch is picked like an Issue branch, running as many
-/// Tickets at once as `parallel` says. A `parallel` the command asked for on
-/// an issue with no sub-issues fails before any work, as does a Spec whose
-/// Tickets are all closed with no Spec branch to continue.
+/// The Base branch `started_by` gave the Run, if it gave one, stands in for
+/// the checked-out branch as the Base branch: the Spec branch or the Base
+/// branch of the Run that started a child Run, or the Base branch of the
+/// Architect run that dispatched this one. Unless the Run is a child Run, an
+/// issue with sub-issues is a Spec, taken on by a Spec run instead, whose
+/// Spec branch is picked like an Issue branch, running as many Tickets at
+/// once as `parallel` says. A `parallel` the command asked for on an issue
+/// with no sub-issues fails before any work, as does a Spec whose Tickets are
+/// all closed with no Spec branch to continue.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures.
@@ -113,14 +152,14 @@ fn run(
     logs_dir: &Path,
     launch_pull: bool,
     parallel: Parallel,
-    given_base: Option<&str>,
+    started_by: StartedBy,
     base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
     preflight::check(&launch, issue)?;
-    let tickets = match given_base {
+    let tickets = match started_by.child() {
         Some(_) => Vec::new(),
         None => github::tickets(issue)?,
     };
@@ -131,12 +170,9 @@ fn run(
         )
         .into());
     }
-    let checked_out = match given_base {
-        Some(given_base) => Some(given_base.to_string()),
-        None => launch
-            .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
-            .ok(),
-    };
+    let checked_out = launch
+        .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .ok();
     let selection = branch::select(&launch, issue)?;
     // A Spec implemented some other way: the Spec run leaves it be.
     if matches!(selection, Selection::Fresh { .. }) && spec_run::all_closed(&tickets) {
@@ -145,7 +181,7 @@ fn run(
         );
     }
     let branch = selection.branch().to_string();
-    let base = selection.base_branch(checked_out.as_deref())?;
+    let base = selection.base_branch(started_by.given_base(), checked_out.as_deref())?;
     preflight::check_base_branch(&launch, &base)?;
     if launch_pull {
         pull_base_branch(&launch, checked_out.as_deref(), &base);

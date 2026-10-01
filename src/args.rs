@@ -35,6 +35,9 @@ pub struct ArchitectArgs {
     /// The free text that points the Architecture review at an area, if
     /// given.
     pub focus: Option<String>,
+    /// The Base branch `base <branch>` named, if given; without it, the
+    /// branch checked out in the Launch directory is the Base branch.
+    pub base: Option<String>,
     /// What `email` or `no-email` asked for, if either was given; without
     /// one, the User config decides.
     pub email: Option<NotificationAsk>,
@@ -55,6 +58,12 @@ pub struct DispatchArgs {
 /// The word that lets a Run start a Base fix, which a Spec run passes on to
 /// each Ticket's Run.
 pub const BASE_FIX: &str = "base-fix";
+
+/// The hidden argument a Spec run that nobody decided about a Base fix for
+/// starts each Ticket's Run with, followed by the command that starts the
+/// Spec run again with one allowed, for the Ticket's Run to offer: it asks
+/// [`BaseFixAsk::Undecided`]. Not in help.
+pub const OFFER_BASE_FIX: &str = "--offer-base-fix";
 
 /// The hidden argument a Spec run starts each Ticket's Run with, followed by
 /// the Spec branch: it makes the Run a [`Kind::Ticket`]. Not in help.
@@ -133,6 +142,11 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     Kind::BaseFix { base }
                 });
             }
+            OFFER_BASE_FIX => {
+                let retry = args.next().context("missing command to offer")?.clone();
+                let undecided = BaseFixAsk::Undecided { retry };
+                ask_once(&mut flags.base_fix, undecided, arg, BASE_FIX_FLAGS)?;
+            }
             _ => {
                 if issue.is_some() {
                     bail!("unexpected argument after the Issue URL: {arg}");
@@ -154,15 +168,45 @@ pub fn parse(args: &[String]) -> Result<Command> {
     }))
 }
 
+/// The command that starts the Run on `issue` again as its command asked for
+/// it, with `goal`, `email` and `parallel` as [`RunArgs`] has them, and with
+/// `base-fix` added.
+pub fn retry_with_base_fix(
+    issue: &IssueUrl,
+    goal: Option<Goal>,
+    email: Option<&NotificationAsk>,
+    parallel: Option<NonZeroUsize>,
+) -> String {
+    let mut command = format!("thirdshift {}", issue.url);
+    match goal {
+        Some(Goal::Merged) => command += " merge",
+        Some(Goal::ReadyForReview) => command += " --no-merge",
+        None => {}
+    }
+    match email {
+        Some(NotificationAsk::Send(Some(to))) => command += &format!(" --email {to}"),
+        Some(NotificationAsk::Send(None)) => command += " --email",
+        Some(NotificationAsk::Skip) => command += " --no-email",
+        None => {}
+    }
+    if let Some(parallel) = parallel {
+        command += &format!(" parallel {parallel}");
+    }
+    command + " " + BASE_FIX
+}
+
 /// Parse the arguments after `architect`: at most one focus, and its flags,
-/// each at most once, in any order. [`PLAN_ONLY`] dispatches nothing, so the
+/// each at most once, in any order. `base` must be followed by the Base
+/// branch. [`PLAN_ONLY`] dispatches nothing, so the
 /// flags for the dispatched run, `merge`, `no-merge`, `parallel`, `base-fix`
 /// and `no-base-fix`, can't go with it. `email` and `no-email` are for the
-/// Architect run's own Run notification, so they can. None of a Run's flags
+/// Architect run's own Run notification, and `base` is for the Architecture
+/// review too, so they can. None of a Run's flags, nor `base`,
 /// is ever the focus, and any other argument that starts with a dash is
 /// unexpected rather than a focus.
 fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     let mut focus = None;
+    let mut base = None;
     let mut plan_only = false;
     let mut flags = RunFlags::default();
     let mut args = args.iter().peekable();
@@ -177,6 +221,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
                 }
                 plan_only = true;
             }
+            "base" | "--base" => ask_base(&mut base, arg, args.next())?,
             _ if arg.starts_with('-') => bail!("unexpected argument after architect: {arg}"),
             _ if focus.is_some() => bail!("unexpected argument after the focus: {arg}"),
             _ if arg.trim().is_empty() => bail!("the focus is empty"),
@@ -196,6 +241,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     }
     Ok(ArchitectArgs {
         focus,
+        base,
         email: flags.email,
         dispatch: (!plan_only).then_some(dispatch),
     })
@@ -275,6 +321,22 @@ fn ask_parallel(parallel: &mut Option<NonZeroUsize>, arg: &str, n: Option<&Strin
         bail!("{arg} must be followed by a whole number from 1 up{given}");
     };
     *parallel = Some(n);
+    Ok(())
+}
+
+/// Record in `base` the `branch` that follows the flag `arg`, given once. No
+/// branch's name starts with a dash, so a flag there is not taken for one.
+fn ask_base(base: &mut Option<String>, arg: &str, branch: Option<&String>) -> Result<()> {
+    if base.is_some() {
+        bail!("repeated argument: {arg}");
+    }
+    match branch {
+        Some(branch) if branch.starts_with('-') => {
+            bail!("{arg} must be followed by a branch, not {branch}")
+        }
+        Some(branch) if !branch.trim().is_empty() => *base = Some(branch.clone()),
+        _ => bail!("{arg} must be followed by a branch"),
+    }
     Ok(())
 }
 
@@ -529,6 +591,99 @@ mod tests {
     }
 
     #[test]
+    fn architect_takes_base_and_the_branch_after_it_before_or_after_the_focus_and_other_flags() {
+        let focus = || Some("the Spec run".to_string());
+        for (args, focus) in [
+            (vec!["architect", "base", "develop"], None),
+            (vec!["architect", "--base", "develop"], None),
+            (
+                vec!["architect", "base", "develop", "the Spec run"],
+                focus(),
+            ),
+            (
+                vec!["architect", "the Spec run", "merge", "--base", "develop"],
+                focus(),
+            ),
+            (
+                vec!["architect", "email", "base", "develop", "parallel", "2"],
+                None,
+            ),
+        ] {
+            let architect_args = architect_args(&args);
+            assert_eq!(architect_args.base.as_deref(), Some("develop"), "{args:?}");
+            assert_eq!(architect_args.focus, focus, "{args:?}");
+        }
+        assert_eq!(architect_args(&["architect", "the Spec run"]).base, None);
+    }
+
+    #[test]
+    fn architect_takes_base_with_plan_only() {
+        for args in [
+            ["architect", "base", "develop", "--plan-only"],
+            ["architect", "--plan-only", "--base", "develop"],
+        ] {
+            let architect_args = architect_args(&args);
+            assert_eq!(architect_args.base.as_deref(), Some("develop"), "{args:?}");
+            assert_eq!(architect_args.dispatch, None, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn architect_rejects_base_without_a_branch_and_base_given_twice() {
+        for (args, error) in [
+            (
+                vec!["architect", "base"],
+                "base must be followed by a branch",
+            ),
+            (
+                vec!["architect", "the Spec run", "--base"],
+                "--base must be followed by a branch",
+            ),
+            (
+                vec!["architect", "base", "--plan-only"],
+                "base must be followed by a branch, not --plan-only",
+            ),
+            (
+                vec!["architect", "base", " "],
+                "base must be followed by a branch",
+            ),
+            (
+                vec!["architect", "base", "develop", "base", "main"],
+                "repeated argument: base",
+            ),
+            (
+                vec![
+                    "architect",
+                    "base",
+                    "develop",
+                    "--plan-only",
+                    "--base",
+                    "develop",
+                ],
+                "repeated argument: --base",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn base_is_not_a_flag_of_a_run() {
+        for (args, error) in [
+            (
+                vec![URL, "base", "develop"],
+                "unexpected argument after the Issue URL: base",
+            ),
+            (
+                vec!["--base", "develop", URL],
+                "not a GitHub issue URL: --base",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
     fn architect_rejects_stray_arguments() {
         for (args, error) in [
             (
@@ -613,6 +768,53 @@ mod tests {
                 "{flag}"
             );
         }
+    }
+
+    #[test]
+    fn the_retry_command_is_the_runs_own_flags_and_issue_url_with_base_fix_added() {
+        for (args, retry) in [
+            (vec![URL], format!("thirdshift {URL} base-fix")),
+            (
+                vec!["--merge", URL, "email"],
+                format!("thirdshift {URL} merge --email base-fix"),
+            ),
+            (
+                vec!["no-merge", "--no-email", URL, "--parallel", "2"],
+                format!("thirdshift {URL} --no-merge --no-email parallel 2 base-fix"),
+            ),
+            (
+                vec![URL, "email", "me@example.com"],
+                format!("thirdshift {URL} --email me@example.com base-fix"),
+            ),
+        ] {
+            let run = run_args(&args);
+            assert_eq!(
+                retry_with_base_fix(&run.issue, run.goal, run.email.as_ref(), run.parallel),
+                retry,
+                "{args:?}"
+            );
+            // The command it gives asks for what the Run was asked for.
+            let words: Vec<&str> = retry.split(' ').skip(1).collect();
+            let again = run_args(&words);
+            assert_eq!(again.base_fix, Some(BaseFixAsk::Allow), "{retry}");
+            assert_eq!(
+                (again.issue.url, again.goal, again.email, again.parallel),
+                (run.issue.url, run.goal, run.email, run.parallel),
+                "{retry}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tickets_run_is_given_the_command_to_offer_a_base_fix_with() {
+        let retry = format!("thirdshift {URL} base-fix");
+        let run = run_args(&["--spec-branch", "issue-7", "--offer-base-fix", &retry, URL]);
+
+        assert_eq!(run.base_fix, Some(BaseFixAsk::Undecided { retry }));
+        assert_eq!(
+            rejection(&[URL, "--offer-base-fix"]),
+            "missing command to offer"
+        );
     }
 
     #[test]

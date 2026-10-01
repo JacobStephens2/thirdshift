@@ -27,24 +27,31 @@ impl Selection {
     }
 
     /// The Base branch: the open PR's base in a Continuation that has one,
-    /// otherwise `checked_out`, the branch checked out in the launch
+    /// otherwise `given`, the Base branch the Run was given by what started
+    /// it, or without one `checked_out`, the branch checked out in the launch
     /// directory (`None` on a detached HEAD). Says so on stderr when the PR's
-    /// base replaces a different checked-out branch.
-    pub fn base_branch(&self, checked_out: Option<&str>) -> Result<String> {
+    /// base replaces a different given or checked-out branch.
+    pub fn base_branch(&self, given: Option<&str>, checked_out: Option<&str>) -> Result<String> {
+        let otherwise = given.or(checked_out);
         if let Selection::Continuation {
             branch,
             pr: Some(pr),
         } = self
         {
-            if let Some(checked_out) = checked_out.filter(|&c| c != pr.base) {
+            if let Some(replaced) = otherwise.filter(|&replaced| replaced != pr.base) {
+                let which = if given.is_some() {
+                    "given"
+                } else {
+                    "checked-out"
+                };
                 progress::step(format_args!(
-                    "continuing {branch} and its PR {}, so the Base branch is {}, not the checked-out {checked_out}",
+                    "continuing {branch} and its PR {}, so the Base branch is {}, not the {which} {replaced}",
                     pr.url, pr.base
                 ));
             }
             return Ok(pr.base.clone());
         }
-        checked_out
+        otherwise
             .map(String::from)
             .context("HEAD is detached; check out the branch the work should be based on")
     }

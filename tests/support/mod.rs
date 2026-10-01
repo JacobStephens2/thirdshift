@@ -112,6 +112,44 @@ impl From<Output> for RunResult {
     }
 }
 
+/// A Run started and waited on until its fake agent started, as by
+/// [`Scenario::run_until`], which its fake agent's script may still be
+/// holding where it is.
+pub struct HeldRun {
+    child: Child,
+    /// Whether the Run had exited by the time the agent was seen to start.
+    exited: bool,
+}
+
+impl HeldRun {
+    /// Send the Run `signal` (e.g. `"INT"`), unless it had already exited.
+    pub fn signal(&mut self, signal: &str) {
+        // A Run that has exited is past signalling, and its process id may
+        // be another process's by now.
+        if self.exited {
+            return;
+        }
+        let status = Command::new("kill")
+            .args([&format!("-{signal}"), &self.child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    /// Kill the Run, unless it had already exited, and wait until it is gone.
+    /// What it started lives on.
+    pub fn kill(&mut self) {
+        self.signal("KILL");
+        self.child.wait().unwrap();
+    }
+
+    /// Wait for the Run to exit, and for everything it started to let go of
+    /// its stdout and stderr.
+    pub fn finish(self) -> RunResult {
+        self.child.wait_with_output().unwrap().into()
+    }
+}
+
 /// `stderr` with the `HH:MM:SS ` that starts each progress line, after its
 /// `thirdshift: `, removed.
 pub fn unstamped(stderr: &str) -> String {
@@ -267,19 +305,20 @@ impl Scenario {
         started: &str,
         signal: &str,
     ) -> RunResult {
+        let mut held = self.run_until(args, env, started);
+        held.signal(signal);
+        held.finish()
+    }
+
+    /// Start thirdshift and return once the fake agent has touched the file
+    /// `started` in the scenario root, with the Run still going unless it
+    /// exited just after. Panics with the Run's stderr if the Run exits
+    /// without the file there, or if the file isn't there within
+    /// [`WAIT_BOUND`].
+    pub fn run_until(&self, args: &[&str], env: &[(&str, &str)], started: &str) -> HeldRun {
         let mut command = self.command(args);
         command.envs(env.iter().copied());
-        let mut child = self.spawn_until_started(command, started);
-        // A Run that has exited is past signalling, and its process id may
-        // be another process's by now.
-        if child.try_wait().unwrap().is_none() {
-            let status = Command::new("kill")
-                .args([&format!("-{signal}"), &child.id().to_string()])
-                .status()
-                .unwrap();
-            assert!(status.success());
-        }
-        child.wait_with_output().unwrap().into()
+        self.spawn_until_started(command, started)
     }
 
     /// Run a copy of thirdshift, `installed/thirdshift` in the scenario root,
@@ -303,10 +342,10 @@ impl Scenario {
             .status()
             .unwrap();
         assert!(copied.success());
-        let child = self.spawn_until_started(self.command_running(&copy, args), COPY_IN_USE);
+        let held = self.spawn_until_started(self.command_running(&copy, args), COPY_IN_USE);
         replace(&copy);
         fs::write(self.path(COPY_REPLACED), "").unwrap();
-        child.wait_with_output().unwrap().into()
+        held.finish()
     }
 
     /// Bash for a session of a Run started by
@@ -325,10 +364,11 @@ test -f {root}/{COPY_REPLACED}
     }
 
     /// Spawn `command`, its stdout and stderr piped, and wait until the fake
-    /// agent has touched the file `started` in the scenario root. Panics with
-    /// the Run's stderr if the Run exits without the file there, or if the
-    /// file isn't there within [`WAIT_BOUND`].
-    fn spawn_until_started(&self, mut command: Command, started: &str) -> Child {
+    /// agent has touched the file `started` in the scenario root, with the
+    /// Run still going unless it exited just after. Panics with the Run's
+    /// stderr if the Run exits without the file there, or if the file isn't
+    /// there within [`WAIT_BOUND`].
+    fn spawn_until_started(&self, mut command: Command, started: &str) -> HeldRun {
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -338,10 +378,10 @@ test -f {root}/{COPY_REPLACED}
         // Whether the Run has exited is read before whether the agent has
         // started, so a Run that starts the agent and exits between the two
         // reads still counts as started.
-        loop {
+        let exited = loop {
             let exited = child.try_wait().unwrap().is_some();
             if self.path(started).exists() {
-                return child;
+                break exited;
             }
             if exited {
                 let result = RunResult::from(child.wait_with_output().unwrap());
@@ -352,7 +392,8 @@ test -f {root}/{COPY_REPLACED}
             }
             assert!(Instant::now() < deadline, "the agent never started");
             std::thread::sleep(Duration::from_millis(20));
-        }
+        };
+        HeldRun { child, exited }
     }
 
     /// Run thirdshift with stdin and stderr on a pseudo-terminal, as from an

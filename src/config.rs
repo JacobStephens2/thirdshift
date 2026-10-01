@@ -153,12 +153,13 @@ impl UserConfig {
     }
 
     /// What a Run whose command gave no `base-fix` or `no-base-fix` asks
-    /// about a Base fix.
-    pub fn default_base_fix(&self) -> BaseFixAsk {
+    /// about a Base fix, `retry` being the command that starts it again
+    /// with one allowed: without `base.fix`, nobody decided.
+    pub fn default_base_fix(&self, retry: String) -> BaseFixAsk {
         if self.base_fix {
             BaseFixAsk::Allow
         } else {
-            BaseFixAsk::Forbid
+            BaseFixAsk::Undecided { retry }
         }
     }
 }
