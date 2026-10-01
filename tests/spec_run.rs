@@ -589,6 +589,43 @@ fn red_ci_on_the_spec_prs_head_gets_a_ci_fix_repair() {
     );
 }
 
+#[test]
+fn a_ci_fix_repair_on_the_spec_pr_that_makes_no_commit_gets_a_check_re_run() {
+    let scenario = linear_spec();
+    scenario.agent_does_for_in_session(
+        SPEC,
+        1,
+        &checks_on_head(
+            r#"[{"name": "test", "conclusion": "failure",
+                 "url": "https://github.com/acme/widgets/actions/runs/900/job/1",
+                 "rerun": {"conclusion": "success"}}]"#,
+        ),
+    );
+    scenario.agent_does_for_in_session(SPEC, 2, "true\n");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        spec_prompts(&scenario).len(),
+        2,
+        "the Spec review and 1 Repair"
+    );
+    assert_eq!(
+        scenario.gh_calls_of("run", "rerun"),
+        vec![vec![
+            "run",
+            "rerun",
+            "900",
+            "--failed",
+            "--repo",
+            "acme/widgets"
+        ]]
+    );
+    assert_contains(&result.stderr, "re-running the failed checks on ");
+    assert_eq!(spec_pr(&scenario)["isDraft"], false);
+}
+
 /// Bash that sets the check runs on `origin/<branch>`'s tip, as the worktree
 /// last fetched it, to `checks`.
 fn checks_on_origin(branch: &str, checks: &str) -> String {
