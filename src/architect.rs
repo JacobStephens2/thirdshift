@@ -384,15 +384,7 @@ fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Res
         &plan.repo_slug(),
         &[(ARCHITECT_PLAN_LABEL, ARCHITECT_PLAN_DESCRIPTION)],
     )?;
-    let added = [READY_FOR_AGENT, ARCHITECT_PLAN_LABEL];
-    // GitHub's label names are case-insensitive.
-    let mut labels: Vec<&str> = kept
-        .iter()
-        .map(String::as_str)
-        .filter(|kept| !added.iter().any(|added| added.eq_ignore_ascii_case(kept)))
-        .collect();
-    labels.extend(added);
-    github::set_labels(plan, &labels)
+    github::set_labels_adding(plan, &kept, &[READY_FOR_AGENT, ARCHITECT_PLAN_LABEL])
 }
 
 /// The labels `plan` keeps once it is marked ready: all it has but

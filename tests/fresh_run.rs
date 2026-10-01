@@ -356,6 +356,7 @@ fn a_repository_that_has_the_in_progress_label_keeps_it_as_it_is() {
 fn a_run_whose_claim_cannot_be_made_stops_before_any_work_naming_the_cause() {
     for (failing, cause) in [
         ("label list", "gh label list failed: HTTP 502"),
+        ("label create", "gh label create in-progress "),
         (
             "api --method",
             "gh api --method PUT repos/acme/widgets/issues/7/labels --silent \

@@ -83,7 +83,7 @@ pub fn issue_labels(issue: &IssueUrl) -> Result<Vec<String>> {
 /// Set `issue`'s labels to exactly `labels`, in one request, so a swap of
 /// one label for another can't stop halfway. Through the REST API: `gh issue
 /// edit` fails on the GitHub Projects (classic) sunset in older `gh`.
-pub fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
+fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
     let path = format!("repos/{}/issues/{}/labels", issue.repo_slug(), issue.number);
     let fields: Vec<String> = labels
         .iter()
@@ -94,6 +94,20 @@ pub fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
         args.extend(["-f", field]);
     }
     gh(&args)
+}
+
+/// Set `issue`'s labels to `kept` and then each of `added`, in one request,
+/// as [`set_labels`] does. One of `kept` that is also one of `added`,
+/// whatever its case, as GitHub's label names are case-insensitive, is there
+/// once, as `added` spells it.
+pub fn set_labels_adding(issue: &IssueUrl, kept: &[String], added: &[&str]) -> Result<()> {
+    let mut labels: Vec<&str> = kept
+        .iter()
+        .map(String::as_str)
+        .filter(|kept| !added.iter().any(|added| added.eq_ignore_ascii_case(kept)))
+        .collect();
+    labels.extend(added);
+    set_labels(issue, &labels)
 }
 
 /// A Spec's sub-issue, as a Spec run reads it.

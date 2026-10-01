@@ -88,6 +88,13 @@ impl<'a> StartedBy<'a> {
         }
     }
 
+    /// Whether the Run, or the Spec run, makes the Claim on its issue: a
+    /// child Run makes none, so that only the issue the Day shift would look
+    /// at carries one.
+    fn makes_claim(self) -> bool {
+        self.child().is_none()
+    }
+
     /// The Base branch the Run was given, if what started it gave one.
     fn given_base(self) -> Option<&'a str> {
         match self {
@@ -195,9 +202,7 @@ fn run(
     if interrupt::requested() {
         return Err(anyhow!("interrupted").into());
     }
-    // A Ticket's Run in a Spec run and a Base fix make no Claim: only the
-    // issue the Day shift would look at carries it.
-    if started_by.child().is_none() {
+    if started_by.makes_claim() {
         claim::make(issue)?;
     }
     let worktree = match &selection {

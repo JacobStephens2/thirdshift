@@ -23,12 +23,13 @@ const IN_PROGRESS_DESCRIPTION: &str = "A Claim: thirdshift has taken this issue"
 /// it is, with no request made. A failure names the Claim as what could not
 /// be made.
 pub fn make(issue: &IssueUrl) -> Result<()> {
-    swap_labels(issue).with_context(|| format!("could not make the Claim on #{}", issue.number))
+    label_in_progress(issue)
+        .with_context(|| format!("could not make the Claim on #{}", issue.number))
 }
 
 /// [`make`], its failure as `gh` gave it.
-fn swap_labels(issue: &IssueUrl) -> Result<()> {
-    let labels = github::issue_labels(issue)?;
+fn label_in_progress(issue: &IssueUrl) -> Result<()> {
+    let mut labels = github::issue_labels(issue)?;
     // GitHub's label names are case-insensitive.
     let has = |label: &str| labels.iter().any(|name| name.eq_ignore_ascii_case(label));
     let (claimed, ready) = (has(IN_PROGRESS), has(READY_FOR_AGENT));
@@ -43,17 +44,12 @@ fn swap_labels(issue: &IssueUrl) -> Result<()> {
     } else {
         progress::step(format_args!("labelling #{} {IN_PROGRESS}", issue.number));
     }
-    let mut kept: Vec<&str> = labels
-        .iter()
-        .map(String::as_str)
-        .filter(|name| !name.eq_ignore_ascii_case(READY_FOR_AGENT))
-        .collect();
     if !claimed {
         github::ensure_labels(
             &issue.repo_slug(),
             &[(IN_PROGRESS, IN_PROGRESS_DESCRIPTION)],
         )?;
-        kept.push(IN_PROGRESS);
     }
-    github::set_labels(issue, &kept)
+    labels.retain(|name| !name.eq_ignore_ascii_case(READY_FOR_AGENT));
+    github::set_labels_adding(issue, &labels, &[IN_PROGRESS])
 }
