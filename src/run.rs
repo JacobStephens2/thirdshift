@@ -117,11 +117,7 @@ pub fn run(
             Worktree::continue_existing(&launch, &issue.repo, &branch, &base)?
         }
     };
-    let logs = Logs {
-        issue,
-        dir: logs_dir,
-        timestamp: &timestamp,
-    };
+    let logs = Logs::of_run(issue, logs_dir, &timestamp);
     if !tickets.is_empty() {
         return spec_run::run(
             issue,
@@ -157,7 +153,7 @@ pub fn run(
 /// if `base` is ahead of it. The Run doesn't depend on this, so a failure,
 /// such as uncommitted changes in the way, is only a warning, and those
 /// changes are left as they were.
-fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
+pub fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
     if checked_out != Some(base) {
         return;
     }

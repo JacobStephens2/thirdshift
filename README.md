@@ -124,11 +124,12 @@ It sends one [Run notification](#run-notifications), whatever the outcome. To ha
 
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
 - **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. Each line starts with the local time it was printed, as in `thirdshift: 12:14:49 pushing issue-7`, so a quiet terminal shows how long the Run has been on its last step. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
-- **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin` or closing the issue then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, a Run flag is repeated or contradicts another, or `parallel` isn't followed by a whole number from 1 up; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
+- **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin` or closing the issue then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the command is one thirdshift can't use: the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, a Run flag is repeated or contradicts another, or `parallel` isn't followed by a whole number from 1 up; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
 
 The other commands:
 
 ```sh
+thirdshift architect [<focus>] --plan-only   # review the Base branch's architecture and publish a plan (see Architect runs)
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift update                   # update to the latest release (see Updating)
@@ -136,7 +137,7 @@ thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print every form of the command, each with a one-line description
 ```
 
-`version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr.
+`version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too, with the plan's URL on stdout in place of a pull request's.
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
@@ -262,6 +263,7 @@ Each session's full transcript, as Claude Code's `stream-json` output, is writte
 ```
 ~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-implement.jsonl
 ~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-repair-<i>.jsonl
+~/.thirdshift/logs/<owner>-<repo>-architect-<timestamp>-architecture-review.jsonl
 ```
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.jsonl`.
@@ -341,6 +343,33 @@ thirdshift: 03:12:40 Tickets not done: #21, #22, #24, #25, #26, #27
 ```
 
 Running the Spec again picks up where the last Spec run stopped. The Spec branch is on `origin`, so the Spec run continues it ([ADR-0002](docs/adr/0002-existing-issue-branch-means-continue.md)) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Run is a [Continuation](#continuation) into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with `every Ticket is closed and there is no Spec branch; nothing to do` and exits `1`, creating no branch or pull request and leaving the Spec open.
+
+## Architect runs
+
+`thirdshift architect --plan-only` starts an **Architect run**: the factory looks for architecture work itself, with no **Issue URL**. Start it from a clone of the repository, on the **Base branch**:
+
+```sh
+cd ~/repos/widgets
+thirdshift architect --plan-only                  # review the whole codebase
+thirdshift architect "the Spec run" --plan-only   # point the review at an area
+```
+
+The focus is optional free text, given as one argument, before or after `--plan-only`; it goes into the Session prompt. `--plan-only` is required for now: an Architect run publishes its plan and stops, and can't yet go on to implement it. `architect` is a command only as the first argument. A second focus, `--plan-only` twice, any other argument starting with a dash, or an empty focus is an argument error (exit `2`), as is leaving `--plan-only` out.
+
+An Architect run:
+
+1. Makes the checks a Run makes that don't need an issue, before creating anything: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached, and the Base branch exists on `origin` with your local copy not ahead of it. There is no **Origin match**, since there is no Issue URL: the repository is the one `origin` names. With `launch.pull = true` in the [User config](#user-config), it then fast-forwards your checkout of the Base branch, as a Run does.
+2. Creates a git worktree next to your clone, named `<repo>-architect`, detached at the head of the Base branch on `origin`, with no **Issue branch**. Your checkout, its uncommitted changes and its untracked files are never touched or scanned.
+3. Runs the **Architecture review** there: a headless Claude Code session with the **Factory skills** loaded, started with the [Architecture review prompt](prompts/architecture-review.md). It looks for deepening opportunities, skips any an open issue already covers, and publishes the top recommendation as the plan, labelled `needs-triage`: a **Spec** with **Tickets**, or a single Ticket when one session is enough. It may edit files in the worktree to check an idea, but commits and pushes nothing. It ends its final message with one line naming the plan: `Architecture review plan: <Issue URL>`. thirdshift reads only that line.
+4. Checks the plan: the issue is in this repository, is open, was created after the Architect run started, and carries no other label that says it is not agent work (`ready-for-human`, `needs-info` or `wontfix`).
+5. Marks the plan ready, in one request: `needs-triage` is swapped for `ready-for-agent`, and its other labels are kept. A Spec's Tickets are left as the review labelled them.
+6. Removes the worktree and the temporary plugin directory, whatever the outcome.
+
+On success it exits `0` with the plan's URL alone on stdout, and `plan <url> is ready for an agent` as stderr's last line. Read or edit the plan, then run it with `thirdshift <Issue URL>`. Progress lines on stderr say when the review starts, which plan it reported, and when the labels are swapped.
+
+A review session that fails or is interrupted, a final message without that line, or a plan that fails a check ends the Architect run as a failure: exit `1`, nothing on stdout, the cause on stderr and then the path of the session log. No label is changed, so a plan the review did publish stays `needs-triage` for you to finish or close. A review that reports an idea it filed, or an open issue that already covers its top recommendation, instead of a plan, is a failure too for now, naming that issue.
+
+Start one Architect run per repository at a time. Nothing stops a second one, but two at once may pick the same opportunity and publish the same plan, and the second can't create its worktree while the first's is there.
 
 ## Building from source
 

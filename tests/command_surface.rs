@@ -12,6 +12,7 @@ fn assert_help_text(text: &str) {
         "thirdshift <Issue URL>",
         "thirdshift merge <Issue URL>",
         "thirdshift --email <Issue URL>",
+        "thirdshift architect [<focus>] --plan-only",
         "thirdshift email-test [<address>]",
         "thirdshift setup",
         "thirdshift update",
@@ -62,6 +63,52 @@ fn help_does_not_mention_the_flag_aliases() {
             !words.contains(&alias),
             "help mentions {alias}: {}",
             help.stdout
+        );
+    }
+}
+
+#[test]
+fn help_documents_architect_its_focus_plan_only_and_one_architect_run_at_a_time() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    // However the lines are wrapped.
+    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+    for mention in [
+        "<focus> is free text",
+        "--plan-only is required",
+        "thirdshift architect \"the Spec run\" --plan-only",
+        "Start one Architect run per repository at a time",
+    ] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+}
+
+#[test]
+fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+
+    for (args, error) in [
+        (
+            vec!["architect"],
+            "architect needs --plan-only: it can't yet implement the plan it publishes",
+        ),
+        (
+            vec!["architect", "the Spec run", "the Run", "--plan-only"],
+            "unexpected argument after the focus: the Run",
+        ),
+        (
+            vec!["architect", "--plan-only", "--merge"],
+            "unexpected argument after architect: --merge",
+        ),
+    ] {
+        let result = scenario.run(&args);
+
+        assert_argument_error(&scenario, &result, error);
+        assert!(
+            scenario.claude_calls().is_empty(),
+            "{args:?} started a review"
         );
     }
 }

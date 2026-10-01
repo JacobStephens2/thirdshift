@@ -86,6 +86,8 @@ pub struct Progress {
     /// Signed in with a claude.ai subscription rather than an API key.
     subscription: bool,
     turns_and_cost: Option<(u64, f64)>,
+    /// The text of the last `result`, if it had any.
+    final_message: Option<String>,
 }
 
 impl Progress {
@@ -117,6 +119,7 @@ impl Progress {
             Some("result") => {
                 self.killed.clear();
                 self.failed = event["subtype"] != "success" || event["is_error"] == true;
+                self.final_message = event["result"].as_str().map(String::from);
                 // Both are cumulative across a session's result events.
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),
@@ -141,6 +144,13 @@ impl Progress {
             ""
         };
         Some(format!("{turns} turns, ${cost:.2}{basis}"))
+    }
+
+    /// The session's final message: the text of its last `result` event,
+    /// what the agent said as it ended its last turn. None if that `result`
+    /// had no text, as one that is an error may not.
+    pub fn final_message(&self) -> Option<&str> {
+        self.final_message.as_deref()
     }
 
     /// The session's id, from its first `init` event.
@@ -408,6 +418,16 @@ mod tests {
             json!({ "type": "result", "subtype": "success" }),
         ]);
         assert_eq!(progress.summary().as_deref(), Some("34 turns, $1.82"));
+    }
+
+    #[test]
+    fn the_final_message_is_the_text_of_the_last_result() {
+        let said = |text: &str| json!({ "type": "result", "subtype": "success", "result": text });
+        let (progress, _) = lines(&[said("Waiting on the tests."), said("Done.")]);
+        assert_eq!(progress.final_message(), Some("Done."));
+
+        let (progress, _) = lines(&[said("Done."), result(3, 0.1)]);
+        assert_eq!(progress.final_message(), None);
     }
 
     #[test]

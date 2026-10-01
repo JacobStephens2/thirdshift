@@ -1,9 +1,9 @@
-//! The Issue URL and the Origin match.
+//! The Issue URL, the repository `origin` names, and the Origin match.
 
 use anyhow::{Result, bail};
 
 /// A parsed `https://github.com/<owner>/<repo>/issues/<n>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueUrl {
     pub url: String,
     pub owner: String,
@@ -51,20 +51,88 @@ impl IssueUrl {
     /// The Origin match: does `origin_url` (the raw configured origin, HTTPS or
     /// SSH, with or without `.git`) name this issue's repository? Case-insensitive.
     pub fn matches_origin(&self, origin_url: &str) -> bool {
-        normalise_origin(origin_url).is_some_and(|origin| {
-            origin == format!("github.com/{}", self.repo_slug()).to_lowercase()
+        Repo::of_origin(origin_url).is_some_and(|origin| {
+            origin.owner.eq_ignore_ascii_case(&self.owner)
+                && origin.name.eq_ignore_ascii_case(&self.repo)
         })
     }
 }
 
-/// `github.com/<owner>/<repo>`, lowercased, or `None` for a non-GitHub origin.
-fn normalise_origin(origin_url: &str) -> Option<String> {
-    let lower = origin_url.trim().to_lowercase();
-    let path = lower
-        .strip_prefix("https://github.com/")
-        .or_else(|| lower.strip_prefix("git@github.com:"))
-        .or_else(|| lower.strip_prefix("ssh://git@github.com/"))?;
-    let path = path.trim_end_matches('/');
-    let path = path.strip_suffix(".git").unwrap_or(path);
-    Some(format!("github.com/{path}"))
+/// The GitHub repository an `origin` remote names, spelled as its URL spells
+/// it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Repo {
+    pub owner: String,
+    pub name: String,
+}
+
+impl Repo {
+    /// The repository `origin_url` names (the raw configured origin, HTTPS or
+    /// SSH, with or without `.git`), or `None` for a non-GitHub origin.
+    pub fn of_origin(origin_url: &str) -> Option<Self> {
+        const GIT: &str = ".git";
+        let url = origin_url.trim();
+        let path = [
+            "https://github.com/",
+            "git@github.com:",
+            "ssh://git@github.com/",
+        ]
+        .into_iter()
+        .find_map(|prefix| {
+            let start = url.get(..prefix.len())?;
+            start
+                .eq_ignore_ascii_case(prefix)
+                .then(|| &url[prefix.len()..])
+        })?;
+        let path = path.trim_end_matches('/');
+        let path = match path
+            .len()
+            .checked_sub(GIT.len())
+            .and_then(|at| path.get(at..))
+        {
+            Some(end) if end.eq_ignore_ascii_case(GIT) => &path[..path.len() - GIT.len()],
+            _ => path,
+        };
+        match path.split('/').collect::<Vec<_>>().as_slice() {
+            [owner, name] if !owner.is_empty() && !name.is_empty() => Some(Repo {
+                owner: owner.to_string(),
+                name: name.to_string(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_repository_of_an_origin_keeps_its_spelling_whatever_the_form_of_the_url() {
+        let repo = |owner: &str, name: &str| {
+            Some(Repo {
+                owner: owner.to_string(),
+                name: name.to_string(),
+            })
+        };
+        for (origin, expected) in [
+            (
+                "https://github.com/acme/widgets.git",
+                repo("acme", "widgets"),
+            ),
+            ("https://github.com/Acme/Widgets", repo("Acme", "Widgets")),
+            (
+                "HTTPS://GitHub.com/acme/widgets.GIT/",
+                repo("acme", "widgets"),
+            ),
+            ("git@github.com:acme/widgets.git\n", repo("acme", "widgets")),
+            ("ssh://git@github.com/acme/widgets", repo("acme", "widgets")),
+            ("https://gitlab.com/acme/widgets.git", None),
+            ("https://github.com/acme", None),
+            ("https://github.com/acme/widgets/extra", None),
+            ("../origin.git", None),
+        ] {
+            assert_eq!(Repo::of_origin(origin), expected, "{origin}");
+        }
+    }
 }

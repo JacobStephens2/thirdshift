@@ -22,6 +22,7 @@ claude -p --permission-mode auto --plugin-dir <plugin dir> --output-format strea
 | Continuation, with no pull request | Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request. | [continuation.md](continuation.md) |
 | Continuation, with an open pull request | Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open. | [continuation-pr.md](continuation-pr.md) |
 | Spec review | In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready. | [spec-review.md](spec-review.md) |
+| Architecture review | Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none. | [architecture-review.md](architecture-review.md) |
 | Conflict Repair | Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts. | [conflict-repair.md](conflict-repair.md) |
 | Conflict Repair, on Foreign commits | In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts. | [foreign-conflict-repair.md](foreign-conflict-repair.md) |
 | Review Repair | In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged. | [review-repair.md](review-repair.md) |

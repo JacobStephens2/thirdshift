@@ -25,7 +25,9 @@
 //! The `init` line carries session id `fake-session-<n>` for the n-th call.
 //! Lines the script appends to the file named by $FAKE_CLAUDE_AFTER_RESULT
 //! are emitted after the closing `result` line, e.g. to kill a background
-//! task as the session ends.
+//! task as the session ends. What the script writes to the file named by
+//! $FAKE_CLAUDE_FINAL_MESSAGE is the closing `result` line's `result`: the
+//! session's final message.
 //!
 //! Called without --output-format, as `claude -p` with its prompt on stdin,
 //! it records stdin as `stdin` and prints only what the script prints, as
@@ -187,16 +189,21 @@ pub fn main(argv: Vec<String>) {
     println!("{init}");
     // Beside the record, not in $TMPDIR, which tests expect to be left empty.
     let after_result = format!("{}.after-result.{session}", record_path.display());
+    let final_message = format!("{}.final-message.{session}", record_path.display());
     let status = bash()
         .env("FAKE_CLAUDE_AFTER_RESULT", &after_result)
+        .env("FAKE_CLAUDE_FINAL_MESSAGE", &final_message)
         .status()
         .unwrap();
     let code = exit_code(status);
-    let result = object([
+    let mut result = object([
         ("type", string("result")),
         ("subtype", string("success")),
         ("is_error", Bool(code != 0)),
     ]);
+    if let Ok(message) = fs::read_to_string(&final_message) {
+        result.set("result", string(message));
+    }
     println!("{result}");
     if let Ok(lines) = fs::read_to_string(&after_result) {
         print!("{lines}");

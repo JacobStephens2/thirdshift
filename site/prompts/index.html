@@ -127,6 +127,32 @@ Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it.
 </code></pre>
       </article>
+      <article class="job-sheet" id="prompt-architecture-review" aria-labelledby="prompt-architecture-review-title">
+        <h3 id="prompt-architecture-review-title">Architecture review</h3>
+        <p>Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.</p>
+        <p class="sent-by">Sent by an Architect run, before any unit</p>
+        <pre class="job-text"><code>/thirdshift:improve-codebase-architecture
+
+This is an Architecture review of the base branch <mark class="ph">&lt;base&gt;</mark>: this worktree is checked out at its head on origin, on no branch.
+
+Focus the review on: <mark class="ph">&lt;focus&gt;</mark>
+
+Find the deepening opportunities with /thirdshift:improve-codebase-architecture, using /thirdshift:codebase-design for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.
+
+If it is Strong, settle its design yourself and publish it as the plan with /thirdshift:to-spec and /thirdshift:to-tickets: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `needs-triage`, not `ready-for-agent`: thirdshift marks it ready once you are done.
+
+If it is not Strong, file it as one issue labelled `needs-triage`, unless an open issue already covers it.
+
+Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to CONTEXT.md or an ADR is a Ticket's work, not yours.
+
+End your final message with one of these lines, as its last line, with the issue's full URL and nothing else on the line:
+Architecture review plan: &lt;URL of the Spec or the single Ticket you published&gt;
+Architecture review idea: &lt;URL of the issue you filed&gt;
+Architecture review already filed: &lt;URL of the open issue that already covers it&gt;
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it.
+</code></pre>
+      </article>
       <article class="job-sheet" id="prompt-conflict-repair" aria-labelledby="prompt-conflict-repair-title">
         <h3 id="prompt-conflict-repair-title">Conflict Repair</h3>
         <p>Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.</p>

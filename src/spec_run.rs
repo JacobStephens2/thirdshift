@@ -31,8 +31,12 @@ use crate::worktree::Worktree;
 /// How often to check whether a Ticket's Run has ended, or been interrupted.
 const POLL: Duration = Duration::from_millis(100);
 
+/// The triage label of an issue no one has evaluated yet, which an
+/// Architecture review publishes its plan with.
+pub const NEEDS_TRIAGE: &str = "needs-triage";
+
 /// The triage labels that make an open Ticket an Unready Ticket.
-const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "needs-triage"];
+const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", NEEDS_TRIAGE];
 
 /// The Spec review session's kind, in its progress lines and log name.
 const SPEC_REVIEW: &str = "spec-review";
@@ -299,17 +303,17 @@ fn next_ready(
                     .any(|blocker| running.contains(blocker))
                 && !outcomes.contains_key(&ticket.number)
                 && !running.contains(&ticket.number)
-                && unready_label(ticket).is_none()
+                && unready_label(&ticket.labels).is_none()
         })
         .map(|ticket| ticket.number)
         .min()
 }
 
-/// The first of the Unready Ticket labels `ticket` has, if any.
-fn unready_label(ticket: &Ticket) -> Option<&str> {
+/// The first of the Unready Ticket labels among an issue's `labels`, if any.
+pub fn unready_label(labels: &[String]) -> Option<&'static str> {
     UNREADY_LABELS
         .into_iter()
-        .find(|label| ticket.labels.iter().any(|name| name == label))
+        .find(|label| labels.iter().any(|name| name == label))
 }
 
 /// A line on each Ticket that landed in this Spec run, with its PR, and on
@@ -364,7 +368,7 @@ fn standing(
     }
     if let Some(landed) = landed {
         format!("{landed}, but is still open")
-    } else if let Some(label) = unready_label(ticket) {
+    } else if let Some(label) = unready_label(&ticket.labels) {
         format!("unready: labelled {label}")
     } else if ticket.has_sub_issues {
         "unready: has sub-issues".to_string()

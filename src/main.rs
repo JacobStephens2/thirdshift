@@ -1,3 +1,4 @@
+mod architect;
 mod args;
 mod branch;
 mod ci;
@@ -28,8 +29,9 @@ mod worktree;
 use std::io::Write;
 use std::process::ExitCode;
 
-use args::{Command, RunArgs};
+use args::{ArchitectArgs, Command, RunArgs};
 use config::UserConfig;
+use failed_run::FailedRun;
 use notification::{NotificationAsk, RunNotification};
 use run::Goal;
 use spec_run::Parallel;
@@ -37,15 +39,16 @@ use spec_run::Parallel;
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, or a merged one, unattended.
 
-usage: thirdshift <Issue URL>              Run the factory on the issue, from the clone on the Base branch
-       thirdshift merge <Issue URL>        Run the factory on the issue, then merge its pull request
-       thirdshift --no-merge <Issue URL>   Run the factory on the issue and leave its pull request for review
-       thirdshift --email <Issue URL>      Run the factory on the issue, then email how the Run ended
-       thirdshift email-test [<address>]   Send a test email through Resend, to check the email setup
-       thirdshift setup                    Choose your defaults, then write the User config with every setting
-       thirdshift update                   Update thirdshift to the latest release
-       thirdshift version                  Print thirdshift's version
-       thirdshift help                     Print this help
+usage: thirdshift <Issue URL>                         Run the factory on the issue, from the clone on the Base branch
+       thirdshift merge <Issue URL>                   Run the factory on the issue, then merge its pull request
+       thirdshift --no-merge <Issue URL>              Run the factory on the issue and leave its pull request for review
+       thirdshift --email <Issue URL>                 Run the factory on the issue, then email how the Run ended
+       thirdshift architect [<focus>] --plan-only     Review the Base branch's architecture and publish a plan for a refactor
+       thirdshift email-test [<address>]              Send a test email through Resend, to check the email setup
+       thirdshift setup                               Choose your defaults, then write the User config with every setting
+       thirdshift update                              Update thirdshift to the latest release
+       thirdshift version                             Print thirdshift's version
+       thirdshift help                                Print this help
 
 merge, --no-merge, --email, --no-email and parallel <n> (or --parallel <n>) go before or
 after the Issue URL, in any order.
@@ -75,6 +78,21 @@ Ticket Runs send none.
 Tickets always merge into the Spec branch, whatever the command or the User config says.
 merge on a Spec merges the Spec PR into the Base branch once it is ready, mergeable and green,
 as does merge.always; without either, or with --no-merge, the Spec PR is left ready for review.
+
+architect starts an Architect run from the clone on the Base branch, with no Issue URL. Its
+Architecture review, an agent session in its own worktree at the Base branch's head on origin,
+looks for deepening opportunities and publishes the top one as a plan: a Spec with Tickets, or
+a single Ticket. thirdshift then checks that the plan is open, new and not labelled
+ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
+and prints its URL, to read, edit and run with thirdshift <Issue URL>. --plan-only is
+required: an Architect run can't yet implement its plan. <focus> is free text, one argument,
+that points the review at an area:
+
+    thirdshift architect \"the Spec run\" --plan-only
+
+A review that fails, is interrupted, or ends without naming a plan fails the Architect run and
+leaves any plan it published labelled needs-triage. Start one Architect run per repository at a
+time: two at once may publish the same plan.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
@@ -134,15 +152,13 @@ fn main() -> ExitCode {
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),
             );
         }
+        Ok(Command::Architect(architect_args)) => return architect(&architect_args),
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    let config = match config::offer_setup().and_then(|()| UserConfig::load()) {
+    let config = match user_config() {
         Ok(config) => config,
-        Err(error) => {
-            progress::step(format_args!("{error:#}"));
-            return ExitCode::FAILURE;
-        }
+        Err(failure) => return failure,
     };
     // A Ticket's Run in a Spec run is always a Merge run, and leaves the Run
     // notification and the Launch directory to the Spec run.
@@ -156,8 +172,7 @@ fn main() -> ExitCode {
     };
     // First, so no interrupt can end the Run once its notification is checked.
     if let Err(error) = interrupt::install() {
-        progress::step(format_args!("{error:#}"));
-        return ExitCode::FAILURE;
+        return failure(&error);
     }
     let notification = match email {
         NotificationAsk::Send(to) => RunNotification::new(to, &config.email, &issue).map(Some),
@@ -165,10 +180,7 @@ fn main() -> ExitCode {
     };
     let notification = match notification {
         Ok(notification) => notification,
-        Err(error) => {
-            progress::step(format_args!("{error:#}"));
-            return ExitCode::FAILURE;
-        }
+        Err(error) => return failure(&error),
     };
     let parallel = Parallel {
         tickets: parallel.unwrap_or(config.spec_parallel),
@@ -190,19 +202,10 @@ fn main() -> ExitCode {
                 reached.pr_url,
                 reached.goal.outcome()
             ));
-            print_pr_url(&reached.pr_url);
+            print_url(&reached.pr_url);
             ExitCode::SUCCESS
         }
-        Err(failed) => {
-            progress::step(format_args!("{:#}", failed.error));
-            if let Some(log) = &failed.log {
-                progress::step(format_args!("{}{}", failed_run::SESSION_LOG, log.display()));
-            }
-            if let Some(pr_url) = &failed.pr_url {
-                print_pr_url(pr_url);
-            }
-            ExitCode::FAILURE
-        }
+        Err(failed) => report(failed),
     };
     if let Some(notification) = notification {
         notification.send(&ended);
@@ -210,10 +213,59 @@ fn main() -> ExitCode {
     code
 }
 
-/// The PR's URL on stdout. A failed write, as once the terminal has closed,
-/// is ignored, so the Run notification still goes.
-fn print_pr_url(pr_url: &str) {
-    let _ = writeln!(std::io::stdout(), "{pr_url}");
+/// An Architect run that stops at the plan: the plan's URL on stdout once it
+/// is marked ready, or the cause and the session log on stderr.
+fn architect(args: &ArchitectArgs) -> ExitCode {
+    let config = match user_config() {
+        Ok(config) => config,
+        Err(failure) => return failure,
+    };
+    if let Err(error) = interrupt::install() {
+        return failure(&error);
+    }
+    match architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull) {
+        Ok(plan_url) => {
+            // Also on stderr, so the outcome shows even when stdout is captured.
+            progress::step(format_args!("plan {plan_url} is ready for an agent"));
+            print_url(&plan_url);
+            ExitCode::SUCCESS
+        }
+        Err(failed) => report(&failed),
+    }
+}
+
+/// The User config, after offering Setup where there is none, or the failure
+/// to exit with, its error reported.
+fn user_config() -> Result<UserConfig, ExitCode> {
+    config::offer_setup()
+        .and_then(|()| UserConfig::load())
+        .map_err(|error| failure(&error))
+}
+
+/// `error` on stderr, and the exit code of a failure.
+fn failure(error: &anyhow::Error) -> ExitCode {
+    progress::step(format_args!("{error:#}"));
+    ExitCode::FAILURE
+}
+
+/// How a Failed run, or a failed Architect run, shows: its cause and its
+/// session log on stderr, and its pull request's URL, if it left one, on
+/// stdout.
+fn report(failed: &FailedRun) -> ExitCode {
+    progress::step(format_args!("{:#}", failed.error));
+    if let Some(log) = &failed.log {
+        progress::step(format_args!("{}{}", failed_run::SESSION_LOG, log.display()));
+    }
+    if let Some(pr_url) = &failed.pr_url {
+        print_url(pr_url);
+    }
+    ExitCode::FAILURE
+}
+
+/// A pull request's or a plan's URL on stdout. A failed write, as once the
+/// terminal has closed, is ignored, so the Run notification still goes.
+fn print_url(url: &str) {
+    let _ = writeln!(std::io::stdout(), "{url}");
 }
 
 /// The end of a command other than a Run: the line that says how it went,
@@ -224,10 +276,7 @@ fn outcome(result: anyhow::Result<impl std::fmt::Display>) -> ExitCode {
             progress::step(outcome);
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            progress::step(format_args!("{error:#}"));
-            ExitCode::FAILURE
-        }
+        Err(error) => failure(&error),
     }
 }
 
