@@ -104,6 +104,31 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
     scenario.assert_cleaned_up("issue-8");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_run_whose_thirdshift_was_removed_after_it_started_still_starts_its_base_fix() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{RUN_OPENS_PR_WITH_INHERITED_FAILURE}{}",
+        scenario.waits_to_be_replaced()
+    ));
+    scenario.agent_does_for(8, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
+
+    let result = scenario
+        .run_copy_replaced_midway(&[&scenario.issue_url(7), "base-fix"], |installed| {
+            std::fs::remove_file(installed).unwrap()
+        });
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let gh = scenario.gh_state();
+    assert_eq!(gh["prs"][1]["base"], "main");
+    assert_eq!(gh["prs"][1]["state"], "MERGED");
+    assert_eq!(
+        scenario.origin_file("issue-7", "ci-fix.txt").as_deref(),
+        Some("fixed\n")
+    );
+}
+
 #[test]
 fn the_base_fix_repairs_the_check_as_its_own_and_only_the_run_sends_a_notification() {
     let scenario = Scenario::new();

@@ -176,6 +176,108 @@ fn each_ticket_branches_off_the_spec_branch_and_its_prompts_name_it_as_the_base(
     }
 }
 
+/// The file in the scenario root that says the stand-in for a newer
+/// thirdshift was run.
+#[cfg(target_os = "linux")]
+const REPLACEMENT_RAN: &str = "replacement-ran";
+
+/// Rename a stand-in for a newer thirdshift, a script that only records that
+/// it was run, over `installed`, as the release installer, `thirdshift
+/// update` and `cargo install` each put a new binary in place.
+#[cfg(target_os = "linux")]
+fn rename_a_replacement_over(scenario: &Scenario, installed: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = format!(
+        "#!/bin/sh\ntouch {}\nexit 1\n",
+        scenario.path(REPLACEMENT_RAN).display()
+    );
+    let new = installed.with_extension("new");
+    std::fs::write(&new, script).unwrap();
+    std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::rename(&new, installed).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_tickets_run_started_after_thirdshift_was_replaced_runs_the_spec_runs_own_binary() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}{}",
+            agent_lands(21, "first.txt"),
+            scenario.waits_to_be_replaced()
+        ),
+    );
+    // The session's script is run by the agent, which #22's Run started.
+    let name_of_run = scenario.path("name-of-run-22");
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "cat /proc/$(ps -o ppid= -p $PPID | tr -d ' ')/comm > {}\n{}",
+            name_of_run.display(),
+            agent_lands(22, "second.txt")
+        ),
+    );
+
+    let result = scenario.run_copy_replaced_midway(&[&spec_url(&scenario)], |installed| {
+        rename_a_replacement_over(&scenario, installed)
+    });
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "thirdshift: #22 landed\n");
+    assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
+    assert_eq!(
+        scenario.origin_file("issue-20", "second.txt").as_deref(),
+        Some("22\n")
+    );
+    assert!(
+        !scenario.path(REPLACEMENT_RAN).exists(),
+        "#22 ran the replacement"
+    );
+    // As `pgrep thirdshift` and `top` see #22's Run.
+    assert_eq!(
+        std::fs::read_to_string(name_of_run).unwrap(),
+        "thirdshift\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_tickets_run_started_after_thirdshift_was_replaced_can_still_start_its_base_fix() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}{}",
+            agent_lands(21, "21.txt"),
+            scenario.waits_to_be_replaced()
+        ),
+    );
+    scenario.agent_does_for(22, &agent_lands_with_an_inherited_failure(22, "22.txt"));
+    base_fix_lands_on_the_spec_branch(&scenario, 23);
+
+    let result = scenario
+        .run_copy_replaced_midway(&[&spec_url(&scenario), "base-fix"], |installed| {
+            rename_a_replacement_over(&scenario, installed)
+        });
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "#22: starting Base fix #23 into issue-20: https://github.com/acme/widgets/issues/23\n",
+    );
+    for head in ["issue-22", "issue-23"] {
+        assert_eq!(pr_from(&scenario, head).unwrap()["state"], "MERGED");
+    }
+    assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_some());
+    assert!(
+        !scenario.path(REPLACEMENT_RAN).exists(),
+        "a Run ran the replacement"
+    );
+}
+
 #[test]
 fn closed_tickets_are_not_run() {
     let scenario = linear_spec();
@@ -538,33 +640,35 @@ gh pr create --base main --head issue-24 --title "Fix CI on main" --body "Closes
     assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_some());
 }
 
-/// A Spec #20 whose one Ticket, #21, lands with `test` red on its head and
-/// on the Spec branch: an Inherited failure.
+/// The agent for Ticket `ticket` lands `file` with `test` red on its head
+/// and on the Spec branch: an Inherited failure.
+fn agent_lands_with_an_inherited_failure(ticket: u32, file: &str) -> String {
+    format!(
+        "{}{}{}",
+        agent_lands(ticket, file),
+        checks_on_head(RED),
+        checks_on_origin("issue-20", RED)
+    )
+}
+
+/// A Spec #20 whose one Ticket, #21, lands with an Inherited failure.
 fn spec_whose_ticket_inherits_a_failure() -> Scenario {
     let scenario = spec_of(&[(21, &[])]);
-    scenario.agent_does_for(
-        21,
-        &format!(
-            "{}{}{}",
-            agent_lands(21, "first.txt"),
-            checks_on_head(RED),
-            checks_on_origin("issue-20", RED)
-        ),
-    );
+    scenario.agent_does_for(21, &agent_lands_with_an_inherited_failure(21, "first.txt"));
     scenario
 }
 
-/// The agent, on the Base fix issue #22, the next after the Ticket, commits
+/// The agent, on the Base fix issue `fix`, the next after the Tickets, commits
 /// a fix and opens its PR into the Spec branch, with `test` green on its head.
-fn base_fix_lands_on_the_spec_branch(scenario: &Scenario) {
+fn base_fix_lands_on_the_spec_branch(scenario: &Scenario, fix: u32) {
     scenario.agent_does_for(
-        22,
+        fix,
         &format!(
             r#"
 echo "fixed" > ci-fix.txt
 git add ci-fix.txt
 git commit -q -m "Fix CI on the Spec branch"
-gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22"
+gh pr create --base issue-20 --head issue-{fix} --title "Fix CI" --body "Closes #{fix}"
 {}"#,
             checks_on_head(GREEN)
         ),
@@ -574,7 +678,7 @@ gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22
 #[test]
 fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
     let scenario = spec_whose_ticket_inherits_a_failure();
-    base_fix_lands_on_the_spec_branch(&scenario);
+    base_fix_lands_on_the_spec_branch(&scenario, 22);
 
     let result = scenario.run(&[&spec_url(&scenario), "base-fix"]);
 
@@ -600,7 +704,7 @@ fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branc
 #[test]
 fn a_ticket_that_landed_after_a_base_fix_says_so_in_the_notification_and_the_checklist() {
     let scenario = spec_whose_ticket_inherits_a_failure();
-    base_fix_lands_on_the_spec_branch(&scenario);
+    base_fix_lands_on_the_spec_branch(&scenario, 22);
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
 
     let result = run_emailing(
@@ -738,7 +842,7 @@ fn a_shared_base_fix_that_fails_fails_the_ticket_that_started_it_and_the_one_wai
 fn base_fix_in_the_user_config_gives_a_tickets_inherited_failure_a_base_fix() {
     let scenario = spec_whose_ticket_inherits_a_failure();
     scenario.user_config_is("[base]\nfix = true\n");
-    base_fix_lands_on_the_spec_branch(&scenario);
+    base_fix_lands_on_the_spec_branch(&scenario, 22);
 
     let result = scenario.run(&[&spec_url(&scenario)]);
 
