@@ -18,16 +18,15 @@ use crate::progress;
 use crate::prompt;
 use crate::run;
 use crate::session::{Logs, Sessions};
-use crate::spec_run::UNREADY_LABELS;
+use crate::spec_run::{self, NEEDS_TRIAGE};
 use crate::worktree::ReviewWorktree;
 
 /// The Architecture review session's kind, in its progress lines and log
 /// name.
 const REVIEW: &str = "architecture-review";
 
-/// The triage label the Architecture review publishes its plan with, and the
-/// one thirdshift swaps it for once the plan passes its checks.
-const NEEDS_TRIAGE: &str = "needs-triage";
+/// The triage label thirdshift swaps the plan's `needs-triage` for once the
+/// plan passes its checks.
 const READY_FOR_AGENT: &str = "ready-for-agent";
 
 /// Run an Architecture review of the branch checked out in the Launch
@@ -91,7 +90,7 @@ fn review(
         )),
         None => progress::step(format_args!("starting the Architecture review of {base}")),
     }
-    sessions.final_message(REVIEW, &prompt::architecture_review(base, focus), log)
+    sessions.run_to_final_message(REVIEW, &prompt::architecture_review(base, focus), log)
 }
 
 /// What an Architecture review reported in the last line of its final
@@ -126,18 +125,43 @@ impl Report {
 }
 
 /// Mark ready the plan that the review's `final_message` names, and return
-/// its URL: check it, then swap its `needs-triage` for `ready-for-agent`.
-/// Fails, changing no label, without a final line naming a plan, or if the
-/// plan fails its checks: it is in the repository at `origin`, open, created
-/// since the Architect run `started`, and has no label that makes an Unready
-/// Ticket other than `needs-triage`.
+/// its URL: check it, then swap its `needs-triage` for `ready-for-agent`, in
+/// one request. Fails, changing no label, without a final line naming a
+/// plan, or if the plan fails its checks.
 fn mark_plan_ready(
     final_message: Option<&str>,
     origin: &str,
     started: DateTime<Utc>,
 ) -> Result<String> {
-    let plan = match final_message.and_then(Report::read) {
-        Some(Report::Plan(plan)) => plan,
+    let plan = reported_plan(final_message)?;
+    progress::step(format_args!(
+        "the Architecture review published the plan {}",
+        plan.url
+    ));
+    let kept = labels_to_keep(&plan, origin, started)?;
+    if interrupt::requested() {
+        bail!("interrupted");
+    }
+    progress::step(format_args!(
+        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} on #{}",
+        plan.number
+    ));
+    let mut labels: Vec<&str> = kept
+        .iter()
+        .map(String::as_str)
+        .filter(|&label| label != READY_FOR_AGENT)
+        .collect();
+    labels.push(READY_FOR_AGENT);
+    github::set_labels(&plan, &labels)?;
+    Ok(plan.url)
+}
+
+/// The plan the last line of the review's `final_message` names. Fails if
+/// the session had no final message, if its last line is not one the prompt
+/// asks for, or if that line names an issue that is not a plan.
+fn reported_plan(final_message: Option<&str>) -> Result<IssueUrl> {
+    match final_message.and_then(Report::read) {
+        Some(Report::Plan(plan)) => Ok(plan),
         Some(Report::Idea(idea)) => bail!(
             "the Architecture review published no plan: it filed the idea {}",
             idea.url
@@ -147,18 +171,21 @@ fn mark_plan_ready(
             issue.url
         ),
         None => bail!("the Architecture review ended without a final line naming its plan"),
-    };
-    progress::step(format_args!(
-        "the Architecture review published the plan {}",
-        plan.url
-    ));
+    }
+}
+
+/// The labels `plan` keeps once it is marked ready: all it has but
+/// `needs-triage`. Fails unless the plan passes its checks: it is in the
+/// repository at `origin`, open, created since the Architect run `started`,
+/// and has no other label that makes an Unready Ticket.
+fn labels_to_keep(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<Vec<String>> {
     if !plan.matches_origin(origin) {
         bail!(
             "the plan {} is not in the repository at origin {origin}",
             plan.url
         );
     }
-    let issue = github::issue(&plan)?;
+    let issue = github::issue(plan)?;
     if !issue.is_open {
         bail!("the plan {} is closed", plan.url);
     }
@@ -169,28 +196,12 @@ fn mark_plan_ready(
             plan.url
         );
     }
-    let unready = UNREADY_LABELS
-        .iter()
-        .find(|&&unready| unready != NEEDS_TRIAGE && issue.labels.iter().any(|l| l == unready));
-    if let Some(unready) = unready {
+    let mut kept = issue.labels;
+    kept.retain(|label| label != NEEDS_TRIAGE);
+    if let Some(unready) = spec_run::unready_label(&kept) {
         bail!("the plan {} is labelled {unready}", plan.url);
     }
-    if interrupt::requested() {
-        bail!("interrupted");
-    }
-    progress::step(format_args!(
-        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} on #{}",
-        plan.number
-    ));
-    let mut labels: Vec<&str> = issue
-        .labels
-        .iter()
-        .map(String::as_str)
-        .filter(|&label| label != NEEDS_TRIAGE && label != READY_FOR_AGENT)
-        .collect();
-    labels.push(READY_FOR_AGENT);
-    github::set_labels(&plan, &labels)?;
-    Ok(plan.url)
+    Ok(kept)
 }
 
 #[cfg(test)]

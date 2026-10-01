@@ -10,31 +10,32 @@ use serde_json::Value;
 
 use crate::issue::IssueUrl;
 
-/// Whether `issue` is open.
-pub fn issue_is_open(issue: &IssueUrl) -> Result<bool> {
-    let json = gh_json(&[
+/// The `fields` of `issue`, as JSON.
+fn issue_view(issue: &IssueUrl, fields: &str) -> Result<Value> {
+    gh_json(&[
         "issue",
         "view",
         &issue.number.to_string(),
         "--repo",
         &issue.repo_slug(),
         "--json",
-        "state",
-    ])?;
+        fields,
+    ])
+}
+
+/// Whether the issue `json` describes, with its `state`, is open.
+fn state_is_open(json: &Value) -> Result<bool> {
     Ok(json["state"].as_str().context("gh output has no state")? == "OPEN")
+}
+
+/// Whether `issue` is open.
+pub fn issue_is_open(issue: &IssueUrl) -> Result<bool> {
+    state_is_open(&issue_view(issue, "state")?)
 }
 
 /// The title of `issue`.
 pub fn issue_title(issue: &IssueUrl) -> Result<String> {
-    let json = gh_json(&[
-        "issue",
-        "view",
-        &issue.number.to_string(),
-        "--repo",
-        &issue.repo_slug(),
-        "--json",
-        "title",
-    ])?;
+    let json = issue_view(issue, "title")?;
     Ok(json["title"]
         .as_str()
         .context("gh output has no title")?
@@ -51,20 +52,12 @@ pub struct Issue {
 
 /// `issue`'s state, labels and when it was created.
 pub fn issue(issue: &IssueUrl) -> Result<Issue> {
-    let json = gh_json(&[
-        "issue",
-        "view",
-        &issue.number.to_string(),
-        "--repo",
-        &issue.repo_slug(),
-        "--json",
-        "state,labels,createdAt",
-    ])?;
+    let json = issue_view(issue, "state,labels,createdAt")?;
     let created = json["createdAt"]
         .as_str()
         .context("gh output has no createdAt")?;
     Ok(Issue {
-        is_open: json["state"].as_str().context("gh output has no state")? == "OPEN",
+        is_open: state_is_open(&json)?,
         labels: json["labels"]
             .as_array()
             .context("gh output has no labels")?

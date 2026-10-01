@@ -72,13 +72,13 @@ const PLACEHOLDERS: [&str; 15] = [
     PROMPT,
 ];
 
-/// A prompt as the page shows it: when a Run sends it, from which units, and
-/// its text with placeholders.
+/// A prompt as the page shows it: when it is sent, from which units, and its
+/// text with placeholders.
 struct Prompt {
     id: &'static str,
     title: &'static str,
     when: &'static str,
-    /// None for the prompt an Architect run sends: the press units are a
+    /// Empty for the prompt an Architect run sends: the press units are a
     /// Run's.
     units: &'static [Unit],
     text: String,

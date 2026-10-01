@@ -20,9 +20,9 @@ use crate::prompt;
 /// config's `logs.dir` or `~/.thirdshift/logs`, each named for what is run
 /// and its `timestamp`.
 pub struct Logs<'a> {
-    /// `<owner>-<repo>-issue-<n>` for a Run, `<owner>-<repo>-architect` for
-    /// an Architect run.
-    run: String,
+    /// What every log's name starts with: `<owner>-<repo>-issue-<n>` for a
+    /// Run, `<owner>-<repo>-architect` for an Architect run.
+    name: String,
     dir: &'a Path,
     timestamp: &'a str,
 }
@@ -31,7 +31,7 @@ impl<'a> Logs<'a> {
     /// The logs of the Run on `issue` that started at `timestamp`.
     pub fn of_run(issue: &IssueUrl, dir: &'a Path, timestamp: &'a str) -> Self {
         Logs {
-            run: format!("{}-{}-issue-{}", issue.owner, issue.repo, issue.number),
+            name: format!("{}-{}-issue-{}", issue.owner, issue.repo, issue.number),
             dir,
             timestamp,
         }
@@ -40,17 +40,17 @@ impl<'a> Logs<'a> {
     /// The logs of the Architect run on `repo` that started at `timestamp`.
     pub fn of_architect_run(repo: &Repo, dir: &'a Path, timestamp: &'a str) -> Self {
         Logs {
-            run: format!("{}-{}-architect", repo.owner, repo.name),
+            name: format!("{}-{}-architect", repo.owner, repo.name),
             dir,
             timestamp,
         }
     }
 
     /// Where a session's stream is logged:
-    /// `<dir>/<run>-<timestamp>-<kind>.jsonl`.
+    /// `<dir>/<name>-<timestamp>-<kind>.jsonl`.
     pub fn path(&self, kind: &str) -> PathBuf {
         self.dir
-            .join(format!("{}-{}-{kind}.jsonl", self.run, self.timestamp))
+            .join(format!("{}-{}-{kind}.jsonl", self.name, self.timestamp))
     }
 }
 
@@ -69,12 +69,12 @@ impl Sessions<'_> {
     /// as `<kind>-resume`; if that ends the same way, this fails and names the
     /// killed work.
     pub fn run(&self, kind: &str, prompt: &str, log: &mut PathBuf) -> Result<()> {
-        self.final_message(kind, prompt, log).map(drop)
+        self.run_to_final_message(kind, prompt, log).map(drop)
     }
 
     /// Run a session as [`Sessions::run`] does, and return its final message:
     /// what the agent said as it ended its last turn, if anything.
-    pub fn final_message(
+    pub fn run_to_final_message(
         &self,
         kind: &str,
         prompt: &str,
