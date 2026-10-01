@@ -278,14 +278,20 @@ fn fence(text: &str) -> String {
     "`".repeat(longest.max(2) + 1)
 }
 
-/// The unit whose session uses each Factory skill, and when, if not always.
-fn skill_unit(skill: &str) -> (Unit, Option<&'static str>) {
-    match skill {
+/// What uses each Factory skill: the unit whose session does, linked, and
+/// when, if not always; or the Architecture review, which is no unit of a Run.
+fn skill_user(skill: &str) -> String {
+    let (unit, note) = match skill {
         "implement" | "tdd" => (IMPLEMENT, None),
         "code-review" | "pr" => (REVIEW, None),
         "resolving-merge-conflicts" => (FINISH, Some("in a Repair")),
-        _ => panic!("the Factory skill {skill} has no unit: add it to skill_unit"),
-    }
+        "improve-codebase-architecture" | "to-spec" | "to-tickets" | "codebase-design" => {
+            return "the Architecture review, in an Architect run".to_string();
+        }
+        _ => panic!("the Factory skill {skill} has no user: add it to skill_user"),
+    };
+    let note = note.map_or(String::new(), |note| format!(", {note}"));
+    format!("{}{note}", unit_links(&[unit]))
 }
 
 /// The fragment: the command line, the prompts, the skills, and the skills'
@@ -367,15 +373,13 @@ fn skills_section(html: &mut String) {
     skills.sort_by_key(|dir| dir.path());
     for skill in skills {
         let name = skill.path().to_string_lossy();
-        let (unit, note) = skill_unit(&name);
-        let note = note.map_or(String::new(), |note| format!(", {note}"));
         let _ = write!(
             html,
             r##"      <article class="job-sheet" id="skill-{name}" aria-labelledby="skill-{name}-title">
         <h3 id="skill-{name}-title">{name}</h3>
-        <p class="sent-by">Used by {unit}{note}</p>
+        <p class="sent-by">Used by {user}</p>
 "##,
-            unit = unit_links(&[unit]),
+            user = skill_user(&name),
         );
         let mut files = Vec::new();
         collect_files(skill, &mut files);

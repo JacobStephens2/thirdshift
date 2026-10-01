@@ -308,6 +308,216 @@ Reporting them separately stops one axis from masking the other.
   short_description: "Review a diff on standards and spec"
 </code></pre>
       </article>
+      <article class="job-sheet" id="skill-codebase-design" aria-labelledby="skill-codebase-design-title">
+        <h3 id="skill-codebase-design-title">codebase-design</h3>
+        <p class="sent-by">Used by the Architecture review, in an Architect run</p>
+        <h4 id="file-codebase-design-skill-md"><code>codebase-design/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: codebase-design
+description: Shared vocabulary for designing deep modules. Use when designing or improving a module's interface, finding deepening opportunities, deciding where a seam goes, making code more testable or AI-navigable, or when another skill needs the deep-module vocabulary.
+---
+
+# Codebase Design
+
+Design **deep modules**: a lot of behaviour behind a small interface, placed at a clean seam, testable through that interface. Use this language and these principles wherever code is being designed or restructured. The aim is leverage for callers, locality for maintainers, and testability for everyone.
+
+## Glossary
+
+Use these terms exactly: don't substitute "component," "service," "API," or "boundary." Consistent language is the whole point.
+
+**Module**: anything with an interface and an implementation. Deliberately scale-agnostic: a function, class, package, or tier-spanning slice. _Avoid_: unit, component, service.
+
+**Interface**: everything a caller must know to use the module correctly: the type signature, but also invariants, ordering constraints, error modes, required configuration, and performance characteristics. _Avoid_: API, signature (too narrow, they refer only to the type-level surface).
+
+**Implementation**: what's inside a module, its body of code. Distinct from **Adapter**: a thing can be a small adapter with a large implementation (a Postgres repo) or a large adapter with a small implementation (an in-memory fake). Reach for "adapter" when the seam is the topic; "implementation" otherwise.
+
+**Depth**: leverage at the interface. The amount of behaviour a caller (or test) can exercise per unit of interface they have to learn. A module is **deep** when a large amount of behaviour sits behind a small interface, **shallow** when the interface is nearly as complex as the implementation.
+
+**Seam** _(Michael Feathers)_: a place where you can alter behaviour without editing in that place; the *location* at which a module's interface lives. Where to put the seam is its own design decision, distinct from what goes behind it. _Avoid_: boundary (overloaded with DDD's bounded context).
+
+**Adapter**: a concrete thing that satisfies an interface at a seam. Describes *role* (what slot it fills), not substance (what's inside).
+
+**Leverage**: what callers get from depth. More capability per unit of interface they learn. One implementation pays back across N call sites and M tests.
+
+**Locality**: what maintainers get from depth. Change, bugs, knowledge, and verification concentrate in one place rather than spreading across callers. Fix once, fixed everywhere.
+
+## Deep vs shallow
+
+**Deep module** = small interface + lots of implementation:
+
+```
+┌─────────────────────┐
+│   Small Interface   │  ← Few methods, simple params
+├─────────────────────┤
+│                     │
+│  Deep Implementation│  ← Complex logic hidden
+│                     │
+└─────────────────────┘
+```
+
+**Shallow module** = large interface + little implementation (avoid):
+
+```
+┌─────────────────────────────────┐
+│       Large Interface           │  ← Many methods, complex params
+├─────────────────────────────────┤
+│  Thin Implementation            │  ← Just passes through
+└─────────────────────────────────┘
+```
+
+When designing an interface, ask:
+
+- Can I reduce the number of methods?
+- Can I simplify the parameters?
+- Can I hide more complexity inside?
+
+## Principles
+
+- **Depth is a property of the interface, not the implementation.** A deep module can be internally composed of small, mockable, swappable parts; they just aren't part of the interface. A module can have **internal seams** (private to its implementation, used by its own tests) as well as the **external seam** at its interface.
+- **The deletion test.** Imagine deleting the module. If complexity vanishes, it was a pass-through. If complexity reappears across N callers, it was earning its keep.
+- **The interface is the test surface.** Callers and tests cross the same seam. If you want to test *past* the interface, the module is probably the wrong shape.
+- **One adapter means a hypothetical seam. Two adapters means a real one.** Don't introduce a seam unless something actually varies across it.
+
+## Designing for testability
+
+Good interfaces make testing natural:
+
+1. **Accept dependencies, don't create them.**
+
+   ```typescript
+   // Testable
+   function processOrder(order, paymentGateway) {}
+
+   // Hard to test
+   function processOrder(order) {
+     const gateway = new StripeGateway();
+   }
+   ```
+
+2. **Return results, don't produce side effects.**
+
+   ```typescript
+   // Testable
+   function calculateDiscount(cart): Discount {}
+
+   // Hard to test
+   function applyDiscount(cart): void {
+     cart.total -= discount;
+   }
+   ```
+
+3. **Small surface area.** Fewer methods = fewer tests needed. Fewer params = simpler test setup.
+
+## Relationships
+
+- A **Module** has exactly one **Interface** (the surface it presents to callers and tests).
+- **Depth** is a property of a **Module**, measured against its **Interface**.
+- A **Seam** is where a **Module**'s **Interface** lives.
+- An **Adapter** sits at a **Seam** and satisfies the **Interface**.
+- **Depth** produces **Leverage** for callers and **Locality** for maintainers.
+
+## Rejected framings
+
+- **Depth as ratio of implementation-lines to interface-lines** (Ousterhout): rewards padding the implementation. We use depth-as-leverage instead.
+- **"Interface" as the TypeScript `interface` keyword or a class's public methods**: too narrow: interface here includes every fact a caller must know.
+- **"Boundary"**: overloaded with DDD's bounded context. Say **seam** or **interface**.
+
+## Going deeper
+
+- **Deepening a cluster given its dependencies**, see [DEEPENING.md](DEEPENING.md): dependency categories, seam discipline, and replace-don't-layer testing.
+- **Exploring alternative interfaces**, see [DESIGN-IT-TWICE.md](DESIGN-IT-TWICE.md): spin up parallel sub-agents to design the interface several radically different ways, then compare on depth, locality, and seam placement.
+</code></pre>
+        <h4 id="file-codebase-design-deepening-md"><code>codebase-design/DEEPENING.md</code></h4>
+        <pre class="job-text"><code># Deepening
+
+How to deepen a cluster of shallow modules safely, given its dependencies. Assumes the vocabulary in [SKILL.md](SKILL.md): **module**, **interface**, **seam**, **adapter**.
+
+## Dependency categories
+
+When assessing a candidate for deepening, classify its dependencies. The category determines how the deepened module is tested across its seam.
+
+### 1. In-process
+
+Pure computation, in-memory state, no I/O. Always deepenable: merge the modules and test through the new interface directly. No adapter needed.
+
+### 2. Local-substitutable
+
+Dependencies that have local test stand-ins (PGLite for Postgres, in-memory filesystem). Deepenable if the stand-in exists. The deepened module is tested with the stand-in running in the test suite. The seam is internal; no port at the module's external interface.
+
+### 3. Remote but owned (Ports &amp; Adapters)
+
+Your own services across a network boundary (microservices, internal APIs). Define a **port** (interface) at the seam. The deep module owns the logic; the transport is injected as an **adapter**. Tests use an in-memory adapter. Production uses an HTTP/gRPC/queue adapter.
+
+Recommendation shape: *"Define a port at the seam, implement an HTTP adapter for production and an in-memory adapter for testing, so the logic sits in one deep module even though it's deployed across a network."*
+
+### 4. True external (Mock)
+
+Third-party services (Stripe, Twilio, etc.) you don't control. The deepened module takes the external dependency as an injected port; tests provide a mock adapter.
+
+## Seam discipline
+
+- **One adapter means a hypothetical seam. Two adapters means a real one.** Don't introduce a port unless at least two adapters are justified (typically production + test). A single-adapter seam is just indirection.
+- **Internal seams vs external seams.** A deep module can have internal seams (private to its implementation, used by its own tests) as well as the external seam at its interface. Don't expose internal seams through the interface just because tests use them.
+
+## Testing strategy: replace, don't layer
+
+- Old unit tests on shallow modules become waste once tests at the deepened module's interface exist; delete them.
+- Write new tests at the deepened module's interface. The **interface is the test surface**.
+- Tests assert on observable outcomes through the interface, not internal state.
+- Tests should survive internal refactors, since they describe behaviour, not implementation. If a test has to change when the implementation changes, it's testing past the interface.
+</code></pre>
+        <h4 id="file-codebase-design-design-it-twice-md"><code>codebase-design/DESIGN-IT-TWICE.md</code></h4>
+        <pre class="job-text"><code># Design It Twice
+
+To explore alternative interfaces for a chosen deepening candidate, use this parallel sub-agent pattern. Based on "Design It Twice" (Ousterhout): your first idea is unlikely to be the best.
+
+Uses the vocabulary in [SKILL.md](SKILL.md): **module**, **interface**, **seam**, **adapter**, **leverage**.
+
+## Process
+
+### 1. Frame the problem space
+
+Before spawning sub-agents, write down the problem space for the chosen candidate:
+
+- The constraints any new interface would need to satisfy
+- The dependencies it would rely on, and which category they fall into (see [DEEPENING.md](DEEPENING.md))
+- A rough illustrative code sketch to ground the constraints, not a proposal, just a way to make the constraints concrete
+
+Nobody is there to read it, so don't wait: proceed to Step 2. It is what you compare the designs against in Step 3.
+
+### 2. Spawn sub-agents
+
+Spawn 3+ sub-agents in parallel. Each must produce a **radically different** interface for the deepened module.
+
+Prompt each sub-agent with a separate technical brief (file paths, coupling details, dependency category from [DEEPENING.md](DEEPENING.md), what sits behind the seam). The brief is independent of the problem-space explanation in Step 1. Give each agent a different design constraint:
+
+- Agent 1: "Minimize the interface: aim for 1–3 entry points max. Maximise leverage per entry point."
+- Agent 2: "Maximise flexibility: support many use cases and extension."
+- Agent 3: "Optimise for the most common caller: make the default case trivial."
+- Agent 4 (if applicable): "Design around ports &amp; adapters for cross-seam dependencies."
+
+Include both [SKILL.md](SKILL.md) vocabulary and CONTEXT.md vocabulary in the brief so each sub-agent names things consistently with the architecture language and the project's domain language.
+
+Each sub-agent outputs:
+
+1. Interface (types, methods, params, plus invariants, ordering, error modes)
+2. Usage example showing how callers use it
+3. What the implementation hides behind the seam
+4. Dependency strategy and adapters (see [DEEPENING.md](DEEPENING.md))
+5. Trade-offs: where leverage is high, where it's thin
+
+### 3. Compare and decide
+
+Compare the designs in prose. Contrast by **depth** (leverage at the interface), **locality** (where change concentrates), and **seam placement**.
+
+After comparing, decide: which design is strongest and why. If elements from different designs would combine well, take a hybrid. Be opinionated: the choice is yours to make, and nobody picks from a menu. Record the decision and its reason, with the designs you turned down and why.
+</code></pre>
+        <h4 id="file-codebase-design-agents-openai-yaml"><code>codebase-design/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "Codebase Design"
+  short_description: "Vocabulary for deep-module design"
+</code></pre>
+      </article>
       <article class="job-sheet" id="skill-implement" aria-labelledby="skill-implement-title">
         <h3 id="skill-implement-title">implement</h3>
         <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
@@ -332,6 +542,262 @@ Commit your work to the current branch.
         <pre class="job-text"><code>interface:
   display_name: "Implement"
   short_description: "Build work from a spec or tickets"
+policy:
+  allow_implicit_invocation: true
+</code></pre>
+      </article>
+      <article class="job-sheet" id="skill-improve-codebase-architecture" aria-labelledby="skill-improve-codebase-architecture-title">
+        <h3 id="skill-improve-codebase-architecture-title">improve-codebase-architecture</h3>
+        <p class="sent-by">Used by the Architecture review, in an Architect run</p>
+        <h4 id="file-improve-codebase-architecture-skill-md"><code>improve-codebase-architecture/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: improve-codebase-architecture
+description: "Scan a codebase for deepening opportunities, take the top recommendation, and publish it to the issue tracker: as a plan when it is Strong, as an idea otherwise."
+disable-model-invocation: false
+---
+
+# Improve Codebase Architecture
+
+Surface architectural friction and propose **deepening opportunities**: refactors that turn shallow modules into deep ones. The aim is testability and AI-navigability.
+
+This is an **Architecture review**. It runs headless: nobody reads a report, picks a candidate or answers a question. Never open a browser, ask a question or wait for an answer. Every decision is yours, and each one is written down with its reason.
+
+It changes nothing in the repository. Never commit, push, create a branch or open a pull request, and never edit `CONTEXT.md` or an ADR: any change the refactor needs to them is work for a Ticket. The worktree is thrown away when the session ends, so a throwaway prototype in it is fine, and nothing in it survives. What the review produces is issues on the issue tracker.
+
+This command is _informed_ by the project's domain model and built on a shared design vocabulary:
+
+- Call the Skill tool with "thirdshift:codebase-design" for the architecture vocabulary (**module**, **interface**, **depth**, **seam**, **adapter**, **leverage**, **locality**) and its principles (the deletion test, "the interface is the test surface", "one adapter = hypothetical seam, two = real"). Use these terms exactly in every suggestion, and don't drift into "component," "service," "API," or "boundary."
+- The domain language in `CONTEXT.md` gives names to good seams; ADRs in `docs/adr/` record decisions this command should not re-litigate.
+
+The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to the `gh` CLI. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
+
+## Process
+
+### 1. Explore
+
+**Scope before you scan: YAGNI.** Deepening a module pays off by making future changes to it easier, so put extra weight on the parts of the codebase that have recently changed. Decide *where* to look before you look:
+
+- If the Session prompt named a focus (a module, a subsystem, a pain point), take it, and skip the inference below.
+- Otherwise, walk back a good stretch of the commit history (`git log --oneline`) to find the codebase's hot spots, the files and areas that keep coming up, and let those paths pull your attention first. If the changes are scattered with no clear hot spot, widen the net.
+
+Read the project's domain glossary (`CONTEXT.md`) and any ADRs in the area you're touching first.
+
+Read the open issues too, titles and bodies: Specs, Tickets and ideas alike, whatever their labels. They are what a candidate may already be covered by.
+
+Then spawn a sub-agent to walk the codebase. Don't follow rigid heuristics; explore organically and note where you experience friction:
+
+- Where does understanding one concept require bouncing between many small modules?
+- Where are modules **shallow**, with an interface nearly as complex as the implementation?
+- Where have pure functions been extracted just for testability, but the real bugs hide in how they're called (no **locality**)?
+- Where do tightly-coupled modules leak across their seams?
+- Which parts of the codebase are untested, or hard to test through their current interface?
+
+Apply the **deletion test** to anything you suspect is shallow: would deleting it concentrate complexity, or just move it? A "yes, concentrates" is the signal you want.
+
+### 2. Take the top recommendation
+
+Weigh the candidates in the session. Write no report file. For each candidate, settle:
+
+- **Files**: which files/modules are involved
+- **Problem**: why the current architecture is causing friction
+- **Solution**: plain English description of what would change
+- **Benefits**: explained in terms of locality and leverage, and how tests would improve
+- **Recommendation strength**: one of `Strong`, `Worth exploring`, `Speculative`
+- **Covered by**: the open issue that already covers it, if one does
+
+A candidate is **Strong** only when all of these hold:
+
+- The friction is real and you can point to it in the code.
+- The deepening passes the deletion test.
+- You can settle its whole design from the code, `CONTEXT.md` and the ADRs. A candidate with a decision only a human can make is `Worth exploring` at most.
+- It contradicts no ADR, or the friction is real enough to warrant reopening that ADR.
+
+A candidate is **covered** when an open issue proposes the same deepening of the same modules, whether as a Spec, a Ticket or an idea. An issue that only touches the same files doesn't cover it.
+
+Rank the candidates: which you'd tackle first and why. Then take the **top recommendation**:
+
+1. The highest-ranked `Strong` candidate that no open issue covers. It becomes the plan: go on to step 3.
+2. If there is none, the highest-ranked candidate of all. If an open issue covers it, file nothing: go to step 6 and name that issue. Otherwise it becomes an idea: go to step 5.
+
+Every other candidate is dropped. Don't file it, and don't list it in the plan or the idea: the next Architecture review starts from the codebase as it is by then.
+
+If the scan surfaced no candidate at all, file nothing and say so plainly in place of the final line.
+
+**Use CONTEXT.md vocabulary for the domain, and the `/thirdshift:codebase-design` vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
+
+**ADR conflicts**: if a candidate contradicts an existing ADR, only keep it when the friction is real enough to warrant revisiting the ADR. Mark it clearly in the report (e.g. a warning callout: _"contradicts ADR-0007, but worth reopening because…"_). Don't raise every theoretical refactor an ADR forbids.
+
+Do NOT propose interfaces yet.
+
+### 3. Settle the design
+
+Only for a `Strong` top recommendation.
+
+Map the decisions as a **design tree**: every decision branches into the decisions that hang off it. Walk it: constraints, dependencies, the shape of the deepened module, what sits behind the seam, what tests survive.
+
+Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled. Settle the whole frontier yourself, then recompute it. Finding _facts_ is a lookup: when a decision needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent to find it. The _decisions_ are yours too. For each one, write down what you decided and why. The design is settled when the frontier is empty: every branch of the design tree visited, nothing left silently assumed.
+
+If a decision turns out to need a human, the candidate was not `Strong`: make it `Worth exploring` and take the top recommendation again, from step 2.
+
+Side effects are recorded, never written:
+
+- **Naming a deepened module after a concept not in `CONTEXT.md`?** Record the term and its definition as work for a Ticket.
+- **Sharpening a fuzzy term as you decide?** Record the sharper definition as work for a Ticket.
+- **Reopening an ADR, or making a decision worth one?** Record the new or changed ADR as work for a Ticket. A decision is worth an ADR only when it is hard to reverse, surprising without context, and the result of a real trade-off.
+- **Want to explore alternative interfaces for the deepened module?** Call the Skill tool with "thirdshift:codebase-design" and use its design-it-twice parallel sub-agent pattern.
+
+### 4. Publish the plan
+
+Only for a `Strong` top recommendation whose design is settled.
+
+Decide the plan's size. If one session, a single fresh context window, is enough for the whole change, the plan is a single **Ticket**. Otherwise it is a **Spec** with **Tickets**. Don't force a small refactor into a Spec.
+
+- **A Spec with Tickets**: call the Skill tool with "thirdshift:to-spec" to publish the Spec, then with "thirdshift:to-tickets" to publish its Tickets as the Spec's sub-issues.
+- **A single Ticket**: call the Skill tool with "thirdshift:to-tickets" to publish one standalone Ticket, with no parent.
+
+The plan's top issue, the Spec or the single Ticket, is labelled `needs-triage` and nothing else. thirdshift marks it ready once the session has ended and the plan passes its checks; you never do. Tickets under a Spec are labelled `ready-for-agent`.
+
+The plan's top issue carries, whichever shape it takes:
+
+- **Every decision from step 3, each with its reason.** In a Spec, under Implementation Decisions and Testing Decisions. In a single Ticket, under a `## Decisions` heading after the acceptance criteria.
+- **The report**: the candidate's card as Markdown with a Mermaid before/after diagram. In a Spec, under Further Notes. In a single Ticket, under a `## Architecture review` heading at the end. See [REPORT.md](REPORT.md) for the card.
+- **The `CONTEXT.md` and ADR changes** recorded in step 3, as part of a Ticket's work, so they land through its pull request.
+
+### 5. File the idea
+
+Only for a top recommendation that is not `Strong` and that no open issue covers.
+
+Publish one issue to the issue tracker, labelled `needs-triage`, for a human to flesh out. Its title names the deepening. Its body is the report: the candidate's card as Markdown with a Mermaid before/after diagram, its recommendation strength, and what stopped it being `Strong`. See [REPORT.md](REPORT.md) for the card.
+
+Publish nothing else: no Spec, no Tickets, and no second idea.
+
+### 6. End with the final line
+
+End your final message with the one final line the Session prompt asks for, in exactly the format it gives. The format is defined there and nowhere else. The line names one issue:
+
+- the plan's top issue, when you published a plan;
+- the idea issue, when you filed one;
+- the open issue that already covers the top recommendation, when you filed nothing.
+
+thirdshift reads only that line, so everything else you want read belongs in the issue.
+</code></pre>
+        <h4 id="file-improve-codebase-architecture-report-md"><code>improve-codebase-architecture/REPORT.md</code></h4>
+        <pre class="job-text"><code># Report Format
+
+The architectural review's report is Markdown, written into the issue it publishes: the plan's top issue, or the idea issue. GitHub renders Mermaid in a fenced `mermaid` block, so the diagrams live where the issue is read. Write no file, and open nothing.
+
+The report is one candidate's card: the top recommendation's. The candidates that weren't chosen get no card.
+
+## Candidate card
+
+The diagrams carry the weight. Prose is sparse, plain, and uses the glossary terms (from the `/thirdshift:codebase-design` skill) without ceremony.
+
+```md
+**Strength**: Strong · **Dependencies**: in-process
+
+**Files**: `src/order/handler.rs`, `src/order/validator.rs`, `src/order/repo.rs`
+
+**Before**
+
+&lt;a mermaid block&gt;
+
+**After**
+
+&lt;a mermaid block&gt;
+
+**Problem**: one sentence. What hurts.
+
+**Solution**: one sentence. What changes.
+
+**Wins**
+
+- Tests hit one interface
+- Pricing logic stops leaking
+
+&gt; [!WARNING]
+&gt; Contradicts ADR-0007, but worth reopening because…
+```
+
+- **Strength**: the recommendation strength (`Strong`, `Worth exploring` or `Speculative`), plus the dependency category (`in-process`, `local-substitutable`, `ports &amp; adapters`, `mock`). On an idea issue, add one line saying what stopped it being `Strong`.
+- **Files**: a list in code spans. The report is the one place file paths belong; the rest of a Spec or Ticket leaves them out.
+- **Before / After diagram**: the centrepiece. One Mermaid block each, the same modules in both so the eye can compare. See patterns below.
+- **Problem**: one sentence. What hurts.
+- **Solution**: one sentence. What changes.
+- **Wins**: bullets, ≤6 words each. e.g. "Tests hit one interface", "Pricing logic stops leaking", "Delete 4 shallow wrappers".
+- **ADR callout** (if applicable): one line in a `&gt; [!WARNING]` alert.
+
+No paragraphs of explanation. If the diagram needs a paragraph to be understood, redraw the diagram.
+
+## Diagram patterns
+
+Pick the pattern that fits the candidate. Before and after use the same pattern.
+
+### Flowchart (the workhorse for dependencies / call flow)
+
+Use a Mermaid `flowchart` when the point is "X calls Y calls Z, and look at the mess." Style with `classDef` to colour leakage edges red and give the deep module a thick border. A dashed edge is leakage across a seam.
+
+````md
+```mermaid
+flowchart LR
+  A[OrderHandler] --&gt; B[OrderValidator]
+  B --&gt; C[OrderRepo]
+  C -.leak.-&gt; D[PricingClient]
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class C,D leak
+```
+````
+
+### Sequence diagram (good for round-trips)
+
+Use a `sequenceDiagram` for "before: 6 round-trips; after: 1."
+
+### Subgraph collapse (good for layered shallowness and call-graph collapse)
+
+Before: the shallow modules as separate nodes, each call an edge. After: one `subgraph` labelled with the consolidated responsibility, the now-internal calls inside it, and one edge in from the caller.
+
+````md
+```mermaid
+flowchart LR
+  Caller --&gt; Intake
+  subgraph Intake[Order intake]
+    direction LR
+    validate --&gt; price --&gt; store
+  end
+  classDef deep stroke-width:3px;
+  class Intake deep
+```
+````
+
+## Style guidance
+
+- Keep each diagram small: a dozen nodes at most. Leave out whatever doesn't change between before and after.
+- Colour sparingly: red for leakage, a thick border for the deep module, nothing else.
+- Label nodes with the module's name in the domain language, not a sentence.
+- Check that each block is valid Mermaid before publishing: a diagram that doesn't render is worse than none.
+
+## Tone
+
+Plain English, concise, but the architectural nouns and verbs come straight from the `/thirdshift:codebase-design` skill. Concision is not an excuse to drift.
+
+**Use exactly:** module, interface, implementation, depth, deep, shallow, seam, adapter, leverage, locality.
+
+**Never substitute:** component, service, unit (for module) · API, signature (for interface) · boundary (for seam) · layer, wrapper (for module, when you mean module).
+
+**Phrasings that fit the style:**
+
+- "Order intake module is shallow: interface nearly matches the implementation."
+- "Pricing leaks across the seam."
+- "Deepen: one interface, one place to test."
+- "Two adapters justify the seam: HTTP in prod, in-memory in tests."
+
+**Wins bullets** name the gain in glossary terms: *"locality: bugs concentrate in one module"*, *"leverage: one interface, N call sites"*, *"interface shrinks; implementation absorbs the wrappers"*. Don't write *"easier to maintain"* or *"cleaner code"*, because those terms aren't in the glossary and don't earn their place.
+
+No hedging, no throat-clearing, no "it's worth noting that…". If a sentence could be a bullet, make it a bullet. If a bullet could be cut, cut it. If a term isn't in the `/thirdshift:codebase-design` glossary, reach for one that is before inventing a new one.
+</code></pre>
+        <h4 id="file-improve-codebase-architecture-agents-openai-yaml"><code>improve-codebase-architecture/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "Improve Codebase Architecture"
+  short_description: "Find and publish the top architecture improvement"
 policy:
   allow_implicit_invocation: true
 </code></pre>
@@ -731,6 +1197,209 @@ test("calculateTotal sums line items", () =&gt; {
   expect(calculateTotal([{ price: 10 }, { price: 5 }])).toBe(15);
 });
 ```
+</code></pre>
+      </article>
+      <article class="job-sheet" id="skill-to-spec" aria-labelledby="skill-to-spec-title">
+        <h3 id="skill-to-spec-title">to-spec</h3>
+        <p class="sent-by">Used by the Architecture review, in an Architect run</p>
+        <h4 id="file-to-spec-skill-md"><code>to-spec/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: to-spec
+description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled."
+disable-model-invocation: false
+---
+
+This skill takes the current session context and codebase understanding and produces a spec. Nobody is there to interview or to ask; just synthesize what you already know.
+
+The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to `gh issue create`. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
+
+The spec is all this skill writes. Write nothing to the repository: no files, commits or branches. A `CONTEXT.md` or ADR change the spec needs is work for one of its tickets.
+
+## Process
+
+1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the spec, and respect any ADRs in the area you're touching.
+
+2. Sketch out the seams at which the feature will be tested. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can. The fewer seams across the codebase, the better - the ideal number is one.
+
+Decide the seams yourself and record them, with the reason for each, under Testing Decisions.
+
+3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `needs-triage` triage label and no other: thirdshift marks the spec ready once the session has ended and the plan passes its checks.
+
+&lt;spec-template&gt;
+
+## Problem Statement
+
+The problem that the user is facing, from the user's perspective.
+
+## Solution
+
+The solution to the problem, from the user's perspective.
+
+## User Stories
+
+A LONG, numbered list of user stories. Each user story should be in the format of:
+
+1. As an &lt;actor&gt;, I want a &lt;feature&gt;, so that &lt;benefit&gt;
+
+&lt;user-story-example&gt;
+1. As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending
+&lt;/user-story-example&gt;
+
+This list of user stories should be extremely extensive and cover all aspects of the feature.
+
+## Implementation Decisions
+
+A list of implementation decisions that were made, each with its reason. This can include:
+
+- The modules that will be built/modified
+- The interfaces of those modules that will be modified
+- Architectural decisions
+- Schema changes
+- API contracts
+- Specific interactions
+
+Do NOT include specific file paths or code snippets. They may end up being outdated very quickly.
+
+Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it within the relevant decision and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
+
+## Testing Decisions
+
+A list of testing decisions that were made, each with its reason. Include:
+
+- A description of what makes a good test (only test external behavior, not implementation details)
+- The seams the feature will be tested at
+- Which modules will be tested
+- Prior art for the tests (i.e. similar types of tests in the codebase)
+
+## Out of Scope
+
+A description of the things that are out of scope for this spec.
+
+## Further Notes
+
+Any further notes about the feature.
+
+&lt;/spec-template&gt;
+</code></pre>
+        <h4 id="file-to-spec-agents-openai-yaml"><code>to-spec/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "To Spec"
+  short_description: "Turn a session into a spec"
+policy:
+  allow_implicit_invocation: true
+</code></pre>
+      </article>
+      <article class="job-sheet" id="skill-to-tickets" aria-labelledby="skill-to-tickets-title">
+        <h3 id="skill-to-tickets-title">to-tickets</h3>
+        <p class="sent-by">Used by the Architecture review, in an Architect run</p>
+        <h4 id="file-to-tickets-skill-md"><code>to-tickets/SKILL.md</code></h4>
+        <pre class="job-text"><code>---
+name: to-tickets
+description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links.
+disable-model-invocation: false
+---
+
+# To Tickets
+
+Break a plan, spec, or session into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it.
+
+The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to the `gh` CLI. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
+
+The tickets are all this skill writes. Write nothing to the repository: no files, commits or branches. A `CONTEXT.md` or ADR change the work needs is part of a ticket's work, named in its acceptance criteria.
+
+## Process
+
+### 1. Gather context
+
+Work from whatever is already in the session context. If you were given a reference (an issue number or URL) as an argument, fetch it and read its full body and comments.
+
+### 2. Explore the codebase (optional)
+
+If you have not already explored the codebase, do so to understand the current state of the code. Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
+
+Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
+
+### 3. Draft vertical slices
+
+Break the work into **tracer bullet** tickets.
+
+&lt;vertical-slice-rules&gt;
+
+- Each slice cuts a narrow but COMPLETE path through every layer (schema, API, UI, tests): vertical, NOT a horizontal slice of one layer
+- A completed slice is demoable or verifiable on its own
+- Each slice is sized to fit in a single fresh context window
+- Any prefactoring should be done first
+
+&lt;/vertical-slice-rules&gt;
+
+Give each ticket its **blocking edges**: the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
+
+**Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change (rename a column, retype a shared symbol) whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket; green is promised only there.
+
+When the whole change fits a single fresh context window, the breakdown is one ticket with no blocking edges. Don't split it to make a set.
+
+### 4. Check the breakdown
+
+Nobody is there to approve the breakdown, so check it yourself. Write the proposed breakdown as a numbered list. For each ticket:
+
+- **Title**: short descriptive name
+- **Blocked by**: which other tickets (if any) must complete first
+- **What it delivers**: the end-to-end behaviour this ticket makes work
+
+Answer for yourself:
+
+- Is the granularity right? (too coarse / too fine)
+- Are the blocking edges correct: does each ticket only depend on tickets that genuinely gate it?
+- Should any tickets be merged or split further?
+
+Iterate until every answer holds.
+
+### 5. Publish the tickets to the issue tracker
+
+Publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the issue template below.
+
+The links are native, never only text in a body: thirdshift reads the tracker's own sub-issue and "blocked by" links to order the work, and ignores what a body says.
+
+- **Parent**: when the tickets come from a spec's issue, make each one a sub-issue of it: `gh api --method POST repos/&lt;owner&gt;/&lt;repo&gt;/issues/&lt;spec&gt;/sub_issues -F sub_issue_id=&lt;ticket-db-id&gt;`.
+- **Blocked by**: add each blocking edge as an issue dependency: `gh api --method POST repos/&lt;owner&gt;/&lt;repo&gt;/issues/&lt;ticket&gt;/dependencies/blocked_by -F issue_id=&lt;blocker-db-id&gt;`.
+
+Both take the issue's numeric **database id** (`gh api repos/&lt;owner&gt;/&lt;repo&gt;/issues/&lt;n&gt; --jq .id`), not its `#number` or `node_id`. Once published, read the links back and fix any that are missing.
+
+Apply the `ready-for-agent` triage label to each ticket of a spec; the tickets are agent-grabbable by construction. A single standalone ticket, with no parent, is the whole plan: label it `needs-triage` and nothing else, as thirdshift marks it ready once the session has ended and the plan passes its checks.
+
+Publish only: don't start work on any ticket.
+
+Do NOT close or modify any parent issue, beyond linking its sub-issues.
+
+&lt;issue-template&gt;
+
+## Parent
+
+A reference to the parent issue on the tracker (if the source was an existing issue, otherwise omit this section).
+
+## What to build
+
+The end-to-end behaviour this ticket makes work, from the user's perspective, not layer-by-layer implementation.
+
+## Acceptance criteria
+
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+## Blocked by
+
+- A reference to each blocking ticket, or "None (can start immediately)".
+
+&lt;/issue-template&gt;
+
+Avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
+</code></pre>
+        <h4 id="file-to-tickets-agents-openai-yaml"><code>to-tickets/agents/openai.yaml</code></h4>
+        <pre class="job-text"><code>interface:
+  display_name: "To Tickets"
+  short_description: "Split a plan into tracer-bullet tickets"
+policy:
+  allow_implicit_invocation: true
 </code></pre>
       </article>
     </div>

@@ -116,6 +116,10 @@ fn loads_every_factory_skill_as_the_thirdshift_plugin() {
         "pr",
         "tdd",
         "resolving-merge-conflicts",
+        "improve-codebase-architecture",
+        "to-spec",
+        "to-tickets",
+        "codebase-design",
     ] {
         let skill_md = files[format!("skills/{skill}/SKILL.md")].as_str();
         assert!(
@@ -123,10 +127,17 @@ fn loads_every_factory_skill_as_the_thirdshift_plugin() {
             "skill {skill} missing from the plugin"
         );
     }
-    assert!(
-        files["skills/tdd/tests.md"].is_string(),
-        "a skill's supporting files are missing"
-    );
+    for supporting in [
+        "skills/tdd/tests.md",
+        "skills/improve-codebase-architecture/REPORT.md",
+        "skills/codebase-design/DEEPENING.md",
+        "skills/codebase-design/DESIGN-IT-TWICE.md",
+    ] {
+        assert!(
+            files[supporting].is_string(),
+            "the supporting file {supporting} is missing from the plugin"
+        );
+    }
 }
 
 #[test]
