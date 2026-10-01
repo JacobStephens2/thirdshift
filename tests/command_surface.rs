@@ -367,6 +367,23 @@ fn help_points_to_running_an_architect_run_on_a_schedule_without_the_recipe() {
 }
 
 #[test]
+fn help_points_to_running_a_pickup_run_on_a_schedule_without_the_recipe() {
+    let scenario = Scenario::new();
+
+    let help = unwrapped_help(&scenario);
+
+    for mention in [
+        "To run a Pickup run on a schedule, have a scheduler, such as cron, run thirdshift pickup base main from the clone",
+        "the README's \"A Pickup run on a schedule\" has a crontab entry",
+    ] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+    for recipe in ["PATH=", "* * *", "pickup-cron.log"] {
+        assert!(!help.contains(recipe), "help repeats {recipe:?}: {help}");
+    }
+}
+
+#[test]
 fn base_on_a_run_is_an_argument_error() {
     let scenario = Scenario::new();
     let url = scenario.issue_url(7);
