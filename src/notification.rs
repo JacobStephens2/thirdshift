@@ -57,13 +57,14 @@ impl RunNotification {
     /// Send the notification for the Run that `ended`. A failed send is only
     /// a warning: it never changes the Run's outcome.
     pub fn send(self, ended: &Result<Reached, FailedRun>) {
-        let (outcome, pr_url, cause, log, tickets) = match ended {
+        let (outcome, pr_url, cause, log, tickets, base_fix) = match ended {
             Ok(reached) => (
                 reached.goal.outcome(),
                 Some(reached.pr_url.as_str()),
                 None,
                 reached.log.as_deref(),
                 &reached.ticket_lines[..],
+                reached.base_fix.as_deref(),
             ),
             Err(failed) => {
                 let (outcome, cause) = if failed.interrupted {
@@ -77,6 +78,7 @@ impl RunNotification {
                     cause,
                     failed.log.as_deref(),
                     &failed.ticket_lines[..],
+                    failed.base_fix.as_deref(),
                 )
             }
         };
@@ -84,6 +86,7 @@ impl RunNotification {
         let body = Body {
             pr_url,
             cause: cause.as_deref(),
+            base_fix,
             log,
             host: host.as_deref().unwrap_or("unknown host"),
             took: self.started.elapsed(),
@@ -113,6 +116,8 @@ fn subject(issue: &IssueUrl, title: Option<&str>, outcome: &str) -> String {
 struct Body<'a> {
     pr_url: Option<&'a str>,
     cause: Option<&'a str>,
+    /// What became of the Base fix the Run started, if it started one.
+    base_fix: Option<&'a str>,
     log: Option<&'a Path>,
     host: &'a str,
     took: Duration,
@@ -128,6 +133,9 @@ impl Body<'_> {
         }
         if let Some(cause) = self.cause {
             text += &format!("Cause:        {cause}\n");
+        }
+        if let Some(base_fix) = self.base_fix {
+            text += &format!("Base fix:     {base_fix}\n");
         }
         if let Some(log) = self.log {
             text += &format!("Session log:  {}\n", log.display());
@@ -182,6 +190,7 @@ mod tests {
         let body = Body {
             pr_url: None,
             cause: Some("origin mismatch"),
+            base_fix: None,
             log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
@@ -209,6 +218,27 @@ mod tests {
     }
 
     #[test]
+    fn the_body_reports_the_base_fix_after_the_cause() {
+        let body = Body {
+            pr_url: Some("https://github.com/acme/widgets/pull/1"),
+            cause: Some("claude exited 1"),
+            base_fix: Some("https://github.com/acme/widgets/issues/8 merged"),
+            log: None,
+            host: "droplet-1",
+            took: Duration::from_secs(4),
+            tickets: &[],
+        };
+        assert_eq!(
+            body.text(),
+            "Pull request: https://github.com/acme/widgets/pull/1\n\
+             Cause:        claude exited 1\n\
+             Base fix:     https://github.com/acme/widgets/issues/8 merged\n\
+             Host:         droplet-1\n\
+             Took:         4s\n"
+        );
+    }
+
+    #[test]
     fn a_spec_runs_body_ends_with_a_line_per_ticket() {
         let tickets = [
             "#21 failed: claude exited 1".to_string(),
@@ -217,6 +247,7 @@ mod tests {
         let body = Body {
             pr_url: None,
             cause: Some("Tickets not done: #21, #22"),
+            base_fix: None,
             log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),

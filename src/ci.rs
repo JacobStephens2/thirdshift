@@ -30,8 +30,10 @@ pub struct FailedChecks {
 /// Wait up to the grace period for any check or status on `sha`, then watch
 /// them until they have all finished. Checks that failed are compared, by
 /// name, with the checks on `base_commit` as they stand: the Base branch's CI
-/// is never waited for or triggered, and no log text is read.
-pub fn watch(issue: &IssueUrl, sha: &str, base_commit: &str) -> Result<Ci> {
+/// is never waited for or triggered, and no log text is read. With no
+/// `base_commit`, as in a Base fix, every check that failed is the branch's
+/// own.
+pub fn watch(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
     let grace = poll::grace_period();
     let short = short(sha);
     progress::step(format_args!(
@@ -73,6 +75,12 @@ pub fn watch(issue: &IssueUrl, sha: &str, base_commit: &str) -> Result<Ci> {
         "CI failed on {short}: {}",
         check_names(&failed)
     ));
+    let Some(base_commit) = base_commit else {
+        return Ok(Ci::Failed(FailedChecks {
+            own: failed,
+            inherited: Vec::new(),
+        }));
+    };
     let on_base = github::checks_on(issue, base_commit)?;
     let (inherited, own) = failed.into_iter().partition(|check| {
         let mut same_name = on_base.iter().filter(|base| base.name == check.name);

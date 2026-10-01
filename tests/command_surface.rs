@@ -186,6 +186,8 @@ fn a_repeated_flag_prints_an_error_and_the_help_to_stderr() {
             vec![url.as_str(), "email", "--email", "b@example.com"],
             "--email",
         ),
+        (vec!["base-fix", url.as_str(), "base-fix"], "base-fix"),
+        (vec![url.as_str(), "base-fix", "--base-fix"], "--base-fix"),
         (
             vec!["parallel", "2", url.as_str(), "parallel", "2"],
             "parallel",

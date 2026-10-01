@@ -26,6 +26,12 @@ pub enum Command {
 /// help.
 pub const SPEC_BRANCH: &str = "--spec-branch";
 
+/// The hidden argument a Run starts its Base fix with, followed by the Run's
+/// Base branch: it makes the Base fix a Merge run into that branch that sends
+/// no Run notification, leaves the Launch directory alone, sees no Inherited
+/// failures and starts no Base fix of its own. Not in help.
+pub const BASE_FIX_INTO: &str = "--base-fix-into";
+
 /// A Run's arguments.
 pub struct RunArgs {
     pub issue: IssueUrl,
@@ -38,8 +44,12 @@ pub struct RunArgs {
     /// How many Tickets a Spec run runs at once, if `parallel <n>` was
     /// given; without it, the User config decides.
     pub parallel: Option<NonZeroUsize>,
+    /// Whether `base-fix` was given: the Run may start a Base fix.
+    pub base_fix: bool,
     /// The Spec branch, given with [`SPEC_BRANCH`] to a Ticket's Run.
     pub spec_branch: Option<String>,
+    /// The Base branch, given with [`BASE_FIX_INTO`] to a Base fix.
+    pub base_fix_into: Option<String>,
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
@@ -73,7 +83,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let mut goal = None;
     let mut email = None;
     let mut parallel = None;
+    let mut base_fix = false;
     let mut spec_branch = None;
+    let mut base_fix_into = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -99,11 +111,23 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 };
                 parallel = Some(n);
             }
+            "base-fix" | "--base-fix" => {
+                if base_fix {
+                    bail!("repeated argument: {arg}");
+                }
+                base_fix = true;
+            }
             SPEC_BRANCH => {
                 if spec_branch.is_some() {
                     bail!("repeated argument: {arg}");
                 }
                 spec_branch = Some(args.next().context("missing Spec branch")?.clone());
+            }
+            BASE_FIX_INTO => {
+                if base_fix_into.is_some() {
+                    bail!("repeated argument: {arg}");
+                }
+                base_fix_into = Some(args.next().context("missing Base branch")?.clone());
             }
             _ => {
                 if issue.is_some() {
@@ -121,7 +145,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
         goal,
         email,
         parallel,
+        base_fix,
         spec_branch,
+        base_fix_into,
     }))
 }
 

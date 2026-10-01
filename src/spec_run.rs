@@ -6,17 +6,17 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::io::{BufRead, BufReader, Read};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
-use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::args;
+use crate::base_fix::BaseFix;
+use crate::child_run::{self, Ended};
 use crate::failed_run::{self, FailedRun};
 use crate::github::{self, PullRequest, Ticket};
 use crate::interrupt;
@@ -27,9 +27,6 @@ use crate::prompt;
 use crate::run::{self, Goal, Reached};
 use crate::session::{Logs, Sessions};
 use crate::worktree::Worktree;
-
-/// How often to check whether a Ticket's Run has ended, or been interrupted.
-const POLL: Duration = Duration::from_millis(100);
 
 /// The triage labels that make an open Ticket an Unready Ticket.
 const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "needs-triage"];
@@ -72,13 +69,16 @@ pub fn all_closed(tickets: &[Ticket]) -> bool {
 /// from the Spec review on goes through the Failed run path. The worktree is
 /// cleaned up when this returns, or kept by the Failed run path if its work
 /// did not reach origin. However it ends, it carries a line on each Ticket
-/// it landed or did not get done, for the Run notification.
+/// it landed or did not get done, for the Run notification. `base_fix` is for
+/// the Spec PR's Repair loop: a Ticket's Run starts no Base fix.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
     worktree: Worktree,
     base: &str,
     goal: Goal,
+    base_fix: &mut BaseFix,
     logs: &Logs,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
@@ -86,7 +86,9 @@ pub fn run(
     let (ticket_lines, landed) =
         land_tickets(spec, tickets, &worktree, base, parallel, &mut spec_pr);
     let ended = match landed {
-        Ok(checklist) => open_and_review(spec, worktree, base, spec_pr, &checklist, goal, logs),
+        Ok(checklist) => open_and_review(
+            spec, worktree, base, spec_pr, &checklist, goal, base_fix, logs,
+        ),
         Err(error) => Err(FailedRun {
             pr_url: spec_pr.map(|pr| pr.url),
             ..FailedRun::from(error)
@@ -95,10 +97,12 @@ pub fn run(
     match ended {
         Ok(reached) => Ok(Reached {
             ticket_lines,
+            base_fix: base_fix.report(),
             ..reached
         }),
         Err(failed) => Err(FailedRun {
             ticket_lines,
+            base_fix: base_fix.report(),
             ..failed
         }),
     }
@@ -107,6 +111,7 @@ pub fn run(
 /// Once every Ticket has landed: open the Spec PR as a draft with
 /// `checklist` if `spec_pr` is none, run the Spec review, put `checklist`
 /// back, mark the Spec PR ready and take it to `goal`, as [`run`] does.
+#[allow(clippy::too_many_arguments)]
 fn open_and_review(
     spec: &IssueUrl,
     worktree: Worktree,
@@ -114,6 +119,7 @@ fn open_and_review(
     spec_pr: Option<PullRequest>,
     checklist: &str,
     goal: Goal,
+    base_fix: &mut BaseFix,
     logs: &Logs,
 ) -> Result<Reached, FailedRun> {
     let spec_pr = match spec_pr {
@@ -122,7 +128,7 @@ fn open_and_review(
     };
     let mut log = logs.path(SPEC_REVIEW);
     let delivered = review_and_deliver(
-        spec, &worktree, base, &spec_pr, checklist, goal, logs, &mut log,
+        spec, &worktree, base, &spec_pr, checklist, goal, base_fix, logs, &mut log,
     );
     match delivered {
         Ok(()) => Ok(Reached {
@@ -130,6 +136,7 @@ fn open_and_review(
             goal,
             log: Some(log),
             ticket_lines: Vec::new(),
+            base_fix: None,
         }),
         Err(error) => {
             // The Spec review may have rewritten the body without it.
@@ -470,90 +477,29 @@ fn start_ticket(
     ended: Sender<(u64, Result<TicketOutcome>)>,
 ) -> Result<()> {
     progress::step(format_args!("starting #{number}"));
-    let ticket = spec.sibling(number);
-    let child = Command::new(std::env::current_exe().context("no thirdshift executable")?)
-        .args([args::SPEC_BRANCH, spec_branch, &ticket.url])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("could not start the Run for #{number}"))?;
+    let child = child_run::start(&spec.sibling(number), [args::SPEC_BRANCH, spec_branch])?;
     thread::spawn(move || {
         let _ = ended.send((number, finish_ticket(number, child)));
     });
     Ok(())
 }
 
-/// Relay the stderr of Ticket `number`'s Run `child` with a `#<number>: `
-/// prefix until it exits. An interrupt is passed on to the child, which is
-/// waited for as it goes down its Failed run path, and its outcome is
-/// `Interrupted`. Otherwise it landed if it exits 0, and failed otherwise,
-/// with the cause and session log it ended on.
-fn finish_ticket(number: u64, mut child: Child) -> Result<TicketOutcome> {
-    // Relay on its own thread, so this one can watch for an interrupt.
-    let stderr = child.stderr.take().context("no stderr from the Run")?;
-    // A failed Run ends on its error, then its session log if it has one.
-    let relay = thread::spawn(move || -> std::io::Result<[Option<String>; 2]> {
-        let mut last_lines: [Option<String>; 2] = [None, None];
-        for line in BufReader::new(stderr).lines() {
-            let line = line?;
-            let message = progress::relay(format_args!("#{number}"), &line).to_string();
-            last_lines = [last_lines[1].take(), Some(message)];
+/// Wait for Ticket `number`'s Run `child`, relaying its stderr, and say how
+/// it ended.
+fn finish_ticket(number: u64, child: Child) -> Result<TicketOutcome> {
+    Ok(match child_run::wait(number, child)? {
+        Ended::Reached(pr_url) => {
+            progress::step(format_args!("#{number} landed"));
+            TicketOutcome::Landed(pr_url)
         }
-        Ok(last_lines)
-    });
-    let mut passed_on = false;
-    let status = loop {
-        // The child shares the process group, so a Ctrl-C or a closed
-        // terminal reaches it too, but a signal sent to this process alone
-        // doesn't. A second one is harmless: it only records the interrupt.
-        if !passed_on && interrupt::requested() {
-            // SAFETY: kill has no memory-safety preconditions, and the child
-            // is not yet reaped, so its pid is still its own.
-            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-            passed_on = true;
+        Ended::Interrupted => {
+            progress::step(format_args!("#{number} interrupted"));
+            TicketOutcome::Interrupted
         }
-        if let Some(status) = child
-            .try_wait()
-            .with_context(|| format!("could not wait for the Run for #{number}"))?
-        {
-            break status;
+        Ended::Failed { cause, log } => {
+            progress::step(format_args!("#{number} failed"));
+            TicketOutcome::Failed { cause, log }
         }
-        thread::sleep(POLL);
-    };
-    let last_lines = relay
-        .join()
-        .map_err(|_| anyhow!("the relay of the Run for #{number} panicked"))?
-        .with_context(|| format!("could not read the Run for #{number}"))?;
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .context("no stdout from the Run")?
-        .read_to_string(&mut stdout)
-        .with_context(|| format!("could not read the Run for #{number}"))?;
-    if status.success() {
-        progress::step(format_args!("#{number} landed"));
-        return Ok(TicketOutcome::Landed(
-            stdout.lines().last().map(String::from),
-        ));
-    }
-    if interrupt::requested() {
-        progress::step(format_args!("#{number} interrupted"));
-        return Ok(TicketOutcome::Interrupted);
-    }
-    progress::step(format_args!("#{number} failed"));
-    let [before, last] = last_lines;
-    let (cause, log) = match last {
-        Some(last) => match last.strip_prefix(failed_run::SESSION_LOG) {
-            Some(log) => (before, Some(log.to_string())),
-            None => (Some(last), None),
-        },
-        None => (None, None),
-    };
-    Ok(TicketOutcome::Failed {
-        cause: cause.unwrap_or_else(|| format!("the Run {status}")),
-        log,
     })
 }
 
@@ -615,8 +561,8 @@ fn write_checklist_or_warn(spec: &IssueUrl, pr: &PullRequest, checklist: &str) {
 /// origin, and run the Spec review on it. Then push the Spec branch, for any
 /// commit the session left unpushed, put `checklist` back in the body the
 /// session wrote for the Spec PR `spec_pr` into `base`, mark it ready, and
-/// [`run::deliver`] it to `goal`, with the Spec as the issue. `log` is left
-/// at the most recent session's log.
+/// [`run::deliver`] it to `goal`, with the Spec as the issue and `base_fix`
+/// as its one Base fix. `log` is left at the most recent session's log.
 #[allow(clippy::too_many_arguments)]
 fn review_and_deliver(
     spec: &IssueUrl,
@@ -625,6 +571,7 @@ fn review_and_deliver(
     spec_pr: &PullRequest,
     checklist: &str,
     goal: Goal,
+    base_fix: &mut BaseFix,
     logs: &Logs,
     log: &mut PathBuf,
 ) -> Result<()> {
@@ -644,7 +591,7 @@ fn review_and_deliver(
     worktree.push()?;
     write_checklist(spec, spec_pr, checklist)?;
     let pr = run::mark_pr_ready(spec, spec_branch, base)?;
-    run::deliver(spec, worktree, base, &pr, goal, &mut run_session)
+    run::deliver(spec, worktree, base, &pr, goal, base_fix, &mut run_session)
 }
 
 #[cfg(test)]
