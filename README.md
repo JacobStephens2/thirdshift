@@ -485,7 +485,7 @@ The integration tests swap in a fake `gh` and `claude`, from [`tests/fakes.rs`](
 
 [`rust-toolchain.toml`](rust-toolchain.toml) pins the exact Rust version this repository builds with, and the `rustfmt` and `clippy` components CI runs. `rustup` reads it, so `cargo` in a checkout, CI, the release builds and the crates.io publish all use that version, and `rustup` installs it the first time it is needed. No workflow names a version of its own. The file is not in the crates.io package, so `cargo install thirdshift` builds with whatever Rust the machine has.
 
-A newer Rust arrives as a pull request that changes `channel` in that file, so it runs through CI before `main` builds with it. Dependabot opens that pull request within a week of a stable release ([`.github/dependabot.yml`](.github/dependabot.yml)). To move the pin by hand, set `channel` to the new version, such as `1.99.0`, run the three checks CI runs, and open a pull request with the change and whatever the new compiler's lints asked for:
+A newer Rust arrives as a pull request that changes `channel` in that file, so it runs through CI before `main` builds with it. Dependabot opens that pull request within a week of a stable release ([`.github/dependabot.yml`](.github/dependabot.yml)). To move the pin by hand, set `channel` to the new version in full, patch number included, run the three checks CI runs, and open a pull request with the change and whatever the new compiler's lints asked for:
 
 ```sh
 cargo fmt --check
