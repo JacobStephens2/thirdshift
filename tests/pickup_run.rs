@@ -5,8 +5,10 @@
 //! settled, and
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
-//! way gets a line saying why. With no Ready issue, or while an Architect run
-//! or another Pickup run on the repository is still running, it is skipped.
+//! way gets a line saying why. With no Ready issue, with the repository at
+//! its Claim limit, or while an Architect run or another Pickup run on the
+//! repository is still running, it is skipped. Each pass that gets the lock
+//! first sweeps `in-progress` off the repository's closed issues.
 //! Asked for a Run notification, a pass that took an issue sends one, the
 //! dispatched run's, and a skipped one sends none.
 
@@ -1361,4 +1363,261 @@ fn the_user_configs_spec_parallel_reaches_a_dispatched_spec_run() {
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
     assert_eq!(sessions(&scenario), ["8", "9", "7"]);
+}
+
+/// Make each of `issues` open and labelled `in-progress` on the fake GitHub:
+/// an issue that carries a Claim.
+fn claimed_issues(scenario: &Scenario, issues: &[u32]) {
+    for issue in issues {
+        scenario.issue_is(*issue, "OPEN");
+        scenario.issue_labelled(*issue, &[IN_PROGRESS]);
+    }
+}
+
+#[test]
+fn with_three_open_issues_in_progress_and_no_pickup_limit_the_pass_is_skipped() {
+    let scenario = ready_ticket();
+    claimed_issues(&scenario, &[1, 2, 3]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        "thirdshift: at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, \
+         pickup.limit is 3\n",
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+}
+
+#[test]
+fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
+    let scenario = ready_ticket();
+    claimed_issues(&scenario, &[1, 2, 3]);
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        "thirdshift: at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, \
+         pickup.limit is 3\n",
+    );
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn with_two_open_issues_in_progress_the_pass_takes_a_ready_issue() {
+    let scenario = ready_ticket();
+    claimed_issues(&scenario, &[1, 2]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+}
+
+#[test]
+fn pickup_limit_in_the_user_config_raises_and_lowers_the_claim_limit() {
+    // Raised, three Claims no longer stop the pass.
+    let scenario = ready_ticket();
+    claimed_issues(&scenario, &[1, 2, 3]);
+    scenario.user_config_is("[pickup]\nlimit = 4\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+
+    // Lowered, one Claim stops it.
+    let scenario = ready_ticket();
+    claimed_issues(&scenario, &[1]);
+    scenario.user_config_is("[pickup]\nlimit = 1\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        "thirdshift: at the Claim limit on acme/widgets: 1 open issue(s) labelled in-progress, \
+         pickup.limit is 1\n",
+    );
+}
+
+#[test]
+fn over_the_claim_limit_the_pass_is_skipped_naming_the_count_and_the_limit() {
+    let scenario = ready_ticket();
+    claimed_issues(&scenario, &[1, 2, 3, 4]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        "thirdshift: at the Claim limit on acme/widgets: 4 open issue(s) labelled in-progress, \
+         pickup.limit is 3\n",
+    );
+}
+
+#[test]
+fn a_closed_issue_labelled_in_progress_does_not_count_against_the_claim_limit() {
+    let scenario = ready_ticket();
+    claimed_issues(&scenario, &[1, 2, 3]);
+    scenario.issue_is(3, "CLOSED");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+}
+
+#[test]
+fn a_pickup_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_naming_the_file_and_key() {
+    for limit in ["0", "-1", "1.5", "\"3\"", "true"] {
+        let scenario = ready_ticket();
+        let path = scenario.user_config_is(&format!("[pickup]\nlimit = {limit}\n"));
+
+        let result = scenario.run(&["pickup"]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!(
+                "thirdshift: pickup.limit must be a whole number from 1 up in the User config {}\n",
+                path.display()
+            ),
+        );
+        assert_eq!(result.code, Some(1), "{limit}: {}", result.stderr);
+        assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    }
+}
+
+/// Make issue `number` closed on the fake GitHub, still labelled
+/// `in-progress`, after the labels `before` it: an issue merged by hand,
+/// which no Self-merge took the Claim off.
+fn closed_issue_in_progress(scenario: &Scenario, number: u32, before: &[&str]) {
+    scenario.issue_is(number, "CLOSED");
+    scenario.issue_labelled(number, &[before, &[IN_PROGRESS]].concat());
+}
+
+#[test]
+fn a_pass_takes_in_progress_off_every_closed_issue_and_leaves_its_other_labels() {
+    let scenario = ready_ticket();
+    closed_issue_in_progress(&scenario, 3, &["bug", "architect-plan"]);
+    closed_issue_in_progress(&scenario, 4, &[]);
+    claimed_issues(&scenario, &[5]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.issue_labels(3), ["bug", "architect-plan"]);
+    assert_eq!(scenario.issue_labels(4), Vec::<String>::new());
+    assert_eq!(scenario.issue_labels(5), [IN_PROGRESS]);
+    for closed in [3, 4] {
+        let swept = format!("thirdshift: taking in-progress off #{closed}, which is closed\n");
+        assert!(result.stderr.contains(&swept), "stderr: {}", result.stderr);
+    }
+}
+
+/// What the Sweep says as it takes `in-progress` off closed issue #3.
+const SWEEPING_3: &str = "thirdshift: taking in-progress off #3, which is closed\n";
+
+#[test]
+fn the_sweep_runs_on_a_pass_that_is_then_skipped_for_the_claim_limit() {
+    let scenario = ready_ticket();
+    closed_issue_in_progress(&scenario, 3, &["bug"]);
+    claimed_issues(&scenario, &[4, 5, 6]);
+
+    let result = scenario.run(&["pickup"]);
+
+    let reason = "thirdshift: at the Claim limit on acme/widgets: 3 open issue(s) labelled \
+                  in-progress, pickup.limit is 3\n";
+    assert_skipped(&scenario, &result, &format!("{SWEEPING_3}{reason}"));
+    assert_eq!(scenario.issue_labels(3), ["bug"]);
+}
+
+#[test]
+fn the_sweep_runs_on_a_pass_that_is_then_skipped_for_having_no_ready_issue() {
+    let scenario = Scenario::new();
+    closed_issue_in_progress(&scenario, 3, &["bug"]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(&scenario, &result, &format!("{SWEEPING_3}{NO_READY_ISSUE}"));
+    assert_eq!(scenario.issue_labels(3), ["bug"]);
+}
+
+#[test]
+fn the_sweep_does_not_run_on_a_pass_skipped_for_the_lock() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    closed_issue_in_progress(&scenario, 3, &["bug"]);
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let architect = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stderr, ALREADY_RUNNING);
+    assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
+    release(&scenario);
+    architect.finish();
+}
+
+#[test]
+fn a_sweep_that_fails_prints_a_warning_and_the_pass_carries_on() {
+    let scenario = ready_ticket();
+    closed_issue_in_progress(&scenario, 3, &["bug"]);
+    closed_issue_in_progress(&scenario, 4, &[]);
+    scenario.gh_fails("api --method DELETE");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    for closed in [3, 4] {
+        let warning = format!(
+            "thirdshift: warning: could not take in-progress off #{closed}: gh api --method \
+             DELETE repos/acme/widgets/issues/{closed}/labels/in-progress --silent failed: \
+             HTTP 502"
+        );
+        assert!(
+            result.stderr.contains(&warning),
+            "stderr: {}",
+            result.stderr
+        );
+    }
+    assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+}
+
+#[test]
+fn a_sweep_that_cannot_list_the_closed_issues_prints_a_warning_and_the_pass_carries_on() {
+    let scenario = ready_ticket();
+    closed_issue_in_progress(&scenario, 3, &["bug"]);
+    scenario.gh_fails("issue list --state closed");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    let warning = "thirdshift: warning: could not list the closed issues labelled in-progress: \
+                   gh issue list failed: HTTP 502";
+    assert!(result.stderr.contains(warning), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
+}
+
+#[test]
+fn the_sweep_takes_the_label_off_as_the_closed_issue_spells_it() {
+    let scenario = Scenario::new();
+    scenario.issue_is(3, "CLOSED");
+    scenario.issue_labelled(3, &["In-Progress", "bug"]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(&scenario, &result, &format!("{SWEEPING_3}{NO_READY_ISSUE}"));
+    assert_eq!(scenario.issue_labels(3), ["bug"]);
+    let deleted = scenario.gh_calls_of("api", "--method");
+    assert_eq!(deleted.len(), 1, "{deleted:?}");
+    assert_eq!(
+        deleted[0][3],
+        "repos/acme/widgets/issues/3/labels/In-Progress"
+    );
 }

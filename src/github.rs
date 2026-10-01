@@ -277,7 +277,7 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     ])
 }
 
-/// An open issue as a listing of its repository's issues gives it.
+/// An issue as a listing of its repository's issues gives it.
 pub struct ListedIssue {
     pub issue: IssueUrl,
     pub title: String,
@@ -288,15 +288,27 @@ pub struct ListedIssue {
 /// `owner/repo`, newest first. They come from GitHub's issue list, not its
 /// search, whose index can be a while behind an issue just opened.
 pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
+    issues_labelled(repo, label, "open")
+}
+
+/// Every closed issue labelled `label` in the repository `repo`, an
+/// `owner/repo`, newest first.
+pub fn closed_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
+    issues_labelled(repo, label, "closed")
+}
+
+/// Every issue labelled `label` in the repository `repo` whose state is
+/// `state`, `open` or `closed`, newest first.
+fn issues_labelled(repo: &str, label: &str, state: &str) -> Result<Vec<ListedIssue>> {
     let json = gh_json(&[
         "issue",
         "list",
+        "--state",
+        state,
         "--repo",
         repo,
         "--label",
         label,
-        "--state",
-        "open",
         "--json",
         "url,title,labels",
         "--limit",

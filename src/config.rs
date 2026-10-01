@@ -38,6 +38,9 @@ pub struct UserConfig {
     /// `spec.parallel`: how many Tickets a Spec run runs at once, by
     /// default 3.
     pub spec_parallel: NonZeroUsize,
+    /// `pickup.limit`: the Claim limit, how many open issues carrying a
+    /// Claim stop a Pickup run from taking another, by default 3.
+    pub pickup_limit: NonZeroUsize,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -76,6 +79,7 @@ impl UserConfig {
             logs_dir: home.join(".thirdshift/logs"),
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
+            pickup_limit: NonZeroUsize::new(3).unwrap(),
         }
     }
 
@@ -92,7 +96,7 @@ impl UserConfig {
         for (section, value) in &table {
             let known = matches!(
                 section.as_str(),
-                "merge" | "base" | "launch" | "logs" | "email" | "spec"
+                "merge" | "base" | "launch" | "logs" | "email" | "spec" | "pickup"
             );
             let settings = match value {
                 Value::Table(settings) if known => settings,
@@ -125,16 +129,10 @@ impl UserConfig {
                         bail!("{section}.{key} must be a quoted email address in {file}")
                     }
                     ("spec", "parallel", value) => {
-                        let parallel = value
-                            .as_integer()
-                            .and_then(|n| usize::try_from(n).ok())
-                            .and_then(NonZeroUsize::new);
-                        match parallel {
-                            Some(parallel) => config.spec_parallel = parallel,
-                            None => {
-                                bail!("spec.parallel must be a whole number from 1 up in {file}")
-                            }
-                        }
+                        config.spec_parallel = whole_number_from_1(value, "spec.parallel", &file)?
+                    }
+                    ("pickup", "limit", value) => {
+                        config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
                     }
                     _ => bail!("unknown key {section}.{key} in {file}"),
                 }
@@ -610,6 +608,9 @@ dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
+
+[pickup]
+limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -640,6 +641,16 @@ fn suggested_address(home: &Path) -> Option<String> {
                     .ends_with("@users.noreply.github.com")
         })
     })
+}
+
+/// `value`, which `file` gives the setting `key`, as a whole number from 1
+/// up, or an error naming both if it is anything else.
+fn whole_number_from_1(value: &Value, key: &str, file: &str) -> Result<NonZeroUsize> {
+    value
+        .as_integer()
+        .and_then(|n| usize::try_from(n).ok())
+        .and_then(NonZeroUsize::new)
+        .with_context(|| format!("{key} must be a whole number from 1 up in {file}"))
 }
 
 /// `$HOME`, and the User config's path under it.
@@ -738,6 +749,15 @@ mod tests {
         assert_eq!(config.spec_parallel.get(), 5);
         for text in ["", "[spec]\n"] {
             assert_eq!(parse(text).unwrap().spec_parallel.get(), 3, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn pickup_limit_is_read_and_defaults_to_3() {
+        let config = parse("[pickup]\nlimit = 1\n").unwrap();
+        assert_eq!(config.pickup_limit.get(), 1);
+        for text in ["", "[pickup]\n"] {
+            assert_eq!(parse(text).unwrap().pickup_limit.get(), 3, "{text:?}");
         }
     }
 
@@ -855,6 +875,24 @@ mod tests {
             (
                 "[spec]\nparallel = \"2\"\n",
                 "spec.parallel must be a whole number from 1 up",
+            ),
+            ("[pickup]\nlimt = 2\n", "unknown key pickup.limt"),
+            ("pickup = 2\n", "pickup must be the section [pickup]"),
+            (
+                "[pickup]\nlimit = 0\n",
+                "pickup.limit must be a whole number from 1 up",
+            ),
+            (
+                "[pickup]\nlimit = -1\n",
+                "pickup.limit must be a whole number from 1 up",
+            ),
+            (
+                "[pickup]\nlimit = 2.5\n",
+                "pickup.limit must be a whole number from 1 up",
+            ),
+            (
+                "[pickup]\nlimit = \"2\"\n",
+                "pickup.limit must be a whole number from 1 up",
             ),
         ] {
             let error = format!("{:#}", parse(text).unwrap_err());

@@ -49,6 +49,8 @@ A release undoes only what the Claim changed, in one request that keeps the issu
 
 A process killed outright, with `kill -9` or by a power cut, releases nothing: the issue stays `in-progress` for you to relabel.
 
+An issue closed some other way, as when you merge its pull request by hand, keeps `in-progress` until a [Pickup run](#pickup-runs) takes it off, in the [Sweep](#the-sweep).
+
 ### Status
 
 The designed behaviour described in this README is implemented. Known gaps and planned work are tracked in the [open issues](https://github.com/JacobStephens2/thirdshift/issues).
@@ -193,6 +195,9 @@ dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/log
 
 [spec]
 parallel = 2   # how many Tickets a Spec run runs at once, instead of 3
+
+[pickup]
+limit = 5   # how many open issues labelled in-progress stop a Pickup run taking another, instead of 3
 ```
 
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
@@ -217,6 +222,9 @@ dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
+
+[pickup]
+limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 ```
 
 Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
@@ -227,7 +235,7 @@ Every key holds its real value, so a Run reading it does exactly what it does wi
 4. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
 5. With notifications on, the Resend API key, with input hidden. With none saved it asks `Resend API key (input hidden, Enter to skip):`; with one in the [Credentials](#email), `Resend API key (input hidden, Enter keeps the saved one):`, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn't start with `re_` is asked again. A key you give is saved in the Credentials, `~/.thirdshift/credentials.toml`, created with mode 600 (and `~/.thirdshift` with it) or edited in place, keeping its comments and anything else in it and changing only `resend.key`; `setup` then prints `wrote the Credentials <path>`. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun `thirdshift setup`, or set `RESEND_API_KEY`. With `RESEND_API_KEY` set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from `RESEND_API_KEY`. With a key found or given, it offers to send a test email (default No), as `thirdshift email-test` does, once the files are written.
 
-Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir` is not asked about. The answers are written like everything else below: in place, keeping your comments. Ctrl-C during the questions, the key included, writes nothing: neither the User config nor the Credentials. With notifications off, nothing about a key is asked, and saved Credentials stay as they were, so `--email` on a single Run still works. Credentials a Run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
+Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `spec.parallel` and `pickup.limit` are not asked about. The answers are written like everything else below: in place, keeping your comments. Ctrl-C during the questions, the key included, writes nothing: neither the User config nor the Credentials. With notifications off, nothing about a key is asked, and saved Credentials stay as they were, so `--email` on a single Run still works. Credentials a Run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
 The first Run on a machine with no User config, started from a terminal, offers Setup before any work, on stderr: `No User config at <path>. Set your defaults now? [Y/n]`. Yes (or Enter) asks the questions above, writes the file, and the Run carries on using your answers; a flag in the command, such as `--no-merge`, `--email` or `--no-email`, still wins over them. No writes every setting at its default, as `setup` with no terminal does, asks nothing about a key, writes no Credentials, says that `thirdshift setup` changes it, and the Run carries on; later Runs find the file and don't offer again. If the file can't be written, stderr gets a `warning:` line and the Run carries on with the defaults. Ctrl-C during the offer or the questions writes nothing and ends the command before any work, with no Run notification. A command thirdshift can't parse exits `2` before any offer. A Run with no terminal, as from cron, CI, `nohup` or an agent's shell, offers nothing, writes nothing, and runs on the defaults, so a later Run from a terminal still gets the offer.
 
@@ -241,9 +249,11 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 
 `spec.parallel` sets how many Tickets a [Spec run](#spec-runs) runs at once, by default 3. It must be a whole number from 1 up; `parallel <n>` on the command line wins over it for one Spec run.
 
+`pickup.limit` sets the [Claim limit](#the-claim-limit): how many open issues labelled `in-progress` stop a [Pickup run](#pickup-runs) from taking another, by default 3. It must be a whole number from 1 up. There is no command-line flag for it.
+
 `logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
-A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, or `0` for `spec.parallel`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them, and they never offer Setup; nor does `email-test`.
+A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, or `0` for `spec.parallel` or `pickup.limit`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them, and they never offer Setup; nor does `email-test`.
 
 ### Email
 
@@ -575,16 +585,36 @@ A Pickup run:
 
 1. Makes the checks an [Architect run](#architect-runs) makes, before anything else but the [Run notification](#one-run-notification-for-the-issue-taken)'s own: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached unless `base <branch>` names the Base branch, and the Base branch exists on `origin` with your local copy not ahead of it. A check that fails stops the pass with exit `1`, before any label is read or changed.
 2. Tries the lock an Architect run takes, and is [skipped](#one-at-a-time) if an Architect run or another Pickup run on the repository is still running on the machine.
-3. Lists the repository's open issues labelled `ready-for-agent`, lowest number first, and takes the first that is a Ready issue, saying so on stderr: `taking Ready issue #<n> "<title>", as thirdshift <Issue URL> would`. Each one it passes over on the way gets [a line saying why](#why-an-issue-was-passed-over). One issue a pass: the rest wait for the next.
-4. Dispatches it exactly as `thirdshift <Issue URL>` would from the same clone on the Pickup run's Base branch: a [Spec run](#spec-runs) when the issue has sub-issues, a Run otherwise. That run makes the Claim, so the issue's `ready-for-agent` is swapped for `in-progress` and no later pass takes it again.
+3. Takes `in-progress` off the repository's closed issues: the [Sweep](#the-sweep).
+4. Counts the repository's open issues labelled `in-progress`, and is skipped if the repository is at its [Claim limit](#the-claim-limit).
+5. Lists the repository's open issues labelled `ready-for-agent`, lowest number first, and takes the first that is a Ready issue, saying so on stderr: `taking Ready issue #<n> "<title>", as thirdshift <Issue URL> would`. Each one it passes over on the way gets [a line saying why](#why-an-issue-was-passed-over). One issue a pass: the rest wait for the next.
+6. Dispatches it exactly as `thirdshift <Issue URL>` would from the same clone on the Pickup run's Base branch: a [Spec run](#spec-runs) when the issue has sub-issues, a Run otherwise. That run makes the Claim, so the issue's `ready-for-agent` is swapped for `in-progress` and no later pass takes it again.
 
-`merge`, `no-merge`, `base-fix`, `no-base-fix` and `parallel <n>`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`, as do `email`, optionally followed by an address, and `no-email` for the Pickup run's [Run notification](#one-run-notification-for-the-issue-taken). The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `launch.pull` and `logs.dir`. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it.
+`merge`, `no-merge`, `base-fix`, `no-base-fix` and `parallel <n>`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`, as do `email`, optionally followed by an address, and `no-email` for the Pickup run's [Run notification](#one-run-notification-for-the-issue-taken). The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `launch.pull` and `logs.dir`. A User config a Run would refuse stops the pass the same way, before any check. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it.
 
 `pickup` is a command only as the first argument, and takes nothing but those flags, each at most once: a focus, `--plan-only`, an Issue URL, a repeated or contradictory flag, or any other argument is an argument error (exit `2`).
 
 The dispatched run's ending is the Pickup run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Pickup run fails as that [Failed run](#failed-runs) or Failed spec run does. After an [Inherited failure](#an-inherited-failure-links-the-base-branchs-checks), the command it offers is `thirdshift <Issue URL>` with the dispatched run's flags and `base-fix`, since another Pickup run would not take a started issue again.
 
-A pass is **skipped** when the lock is held, or when the repository has no Ready issue: it exits `0` with stdout empty and one line of reason on stderr, `an Architect run or a Pickup run is already running on <owner>/<repo>` or `no Ready issue on <owner>/<repo>`, after the lines on the issues it passed over. Skipped is not a failure. A skipped pass starts no agent session, changes no label, and sends no Run notification.
+A pass is **skipped** when the lock is held, when the repository is at its Claim limit, or when the repository has no Ready issue: it exits `0` with stdout empty and one line of reason on stderr, `an Architect run or a Pickup run is already running on <owner>/<repo>`, `at the Claim limit on <owner>/<repo>: <count> open issue(s) labelled in-progress, pickup.limit is <limit>` or `no Ready issue on <owner>/<repo>`, the last after the lines on the issues it passed over. Skipped is not a failure. A skipped pass starts no agent session, makes no Claim, and sends no Run notification. One skipped for the lock changes no label at all; the others have made the Sweep, whose lines come before the reason.
+
+### The Claim limit
+
+A Pickup run takes nothing while the repository is at its **Claim limit**: as many open issues carry a [Claim](#the-claim), that is, are labelled `in-progress`, as the limit, which is 3 unless you set it. It keeps a broken Base branch from failing every Ready issue in turn, one a pass, and pull requests from piling up unreviewed: once that many issues wait on you, the factory waits too.
+
+- The count is every open issue labelled `in-progress` in the repository, whoever started it: a Run you started by hand counts as one a Pickup run dispatched does. Closed issues don't count.
+- `pickup.limit` in the [User config](#user-config) sets the limit, a whole number from 1 up, by default 3. Raise it on a machine where you review quickly; `limit = 1` takes one issue at a time. There is no command-line flag for it.
+- At or over the limit, the pass is skipped: exit `0`, stdout empty, and the reason on stderr with the count and the limit, such as `at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, pickup.limit is 3`. No Ready issue is looked for, and no session is started.
+- An issue leaves the count when it is closed, as merging its pull request does, or when you take its `in-progress` label off.
+- If the issues can't be counted, the pass stops with exit `1` and `gh`'s error.
+
+### The Sweep
+
+In the **Sweep**, each Pickup run, once it holds the lock and before it counts, lists the repository's closed issues labelled `in-progress` and takes the label off each, so an issue whose pull request you merged by hand doesn't look taken for ever.
+
+- Only `in-progress` is removed, in one request per issue: the closed issue's other labels stay. stderr says `taking in-progress off #<n>, which is closed`.
+- It runs on every pass that gets the lock, one that is then skipped for the Claim limit or for having no Ready issue included, and not on one skipped because the lock is held.
+- A failure, to list the closed issues or to take the label off one, is a `warning:` line on stderr, such as `warning: could not take in-progress off #<n>: <gh's error>`, and the pass carries on: the next pass tries again.
 
 ### Why an issue was passed over
 

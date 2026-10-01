@@ -3,10 +3,12 @@
 //! repository, for the command to dispatch, saying why it passed over each
 //! issue labelled `ready-for-agent` before it. Only one Pickup run or
 //! Architect run per repository runs at a time on a machine: one started
-//! while another is still running is skipped, before any search. So is one
-//! that finds no Ready issue.
+//! while another is still running is skipped, before any search. One that
+//! runs first makes the Sweep, and is then skipped if it finds the
+//! repository at its Claim limit, or with no Ready issue.
 
 use std::fmt;
+use std::num::NonZeroUsize;
 
 use anyhow::Result;
 use chrono::{TimeDelta, Utc};
@@ -48,6 +50,13 @@ pub enum Skipped {
     /// An Architect run or another Pickup run on this repository is still
     /// running on this machine, the Spec run or Run it dispatched included.
     AlreadyRunning(AlreadyRunning),
+    /// The repository is at its Claim limit: `claimed` open issues carry a
+    /// Claim, and `limit` or more stop a Pickup run from taking another.
+    AtClaimLimit {
+        repo: Repo,
+        claimed: usize,
+        limit: NonZeroUsize,
+    },
     /// The repository has no Ready issue.
     NoReadyIssue(Repo),
 }
@@ -56,6 +65,17 @@ impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::AlreadyRunning(running) => running.fmt(f),
+            Self::AtClaimLimit {
+                repo,
+                claimed,
+                limit,
+            } => write!(
+                f,
+                "at the Claim limit on {}: {claimed} open issue(s) labelled {}, \
+                 pickup.limit is {limit}",
+                repo.slug(),
+                claim::IN_PROGRESS
+            ),
             Self::NoReadyIssue(repo) => write!(f, "no Ready issue on {}", repo.slug()),
         }
     }
@@ -66,14 +86,17 @@ impl fmt::Display for Skipped {
 /// labelled `ready-for-agent` it passed over on the way, with why. The Base
 /// branch is `base`, the branch the command named, whatever the Launch
 /// directory has checked out, or without one the branch checked out there.
-/// Nothing is changed, on GitHub or in the Launch directory: the run the
-/// issue is dispatched as makes the Claim.
+/// Nothing is changed in the Launch directory, nor on the issue taken: the
+/// run it is dispatched as makes the Claim.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
 /// skipped if an Architect run or another Pickup run on the same repository
 /// is still running on this machine. Otherwise this process is that
 /// repository's one such run until it exits, through whatever it dispatches.
-pub fn run(base: Option<&str>) -> Result<Outcome> {
+/// It first makes the Sweep, taking the Claim off the repository's closed
+/// issues, and is then skipped, still before any search, if the repository
+/// is at its Claim limit: `limit` or more of its open issues carry a Claim.
+pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
     let Launch {
         git, repo, base, ..
     } = match launch::start(base)? {
@@ -82,6 +105,15 @@ pub fn run(base: Option<&str>) -> Result<Outcome> {
             return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
+    claim::sweep(&repo);
+    let claimed = claim::open_count(&repo)?;
+    if claimed >= limit.get() {
+        return Ok(Outcome::Skipped(Skipped::AtClaimLimit {
+            repo,
+            claimed,
+            limit,
+        }));
+    }
     let candidates = github::open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
     let Some((ready, is_spec)) = Search::new(&git, candidates).first_ready()? else {
         return Ok(Outcome::Skipped(Skipped::NoReadyIssue(repo)));

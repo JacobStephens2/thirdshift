@@ -196,9 +196,25 @@ Architect run's, and the dispatched run branches off <branch> and targets it:
 pickup takes nothing else: no focus and no --plan-only.
 
 A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why,
-after any lines on issues it passed over, when the repository has no Ready issue, and while
-an Architect run or another Pickup run on the same repository is still running on this
-machine.
+after any lines on issues it passed over, when the repository has no Ready issue, when the
+repository is at its Claim limit, and while an Architect run or another Pickup run on the same
+repository is still running on this machine.
+
+A Pickup run takes nothing while as many open issues are labelled in-progress, whoever
+started them, as the Claim limit, 3 unless set, so a broken Base branch can't fail every
+Ready issue in turn, and pull requests can't pile up unreviewed. The skipped run's line names
+the count and the limit. pickup.limit in the User config sets the Claim limit, a whole number
+from 1 up:
+
+    [pickup]
+    limit = 5
+
+There is no flag for it.
+
+Each Pickup run that gets the lock first takes in-progress off every closed issue that still
+has it, keeping the issue's other labels, so issues merged by hand are cleaned up and don't
+look taken. Closed issues never count against the Claim limit. A label it can't take off is a
+warning: line, and the pass carries on.
 
 --email, --email <address> and --no-email ask a Pickup run for its Run notification as they
 do a Run, and email.always sets the default. A pass that took an issue sends one: the
@@ -407,13 +423,13 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// directory's repository, then that issue dispatched as `thirdshift <Issue
 /// URL>` with the same flags would be, but on the Pickup run's Base branch,
 /// whatever the Launch directory has checked out. The dispatched run's ending
-/// is the Pickup run's. One that is skipped says why on stderr, puts nothing
-/// on stdout, and is no failure. If asked, by the command or the User config,
-/// one that took an issue sends one Run notification, the one the dispatched
-/// run would send started by hand, and that run sends none of its own; one
-/// that is skipped sends none. The notification's checks are made before any
-/// other work all the same, so a pass that would be skipped fails on them
-/// too.
+/// is the Pickup run's. One that is skipped, as when the repository is at the
+/// User config's Claim limit, says why on stderr, puts nothing on stdout, and
+/// is no failure. If asked, by the command or the User config, one that took
+/// an issue sends one Run notification, the one the dispatched run would send
+/// started by hand, and that run sends none of its own; one that is skipped
+/// sends none. The notification's checks are made before any other work all
+/// the same, so a pass that would be skipped fails on them too.
 fn pickup(args: PickupArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -429,7 +445,7 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let taken = match pickup::run(args.base.as_deref()) {
+    let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
         Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
         Err(error) => return failure(&error),

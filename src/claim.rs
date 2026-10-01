@@ -7,9 +7,9 @@
 use anyhow::{Context, Result};
 
 use crate::git::Git;
-use crate::github;
+use crate::github::{self, ListedIssue};
 use crate::interrupt;
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
 use crate::progress;
 use crate::spec_run::READY_FOR_AGENT;
 
@@ -35,6 +35,11 @@ pub struct Claim<'a> {
 /// labelled.
 pub fn is_on(labels: &[String]) -> bool {
     github::has_label(labels, IN_PROGRESS)
+}
+
+/// `label` as `labels` spells it, whatever its case, if it is one of them.
+fn spelling<'a>(labels: &'a [String], label: &str) -> Option<&'a String> {
+    labels.iter().find(|name| name.eq_ignore_ascii_case(label))
 }
 
 /// Make the Claim on `issue`: label it `in-progress`, in place of
@@ -189,5 +194,42 @@ impl Claim<'_> {
             commands.push(github::add_label_command(self.issue, READY_FOR_AGENT));
         }
         commands.join(" && ")
+    }
+}
+
+/// How many open issues in `repo` carry a Claim, whoever started the Run or
+/// Spec run that made it: what a Pickup run holds against the Claim limit.
+pub fn open_count(repo: &Repo) -> Result<usize> {
+    Ok(github::open_issues_labelled(&repo.slug(), IN_PROGRESS)?.len())
+}
+
+/// The Sweep: take `in-progress` off every closed issue in `repo` that still
+/// carries it, as an issue merged by hand does, leaving its other labels. A
+/// failure, to list them or to take the label off one, is only a warning.
+pub fn sweep(repo: &Repo) {
+    let closed = match github::closed_issues_labelled(&repo.slug(), IN_PROGRESS) {
+        Ok(closed) => closed,
+        Err(error) => {
+            progress::step(format_args!(
+                "warning: could not list the closed issues labelled {IN_PROGRESS}: {error:#}"
+            ));
+            return;
+        }
+    };
+    for ListedIssue { issue, labels, .. } in closed {
+        // As the issue spells it: GitHub's label names are case-insensitive.
+        let Some(label) = spelling(&labels, IN_PROGRESS) else {
+            continue;
+        };
+        progress::step(format_args!(
+            "taking {IN_PROGRESS} off #{}, which is closed",
+            issue.number
+        ));
+        if let Err(error) = github::remove_label(&issue, label) {
+            progress::step(format_args!(
+                "warning: could not take {IN_PROGRESS} off #{}: {error:#}",
+                issue.number
+            ));
+        }
     }
 }
