@@ -7,8 +7,8 @@
 
 mod support;
 
-use support::Scenario;
 use support::resend::ResendStandIn;
+use support::{Scenario, WAIT_BOUND};
 
 const SPEC: u32 = 20;
 const SPEC_TITLE: &str = "Widgets, all of them";
@@ -1111,15 +1111,19 @@ fn help_does_not_mention_the_ticket_runs_hidden_argument() {
     assert!(!result.stdout.contains("spec-branch"), "{}", result.stdout);
 }
 
+/// How many times a session's script that waits on other sessions looks for
+/// them, 0.05 seconds apart: the harness's [`WAIT_BOUND`] of looking.
+const LOOKS: u128 = WAIT_BOUND.as_millis() / 50;
+
 /// Bash that touches `started-<ticket>` in the scenario root, then waits up
-/// to ten seconds for `started-<other>` there, failing if it never appears:
+/// to [`WAIT_BOUND`] for `started-<other>` there, failing if it never appears:
 /// the session for `ticket` only ends once `other`'s has started too.
 fn waits_for_other_session(scenario: &Scenario, ticket: u32, other: u32) -> String {
     let root = scenario.path("");
     format!(
         r#"
 touch {root}/started-{ticket}
-for _ in $(seq 200); do test -f {root}/started-{other} && break; sleep 0.05; done
+for _ in $(seq {LOOKS}); do test -f {root}/started-{other} && break; sleep 0.05; done
 test -f {root}/started-{other}
 "#,
         root = root.display()
@@ -1307,7 +1311,7 @@ fn without_a_limit_at_most_three_tickets_run_at_once() {
     scenario.spec_has_tickets(SPEC, &tickets.map(|ticket| (ticket, &[][..])));
     let root = scenario.path("").display().to_string();
     for ticket in tickets {
-        // Each session waits, up to ten seconds, until three are running or
+        // Each session waits, up to `WAIT_BOUND`, until three are running or
         // have been, then for a moment more, and records how many it saw at
         // once.
         scenario.agent_does_for(
@@ -1316,7 +1320,7 @@ fn without_a_limit_at_most_three_tickets_run_at_once() {
                 r#"
 mkdir -p {root}/running
 touch {root}/running/{ticket}
-for _ in $(seq 200); do
+for _ in $(seq {LOOKS}); do
   test -f {root}/three && break
   test "$(ls {root}/running | wc -l)" -ge 3 && touch {root}/three && break
   sleep 0.05
@@ -1548,21 +1552,19 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
     // to the Ticket's Run as SIGTERM.
     let scenario = linear_spec();
     let started = scenario.path("agent-started");
+    let outlived = scenario.path("agent-outlived-its-sleep");
     scenario.agent_does_for(
         21,
         &format!(
-            "echo 'half done' > wip.txt\ntouch {}\nsleep 30\n",
-            started.display()
+            "echo 'half done' > wip.txt\ntouch {}\nsleep 30\ntouch {}\n",
+            started.display(),
+            outlived.display()
         ),
     );
 
-    let began = std::time::Instant::now();
     let result = scenario.run_and_signal(&[&spec_url(&scenario)], "agent-started", "TERM");
 
-    assert!(
-        began.elapsed() < std::time::Duration::from_secs(20),
-        "the Ticket's session was not stopped"
-    );
+    assert!(!outlived.exists(), "the Ticket's session was not stopped");
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");
     assert_eq!(sessions_by_issue(&scenario), ["21"]);

@@ -1,5 +1,6 @@
 
 Agents, do not modify this file. It is for human handwritten content.
+
 # Sep 22 2026: create cli command to implement GitHub issue, spec 2
 
 ## Round 1
@@ -714,6 +715,7 @@ PR the glossary and adr 006 updates and anything else currently to pr
 /to-tickets
 ## 9
  These tickets look good. File them as sub-issues
+
 # Sep 29 2026, release program, spec 150
 /grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/150 - do we
   already have a program to create a new release?
@@ -766,7 +768,7 @@ Yes
 Either commit to main and push or PR the CONTEXT.md change.
 
 
-# Sep 30 2026, shorten test suite time, issue 174
+# Sep 30 2026, shorten test suite time, spec 174
 /grill-with-docs on 174
 
 ## 2
@@ -777,7 +779,25 @@ And I want to focus here on reducing the tests for thirdshift specifically, but 
 3 - agree
 4 - agree
 
-# Sep 30 2026, make email setup easier
+## 3
+5 - agree
+6 - agree
+7 - agree
+8 - agree
+9 - agree
+10 - agree
+
+## 4
+we share understanding. /to-spec 
+and file those
+
+## 7
+/to-tickets
+
+## 6
+this is right. file these as sub-issues of 174
+
+# Sep 30 2026, make email setup easier, spec 190
 1 - agree
 2 -  Is env-only still saving the key to a file? If so, does the question become which file to save the key to? 
 
@@ -811,3 +831,111 @@ That matches
 
 ## 7
 /to-tickets
+
+# 2026-09-30, release to gh on release.sh, spec 211
+/grill-with-docs I ran the following release process, but github did not get a release of v0.5.0: [Pasted text #2 +21 lines]
+
+## 2
+I see now that at 3:38p EDT V0.5.0 was released to GitHub. And at 3:39p EDT I got a crates.io email about v0.5.0 being published. I wonder what released to GitHub.
+
+1 - agree
+2 - agree
+
+## 3
+3 - agree
+4 - agree
+5 - agree
+6 - agree
+7 - agree
+
+
+# 2026-09-30, responding to red ci checks on base branch, spec 221
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/103#issuecomment-5920787837
+
+## 2
+1 - agree
+2 - agree
+3 - agree
+4 - agree
+5 - agree
+6 - agree
+7 - agree
+
+## 3
+8 - agree
+9 - agree
+10 - Agreed, though I'm considering for a moment having thirdshift resolve the failure on the base branch as part of its process to make run failure less likely in the case that someone wants to lean more in the automation and trust direction with thirdshift? I would probably want to turn this on, as I'd likely just have an agent resolve the base branch ci failure anyway - so may as well have that done in the thirdshift process. Maybe this should be a configuration setting? And I'm using more of a gardening / farming metaphor with how I think about thirdshift, like that I want it to be able to help grow a codebase even without me deciding about every single little line of code which the more construction software engineering metaphor can connote.
+11 - agree
+
+## 4
+12 - agreed maybe, though I'm envisioning maybe we end this grilling with a run of the to-spec then to-tickets skills, so maybe it could be a latter ticket, the Base fix that is
+13 - agree
+14 - agreed - and clarifying that the user config setting could turn it on such that the user wouldn't need the command line flag for a Base fix to operate.
+15 - agree
+
+## 5
+16 - agree
+17 - agree
+18 - agree
+19 - agree
+20 - agree
+21 - agree
+22 - agree
+
+## 6
+we share understanding. do 1, PR it, then /to-spec
+
+## 7
+i merged pr 220. /to-tickets
+
+## 8
+those tickets look good. File them as sub-issues under the parent spec issue.
+and post that comment.
+
+# 2026-09-30, improve-codebase-architecture, spec 27
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/27 - I'm thinking about some kind of setup where the first candidate run of this skill is implemented automatically - perhaps even a to-spec and to-tickets calls are made for it, and then there is a spec run for it. So this will probably involve a new factory skill version of the improve-codebase-architecture that's already installed here.
+
+## 2
+1 - agree, and this process could even use a worktree to plan in if beneficial, or if useful to be able to change code in the planning process, otherwise scanning in the launch directory may be sufficient if not preferable, as it may have things which may not get copied over into a worktree possibly - check me on that if that seems unlikely though.
+
+2 - agree, though maybe --spec-only as the flag instead of --plan-only. Hm, on second thought though I'm thinking a valuable part of --plan-only could be that it can mean spec and tickets, so running --plan-only could create a spec and tickets for it.
+
+3 - agreed
+
+4 - a, as I would want for another improve-codebase-architecture run / architect run to do a fresh analysis of the codebase given how it has since changed, so the other ideas could become stale. Only end the architect run with filing an issue but no spec pr and pec run if none of the candidates are Strong, then file an issue for the top recommendation which in this case is either worth exploring or speculative. That gives an idea for the day shift to flesh out and consider, but by default just works the codebase through Strong ideas until they are not found anymore.
+
+5 - agree
+
+6 - agree
+
+## 3
+7 - agree
+8 - One pass per command by default - let's leave the loop idea out for now.
+9 - agree
+10 - agree
+11 - agree
+12 - agree
+13 - agree, though I'm thinking it could be possible to result in just one spec issue ready-for-agent with no ticket sub-issues if the change is small enough, so not finding any sub-issues I'm not sure whether or not to call a failure.
+
+## 4
+14 - agree
+15 - agree, though I'm thinking to allow a Base fix to be run by a `thirdshift architect` run, as is being worked on in the https://github.com/JacobStephens2/thirdshift/issues/221 spec at this very moment on this server.
+16 - agreed
+17 - agree
+18 - agreed - and is it the thirdshift program or agent applying ready-for-agent here?
+19 - agree
+
+## 5
+18' - agree, and file the issue
+15' - agree
+20 - agree
+/to-spec
+
+## 6
+These seams match my expectation.
+
+## 7
+These are good. File them as sub-issue tickets on spec issue 27.
+
+## 8
+pr the context change

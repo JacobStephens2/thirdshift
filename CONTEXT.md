@@ -48,11 +48,19 @@ An issue scoping one session of work, standing alone or as a sub-issue of a **Sp
 _Avoid_: task, sub-task
 
 **Run**:
-One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request. Started directly on an **Issue URL**, or by a **Spec run** for one of its **Tickets**.
+One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, or by an **Architect run** for the Ticket its **Architecture review** published.
 
 **Spec run**:
 One invocation of the factory on a **Spec**'s **Issue URL**: it works through the Spec's **Tickets** in dependency order, starting a **Run** for each Ticket once the Tickets blocking it are done, several at once when the graph allows.
 _Avoid_: batch run, spec implementation
+
+**Architect run**:
+One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop at the plan, a **Spec run** on the **Spec** it published, or a **Run** on its standalone **Ticket**. One pass per invocation.
+_Avoid_: improve run, architecture run
+
+**Architecture review**:
+The agent session that opens an **Architect run**: it scans the **Base branch** for deepening opportunities, skips any already covered by an open issue, and publishes the top recommendation as the plan, a **Spec** with **Tickets** or a single Ticket when one session is enough, but only when that recommendation is Strong. Otherwise it files the top recommendation as an issue labelled `needs-triage` for the **Day shift**, and nothing is implemented. It changes nothing in the repository.
+_Avoid_: planning session
 
 **Spec branch**:
 The **Issue branch** of the **Spec** in a **Spec run**, branched off the **Base branch**. Each **Ticket**'s **Run** is a **Merge run** into it, so the Spec's work gathers there before it reaches the Base branch.
