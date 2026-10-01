@@ -54,17 +54,17 @@ impl RunNotification {
         })
     }
 
-    /// Send the notification for the Run that `ended`. A failed send is only
-    /// a warning: it never changes the Run's outcome.
-    pub fn send(self, ended: &Result<Reached, FailedRun>) {
-        let (outcome, pr_url, cause, log, tickets, base_fix) = match ended {
+    /// Send the notification for the Run that `ended`, with `base_fix`, what
+    /// became of the Base fix it started, if it started one. A failed send is
+    /// only a warning: it never changes the Run's outcome.
+    pub fn send(self, ended: &Result<Reached, FailedRun>, base_fix: Option<&str>) {
+        let (outcome, pr_url, cause, log, tickets) = match ended {
             Ok(reached) => (
                 reached.goal.outcome(),
                 Some(reached.pr_url.as_str()),
                 None,
                 reached.log.as_deref(),
                 &reached.ticket_lines[..],
-                reached.base_fix.as_deref(),
             ),
             Err(failed) => {
                 let (outcome, cause) = if failed.interrupted {
@@ -78,7 +78,6 @@ impl RunNotification {
                     cause,
                     failed.log.as_deref(),
                     &failed.ticket_lines[..],
-                    failed.base_fix.as_deref(),
                 )
             }
         };

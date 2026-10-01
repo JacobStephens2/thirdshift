@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::base_fix::{BaseFix, Policy};
+use crate::base_fix::BaseFix;
 use crate::branch::{self, Selection};
 use crate::ci::{self, Ci};
 use crate::failed_run::{self, FailedRun, PolicyRefusal};
@@ -49,8 +49,6 @@ pub struct Reached {
     pub log: Option<PathBuf>,
     /// In a Spec run, a line on each Ticket it landed; empty in a Run.
     pub ticket_lines: Vec<String>,
-    /// What became of the Base fix it started, if it started one.
-    pub base_fix: Option<String>,
 }
 
 /// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure
@@ -70,8 +68,8 @@ pub struct Reached {
 /// an issue with no sub-issues fails before any work, as does a Spec whose
 /// Tickets are all closed with no Spec branch to continue.
 ///
-/// `inherited_failures` says what the Run, or a Spec run on its Spec PR, does
-/// when its only red checks are Inherited failures.
+/// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
+/// start when its only red checks are Inherited failures.
 pub fn run(
     issue: &IssueUrl,
     goal: Goal,
@@ -79,7 +77,7 @@ pub fn run(
     launch_pull: bool,
     parallel: Parallel,
     given_base: Option<&str>,
-    inherited_failures: Policy,
+    base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
@@ -130,7 +128,6 @@ pub fn run(
         dir: logs_dir,
         timestamp: &timestamp,
     };
-    let mut base_fix = BaseFix::new(inherited_failures);
     if !tickets.is_empty() {
         return spec_run::run(
             issue,
@@ -138,7 +135,7 @@ pub fn run(
             worktree,
             &base,
             goal,
-            &mut base_fix,
+            base_fix,
             &logs,
             parallel.tickets,
         );
@@ -151,14 +148,7 @@ pub fn run(
     };
     let mut log = logs.path("implement");
     let implemented = implement(
-        issue,
-        &worktree,
-        &base,
-        &prompt,
-        goal,
-        &mut base_fix,
-        &logs,
-        &mut log,
+        issue, &worktree, &base, &prompt, goal, base_fix, &logs, &mut log,
     );
     match implemented {
         Ok(pr_url) => Ok(Reached {
@@ -166,12 +156,8 @@ pub fn run(
             goal,
             log: Some(log),
             ticket_lines: Vec::new(),
-            base_fix: base_fix.report(),
         }),
-        Err(error) => Err(FailedRun {
-            base_fix: base_fix.report(),
-            ..failed_run::fail(issue, worktree, &base, &log, error)
-        }),
+        Err(error) => Err(failed_run::fail(issue, worktree, &base, &log, error)),
     }
 }
 

@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result, bail};
 
+use crate::child_run::Kind;
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
@@ -21,15 +22,11 @@ pub enum Command {
 }
 
 /// The hidden argument a Spec run starts each Ticket's Run with, followed by
-/// the Spec branch: it makes the Run a Merge run into the Spec branch that
-/// sends no Run notification and leaves the Launch directory alone. Not in
-/// help.
+/// the Spec branch: it makes the Run a [`Kind::Ticket`]. Not in help.
 pub const SPEC_BRANCH: &str = "--spec-branch";
 
 /// The hidden argument a Run starts its Base fix with, followed by the Run's
-/// Base branch: it makes the Base fix a Merge run into that branch that sends
-/// no Run notification, leaves the Launch directory alone, sees no Inherited
-/// failures and starts no Base fix of its own. Not in help.
+/// Base branch: it makes the Run a [`Kind::BaseFix`]. Not in help.
 pub const BASE_FIX_INTO: &str = "--base-fix-into";
 
 /// A Run's arguments.
@@ -46,10 +43,9 @@ pub struct RunArgs {
     pub parallel: Option<NonZeroUsize>,
     /// Whether `base-fix` was given: the Run may start a Base fix.
     pub base_fix: bool,
-    /// The Spec branch, given with [`SPEC_BRANCH`] to a Ticket's Run.
-    pub spec_branch: Option<String>,
-    /// The Base branch, given with [`BASE_FIX_INTO`] to a Base fix.
-    pub base_fix_into: Option<String>,
+    /// What the Run is, if another thirdshift started it, given with
+    /// [`SPEC_BRANCH`] or [`BASE_FIX_INTO`].
+    pub child: Option<Kind>,
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
@@ -84,8 +80,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let mut email = None;
     let mut parallel = None;
     let mut base_fix = false;
-    let mut spec_branch = None;
-    let mut base_fix_into = None;
+    let mut child = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -117,17 +112,16 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 }
                 base_fix = true;
             }
-            SPEC_BRANCH => {
-                if spec_branch.is_some() {
+            SPEC_BRANCH | BASE_FIX_INTO => {
+                if child.is_some() {
                     bail!("repeated argument: {arg}");
                 }
-                spec_branch = Some(args.next().context("missing Spec branch")?.clone());
-            }
-            BASE_FIX_INTO => {
-                if base_fix_into.is_some() {
-                    bail!("repeated argument: {arg}");
-                }
-                base_fix_into = Some(args.next().context("missing Base branch")?.clone());
+                let base = args.next().context("missing Base branch")?.clone();
+                child = Some(if arg == SPEC_BRANCH {
+                    Kind::Ticket { spec_branch: base }
+                } else {
+                    Kind::BaseFix { base }
+                });
             }
             _ => {
                 if issue.is_some() {
@@ -146,8 +140,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         email,
         parallel,
         base_fix,
-        spec_branch,
-        base_fix_into,
+        child,
     }))
 }
 

@@ -31,7 +31,8 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use args::{Command, RunArgs};
-use base_fix::Policy;
+use base_fix::BaseFix;
+use child_run::Kind;
 use config::UserConfig;
 use notification::{NotificationAsk, RunNotification};
 use run::Goal;
@@ -129,8 +130,7 @@ fn main() -> ExitCode {
         email,
         parallel,
         base_fix,
-        spec_branch,
-        base_fix_into,
+        child,
     } = match args::parse(&args) {
         Ok(Command::Help) => {
             print!("{HELP}");
@@ -157,16 +157,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let inherited_failures = match (&base_fix_into, base_fix) {
-        (Some(_), _) => Policy::IsBaseFix,
-        (None, true) => Policy::StartBaseFix,
-        (None, false) => Policy::FailTheRun,
-    };
-    // A Ticket's Run in a Spec run, like a Base fix, is always a Merge run
-    // into the Base branch it was given, and leaves the Run notification and
-    // the Launch directory to what started it.
-    let given_base = spec_branch.or(base_fix_into);
-    let (goal, email, launch_pull) = match given_base {
+    // A child Run, a Ticket's Run in a Spec run or a Base fix, is always a
+    // Merge run, and leaves the Run notification and the Launch directory to
+    // what started it.
+    let (goal, email, launch_pull) = match child {
         Some(_) => (Goal::Merged, NotificationAsk::Skip, false),
         None => (
             goal.unwrap_or(config.default_goal()),
@@ -190,6 +184,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let mut base_fix = BaseFix::new(child.as_ref(), base_fix);
     let parallel = Parallel {
         tickets: parallel.unwrap_or(config.spec_parallel),
         asked: parallel.is_some(),
@@ -200,8 +195,8 @@ fn main() -> ExitCode {
         &config.logs_dir,
         launch_pull,
         parallel,
-        given_base.as_deref(),
-        inherited_failures,
+        child.as_ref().map(Kind::base),
+        &mut base_fix,
     );
     let code = match &ended {
         Ok(reached) => {
@@ -226,7 +221,7 @@ fn main() -> ExitCode {
         }
     };
     if let Some(notification) = notification {
-        notification.send(&ended);
+        notification.send(&ended, base_fix.report().as_deref());
     }
     code
 }

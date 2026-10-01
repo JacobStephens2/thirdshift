@@ -4,10 +4,9 @@
 
 use anyhow::{Result, bail};
 
-use crate::args;
-use crate::child_run::{self, Ended};
+use crate::child_run::{self, Ended, Kind};
 use crate::ci;
-use crate::github::{self, Check};
+use crate::github::{self, Check, CheckState};
 use crate::issue::IssueUrl;
 use crate::progress;
 
@@ -20,7 +19,7 @@ const LABELS: [(&str, &str); 2] = [
 
 /// What a Run does when its only red checks are Inherited failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Policy {
+enum OnInheritedFailures {
     /// Fail, saying to fix the Base branch first.
     FailTheRun,
     /// Start a Base fix, once, and go on when it has merged.
@@ -32,7 +31,7 @@ pub enum Policy {
 
 /// A Run's one Base fix: whether it may start one, and the one it started.
 pub struct BaseFix {
-    policy: Policy,
+    on_inherited_failures: OnInheritedFailures,
     started: Option<Started>,
 }
 
@@ -43,9 +42,17 @@ struct Started {
 }
 
 impl BaseFix {
-    pub fn new(policy: Policy) -> Self {
+    /// The Base fix of a Run that is the child Run `child`, if it is one,
+    /// and that, with `asked`, was given `base-fix`. A Base fix starts none
+    /// of its own, whatever it was given.
+    pub fn new(child: Option<&Kind>, asked: bool) -> Self {
+        let on_inherited_failures = match (child, asked) {
+            (Some(Kind::BaseFix { .. }), _) => OnInheritedFailures::IsBaseFix,
+            (_, true) => OnInheritedFailures::StartBaseFix,
+            (_, false) => OnInheritedFailures::FailTheRun,
+        };
         BaseFix {
-            policy,
+            on_inherited_failures,
             started: None,
         }
     }
@@ -53,11 +60,17 @@ impl BaseFix {
     /// Whether the Run compares its red checks with the Base branch's, so
     /// that some may be Inherited failures.
     pub fn sees_inherited_failures(&self) -> bool {
-        self.policy != Policy::IsBaseFix
+        self.on_inherited_failures != OnInheritedFailures::IsBaseFix
+    }
+
+    /// Whether the Run may start a Base fix, as may then each Ticket's Run
+    /// of a Spec run.
+    pub fn may_start(&self) -> bool {
+        self.on_inherited_failures == OnInheritedFailures::StartBaseFix
     }
 
     /// Fix the checks `inherited`, the only red ones on the PR `pr_url` of
-    /// the Run on `run` and all Inherited failures from `base` at
+    /// the Run on `issue` and all Inherited failures from `base` at
     /// `base_commit`, with a Base fix: write its issue, start it as a child
     /// `thirdshift` and wait for it to merge, after which the Run is to merge
     /// `base` in and watch CI again. Fails, with the Run's cause, if the Run
@@ -66,7 +79,7 @@ impl BaseFix {
     /// which case the cause names that one's issue.
     pub fn fix(
         &mut self,
-        run: &IssueUrl,
+        issue: &IssueUrl,
         pr_url: &str,
         base: &str,
         base_commit: &str,
@@ -81,25 +94,36 @@ impl BaseFix {
                 started.issue.url
             );
         }
-        if self.policy != Policy::StartBaseFix {
+        if !self.may_start() {
             bail!("CI red on {checks}, which also fails on {base} at {base_at}; fix {base} first");
         }
-        let issue = github::create_issue(
-            run,
+        // The issue links the Base branch's own failed checks, not the PR's.
+        let on_base: Vec<Check> = github::checks_on(issue, base_commit)?
+            .into_iter()
+            .filter(|check| {
+                check.state == CheckState::Failed
+                    && inherited.iter().any(|failed| failed.name == check.name)
+            })
+            .collect();
+        let fix = github::create_issue(
+            issue,
             &format!("CI red on {base}: {checks}"),
-            &issue_body(run, pr_url, base, base_at, inherited),
+            &issue_body(issue, pr_url, base, base_at, &on_base),
             &LABELS,
         )?;
-        let number = issue.number;
+        let number = fix.number;
         progress::step(format_args!(
             "starting Base fix #{number} into {base}: {}",
-            issue.url
+            fix.url
         ));
         let started = self.started.insert(Started {
-            issue,
+            issue: fix,
             merged: false,
         });
-        let child = child_run::start(&started.issue, [args::BASE_FIX_INTO, base])?;
+        let kind = Kind::BaseFix {
+            base: base.to_string(),
+        };
+        let child = child_run::start(&started.issue, &kind, false)?;
         progress::step(format_args!("waiting on Base fix #{number}"));
         match child_run::wait(number, child)? {
             Ended::Reached(_) => {
@@ -133,18 +157,17 @@ impl BaseFix {
 }
 
 /// The body of the Base fix issue, from a fixed template: the checks
-/// `inherited` with their URLs, the Base branch `base` and its commit
-/// `base_at`, shortened, and the Run that found them, on `run` with the PR
-/// `pr_url`.
+/// `failed` on the Base branch `base` at its commit `base_at`, shortened, with
+/// their URLs, and the Run that found them, on `issue` with the PR `pr_url`.
 fn issue_body(
-    run: &IssueUrl,
+    issue: &IssueUrl,
     pr_url: &str,
     base: &str,
     base_at: &str,
-    inherited: &[Check],
+    failed: &[Check],
 ) -> String {
     let mut checks = String::new();
-    for check in inherited {
+    for check in failed {
         checks += &match &check.url {
             Some(url) => format!("- {}: {url}\n", check.name),
             None => format!("- {}\n", check.name),
@@ -158,6 +181,6 @@ fn issue_body(
          Found by the thirdshift Run on #{}, whose pull request is {pr_url}.\n\
          \n\
          Fix the checks on `{base}`. Do not skip, disable, or weaken tests or checks to make them pass.\n",
-        run.number
+        issue.number
     )
 }

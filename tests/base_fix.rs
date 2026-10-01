@@ -17,7 +17,7 @@ git add feature.txt
 git commit -q -m "Add feature"
 gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "failure", "url": "https://ci.example/test"}]'
-gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "failure", "url": "https://ci.example/test"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "failure", "url": "https://ci.example/main/test"}]'
 "#;
 
 /// The agent, on the Base fix issue #8, commits a fix and opens its PR into
@@ -33,16 +33,10 @@ const GREEN_ON_HEAD: &str = "gh fake checks \"$(git rev-parse HEAD)\" '[{\"name\
 
 const RED_ON_HEAD: &str = "gh fake checks \"$(git rev-parse HEAD)\" '[{\"name\": \"test\", \"conclusion\": \"failure\"}]'\n";
 
-const BASE_FIX_URL: &str = "https://github.com/acme/widgets/issues/8";
+/// Resend's reply to an email it accepted.
+const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
 
-/// Every `gh <command> <subcommand>` call made, e.g. `gh issue create`.
-fn gh_calls_of(scenario: &Scenario, command: &str, subcommand: &str) -> Vec<Vec<String>> {
-    scenario
-        .gh_calls()
-        .into_iter()
-        .filter(|call| call.starts_with(&[command.to_string(), subcommand.to_string()]))
-        .collect()
-}
+const BASE_FIX_URL: &str = "https://github.com/acme/widgets/issues/8";
 
 /// The prompt of each session, in order.
 fn prompts(scenario: &Scenario) -> Vec<String> {
@@ -71,7 +65,7 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
         format!(
             "CI is red on `main` at {}: these checks fail there, so every pull request into `main` inherits them.\n\
              \n\
-             - test: https://ci.example/test\n\
+             - test: https://ci.example/main/test\n\
              \n\
              Found by the thirdshift Run on #7, whose pull request is https://github.com/acme/widgets/pull/1.\n\
              \n\
@@ -122,7 +116,7 @@ fn the_base_fix_repairs_the_check_as_its_own_and_only_the_run_sends_a_notificati
             "echo more > more.txt\ngit add more.txt\ngit commit -q -m 'Fix more'\n{GREEN_ON_HEAD}"
         ),
     );
-    let resend = ResendStandIn::replying(200, r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
     let result = scenario.run_with_env(
         &[
@@ -153,7 +147,7 @@ fn the_base_fix_repairs_the_check_as_its_own_and_only_the_run_sends_a_notificati
         result.stderr
     );
     assert_eq!(scenario.gh_state()["prs"][1]["state"], "MERGED");
-    assert_eq!(gh_calls_of(&scenario, "issue", "create").len(), 1);
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
     // One Run notification: the Run's, which reports the Base fix.
     let requests = resend.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
@@ -224,8 +218,20 @@ fn a_failing_base_fix_fails_the_run_naming_its_issue() {
     let scenario = Scenario::new();
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
     scenario.agent_does_for(8, "exit 3\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-    let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+    let result = scenario.run_with_env(
+        &[
+            &scenario.issue_url(7),
+            "base-fix",
+            "email",
+            "me@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    );
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
@@ -248,6 +254,14 @@ fn a_failing_base_fix_fails_the_run_naming_its_issue() {
         scenario.origin_log("issue-7")
     );
     scenario.assert_cleaned_up("issue-7");
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(
+        text.contains(&cause)
+            && text.contains(&format!("Base fix:     {BASE_FIX_URL} not merged\n")),
+        "text: {text}"
+    );
 }
 
 #[test]
@@ -277,7 +291,7 @@ fn checks_still_inherited_failures_after_the_base_fix_merged_fail_the_run_with_n
     assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
     let gh = scenario.gh_state();
     assert_eq!(gh["prs"][1]["state"], "MERGED");
-    assert_eq!(gh_calls_of(&scenario, "issue", "create").len(), 1);
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
     assert_eq!(gh["issues"].as_object().unwrap().len(), 2, "#7 and #8");
     assert_eq!(gh["prs"][0]["isDraft"], true);
     assert_eq!(prompts(&scenario).len(), 2, "no Repair");
@@ -300,8 +314,8 @@ fn without_base_fix_an_inherited_failure_fails_the_run_and_writes_no_issue() {
         "stderr: {}",
         result.stderr
     );
-    assert!(gh_calls_of(&scenario, "issue", "create").is_empty());
-    assert!(gh_calls_of(&scenario, "label", "list").is_empty());
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+    assert!(scenario.gh_calls_of("label", "list").is_empty());
     assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
 }
 
@@ -317,7 +331,7 @@ fn a_label_the_repository_lacks_is_added_and_one_it_has_is_left_alone() {
     let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let created = gh_calls_of(&scenario, "label", "create");
+    let created = scenario.gh_calls_of("label", "create");
     assert_eq!(created.len(), 1, "{created:?}");
     assert_eq!(created[0][2], "base-fix");
     assert_eq!(

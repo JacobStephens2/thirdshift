@@ -290,13 +290,13 @@ thirdshift base-fix https://github.com/acme/widgets/issues/7
 
 When the Run's only red checks are Inherited failures and the Base branch has not moved since, it then starts a **Base fix**, at most one per Run ([ADR-0008](docs/adr/0008-inherited-failures-fail-the-run.md)):
 
-1. thirdshift opens an issue from a fixed template, with no agent session: titled `CI red on <base>: <check>[, <check>…]`, its body naming the checks with their URLs, the Base branch and its short sha, and the Run's pull request, labelled `base-fix` and `ready-for-agent`. A label the repository lacks is added to it first.
+1. thirdshift opens an issue from a fixed template, with no agent session: titled `CI red on <base>: <check>[, <check>…]`, its body naming the checks with their URLs on the Base branch, the Base branch and its short sha, and the Run's pull request, labelled `base-fix` and `ready-for-agent`. A label the repository lacks is added to it first.
 2. It starts a child `thirdshift` on that issue from the same Launch directory, as a Merge run into the Run's Base branch, whatever the Run's own goal. Its progress lines are relayed with a `#<n>: ` prefix, after `starting Base fix #<n> into <base>: <issue URL>` and `waiting on Base fix #<n>`. The Base fix sends no Run notification, treats every red check as its own to fix rather than as an Inherited failure, and never starts a Base fix of its own.
 3. Once the Base fix has merged, and its Self-merge has closed its issue, the Run merges the Base branch in again and watches CI, and goes on as usual: ready for review, or merged in a Merge run.
 
 If the Base fix fails, the Run is a [Failed run](#failed-runs) with the cause `Base fix <issue URL> failed: <its cause>`. If the checks are still Inherited failures once the Base fix has merged, there is no second one, and the cause is `CI red on <check>, which also fails on <base> at <short sha>, even after Base fix <issue URL> merged; fix <base> first`. The Run's own [Run notification](#run-notifications) has a `Base fix:` line with the issue's URL and whether it merged.
 
-On a Spec, `base-fix` is for the Spec PR, whose Base fix goes into the Base branch. A Ticket's Run starts no Base fix: an Inherited failure from the Spec branch fails it.
+On a Spec, `base-fix` goes to each Ticket's Run, whose Base fix goes into the Spec branch, its Base branch, and to the Spec PR, whose Base fix goes into the Base branch. Tickets running at once that meet the same Inherited failure each start a Base fix of their own.
 
 Without `base-fix`, an Inherited failure fails the Run as described in [What a Run does](#what-a-run-does).
 

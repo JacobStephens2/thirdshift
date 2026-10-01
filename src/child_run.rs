@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::args;
 use crate::failed_run;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -16,6 +17,36 @@ use crate::progress;
 
 /// How often to check whether a child Run has ended, or been interrupted.
 const POLL: Duration = Duration::from_millis(100);
+
+/// What a child Run is, with the Base branch it is given: a Merge run into
+/// that branch that sends no Run notification and leaves the Launch directory
+/// alone.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// A Ticket's Run in a Spec run, into the Spec branch.
+    Ticket { spec_branch: String },
+    /// A Base fix, into the Base branch of the Run that started it. It sees
+    /// no Inherited failures and starts no Base fix of its own.
+    BaseFix { base: String },
+}
+
+impl Kind {
+    /// The Base branch the child Run is given.
+    pub fn base(&self) -> &str {
+        match self {
+            Kind::Ticket { spec_branch } => spec_branch,
+            Kind::BaseFix { base } => base,
+        }
+    }
+
+    /// The hidden argument that says which kind the child Run is.
+    fn hidden_argument(&self) -> &'static str {
+        match self {
+            Kind::Ticket { .. } => args::SPEC_BRANCH,
+            Kind::BaseFix { .. } => args::BASE_FIX_INTO,
+        }
+    }
+}
 
 /// How a child Run ended.
 pub enum Ended {
@@ -27,12 +58,13 @@ pub enum Ended {
     Interrupted,
 }
 
-/// Start a Run on `issue` in a child `thirdshift`, from the same Launch
-/// directory, given `hidden`: the argument that says what started it, and the
-/// Base branch that goes with it.
-pub fn start(issue: &IssueUrl, hidden: [&str; 2]) -> Result<Child> {
+/// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
+/// Launch directory. With `base_fix`, it is given `base-fix`, so it may start
+/// a Base fix.
+pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: bool) -> Result<Child> {
     Command::new(std::env::current_exe().context("no thirdshift executable")?)
-        .args(hidden)
+        .args([kind.hidden_argument(), kind.base()])
+        .args(base_fix.then_some("base-fix"))
         .arg(&issue.url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

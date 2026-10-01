@@ -14,9 +14,8 @@ use std::thread;
 
 use anyhow::{Context, Result, bail};
 
-use crate::args;
 use crate::base_fix::BaseFix;
-use crate::child_run::{self, Ended};
+use crate::child_run::{self, Ended, Kind};
 use crate::failed_run::{self, FailedRun};
 use crate::github::{self, PullRequest, Ticket};
 use crate::interrupt;
@@ -70,7 +69,8 @@ pub fn all_closed(tickets: &[Ticket]) -> bool {
 /// cleaned up when this returns, or kept by the Failed run path if its work
 /// did not reach origin. However it ends, it carries a line on each Ticket
 /// it landed or did not get done, for the Run notification. `base_fix` is for
-/// the Spec PR's Repair loop: a Ticket's Run starts no Base fix.
+/// the Spec PR's Repair loop, and if it may start a Base fix, so may each
+/// Ticket's Run, into the Spec branch.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     spec: &IssueUrl,
@@ -83,8 +83,15 @@ pub fn run(
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
     let mut spec_pr = draft_spec_pr(spec, worktree.branch())?;
-    let (ticket_lines, landed) =
-        land_tickets(spec, tickets, &worktree, base, parallel, &mut spec_pr);
+    let (ticket_lines, landed) = land_tickets(
+        spec,
+        tickets,
+        &worktree,
+        base,
+        parallel,
+        base_fix.may_start(),
+        &mut spec_pr,
+    );
     let ended = match landed {
         Ok(checklist) => open_and_review(
             spec, worktree, base, spec_pr, &checklist, goal, base_fix, logs,
@@ -97,12 +104,10 @@ pub fn run(
     match ended {
         Ok(reached) => Ok(Reached {
             ticket_lines,
-            base_fix: base_fix.report(),
             ..reached
         }),
         Err(failed) => Err(FailedRun {
             ticket_lines,
-            base_fix: base_fix.report(),
             ..failed
         }),
     }
@@ -136,7 +141,6 @@ fn open_and_review(
             goal,
             log: Some(log),
             ticket_lines: Vec::new(),
-            base_fix: None,
         }),
         Err(error) => {
             // The Spec review may have rewritten the body without it.
@@ -166,12 +170,14 @@ enum TicketOutcome {
 /// not done, none if the Spec branch could not be pushed, and the last
 /// Tickets checklist if every Ticket is done: if not, it fails, after putting
 /// those lines on stderr unless an interrupt or another error ended it first.
+/// With `base_fix`, each Ticket's Run may start a Base fix.
 fn land_tickets(
     spec: &IssueUrl,
     mut tickets: Vec<Ticket>,
     worktree: &Worktree,
     base: &str,
     parallel: NonZeroUsize,
+    base_fix: bool,
     spec_pr: &mut Option<PullRequest>,
 ) -> (Vec<String>, Result<String>) {
     if let Err(error) = worktree.push() {
@@ -185,6 +191,7 @@ fn land_tickets(
         worktree.branch(),
         base,
         parallel,
+        base_fix,
         spec_pr,
     );
     let lines = summarize(&tickets, &outcomes);
@@ -210,7 +217,8 @@ fn land_tickets(
 /// Ticket's outcome in `outcomes`, and the Tickets checklist of `spec_pr`,
 /// opened into `base` once a Ticket lands, up to date. An interrupt, or an
 /// error other than a Ticket failing, stops any more from starting, and
-/// fails this once those running have ended.
+/// fails this once those running have ended. With `base_fix`, each Ticket's
+/// Run may start a Base fix.
 #[allow(clippy::too_many_arguments)]
 fn run_ready_tickets(
     spec: &IssueUrl,
@@ -219,6 +227,7 @@ fn run_ready_tickets(
     spec_branch: &str,
     base: &str,
     parallel: NonZeroUsize,
+    base_fix: bool,
     spec_pr: &mut Option<PullRequest>,
 ) -> Result<()> {
     let (ended, endings) = mpsc::channel();
@@ -230,7 +239,7 @@ fn run_ready_tickets(
             let Some(ticket) = next_ready(tickets, outcomes, &running) else {
                 break;
             };
-            match start_ticket(spec, ticket, spec_branch, ended.clone()) {
+            match start_ticket(spec, ticket, spec_branch, base_fix, ended.clone()) {
                 Ok(()) => {
                     running.insert(ticket);
                     outcomes.insert(ticket, TicketOutcome::Running);
@@ -468,16 +477,21 @@ fn cycle_through(start: u64, tickets: &[Ticket]) -> Option<Vec<u64>> {
 }
 
 /// Start Ticket `number` of `spec` as a child `thirdshift`, a Merge run into
-/// `spec_branch` from the same Launch directory, and a thread that sends
-/// `number` and how it ended on `ended`.
+/// `spec_branch` from the same Launch directory that, with `base_fix`, may
+/// start a Base fix, and a thread that sends `number` and how it ended on
+/// `ended`.
 fn start_ticket(
     spec: &IssueUrl,
     number: u64,
     spec_branch: &str,
+    base_fix: bool,
     ended: Sender<(u64, Result<TicketOutcome>)>,
 ) -> Result<()> {
     progress::step(format_args!("starting #{number}"));
-    let child = child_run::start(&spec.sibling(number), [args::SPEC_BRANCH, spec_branch])?;
+    let kind = Kind::Ticket {
+        spec_branch: spec_branch.to_string(),
+    };
+    let child = child_run::start(&spec.sibling(number), &kind, base_fix)?;
     thread::spawn(move || {
         let _ = ended.send((number, finish_ticket(number, child)));
     });
