@@ -465,6 +465,40 @@ fn red_ci_on_the_spec_prs_head_gets_a_ci_fix_repair() {
     );
 }
 
+/// Bash that sets the check runs on `origin/<branch>`'s tip, as the worktree
+/// last fetched it, to `checks`.
+fn checks_on_origin(branch: &str, checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse origin/{branch})\" '{checks}'\n")
+}
+
+/// The cause of a Failed run whose red check `test` is an Inherited failure
+/// from `base`, as its tip on origin is now.
+fn inherited_failure(scenario: &Scenario, base: &str) -> String {
+    let base_commit = scenario.origin_git(&["rev-parse", base]);
+    format!(
+        "CI red on test, which also fails on {base} at {}; fix {base} first",
+        &base_commit[..7]
+    )
+}
+
+#[test]
+fn a_spec_pr_whose_red_check_also_fails_on_the_base_branch_commit_gets_no_repair() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        &format!("{}{}", checks_on_head(RED), checks_on_origin("main", RED)),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, &inherited_failure(&scenario, "main"));
+    assert_eq!(spec_prompts(&scenario).len(), 1, "only the Spec review");
+    let spec = spec_pr(&scenario);
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], true);
+}
+
 #[test]
 fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
     let scenario = linear_spec();
@@ -1310,6 +1344,37 @@ fn a_ticket_that_fails_once_the_spec_pr_is_open_is_shown_failed_in_its_checklist
         &result.stderr,
         "thirdshift: updating the Spec PR's Tickets checklist\n",
     );
+}
+
+#[test]
+fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the_checklist() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "{}{}{}",
+            agent_lands(22, "22.txt"),
+            checks_on_head(RED),
+            checks_on_origin("issue-20", RED)
+        ),
+    );
+
+    // One at a time, so #22 branches off a Spec branch #21 has landed on.
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    let cause = inherited_failure(&scenario, "issue-20");
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        &format!(
+            "- [x] #21 landed with https://github.com/acme/widgets/pull/1\n\
+             - [ ] #22 failed: {cause}\n"
+        ),
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22"], "no Repair");
+    assert_contains(&result.stderr, &format!("thirdshift: #22 failed: {cause}"));
+    assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "OPEN");
+    assert_eq!(scenario.origin_file("issue-20", "22.txt"), None);
 }
 
 #[test]

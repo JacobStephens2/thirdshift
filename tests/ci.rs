@@ -1,6 +1,8 @@
 //! Watching CI: after each push thirdshift waits for checks on the head
 //! commit, hands red CI to a CI-fix Repair, and gives up after 5 Repairs, or
-//! as soon as a CI-fix Repair makes no commit.
+//! as soon as a CI-fix Repair makes no commit. A red check that also fails on
+//! the Base branch commit the head merged in is an Inherited failure, which
+//! gets no Repair.
 
 mod support;
 
@@ -518,4 +520,217 @@ fn a_pr_whose_mergeability_stays_unknown_is_a_failed_run() {
         result.stderr
     );
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+}
+
+/// Bash that sets the check runs on `origin/main`'s tip, as the worktree last
+/// fetched it, to `checks`.
+fn checks_on_base(checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse origin/main)\" '{checks}'\n")
+}
+
+/// The cause of a Failed run whose red `checks` are all Inherited failures
+/// from `main` at `base_commit`.
+fn inherited_failure(checks: &str, base_commit: &str) -> String {
+    format!(
+        "CI red on {checks}, which also fails on main at {}; fix main first",
+        &base_commit.trim()[..7]
+    )
+}
+
+#[test]
+fn checks_that_also_fail_on_the_base_branch_commit_fail_the_run_without_a_repair() {
+    const BOTH_RED: &str = r#"[{"name": "test", "conclusion": "failure"},
+                               {"name": "lint", "conclusion": "failure"},
+                               {"name": "build", "conclusion": "success"}]"#;
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        checks_on_head(BOTH_RED),
+        checks_on_base(BOTH_RED)
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    let base_commit = scenario.origin_git(&["rev-parse", "main"]);
+    let cause = inherited_failure("test, lint", &base_commit);
+    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: Inherited failures (also failing on main at {}): test, lint\n",
+            &base_commit[..7]
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("starting Repair"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "the implement session");
+    assert_session_log_is(&result, "implement");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            format!("thirdshift: failed run ({cause})"),
+            "Add feature".to_string(),
+            "Initial commit".to_string(),
+        ])
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn with_mixed_failures_the_repair_fixes_only_the_branchs_own_and_the_run_then_fails_on_the_inherited()
+ {
+    const TEST_RED: &str =
+        r#"{"name": "test", "conclusion": "failure", "url": "https://ci.example/test"}"#;
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        checks_on_head(&format!(
+            r#"[{TEST_RED},
+                {{"name": "lint", "conclusion": "failure", "url": "https://ci.example/lint"}}]"#
+        )),
+        checks_on_base(&format!("[{TEST_RED}]"))
+    ));
+    // The Repair turns lint green; test stays red, as on main.
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{}{}",
+            commits_fix(1),
+            checks_on_head(&format!(
+                r#"[{TEST_RED}, {{"name": "lint", "conclusion": "success"}}]"#
+            ))
+        ),
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2, "the implement session and 1 Repair");
+    assert_eq!(
+        calls[1]["prompt"],
+        "CI failed on pull request https://github.com/acme/widgets/pull/1 (branch issue-7, implementing https://github.com/acme/widgets/issues/7).\n\
+         \n\
+         Failed checks:\n\
+         - lint: https://ci.example/lint\n\
+         \n\
+         Also failing on `main`; don't fix:\n\
+         - test: https://ci.example/test\n\
+         \n\
+         Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
+         Run the affected checks locally, commit, and push issue-7.\n\
+         \n\
+         If a failure is not caused by this branch (it is flaky, or also fails on main), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n\
+         \n\
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it.\n"
+    );
+    let base_commit = scenario.origin_git(&["rev-parse", "main"]);
+    let cause = inherited_failure("test", &base_commit);
+    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[..2],
+        [
+            format!("thirdshift: failed run ({cause})"),
+            "Fix CI 1".to_string()
+        ]
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+}
+
+/// Assert that `prompt` is a CI-fix Repair's that names no Inherited failure.
+fn assert_ci_fix_repair_with_no_inherited_failures(prompt: &serde_json::Value) {
+    let prompt = prompt.as_str().unwrap();
+    assert!(
+        prompt.starts_with("CI failed on pull request") && prompt.contains("- test"),
+        "prompt: {prompt}"
+    );
+    assert!(!prompt.contains("Also failing on"), "prompt: {prompt}");
+}
+
+#[test]
+fn a_check_still_pending_on_the_base_branch_commit_is_handed_to_a_ci_fix_repair() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        checks_on_head(RED),
+        checks_on_base(r#"[{"name": "test", "conclusion": "failure", "pending_polls": 1000}]"#)
+    ));
+    scenario.agent_does_in_session(2, &format!("{}{}", commits_fix(1), checks_on_head(GREEN)));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2, "the implement session and 1 Repair");
+    assert_ci_fix_repair_with_no_inherited_failures(&calls[1]["prompt"]);
+}
+
+#[test]
+fn a_check_passed_or_missing_on_the_base_branch_commit_is_handed_to_a_ci_fix_repair() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        checks_on_head(
+            r#"[{"name": "test", "conclusion": "failure"},
+                {"name": "lint", "conclusion": "failure"}]"#
+        ),
+        // test passed on main, lint never ran there, and what failed there is
+        // another check.
+        checks_on_base(
+            r#"[{"name": "test", "conclusion": "success"},
+                {"name": "deploy", "conclusion": "failure"}]"#
+        )
+    ));
+    scenario.agent_does_in_session(2, &format!("{}{}", commits_fix(1), checks_on_head(GREEN)));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2, "the implement session and 1 Repair");
+    assert_ci_fix_repair_with_no_inherited_failures(&calls[1]["prompt"]);
+    assert!(
+        calls[1]["prompt"].as_str().unwrap().contains("- lint"),
+        "prompt: {}",
+        calls[1]["prompt"]
+    );
+}
+
+#[test]
+fn when_the_base_branch_moved_since_inherited_failures_it_is_merged_again_and_ci_watched_again() {
+    let scenario = Scenario::new();
+    // main moves on while CI runs on the head, as if someone fixed it, so CI
+    // is watched on the merge commit instead, which has no checks.
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}gh fake on-ci-read 1 '{}'\n",
+        checks_on_head(RED),
+        checks_on_base(RED),
+        base_moves_on("other.txt", "other")
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1, "the implement session");
+    assert!(
+        result
+            .stderr
+            .contains("origin/main moved while CI ran; merging it again"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("no CI checks appeared"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    scenario.assert_cleaned_up("issue-7");
 }

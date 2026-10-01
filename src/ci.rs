@@ -14,12 +14,24 @@ pub enum Ci {
     Absent,
     Passed,
     /// Red, with the checks that failed.
-    Failed(Vec<Check>),
+    Failed(Failed),
+}
+
+/// The checks that failed on a commit, at least one, split by whether the
+/// branch is the one to fix them.
+pub struct Failed {
+    /// The branch's own failures, for a CI-fix Repair.
+    pub own: Vec<Check>,
+    /// Inherited failures: checks that also failed, under the same name, on
+    /// the Base branch commit.
+    pub inherited: Vec<Check>,
 }
 
 /// Wait up to the grace period for any check or status on `sha`, then watch
-/// them until they have all finished.
-pub fn watch(issue: &IssueUrl, sha: &str) -> Result<Ci> {
+/// them until they have all finished. Checks that failed are compared, by
+/// name, with the checks on `base_commit` as they stand: the Base branch's CI
+/// is never waited for or triggered, and no log text is read.
+pub fn watch(issue: &IssueUrl, sha: &str, base_commit: &str) -> Result<Ci> {
     let grace = poll::grace_period();
     let short = short(sha);
     progress::step(format_args!(
@@ -60,9 +72,20 @@ pub fn watch(issue: &IssueUrl, sha: &str) -> Result<Ci> {
         progress::step(format_args!("CI passed on {short}"));
         return Ok(Ci::Passed);
     }
-    let names: Vec<&str> = failed.iter().map(|check| check.name.as_str()).collect();
-    progress::step(format_args!("CI failed on {short}: {}", names.join(", ")));
-    Ok(Ci::Failed(failed))
+    progress::step(format_args!("CI failed on {short}: {}", names(&failed)));
+    let on_base = github::checks_on(issue, base_commit)?;
+    let (inherited, own) = failed.into_iter().partition(|check| {
+        on_base
+            .iter()
+            .any(|base| base.name == check.name && base.state == CheckState::Failed)
+    });
+    Ok(Ci::Failed(Failed { own, inherited }))
+}
+
+/// The names of `checks`, as in "test, lint".
+pub fn names(checks: &[Check]) -> String {
+    let names: Vec<&str> = checks.iter().map(|check| check.name.as_str()).collect();
+    names.join(", ")
 }
 
 /// `sha` shortened to 7 characters, as in progress messages.

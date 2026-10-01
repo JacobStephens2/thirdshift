@@ -1003,3 +1003,30 @@ fn a_merge_refused_with_nothing_left_to_fix_leaves_the_pr_ready_for_review() {
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
     scenario.assert_cleaned_up("issue-7");
 }
+
+#[test]
+fn a_merge_run_whose_red_checks_also_fail_on_the_base_branch_commit_does_not_merge() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}gh fake checks \"$(git rev-parse origin/main)\" '{RED}'\n",
+        checks_on_head(RED)
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    let base_commit = scenario.origin_git(&["rev-parse", "main"]);
+    let cause = format!(
+        "CI red on test, which also fails on main at {}; fix main first",
+        &base_commit[..7]
+    );
+    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1, "the implement session");
+    assert!(gh_calls_of(&scenario, "pr", "merge").is_empty());
+    let gh = scenario.gh_state();
+    assert_eq!(gh["prs"][0]["state"], "OPEN");
+    assert_eq!(gh["prs"][0]["isDraft"], true);
+    assert_eq!(gh["issues"]["7"], "OPEN");
+    assert_eq!(scenario.origin_file("main", "feature.txt"), None);
+}

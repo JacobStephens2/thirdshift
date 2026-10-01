@@ -158,6 +158,15 @@ impl Worktree {
         self.merge(&format!("origin/{base}"))
     }
 
+    /// The Base branch commit the Issue branch last merged in: the newest
+    /// commit of `origin/<base>`, as last fetched, that its head contains.
+    /// Another Run's fetch may have moved the shared remote-tracking ref on
+    /// since the merge, which this is unaffected by.
+    pub fn merged_base_commit(&self, base: &str) -> Result<String> {
+        self.git
+            .run(&["merge-base", "HEAD", &format!("origin/{base}")])
+    }
+
     /// The Issue branch on origin, as fetched: `origin/<branch>`.
     pub fn upstream(&self) -> String {
         format!("origin/{}", self.branch)
