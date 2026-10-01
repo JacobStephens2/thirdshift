@@ -939,3 +939,48 @@ These are good. File them as sub-issue tickets on spec issue 27.
 
 ## 8
 pr the context change
+
+# sep 30 '26: run thirdshift architect nightly, spec 237
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/237
+
+## 2
+1 - agree
+2 - agree
+3 - agree
+4 - agree
+5 - I lean c but am between c and a. I'd like to avoid a persistent copy around of the codebase.
+6 - agree
+7 - agree
+
+## 3
+8 - agree
+9 - agree
+10 - agree, though is Plan worth adding to the glossary in light of having Spec? Maybe. I'm reading https://www.aihero.dev/ai-coding-dictionary, https://www.aihero.dev/ai-coding-dictionary/handoff-artifact, https://www.aihero.dev/ai-coding-dictionary/spec, and https://www.aihero.dev/ai-coding-dictionary/ticket, and I do see plan referenced in https://www.aihero.dev/ai-coding-dictionary/handoff-artifact separate from spec, and i see spec here at https://www.aihero.dev/ai-coding-dictionary/spec understood as being made of tickets.
+11 - agree
+
+## 4
+12 - agree
+13 - agree
+14 - agree
+15 - agree
+16 - agree
+
+## 5
+17 - agree
+18 - agree
+
+## 6
+The summary table matches my understanding. /to-spec
+
+## 7
+/to-tickets
+
+## 8
+File these as sub issues of the spec issue
+
+## 9
+can i run thirdshift merge https://github.com/JacobStephens2/thirdshift/issues/237 now and will it wait for 27 to finish? or not?
+
+## 10
+pr the glossary commit
+
