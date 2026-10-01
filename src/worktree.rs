@@ -286,11 +286,24 @@ pub struct ReviewWorktree {
 
 impl ReviewWorktree {
     /// Check out `origin/<base>`, detached, in a new worktree next to the
-    /// launch repository's root, named `<repo>-architect`.
+    /// launch repository's root, named `<repo>-architect`. A worktree of the
+    /// launch repository already there is removed first: only one Architect
+    /// run per repository runs at a time, so it is one a killed Architect
+    /// run could not remove.
     pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;
         let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
+        if path.exists() {
+            let stale = path.to_str().context("worktree path is not UTF-8")?;
+            // Anything else at the path is left for `git worktree add` to
+            // refuse.
+            if launch.succeeds(&["worktree", "remove", "--force", stale])? {
+                progress::step(format_args!(
+                    "removed the worktree {stale}, left by an Architect run that was killed"
+                ));
+            }
+        }
         let start = format!("origin/{base}");
         progress::step(format_args!(
             "creating worktree {} detached at {start}",

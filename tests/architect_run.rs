@@ -1378,3 +1378,207 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
     assert!(tickets.contains(&landed), "expected {landed:?} in: {text}");
     assert!(tickets.contains("#10 failed: "), "{text}");
 }
+
+/// What a skipped Architect run says when another is running on the
+/// scenario's repository.
+const ALREADY_RUNNING: &str = "thirdshift: an Architect run is already running on acme/widgets\n";
+
+/// A script in which the agent touches `started` in the scenario root, then
+/// waits there until the test touches `release`, or until the scenario is
+/// gone, as after a test that failed while holding it.
+const AGENT_WAITS_FOR_RELEASE: &str = r#"
+root=$(dirname "$FAKE_CLAUDE_RECORD")
+touch "$root/started"
+while [ -d "$root" ] && [ ! -e "$root/release" ]; do sleep 0.05; done
+"#;
+
+/// Let an agent held by [`AGENT_WAITS_FOR_RELEASE`] go on.
+fn release(scenario: &Scenario) {
+    fs::write(scenario.path("release"), "").unwrap();
+}
+
+#[test]
+fn a_second_architect_run_on_the_repository_is_skipped_while_the_first_is_mid_review() {
+    let scenario = scenario();
+    scenario.user_config_is("[launch]\npull = true\n");
+    scenario.agent_does(&format!(
+        "{AGENT_WAITS_FOR_RELEASE}{AGENT_PUBLISHES_A_TICKET}"
+    ));
+    let first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    scenario.origin_has_commit("main", "upstream.txt", "upstream\n", "Upstream work");
+    let launch_main = scenario.launch_git(&["rev-parse", "refs/heads/main"]);
+    let (github, gh_calls) = (scenario.gh_state(), scenario.gh_calls());
+
+    let second = scenario.run(&["architect"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stderr, ALREADY_RUNNING);
+    assert_eq!(second.stdout, "");
+    assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
+    assert_eq!(
+        scenario.launch_git(&["rev-parse", "refs/heads/main"]),
+        launch_main,
+        "the skipped run did a launch pull"
+    );
+    assert_eq!(scenario.entries("work"), [REPO, "widgets-architect"]);
+    assert_eq!(scenario.gh_state(), github);
+    assert_eq!(scenario.gh_calls(), gh_calls);
+
+    release(&scenario);
+    let first = first.finish();
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.stdout, format!("{PLAN_URL}\n"));
+}
+
+#[test]
+fn a_second_architect_run_is_skipped_while_the_firsts_dispatched_run_or_spec_run_is_still_going() {
+    for (plan, held_issue, base) in [
+        (single_ticket_plan as fn() -> Scenario, 8, "main"),
+        (|| spec_plan(""), 9, "issue-8"),
+    ] {
+        let scenario = plan();
+        scenario.agent_does_for(
+            held_issue,
+            &format!(
+                "{AGENT_WAITS_FOR_RELEASE}{}",
+                agent_opens_pr(held_issue, base)
+            ),
+        );
+        let first = scenario.run_until(&["architect"], &[], "started");
+
+        let second = scenario.run(&["architect"]);
+
+        assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+        assert_eq!(second.stderr, ALREADY_RUNNING);
+        assert_eq!(second.stdout, "");
+        release(&scenario);
+        let first = first.finish();
+        assert_ended_with_pr(&first, &pr_from(&scenario, "issue-8"), "ready for review");
+        let reviews = scenario.claude_calls().into_iter().filter(|call| {
+            let prompt = call["prompt"].as_str().unwrap();
+            prompt.contains("/thirdshift:improve-codebase-architecture")
+        });
+        assert_eq!(reviews.count(), 1, "a second review was started");
+    }
+}
+
+#[test]
+fn once_the_first_architect_run_has_ended_a_new_one_runs() {
+    let scenario = scenario();
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    let first = scenario.run(&["architect", "--plan-only"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+
+    let second = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stdout, format!("{}\n", scenario.issue_url(9)));
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_nothing_left_behind(&scenario);
+}
+
+#[test]
+fn once_the_first_architect_run_is_killed_a_new_one_runs_with_nothing_to_clean_up() {
+    let scenario = scenario();
+    scenario.agent_does_in_session(1, AGENT_WAITS_FOR_RELEASE);
+    scenario.agent_does_in_session(2, AGENT_PUBLISHES_A_TICKET);
+    let mut first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    first.signal("KILL");
+    // The killed run could not stop its session, which outlives it until
+    // released.
+    release(&scenario);
+    assert_eq!(first.finish().code, None);
+    assert_eq!(scenario.entries("work"), [REPO, "widgets-architect"]);
+
+    let second = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stdout, format!("{PLAN_URL}\n"));
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_eq!(scenario.entries("work"), [REPO]);
+}
+
+#[test]
+fn an_architect_run_on_a_different_repository_at_the_same_time_is_not_skipped() {
+    let scenario = scenario();
+    scenario.agent_does_in_session(1, AGENT_WAITS_FOR_RELEASE);
+    let gadgets_issue = "https://github.com/acme/gadgets/issues/3";
+    scenario.agent_does_in_session(
+        2,
+        &ends_with(&format!(
+            "Architecture review already filed: {gadgets_issue}"
+        )),
+    );
+    let first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    // The first Architect run has read its repository, acme/widgets, by now:
+    // the next one from the Launch directory is on another.
+    scenario.set_origin_url("https://github.com/acme/gadgets.git");
+
+    let second = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stdout, format!("{gadgets_issue}\n"));
+    assert!(
+        !second.stderr.contains("already running"),
+        "stderr: {}",
+        second.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 2);
+    release(&scenario);
+    first.finish();
+}
+
+#[test]
+fn a_skipped_architect_run_sends_one_notification_with_skipped_in_its_subject_and_why_in_its_body()
+{
+    let scenario = scenario();
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let second = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--email", "me@example.com"],
+    );
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stderr, ALREADY_RUNNING);
+    assert_eq!(second.stdout, "");
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Architect run: skipped");
+    assert!(
+        text.starts_with(
+            "Skipped:      an Architect run is already running on acme/widgets\n\
+             Host:         "
+        ),
+        "{text}"
+    );
+    release(&scenario);
+    first.finish();
+}
+
+#[test]
+fn the_notifications_checks_come_before_the_skip_so_a_skip_never_goes_unnotified() {
+    let scenario = scenario();
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let second = run_with_resend(&scenario, &resend, &["architect", "--email"]);
+
+    assert_eq!(second.code, Some(1), "stderr: {}", second.stderr);
+    assert!(
+        second.stderr.contains("no email address"),
+        "stderr: {}",
+        second.stderr
+    );
+    assert!(
+        !second.stderr.contains("already running"),
+        "stderr: {}",
+        second.stderr
+    );
+    assert!(resend.requests().is_empty());
+    release(&scenario);
+    first.finish();
+}
