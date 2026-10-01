@@ -32,7 +32,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use args::{ArchitectArgs, Command, RunArgs};
-use base_fix::BaseFixAsk;
+use base_fix::{Advice, BaseFixAsk};
 use config::UserConfig;
 use failed_run::FailedRun;
 use notification::{ArchitectNotification, NotificationAsk, RunNotification};
@@ -63,14 +63,15 @@ after --email is the address only if it has an @ and isn't a URL.
 
 A check that fails on the pull request and also on the Base branch commit it last merged in
 is an Inherited failure, not the branch's to fix: a Run whose only red checks are Inherited
-failures fails, saying to fix the Base branch first. With base-fix, it starts a Base fix
-instead, once: it opens an issue for those checks, labelled base-fix and ready-for-agent,
-runs a Merge run on it into the Base branch, waits for it to merge, then merges the Base
-branch in and watches CI again. If the Base fix fails, or the checks still fail on the Base
-branch once it has merged, the Run fails, naming the Base fix issue. A Run that finds an
-open base-fix issue for the same Base branch and checks waits for that one to close
-instead of starting another, and a Spec run's Tickets that meet the same Inherited failure
-share one Base fix.
+failures fails, saying to fix the Base branch first, with each check's URL there and,
+unless base-fix, --no-base-fix or base.fix decided it, the command that retries the Run
+with base-fix. With base-fix, it starts a Base fix instead, once: it opens an issue for
+those checks, labelled base-fix and ready-for-agent, runs a Merge run on it into the Base
+branch, waits for it to merge, then merges the Base branch in and watches CI again. If the
+Base fix fails, or the checks still fail on the Base branch once it has merged, the Run
+fails, naming the Base fix issue. A Run that finds an open base-fix issue for the same Base
+branch and checks waits for that one to close instead of starting another, and a Spec run's
+Tickets that meet the same Inherited failure share one Base fix.
 
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec
@@ -210,12 +211,18 @@ fn main() -> ExitCode {
             false,
             base_fix.unwrap_or(BaseFixAsk::Forbid),
         ),
-        None => (
-            goal.unwrap_or(config.default_goal()),
-            email.unwrap_or(config.email.default_ask()),
-            config.launch_pull,
-            base_fix.unwrap_or(config.default_base_fix()),
-        ),
+        None => {
+            let base_fix = base_fix.unwrap_or_else(|| {
+                let retry = args::retry_with_base_fix(&issue, goal, email.as_ref(), parallel);
+                config.default_base_fix(retry)
+            });
+            (
+                goal.unwrap_or(config.default_goal()),
+                email.unwrap_or(config.email.default_ask()),
+                config.launch_pull,
+                base_fix,
+            )
+        }
     };
     // First, so no interrupt can end the Run once its notification is checked.
     if let Err(error) = interrupt::install() {
@@ -262,6 +269,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
+    // As the command gave it, for the command a Base fix is offered with.
+    let email_flag = args.email.clone();
     let email = args.email.unwrap_or(config.email.default_ask());
     let notification = match asked(email, |to| ArchitectNotification::new(to, &config.email)) {
         Ok(notification) => notification,
@@ -281,7 +290,16 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 config.launch_pull,
                 Parallel::new(dispatch.parallel, config.spec_parallel),
                 None,
-                dispatch.base_fix.unwrap_or(config.default_base_fix()),
+                dispatch.base_fix.clone().unwrap_or_else(|| {
+                    // The plan is retried as a Run of its own: another
+                    // Architect run would start a new review instead.
+                    config.default_base_fix(args::retry_with_base_fix(
+                        plan,
+                        dispatch.goal,
+                        email_flag.as_ref(),
+                        dispatch.parallel,
+                    ))
+                }),
             ))
         }
         _ => None,
@@ -294,7 +312,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
             print_url(outcome.url());
             ExitCode::SUCCESS
         }
-        (Err(failed), None) => report(failed),
+        (Err(failed), None) => report(failed, &[]),
     };
     if let Some(notification) = notification {
         notification.send(&reviewed, dispatched.as_ref());
@@ -333,7 +351,7 @@ fn run_outcome(ended: &Ended) -> ExitCode {
             print_url(&reached.pr_url);
             ExitCode::SUCCESS
         }
-        Err(failed) => report(failed),
+        Err(failed) => report(failed, &ended.advice),
     }
 }
 
@@ -351,11 +369,14 @@ fn failure(error: &anyhow::Error) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// How a Failed run, or a failed Architect run, shows: its cause and its
-/// session log on stderr, and its pull request's URL, if it left one, on
-/// stdout.
-fn report(failed: &FailedRun) -> ExitCode {
+/// How a Failed run, or a failed Architect run, shows: its cause, its
+/// `advice`, if it has any, and its session log on stderr, and its pull
+/// request's URL, if it left one, on stdout.
+fn report(failed: &FailedRun, advice: &[Advice]) -> ExitCode {
     progress::step(format_args!("{:#}", failed.error));
+    for line in advice {
+        progress::step(line);
+    }
     if let Some(log) = &failed.log {
         progress::step(format_args!("{}{}", failed_run::SESSION_LOG, log.display()));
     }

@@ -867,6 +867,11 @@ fn the_user_configs_base_fix_applies_to_the_dispatched_run_unless_no_base_fix_is
             "stderr: {}",
             result.stderr
         );
+        assert!(
+            !result.stderr.contains("Retry with:"),
+            "stderr: {}",
+            result.stderr
+        );
         // Only the plan was created: no Base fix issue.
         assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1, "{flag}");
     }
@@ -877,11 +882,17 @@ fn without_base_fix_the_dispatched_run_fails_on_an_inherited_failure() {
     let scenario = single_ticket_plan_that_inherits_a_failure();
     let cause = inherited_failure(&scenario);
 
-    let result = scenario.run(&["architect"]);
+    let result = scenario.run(&["architect", "merge", "no-email"]);
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    // The offer retries the plan as a Run of its own: another Architect run
+    // would start a new review instead.
     assert!(
-        result.stderr.contains(&format!("thirdshift: {cause}\n")),
+        result.stderr.contains(&format!(
+            "thirdshift: {cause}\n\
+             thirdshift: Base check: test\n\
+             thirdshift: Retry with: thirdshift {PLAN_URL} merge --no-email base-fix\n"
+        )),
         "stderr: {}",
         result.stderr
     );

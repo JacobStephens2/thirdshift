@@ -109,7 +109,7 @@ pub fn run(
         &worktree,
         base,
         parallel,
-        base_fix.ask_of_tickets(),
+        &base_fix.ask_of_tickets(),
         &mut spec_pr,
     );
     let ended = match landed {
@@ -201,7 +201,7 @@ fn land_tickets(
     worktree: &Worktree,
     base: &str,
     parallel: NonZeroUsize,
-    base_fix: BaseFixAsk,
+    base_fix: &BaseFixAsk,
     spec_pr: &mut Option<PullRequest>,
 ) -> (Vec<String>, Result<String>) {
     if let Err(error) = worktree.push() {
@@ -251,7 +251,7 @@ fn run_ready_tickets(
     spec_branch: &str,
     base: &str,
     parallel: NonZeroUsize,
-    base_fix: BaseFixAsk,
+    base_fix: &BaseFixAsk,
     spec_pr: &mut Option<PullRequest>,
 ) -> Result<()> {
     let (ended, endings) = mpsc::channel();
@@ -516,7 +516,7 @@ fn start_ticket(
     spec: &IssueUrl,
     number: u64,
     spec_branch: &str,
-    base_fix: BaseFixAsk,
+    base_fix: &BaseFixAsk,
     ended: Sender<(u64, Result<TicketOutcome>)>,
 ) -> Result<()> {
     progress::step(format_args!("starting #{number}"));
