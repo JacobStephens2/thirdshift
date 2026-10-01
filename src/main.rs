@@ -149,8 +149,8 @@ thirdshift <plan URL>, and exits 0. No flag overrides this: finish or close the 
 plan, or remove its label. An Architect run never retries or dispatches an existing
 Architect plan, so one whose run failed stays open until you pick it up.
 
-To run an Architect run on a schedule, have the operating system's scheduler, such as cron,
-run thirdshift architect base main from the clone: the README's \"On a schedule\" has a crontab entry.
+To run an Architect run on a schedule, have the operating system's scheduler, such as cron, run
+thirdshift architect base main from the clone: the README's \"On a schedule\" has a crontab entry.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
