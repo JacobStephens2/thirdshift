@@ -16,7 +16,10 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
+3. Write the spec using the template below, then publish it to the project issue tracker. As you publish it, ask the user whether tickets will follow, and label the spec by the answer:
+
+- **Tickets will follow** → apply the `needs-triage` triage label, and tell the user that `/to-tickets` will mark the spec ready once its tickets are published. A spec labelled `ready-for-agent` with no tickets yet looks exactly like a standalone ticket, and would be picked up as one.
+- **No tickets** → the spec stands alone as one session of work. Apply the `ready-for-agent` triage label - no need for additional triage.
 
 <spec-template>
 

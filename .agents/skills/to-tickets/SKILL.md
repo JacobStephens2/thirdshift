@@ -64,7 +64,7 @@ Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
-Do NOT close or modify any parent issue.
+Do NOT close or modify any parent issue, with one exception: its triage label. When the tickets come from a spec's issue, swap the spec's `needs-triage` label for `ready-for-agent` as your last step, after every ticket and every blocking link is published. `ready-for-agent` on a spec says its tickets are published, so it must not be there any earlier. Change nothing else on the spec.
 
 <local-ticket-template>
 
