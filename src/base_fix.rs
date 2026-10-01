@@ -7,6 +7,7 @@
 //! failures at once share one Base fix; across clones and machines the look
 //! is a best-effort lock.
 
+use std::fmt;
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -37,12 +38,59 @@ pub const REPORT: &str = "Base fix: ";
 
 /// What a Run asks about a Base fix, by its command or, without `base-fix`
 /// or `no-base-fix`, by the User config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BaseFixAsk {
     /// The Run may start one.
     Allow,
     /// The Run starts none.
     Forbid,
+    /// Nobody decided, the command or the User config: the Run starts none,
+    /// and if Inherited failures fail it, its [`Advice`] offers one, with
+    /// `retry`, the command that starts the Run again with one allowed.
+    Undecided { retry: String },
+}
+
+/// What starts the line of [`Advice`] linking a check where it fails on the
+/// Base branch.
+const BASE_CHECK: &str = "Base check";
+
+/// What starts the line of [`Advice`] with the command that starts the Run
+/// again with a Base fix allowed.
+const RETRY_WITH: &str = "Retry with";
+
+/// What starts the line of [`Advice`] naming the User config's `base.fix`.
+const OR_SET: &str = "Or set";
+
+/// A line of the advice a Run gives after its cause when Inherited failures
+/// fail it with no Base fix taken: each check where it fails on the Base
+/// branch, then, if nobody decided against a Base fix, how to allow one. It
+/// reads `<label>: <value>` on stderr, and the Run notification lays it out
+/// like its other lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Advice {
+    /// What the line starts with, saying what its value is.
+    pub label: &'static str,
+    /// A check and its URL, a command, or a setting.
+    pub value: String,
+}
+
+impl Advice {
+    /// Whether `message`, a line a Run printed on stderr, is one of these:
+    /// a child Run's is relayed, but is neither its cause nor its session
+    /// log.
+    pub fn is_line(message: &str) -> bool {
+        [BASE_CHECK, RETRY_WITH, OR_SET].iter().any(|label| {
+            message
+                .strip_prefix(label)
+                .is_some_and(|value| value.starts_with(": "))
+        })
+    }
+}
+
+impl fmt::Display for Advice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.label, self.value)
+    }
 }
 
 /// What a Run does when its only red checks are Inherited failures.
@@ -60,7 +108,13 @@ enum OnInheritedFailures {
 /// A Run's one Base fix: whether it may start one, and the one it took.
 pub struct BaseFix {
     on_inherited_failures: OnInheritedFailures,
+    /// The command that starts the Run again with a Base fix allowed, if
+    /// nobody decided whether it may start one.
+    retry: Option<String>,
     taken: Option<Taken>,
+    /// What the Run says after its cause, if Inherited failures failed it
+    /// with no Base fix taken.
+    advice: Vec<Advice>,
 }
 
 /// The Base fix a Run took as its one: one it started, or one it found
@@ -86,14 +140,17 @@ impl BaseFix {
     /// and that asked `ask` about a Base fix. A Base fix starts none of its
     /// own, whatever it asked.
     pub fn new(child: Option<&Kind>, ask: BaseFixAsk) -> Self {
-        let on_inherited_failures = match (child, ask) {
-            (Some(Kind::BaseFix { .. }), _) => OnInheritedFailures::IsBaseFix,
-            (_, BaseFixAsk::Allow) => OnInheritedFailures::StartBaseFix,
-            (_, BaseFixAsk::Forbid) => OnInheritedFailures::FailTheRun,
+        let (on_inherited_failures, retry) = match (child, ask) {
+            (Some(Kind::BaseFix { .. }), _) => (OnInheritedFailures::IsBaseFix, None),
+            (_, BaseFixAsk::Allow) => (OnInheritedFailures::StartBaseFix, None),
+            (_, BaseFixAsk::Forbid) => (OnInheritedFailures::FailTheRun, None),
+            (_, BaseFixAsk::Undecided { retry }) => (OnInheritedFailures::FailTheRun, Some(retry)),
         };
         BaseFix {
             on_inherited_failures,
+            retry,
             taken: None,
+            advice: Vec::new(),
         }
     }
 
@@ -109,10 +166,15 @@ impl BaseFix {
     }
 
     /// What each Ticket's Run of a Spec run asks about a Base fix: what the
-    /// Spec run may do, so may it.
+    /// Spec run may do, so may it, and where nobody decided, it offers the
+    /// command that starts the Spec run again with one allowed.
     pub fn ask_of_tickets(&self) -> BaseFixAsk {
         if self.may_start() {
             BaseFixAsk::Allow
+        } else if let Some(retry) = &self.retry {
+            BaseFixAsk::Undecided {
+                retry: retry.clone(),
+            }
         } else {
             BaseFixAsk::Forbid
         }
@@ -130,7 +192,8 @@ impl BaseFix {
     /// it again on the same issue. Fails, with the Run's cause, if the Run
     /// was not asked to start one, if the Base fix fails, in which case the
     /// cause names its issue, or if the Run has had its one Base fix, in
-    /// which case the cause names that one's issue.
+    /// which case the cause names that one's issue. A Run that fails with no
+    /// Base fix taken has [`BaseFix::into_advice`] to give after its cause.
     pub fn fix(
         &mut self,
         launch: &Git,
@@ -149,7 +212,10 @@ impl BaseFix {
                     taken.issue.url,
                     taken.awaited_end()
                 ),
-                None => String::new(),
+                None => {
+                    self.advice = self.advice_on(issue, base, base_commit, inherited);
+                    String::new()
+                }
             };
             bail!(
                 "CI red on {checks}, which also fails on {base} at {base_at}{even_after}; \
@@ -175,15 +241,7 @@ impl BaseFix {
                 }
             },
             None => {
-                // The issue links the Base branch's own failed checks, not
-                // the PR's.
-                let on_base: Vec<Check> = github::checks_on(issue, base_commit)?
-                    .into_iter()
-                    .filter(|check| {
-                        check.state == CheckState::Failed
-                            && inherited.iter().any(|failed| failed.name == check.name)
-                    })
-                    .collect();
+                let on_base = failed_on_base(issue, base_commit, inherited)?;
                 let fix = github::create_issue(
                     issue,
                     &issue_title(base, &checks),
@@ -208,7 +266,7 @@ impl BaseFix {
         let kind = Kind::BaseFix {
             base: base.to_string(),
         };
-        let child = child_run::start(&taken.issue, &kind, BaseFixAsk::Forbid)?;
+        let child = child_run::start(&taken.issue, &kind, &BaseFixAsk::Forbid)?;
         progress::step(format_args!("waiting on Base fix #{number}"));
         match child_run::wait(number, child)? {
             Ended::Reached { .. } => {
@@ -263,6 +321,53 @@ impl BaseFix {
             "Base fix #{number} closed; merging {base} in again"
         ));
         Ok(())
+    }
+
+    /// The advice for a Run on `issue` that the checks `inherited`, Inherited
+    /// failures from `base` at `base_commit`, fail with no Base fix taken:
+    /// each check with its URL on `base`, then, if nobody decided against a
+    /// Base fix, the command that retries the Run with one allowed and the
+    /// User config's setting that allows one for every Run. If the checks on
+    /// `base` can't be read, that is reported and none is linked.
+    fn advice_on(
+        &self,
+        issue: &IssueUrl,
+        base: &str,
+        base_commit: &str,
+        inherited: &[Check],
+    ) -> Vec<Advice> {
+        let on_base = failed_on_base(issue, base_commit, inherited).unwrap_or_else(|error| {
+            progress::step(format_args!(
+                "could not read the checks on {base}: {error:#}"
+            ));
+            Vec::new()
+        });
+        let mut advice: Vec<Advice> = on_base
+            .iter()
+            .map(|check| Advice {
+                label: BASE_CHECK,
+                value: ci::check_with_url(check),
+            })
+            .collect();
+        if let Some(retry) = &self.retry {
+            advice.push(Advice {
+                label: RETRY_WITH,
+                value: retry.clone(),
+            });
+            advice.push(Advice {
+                label: OR_SET,
+                value: "base.fix = true in ~/.thirdshift/config.toml, \
+                        to allow a Base fix for every Run on this machine"
+                    .to_string(),
+            });
+        }
+        advice
+    }
+
+    /// What the Run says after its cause, if Inherited failures failed it
+    /// with no Base fix taken; nothing otherwise.
+    pub fn into_advice(self) -> Vec<Advice> {
+        self.advice
     }
 
     /// What became of the Base fix the Run took, if it took one, for its Run
@@ -340,6 +445,20 @@ impl Mark {
         }
         ended
     }
+}
+
+/// The checks that failed on the Base branch at `base_commit`, of the Run on
+/// `issue`, under the name of one of `inherited`: the Base branch's own
+/// checks, with their URLs there, not the PR's.
+fn failed_on_base(issue: &IssueUrl, base_commit: &str, inherited: &[Check]) -> Result<Vec<Check>> {
+    let on_base = github::checks_on(issue, base_commit)?
+        .into_iter()
+        .filter(|check| {
+            check.state == CheckState::Failed
+                && inherited.iter().any(|failed| failed.name == check.name)
+        })
+        .collect();
+    Ok(on_base)
 }
 
 /// The title of the Base fix issue for `checks`, their names as in

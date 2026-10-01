@@ -702,6 +702,60 @@ fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branc
 }
 
 #[test]
+fn a_tickets_run_offers_the_spec_runs_command_with_a_base_fix_and_the_spec_run_repeats_none_of_it()
+{
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let spec_url = spec_url(&scenario);
+
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &["--email", "me@example.com", "parallel", "1", &spec_url],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let cause = inherited_failure(&scenario, "issue-20");
+    // The Ticket's Run says it on its own stderr, between its cause and its
+    // session log.
+    assert_contains(
+        &result.stderr,
+        &format!(
+            "thirdshift: #21: {cause}\n\
+             thirdshift: #21: Base check: test\n\
+             thirdshift: #21: Retry with: thirdshift {spec_url} --email me@example.com parallel 1 base-fix\n\
+             thirdshift: #21: Or set: base.fix = true in ~/.thirdshift/config.toml, \
+             to allow a Base fix for every Run on this machine\n\
+             thirdshift: #21: session log: "
+        ),
+    );
+    // What the Spec run reads back is the cause and the session log, as ever.
+    let failed = format!("#21 failed: {cause} (session log: ");
+    assert_contains(&result.stderr, &format!("thirdshift: {failed}"));
+    let (_, text) = the_one_notification(&resend);
+    assert_contains(&text, &failed);
+    for label in ["Base check:", "Retry with:", "Or set:"] {
+        assert!(!text.contains(label), "{label} in: {text}");
+        assert_eq!(result.stderr.matches(label).count(), 1, "{label}");
+    }
+}
+
+#[test]
+fn with_no_base_fix_on_a_spec_a_tickets_run_links_the_checks_and_offers_no_base_fix() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+
+    let result = scenario.run(&[&spec_url(&scenario), "no-base-fix"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "thirdshift: #21: Base check: test\n");
+    assert!(
+        !result.stderr.contains("Retry with:"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
 fn a_ticket_that_landed_after_a_base_fix_says_so_in_the_notification_and_the_checklist() {
     let scenario = spec_whose_ticket_inherits_a_failure();
     base_fix_lands_on_the_spec_branch(&scenario, 22);
