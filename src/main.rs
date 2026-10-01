@@ -269,7 +269,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    let email_given = args.email.clone();
+    // As the command gave it, for the command a Base fix is offered with.
+    let email_flag = args.email.clone();
     let email = args.email.unwrap_or(config.email.default_ask());
     let notification = match asked(email, |to| ArchitectNotification::new(to, &config.email)) {
         Ok(notification) => notification,
@@ -295,7 +296,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                     config.default_base_fix(args::retry_with_base_fix(
                         plan,
                         dispatch.goal,
-                        email_given.as_ref(),
+                        email_flag.as_ref(),
                         dispatch.parallel,
                     ))
                 }),

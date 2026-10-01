@@ -176,7 +176,7 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
                 base_fix = Some(report.to_string());
             }
             // Between its cause and its session log, and neither.
-            if Advice::is(&message) {
+            if Advice::is_line(&message) {
                 continue;
             }
             last_lines = [last_lines[1].take(), Some(message)];

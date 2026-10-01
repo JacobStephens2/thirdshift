@@ -59,7 +59,7 @@ pub struct Ended {
     /// [`BaseFix::report`] tells it.
     pub base_fix: Option<String>,
     /// What it says after its cause, if Inherited failures failed it with no
-    /// Base fix taken, as [`BaseFix::advice`] gives it.
+    /// Base fix taken, as [`BaseFix::into_advice`] gives it.
     pub advice: Vec<Advice>,
 }
 
@@ -88,7 +88,7 @@ pub fn run_to_end(
     Ended {
         outcome,
         base_fix: base_fix.report(),
-        advice: base_fix.advice(),
+        advice: base_fix.into_advice(),
     }
 }
 

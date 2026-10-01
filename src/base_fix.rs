@@ -68,7 +68,9 @@ const OR_SET: &str = "Or set";
 /// like its other lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Advice {
+    /// What the line starts with, saying what its value is.
     pub label: &'static str,
+    /// A check and its URL, a command, or a setting.
     pub value: String,
 }
 
@@ -76,7 +78,7 @@ impl Advice {
     /// Whether `message`, a line a Run printed on stderr, is one of these:
     /// a child Run's is relayed, but is neither its cause nor its session
     /// log.
-    pub fn is(message: &str) -> bool {
+    pub fn is_line(message: &str) -> bool {
         [BASE_CHECK, RETRY_WITH, OR_SET].iter().any(|label| {
             message
                 .strip_prefix(label)
@@ -167,12 +169,14 @@ impl BaseFix {
     /// Spec run may do, so may it, and where nobody decided, it offers the
     /// command that starts the Spec run again with one allowed.
     pub fn ask_of_tickets(&self) -> BaseFixAsk {
-        match &self.retry {
-            _ if self.may_start() => BaseFixAsk::Allow,
-            Some(retry) => BaseFixAsk::Undecided {
+        if self.may_start() {
+            BaseFixAsk::Allow
+        } else if let Some(retry) = &self.retry {
+            BaseFixAsk::Undecided {
                 retry: retry.clone(),
-            },
-            None => BaseFixAsk::Forbid,
+            }
+        } else {
+            BaseFixAsk::Forbid
         }
     }
 
@@ -189,7 +193,7 @@ impl BaseFix {
     /// was not asked to start one, if the Base fix fails, in which case the
     /// cause names its issue, or if the Run has had its one Base fix, in
     /// which case the cause names that one's issue. A Run that fails with no
-    /// Base fix taken has [`BaseFix::advice`] to give after its cause.
+    /// Base fix taken has [`BaseFix::into_advice`] to give after its cause.
     pub fn fix(
         &mut self,
         launch: &Git,
@@ -362,8 +366,8 @@ impl BaseFix {
 
     /// What the Run says after its cause, if Inherited failures failed it
     /// with no Base fix taken; nothing otherwise.
-    pub fn advice(&self) -> Vec<Advice> {
-        self.advice.clone()
+    pub fn into_advice(self) -> Vec<Advice> {
+        self.advice
     }
 
     /// What became of the Base fix the Run took, if it took one, for its Run
