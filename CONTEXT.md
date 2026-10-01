@@ -82,7 +82,7 @@ A message thirdshift sends when a **Run** or a **Spec run** ends, whatever its o
 _Avoid_: completion email, alert
 
 **User config**:
-The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, and whether a Run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
+The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, whether a Run may start a **Base fix**, and whether a Run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
 
 **Credentials**:
 The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key a **Run notification** is sent with. The key in the environment wins over it; it is what lets a **Run** started from cron, `nohup` or an agent's shell find the key. Only commands that send email read it, so the User config holds no secret.
@@ -99,7 +99,15 @@ The step at the end of a **Merge run** in which thirdshift itself merges the pul
 A merge the **Self-merge** tried that failed, where the round of the Repair loop that followed found nothing to fix: the **Base branch** unchanged, no conflict, CI green or absent, the pull request mergeable. The cause is a repository setting or rule, such as merge commits disallowed or a review required. thirdshift never reads GitHub's error text to decide it. The **Merge run** is a **Failed run** that leaves the pull request ready for review.
 
 **Declined CI fix**:
-A CI-fix **Repair** that found nothing on the branch to fix, for example because the check also fails on the **Base branch**: once the Repair ends and the **Base branch** is merged in again, the head of the **Issue branch** is still the commit whose CI just failed. Going round again would only watch the same red CI, so the **Run** is a **Failed run** with the cause `CI red on <short sha> and the Repair found nothing to fix on the branch`, rather than spending its remaining Repairs.
+A CI-fix **Repair** that found nothing on the branch to fix, for example because the failure is not the branch's but was not recognised as an **Inherited failure**, since the **Base branch** commit had no finished result for that check: once the Repair ends and the **Base branch** is merged in again, the head of the **Issue branch** is still the commit whose CI just failed. Going round again would only watch the same red CI, so the **Run** is a **Failed run** with the cause `CI red on <short sha> and the Repair found nothing to fix on the branch`, rather than spending its remaining Repairs.
+
+**Inherited failure**:
+A failed check on the head of the **Issue branch** that also failed, under the same check name, on the **Base branch** commit that head last merged in. It is not the branch's to fix: no **Repair** is started for it, and a **Run** whose only red checks are Inherited failures is a **Failed run** with the cause `CI red on <check>, which also fails on <base> at <short sha>; fix <base> first`. A check with no finished result on that Base branch commit is not one. When asked to, by a flag or the **User config**, the Run starts a **Base fix** before failing.
+_Avoid_: base-red check, flaky check, shared failure
+
+**Base fix**:
+A **Merge run** into a **Run**'s **Base branch** that thirdshift starts when that Run meets an **Inherited failure**, on an issue thirdshift writes naming the failing checks, if it was asked to by a flag or the **User config**. The Run waits for it, then merges the new Base branch in and watches CI again; one Base fix per Run, and a Run that finds an open Base fix issue for the same failure waits on that one instead. A Base fix sees no Inherited failures, starts no Base fix of its own, and sends no **Run notification**: the Run that started it reports it, and is a **Failed run** naming its issue if the Base fix fails.
+_Avoid_: hotfix, base repair (a **Repair** works on the Issue branch)
 
 **Failed run**:
 A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI. For a **Merge run**, it is also a Run that ends without its pull request merged. Its work is still pushed so nothing is lost (or, if the push fails, its worktree and local **Issue branch** are kept), and its open pull request, if any, is converted back to a draft, unless the pull request is ready, mergeable and green and only the **Self-merge** could not happen.
