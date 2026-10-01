@@ -24,6 +24,7 @@ const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
 const OFFER: &str = "Set your defaults now? [Y/n]";
 const MERGE: &str = "Merge run?";
+const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
 const NOTIFY: &str = "Run notifications, an email";
 const TO: &str = "Send Run notifications to";
@@ -75,12 +76,57 @@ fn accepting_and_choosing_merge_always_makes_that_run_a_merge_run() {
     let result = scenario.run_on_terminal(
         &[&scenario.issue_url(7)],
         &[],
-        &[(OFFER, ""), (MERGE, "y"), (PULL, ""), (NOTIFY, "")],
+        &[
+            (OFFER, ""),
+            (MERGE, "y"),
+            (BASE_FIX, ""),
+            (PULL, ""),
+            (NOTIFY, ""),
+        ],
     );
 
     assert_ended(&scenario, &result, "merged", "MERGED");
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
     assert_eq!(config["merge"]["always"].as_bool(), Some(true));
+}
+
+#[test]
+fn accepting_and_allowing_base_fixes_lets_that_run_start_a_base_fix() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        "gh fake checks \"$(git rev-parse HEAD)\" '[{\"name\": \"test\", \"conclusion\": \"failure\"}]'\n",
+        "gh fake checks \"$(git rev-parse origin/main)\" '[{\"name\": \"test\", \"conclusion\": \"failure\"}]'\n",
+    ));
+    scenario.agent_does_for(
+        8,
+        r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on main"
+gh pr create --base main --head issue-8 --title "Fix CI on main" --body "Closes #8"
+gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "success"}]'
+"#,
+    );
+
+    let result = scenario.run_on_terminal(
+        &[&scenario.issue_url(7)],
+        &[],
+        &[
+            (OFFER, ""),
+            (MERGE, "y"),
+            (BASE_FIX, "y"),
+            (PULL, ""),
+            (NOTIFY, ""),
+        ],
+    );
+
+    assert_ended(&scenario, &result, "merged", "MERGED");
+    let config: toml::Table = result.user_config.unwrap().parse().unwrap();
+    assert_eq!(config["base"]["fix"].as_bool(), Some(true));
+    let gh = scenario.gh_state();
+    assert_eq!(gh["titles"]["8"], "CI red on main: test");
+    assert_eq!(gh["prs"][1]["state"], "MERGED");
 }
 
 #[test]
@@ -91,7 +137,13 @@ fn no_merge_in_the_command_wins_over_a_fresh_merge_always() {
     let result = scenario.run_on_terminal(
         &["--no-merge", &scenario.issue_url(7)],
         &[],
-        &[(OFFER, "y"), (MERGE, "y"), (PULL, ""), (NOTIFY, "")],
+        &[
+            (OFFER, "y"),
+            (MERGE, "y"),
+            (BASE_FIX, ""),
+            (PULL, ""),
+            (NOTIFY, ""),
+        ],
     );
 
     assert_ended(&scenario, &result, "ready for review", "OPEN");
@@ -277,7 +329,13 @@ fn an_unwritable_user_config_is_a_warning_and_the_run_completes_on_the_defaults(
     let result = scenario.run_on_terminal(
         &[&scenario.issue_url(7)],
         &[],
-        &[(OFFER, "y"), (MERGE, "y"), (PULL, ""), (NOTIFY, "")],
+        &[
+            (OFFER, "y"),
+            (MERGE, "y"),
+            (BASE_FIX, ""),
+            (PULL, ""),
+            (NOTIFY, ""),
+        ],
     );
 
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
@@ -326,7 +384,7 @@ fn ctrl_c_during_the_questions_writes_no_file_and_does_no_work() {
     let result = scenario.run_on_terminal(
         &[&scenario.issue_url(7)],
         &[],
-        &[(OFFER, "y"), (MERGE, "y"), (PULL, CTRL_C)],
+        &[(OFFER, "y"), (MERGE, "y"), (BASE_FIX, ""), (PULL, CTRL_C)],
     );
 
     assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);

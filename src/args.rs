@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result, bail};
 
+use crate::base_fix::BaseFixAsk;
 use crate::child_run::Kind;
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
@@ -41,8 +42,9 @@ pub struct RunArgs {
     /// How many Tickets a Spec run runs at once, if `parallel <n>` was
     /// given; without it, the User config decides.
     pub parallel: Option<NonZeroUsize>,
-    /// Whether `base-fix` was given: the Run may start a Base fix.
-    pub base_fix: bool,
+    /// What `base-fix` or `no-base-fix` asked for, if either was given;
+    /// without one, the User config decides.
+    pub base_fix: Option<BaseFixAsk>,
     /// What the Run is, if another thirdshift started it, given with
     /// [`SPEC_BRANCH`] or [`BASE_FIX_INTO`].
     pub child: Option<Kind>,
@@ -54,7 +56,8 @@ pub struct RunArgs {
 /// before or after it.
 /// `email` may be followed by the address to send the Run notification to,
 /// and `parallel` must be followed by a whole number from 1 up.
-/// `merge` and `no-merge` contradict each other, as do `email` and `no-email`.
+/// `merge` and `no-merge` contradict each other, as do `email` and `no-email`,
+/// and `base-fix` and `no-base-fix`.
 pub fn parse(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
@@ -79,7 +82,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let mut goal = None;
     let mut email = None;
     let mut parallel = None;
-    let mut base_fix = false;
+    let mut base_fix = None;
     let mut child = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
@@ -107,10 +110,10 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 parallel = Some(n);
             }
             "base-fix" | "--base-fix" => {
-                if base_fix {
-                    bail!("repeated argument: {arg}");
-                }
-                base_fix = true;
+                ask_once(&mut base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
+            }
+            "no-base-fix" | "--no-base-fix" => {
+                ask_once(&mut base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
             }
             SPEC_BRANCH | BASE_FIX_INTO => {
                 if child.is_some() {
@@ -146,6 +149,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
 
 const MERGE_FLAGS: &str = "merge and no-merge";
 const EMAIL_FLAGS: &str = "email and no-email";
+const BASE_FIX_FLAGS: &str = "base-fix and no-base-fix";
 
 /// Record in `given` what the flag `arg` asked for: the same kind of ask
 /// twice is a repeated argument, and a different one contradicts the first,
