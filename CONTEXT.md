@@ -20,7 +20,7 @@ _Avoid_: originating workspace, launch repo
 The rule that the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the **Launch directory**. A mismatch stops the run before any work happens.
 
 **Base branch**:
-The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for a **Ticket**'s **Run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
+The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** whose command names a branch, that branch, whatever is checked out; for a **Ticket**'s **Run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
 
 **Factory skills**:
 The skills in `skills/`, loaded into the session as the `thirdshift` plugin: adapted copies of Matt Pocock's skills, designed to run headless with no human in the loop.
@@ -55,12 +55,16 @@ One invocation of the factory on a **Spec**'s **Issue URL**: it works through th
 _Avoid_: batch run, spec implementation
 
 **Architect run**:
-One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop at the plan, a **Spec run** on the **Spec** it published, or a **Run** on its standalone **Ticket**. One pass per invocation.
+One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another Architect run on the same repository is still running on the machine, its Spec run or Run included, or when an earlier Architect plan is still open. Skipped is not a failure, and still sends the **Run notification** when one was asked for.
 _Avoid_: improve run, architecture run
 
 **Architecture review**:
-The agent session that opens an **Architect run**: it scans the **Base branch** for deepening opportunities, skips any already covered by an open issue, and publishes the top recommendation as the plan, a **Spec** with **Tickets** or a single Ticket when one session is enough, but only when that recommendation is Strong. Otherwise it files the top recommendation as an issue labelled `needs-triage` for the **Day shift**, and nothing is implemented. It changes nothing in the repository.
+The agent session that opens an **Architect run**: it scans the **Base branch** for deepening opportunities, skips any already covered by an open issue, and publishes the top recommendation as the **Architect plan**, but only when that recommendation is Strong. Otherwise it files the top recommendation as an issue labelled `needs-triage` for the **Day shift**, and nothing is implemented. It changes nothing in the repository.
 _Avoid_: planning session
+
+**Architect plan**:
+The **Spec**, or the standalone **Ticket** when one session is enough, that an **Architecture review** published: one or the other, never a third kind of issue. thirdshift labels it `architect-plan` once the review has ended cleanly, and it stays open until its work is merged or someone closes it. A failed **Run** or **Spec run** on it leaves it open for the **Day shift** to pick up; no later **Architect run** retries it.
+_Avoid_: plan, plan doc
 
 **Spec branch**:
 The **Issue branch** of the **Spec** in a **Spec run**, branched off the **Base branch**. Each **Ticket**'s **Run** is a **Merge run** into it, so the Spec's work gathers there before it reaches the Base branch.
