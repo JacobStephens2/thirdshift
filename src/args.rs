@@ -1,5 +1,5 @@
 //! The command line: which command, and for a Run, its Issue URL and flags,
-//! or for an Architect run, its focus and flags.
+//! for an Architect run, its focus and flags, or for a Pickup run, its flags.
 
 use std::iter::Peekable;
 use std::mem::discriminant;
@@ -22,6 +22,7 @@ pub enum Command {
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
+    Pickup(PickupArgs),
     Run(RunArgs),
 }
 
@@ -46,8 +47,21 @@ pub struct ArchitectArgs {
     pub dispatch: Option<DispatchArgs>,
 }
 
-/// What an Architect run's flags ask of the Spec run or Run it dispatches
-/// its plan as, each meaning what it does in [`RunArgs`].
+/// A Pickup run's arguments.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PickupArgs {
+    /// The Base branch `base <branch>` named, if given; without it, the
+    /// branch checked out in the Launch directory is the Base branch.
+    pub base: Option<String>,
+    /// What `email` or `no-email` asked for, if either was given; without
+    /// one, the User config decides.
+    pub email: Option<NotificationAsk>,
+    /// The flags for the Spec run or Run the Ready issue is dispatched as.
+    pub dispatch: DispatchArgs,
+}
+
+/// What the flags of an Architect run or a Pickup run ask of the Spec run or
+/// Run it dispatches, each meaning what it does in [`RunArgs`].
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct DispatchArgs {
     pub goal: Option<Goal>,
@@ -94,8 +108,8 @@ pub struct RunArgs {
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
-/// `setup`, `email-test` and `architect` are commands only as the first
-/// argument. Otherwise it is a Run: one Issue URL, with each Run flag at
+/// `setup`, `email-test`, `architect` and `pickup` are commands only as the
+/// first argument. Otherwise it is a Run: one Issue URL, with each Run flag at
 /// most once, before or after it.
 /// `email` may be followed by the address to send the Run notification to,
 /// and `parallel` must be followed by a whole number from 1 up.
@@ -120,6 +134,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("architect") => return parse_architect(&args[1..]).map(Command::Architect),
+        Some("pickup") => return parse_pickup(&args[1..]).map(Command::Pickup),
         _ => {}
     }
     let mut issue = None;
@@ -247,8 +262,34 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     })
 }
 
-/// The flags a Run and an Architect run both take, as given so far: each
-/// field is what [`RunArgs`] says of the one it becomes.
+/// Parse the arguments after `pickup`: its flags, each at most once, in any
+/// order, and nothing else. `base` must be followed by the Base branch.
+fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
+    let mut base = None;
+    let mut flags = RunFlags::default();
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
+        if flags.take(arg, &mut args)? {
+            continue;
+        }
+        match arg.as_str() {
+            "base" | "--base" => ask_base(&mut base, arg, args.next())?,
+            _ => bail!("unexpected argument after pickup: {arg}"),
+        }
+    }
+    Ok(PickupArgs {
+        base,
+        email: flags.email,
+        dispatch: DispatchArgs {
+            goal: flags.goal,
+            parallel: flags.parallel,
+            base_fix: flags.base_fix,
+        },
+    })
+}
+
+/// The flags a Run, an Architect run and a Pickup run all take, as given so
+/// far: each field is what [`RunArgs`] says of the one it becomes.
 #[derive(Default)]
 struct RunFlags {
     goal: Option<Goal>,
@@ -715,6 +756,176 @@ mod tests {
                 vec!["merge", "architect", "--plan-only"],
                 "not a GitHub issue URL: architect",
             ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    /// The Pickup run `args` parse to.
+    fn pickup_args(args: &[&str]) -> PickupArgs {
+        match parse_strs(args) {
+            Ok(Command::Pickup(pickup_args)) => pickup_args,
+            Ok(_) => panic!("{args:?}: not a Pickup run"),
+            Err(error) => panic!("{args:?}: {error:#}"),
+        }
+    }
+
+    #[test]
+    fn pickup_takes_each_of_its_flags_with_or_without_dashes_in_any_order() {
+        let none = PickupArgs {
+            base: None,
+            email: None,
+            dispatch: DispatchArgs::default(),
+        };
+        assert_eq!(pickup_args(&["pickup"]), none);
+        let all = PickupArgs {
+            base: Some("develop".to_string()),
+            email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
+            dispatch: DispatchArgs {
+                goal: Some(Goal::Merged),
+                parallel: NonZeroUsize::new(2),
+                base_fix: Some(BaseFixAsk::Allow),
+            },
+        };
+        for args in [
+            vec![
+                "pickup",
+                "merge",
+                "parallel",
+                "2",
+                "base-fix",
+                "email",
+                "me@example.com",
+                "base",
+                "develop",
+            ],
+            vec![
+                "pickup",
+                "--base",
+                "develop",
+                "--email",
+                "me@example.com",
+                "--base-fix",
+                "--parallel",
+                "2",
+                "--merge",
+            ],
+        ] {
+            assert_eq!(pickup_args(&args), all, "{args:?}");
+        }
+        let cautious = PickupArgs {
+            base: None,
+            email: Some(NotificationAsk::Skip),
+            dispatch: DispatchArgs {
+                goal: Some(Goal::ReadyForReview),
+                parallel: None,
+                base_fix: Some(BaseFixAsk::Forbid),
+            },
+        };
+        for args in [
+            ["pickup", "no-merge", "no-base-fix", "no-email"],
+            ["pickup", "--no-email", "--no-merge", "--no-base-fix"],
+        ] {
+            assert_eq!(pickup_args(&args), cautious, "{args:?}");
+        }
+        let bare_email = pickup_args(&["pickup", "email", "merge"]);
+        assert_eq!(bare_email.email, Some(NotificationAsk::Send(None)));
+        assert_eq!(bare_email.dispatch.goal, Some(Goal::Merged));
+    }
+
+    #[test]
+    fn pickup_rejects_a_focus_plan_only_an_issue_url_and_any_other_argument() {
+        for (args, error) in [
+            (
+                vec!["pickup", "the Spec run"],
+                "unexpected argument after pickup: the Spec run",
+            ),
+            (
+                vec!["pickup", "merge", "--plan-only"],
+                "unexpected argument after pickup: --plan-only",
+            ),
+            (
+                vec!["pickup", URL],
+                "unexpected argument after pickup: https://github.com/acme/widgets/issues/7",
+            ),
+            (
+                vec!["pickup", "--verbose"],
+                "unexpected argument after pickup: --verbose",
+            ),
+            (
+                vec!["pickup", "--spec-branch", "issue-7"],
+                "unexpected argument after pickup: --spec-branch",
+            ),
+            (
+                vec!["pickup", "pickup"],
+                "unexpected argument after pickup: pickup",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn pickup_rejects_repeated_contradictory_and_malformed_flags() {
+        for (args, error) in [
+            (
+                vec!["pickup", "merge", "--no-merge"],
+                "merge and no-merge can't be used together",
+            ),
+            (
+                vec!["pickup", "no-merge", "no-merge"],
+                "repeated argument: no-merge",
+            ),
+            (
+                vec!["pickup", "base-fix", "no-base-fix"],
+                "base-fix and no-base-fix can't be used together",
+            ),
+            (
+                vec!["pickup", "--base-fix", "base-fix"],
+                "repeated argument: base-fix",
+            ),
+            (
+                vec!["pickup", "no-email", "email", "me@example.com"],
+                "email and no-email can't be used together",
+            ),
+            (
+                vec!["pickup", "email", "--email"],
+                "repeated argument: --email",
+            ),
+            (
+                vec!["pickup", "parallel", "2", "parallel", "3"],
+                "repeated argument: parallel",
+            ),
+            (
+                vec!["pickup", "parallel"],
+                "parallel must be followed by a whole number from 1 up",
+            ),
+            (
+                vec!["pickup", "parallel", "merge"],
+                "parallel must be followed by a whole number from 1 up, not merge",
+            ),
+            (vec!["pickup", "base"], "base must be followed by a branch"),
+            (
+                vec!["pickup", "--base", "--merge"],
+                "--base must be followed by a branch, not --merge",
+            ),
+            (
+                vec!["pickup", "base", "develop", "base", "main"],
+                "repeated argument: base",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn pickup_is_a_command_only_as_the_first_argument() {
+        for (args, error) in [
+            (
+                vec![URL, "pickup"],
+                "unexpected argument after the Issue URL: pickup",
+            ),
+            (vec!["merge", "pickup"], "not a GitHub issue URL: pickup"),
         ] {
             assert_eq!(rejection(&args), error, "{args:?}");
         }

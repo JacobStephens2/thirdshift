@@ -57,32 +57,12 @@ impl Selection {
     }
 }
 
-/// Pick the Issue branch for `issue` from the Issue branches on origin (one
-/// `git ls-remote`) and their PRs in any state (one `gh pr list`): the
-/// highest number seen on either decides. Fails if a local copy of the chosen branch in the launch repository differs from
+/// Pick the Issue branch for `issue` from the Issue branches on origin and
+/// their PRs in any state: the highest number seen on either decides. Fails if a local copy of the chosen branch in the launch repository differs from
 /// origin's: the Run replaces it and deletes it at cleanup.
 pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
     let first_branch = branch_name(issue, 1);
-    let remote = launch.run(&[
-        "ls-remote",
-        "--heads",
-        "origin",
-        &format!("refs/heads/{first_branch}"),
-        &format!("refs/heads/{first_branch}-branch-*"),
-    ])?;
-    let on_origin: Vec<(u64, String)> = remote
-        .lines()
-        .filter_map(|line| {
-            let (sha, name) = line.split_once('\t')?;
-            let number = branch_number(issue, name.strip_prefix("refs/heads/")?)?;
-            Some((number, sha.to_string()))
-        })
-        .collect();
-    let prs: Vec<(u64, PullRequest)> =
-        github::pull_requests_with_head_prefix(issue, &first_branch)?
-            .into_iter()
-            .filter_map(|pr| Some((branch_number(issue, &pr.head)?, pr)))
-            .collect();
+    let Used { on_origin, prs } = used(launch, issue)?;
 
     let highest = on_origin
         .iter()
@@ -117,6 +97,48 @@ pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
         }
         (None, _) => bail!("{branch} has an open PR but is gone from origin"),
     }
+}
+
+/// Whether `issue` was ever started: an Issue branch for it is on origin, or
+/// a pull request from one exists, open, merged or closed.
+pub fn started(launch: &Git, issue: &IssueUrl) -> Result<bool> {
+    let Used { on_origin, prs } = used(launch, issue)?;
+    Ok(!on_origin.is_empty() || !prs.is_empty())
+}
+
+/// What has been used of an issue's Issue branches.
+struct Used {
+    /// Those on origin, each by its number, with its head.
+    on_origin: Vec<(u64, String)>,
+    /// The pull requests from them, in any state, each with its Issue
+    /// branch's number.
+    prs: Vec<(u64, PullRequest)>,
+}
+
+/// What has been used of `issue`'s Issue branches: those on origin (one `git
+/// ls-remote`) and the pull requests from them (one `gh pr list`).
+fn used(launch: &Git, issue: &IssueUrl) -> Result<Used> {
+    let first_branch = branch_name(issue, 1);
+    let remote = launch.run(&[
+        "ls-remote",
+        "--heads",
+        "origin",
+        &format!("refs/heads/{first_branch}"),
+        &format!("refs/heads/{first_branch}-branch-*"),
+    ])?;
+    let on_origin = remote
+        .lines()
+        .filter_map(|line| {
+            let (sha, name) = line.split_once('\t')?;
+            let number = branch_number(issue, name.strip_prefix("refs/heads/")?)?;
+            Some((number, sha.to_string()))
+        })
+        .collect();
+    let prs = github::pull_requests_with_head_prefix(issue, &first_branch)?
+        .into_iter()
+        .filter_map(|pr| Some((branch_number(issue, &pr.head)?, pr)))
+        .collect();
+    Ok(Used { on_origin, prs })
 }
 
 /// A local `branch` in the launch repository must be at `origin_sha`, or not
