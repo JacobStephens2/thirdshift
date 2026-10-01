@@ -1,5 +1,6 @@
 //! An Architect run up to its plan: an Architecture review of the Base
-//! branch, from the Launch directory with no Issue URL, then the checks on
+//! branch, the one its command named or else the one checked out in the
+//! Launch directory, from the Launch directory with no Issue URL, then the checks on
 //! the plan it published and the label swap that marks the plan ready, for
 //! the command to stop at or to dispatch. A review that found no Strong
 //! candidate published no plan, and the Architect run ends on the issue it
@@ -88,8 +89,9 @@ impl fmt::Display for Skipped {
 /// issue.
 #[derive(Debug)]
 pub enum Reviewed {
-    /// The plan the review published is marked ready.
-    PlanReady(IssueUrl),
+    /// The plan the review published is marked ready, with the Architect
+    /// run's Base branch, which the run the plan is dispatched as takes.
+    PlanReady { plan: IssueUrl, base: String },
     /// The review found no Strong candidate, and filed its top
     /// recommendation as this issue.
     IdeaFiled(IssueUrl),
@@ -103,7 +105,7 @@ impl Reviewed {
     /// notification says it.
     pub fn review(&self) -> &'static str {
         match self {
-            Self::PlanReady(_) => "plan published",
+            Self::PlanReady { .. } => "plan published",
             Self::IdeaFiled(_) => "idea filed",
             Self::AlreadyFiled(_) => "idea already filed",
         }
@@ -112,9 +114,9 @@ impl Reviewed {
     /// The URL of the issue the Architecture review ended on.
     pub fn url(&self) -> &str {
         match self {
-            Self::PlanReady(issue) | Self::IdeaFiled(issue) | Self::AlreadyFiled(issue) => {
-                &issue.url
-            }
+            Self::PlanReady { plan: issue, .. }
+            | Self::IdeaFiled(issue)
+            | Self::AlreadyFiled(issue) => &issue.url,
         }
     }
 }
@@ -123,7 +125,7 @@ impl fmt::Display for Reviewed {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let url = self.url();
         match self {
-            Self::PlanReady(_) => write!(f, "plan {url} is ready for an agent"),
+            Self::PlanReady { .. } => write!(f, "plan {url} is ready for an agent"),
             Self::IdeaFiled(_) => write!(
                 f,
                 "no Strong candidate: the Architecture review filed the idea {url}"
@@ -136,12 +138,15 @@ impl fmt::Display for Reviewed {
     }
 }
 
-/// Run an Architecture review of the branch checked out in the Launch
-/// directory, the Base branch, pointed at `focus` if given, and mark the plan
-/// it publishes ready. A review that reports an idea issue it filed, or the
+/// Run an Architecture review of the Base branch, pointed at `focus` if
+/// given, and mark the plan it publishes ready. The Base branch is `base`,
+/// the branch the command named, whatever the Launch directory has checked
+/// out, or without one the branch checked out there. A review that reports
+/// an idea issue it filed, or the
 /// open issue that already covers its top recommendation, instead of a plan,
 /// changes no label. With `launch_pull`, the Launch directory's checkout of
-/// the Base branch is first brought up to date with origin. The review's
+/// the Base branch, if that is the branch checked out, is first brought up
+/// to date with origin. The review's
 /// worktree and the plugin directory are gone when this returns. A failure
 /// after the plan is published leaves its labels as the review left them.
 ///
@@ -149,15 +154,26 @@ impl fmt::Display for Reviewed {
 /// run is skipped, with nothing done, if another on the same repository is
 /// still running on this machine. Otherwise this process is that repository's
 /// one Architect run until it exits, through whatever it dispatches.
-pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<Outcome, FailedRun> {
+pub fn run(
+    focus: Option<&str>,
+    base: Option<&str>,
+    logs_dir: &Path,
+    launch_pull: bool,
+) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
     let timestamp = started.format("%Y%m%dT%H%M%SZ").to_string();
     let (launch, origin, repo) = launch()?;
     preflight::check_identity(&launch)?;
-    let base = launch
+    let checked_out = launch
         .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .ok()
-        .context("HEAD is detached; check out the branch the Architecture review should scan")?;
+        .ok();
+    let base = base
+        .or(checked_out.as_deref())
+        .context(
+            "HEAD is detached; check out the branch the Architecture review should scan, \
+             or name it with base <branch>",
+        )?
+        .to_string();
     preflight::check_base_branch(&launch, &base)?;
     let Some(lock) = try_run_lock(&repo)? else {
         return Ok(Outcome::Skipped(Skipped::AlreadyRunning(repo)));
@@ -167,7 +183,7 @@ pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<Ou
     // operating system releases it however the process ends.
     std::mem::forget(lock);
     if launch_pull {
-        run::pull_base_branch(&launch, Some(&base), &base);
+        run::pull_base_branch(&launch, checked_out.as_deref(), &base);
     }
 
     if interrupt::requested() {
@@ -177,7 +193,7 @@ pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<Ou
     let logs = Logs::of_architect_run(&repo, logs_dir, &timestamp);
     let mut log = logs.path(REVIEW);
     review(worktree, &base, focus, &logs, &mut log)
-        .and_then(|final_message| conclude(final_message.as_deref(), &origin, started))
+        .and_then(|final_message| conclude(final_message.as_deref(), &origin, started, base))
         .map(Outcome::Reviewed)
         .map_err(|error| FailedRun {
             log: log.exists().then_some(log),
@@ -279,16 +295,22 @@ impl Report {
     }
 }
 
-/// End the Architecture review on the issue the last line of its
+/// End the Architecture review, of the Base branch `base`, on the issue the
+/// last line of its
 /// `final_message` names: a plan is marked ready, and an idea issue, or the
 /// issue that already covers the top recommendation, is left as it is. Fails
 /// if the session had no final message, if its last line is not one the
 /// prompt asks for, or if the plan can't be marked ready.
-fn conclude(final_message: Option<&str>, origin: &str, started: DateTime<Utc>) -> Result<Reviewed> {
+fn conclude(
+    final_message: Option<&str>,
+    origin: &str,
+    started: DateTime<Utc>,
+    base: String,
+) -> Result<Reviewed> {
     match final_message.and_then(Report::read) {
         Some(Report::Plan(plan)) => {
             mark_plan_ready(&plan, origin, started)?;
-            Ok(Reviewed::PlanReady(plan))
+            Ok(Reviewed::PlanReady { plan, base })
         }
         Some(Report::Idea(idea)) => Ok(Reviewed::IdeaFiled(idea)),
         Some(Report::AlreadyFiled(issue)) => Ok(Reviewed::AlreadyFiled(issue)),

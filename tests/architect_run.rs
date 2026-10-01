@@ -9,6 +9,9 @@
 //! Asked to, by `email` or the User config, it sends one Run notification,
 //! through Resend, here a local stand-in, however it ended, and the run it
 //! dispatched sends none.
+//! The Base branch is the branch checked out in the Launch directory, or the
+//! one `base <branch>` names, whatever is checked out there, which the run
+//! the plan is dispatched as takes as its Base branch too.
 
 mod support;
 
@@ -553,7 +556,8 @@ fn a_detached_head_is_rejected_before_any_work() {
 
     scenario.assert_rejected_before_any_work(
         &result,
-        "HEAD is detached; check out the branch the Architecture review should scan",
+        "HEAD is detached; check out the branch the Architecture review should scan, \
+         or name it with base <branch>",
     );
 }
 
@@ -982,6 +986,237 @@ fn progress_lines_show_the_dispatch_after_the_label_swap_and_before_the_run() {
     }
     assert!(
         !result.stderr.contains("is ready for an agent"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+/// A script that records the commit the session's worktree is at as
+/// `review-head` in the scenario root.
+const RECORDS_THE_REVIEW_HEAD: &str =
+    r#"git rev-parse HEAD > "$(dirname "$FAKE_CLAUDE_RECORD")/review-head""#;
+
+/// A scenario whose origin has a `develop` branch, one commit ahead of
+/// `main`, that the Launch directory has never fetched. The Launch directory
+/// stays on `main`, or with `detached` on a detached HEAD, with an
+/// uncommitted change.
+fn develop_on_origin(detached: bool) -> Scenario {
+    let scenario = scenario();
+    scenario.origin_has_branch("develop", "main", &["Develop work"]);
+    if detached {
+        scenario.launch_git(&["checkout", "-q", "--detach"]);
+    }
+    fs::write(scenario.launch_dir().join("README.md"), "widgets, edited\n").unwrap();
+    scenario
+}
+
+/// The head of `branch` on origin.
+fn origin_head(scenario: &Scenario, branch: &str) -> String {
+    scenario.origin_git(&["rev-parse", &format!("refs/heads/{branch}")])
+}
+
+#[test]
+fn base_starts_the_review_at_the_named_branchs_origin_head_whatever_is_checked_out() {
+    for detached in [false, true] {
+        let scenario = develop_on_origin(detached);
+        let checked_out = scenario.launch_git(&["branch", "--show-current"]);
+        let launch_status = scenario.launch_git(&["status", "--porcelain"]);
+        scenario.agent_does(&publishes_a_ticket_then(RECORDS_THE_REVIEW_HEAD));
+
+        let result = scenario.run(&["architect", "base", "develop", "--plan-only"]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+        assert_eq!(
+            fs::read_to_string(scenario.path("review-head")).unwrap(),
+            origin_head(&scenario, "develop"),
+            "detached: {detached}"
+        );
+        let prompt = scenario.first_prompt();
+        assert!(prompt.contains("the base branch develop"), "{prompt}");
+        assert_eq!(
+            scenario.launch_git(&["branch", "--show-current"]),
+            checked_out
+        );
+        assert_eq!(
+            scenario.launch_git(&["status", "--porcelain"]),
+            launch_status
+        );
+    }
+}
+
+#[test]
+fn base_carries_the_named_branch_to_the_dispatched_run_whatever_is_checked_out() {
+    for detached in [false, true] {
+        let scenario = develop_on_origin(detached);
+        scenario.agent_does_in_session(1, AGENT_PUBLISHES_A_TICKET);
+        scenario.agent_does_for(8, &agent_opens_pr(8, "develop"));
+
+        let result = scenario.run(&["architect", "base", "develop"]);
+
+        let pr = pr_from(&scenario, "issue-8");
+        assert_ended_with_pr(&result, &pr, "ready for review");
+        assert_eq!(pr["base"], "develop", "detached: {detached}");
+        assert_eq!(
+            scenario.origin_log("issue-8").unwrap(),
+            ["Work on 8", "Develop work", "Initial commit"],
+            "detached: {detached}"
+        );
+        let prompt = scenario.claude_calls()[1]["prompt"].to_string();
+        assert!(prompt.contains("develop"), "{prompt}");
+        scenario.assert_cleaned_up("issue-8");
+    }
+}
+
+#[test]
+fn base_carries_the_named_branch_to_the_dispatched_spec_run_whatever_is_checked_out() {
+    for detached in [false, true] {
+        let scenario = spec_plan("");
+        scenario.origin_has_branch("develop", "main", &["Develop work"]);
+        if detached {
+            scenario.launch_git(&["checkout", "-q", "--detach"]);
+        }
+
+        let result = scenario.run(&["architect", "--base", "develop"]);
+
+        let spec_pr = pr_from(&scenario, "issue-8");
+        assert_ended_with_pr(&result, &spec_pr, "ready for review");
+        assert_eq!(spec_pr["base"], "develop", "detached: {detached}");
+        assert_eq!(spec_pr["isDraft"], false);
+        assert_eq!(
+            scenario.origin_file("issue-8", "develop-0.txt").as_deref(),
+            Some("Develop work"),
+            "the Spec branch is not branched off develop"
+        );
+        for ticket in [9, 10] {
+            let pr = pr_from(&scenario, &format!("issue-{ticket}"));
+            assert_eq!(pr["base"], "issue-8");
+            assert_eq!(pr["state"], "MERGED");
+        }
+        scenario.assert_cleaned_up("issue-8");
+    }
+}
+
+#[test]
+fn merge_merges_the_dispatched_runs_pull_request_into_the_named_branch() {
+    let scenario = develop_on_origin(false);
+    scenario.agent_does_in_session(1, AGENT_PUBLISHES_A_TICKET);
+    scenario.agent_does_for(8, &agent_opens_pr(8, "develop"));
+    let main = origin_head(&scenario, "main");
+
+    let result = scenario.run(&["architect", "merge", "base", "develop"]);
+
+    let pr = pr_from(&scenario, "issue-8");
+    assert_ended_with_pr(&result, &pr, "merged");
+    assert_eq!(pr["base"], "develop");
+    assert_eq!(
+        scenario.origin_file("develop", "issue-8.txt").as_deref(),
+        Some("8\n")
+    );
+    assert_eq!(origin_head(&scenario, "main"), main);
+}
+
+#[test]
+fn a_named_branch_that_is_not_on_origin_is_rejected_before_any_work() {
+    let scenario = scenario();
+    scenario.launch_git(&["branch", "local-only"]);
+
+    for branch in ["nowhere", "local-only"] {
+        let result = scenario.run(&["architect", "base", branch]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!("base branch {branch} does not exist on origin; push it first"),
+        );
+        assert_eq!(result.code, Some(1), "{branch}");
+    }
+}
+
+#[test]
+fn a_named_branch_whose_local_copy_is_ahead_of_origin_is_rejected_before_any_work() {
+    let scenario = scenario();
+    scenario.origin_has_branch("develop", "main", &["Develop work"]);
+    scenario.launch_checks_out("develop");
+    scenario.commit_locally("local.txt", "local\n", "Local work");
+    scenario.launch_git(&["checkout", "-q", "main"]);
+
+    let result = scenario.run(&["architect", "base", "develop", "--plan-only"]);
+
+    scenario.assert_rejected_before_any_work(
+        &result,
+        "local develop is 1 commit(s) ahead of origin/develop; push them first",
+    );
+}
+
+#[test]
+fn launch_pull_leaves_the_checkout_alone_unless_the_named_branch_is_the_one_checked_out() {
+    for (checkout, updated) in [
+        (vec!["checkout", "-q", "main"], false),
+        (vec!["checkout", "-q", "--detach", "main"], false),
+        (vec!["checkout", "-q", "develop"], true),
+    ] {
+        let scenario = scenario();
+        scenario.origin_has_branch("develop", "main", &["Develop work"]);
+        scenario.launch_checks_out("develop");
+        scenario.launch_git(&checkout);
+        scenario.origin_has_commit("main", "upstream.txt", "upstream\n", "Upstream work");
+        scenario.origin_has_commit("develop", "more.txt", "more\n", "More develop work");
+        scenario.user_config_is("[launch]\npull = true\n");
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+        let head = scenario.launch_git(&["rev-parse", "HEAD"]);
+        let main = scenario.launch_git(&["rev-parse", "refs/heads/main"]);
+
+        let result = scenario.run(&["architect", "base", "develop", "--plan-only"]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert_eq!(
+            result.stderr.contains("Launch directory"),
+            updated,
+            "{checkout:?}: {}",
+            result.stderr
+        );
+        assert_eq!(
+            scenario.launch_git(&["rev-parse", "refs/heads/main"]),
+            main,
+            "{checkout:?}"
+        );
+        if updated {
+            assert_eq!(
+                scenario.launch_git(&["rev-parse", "HEAD"]),
+                origin_head(&scenario, "develop")
+            );
+            assert!(
+                result.stderr.contains(
+                    "thirdshift: updating develop in the Launch directory from origin/develop\n"
+                ),
+                "stderr: {}",
+                result.stderr
+            );
+        } else {
+            assert_eq!(
+                scenario.launch_git(&["rev-parse", "HEAD"]),
+                head,
+                "{checkout:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn launch_pull_leaves_the_checkout_alone_when_the_dispatched_run_starts_too() {
+    let scenario = develop_on_origin(false);
+    scenario.origin_has_commit("main", "upstream.txt", "upstream\n", "Upstream work");
+    scenario.user_config_is("[launch]\npull = true\n");
+    scenario.agent_does_in_session(1, AGENT_PUBLISHES_A_TICKET);
+    scenario.agent_does_for(8, &agent_opens_pr(8, "develop"));
+    let head = scenario.launch_git(&["rev-parse", "HEAD"]);
+
+    let result = scenario.run(&["architect", "base", "develop"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+    assert_eq!(scenario.launch_git(&["rev-parse", "HEAD"]), head);
+    assert!(
+        !result.stderr.contains("Launch directory"),
         "stderr: {}",
         result.stderr
     );

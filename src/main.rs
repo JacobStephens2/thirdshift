@@ -37,7 +37,7 @@ use base_fix::BaseFixAsk;
 use config::UserConfig;
 use failed_run::FailedRun;
 use notification::{ArchitectNotification, NotificationAsk, RunNotification};
-use run::{Ended, Goal};
+use run::{Ended, Goal, StartedBy};
 use spec_run::Parallel;
 
 const HELP: &str = "\
@@ -49,6 +49,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift --email <Issue URL>                 Run the factory on the issue, then email how the Run ended
        thirdshift architect [<focus>]                 Review the Base branch's architecture, publish a plan for a refactor, and run it
        thirdshift architect [<focus>] --plan-only     Publish and mark ready the plan for a refactor, and stop there
+       thirdshift architect base <branch> [<focus>]   Do either with <branch> as the Base branch, from a clone on any branch
        thirdshift email-test [<address>]              Send a test email through Resend, to check the email setup
        thirdshift setup                               Choose your defaults, then write the User config with every setting
        thirdshift update                              Update thirdshift to the latest release
@@ -110,6 +111,19 @@ thirdshift <Issue URL>, and takes none of those flags. <focus> is free text, one
 that points the review at an area:
 
     thirdshift architect \"the Spec run\"
+
+base <branch> (or --base <branch>) names the Architect run's Base branch, whatever branch the
+clone has checked out, so it can start from a clone on another branch, on a detached HEAD or
+with uncommitted changes:
+
+    thirdshift architect base main
+
+The review starts at <branch>'s head on origin, and the run the plan is dispatched as branches
+off <branch> and targets it with its pull request. <branch> must exist on origin, with no local
+copy of it ahead, and launch.pull updates the clone only when <branch> is the branch checked
+out. base goes with --plan-only too, before or after the focus and the other flags. base is
+for architect only: thirdshift <Issue URL> doesn't take it. Without base, the Base branch is
+the branch checked out.
 
 A review that finds no Strong candidate publishes no plan. It files its top recommendation as
 one idea issue labelled needs-triage, or names the open issue that already covers it, and
@@ -237,7 +251,7 @@ fn main() -> ExitCode {
         &config.logs_dir,
         launch_pull,
         Parallel::new(parallel, config.spec_parallel),
-        child.as_ref(),
+        child.as_ref().map_or(StartedBy::Command, StartedBy::Child),
         base_fix,
     );
     let code = run_outcome(&ended);
@@ -249,7 +263,9 @@ fn main() -> ExitCode {
 
 /// An Architect run: the Architecture review and its plan marked ready, then,
 /// unless the command asked to stop at the plan, the plan dispatched as
-/// `thirdshift <plan URL>` with the same flags would be, whose ending is the
+/// `thirdshift <plan URL>` with the same flags would be, but on the Architect
+/// run's Base branch, whatever the Launch directory has checked out. The
+/// dispatched run's ending is the
 /// Architect run's, with the Base fix it took, if any. One that stops at the
 /// plan, or whose review found no Strong candidate and so published no plan
 /// to dispatch, puts the URL of the issue it ended on on stdout: the plan,
@@ -275,9 +291,14 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let ended = architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull);
+    let ended = architect::run(
+        args.focus.as_deref(),
+        args.base.as_deref(),
+        &config.logs_dir,
+        config.launch_pull,
+    );
     let dispatched = match (&ended, &args.dispatch) {
-        (Ok(Outcome::Reviewed(Reviewed::PlanReady(plan))), Some(dispatch)) => {
+        (Ok(Outcome::Reviewed(Reviewed::PlanReady { plan, base })), Some(dispatch)) => {
             progress::step(format_args!(
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
@@ -288,7 +309,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 &config.logs_dir,
                 config.launch_pull,
                 Parallel::new(dispatch.parallel, config.spec_parallel),
-                None,
+                StartedBy::ArchitectRun { base },
                 dispatch.base_fix.unwrap_or(config.default_base_fix()),
             ))
         }
