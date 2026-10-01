@@ -31,6 +31,11 @@ use crate::worktree::Worktree;
 /// Architecture review publishes its plan with.
 pub const NEEDS_TRIAGE: &str = "needs-triage";
 
+/// The triage label of an issue an agent can take on: what thirdshift swaps
+/// a plan's `needs-triage` for once the plan passes its checks, and what a
+/// Base fix issue is opened with.
+pub const READY_FOR_AGENT: &str = "ready-for-agent";
+
 /// The triage labels that make an open Ticket an Unready Ticket.
 const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", NEEDS_TRIAGE];
 
@@ -674,7 +679,7 @@ mod tests {
     fn each_unready_label_keeps_a_ticket_from_running_and_is_named_in_its_line() {
         for label in UNREADY_LABELS {
             let mut unready = ticket(21, true, &[], &[]);
-            unready.labels = vec!["ready-for-agent".to_string(), label.to_string()];
+            unready.labels = vec![READY_FOR_AGENT.to_string(), label.to_string()];
             let tickets = [unready, ticket(22, true, &[], &[])];
             let outcomes = BTreeMap::new();
 

@@ -116,8 +116,9 @@ thirdshift prints that issue's URL instead, changing no label. Its last line say
 review filed the idea, or it filed nothing.
 
 A review that fails, is interrupted, or ends without naming one of these issues fails the
-Architect run and leaves any plan it published labelled needs-triage. Start one Architect run
-per repository at a time: two at once may publish the same plan.
+Architect run and leaves any plan it published labelled needs-triage. One that finds no
+deepening opportunity at all has no issue to name, so it fails the Architect run too. Start
+one Architect run per repository at a time: two at once may publish the same plan.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
@@ -247,9 +248,9 @@ fn main() -> ExitCode {
 /// to dispatch, puts the URL of the issue it ended on on stdout: the plan,
 /// the idea issue the review filed, or the issue that already covers its top
 /// recommendation. One whose review or plan fails puts the cause and the
-/// session log on stderr. If asked, by the
-/// command or the User config, it sends one Run notification, however it
-/// ended; the run it dispatched sends none of its own.
+/// session log on stderr. If asked, by the command or the User config, it
+/// sends one Run notification, however it ended; the run it dispatched sends
+/// none of its own.
 fn architect(args: ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,

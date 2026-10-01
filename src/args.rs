@@ -1,6 +1,7 @@
 //! The command line: which command, and for a Run, its Issue URL and flags,
 //! or for an Architect run, its focus and flags.
 
+use std::iter::Peekable;
 use std::mem::discriminant;
 use std::num::NonZeroUsize;
 
@@ -113,32 +114,14 @@ pub fn parse(args: &[String]) -> Result<Command> {
         _ => {}
     }
     let mut issue = None;
-    let mut goal = None;
-    let mut email = None;
-    let mut parallel = None;
-    let mut base_fix = None;
+    let mut flags = RunFlags::default();
     let mut child = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
+        if flags.take(arg, &mut args)? {
+            continue;
+        }
         match arg.as_str() {
-            "merge" | "--merge" => ask_once(&mut goal, Goal::Merged, arg, MERGE_FLAGS)?,
-            "no-merge" | "--no-merge" => {
-                ask_once(&mut goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
-            }
-            "email" | "--email" => {
-                let to = args.next_if(|next| is_address(next)).cloned();
-                ask_once(&mut email, NotificationAsk::Send(to), arg, EMAIL_FLAGS)?
-            }
-            "no-email" | "--no-email" => {
-                ask_once(&mut email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
-            }
-            "parallel" | "--parallel" => ask_parallel(&mut parallel, arg, args.next())?,
-            BASE_FIX | "--base-fix" => {
-                ask_once(&mut base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
-            }
-            "no-base-fix" | "--no-base-fix" => {
-                ask_once(&mut base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
-            }
             SPEC_BRANCH | BASE_FIX_INTO => {
                 if child.is_some() {
                     bail!("repeated argument: {arg}");
@@ -163,10 +146,10 @@ pub fn parse(args: &[String]) -> Result<Command> {
     };
     Ok(Command::Run(RunArgs {
         issue,
-        goal,
-        email,
-        parallel,
-        base_fix,
+        goal: flags.goal,
+        email: flags.email,
+        parallel: flags.parallel,
+        base_fix: flags.base_fix,
         child,
     }))
 }
@@ -174,17 +157,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
 /// Parse the arguments after `architect`: at most one focus, and its flags,
 /// each at most once, in any order. [`PLAN_ONLY`] dispatches nothing, so the
 /// flags for the dispatched run, `merge`, `no-merge`, `parallel`, `base-fix`
-/// and `no-base-fix`, which a Run takes too, can't go with it. `email` and `no-email` are for the
-/// Architect run's own Run notification, so they can, and `email` takes an
-/// address as it does for a Run. None of these is ever the focus, and any
-/// other argument that starts with a dash is unexpected rather than a focus.
+/// and `no-base-fix`, can't go with it. `email` and `no-email` are for the
+/// Architect run's own Run notification, so they can. None of a Run's flags
+/// is ever the focus, and any other argument that starts with a dash is
+/// unexpected rather than a focus.
 fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     let mut focus = None;
     let mut plan_only = false;
-    let mut email = None;
-    let mut dispatch = DispatchArgs::default();
+    let mut flags = RunFlags::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
+        if flags.take(arg, &mut args)? {
+            continue;
+        }
         match arg.as_str() {
             PLAN_ONLY => {
                 if plan_only {
@@ -192,44 +177,18 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
                 }
                 plan_only = true;
             }
-            "merge" | "--merge" => ask_once(&mut dispatch.goal, Goal::Merged, arg, MERGE_FLAGS)?,
-            "no-merge" | "--no-merge" => {
-                ask_once(&mut dispatch.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
-            }
-            "email" | "--email" => {
-                let to = args.next_if(|next| is_address(next)).cloned();
-                ask_once(&mut email, NotificationAsk::Send(to), arg, EMAIL_FLAGS)?
-            }
-            "no-email" | "--no-email" => {
-                ask_once(&mut email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
-            }
-            "parallel" | "--parallel" => ask_parallel(&mut dispatch.parallel, arg, args.next())?,
-            BASE_FIX | "--base-fix" => ask_once(
-                &mut dispatch.base_fix,
-                BaseFixAsk::Allow,
-                arg,
-                BASE_FIX_FLAGS,
-            )?,
-            "no-base-fix" | "--no-base-fix" => ask_once(
-                &mut dispatch.base_fix,
-                BaseFixAsk::Forbid,
-                arg,
-                BASE_FIX_FLAGS,
-            )?,
             _ if arg.starts_with('-') => bail!("unexpected argument after architect: {arg}"),
             _ if focus.is_some() => bail!("unexpected argument after the focus: {arg}"),
             _ if arg.trim().is_empty() => bail!("the focus is empty"),
             _ => focus = Some(arg.clone()),
         }
     }
-    if !plan_only {
-        return Ok(ArchitectArgs {
-            focus,
-            email,
-            dispatch: Some(dispatch),
-        });
-    }
-    if dispatch != DispatchArgs::default() {
+    let dispatch = DispatchArgs {
+        goal: flags.goal,
+        parallel: flags.parallel,
+        base_fix: flags.base_fix,
+    };
+    if plan_only && dispatch != DispatchArgs::default() {
         bail!(
             "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
              {PLAN_ONLY}: it dispatches no run for them to apply to"
@@ -237,9 +196,54 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     }
     Ok(ArchitectArgs {
         focus,
-        email,
-        dispatch: None,
+        email: flags.email,
+        dispatch: (!plan_only).then_some(dispatch),
     })
+}
+
+/// The flags a Run and an Architect run both take, as given so far: each
+/// field is what [`RunArgs`] says of the one it becomes.
+#[derive(Default)]
+struct RunFlags {
+    goal: Option<Goal>,
+    email: Option<NotificationAsk>,
+    parallel: Option<NonZeroUsize>,
+    base_fix: Option<BaseFixAsk>,
+}
+
+impl RunFlags {
+    /// Record what `arg` asks for, if it is one of these flags, with or
+    /// without its dashes, taking from `rest` the address after `email`, if
+    /// one is there, and the number after `parallel`. False, taking nothing,
+    /// if `arg` is none of them.
+    fn take<'a>(
+        &mut self,
+        arg: &str,
+        rest: &mut Peekable<impl Iterator<Item = &'a String>>,
+    ) -> Result<bool> {
+        match arg {
+            "merge" | "--merge" => ask_once(&mut self.goal, Goal::Merged, arg, MERGE_FLAGS)?,
+            "no-merge" | "--no-merge" => {
+                ask_once(&mut self.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
+            }
+            "email" | "--email" => {
+                let to = rest.next_if(|next| is_address(next)).cloned();
+                ask_once(&mut self.email, NotificationAsk::Send(to), arg, EMAIL_FLAGS)?
+            }
+            "no-email" | "--no-email" => {
+                ask_once(&mut self.email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
+            }
+            "parallel" | "--parallel" => ask_parallel(&mut self.parallel, arg, rest.next())?,
+            BASE_FIX | "--base-fix" => {
+                ask_once(&mut self.base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
+            }
+            "no-base-fix" | "--no-base-fix" => {
+                ask_once(&mut self.base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
 }
 
 const MERGE_FLAGS: &str = "merge and no-merge";

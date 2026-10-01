@@ -23,16 +23,12 @@ use crate::progress;
 use crate::prompt;
 use crate::run;
 use crate::session::{Logs, Sessions};
-use crate::spec_run::{self, NEEDS_TRIAGE};
+use crate::spec_run::{self, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::worktree::ReviewWorktree;
 
 /// The Architecture review session's kind, in its progress lines and log
 /// name.
 const REVIEW: &str = "architecture-review";
-
-/// The triage label thirdshift swaps the plan's `needs-triage` for once the
-/// plan passes its checks.
-const READY_FOR_AGENT: &str = "ready-for-agent";
 
 /// How an Architect run ended, short of a failure, with the issue it ended
 /// on. Its `Display` is the line that says how it ended, naming that issue.
@@ -195,9 +191,9 @@ impl Report {
 
 /// End the Architect run on the issue the last line of the review's
 /// `final_message` names: a plan is marked ready, and an idea issue, or the
-/// issue that already covers the top recommendation, is left as it is. Fails if the session had no
-/// final message, if its last line is not one the prompt asks for, or if the
-/// plan can't be marked ready.
+/// issue that already covers the top recommendation, is left as it is. Fails
+/// if the session had no final message, if its last line is not one the
+/// prompt asks for, or if the plan can't be marked ready.
 fn conclude(final_message: Option<&str>, origin: &str, started: DateTime<Utc>) -> Result<Outcome> {
     match final_message.and_then(Report::read) {
         Some(Report::Plan(plan)) => {

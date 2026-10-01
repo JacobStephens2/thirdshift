@@ -18,6 +18,8 @@ use crate::plugin::SKILLS;
 use crate::prompt;
 use crate::session::claude_args;
 
+use Sender::{ArchitectRun, Units};
+
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
     anchor: &'static str,
@@ -75,15 +77,21 @@ const PLACEHOLDERS: [&str; 16] = [
     PROMPT,
 ];
 
-/// A prompt as the page shows it: when it is sent, from which units, and its
-/// text with placeholders.
+/// Who sends a prompt.
+enum Sender {
+    /// A Run, from one of these press units.
+    Units(&'static [Unit]),
+    /// An Architect run, which the press units, a Run's, don't cover.
+    ArchitectRun,
+}
+
+/// A prompt as the page shows it: when it is sent, by whom, and its text
+/// with placeholders.
 struct Prompt {
     id: &'static str,
     title: &'static str,
     when: &'static str,
-    /// Empty for the prompt an Architect run sends: the press units are a
-    /// Run's.
-    units: &'static [Unit],
+    sender: Sender,
     text: String,
 }
 
@@ -116,77 +124,77 @@ fn prompts() -> Vec<Prompt> {
             id: "prompt-fresh",
             title: "Fresh",
             when: "Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.",
-            units: &[IMPLEMENT],
+            sender: Units(&[IMPLEMENT]),
             text: prompt::fresh(&issue, BASE, BRANCH),
         },
         Prompt {
             id: "prompt-continuation",
             title: "Continuation, with no pull request",
             when: "Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.",
-            units: &[IMPLEMENT],
+            sender: Units(&[IMPLEMENT]),
             text: prompt::continuation(&issue, BASE, BRANCH, None),
         },
         Prompt {
             id: "prompt-continuation-pr",
             title: "Continuation, with an open pull request",
             when: "Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.",
-            units: &[IMPLEMENT],
+            sender: Units(&[IMPLEMENT]),
             text: prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
         },
         Prompt {
             id: "prompt-spec-review",
             title: "Spec review",
             when: "In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.",
-            units: &[REVIEW],
+            sender: Units(&[REVIEW]),
             text: prompt::spec_review(&spec, BASE, SPEC_BRANCH, PR_URL),
         },
         Prompt {
             id: "prompt-architecture-review",
             title: "Architecture review",
             when: "Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.",
-            units: &[],
+            sender: ArchitectRun,
             text: prompt::architecture_review(BASE, Some(FOCUS)),
         },
         Prompt {
             id: "prompt-conflict-repair",
             title: "Conflict Repair",
             when: "Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::conflict_repair(&issue, BASE, BRANCH, PR_URL),
         },
         Prompt {
             id: "prompt-foreign-conflict-repair",
             title: "Conflict Repair, on Foreign commits",
             when: "In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::conflict_repair(&issue, BRANCH, BRANCH, PR_URL),
         },
         Prompt {
             id: "prompt-review-repair",
             title: "Review Repair",
             when: "In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::review_repair(&issue, BRANCH, PR_URL, OWN_HEAD),
         },
         Prompt {
             id: "prompt-ci-fix-repair",
             title: "CI-fix Repair",
             when: "Starts a Repair session when CI fails on the pull request's head commit, listing each failed check.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::ci_fix_repair(&issue, BASE, BRANCH, PR_URL, &failed),
         },
         Prompt {
             id: "prompt-ci-fix-repair-inherited",
             title: "CI-fix Repair, with Inherited failures",
             when: "Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::ci_fix_repair(&issue, BASE, BRANCH, PR_URL, &failed_with_inherited),
         },
         Prompt {
             id: "prompt-resume",
             title: "Resume",
             when: "Continues any session, once, that ended its turn while waiting on background work, which was killed with it.",
-            units: &[IMPLEMENT, REVIEW, FINISH],
+            sender: Units(&[IMPLEMENT, REVIEW, FINISH]),
             text: prompt::resume(&[BACKGROUND_WORK]),
         },
     ];
@@ -380,7 +388,7 @@ fn prompt_section(html: &mut String) {
             id = prompt.id,
             title = prompt.title,
             when = prompt.when,
-            sender = sender(prompt.units),
+            sender = sent_by(&prompt.sender),
             text = highlighted(&prompt.text),
         );
     }
@@ -473,12 +481,11 @@ fn file_block(html: &mut String, file: &File, indent: &str) {
     );
 }
 
-/// Who sends a prompt: its `units`, or, with none, an Architect run.
-fn sender(units: &[Unit]) -> String {
-    if units.is_empty() {
-        "an Architect run, before any unit".to_string()
-    } else {
-        unit_links(units)
+/// Who sends a prompt, as its "Sent by" line ends.
+fn sent_by(sender: &Sender) -> String {
+    match sender {
+        Units(units) => unit_links(units),
+        ArchitectRun => "an Architect run, before any unit".to_string(),
     }
 }
 
@@ -712,7 +719,7 @@ mod tests {
             id: "prompt-example",
             title: "Example",
             when: "When an example runs.",
-            units: &[IMPLEMENT],
+            sender: Units(&[IMPLEMENT]),
             text: "Say ```hi```.\n".to_string(),
         };
         let markdown = markdown(&prompt);

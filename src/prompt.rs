@@ -2,6 +2,7 @@
 
 use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
+use crate::spec_run::{NEEDS_TRIAGE, READY_FOR_AGENT};
 
 /// Every prompt ends with this. Sessions run with `claude -p`, which exits
 /// once the agent ends its turn, killing any background task still running.
@@ -114,9 +115,9 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
          {focus}\
          Find the deepening opportunities with /thirdshift:improve-codebase-architecture, using /thirdshift:codebase-design for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.\n\
          \n\
-         If it is Strong, settle its design yourself and publish it as the plan with /thirdshift:to-spec and /thirdshift:to-tickets: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `needs-triage`, not `ready-for-agent`: thirdshift marks it ready once you are done.\n\
+         If it is Strong, settle its design yourself and publish it as the plan with /thirdshift:to-spec and /thirdshift:to-tickets: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `{NEEDS_TRIAGE}`, not `{READY_FOR_AGENT}`: thirdshift marks it ready once you are done.\n\
          \n\
-         If it is not Strong, file it as one issue labelled `needs-triage`, unless an open issue already covers it.\n\
+         If it is not Strong, file it as one issue labelled `{NEEDS_TRIAGE}`, unless an open issue already covers it.\n\
          \n\
          Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to CONTEXT.md or an ADR is a Ticket's work, not yours.\n\
          \n\
