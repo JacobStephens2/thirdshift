@@ -44,6 +44,13 @@ use tempfile::TempDir;
 pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
 
+/// How long a test waits for a Run to reach a point, such as starting the
+/// agent or showing a prompt, before it gives the Run up as hung. A Run that
+/// exits without reaching the point fails its test at once, so only a hung
+/// Run waits this long: on a busy machine a Run that is getting there can
+/// take many times what it takes on an idle one (#200).
+pub const WAIT_BOUND: Duration = Duration::from_secs(120);
+
 pub struct Scenario {
     /// Deletes the temp root when the scenario is dropped.
     _temp_dir: TempDir,
@@ -234,7 +241,10 @@ impl Scenario {
     }
 
     /// Run thirdshift and send it `signal` (e.g. `"INT"`) once the fake agent
-    /// has touched the file `started` in the scenario root.
+    /// has touched the file `started` in the scenario root. Panics with the
+    /// Run's stderr if the Run exits without the file there, or if the file
+    /// isn't there within [`WAIT_BOUND`]. A Run that exits just after the
+    /// file appears gets no signal.
     pub fn run_and_signal(&self, args: &[&str], started: &str, signal: &str) -> RunResult {
         self.run_and_signal_with_env(args, &[], started, signal)
     }
@@ -247,29 +257,49 @@ impl Scenario {
         started: &str,
         signal: &str,
     ) -> RunResult {
-        let child = self
+        let mut child = self
             .command(args)
             .envs(env.iter().copied())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !self.path(started).exists() {
+        let deadline = Instant::now() + WAIT_BOUND;
+        // Whether the Run has exited is read before whether the agent has
+        // started, so a Run that starts the agent and exits between the two
+        // reads still counts as started.
+        let exited = loop {
+            let exited = child.try_wait().unwrap().is_some();
+            if self.path(started).exists() {
+                break exited;
+            }
+            if exited {
+                let result = RunResult::from(child.wait_with_output().unwrap());
+                panic!(
+                    "the agent never started: the Run exited first; stderr:\n{}",
+                    result.stderr
+                );
+            }
             assert!(Instant::now() < deadline, "the agent never started");
             std::thread::sleep(Duration::from_millis(20));
+        };
+        // A Run that has exited is past signalling, and its process id may
+        // be another process's by now.
+        if !exited {
+            let status = Command::new("kill")
+                .args([&format!("-{signal}"), &child.id().to_string()])
+                .status()
+                .unwrap();
+            assert!(status.success());
         }
-        let status = Command::new("kill")
-            .args([&format!("-{signal}"), &child.id().to_string()])
-            .status()
-            .unwrap();
-        assert!(status.success());
         child.wait_with_output().unwrap().into()
     }
 
     /// Run thirdshift with stdin and stderr on a pseudo-terminal, as from an
     /// interactive shell, typing `keystrokes` in order. stdout is a pipe, so
-    /// what it prints there stays apart from the terminal.
+    /// what it prints there stays apart from the terminal. Panics with what
+    /// the terminal shows if the command exits without showing a prompt, or
+    /// doesn't show it within [`WAIT_BOUND`].
     pub fn run_on_terminal(
         &self,
         args: &[&str],
@@ -337,15 +367,26 @@ impl Scenario {
             })
         };
         let shown_text = || String::from_utf8_lossy(&shown.lock().unwrap()).replace("\r\n", "\n");
+        let mut reader = Some(reader);
         let mut seen = 0;
         for (prompt, line) in keystrokes {
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + WAIT_BOUND;
             loop {
+                // Once the Run has exited, the terminal is read to its end
+                // before it is searched, so nothing the Run showed is missed.
+                let exited = child.try_wait().unwrap().is_some();
+                if exited && let Some(reader) = reader.take() {
+                    reader.join().unwrap();
+                }
                 let text = shown_text();
                 if let Some(at) = text[seen..].find(prompt) {
                     seen += at + prompt.len();
                     break;
                 }
+                assert!(
+                    !exited,
+                    "the terminal never showed {prompt:?}: the Run exited first; it shows:\n{text}"
+                );
                 assert!(
                     Instant::now() < deadline,
                     "the terminal never showed {prompt:?}; it shows:\n{text}"
@@ -360,7 +401,9 @@ impl Scenario {
         }
         let status = child.wait().unwrap();
         let stdout = stdout.join().unwrap();
-        reader.join().unwrap();
+        if let Some(reader) = reader {
+            reader.join().unwrap();
+        }
         TerminalResult {
             stdout,
             stderr: unstamped(&shown_text()),

@@ -174,18 +174,16 @@ fn sighup_while_the_session_runs_stops_it_and_fails_the_run() {
 fn assert_interrupt_fails_the_run(signal: &str) {
     let scenario = Scenario::new();
     let started = scenario.path("agent-started");
+    let outlived = scenario.path("agent-outlived-its-sleep");
     scenario.agent_does(&format!(
-        "echo 'half done' > wip.txt\ntouch {}\nsleep 30\n",
-        started.display()
+        "echo 'half done' > wip.txt\ntouch {}\nsleep 30\ntouch {}\n",
+        started.display(),
+        outlived.display()
     ));
 
-    let began = std::time::Instant::now();
     let result = scenario.run_and_signal(&[&scenario.issue_url(7)], "agent-started", signal);
 
-    assert!(
-        began.elapsed() < std::time::Duration::from_secs(20),
-        "the session was not stopped"
-    );
+    assert!(!outlived.exists(), "the session was not stopped");
     assert_failed(&scenario, &result, "");
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
