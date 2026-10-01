@@ -33,6 +33,18 @@ fn package_leaves_out_the_repository_tooling() {
     }
 }
 
+/// The toolchain pin is for building in this repository. In the package it
+/// would do nothing for `cargo install thirdshift`, which builds with the
+/// installer's own toolchain, and it stays out so that stays plain.
+#[test]
+fn package_leaves_out_the_toolchain_pin() {
+    let list = package_list();
+    assert!(
+        !list.iter().any(|path| path == "rust-toolchain.toml"),
+        "rust-toolchain.toml is in {list:?}"
+    );
+}
+
 #[test]
 fn package_carries_the_factory_skills_with_their_license_and_credits() {
     let list = package_list();
