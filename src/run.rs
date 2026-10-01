@@ -397,7 +397,7 @@ pub fn deliver(
 /// hand.
 fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
     let branch = worktree.branch();
-    if let Err(error) = interrupt::retry(|| worktree.delete_from_origin()) {
+    if let Err(error) = interrupt::retry_if_interrupted(|| worktree.delete_from_origin()) {
         progress::warn(
             &error,
             format_args!(
@@ -410,7 +410,7 @@ fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
         "Closed by #{}, merged into {} by a thirdshift Merge run.",
         pr.number, pr.base
     );
-    if let Err(error) = interrupt::retry(|| close_unless_closed(issue, &comment)) {
+    if let Err(error) = interrupt::retry_if_interrupted(|| close_unless_closed(issue, &comment)) {
         progress::warn(
             &error,
             format_args!(

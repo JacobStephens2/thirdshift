@@ -333,6 +333,32 @@ fn an_interrupted_run_that_left_nothing_on_origin_releases_its_claim() {
     assert_failed(&scenario, &result, "");
     assert_eq!(scenario.origin_log("issue-7"), None);
     assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    assert!(
+        result.stderr.contains(
+            "thirdshift: releasing the Claim on #7: labelling it ready-for-agent, in place of in-progress\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_released_claim_leaves_an_issue_that_was_already_in_progress_in_progress() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["in-progress", "ready-for-agent"]);
+    scenario.agent_does("exit 1");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.issue_labels(7), ["in-progress", "ready-for-agent"]);
+    assert!(
+        result.stderr.contains(
+            "thirdshift: releasing the Claim on #7: labelling it ready-for-agent again\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
 }
 
 #[test]

@@ -28,7 +28,7 @@ pub struct Claim<'a> {
     /// already.
     added_in_progress: bool,
     /// Whether making it took `ready-for-agent` off the issue.
-    took_ready: bool,
+    removed_ready_for_agent: bool,
 }
 
 /// Make the Claim on `issue`: label it `in-progress`, in place of
@@ -45,11 +45,14 @@ pub fn make(issue: &IssueUrl) -> Result<Claim<'_>> {
 /// [`make`], its failure as `gh` gave it.
 fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
     let mut labels = github::issue_labels(issue)?;
-    let (claimed, ready) = (has(&labels, IN_PROGRESS), has(&labels, READY_FOR_AGENT));
+    let (claimed, ready) = (
+        has_label(&labels, IN_PROGRESS),
+        has_label(&labels, READY_FOR_AGENT),
+    );
     let claim = Claim {
         issue,
         added_in_progress: !claimed,
-        took_ready: ready,
+        removed_ready_for_agent: ready,
     };
     if claimed && !ready {
         return Ok(claim);
@@ -75,7 +78,7 @@ fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
 
 /// Whether `label` is one of `labels`: GitHub's label names are
 /// case-insensitive.
-fn has(labels: &[String], label: &str) -> bool {
+fn has_label(labels: &[String], label: &str) -> bool {
     labels.iter().any(|name| name.eq_ignore_ascii_case(label))
 }
 
@@ -94,10 +97,12 @@ impl Claim<'_> {
     /// The run has ended as it has, so this never fails: a failure is a
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
     pub fn release_if_nothing_on_origin(&self, launch: &Git, branch: &str) {
-        if !self.added_in_progress && !self.took_ready {
+        if !self.added_in_progress && !self.removed_ready_for_agent {
             return;
         }
-        if let Err(error) = interrupt::retry(|| self.release_unless_on_origin(launch, branch)) {
+        if let Err(error) = interrupt::retry_if_interrupted(|| {
+            self.put_labels_back_unless_on_origin(launch, branch)
+        }) {
             progress::warn(
                 &error,
                 format_args!(
@@ -112,19 +117,17 @@ impl Claim<'_> {
 
     /// [`Claim::release_if_nothing_on_origin`], its failure as `git` or `gh`
     /// gave it.
-    fn release_unless_on_origin(&self, launch: &Git, branch: &str) -> Result<()> {
+    fn put_labels_back_unless_on_origin(&self, launch: &Git, branch: &str) -> Result<()> {
         let issue = self.issue;
-        let reference = format!("refs/heads/{branch}");
-        let on_origin = launch.run(&["ls-remote", "--heads", "origin", &reference])?;
-        if !on_origin.is_empty() || github::pull_request_for(issue, branch)?.is_some() {
+        if launch.on_origin(branch)? || github::pull_request_for(issue, branch)?.is_some() {
             return Ok(());
         }
         let mut labels = github::issue_labels(issue)?;
-        if !has(&labels, IN_PROGRESS) {
+        if !has_label(&labels, IN_PROGRESS) {
             return Ok(());
         }
         let number = issue.number;
-        if !self.took_ready {
+        if !self.removed_ready_for_agent {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: removing {IN_PROGRESS}"
             ));
@@ -154,7 +157,7 @@ impl Claim<'_> {
     /// warning naming the command to run by hand, and an interrupt doesn't
     /// stop it.
     pub fn remove_if_closed(&self) {
-        if let Err(error) = interrupt::retry(|| self.remove_label_if_closed()) {
+        if let Err(error) = interrupt::retry_if_interrupted(|| self.unlabel_if_closed()) {
             progress::warn(
                 &error,
                 format_args!(
@@ -167,9 +170,9 @@ impl Claim<'_> {
     }
 
     /// [`Claim::remove_if_closed`], its failure as `gh` gave it.
-    fn remove_label_if_closed(&self) -> Result<()> {
+    fn unlabel_if_closed(&self) -> Result<()> {
         let issue = github::issue(self.issue)?;
-        if issue.is_open || !has(&issue.labels, IN_PROGRESS) {
+        if issue.is_open || !has_label(&issue.labels, IN_PROGRESS) {
             return Ok(());
         }
         progress::step(format_args!(
@@ -185,7 +188,7 @@ impl Claim<'_> {
         if self.added_in_progress {
             commands.push(github::remove_label_command(self.issue, IN_PROGRESS));
         }
-        if self.took_ready {
+        if self.removed_ready_for_agent {
             commands.push(github::add_label_command(self.issue, READY_FOR_AGENT));
         }
         commands.join(" && ")
