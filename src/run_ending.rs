@@ -1,13 +1,14 @@
-//! A Run's ending, both ways: how a Run, a Spec run or a failed Architect
-//! run shows how it ended, and how a Run reads back the ending of a child
-//! Run it started. The lines a Run prints are all a child Run tells what
-//! started it (ADR-0006), so which line carries what is known only here.
+//! A Run's ending, both ways: how a Run, a Spec run or an Architect run
+//! shows how it ended, and how a Run reads back the ending of a child Run it
+//! started. The lines a Run prints are all a child Run tells what started
+//! it (ADR-0006), so which line carries what is known only here.
 
 use std::io::Write;
 use std::process::ExitCode;
 
+use crate::architect;
 use crate::failed_run::FailedRun;
-use crate::progress::{self, Relayed};
+use crate::progress::{self, ChildLine};
 use crate::run::Ended;
 
 /// What starts the line naming a Failed run's session log.
@@ -31,14 +32,28 @@ pub fn show_failure(failed: &FailedRun) -> ExitCode {
     Shown::of_failure(failed).print()
 }
 
+/// Show an Architect run that ended on an issue, having dispatched no run:
+/// the line that says how it ended on stderr, and the issue's URL on stdout.
+/// Returns its exit code.
+pub fn show_architect(outcome: &architect::Outcome) -> ExitCode {
+    Shown {
+        // Also on stderr, so the outcome shows even when stdout is captured.
+        steps: vec![outcome.to_string()],
+        url: Some(outcome.url().to_string()),
+        success: true,
+    }
+    .print()
+}
+
 /// An ending as it shows.
 struct Shown {
     /// The messages of its progress lines on stderr, in order.
     steps: Vec<String>,
-    /// The pull request's URL on stdout.
+    /// The URL on stdout: the pull request's, or that of the issue an
+    /// Architect run ended on.
     url: Option<String>,
     /// Whether it exits 0.
-    reached: bool,
+    success: bool,
 }
 
 impl Shown {
@@ -53,7 +68,7 @@ impl Shown {
                     reached.goal.outcome()
                 )],
                 url: Some(reached.pr_url.clone()),
-                reached: true,
+                success: true,
             },
             Err(failed) => Shown::of_failure(failed),
         };
@@ -71,7 +86,7 @@ impl Shown {
         Shown {
             steps,
             url: failed.pr_url.clone(),
-            reached: false,
+            success: false,
         }
     }
 
@@ -84,7 +99,7 @@ impl Shown {
             // so the Run notification still goes.
             let _ = writeln!(std::io::stdout(), "{url}");
         }
-        if self.reached {
+        if self.success {
             ExitCode::SUCCESS
         } else {
             ExitCode::FAILURE
@@ -113,9 +128,8 @@ pub struct ChildFailure {
 /// Reads a child Run's ending back from what it shows: each line of its
 /// stderr, as it is relayed, then how it exited. Only the child's own
 /// progress lines count: a line that continues one, as the later lines of a
-/// cause do, tells nothing, and a line the child relayed from a Run it
-/// started itself starts with that Run's number, so it is read as neither a
-/// session log nor a Base fix.
+/// cause do, tells nothing, nor does a line the child relayed from a Run it
+/// started itself.
 #[derive(Default)]
 pub struct Reader {
     /// The last progress line that names neither a session log nor a Base
@@ -127,9 +141,9 @@ pub struct Reader {
 }
 
 impl Reader {
-    /// Take in the next line of the child's stderr.
-    pub fn line(&mut self, relayed: Relayed<'_>) {
-        let Relayed::Step(message) = relayed else {
+    /// Read the next line of the child's stderr.
+    pub fn read(&mut self, line: ChildLine<'_>) {
+        let ChildLine::Own(message) = line else {
             return;
         };
         if let Some(report) = message.strip_prefix(BASE_FIX) {
@@ -224,14 +238,14 @@ mod tests {
         let shown = Shown::of(ended);
         let mut reader = Reader::default();
         for line in before.iter().chain(&stderr(&shown)) {
-            reader.line(progress::relayed("#21", line).1);
+            reader.read(ChildLine::of(line));
         }
         let stdout = shown
             .url
             .iter()
             .map(|url| format!("{url}\n"))
             .collect::<String>();
-        reader.finish(&stdout, shown.reached)
+        reader.finish(&stdout, shown.success)
     }
 
     fn read_back(ended: &Ended) -> ChildEnding {
@@ -348,7 +362,7 @@ mod tests {
         );
         let relayed: Vec<String> = stderr(&Shown::of(&base_fix))
             .iter()
-            .map(|line| progress::relayed("#8", line).0)
+            .map(|line| progress::relayed(8, line))
             .collect();
         assert_eq!(
             read_back_after(&relayed, &failed("interrupted", None, None)),
@@ -368,15 +382,23 @@ mod tests {
 
     #[test]
     fn a_child_that_showed_nothing_reads_back_with_no_cause() {
-        assert_eq!(
-            Reader::default().finish("", false),
-            ChildEnding {
-                outcome: Err(ChildFailure {
-                    cause: None,
-                    log: None,
-                }),
-                base_fix: None,
-            }
-        );
+        let nothing = ChildEnding {
+            outcome: Err(ChildFailure {
+                cause: None,
+                log: None,
+            }),
+            base_fix: None,
+        };
+        assert_eq!(Reader::default().finish("", false), nothing);
+
+        // Nor is what it relayed from a child of its own what it showed.
+        let mut reader = Reader::default();
+        for line in stderr(&Shown::of(&with_base_fix(
+            failed("claude exited 1", Some(LOG), None),
+            "not merged",
+        ))) {
+            reader.read(ChildLine::of(&progress::relayed(8, &line)));
+        }
+        assert_eq!(reader.finish("", false), nothing);
     }
 }

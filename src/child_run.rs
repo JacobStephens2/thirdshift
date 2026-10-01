@@ -89,11 +89,11 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
     // Relay on its own thread, so this one can watch for an interrupt.
     let stderr = child.stderr.take().context("no stderr from the Run")?;
     let relay = thread::spawn(move || -> std::io::Result<_> {
-        let mut ending = run_ending::Reader::default();
+        let mut reader = run_ending::Reader::default();
         for line in BufReader::new(stderr).lines() {
-            ending.line(progress::relay(format_args!("#{number}"), &line?));
+            reader.read(progress::relay(number, &line?));
         }
-        Ok(ending)
+        Ok(reader)
     });
     let mut passed_on = false;
     let status = loop {
@@ -114,7 +114,7 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
         }
         thread::sleep(POLL);
     };
-    let ending = relay
+    let reader = relay
         .join()
         .map_err(|_| anyhow!("the relay of the Run for #{number} panicked"))?
         .with_context(|| format!("could not read the Run for #{number}"))?;
@@ -125,7 +125,7 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
         .context("no stdout from the Run")?
         .read_to_string(&mut stdout)
         .with_context(|| format!("could not read the Run for #{number}"))?;
-    let ending = ending.finish(&stdout, status.success());
+    let ending = reader.finish(&stdout, status.success());
     Ok(match ending.outcome {
         Ok(pr_url) => Ended::Reached {
             pr_url,

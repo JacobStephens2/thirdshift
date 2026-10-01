@@ -29,46 +29,58 @@ pub fn stamped(message: impl Display) -> String {
     progress_line(Local::now().format(STAMP), message)
 }
 
-/// A line from the stderr of a child thirdshift, without prefix or time.
+/// What a line from the stderr of a child thirdshift is.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Relayed<'a> {
-    /// The message of one of the child's own progress lines.
-    Step(&'a str),
+pub enum ChildLine<'a> {
+    /// One of the child's own progress lines, with its message: the line
+    /// without prefix or time.
+    Own(&'a str),
+    /// A progress line the child relayed from a child of its own.
+    Relayed,
     /// A line that continues the one before it, as the later lines of an
     /// error of several lines do.
-    Continuation(&'a str),
+    Continuation,
 }
 
-/// Print `line`, from the stderr of a child thirdshift, under `label`, as
-/// [`relayed`] gives it, and return what the line is.
-pub fn relay(label: impl Display, line: &str) -> Relayed<'_> {
-    let (text, relayed) = relayed(label, line);
-    write_line(&text);
-    relayed
+impl<'a> ChildLine<'a> {
+    /// What `line` is: a progress line if it starts with their prefix,
+    /// relayed if its message then starts as [`relayed`] starts one.
+    pub fn of(line: &'a str) -> Self {
+        let Some(rest) = line.strip_prefix(PREFIX) else {
+            return ChildLine::Continuation;
+        };
+        let message = split_stamp(rest).map_or(rest, |(_, message)| message);
+        let relayed = message
+            .strip_prefix('#')
+            .and_then(|rest| rest.split_once(": "))
+            .is_some_and(|(number, _)| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            });
+        if relayed {
+            ChildLine::Relayed
+        } else {
+            ChildLine::Own(message)
+        }
+    }
 }
 
-/// The progress line that relays `line`, from the stderr of a child
-/// thirdshift, under `label`, keeping the time the child stamped it with (or
-/// stamped now, if it has none), and what the line is: one of the child's own
-/// progress lines if it starts with their prefix, else a continuation.
-pub fn relayed(label: impl Display, line: &str) -> (String, Relayed<'_>) {
-    let (rest, own) = match line.strip_prefix(PREFIX) {
-        Some(rest) => (rest, true),
-        None => (line, false),
-    };
-    let (text, message) = match split_stamp(rest) {
-        Some((time, message)) => (
-            progress_line(time, format_args!("{label}: {message}")),
-            message,
-        ),
-        None => (stamped(format_args!("{label}: {rest}")), rest),
-    };
-    let relayed = if own {
-        Relayed::Step(message)
-    } else {
-        Relayed::Continuation(message)
-    };
-    (text, relayed)
+/// Print `line`, from the stderr of the child thirdshift running issue
+/// `number`, as [`relayed`] gives it, and return what the line is.
+pub fn relay(number: u64, line: &str) -> ChildLine<'_> {
+    write_line(&relayed(number, line));
+    ChildLine::of(line)
+}
+
+/// The progress line that relays `line`, from the stderr of the child
+/// thirdshift running issue `number`: its message after `#<number>: `,
+/// keeping the time the child stamped it with (or stamped now, if it has
+/// none).
+pub fn relayed(number: u64, line: &str) -> String {
+    let rest = line.strip_prefix(PREFIX).unwrap_or(line);
+    match split_stamp(rest) {
+        Some((time, message)) => progress_line(time, format_args!("#{number}: {message}")),
+        None => stamped(format_args!("#{number}: {rest}")),
+    }
 }
 
 /// The progress line for `message`, stamped with `time`.
@@ -605,52 +617,58 @@ mod tests {
     }
 
     #[test]
-    fn a_relayed_line_is_a_progress_line_or_continues_the_one_before() {
+    fn a_relayed_line_keeps_its_time_under_the_issues_number() {
         assert_eq!(
-            relayed("#21", "thirdshift: 12:14:49 could not push issue-21"),
-            (
-                "thirdshift: 12:14:49 #21: could not push issue-21".to_string(),
-                Relayed::Step("could not push issue-21")
-            )
+            relayed(21, "thirdshift: 12:14:49 could not push issue-21"),
+            "thirdshift: 12:14:49 #21: could not push issue-21"
         );
-
-        // Stamped now, having no time of its own.
-        let (line, relayed) = relayed("#21", "hint: fetch first");
-        let (_, message) = split_stamp(line.strip_prefix(PREFIX).unwrap()).unwrap();
-        assert_eq!(message, "#21: hint: fetch first");
-        assert_eq!(relayed, Relayed::Continuation("hint: fetch first"));
     }
 
     #[test]
-    fn only_a_line_that_starts_with_the_prefix_is_a_progress_line() {
-        for (line, message) in [
-            ("12:14:49 thirdshift: pushing", "thirdshift: pushing"),
-            (
-                " thirdshift: 12:14:49 pushing",
-                " thirdshift: 12:14:49 pushing",
-            ),
-            ("", ""),
+    fn a_relayed_line_with_no_time_is_stamped_now() {
+        let line = relayed(21, "hint: fetch first");
+        let (_, message) = split_stamp(line.strip_prefix(PREFIX).unwrap()).unwrap();
+        assert_eq!(message, "#21: hint: fetch first");
+    }
+
+    #[test]
+    fn a_childs_line_that_starts_with_the_prefix_is_its_own_progress_line() {
+        assert_eq!(
+            ChildLine::of("thirdshift: 12:14:49 could not push issue-21"),
+            ChildLine::Own("could not push issue-21")
+        );
+        assert_eq!(
+            ChildLine::of(&stamped("#21 failed: claude exited 1")),
+            ChildLine::Own("#21 failed: claude exited 1")
+        );
+    }
+
+    #[test]
+    fn a_childs_line_without_the_prefix_continues_the_one_before() {
+        for line in [
+            "hint: fetch first",
+            "12:14:49 thirdshift: pushing",
+            " thirdshift: 12:14:49 pushing",
+            "#8: claude exited 1",
+            "",
         ] {
-            assert_eq!(
-                relayed("#21", line).1,
-                Relayed::Continuation(message),
-                "{line}"
-            );
+            assert_eq!(ChildLine::of(line), ChildLine::Continuation, "{line}");
         }
     }
 
     #[test]
-    fn a_step_and_its_relay_are_one_progress_line_each() {
-        let line = stamped("pushing issue-7");
-        let (time, message) = split_stamp(line.strip_prefix(PREFIX).unwrap()).unwrap();
-        assert_eq!(message, "pushing issue-7");
-        assert_eq!(
-            relayed("#7", &line),
-            (
-                format!("thirdshift: {time} #7: pushing issue-7"),
-                Relayed::Step("pushing issue-7")
-            )
-        );
+    fn a_line_a_child_relayed_is_not_its_own_progress_line() {
+        for line in [
+            "thirdshift: 12:14:49 claude exited 1",
+            "hint: fetch first",
+            "thirdshift: 12:14:49 #9: relayed before",
+        ] {
+            assert_eq!(
+                ChildLine::of(&relayed(8, line)),
+                ChildLine::Relayed,
+                "{line}"
+            );
+        }
     }
 
     #[test]

@@ -29,7 +29,6 @@ mod spec_run;
 mod update;
 mod worktree;
 
-use std::io::Write;
 use std::process::ExitCode;
 
 use args::{ArchitectArgs, Command, RunArgs};
@@ -287,12 +286,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     };
     let code = match (&reviewed, &dispatched) {
         (_, Some(ended)) => run_ending::show(ended),
-        (Ok(outcome), None) => {
-            // Also on stderr, so the outcome shows even when stdout is captured.
-            progress::step(format_args!("{outcome}"));
-            print_url(outcome.url());
-            ExitCode::SUCCESS
-        }
+        (Ok(outcome), None) => run_ending::show_architect(outcome),
         (Err(failed), None) => run_ending::show_failure(failed),
     };
     if let Some(notification) = notification {
@@ -325,12 +319,6 @@ fn user_config() -> Result<UserConfig, ExitCode> {
 fn failure(error: &anyhow::Error) -> ExitCode {
     progress::step(format_args!("{error:#}"));
     ExitCode::FAILURE
-}
-
-/// The URL of the issue an Architect run ended on, on stdout. A failed write, as once the terminal has closed, is ignored, so
-/// the Run notification still goes.
-fn print_url(url: &str) {
-    let _ = writeln!(std::io::stdout(), "{url}");
 }
 
 /// The end of a command other than a Run: the line that says how it went,
