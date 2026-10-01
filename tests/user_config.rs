@@ -403,7 +403,7 @@ fn no_base_fix_overrides_base_fix_for_one_run() {
 }
 
 #[test]
-fn a_base_fix_that_is_not_true_or_false_stops_the_run_naming_the_file() {
+fn a_base_fix_setting_thirdshift_cant_use_stops_the_run_naming_it_and_the_file() {
     for (config, named) in [
         ("[base]\nfix = \"yes\"\n", "base.fix must be true or false"),
         ("[base]\nfix = 1\n", "base.fix must be true or false"),
@@ -427,7 +427,7 @@ fn a_base_fix_that_is_not_true_or_false_stops_the_run_naming_the_file() {
 }
 
 #[test]
-fn a_config_that_says_nothing_about_base_fixes_leaves_an_inherited_failure_to_fail_the_run() {
+fn without_base_fix_set_to_true_an_inherited_failure_fails_the_run() {
     for config in ["", "[base]\n", "[base]\nfix = false\n"] {
         let scenario = Scenario::new();
         scenario.user_config_is(config);

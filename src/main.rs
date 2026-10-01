@@ -31,7 +31,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use args::{Command, RunArgs};
-use base_fix::BaseFix;
+use base_fix::{BaseFix, BaseFixAsk};
 use child_run::Kind;
 use config::UserConfig;
 use notification::{NotificationAsk, RunNotification};
@@ -164,14 +164,20 @@ fn main() -> ExitCode {
         }
     };
     // A child Run, a Ticket's Run in a Spec run or a Base fix, is always a
-    // Merge run, and leaves the Run notification and the Launch directory to
-    // what started it.
-    let (goal, email, launch_pull) = match child {
-        Some(_) => (Goal::Merged, NotificationAsk::Skip, false),
+    // Merge run, and leaves the Run notification, the Launch directory and
+    // whether it may start a Base fix to what started it.
+    let (goal, email, launch_pull, base_fix) = match child {
+        Some(_) => (
+            Goal::Merged,
+            NotificationAsk::Skip,
+            false,
+            base_fix.unwrap_or(BaseFixAsk::Forbid),
+        ),
         None => (
             goal.unwrap_or(config.default_goal()),
             email.unwrap_or(config.email.default_ask()),
             config.launch_pull,
+            base_fix.unwrap_or(config.default_base_fix()),
         ),
     };
     // First, so no interrupt can end the Run once its notification is checked.
@@ -190,10 +196,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut base_fix = BaseFix::new(
-        child.as_ref(),
-        base_fix.unwrap_or(config.default_base_fix()),
-    );
+    let mut base_fix = BaseFix::new(child.as_ref(), base_fix);
     let parallel = Parallel {
         tickets: parallel.unwrap_or(config.spec_parallel),
         asked: parallel.is_some(),

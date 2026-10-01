@@ -177,7 +177,8 @@ impl EmailSettings {
 
 /// Setup: write the User config. From a terminal, the Setup questions come
 /// first, each with the current value as its default answer, and the answers
-/// are written; with no terminal, nothing is asked, and every setting is at
+/// are written, with `base.fix`, asked about only when every Run is a Merge
+/// run, otherwise at its default; with no terminal, nothing is asked, and every setting is at
 /// its default, with `email.to` as the suggested address, if there is one.
 /// An existing User config is edited in place, once it parses as a Run would
 /// parse it: its comments and key order stay, as do the values Setup didn't
@@ -349,9 +350,7 @@ fn write_new(home: &Path, path: &Path, text: &str) -> Result<()> {
 fn with_answers(text: &str, answers: &Answers) -> Result<String> {
     let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
     set(&mut document, "merge", "always", answers.merge_always);
-    if let Some(base_fix) = answers.base_fix {
-        set(&mut document, "base", "fix", base_fix);
-    }
+    set(&mut document, "base", "fix", answers.base_fix);
     set(&mut document, "launch", "pull", answers.launch_pull);
     set(
         &mut document,
@@ -940,7 +939,7 @@ mod tests {
     fn notifications_to(to: &str) -> Answers {
         Answers {
             merge_always: false,
-            base_fix: None,
+            base_fix: false,
             launch_pull: false,
             notifications: Some(questions::Notifications {
                 to: to.to_string(),

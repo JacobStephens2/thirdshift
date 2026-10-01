@@ -538,8 +538,9 @@ gh pr create --base main --head issue-24 --title "Fix CI on main" --body "Closes
     assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_some());
 }
 
-#[test]
-fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
+/// A Spec #20 whose one Ticket, #21, lands with `test` red on its head and
+/// on the Spec branch: an Inherited failure.
+fn spec_whose_ticket_inherits_a_failure() -> Scenario {
     let scenario = spec_of(&[(21, &[])]);
     scenario.agent_does_for(
         21,
@@ -550,7 +551,12 @@ fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branc
             checks_on_origin("issue-20", RED)
         ),
     );
-    // The Base fix issue is the next after the Ticket.
+    scenario
+}
+
+/// The agent, on the Base fix issue #22, the next after the Ticket, commits
+/// a fix and opens its PR into the Spec branch, with `test` green on its head.
+fn base_fix_lands_on_the_spec_branch(scenario: &Scenario) {
     scenario.agent_does_for(
         22,
         &format!(
@@ -563,6 +569,12 @@ gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22
             checks_on_head(GREEN)
         ),
     );
+}
+
+#[test]
+fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    base_fix_lands_on_the_spec_branch(&scenario);
 
     let result = scenario.run(&[&spec_url(&scenario), "base-fix"]);
 
@@ -587,29 +599,9 @@ gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22
 
 #[test]
 fn base_fix_in_the_user_config_gives_a_tickets_inherited_failure_a_base_fix() {
-    let scenario = spec_of(&[(21, &[])]);
+    let scenario = spec_whose_ticket_inherits_a_failure();
     scenario.user_config_is("[base]\nfix = true\n");
-    scenario.agent_does_for(
-        21,
-        &format!(
-            "{}{}{}",
-            agent_lands(21, "first.txt"),
-            checks_on_head(RED),
-            checks_on_origin("issue-20", RED)
-        ),
-    );
-    scenario.agent_does_for(
-        22,
-        &format!(
-            r#"
-echo "fixed" > ci-fix.txt
-git add ci-fix.txt
-git commit -q -m "Fix CI on the Spec branch"
-gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22"
-{}"#,
-            checks_on_head(GREEN)
-        ),
-    );
+    base_fix_lands_on_the_spec_branch(&scenario);
 
     let result = scenario.run(&[&spec_url(&scenario)]);
 
@@ -622,17 +614,8 @@ gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22
 
 #[test]
 fn no_base_fix_on_a_spec_reaches_its_tickets_whatever_the_user_config_says() {
-    let scenario = spec_of(&[(21, &[])]);
+    let scenario = spec_whose_ticket_inherits_a_failure();
     scenario.user_config_is("[base]\nfix = true\n");
-    scenario.agent_does_for(
-        21,
-        &format!(
-            "{}{}{}",
-            agent_lands(21, "first.txt"),
-            checks_on_head(RED),
-            checks_on_origin("issue-20", RED)
-        ),
-    );
 
     let result = scenario.run(&[&spec_url(&scenario), "no-base-fix"]);
 

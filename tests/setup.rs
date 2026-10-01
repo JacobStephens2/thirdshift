@@ -661,10 +661,10 @@ fn on_a_terminal_the_base_fix_question_defaults_to_the_user_configs_base_fix() {
 }
 
 #[test]
-fn on_a_terminal_turning_merging_off_leaves_base_fix_as_the_user_config_had_it() {
+fn on_a_terminal_turning_merging_off_writes_base_fix_at_its_default() {
     let scenario = Scenario::new();
     scenario.git_email_is(None);
-    scenario.user_config_is("[merge]\nalways = true\n\n[base]\nfix = true\n");
+    scenario.user_config_is("[merge]\nalways = true\n\n[base]\nfix = true  # mine\n");
 
     let result = setup_on_terminal(&scenario, &[], &[(MERGE, "n"), (PULL, ""), (NOTIFY, "")]);
 
@@ -675,7 +675,9 @@ fn on_a_terminal_turning_merging_off_leaves_base_fix_as_the_user_config_had_it()
     );
     let config = table(&result);
     assert_eq!(config["merge"]["always"].as_bool(), Some(false));
-    assert_eq!(config["base"]["fix"].as_bool(), Some(true));
+    assert_eq!(config["base"]["fix"].as_bool(), Some(false));
+    let text = result.user_config.unwrap();
+    assert!(text.contains("fix = false # mine\n"), "{text}");
 }
 
 #[test]
