@@ -43,6 +43,9 @@
 //!
 //! `gh api --method PUT repos/<repo>/issues/<number>/labels -f
 //! labels[]=<label> ...` sets an issue's labels to exactly those given.
+//! `gh api --method DELETE repos/<repo>/issues/<number>/labels/<label>` takes
+//! that label, whatever its case, off the issue, failing if the issue does
+//! not have it, as GitHub does.
 //!
 //! `gh api user` answers with the signed-in user's profile, whose public
 //! `email` is `user_email`, else null. `gh fake fails 'api user'` makes it
@@ -83,7 +86,8 @@
 //! already closed it only warns, as gh does.
 //!
 //! `gh issue list --label <label> --json <fields>` lists the open issues with
-//! that label, whatever its case, newest first.
+//! that label, whatever its case, newest first, or with `--state closed` the
+//! closed ones.
 //!
 //! `gh issue create --title <title> --body <body> --label <label>,<label>`
 //! opens an issue numbered one past the highest issue, with that title, body
@@ -128,7 +132,9 @@
 //!                                         $FAKE_MERGE_HEAD and the merge
 //!                                         commit in $FAKE_MERGE_SHA
 //! gh fake fails '<command> <subcommand>'  make every such call fail, e.g.
-//!                                         'issue close'
+//!                                         'issue close'; with more words,
+//!                                         every call that starts with them,
+//!                                         e.g. 'api --method DELETE'
 //! gh fake user-email '<JSON>'             set the public profile email, an
 //!                                         address or null
 //! gh fake labels <number> '<JSON list>'   set issue <number>'s labels
@@ -663,6 +669,34 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
     save(state);
 }
 
+/// `gh api --method DELETE repos/<repo>/issues/<number>/labels/<label>`: take
+/// the label, whatever its case, off the issue.
+fn issue_label_delete(state: &mut Json, args: &[&str]) {
+    let (positional, _) = parse(args);
+    let label = positional.first().and_then(|path| {
+        let (repo, rest) = repo_prefix(path)?;
+        let (n, name) = rest.strip_prefix("issues/")?.split_once("/labels/")?;
+        Some((repo, n, name))
+    });
+    let Some((repo, n, name)) = label else {
+        die(
+            &format!("fake gh: unsupported api DELETE {}", python_list(args)),
+            2,
+        )
+    };
+    check_repo_is(state, Some(repo));
+    if !state.at("issues").has(n) {
+        die("gh: Not Found (HTTP 404)", 1);
+    }
+    let is_named = |label: &Json| label.str().eq_ignore_ascii_case(name);
+    if !issue_labels(state, n).iter().any(is_named) {
+        die("gh: Label does not exist (HTTP 404)", 1);
+    }
+    let labels = state.at_mut("labels").at_mut(n).items_mut();
+    labels.retain(|label| !is_named(label));
+    save(state);
+}
+
 /// After the issue's `on-issue-view` script, if it has one still to run.
 fn issue_view(state: &mut Json, positional: &[String], flags: &Flags) {
     let n = &positional[0];
@@ -675,12 +709,13 @@ fn issue_view(state: &mut Json, positional: &[String], flags: &Flags) {
 }
 
 /// `gh issue list --label <label> --json <fields>`: the open issues with the
-/// label, whatever its case, newest first.
+/// label, whatever its case, newest first, or with `--state closed` the
+/// closed ones.
 fn issue_list(state: &Json, flags: &Flags) {
     let supported = ["label", "state", "json", "limit", "repo", "R"];
     let label = flag(flags, "label");
     if flags.keys().any(|name| !supported.contains(&name.as_str()))
-        || !matches!(flag(flags, "state"), None | Some("open"))
+        || !matches!(flag(flags, "state"), None | Some("open" | "closed"))
         || label.is_none_or(|label| label.contains(','))
     {
         die(
@@ -689,15 +724,16 @@ fn issue_list(state: &Json, flags: &Flags) {
         );
     }
     let label = label.unwrap();
+    let wanted_state = flag(flags, "state").unwrap_or("open").to_uppercase();
     let Json::Object(issues) = state.at("issues") else {
         panic!("issues is an object")
     };
     let labels = state.get("labels");
-    let mut open: Vec<(i64, &Json)> = issues
+    let mut matching: Vec<(i64, &Json)> = issues
         .iter()
         .filter(|(n, issue_state)| {
             let labels = labels.and_then(|labels| labels.get(n));
-            issue_state.str() == "OPEN"
+            issue_state.str() == wanted_state
                 && labels
                     .map(Json::items)
                     .unwrap_or_default()
@@ -706,10 +742,10 @@ fn issue_list(state: &Json, flags: &Flags) {
         })
         .map(|(n, issue_state)| (n.parse().unwrap(), issue_state))
         .collect();
-    open.sort_by_key(|(n, _)| -n);
+    matching.sort_by_key(|(n, _)| -n);
     let limit: usize = flag(flags, "limit").unwrap_or("30").parse().unwrap();
     let wanted = wanted_fields(flags);
-    let listed = open
+    let listed = matching
         .into_iter()
         .take(limit)
         .map(|(n, issue_state)| {
@@ -1456,11 +1492,14 @@ pub fn main(args: Vec<String>) {
     lock();
     record(&args);
     let mut state = load();
-    let call = args.iter().take(2).cloned().collect::<Vec<_>>().join(" ");
     let failing = state.get("failing").map(Json::items).unwrap_or_default();
+    let starts_with = |call: &str| {
+        let words: Vec<&str> = call.split(' ').collect();
+        args.iter().map(String::as_str).take(words.len()).eq(words)
+    };
     if failing
         .iter()
-        .any(|failing| failing.as_str() == Some(&call))
+        .any(|failing| failing.as_str().is_some_and(starts_with))
     {
         die("HTTP 502: Bad Gateway (https://api.github.com/graphql)", 1);
     }
@@ -1530,6 +1569,7 @@ pub fn main(args: Vec<String>) {
         ["api", "graphql", rest @ ..] => graphql(&state, rest),
         ["api", "--method", "PATCH", rest @ ..] => pr_patch(&mut state, rest),
         ["api", "--method", "PUT", rest @ ..] => issue_labels_put(&mut state, rest),
+        ["api", "--method", "DELETE", rest @ ..] => issue_label_delete(&mut state, rest),
         ["api", path, ..] if generate_notes_repo(path).is_some() => {
             generate_notes(&state, &args[1..]);
         }

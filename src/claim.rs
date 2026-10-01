@@ -4,13 +4,13 @@
 
 use anyhow::{Context, Result};
 
-use crate::github;
-use crate::issue::IssueUrl;
+use crate::github::{self, ListedIssue};
+use crate::issue::{IssueUrl, Repo};
 use crate::progress;
 use crate::spec_run::READY_FOR_AGENT;
 
 /// The label of a Claimed issue.
-const IN_PROGRESS: &str = "in-progress";
+pub const IN_PROGRESS: &str = "in-progress";
 
 /// The description the `in-progress` label is added to the repository with
 /// if the repository lacks it.
@@ -26,6 +26,11 @@ pub fn is_on(labels: &[String]) -> bool {
 /// names are case-insensitive.
 fn has(labels: &[String], label: &str) -> bool {
     labels.iter().any(|name| name.eq_ignore_ascii_case(label))
+}
+
+/// Whether `name` is the label of a Claimed issue, whatever its case.
+fn is_in_progress(name: &str) -> bool {
+    name.eq_ignore_ascii_case(IN_PROGRESS)
 }
 
 /// Make the Claim on `issue`: label it `in-progress`, in place of
@@ -62,4 +67,41 @@ fn label_in_progress(issue: &IssueUrl) -> Result<()> {
     }
     labels.retain(|name| !name.eq_ignore_ascii_case(READY_FOR_AGENT));
     github::set_labels_adding(issue, &labels, &[IN_PROGRESS])
+}
+
+/// How many open issues in `repo` carry a Claim, whoever started the Run or
+/// Spec run that made it: what a Pickup run holds against the Claim limit.
+pub fn open_count(repo: &Repo) -> Result<usize> {
+    Ok(github::open_issues_labelled(&repo.slug(), IN_PROGRESS)?.len())
+}
+
+/// The sweep: take `in-progress` off every closed issue in `repo` that still
+/// carries it, as an issue merged by hand does, leaving its other labels. A
+/// failure, to list them or to take the label off one, is only a warning.
+pub fn sweep(repo: &Repo) {
+    let closed = match github::closed_issues_labelled(&repo.slug(), IN_PROGRESS) {
+        Ok(closed) => closed,
+        Err(error) => {
+            progress::step(format_args!(
+                "warning: could not list the closed issues labelled {IN_PROGRESS}: {error:#}"
+            ));
+            return;
+        }
+    };
+    for ListedIssue { issue, labels, .. } in closed {
+        // As the issue spells it: GitHub's label names are case-insensitive.
+        let Some(label) = labels.iter().find(|name| is_in_progress(name)) else {
+            continue;
+        };
+        progress::step(format_args!(
+            "taking {IN_PROGRESS} off #{}, which is closed",
+            issue.number
+        ));
+        if let Err(error) = github::remove_label(&issue, label) {
+            progress::step(format_args!(
+                "warning: could not take {IN_PROGRESS} off #{}: {error:#}",
+                issue.number
+            ));
+        }
+    }
 }

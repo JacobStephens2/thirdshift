@@ -661,7 +661,8 @@ test -f {root}/{COPY_REPLACED}
     }
 
     /// Make every `gh <call>` fail, `call` being the command's first two
-    /// arguments, e.g. `label list`.
+    /// arguments, e.g. `label list`, or more of them, e.g. `api --method
+    /// DELETE`.
     pub fn gh_fails(&self, call: &str) {
         let mut gh = self.gh_state();
         let failing = gh.as_object_mut().unwrap().entry("failing");

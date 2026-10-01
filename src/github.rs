@@ -110,6 +110,17 @@ pub fn set_labels_adding(issue: &IssueUrl, kept: &[String], added: &[&str]) -> R
     set_labels(issue, &labels)
 }
 
+/// Take `label` off `issue`, in one request that leaves its other labels as
+/// they are. Through the REST API, as [`set_labels`] is.
+pub fn remove_label(issue: &IssueUrl, label: &str) -> Result<()> {
+    let path = format!(
+        "repos/{}/issues/{}/labels/{label}",
+        issue.repo_slug(),
+        issue.number
+    );
+    gh(&["api", "--method", "DELETE", &path, "--silent"])
+}
+
 /// A Spec's sub-issue, as a Spec run reads it.
 pub struct Ticket {
     pub number: u64,
@@ -219,7 +230,7 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     ])
 }
 
-/// An open issue as a listing of its repository's issues gives it.
+/// An issue as a listing of its repository's issues gives it.
 pub struct ListedIssue {
     pub issue: IssueUrl,
     pub title: String,
@@ -230,6 +241,18 @@ pub struct ListedIssue {
 /// `owner/repo`, newest first. They come from GitHub's issue list, not its
 /// search, whose index can be a while behind an issue just opened.
 pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
+    issues_labelled(repo, label, "open")
+}
+
+/// Every closed issue labelled `label` in the repository `repo`, an
+/// `owner/repo`, newest first.
+pub fn closed_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
+    issues_labelled(repo, label, "closed")
+}
+
+/// Every issue labelled `label` in the repository `repo` whose state is
+/// `state`, `open` or `closed`, newest first.
+fn issues_labelled(repo: &str, label: &str, state: &str) -> Result<Vec<ListedIssue>> {
     let json = gh_json(&[
         "issue",
         "list",
@@ -238,7 +261,7 @@ pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>>
         "--label",
         label,
         "--state",
-        "open",
+        state,
         "--json",
         "url,title,labels",
         "--limit",

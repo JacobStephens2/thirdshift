@@ -232,6 +232,27 @@ fn help_documents_pickup_the_ready_issue_the_dispatch_and_when_a_pickup_run_is_s
 }
 
 #[test]
+fn help_documents_the_claim_limit_and_taking_in_progress_off_closed_issues() {
+    let scenario = Scenario::new();
+
+    let help = unwrapped_help(&scenario);
+
+    for mention in [
+        "when the repository is at its Claim limit",
+        "A Pickup run takes nothing while 3 or more open issues are labelled in-progress, whoever started them",
+        "so a broken Base branch can't fail every Ready issue in turn, and pull requests can't pile up unreviewed",
+        "pickup.limit in the User config sets the Claim limit, a whole number from 1 up",
+        "[pickup] limit = 5",
+        "There is no flag for it",
+        "Each Pickup run that gets the lock first takes in-progress off every closed issue that still has it",
+        "so issues merged by hand are cleaned up",
+        "A label it can't take off is a warning: line, and the pass carries on",
+    ] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+}
+
+#[test]
 fn pickup_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["ready-for-agent"]);

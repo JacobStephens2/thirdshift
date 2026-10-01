@@ -184,8 +184,24 @@ it does an Architect run's, and the dispatched run branches off <branch> and tar
 pickup takes nothing else: no focus and no --plan-only.
 
 A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why,
-when the repository has no Ready issue, and while an Architect run or another Pickup run on
-the same repository is still running on this machine.
+when the repository has no Ready issue, when the repository is at its Claim limit, and while
+an Architect run or another Pickup run on the same repository is still running on this
+machine.
+
+A Pickup run takes nothing while 3 or more open issues are labelled in-progress, whoever
+started them: the Claim limit, so a broken Base branch can't fail every Ready issue in turn,
+and pull requests can't pile up unreviewed. The skipped run's line names the count and the
+limit. pickup.limit in the User config sets the Claim limit, a whole number from 1 up:
+
+    [pickup]
+    limit = 5
+
+There is no flag for it.
+
+Each Pickup run that gets the lock first takes in-progress off every closed issue that still
+has it, keeping the issue's other labels, so issues merged by hand are cleaned up and don't
+look taken. Closed issues never count against the Claim limit. A label it can't take off is a
+warning: line, and the pass carries on.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
@@ -388,8 +404,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// URL>` with the same flags would be, but on the Pickup run's Base branch,
 /// whatever the Launch directory has checked out. The dispatched run's ending
 /// is the Pickup run's, its Run notification included.
-/// One that is skipped says why on stderr, puts nothing on stdout, and is no
-/// failure.
+/// One that is skipped, as when the repository is at the User config's Claim
+/// limit, says why on stderr, puts nothing on stdout, and is no failure.
 fn pickup(args: PickupArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -400,7 +416,7 @@ fn pickup(args: PickupArgs) -> ExitCode {
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    let taken = match pickup::run(args.base.as_deref()) {
+    let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
         Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
         Err(error) => return failure(&error),

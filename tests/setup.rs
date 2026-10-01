@@ -66,7 +66,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(
         sections,
         [
-            "[merge]", "[base]", "[launch]", "[email]", "[logs]", "[spec]"
+            "[merge]", "[base]", "[launch]", "[email]", "[logs]", "[spec]", "[pickup]"
         ],
         "{text}"
     );
@@ -81,6 +81,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert!(config["email"].get("to").is_none(), "{text}");
     assert_eq!(config["logs"]["dir"].as_str(), Some("~/.thirdshift/logs"));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
+    assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
     assert!(
         result.stderr.contains(".thirdshift/config.toml"),
         "stderr: {}",
@@ -114,7 +115,8 @@ fn every_key_is_written_with_a_comment_giving_what_it_does_and_its_default() {
             "email.to",
             "email.from",
             "logs.dir",
-            "spec.parallel"
+            "spec.parallel",
+            "pickup.limit"
         ],
         "{text}"
     );
@@ -208,7 +210,7 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
 }
 
 /// Every key this version knows, as `section.key`, sorted.
-const EVERY_KEY: [&str; 8] = [
+const EVERY_KEY: [&str; 9] = [
     "base.fix",
     "email.always",
     "email.from",
@@ -216,6 +218,7 @@ const EVERY_KEY: [&str; 8] = [
     "launch.pull",
     "logs.dir",
     "merge.always",
+    "pickup.limit",
     "spec.parallel",
 ];
 
@@ -309,6 +312,30 @@ fn setup_over_a_user_config_with_no_email_to_adds_it_commented_out_once() {
     let mut names = key_names(&text);
     names.sort();
     assert_eq!(names, EVERY_KEY, "{text}");
+}
+
+#[test]
+fn setup_writes_pickup_limit_at_3_with_its_comment_and_keeps_one_already_there() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[launch]\npull = true\n");
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let text = user_config(&scenario).unwrap();
+    let written = "\n[pickup]\nlimit = 3   # how many open issues labelled in-progress stop a \
+                   Pickup run taking another; default 3\n";
+    assert!(text.ends_with(written), "{text}");
+
+    let mine = "[pickup]\nlimit = 7 # I review quickly\n";
+    scenario.user_config_is(mine);
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let text = user_config(&scenario).unwrap();
+    assert!(text.starts_with(mine), "{text}");
+    assert_eq!(text.matches("limit =").count(), 1, "{text}");
 }
 
 #[test]
@@ -574,7 +601,8 @@ fn on_a_terminal_the_answers_are_written_with_the_comments_on_each_key() {
             "email.to",
             "email.from",
             "logs.dir",
-            "spec.parallel"
+            "spec.parallel",
+            "pickup.limit"
         ],
         "{text}"
     );
@@ -736,6 +764,9 @@ dir = \"/var/log/thirdshift\"
 
 [spec]
 parallel = 5
+
+[pickup]
+limit = 5
 ";
     scenario.user_config_is(mine);
 
