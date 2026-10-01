@@ -34,13 +34,7 @@ pub struct Claim<'a> {
 /// Whether an issue with `labels` carries a Claim, whatever else it is
 /// labelled.
 pub fn is_on(labels: &[String]) -> bool {
-    has(labels, IN_PROGRESS)
-}
-
-/// Whether `label` is one of `labels`, whatever its case: GitHub's label
-/// names are case-insensitive.
-fn has(labels: &[String], label: &str) -> bool {
-    spelling(labels, label).is_some()
+    github::has_label(labels, IN_PROGRESS)
 }
 
 /// `label` as `labels` spells it, whatever its case, if it is one of them.
@@ -62,7 +56,7 @@ pub fn make(issue: &IssueUrl) -> Result<Claim<'_>> {
 /// [`make`], its failure as `gh` gave it.
 fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
     let mut labels = github::issue_labels(issue)?;
-    let (claimed, ready) = (is_on(&labels), has(&labels, READY_FOR_AGENT));
+    let (claimed, ready) = (is_on(&labels), github::has_label(&labels, READY_FOR_AGENT));
     let claim = Claim {
         issue,
         added_in_progress: !claimed,

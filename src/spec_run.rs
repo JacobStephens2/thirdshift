@@ -350,7 +350,7 @@ fn next_ready(
 pub fn unready_label(labels: &[String]) -> Option<&'static str> {
     UNREADY_LABELS
         .into_iter()
-        .find(|label| labels.iter().any(|name| name.eq_ignore_ascii_case(label)))
+        .find(|label| github::has_label(labels, label))
 }
 
 /// A line on each Ticket that landed in this Spec run, with its PR, and on
