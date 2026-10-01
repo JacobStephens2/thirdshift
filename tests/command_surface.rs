@@ -70,7 +70,8 @@ fn help_does_not_mention_the_flag_aliases() {
 }
 
 #[test]
-fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_run_at_a_time() {
+fn help_documents_architect_its_focus_the_dispatch_plan_only_and_when_an_architect_run_is_skipped()
+{
     let scenario = Scenario::new();
 
     let help = scenario.run(&["help"]).stdout;
@@ -89,6 +90,12 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_r
         "Only one Architect run per repository runs at a time on a machine",
         "is skipped: it prints an Architect run is already running on <owner>/<repo>, does nothing else and exits 0",
         "A skipped run still sends its Run notification, with the outcome skipped",
+        "swaps its needs-triage label for ready-for-agent, labels it architect-plan",
+        "creating the label if the repository lacks it",
+        "An Architect run that finds an open issue labelled architect-plan is skipped too, before any review, with or without --plan-only",
+        "prints its URL on stdout, gives the command that picks it up, thirdshift <plan URL>, and exits 0",
+        "No flag overrides this: finish or close the Architect plan, or remove its label",
+        "An Architect run never retries or dispatches an existing Architect plan",
         "--email, --email <address> and --no-email ask an Architect run for its Run notification",
         "It sends one for the whole Architect run, however it ends",
         "The run the plan is dispatched as sends none of its own",

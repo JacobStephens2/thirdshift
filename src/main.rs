@@ -101,8 +101,10 @@ Architecture review, an agent session in its own worktree at the Base branch's h
 looks for deepening opportunities and publishes the top one as a plan: a Spec with Tickets, or
 a single Ticket. thirdshift then checks that the plan is open, new and not labelled
 ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
-and dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single
-Ticket. The Architect run ends as that run does, with its exit code and its PR's URL.
+labels it architect-plan, creating the label if the repository lacks it, and dispatches it
+as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket. A Spec's
+Tickets are never labelled architect-plan. The Architect run ends as that run does, with
+its exit code and its PR's URL.
 merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run, as do the
 User config's defaults; parallel <n> fails it if the plan is a single Ticket. The review
 itself watches no CI, so only that run can start a Base fix. With --plan-only, the
@@ -139,6 +141,13 @@ on the same repository is still running, the Spec run or Run it dispatched inclu
 skipped: it prints an Architect run is already running on <owner>/<repo>, does nothing else
 and exits 0. Nothing is left to clear once that other run ends, however it ends. Runs
 started on an Issue URL are never skipped this way.
+
+An Architect run that finds an open issue labelled architect-plan is skipped too, before
+any review, with or without --plan-only: the last Architect plan is not finished. It names
+each open Architect plan, prints its URL on stdout, gives the command that picks it up,
+thirdshift <plan URL>, and exits 0. No flag overrides this: finish or close the Architect
+plan, or remove its label. An Architect run never retries or dispatches an existing
+Architect plan, so one whose run failed stays open until you pick it up.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
@@ -271,9 +280,10 @@ fn main() -> ExitCode {
 /// to dispatch, puts the URL of the issue it ended on on stdout: the plan,
 /// the idea issue the review filed, or the issue that already covers its top
 /// recommendation. One whose review or plan fails puts the cause and the
-/// session log on stderr. One that is skipped, as another on its repository
-/// is still running, says so on stderr, puts nothing on stdout, and is no
-/// failure. If asked, by the command or the User config, it sends one Run
+/// session log on stderr. One that is skipped says why on stderr, and is no
+/// failure: as another on its repository is still running, it puts nothing
+/// on stdout, and as Architect plans are still open there, the URL of each.
+/// If asked, by the command or the User config, it sends one Run
 /// notification, however it ended, skipped included; the run it dispatched
 /// sends none of its own.
 fn architect(args: ArchitectArgs) -> ExitCode {
@@ -320,9 +330,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         (Ok(outcome), None) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("{outcome}"));
-            if let Outcome::Reviewed(reviewed) = outcome {
-                print_url(reviewed.url());
-            }
+            outcome.urls().into_iter().for_each(print_url);
             ExitCode::SUCCESS
         }
         (Err(failed), None) => report(failed),
