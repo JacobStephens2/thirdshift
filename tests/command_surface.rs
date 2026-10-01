@@ -14,6 +14,7 @@ fn assert_help_text(text: &str) {
         "thirdshift --email <Issue URL>",
         "thirdshift architect [<focus>]",
         "thirdshift architect [<focus>] --plan-only",
+        "thirdshift architect base <branch> [<focus>]",
         "thirdshift email-test [<address>]",
         "thirdshift setup",
         "thirdshift update",
@@ -142,6 +143,18 @@ fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr()
             vec!["architect", "no-base-fix", "--plan-only"],
             PLAN_ONLY_DISPATCHES_NOTHING,
         ),
+        (
+            vec!["architect", "the Spec run", "base"],
+            "base must be followed by a branch",
+        ),
+        (
+            vec!["architect", "--base", "--plan-only"],
+            "--base must be followed by a branch, not --plan-only",
+        ),
+        (
+            vec!["architect", "base", "main", "--plan-only", "--base", "main"],
+            "repeated argument: --base",
+        ),
     ] {
         let result = scenario.run(&args);
 
@@ -151,6 +164,46 @@ fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr()
             "{args:?} started a review"
         );
     }
+}
+
+#[test]
+fn help_documents_base_for_an_architect_run() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    // However the lines are wrapped.
+    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+    for mention in [
+        "base <branch> (or --base <branch>) names the Architect run's Base branch",
+        "whatever branch the clone has checked out",
+        "on a detached HEAD or with uncommitted changes",
+        "The review starts at <branch>'s head on origin",
+        "the run the plan is dispatched as branches off <branch> and targets it with its pull request",
+        "<branch> must exist on origin, with no local copy of it ahead",
+        "launch.pull updates the clone only when <branch> is the branch checked out",
+        "base goes with --plan-only too",
+        "base is for architect only",
+        "Without base, the Base branch is the branch checked out",
+        "thirdshift architect base main",
+    ] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+}
+
+#[test]
+fn base_on_a_run_is_an_argument_error() {
+    let scenario = Scenario::new();
+    let url = scenario.issue_url(7);
+
+    let result = scenario.run(&[&url, "base", "main"]);
+
+    assert_argument_error(
+        &scenario,
+        &result,
+        "unexpected argument after the Issue URL: base",
+    );
+    assert!(scenario.claude_calls().is_empty(), "a Run started");
 }
 
 #[test]
