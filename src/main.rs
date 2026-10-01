@@ -223,9 +223,8 @@ body. The dispatched run sends none of its own. A skipped pass sends none, even 
 The notification's checks, an address and a Resend API key, are made before any other work
 on every pass, so one that would be skipped fails on them too, with exit 1.
 
-To run a Pickup run on a schedule, have the operating system's scheduler, such as cron, run
-thirdshift pickup base main from the clone every half hour or so: the README's \"A Pickup run on
-a schedule\" has a crontab entry.
+To run a Pickup run on a schedule, have a scheduler, such as cron, run thirdshift pickup base main
+from the clone: the README's \"A Pickup run on a schedule\" has a crontab entry.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
