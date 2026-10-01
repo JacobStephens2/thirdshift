@@ -32,6 +32,9 @@ pub struct ArchitectArgs {
     /// The free text that points the Architecture review at an area, if
     /// given.
     pub focus: Option<String>,
+    /// What `email` or `no-email` asked for, if either was given; without
+    /// one, the User config decides.
+    pub email: Option<NotificationAsk>,
     /// The flags for the Spec run or Run the plan is dispatched as, or none
     /// with [`PLAN_ONLY`], which dispatches nothing.
     pub dispatch: Option<DispatchArgs>,
@@ -144,13 +147,16 @@ pub fn parse(args: &[String]) -> Result<Command> {
 /// Parse the arguments after `architect`: at most one focus, and its flags,
 /// each at most once, in any order. [`PLAN_ONLY`] dispatches nothing, so the
 /// flags for the dispatched run, `merge`, `no-merge` and `parallel`, which a
-/// Run takes too, can't go with it. They are never the focus, and any other
-/// argument that starts with a dash is unexpected rather than a focus.
+/// Run takes too, can't go with it. `email` and `no-email` are for the
+/// Architect run's own Run notification, so they can, and `email` takes an
+/// address as it does for a Run. None of these is ever the focus, and any
+/// other argument that starts with a dash is unexpected rather than a focus.
 fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     let mut focus = None;
     let mut plan_only = false;
+    let mut email = None;
     let mut dispatch = DispatchArgs::default();
-    let mut args = args.iter();
+    let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             PLAN_ONLY => {
@@ -163,6 +169,13 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
             "no-merge" | "--no-merge" => {
                 ask_once(&mut dispatch.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
             }
+            "email" | "--email" => {
+                let to = args.next_if(|next| is_address(next)).cloned();
+                ask_once(&mut email, NotificationAsk::Send(to), arg, EMAIL_FLAGS)?
+            }
+            "no-email" | "--no-email" => {
+                ask_once(&mut email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
+            }
             "parallel" | "--parallel" => ask_parallel(&mut dispatch.parallel, arg, args.next())?,
             _ if arg.starts_with('-') => bail!("unexpected argument after architect: {arg}"),
             _ if focus.is_some() => bail!("unexpected argument after the focus: {arg}"),
@@ -173,6 +186,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     if !plan_only {
         return Ok(ArchitectArgs {
             focus,
+            email,
             dispatch: Some(dispatch),
         });
     }
@@ -184,6 +198,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     }
     Ok(ArchitectArgs {
         focus,
+        email,
         dispatch: None,
     })
 }
@@ -220,7 +235,8 @@ fn ask_parallel(parallel: &mut Option<NonZeroUsize>, arg: &str, n: Option<&Strin
 }
 
 /// Is `arg`, after `email`, the address to send to? Only if it looks like
-/// one, so the Issue URL is never taken for it.
+/// one, so the Issue URL is never taken for it, nor is an Architect run's
+/// focus unless it has an `@`.
 fn is_address(arg: &str) -> bool {
     arg.contains('@') && !arg.starts_with("https://")
 }
@@ -332,6 +348,60 @@ mod tests {
     }
 
     #[test]
+    fn architect_takes_the_email_flags_with_or_without_plan_only_and_never_as_the_focus() {
+        let bare = || Some(NotificationAsk::Send(None));
+        let to_me = || Some(NotificationAsk::Send(Some("me@example.com".to_string())));
+        let focus = || Some("the Spec run".to_string());
+        for (args, email, focus) in [
+            (vec!["architect"], None, None),
+            (vec!["architect", "email"], bare(), None),
+            (vec!["architect", "--email", "--plan-only"], bare(), None),
+            (vec!["architect", "email", "the Spec run"], bare(), focus()),
+            (vec!["architect", "email", "merge"], bare(), None),
+            (vec!["architect", "email", "me@example.com"], to_me(), None),
+            (
+                vec!["architect", "the Spec run", "--email", "me@example.com"],
+                to_me(),
+                focus(),
+            ),
+            (
+                vec!["architect", "--plan-only", "no-email"],
+                Some(NotificationAsk::Skip),
+                None,
+            ),
+            (
+                vec!["architect", "--no-email", "the Spec run"],
+                Some(NotificationAsk::Skip),
+                focus(),
+            ),
+        ] {
+            let architect_args = architect_args(&args);
+            assert_eq!(architect_args.email, email, "{args:?}");
+            assert_eq!(architect_args.focus, focus, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn architect_rejects_contradictory_and_repeated_email_flags() {
+        for (args, error) in [
+            (
+                vec!["architect", "email", "--no-email"],
+                "email and no-email can't be used together",
+            ),
+            (
+                vec!["architect", "no-email", "--plan-only", "--email"],
+                "email and no-email can't be used together",
+            ),
+            (
+                vec!["architect", "--email", "me@example.com", "email"],
+                "repeated argument: email",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
     fn architect_rejects_contradictory_repeated_and_malformed_dispatch_flags() {
         for (args, error) in [
             (
@@ -391,8 +461,8 @@ mod tests {
                 "repeated argument: --plan-only",
             ),
             (
-                vec!["architect", "--email", "--plan-only"],
-                "unexpected argument after architect: --email",
+                vec!["architect", "--verbose", "--plan-only"],
+                "unexpected argument after architect: --verbose",
             ),
             (vec!["architect", " ", "--plan-only"], "the focus is empty"),
         ] {

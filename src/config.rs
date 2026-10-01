@@ -42,8 +42,8 @@ pub struct UserConfig {
 /// file holds no secret.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct EmailSettings {
-    /// `email.always`: every Run sends a Run notification unless told
-    /// `no-email`.
+    /// `email.always`: every Run, and every Architect run, sends a Run
+    /// notification unless told `no-email`.
     pub always: bool,
     /// `email.to`: the address email goes to when the command names none.
     pub to: Option<String>,

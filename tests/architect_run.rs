@@ -6,11 +6,15 @@
 //! run or a Run, and ends as that does. A review with no Strong candidate
 //! has no plan: the Architect run prints the URL of the idea issue it filed,
 //! or of the open issue that already covers it, and dispatches nothing.
+//! Asked to, by `email` or the User config, it sends one Run notification,
+//! through Resend, here a local stand-in, however it ended, and the run it
+//! dispatched sends none.
 
 mod support;
 
 use std::fs;
 
+use support::resend::ResendStandIn;
 use support::{REPO, RunResult, Scenario};
 
 /// The first issue the fake agent creates: the scenario starts with issue #7.
@@ -793,4 +797,314 @@ fn progress_lines_show_the_dispatch_after_the_label_swap_and_before_the_run() {
         "stderr: {}",
         result.stderr
     );
+}
+
+const KEY: &str = "re_test_123";
+
+const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
+
+/// Run thirdshift with `args` against `resend`, with a Resend API key in the
+/// environment.
+fn run_with_resend(scenario: &Scenario, resend: &ResendStandIn, args: &[&str]) -> RunResult {
+    let env = [
+        ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ("RESEND_API_KEY", KEY),
+    ];
+    scenario.run_with_env(args, &env)
+}
+
+/// The subject and the text of the one Run notification `resend` received.
+fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let body = &requests[0].body;
+    let part = |name: &str| body[name].as_str().unwrap().to_string();
+    (part("subject"), part("text"))
+}
+
+#[test]
+fn plan_only_sends_one_notification_naming_the_plan() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--plan-only", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+    assert_eq!(resend.requests()[0].body["to"], "me@example.com");
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: plan published"
+    );
+    assert!(
+        text.starts_with(&format!("Review:       plan published: {PLAN_URL}\n")),
+        "{text}"
+    );
+    assert!(!text.contains("Dispatched:"), "{text}");
+    assert!(text.contains("Took:"), "{text}");
+}
+
+#[test]
+fn a_review_that_files_an_idea_sends_one_notification_naming_the_idea() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+url=$(gh issue create --title "Deepen the session module" --body "The idea" --label needs-triage)
+printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: idea filed"
+    );
+    assert!(
+        text.starts_with(&format!("Review:       idea filed: {PLAN_URL}\n")),
+        "{text}"
+    );
+    assert!(!text.contains("Dispatched:"), "{text}");
+}
+
+#[test]
+fn a_review_whose_idea_is_already_filed_sends_one_notification_naming_that_issue() {
+    let scenario = Scenario::new();
+    let url = scenario.issue_url(7);
+    scenario.agent_does(&ends_with(&format!(
+        "Architecture review already filed: {url}"
+    )));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--email", "me@example.com", "--plan-only"],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: idea already filed"
+    );
+    assert!(
+        text.starts_with(&format!("Review:       idea already filed: {url}\n")),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&publishes_a_ticket_then("exit 3"));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--email", "me@example.com"],
+    );
+
+    assert_failed(&scenario, &result, "claude exited 3");
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: review failed"
+    );
+    let log = result.stderr.lines().last().unwrap();
+    let log = log.strip_prefix("thirdshift: session log: ").unwrap();
+    assert!(
+        text.starts_with(&format!(
+            "Review:       failed\n\
+             Cause:        claude exited 3\n\
+             Session log:  {log}\n"
+        )),
+        "{text}"
+    );
+}
+
+/// The User config of a machine where every Run and every Architect run
+/// sends a Run notification.
+const EMAIL_ALWAYS: &str = "[email]\nalways = true\nto = \"config@example.com\"\n";
+
+#[test]
+fn email_always_sends_one_notification_for_the_review_and_the_run_it_dispatched() {
+    let scenario = single_ticket_plan();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["architect"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert_eq!(resend.requests()[0].body["to"], "config@example.com");
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: ready for review"
+    );
+    assert!(
+        text.starts_with(&format!(
+            "Review:       plan published: {PLAN_URL}\n\
+             Dispatched:   ready for review\n\
+             Pull request: {PR_URL}\n"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_dispatched_spec_run_sends_no_notification_of_its_own_and_its_tickets_are_in_the_one_sent() {
+    let scenario = spec_plan("");
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["architect", "merge"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Architect run: merged");
+    let spec_pr = pr_from(&scenario, "issue-8");
+    assert!(
+        text.starts_with(&format!(
+            "Review:       plan published: {PLAN_URL}\n\
+             Dispatched:   merged\n\
+             Pull request: {}\n",
+            spec_pr["url"].as_str().unwrap()
+        )),
+        "{text}"
+    );
+    let (_, tickets) = text.split_once("\nTickets:\n").expect(&text);
+    for ticket in [9, 10] {
+        let pr = pr_from(&scenario, &format!("issue-{ticket}"));
+        let line = format!("#{ticket} landed with {}\n", pr["url"].as_str().unwrap());
+        assert!(tickets.contains(&line), "expected {line:?} in: {text}");
+    }
+}
+
+#[test]
+fn a_dispatched_run_that_fails_sends_one_notification_with_its_outcome_and_cause() {
+    let scenario = single_ticket_plan();
+    scenario.agent_does_for(8, &format!("{}exit 3\n", agent_opens_pr(8, "main")));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Architect run: failed");
+    assert!(
+        text.starts_with(&format!(
+            "Review:       plan published: {PLAN_URL}\n\
+             Dispatched:   failed\n\
+             Pull request: {PR_URL}\n\
+             Cause:        claude exited 3\n"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn no_email_skips_the_notification_email_always_asks_for() {
+    let scenario = single_ticket_plan();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["architect", "--no-email"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn an_architect_run_that_is_not_asked_for_a_notification_sends_none() {
+    let scenario = single_ticket_plan();
+    scenario.user_config_is("[email]\nto = \"config@example.com\"\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["architect"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn with_no_address_known_the_architect_run_stops_before_any_work_and_sends_nothing() {
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["architect", "--email"]);
+
+    scenario.assert_rejected_before_any_work(&result, "no email address");
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn a_failed_send_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    let resend = ResendStandIn::replying(500, "upstream exploded");
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--plan-only", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+    assert_eq!(resend.requests().len(), 1);
+    let warning = result.stderr.lines().find(|line| line.contains("warning:"));
+    assert!(
+        warning.is_some_and(|warning| warning.contains("upstream exploded")),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn an_interrupted_review_sends_one_notification_that_it_was_interrupted() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"touch "$(dirname "$FAKE_CLAUDE_RECORD")/started"
+sleep 60"#,
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_and_signal_with_env(
+        &["architect", "--email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+        "started",
+        "TERM",
+    );
+
+    assert_failed(&scenario, &result, "interrupted");
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: interrupted"
+    );
+    assert!(text.starts_with("Review:       interrupted\n"), "{text}");
+    assert!(!text.contains("Cause:"), "{text}");
 }

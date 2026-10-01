@@ -32,7 +32,7 @@ use std::process::ExitCode;
 use args::{ArchitectArgs, Command, RunArgs};
 use config::UserConfig;
 use failed_run::FailedRun;
-use notification::{NotificationAsk, RunNotification};
+use notification::{ArchitectNotification, NotificationAsk, RunNotification};
 use run::{Goal, Reached};
 use spec_run::Parallel;
 
@@ -87,8 +87,7 @@ a single Ticket. thirdshift then checks that the plan is open, new and not label
 ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
 and dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single
 Ticket. The Architect run ends as that run does, with its exit code and its PR's URL.
-merge, --no-merge and parallel <n> apply to that run, as do the User config's defaults,
-except that it sends no Run notification, whatever email.always says;
+merge, --no-merge and parallel <n> apply to that run, as do the User config's defaults;
 parallel <n> fails it if the plan is a single Ticket. With --plan-only, the Architect run
 prints the plan's URL and stops instead, for you to read, edit and run with
 thirdshift <Issue URL>, and takes none of those flags. <focus> is free text, one argument,
@@ -104,6 +103,12 @@ review filed the idea, or it filed nothing.
 A review that fails, is interrupted, or ends without naming one of these issues fails the
 Architect run and leaves any plan it published labelled needs-triage. Start one Architect run
 per repository at a time: two at once may publish the same plan.
+
+--email, --email <address> and --no-email ask an Architect run for its Run notification as
+they do a Run, with or without --plan-only, and email.always sets the default. It sends one
+for the whole Architect run, however it ends: how the review ended, with the plan or idea
+issue it named, and how the run the plan was dispatched as ended, with a line on each Ticket
+of a Spec run. The run the plan is dispatched as sends none of its own.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
@@ -211,43 +216,65 @@ fn main() -> ExitCode {
 /// An Architect run: the Architecture review and its plan marked ready, then,
 /// unless the command asked to stop at the plan, the plan dispatched as
 /// `thirdshift <plan URL>` with the same flags would be, whose ending is the
-/// Architect run's, though it sends no Run notification. One that stops at
-/// the plan, or whose review found no Strong candidate and so published no
-/// plan to dispatch, puts the URL of the issue it ended on on stdout: the
-/// plan, the idea issue the review filed, or the issue that already covers
-/// its top recommendation. One whose review or plan fails puts the cause and
-/// the session log on stderr.
+/// Architect run's. One that stops at the plan, or whose review found no
+/// Strong candidate and so published no plan to dispatch, puts the URL of the
+/// issue it ended on on stdout: the plan, the idea issue the review filed, or
+/// the issue that already covers its top recommendation. One whose review or
+/// plan fails puts the cause and the session log on stderr. If asked, by the
+/// command or the User config, it sends one Run notification, however it
+/// ended; the run it dispatched sends none of its own.
 fn architect(args: &ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
     };
+    // First, so no interrupt can end the Architect run once its notification
+    // is checked.
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    let outcome = match architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull)
-    {
-        Ok(outcome) => outcome,
-        Err(failed) => return report(&failed),
+    let notification = match args.email.as_ref().unwrap_or(&config.email.default_ask()) {
+        NotificationAsk::Send(to) => {
+            ArchitectNotification::new(to.clone(), &config.email).map(Some)
+        }
+        NotificationAsk::Skip => Ok(None),
     };
-    let (architect::Outcome::PlanReady(plan), Some(dispatch)) = (&outcome, &args.dispatch) else {
-        // Also on stderr, so the outcome shows even when stdout is captured.
-        progress::step(format_args!("{outcome}"));
-        print_url(outcome.url());
-        return ExitCode::SUCCESS;
+    let notification = match notification {
+        Ok(notification) => notification,
+        Err(error) => return failure(&error),
     };
-    progress::step(format_args!(
-        "dispatching the plan {url}, as thirdshift {url} would",
-        url = plan.url
-    ));
-    run_outcome(&run::run(
-        plan,
-        dispatch.goal.unwrap_or(config.default_goal()),
-        &config.logs_dir,
-        config.launch_pull,
-        Parallel::new(dispatch.parallel, config.spec_parallel),
-        None,
-    ))
+    let reviewed = architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull);
+    let dispatched = match (&reviewed, &args.dispatch) {
+        (Ok(architect::Outcome::PlanReady(plan)), Some(dispatch)) => {
+            progress::step(format_args!(
+                "dispatching the plan {url}, as thirdshift {url} would",
+                url = plan.url
+            ));
+            Some(run::run(
+                plan,
+                dispatch.goal.unwrap_or(config.default_goal()),
+                &config.logs_dir,
+                config.launch_pull,
+                Parallel::new(dispatch.parallel, config.spec_parallel),
+                None,
+            ))
+        }
+        _ => None,
+    };
+    let code = match (&reviewed, &dispatched) {
+        (_, Some(ended)) => run_outcome(ended),
+        (Ok(outcome), None) => {
+            // Also on stderr, so the outcome shows even when stdout is captured.
+            progress::step(format_args!("{outcome}"));
+            print_url(outcome.url());
+            ExitCode::SUCCESS
+        }
+        (Err(failed), None) => report(failed),
+    };
+    if let Some(notification) = notification {
+        notification.send(&reviewed, dispatched.as_ref());
+    }
+    code
 }
 
 /// How a Run or a Spec run that `ended` shows: its pull request's URL on
