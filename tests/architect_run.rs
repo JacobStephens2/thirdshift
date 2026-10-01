@@ -1,7 +1,9 @@
 //! An Architect run that stops at the plan: `thirdshift architect --plan-only`
 //! runs the Architecture review in its own worktree, detached at the Base
 //! branch's head on origin, then checks the plan the review published, swaps
-//! its `needs-triage` for `ready-for-agent`, and prints its URL.
+//! its `needs-triage` for `ready-for-agent`, and prints its URL. A review
+//! with no Strong candidate has no plan: the Architect run prints the URL of
+//! the idea issue it filed, or of the open issue that already covers it.
 
 mod support;
 
@@ -12,7 +14,8 @@ use support::{REPO, RunResult, Scenario};
 /// The first issue the fake agent creates: the scenario starts with issue #7.
 const PLAN_URL: &str = "https://github.com/acme/widgets/issues/8";
 
-const NO_FINAL_LINE: &str = "the Architecture review ended without a final line naming its plan";
+const NO_FINAL_LINE: &str =
+    "the Architecture review ended without the final line its prompt asks for";
 
 /// The agent publishes a single Ticket as the plan, labelled `needs-triage`,
 /// and names it in the last line of its final message.
@@ -287,30 +290,59 @@ fn a_session_that_ends_without_a_valid_final_line_fails_the_architect_run() {
 }
 
 #[test]
-fn a_review_that_published_no_plan_fails_the_architect_run_naming_the_issue_it_reported() {
-    for (line, cause) in [
-        (
-            "Architecture review idea: ",
-            format!("the Architecture review published no plan: it filed the idea {PLAN_URL}"),
-        ),
-        (
-            "Architecture review already filed: ",
+fn a_review_that_files_an_idea_prints_its_url_and_changes_no_label() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+url=$(gh issue create --title "Deepen the session module" --body "The idea" --label needs-triage)
+printf 'No Strong candidate.\n\nArchitecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(
             format!(
-                "the Architecture review published no plan: {PLAN_URL} already covers its top recommendation"
-            ),
-        ),
-    ] {
-        let scenario = Scenario::new();
-        scenario.agent_does(&format!(
-            "gh issue create --title Idea --body Idea --label needs-triage > /dev/null\n{}",
-            ends_with(&format!("{line}{PLAN_URL}"))
-        ));
+                "thirdshift: no Strong candidate: the Architecture review filed the idea {PLAN_URL}"
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(scenario.issue_labels(8), ["needs-triage"]);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_nothing_left_behind(&scenario);
+}
 
-        let result = scenario.run(&["architect", "--plan-only"]);
+#[test]
+fn a_review_whose_idea_is_already_filed_prints_that_issues_url_and_files_and_changes_nothing() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["needs-triage"]);
+    let url = scenario.issue_url(7);
+    scenario.agent_does(&ends_with(&format!(
+        "Architecture review already filed: {url}"
+    )));
+    let github = scenario.gh_state();
 
-        assert_failed(&scenario, &result, &cause);
-        assert_eq!(scenario.issue_labels(8), ["needs-triage"], "{line}");
-    }
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{url}\n"));
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(
+            format!(
+                "thirdshift: no Strong candidate: {url} already covers the Architecture review's top idea, so it filed nothing"
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(scenario.gh_state(), github);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_nothing_left_behind(&scenario);
 }
 
 #[test]
