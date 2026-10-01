@@ -79,7 +79,8 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_r
     for mention in [
         "<focus> is free text",
         "dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket",
-        "merge, --no-merge and parallel <n> apply to that run",
+        "merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run",
+        "as do the User config's defaults",
         "With --plan-only, the Architect run prints the plan's URL and stops instead",
         "thirdshift architect \"the Spec run\"",
         "A review that finds no Strong candidate publishes no plan",
@@ -93,8 +94,8 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_r
     }
 }
 
-const PLAN_ONLY_DISPATCHES_NOTHING: &str = "merge, no-merge and parallel can't be used with --plan-only: \
-     it dispatches no run for them to apply to";
+const PLAN_ONLY_DISPATCHES_NOTHING: &str = "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
+     --plan-only: it dispatches no run for them to apply to";
 
 #[test]
 fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr() {
@@ -127,6 +128,18 @@ fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr()
         ),
         (
             vec!["architect", "--plan-only", "parallel", "2"],
+            PLAN_ONLY_DISPATCHES_NOTHING,
+        ),
+        (
+            vec!["architect", "base-fix", "--no-base-fix"],
+            "base-fix and no-base-fix can't be used together",
+        ),
+        (
+            vec!["architect", "--plan-only", "base-fix"],
+            PLAN_ONLY_DISPATCHES_NOTHING,
+        ),
+        (
+            vec!["architect", "no-base-fix", "--plan-only"],
             PLAN_ONLY_DISPATCHES_NOTHING,
         ),
     ] {

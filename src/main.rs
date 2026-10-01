@@ -102,9 +102,10 @@ a single Ticket. thirdshift then checks that the plan is open, new and not label
 ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
 and dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single
 Ticket. The Architect run ends as that run does, with its exit code and its PR's URL.
-merge, --no-merge and parallel <n> apply to that run, as do the User config's defaults;
-parallel <n> fails it if the plan is a single Ticket. With --plan-only, the Architect run
-prints the plan's URL and stops instead, for you to read, edit and run with
+merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run, as do the
+User config's defaults; parallel <n> fails it if the plan is a single Ticket. The review
+itself watches no CI, so only that run can start a Base fix. With --plan-only, the
+Architect run prints the plan's URL and stops instead, for you to read, edit and run with
 thirdshift <Issue URL>, and takes none of those flags. <focus> is free text, one argument,
 that points the review at an area:
 
@@ -244,7 +245,7 @@ fn main() -> ExitCode {
 /// An Architect run: the Architecture review and its plan marked ready, then,
 /// unless the command asked to stop at the plan, the plan dispatched as
 /// `thirdshift <plan URL>` with the same flags would be, whose ending is the
-/// Architect run's. One that stops at the plan, or whose review found no
+/// Architect run's, with the Base fix it took, if any. One that stops at the plan, or whose review found no
 /// Strong candidate and so published no plan to dispatch, puts the URL of the
 /// issue it ended on on stdout: the plan, the idea issue the review filed, or
 /// the issue that already covers its top recommendation. One whose review or
@@ -273,9 +274,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
             ));
-            // An Architect run takes no Base fix flags, so the run it
-            // dispatches starts none.
-            let mut base_fix = BaseFix::new(None, BaseFixAsk::Forbid);
+            let base_fix = dispatch.base_fix.unwrap_or(config.default_base_fix());
+            let mut base_fix = BaseFix::new(None, base_fix);
             let ended = run::run(
                 plan,
                 dispatch.goal.unwrap_or(config.default_goal()),

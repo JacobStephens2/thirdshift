@@ -760,6 +760,178 @@ fn parallel_on_a_single_ticket_plan_fails_as_it_does_for_an_issue_that_is_not_a_
     assert_nothing_left_behind(&scenario);
 }
 
+const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
+
+const GREEN: &str = r#"[{"name": "test", "conclusion": "success"}]"#;
+
+/// A script that sets the check runs on the session's head to `checks`.
+fn checks_on_head(checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse HEAD)\" '{checks}'\n")
+}
+
+/// A script that sets the check runs on origin's `branch` to `checks`.
+fn checks_on_origin(branch: &str, checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse origin/{branch})\" '{checks}'\n")
+}
+
+/// A script in which the agent for the Base fix issue `issue` commits a fix
+/// and opens its PR into `base`, with `test` green on its head.
+fn base_fix_opens_pr(issue: u32, base: &str) -> String {
+    format!(
+        r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on {base}"
+gh pr create --base {base} --head issue-{issue} --title "Fix CI on {base}" --body "Closes #{issue}"
+{green}"#,
+        green = checks_on_head(GREEN)
+    )
+}
+
+/// A single-Ticket plan, #8, whose Run opens its PR with `test` red on its
+/// head and on `main`: an Inherited failure. The agent for the Base fix
+/// issue, #9, the next issue, fixes it.
+fn single_ticket_plan_that_inherits_a_failure() -> Scenario {
+    let scenario = single_ticket_plan();
+    scenario.agent_does_for(
+        8,
+        &format!(
+            "{}{}{}",
+            agent_opens_pr(8, "main"),
+            checks_on_head(RED),
+            checks_on_origin("main", RED)
+        ),
+    );
+    scenario.agent_does_for(9, &base_fix_opens_pr(9, "main"));
+    scenario
+}
+
+/// The cause of a Run that failed on `test`, an Inherited failure from
+/// `main` as it was when the scenario started.
+fn inherited_failure(scenario: &Scenario) -> String {
+    let red_base = scenario.origin_git(&["rev-parse", "main"]);
+    format!(
+        "CI red on test, which also fails on main at {}; fix main first",
+        &red_base[..7]
+    )
+}
+
+#[test]
+fn base_fix_lets_the_dispatched_run_start_a_base_fix() {
+    for flag in ["base-fix", "--base-fix"] {
+        let scenario = single_ticket_plan_that_inherits_a_failure();
+
+        let result = scenario.run(&["architect", flag]);
+
+        let pr = pr_from(&scenario, "issue-8");
+        assert_ended_with_pr(&result, &pr, "ready for review");
+        assert!(
+            result.stderr.contains(
+                "thirdshift: starting Base fix #9 into main: https://github.com/acme/widgets/issues/9\n"
+            ),
+            "stderr: {}",
+            result.stderr
+        );
+        let gh = scenario.gh_state();
+        assert_eq!(gh["titles"]["9"], "CI red on main: test", "{flag}");
+        let fix = pr_from(&scenario, "issue-9");
+        assert_eq!(fix["base"], "main");
+        assert_eq!(fix["state"], "MERGED");
+        assert_eq!(
+            scenario.origin_file("issue-8", "ci-fix.txt").as_deref(),
+            Some("fixed\n")
+        );
+    }
+}
+
+#[test]
+fn the_user_configs_base_fix_applies_to_the_dispatched_run_unless_no_base_fix_is_given() {
+    let scenario = single_ticket_plan_that_inherits_a_failure();
+    scenario.user_config_is("[base]\nfix = true\n");
+
+    let result = scenario.run(&["architect"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+    assert_eq!(pr_from(&scenario, "issue-9")["state"], "MERGED");
+
+    for flag in ["no-base-fix", "--no-base-fix"] {
+        let scenario = single_ticket_plan_that_inherits_a_failure();
+        scenario.user_config_is("[base]\nfix = true\n");
+        let cause = inherited_failure(&scenario);
+
+        let result = scenario.run(&["architect", flag]);
+
+        assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains(&format!("thirdshift: {cause}\n")),
+            "stderr: {}",
+            result.stderr
+        );
+        // Only the plan was created: no Base fix issue.
+        assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1, "{flag}");
+    }
+}
+
+#[test]
+fn without_base_fix_the_dispatched_run_fails_on_an_inherited_failure() {
+    let scenario = single_ticket_plan_that_inherits_a_failure();
+    let cause = inherited_failure(&scenario);
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(&format!("thirdshift: {cause}\n")),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
+}
+
+#[test]
+fn base_fix_reaches_each_tickets_run_of_the_dispatched_spec_run() {
+    // The plan is a Spec, #8, with one Ticket, #9, whose Run meets an
+    // Inherited failure from the Spec branch. Its Base fix issue is #10.
+    let scenario = scenario();
+    scenario.agent_does_in_session(
+        1,
+        r#"
+spec=$(gh issue create --title "Deepen the session module" --body "The Spec" --label needs-triage)
+gh issue create --title "Move the logs" --body "A Ticket" --label ready-for-agent
+gh fake sub-issues 8 '[9]'
+printf 'Architecture review plan: %s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(
+        9,
+        &format!(
+            "{}{}{}",
+            agent_opens_pr(9, "issue-8"),
+            checks_on_head(RED),
+            checks_on_origin("issue-8", RED)
+        ),
+    );
+    scenario.agent_does_for(10, &base_fix_opens_pr(10, "issue-8"));
+
+    let result = scenario.run(&["architect", "base-fix"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+    assert!(
+        result.stderr.contains(
+            "#9: starting Base fix #10 into issue-8: https://github.com/acme/widgets/issues/10\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    let fix = pr_from(&scenario, "issue-10");
+    assert_eq!(fix["base"], "issue-8");
+    assert_eq!(fix["state"], "MERGED");
+    assert_eq!(pr_from(&scenario, "issue-9")["state"], "MERGED");
+    for file in ["issue-9.txt", "ci-fix.txt"] {
+        assert!(scenario.origin_file("issue-8", file).is_some(), "{file}");
+    }
+}
+
 #[test]
 fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
     let scenario = single_ticket_plan();
@@ -977,6 +1149,31 @@ fn email_always_sends_one_notification_for_the_review_and_the_run_it_dispatched(
             "Review:       plan published: {PLAN_URL}\n\
              Dispatched:   ready for review\n\
              Pull request: {PR_URL}\n"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_one_notification_says_what_became_of_the_dispatched_runs_base_fix() {
+    let scenario = single_ticket_plan_that_inherits_a_failure();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["architect", "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: ready for review"
+    );
+    assert!(
+        text.starts_with(&format!(
+            "Review:       plan published: {PLAN_URL}\n\
+             Dispatched:   ready for review\n\
+             Pull request: {PR_URL}\n\
+             Base fix:     https://github.com/acme/widgets/issues/9 merged\n"
         )),
         "{text}"
     );
