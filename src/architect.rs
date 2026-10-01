@@ -49,6 +49,16 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// How the Architecture review ended, as the Architect run's Run
+    /// notification says it.
+    pub fn review(&self) -> &'static str {
+        match self {
+            Self::PlanReady(_) => "plan published",
+            Self::IdeaFiled(_) => "idea filed",
+            Self::AlreadyFiled(_) => "idea already filed",
+        }
+    }
+
     /// The URL of the issue the Architect run ended on.
     pub fn url(&self) -> &str {
         match self {
@@ -87,11 +97,7 @@ impl fmt::Display for Outcome {
 pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
     let timestamp = started.format("%Y%m%dT%H%M%SZ").to_string();
-    let launch = Git::new(std::env::current_dir().context("no current directory")?);
-
-    let origin = launch.run(&["config", "remote.origin.url"])?;
-    let repo = Repo::of_origin(&origin)
-        .with_context(|| format!("origin {origin} is not a GitHub repository"))?;
+    let (launch, origin, repo) = launch()?;
     preflight::check_identity(&launch)?;
     let base = launch
         .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
@@ -114,6 +120,21 @@ pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<Ou
             log: log.exists().then_some(log),
             ..FailedRun::from(error)
         })
+}
+
+/// The Launch directory, the URL of its `origin`, and the GitHub repository
+/// that names: an Architect run's, as it has no Issue URL to name one.
+fn launch() -> Result<(Git, String, Repo)> {
+    let launch = Git::new(std::env::current_dir().context("no current directory")?);
+    let origin = launch.run(&["config", "remote.origin.url"])?;
+    let repo = Repo::of_origin(&origin)
+        .with_context(|| format!("origin {origin} is not a GitHub repository"))?;
+    Ok((launch, origin, repo))
+}
+
+/// The repository an Architect run started from the Launch directory is on.
+pub fn repo() -> Result<Repo> {
+    launch().map(|(_, _, repo)| repo)
 }
 
 /// The Architecture review session in `worktree`, which is removed once the

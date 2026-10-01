@@ -85,6 +85,9 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_r
         "A review that finds no Strong candidate publishes no plan",
         "thirdshift prints that issue's URL instead, changing no label",
         "Start one Architect run per repository at a time",
+        "--email, --email <address> and --no-email ask an Architect run for its Run notification",
+        "It sends one for the whole Architect run, however it ends",
+        "The run the plan is dispatched as sends none of its own",
     ] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");
     }
@@ -103,8 +106,8 @@ fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr()
             "unexpected argument after the focus: the Run",
         ),
         (
-            vec!["architect", "--plan-only", "--email"],
-            "unexpected argument after architect: --email",
+            vec!["architect", "--plan-only", "--verbose"],
+            "unexpected argument after architect: --verbose",
         ),
         (
             vec!["architect", "merge", "no-merge"],
