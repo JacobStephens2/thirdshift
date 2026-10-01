@@ -12,32 +12,50 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::interrupt;
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
 use crate::progress::{self, Progress};
 use crate::prompt;
 
-/// Where a Run's session logs go: in `dir`, the User config's `logs.dir` or
-/// `~/.thirdshift/logs`, each named for the Run's `issue` and `timestamp`.
+/// Where a Run's or an Architect run's session logs go: in `dir`, the User
+/// config's `logs.dir` or `~/.thirdshift/logs`, each named for what is run
+/// and its `timestamp`.
 pub struct Logs<'a> {
-    pub issue: &'a IssueUrl,
-    pub dir: &'a Path,
-    pub timestamp: &'a str,
+    /// What every log's name starts with: `<owner>-<repo>-issue-<n>` for a
+    /// Run, `<owner>-<repo>-architect` for an Architect run.
+    name: String,
+    dir: &'a Path,
+    timestamp: &'a str,
 }
 
-impl Logs<'_> {
+impl<'a> Logs<'a> {
+    /// The logs of the Run on `issue` that started at `timestamp`.
+    pub fn of_run(issue: &IssueUrl, dir: &'a Path, timestamp: &'a str) -> Self {
+        Logs {
+            name: format!("{}-{}-issue-{}", issue.owner, issue.repo, issue.number),
+            dir,
+            timestamp,
+        }
+    }
+
+    /// The logs of the Architect run on `repo` that started at `timestamp`.
+    pub fn of_architect_run(repo: &Repo, dir: &'a Path, timestamp: &'a str) -> Self {
+        Logs {
+            name: format!("{}-{}-architect", repo.owner, repo.name),
+            dir,
+            timestamp,
+        }
+    }
+
     /// Where a session's stream is logged:
-    /// `<dir>/<owner>-<repo>-issue-<n>-<timestamp>-<kind>.jsonl`.
+    /// `<dir>/<name>-<timestamp>-<kind>.jsonl`.
     pub fn path(&self, kind: &str) -> PathBuf {
-        let issue = self.issue;
-        self.dir.join(format!(
-            "{}-{}-issue-{}-{}-{kind}.jsonl",
-            issue.owner, issue.repo, issue.number, self.timestamp
-        ))
+        self.dir
+            .join(format!("{}-{}-{kind}.jsonl", self.name, self.timestamp))
     }
 }
 
-/// Where a Run's sessions run: in `worktree`, with the Factory skills plugin
-/// at `plugin_dir` loaded, each logged in the Run's `logs`.
+/// Where a Run's or an Architect run's sessions run: in `worktree`, with the
+/// Factory skills plugin at `plugin_dir` loaded, each logged in its `logs`.
 pub struct Sessions<'a> {
     pub logs: &'a Logs<'a>,
     pub worktree: &'a Path,
@@ -51,6 +69,17 @@ impl Sessions<'_> {
     /// as `<kind>-resume`; if that ends the same way, this fails and names the
     /// killed work.
     pub fn run(&self, kind: &str, prompt: &str, log: &mut PathBuf) -> Result<()> {
+        self.run_to_final_message(kind, prompt, log).map(drop)
+    }
+
+    /// Run a session as [`Sessions::run`] does, and return its final message:
+    /// what the agent said as it ended its last turn, if anything.
+    pub fn run_to_final_message(
+        &self,
+        kind: &str,
+        prompt: &str,
+        log: &mut PathBuf,
+    ) -> Result<Option<String>> {
         let mut ended = self.start(kind, None, prompt, log)?;
         let killed = ended.killed_background_work();
         if let (false, Some(session_id)) = (killed.is_empty(), ended.session_id()) {
@@ -67,7 +96,7 @@ impl Sessions<'_> {
         }
         let killed = ended.killed_background_work();
         match killed[..] {
-            [] => Ok(()),
+            [] => Ok(ended.final_message().map(String::from)),
             [task] => bail!(
                 "{kind} session ended while waiting on a background task ({task}), which was killed"
             ),

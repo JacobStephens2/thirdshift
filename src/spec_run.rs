@@ -27,8 +27,17 @@ use crate::run::{self, Goal, Reached};
 use crate::session::{Logs, Sessions};
 use crate::worktree::Worktree;
 
+/// The triage label of an issue no one has evaluated yet, which an
+/// Architecture review publishes its plan with.
+pub const NEEDS_TRIAGE: &str = "needs-triage";
+
+/// The triage label of an issue an agent can take on: what thirdshift swaps
+/// a plan's `needs-triage` for once the plan passes its checks, and what a
+/// Base fix issue is opened with.
+pub const READY_FOR_AGENT: &str = "ready-for-agent";
+
 /// The triage labels that make an open Ticket an Unready Ticket.
-const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "needs-triage"];
+const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", NEEDS_TRIAGE];
 
 /// The Spec review session's kind, in its progress lines and log name.
 const SPEC_REVIEW: &str = "spec-review";
@@ -44,6 +53,17 @@ pub struct Parallel {
     /// Whether the command asked for it with `parallel <n>`, rather than the
     /// User config or the default deciding.
     pub asked: bool,
+}
+
+impl Parallel {
+    /// As many Tickets at once as the command `asked` for with
+    /// `parallel <n>`, else as the User config's `default` says.
+    pub fn new(asked: Option<NonZeroUsize>, default: NonZeroUsize) -> Self {
+        Parallel {
+            tickets: asked.unwrap_or(default),
+            asked: asked.is_some(),
+        }
+    }
 }
 
 /// Whether there are `tickets`, as a Spec has, and every one is closed.
@@ -319,17 +339,17 @@ fn next_ready(
                     .any(|blocker| running.contains(blocker))
                 && !outcomes.contains_key(&ticket.number)
                 && !running.contains(&ticket.number)
-                && unready_label(ticket).is_none()
+                && unready_label(&ticket.labels).is_none()
         })
         .map(|ticket| ticket.number)
         .min()
 }
 
-/// The first of the Unready Ticket labels `ticket` has, if any.
-fn unready_label(ticket: &Ticket) -> Option<&str> {
+/// The first of the Unready Ticket labels among an issue's `labels`, if any.
+pub fn unready_label(labels: &[String]) -> Option<&'static str> {
     UNREADY_LABELS
         .into_iter()
-        .find(|label| ticket.labels.iter().any(|name| name == label))
+        .find(|label| labels.iter().any(|name| name == label))
 }
 
 /// A line on each Ticket that landed in this Spec run, with its PR, and on
@@ -392,7 +412,7 @@ fn standing(
     }
     if let Some(landed) = landed {
         format!("{landed}, but is still open")
-    } else if let Some(label) = unready_label(ticket) {
+    } else if let Some(label) = unready_label(&ticket.labels) {
         format!("unready: labelled {label}")
     } else if ticket.has_sub_issues {
         "unready: has sub-issues".to_string()
@@ -659,7 +679,7 @@ mod tests {
     fn each_unready_label_keeps_a_ticket_from_running_and_is_named_in_its_line() {
         for label in UNREADY_LABELS {
             let mut unready = ticket(21, true, &[], &[]);
-            unready.labels = vec!["ready-for-agent".to_string(), label.to_string()];
+            unready.labels = vec![READY_FOR_AGENT.to_string(), label.to_string()];
             let tickets = [unready, ticket(22, true, &[], &[])];
             let outcomes = BTreeMap::new();
 

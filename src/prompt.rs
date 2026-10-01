@@ -2,6 +2,7 @@
 
 use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
+use crate::spec_run::{NEEDS_TRIAGE, READY_FOR_AGENT};
 
 /// Every prompt ends with this. Sessions run with `claude -p`, which exits
 /// once the agent ends its turn, killing any background task still running.
@@ -86,6 +87,46 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          {HEADLESS}",
         url = spec.url,
         number = spec.number,
+    )
+}
+
+/// What the last line of an Architecture review's final message starts with,
+/// before the URL of the issue it names: the plan it published, the idea it
+/// filed instead, or the open issue that already covers that idea. The
+/// Architecture review prompt asks for the line, and the Architect run reads
+/// it back.
+pub const PLAN_LINE: &str = "Architecture review plan: ";
+pub const IDEA_LINE: &str = "Architecture review idea: ";
+pub const ALREADY_FILED_LINE: &str = "Architecture review already filed: ";
+
+/// The Architecture review prompt, for an Architect run's worktree at the
+/// head of the Base branch `base` on origin, pointed at `focus` if the
+/// command gave one.
+pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
+    let focus = match focus {
+        Some(focus) => format!("Focus the review on: {focus}\n\n"),
+        None => String::new(),
+    };
+    format!(
+        "/thirdshift:improve-codebase-architecture\n\
+         \n\
+         This is an Architecture review of the base branch {base}: this worktree is checked out at its head on origin, on no branch.\n\
+         \n\
+         {focus}\
+         Find the deepening opportunities with /thirdshift:improve-codebase-architecture, using /thirdshift:codebase-design for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.\n\
+         \n\
+         If it is Strong, settle its design yourself and publish it as the plan with /thirdshift:to-spec and /thirdshift:to-tickets: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `{NEEDS_TRIAGE}`, not `{READY_FOR_AGENT}`: thirdshift marks it ready once you are done.\n\
+         \n\
+         If it is not Strong, file it as one issue labelled `{NEEDS_TRIAGE}`, unless an open issue already covers it.\n\
+         \n\
+         Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to CONTEXT.md or an ADR is a Ticket's work, not yours.\n\
+         \n\
+         End your final message with one of these lines, as its last line, with the issue's full URL and nothing else on the line:\n\
+         {PLAN_LINE}<URL of the Spec or the single Ticket you published>\n\
+         {IDEA_LINE}<URL of the issue you filed>\n\
+         {ALREADY_FILED_LINE}<URL of the open issue that already covers it>\n\
+         \n\
+         {HEADLESS}",
     )
 }
 

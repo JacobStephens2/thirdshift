@@ -18,6 +18,8 @@ use crate::plugin::SKILLS;
 use crate::prompt;
 use crate::session::claude_args;
 
+use Sender::{ArchitectRun, Units};
+
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
     anchor: &'static str,
@@ -52,10 +54,11 @@ const CHECK: &str = "<failing check>";
 const CHECK_URL: &str = "<check URL>";
 const INHERITED_CHECK: &str = "<Inherited failure>";
 const BACKGROUND_WORK: &str = "<background work>";
+const FOCUS: &str = "<focus>";
 const PLUGIN_DIR: &str = "<plugin dir>";
 const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
-const PLACEHOLDERS: [&str; 15] = [
+const PLACEHOLDERS: [&str; 16] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -68,18 +71,27 @@ const PLACEHOLDERS: [&str; 15] = [
     CHECK_URL,
     INHERITED_CHECK,
     BACKGROUND_WORK,
+    FOCUS,
     PLUGIN_DIR,
     SESSION_ID,
     PROMPT,
 ];
 
-/// A prompt as the page shows it: when a Run sends it, from which units, and
-/// its text with placeholders.
+/// Who sends a prompt.
+enum Sender {
+    /// A Run, from one of these press units.
+    Units(&'static [Unit]),
+    /// An Architect run, which the press units, a Run's, don't cover.
+    ArchitectRun,
+}
+
+/// A prompt as the page shows it: when it is sent, by whom, and its text
+/// with placeholders.
 struct Prompt {
     id: &'static str,
     title: &'static str,
     when: &'static str,
-    units: &'static [Unit],
+    sender: Sender,
     text: String,
 }
 
@@ -112,70 +124,77 @@ fn prompts() -> Vec<Prompt> {
             id: "prompt-fresh",
             title: "Fresh",
             when: "Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.",
-            units: &[IMPLEMENT],
+            sender: Units(&[IMPLEMENT]),
             text: prompt::fresh(&issue, BASE, BRANCH),
         },
         Prompt {
             id: "prompt-continuation",
             title: "Continuation, with no pull request",
             when: "Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.",
-            units: &[IMPLEMENT],
+            sender: Units(&[IMPLEMENT]),
             text: prompt::continuation(&issue, BASE, BRANCH, None),
         },
         Prompt {
             id: "prompt-continuation-pr",
             title: "Continuation, with an open pull request",
             when: "Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.",
-            units: &[IMPLEMENT],
+            sender: Units(&[IMPLEMENT]),
             text: prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
         },
         Prompt {
             id: "prompt-spec-review",
             title: "Spec review",
             when: "In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.",
-            units: &[REVIEW],
+            sender: Units(&[REVIEW]),
             text: prompt::spec_review(&spec, BASE, SPEC_BRANCH, PR_URL),
+        },
+        Prompt {
+            id: "prompt-architecture-review",
+            title: "Architecture review",
+            when: "Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.",
+            sender: ArchitectRun,
+            text: prompt::architecture_review(BASE, Some(FOCUS)),
         },
         Prompt {
             id: "prompt-conflict-repair",
             title: "Conflict Repair",
             when: "Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::conflict_repair(&issue, BASE, BRANCH, PR_URL),
         },
         Prompt {
             id: "prompt-foreign-conflict-repair",
             title: "Conflict Repair, on Foreign commits",
             when: "In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::conflict_repair(&issue, BRANCH, BRANCH, PR_URL),
         },
         Prompt {
             id: "prompt-review-repair",
             title: "Review Repair",
             when: "In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::review_repair(&issue, BRANCH, PR_URL, OWN_HEAD),
         },
         Prompt {
             id: "prompt-ci-fix-repair",
             title: "CI-fix Repair",
             when: "Starts a Repair session when CI fails on the pull request's head commit, listing each failed check.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::ci_fix_repair(&issue, BASE, BRANCH, PR_URL, &failed),
         },
         Prompt {
             id: "prompt-ci-fix-repair-inherited",
             title: "CI-fix Repair, with Inherited failures",
             when: "Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix.",
-            units: &[FINISH],
+            sender: Units(&[FINISH]),
             text: prompt::ci_fix_repair(&issue, BASE, BRANCH, PR_URL, &failed_with_inherited),
         },
         Prompt {
             id: "prompt-resume",
             title: "Resume",
             when: "Continues any session, once, that ended its turn while waiting on background work, which was killed with it.",
-            units: &[IMPLEMENT, REVIEW, FINISH],
+            sender: Units(&[IMPLEMENT, REVIEW, FINISH]),
             text: prompt::resume(&[BACKGROUND_WORK]),
         },
     ];
@@ -296,13 +315,17 @@ fn fence(text: &str) -> String {
     "`".repeat(longest.max(2) + 1)
 }
 
-/// The unit whose session uses each Factory skill, and when, if not always.
-fn skill_unit(skill: &str) -> (Unit, Option<&'static str>) {
+/// What uses each Factory skill: the unit whose session does, linked, and
+/// when, if not always; or the Architecture review, which is no unit of a Run.
+fn skill_used_by(skill: &str) -> String {
     match skill {
-        "implement" | "tdd" => (IMPLEMENT, None),
-        "code-review" | "pr" => (REVIEW, None),
-        "resolving-merge-conflicts" => (FINISH, Some("in a Repair")),
-        _ => panic!("the Factory skill {skill} has no unit: add it to skill_unit"),
+        "implement" | "tdd" => unit_links(&[IMPLEMENT]),
+        "code-review" | "pr" => unit_links(&[REVIEW]),
+        "resolving-merge-conflicts" => format!("{}, in a Repair", unit_links(&[FINISH])),
+        "improve-codebase-architecture" | "to-spec" | "to-tickets" | "codebase-design" => {
+            "the Architecture review, in an Architect run".to_string()
+        }
+        _ => panic!("the Factory skill {skill} has no user: add it to skill_used_by"),
     }
 }
 
@@ -358,14 +381,14 @@ fn prompt_section(html: &mut String) {
             r##"      <article class="job-sheet" id="{id}" aria-labelledby="{id}-title">
         <h3 id="{id}-title">{title}</h3>
         <p>{when}</p>
-        <p class="sent-by">Sent by {units}</p>
+        <p class="sent-by">Sent by {sender}</p>
         <pre class="job-text"><code>{text}</code></pre>
       </article>
 "##,
             id = prompt.id,
             title = prompt.title,
             when = prompt.when,
-            units = unit_links(prompt.units),
+            sender = sent_by(&prompt.sender),
             text = highlighted(&prompt.text),
         );
     }
@@ -385,15 +408,13 @@ fn skills_section(html: &mut String) {
     skills.sort_by_key(|dir| dir.path());
     for skill in skills {
         let name = skill.path().to_string_lossy();
-        let (unit, note) = skill_unit(&name);
-        let note = note.map_or(String::new(), |note| format!(", {note}"));
         let _ = write!(
             html,
             r##"      <article class="job-sheet" id="skill-{name}" aria-labelledby="skill-{name}-title">
         <h3 id="skill-{name}-title">{name}</h3>
-        <p class="sent-by">Used by {unit}{note}</p>
+        <p class="sent-by">Used by {used_by}</p>
 "##,
-            unit = unit_links(&[unit]),
+            used_by = skill_used_by(&name),
         );
         let mut files = Vec::new();
         collect_files(skill, &mut files);
@@ -458,6 +479,14 @@ fn file_block(html: &mut String, file: &File, indent: &str) {
         path = escape(&path),
         text = escape(text),
     );
+}
+
+/// Who sends a prompt, as its "Sent by" line ends.
+fn sent_by(sender: &Sender) -> String {
+    match sender {
+        Units(units) => unit_links(units),
+        ArchitectRun => "an Architect run, before any unit".to_string(),
+    }
 }
 
 /// Links to `units` on the home page, as a list ending "or".
@@ -690,7 +719,7 @@ mod tests {
             id: "prompt-example",
             title: "Example",
             when: "When an example runs.",
-            units: &[IMPLEMENT],
+            sender: Units(&[IMPLEMENT]),
             text: "Say ```hi```.\n".to_string(),
         };
         let markdown = markdown(&prompt);

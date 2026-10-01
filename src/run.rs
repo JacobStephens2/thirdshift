@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::base_fix::BaseFix;
+use crate::base_fix::{BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
+use crate::child_run::Kind;
 use crate::ci::{self, Ci};
 use crate::failed_run::{self, FailedRun, PolicyRefusal};
 use crate::git::Git;
@@ -51,6 +52,42 @@ pub struct Reached {
     pub ticket_lines: Vec<String>,
 }
 
+/// How a Run, or a Spec run, ended.
+pub struct Ended {
+    pub outcome: Result<Reached, FailedRun>,
+    /// What became of the Base fix it started or waited on, if any, as
+    /// [`BaseFix::report`] tells it.
+    pub base_fix: Option<String>,
+}
+
+/// [`run`] the Run on `issue` that asked `base_fix` about a Base fix, as the
+/// child Run `child` if another thirdshift started it, whose Base branch is
+/// then the one it was given, to its end.
+pub fn run_to_end(
+    issue: &IssueUrl,
+    goal: Goal,
+    logs_dir: &Path,
+    launch_pull: bool,
+    parallel: Parallel,
+    child: Option<&Kind>,
+    base_fix: BaseFixAsk,
+) -> Ended {
+    let mut base_fix = BaseFix::new(child, base_fix);
+    let outcome = run(
+        issue,
+        goal,
+        logs_dir,
+        launch_pull,
+        parallel,
+        child.map(Kind::base),
+        &mut base_fix,
+    );
+    Ended {
+        outcome,
+        base_fix: base_fix.report(),
+    }
+}
+
 /// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure
 /// after the worktree exists, including a merge that fails, goes through the
 /// Failed run path. The worktree, the local
@@ -70,7 +107,7 @@ pub struct Reached {
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures.
-pub fn run(
+fn run(
     issue: &IssueUrl,
     goal: Goal,
     logs_dir: &Path,
@@ -123,11 +160,7 @@ pub fn run(
             Worktree::continue_existing(&launch, &issue.repo, &branch, &base)?
         }
     };
-    let logs = Logs {
-        issue,
-        dir: logs_dir,
-        timestamp: &timestamp,
-    };
+    let logs = Logs::of_run(issue, logs_dir, &timestamp);
     if !tickets.is_empty() {
         return spec_run::run(
             issue,
@@ -167,7 +200,7 @@ pub fn run(
 /// if `base` is ahead of it. The Run doesn't depend on this, so a failure,
 /// such as uncommitted changes in the way, is only a warning, and those
 /// changes are left as they were.
-fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
+pub fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
     if checked_out != Some(base) {
         return;
     }
