@@ -152,6 +152,28 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
 }
 
 #[test]
+fn a_spec_run_claims_the_spec_and_its_tickets_runs_change_no_label() {
+    let scenario = linear_spec();
+    scenario.issue_labelled(SPEC, &["ready-for-agent", "enhancement"]);
+    for ticket in [21, 22] {
+        scenario.issue_labelled(ticket, &["ready-for-agent"]);
+    }
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(SPEC), ["enhancement", "in-progress"]);
+    for ticket in [21, 22] {
+        assert_eq!(scenario.issue_labels(ticket), ["ready-for-agent"]);
+    }
+    assert_contains(
+        &result.stderr,
+        "thirdshift: labelling #20 in-progress, in place of ready-for-agent\n",
+    );
+    assert_eq!(result.stderr.matches(" in-progress").count(), 1);
+}
+
+#[test]
 fn each_ticket_branches_off_the_spec_branch_and_its_prompts_name_it_as_the_base() {
     let scenario = linear_spec();
 

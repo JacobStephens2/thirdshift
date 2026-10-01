@@ -204,6 +204,23 @@ fn help_documents_base_for_an_architect_run() {
 }
 
 #[test]
+fn help_documents_the_claim() {
+    let scenario = Scenario::new();
+
+    let help = unwrapped_help(&scenario);
+
+    for mention in [
+        "A Run or a Spec run makes the Claim on its issue once its checks pass, before any work: it labels the issue in-progress, in place of ready-for-agent if it has that",
+        "creating the label if the repository lacks it",
+        "A Ticket's Run in a Spec run and a Base fix make none",
+        "A Run whose Claim can't be made stops there",
+        "That run makes the Claim on the plan, which keeps architect-plan",
+    ] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+}
+
+#[test]
 fn help_points_to_running_an_architect_run_on_a_schedule_without_the_recipe() {
     let scenario = Scenario::new();
 
