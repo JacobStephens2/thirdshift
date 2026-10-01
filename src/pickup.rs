@@ -29,6 +29,7 @@ pub enum Outcome {
 /// The Ready issue a Pickup run took.
 pub struct Taken {
     pub issue: IssueUrl,
+    pub title: String,
     /// The Pickup run's Base branch, which the run the issue is dispatched
     /// as takes.
     pub base: String,
@@ -95,6 +96,7 @@ pub fn run(base: Option<&str>) -> Result<Outcome> {
     let is_spec = !github::tickets(&ready.issue)?.is_empty();
     Ok(Outcome::Taken(Taken {
         issue: ready.issue,
+        title: ready.title,
         base,
         is_spec,
     }))

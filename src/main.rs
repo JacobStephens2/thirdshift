@@ -41,7 +41,7 @@ use base_fix::{Advice, BaseFixAsk};
 use config::UserConfig;
 use failed_run::FailedRun;
 use issue::IssueUrl;
-use notification::{ArchitectNotification, NotificationAsk, RunNotification};
+use notification::{ArchitectNotification, NotificationAsk, PickupNotification, RunNotification};
 use run::{Ended, Goal, StartedBy};
 use spec_run::Parallel;
 
@@ -174,10 +174,10 @@ ready-for-agent that has none of ready-for-human, needs-info, wontfix and needs-
 not in-progress, and was never started: no Issue branch for it is on origin, and no pull
 request from one exists, open, merged or closed. A line on stderr names the issue taken, and
 the run it is dispatched as makes the Claim on it. The Pickup run ends as that run does, with
-its exit code and its PR's URL. merge, --no-merge, base-fix, --no-base-fix, --email,
---no-email and parallel <n> apply to that run, as do the User config's defaults; parallel <n>
-is ignored when the issue is not a Spec. base <branch> names the Pickup run's Base branch as
-it does an Architect run's, and the dispatched run branches off <branch> and targets it:
+its exit code and its PR's URL. merge, --no-merge, base-fix, --no-base-fix and parallel <n>
+apply to that run, as do the User config's defaults; parallel <n> is ignored when the issue
+is not a Spec. base <branch> names the Pickup run's Base branch as it does an Architect
+run's, and the dispatched run branches off <branch> and targets it:
 
     thirdshift pickup base main
 
@@ -186,6 +186,13 @@ pickup takes nothing else: no focus and no --plan-only.
 A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why,
 when the repository has no Ready issue, and while an Architect run or another Pickup run on
 the same repository is still running on this machine.
+
+--email, --email <address> and --no-email ask a Pickup run for its Run notification as they
+do a Run, and email.always sets the default. A pass that took an issue sends one: the
+notification the run it dispatched would send by hand, with that run's subject, outcome and
+body. The dispatched run sends none of its own. A skipped pass sends none, even when asked.
+The notification's checks, an address and a Resend API key, are made before any other work
+on every pass, so one that would be skipped fails on them too, with exit 1.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
@@ -387,31 +394,35 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// directory's repository, then that issue dispatched as `thirdshift <Issue
 /// URL>` with the same flags would be, but on the Pickup run's Base branch,
 /// whatever the Launch directory has checked out. The dispatched run's ending
-/// is the Pickup run's, its Run notification included.
-/// One that is skipped says why on stderr, puts nothing on stdout, and is no
-/// failure.
+/// is the Pickup run's. One that is skipped says why on stderr, puts nothing
+/// on stdout, and is no failure. If asked, by the command or the User config,
+/// one that took an issue sends one Run notification, the one the dispatched
+/// run would send started by hand, and that run sends none of its own; one
+/// that is skipped sends none. The notification's checks are made before any
+/// other work all the same, so a pass that would be skipped fails on them
+/// too.
 fn pickup(args: PickupArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
     };
-    // First, so no interrupt can end the Pickup run once it has taken an
-    // issue.
+    // First, so no interrupt can end the Pickup run once its notification is
+    // checked.
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
+    let email = args.email.clone().unwrap_or(config.email.default_ask());
+    let notification = match asked(email, |to| PickupNotification::new(to, &config.email)) {
+        Ok(notification) => notification,
+        Err(error) => return failure(&error),
+    };
     let taken = match pickup::run(args.base.as_deref()) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
         Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
         Err(error) => return failure(&error),
     };
-    let email = args.email.clone().unwrap_or(config.email.default_ask());
-    let notification = match asked(email, |to| {
-        RunNotification::new(to, &config.email, &taken.issue)
-    }) {
-        Ok(notification) => notification,
-        Err(error) => return failure(&error),
-    };
+    let notification =
+        notification.map(|notification| notification.of_taken(&taken.issue, taken.title));
     // Ignored for an issue that is not a Spec: the command can't know which
     // it will take. Left out of the command a Base fix is offered with too,
     // as the issue is retried as a Run of its own: another Pickup run never

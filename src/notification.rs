@@ -1,6 +1,6 @@
 //! The Run notification: one email when a Run, a Spec run or an Architect run
-//! ends, whatever its outcome, through the same checks and the same send as
-//! `email-test`.
+//! ends, whatever its outcome, or when a Pickup run that took an issue does,
+//! through the same checks and the same send as `email-test`.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -19,8 +19,9 @@ use crate::launch;
 use crate::progress;
 use crate::run::Ended;
 
-/// What a Run or an Architect run asks about its Run notification, by its
-/// command or, without `email` or `no-email`, by the User config.
+/// What a Run, an Architect run or a Pickup run asks about its Run
+/// notification, by its command or, without `email` or `no-email`, by the
+/// User config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationAsk {
     /// Send one, to this address, else to `email.to`.
@@ -65,6 +66,37 @@ impl RunNotification {
         let ending = Ending::of(ended);
         let subject = subject(&self.issue, self.title.as_deref(), ending.outcome);
         send(&self.resend, &subject, self.started, None, &ending);
+    }
+}
+
+/// A Pickup run's Run notification, checked and waiting for the issue the
+/// Pickup run takes. One that is skipped takes none, and so sends none.
+pub struct PickupNotification {
+    resend: Resend,
+    started: Instant,
+}
+
+impl PickupNotification {
+    /// The Run notification for a Pickup run starting now, sent to `to`, else
+    /// to `email.to`. Fails, before any work, with the checks
+    /// [`RunNotification::new`] makes.
+    pub fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
+        let started = Instant::now();
+        let resend = Resend::new(to, settings)?;
+        Ok(PickupNotification { resend, started })
+    }
+
+    /// The Run notification of the Spec run or Run that `issue`, the Ready
+    /// issue the Pickup run took, titled `title`, is dispatched as: the one
+    /// that run would send started by hand, which the Pickup run sends in
+    /// its place.
+    pub fn of_taken(self, issue: &IssueUrl, title: String) -> RunNotification {
+        RunNotification {
+            resend: self.resend,
+            issue: issue.clone(),
+            title: Some(title),
+            started: self.started,
+        }
     }
 }
 
