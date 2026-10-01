@@ -2080,6 +2080,11 @@ fn a_plan_whose_dispatched_run_failed_stays_open_and_the_next_architect_run_neve
     scenario.agent_does_for(8, "exit 3");
     let first = scenario.run(&["architect"]);
     assert_eq!(first.code, Some(1), "stderr: {}", first.stderr);
+    // The run left nothing on origin, so its Claim on the plan is released.
+    assert_eq!(
+        scenario.issue_labels(8),
+        [ARCHITECT_PLAN, "ready-for-agent"]
+    );
     let sessions = scenario.claude_calls().len();
 
     let second = scenario.run(&["architect"]);

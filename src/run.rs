@@ -1,6 +1,7 @@
 //! One Run: from an Issue URL to a checked PR, or to a Failed run. An issue
 //! with sub-issues is a Spec instead, handed to a Spec run.
 
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -12,7 +13,7 @@ use crate::ci::{self, Ci};
 use crate::claim;
 use crate::failed_run::{self, FailedRun, PolicyRefusal};
 use crate::git::Git;
-use crate::github::{self, Mergeable, PullRequest};
+use crate::github::{self, Mergeable, PullRequest, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::plugin::Plugin;
@@ -154,7 +155,9 @@ pub fn run_to_end(
 ///
 /// Once those checks pass, and before the worktree is created, the Run, or
 /// the Spec run, makes the Claim on `issue`, unless it is a child Run. A Claim
-/// that can't be made fails it there, before any work.
+/// that can't be made fails it there, before any work. The Claim is released
+/// if it then fails with nothing on origin to take over, and removed once its
+/// Self-merge has left `issue` closed: see [`claim::Claim`].
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures.
@@ -202,37 +205,69 @@ fn run(
     if interrupt::requested() {
         return Err(anyhow!("interrupted").into());
     }
-    if started_by.makes_claim() {
-        claim::make(issue)?;
+    let claim = started_by
+        .makes_claim()
+        .then(|| claim::make(issue))
+        .transpose()?;
+    let logs = Logs::of_run(issue, logs_dir, &timestamp);
+    let outcome = run_in_worktree(
+        issue,
+        tickets,
+        &launch,
+        &selection,
+        &base,
+        goal,
+        base_fix,
+        &logs,
+        parallel.tickets,
+    );
+    if let Some(claim) = claim {
+        match &outcome {
+            Ok(reached) if reached.goal == Goal::Merged => claim.remove_if_closed(),
+            // Ready for review: the Claim stays while the pull request waits.
+            Ok(_) => {}
+            Err(_) => claim.release_if_nothing_on_origin(&launch, &branch),
+        }
     }
-    let worktree = match &selection {
-        Selection::Fresh { .. } => Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?,
+    outcome
+}
+
+/// [`run`], from the worktree on: create it in the Launch directory `launch`
+/// for the branch `selection` picked, and take `issue` to `goal` there, as a
+/// Spec run if it has `tickets`.
+#[allow(clippy::too_many_arguments)]
+fn run_in_worktree(
+    issue: &IssueUrl,
+    tickets: Vec<Ticket>,
+    launch: &Git,
+    selection: &Selection,
+    base: &str,
+    goal: Goal,
+    base_fix: &mut BaseFix,
+    logs: &Logs,
+    parallel: NonZeroUsize,
+) -> Result<Reached, FailedRun> {
+    let branch = selection.branch();
+    let worktree = match selection {
+        Selection::Fresh { .. } => Worktree::create_fresh(launch, &issue.repo, branch, base)?,
         Selection::Continuation { .. } => {
-            Worktree::continue_existing(&launch, &issue.repo, &branch, &base)?
+            Worktree::continue_existing(launch, &issue.repo, branch, base)?
         }
     };
-    let logs = Logs::of_run(issue, logs_dir, &timestamp);
     if !tickets.is_empty() {
         return spec_run::run(
-            issue,
-            tickets,
-            worktree,
-            &base,
-            goal,
-            base_fix,
-            &logs,
-            parallel.tickets,
+            issue, tickets, worktree, base, goal, base_fix, logs, parallel,
         );
     }
-    let prompt = match &selection {
-        Selection::Fresh { .. } => prompt::fresh(issue, &base, &branch),
+    let prompt = match selection {
+        Selection::Fresh { .. } => prompt::fresh(issue, base, branch),
         Selection::Continuation { pr, .. } => {
-            prompt::continuation(issue, &base, &branch, pr.as_ref().map(|pr| pr.url.as_str()))
+            prompt::continuation(issue, base, branch, pr.as_ref().map(|pr| pr.url.as_str()))
         }
     };
     let mut log = logs.path("implement");
     let implemented = implement(
-        issue, &worktree, &base, &prompt, goal, base_fix, &logs, &mut log,
+        issue, &worktree, base, &prompt, goal, base_fix, logs, &mut log,
     );
     match implemented {
         Ok(pr_url) => Ok(Reached {
@@ -241,7 +276,7 @@ fn run(
             log: Some(log),
             ticket_lines: Vec::new(),
         }),
-        Err(error) => Err(failed_run::fail(issue, worktree, &base, &log, error)),
+        Err(error) => Err(failed_run::fail(issue, worktree, base, &log, error)),
     }
 }
 
@@ -264,7 +299,7 @@ pub fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
         "updating {base} in the Launch directory from {origin_base}"
     ));
     if let Err(error) = launch.run(&["merge", "--ff-only", "--quiet", &origin_base]) {
-        warn(
+        progress::warn(
             &error,
             format_args!(
                 "could not update {base} in the Launch directory, \
@@ -362,8 +397,8 @@ pub fn deliver(
 /// hand.
 fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
     let branch = worktree.branch();
-    if let Err(error) = retry_if_interrupted(|| worktree.delete_from_origin()) {
-        warn(
+    if let Err(error) = interrupt::retry(|| worktree.delete_from_origin()) {
+        progress::warn(
             &error,
             format_args!(
                 "could not delete {branch} on origin, so delete it by hand: \
@@ -375,8 +410,8 @@ fn after_merge(issue: &IssueUrl, worktree: &Worktree, pr: &PullRequest) {
         "Closed by #{}, merged into {} by a thirdshift Merge run.",
         pr.number, pr.base
     );
-    if let Err(error) = retry_if_interrupted(|| close_unless_closed(issue, &comment)) {
-        warn(
+    if let Err(error) = interrupt::retry(|| close_unless_closed(issue, &comment)) {
+        progress::warn(
             &error,
             format_args!(
                 "could not close issue #{number}, so if it is still open, close it by hand: \
@@ -396,24 +431,6 @@ fn close_unless_closed(issue: &IssueUrl, comment: &str) -> Result<()> {
     }
     progress::step(format_args!("closing issue #{}", issue.number));
     github::close_issue(issue, comment)
-}
-
-/// Run `step`, and once more if it failed with the Run interrupted: Ctrl-C in
-/// a terminal also kills the git or gh the step was running.
-fn retry_if_interrupted(step: impl Fn() -> Result<()>) -> Result<()> {
-    step().or_else(|error| {
-        if interrupt::requested() {
-            step()
-        } else {
-            Err(error)
-        }
-    })
-}
-
-/// Report `error`, then a warning saying what to do about it by hand.
-fn warn(error: &anyhow::Error, warning: std::fmt::Arguments) {
-    progress::step(format_args!("{error:#}"));
-    progress::step(format_args!("warning: {warning}"));
 }
 
 /// The most Repair sessions a Run starts, conflict, CI-fix and review
