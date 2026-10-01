@@ -152,6 +152,28 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
 }
 
 #[test]
+fn a_spec_run_claims_the_spec_and_its_tickets_runs_change_no_label() {
+    let scenario = linear_spec();
+    scenario.issue_labelled(SPEC, &["ready-for-agent", "enhancement"]);
+    for ticket in [21, 22] {
+        scenario.issue_labelled(ticket, &["ready-for-agent"]);
+    }
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(SPEC), ["enhancement", "in-progress"]);
+    for ticket in [21, 22] {
+        assert_eq!(scenario.issue_labels(ticket), ["ready-for-agent"]);
+    }
+    assert_contains(
+        &result.stderr,
+        "thirdshift: labelling #20 in-progress, in place of ready-for-agent\n",
+    );
+    assert_eq!(result.stderr.matches(" in-progress").count(), 1);
+}
+
+#[test]
 fn each_ticket_branches_off_the_spec_branch_and_its_prompts_name_it_as_the_base() {
     let scenario = linear_spec();
 
@@ -2302,4 +2324,78 @@ fn with_every_ticket_closed_and_no_spec_branch_there_is_nothing_to_do() {
     let gh = scenario.gh_state();
     assert_eq!(gh["prs"], serde_json::json!([]));
     assert_eq!(gh["issues"]["20"], "OPEN");
+}
+
+#[test]
+fn a_spec_run_that_left_no_spec_branch_on_origin_and_no_spec_pr_releases_the_specs_claim() {
+    let scenario = linear_spec();
+    scenario.issue_labelled(SPEC, &["ready-for-agent", "enhancement"]);
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        "#!/bin/sh\necho \"origin says no\"\nexit 1\n",
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "origin says no");
+    assert_eq!(scenario.origin_log("issue-20"), None);
+    assert!(pr_from(&scenario, "issue-20").is_none());
+    assert_eq!(
+        scenario.issue_labels(SPEC),
+        ["enhancement", "ready-for-agent"]
+    );
+    assert_contains(
+        &result.stderr,
+        "thirdshift: releasing the Claim on #20: labelling it ready-for-agent, in place of in-progress\n",
+    );
+}
+
+#[test]
+fn a_failed_spec_run_whose_spec_branch_is_on_origin_keeps_the_specs_claim() {
+    let scenario = linear_spec();
+    scenario.issue_labelled(SPEC, &["ready-for-agent"]);
+    scenario.agent_does_for(21, "exit 1");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(scenario.origin_log("issue-20").is_some());
+    assert!(pr_from(&scenario, "issue-20").is_none());
+    assert_eq!(scenario.issue_labels(SPEC), ["in-progress"]);
+}
+
+#[test]
+fn a_failed_spec_run_that_left_a_spec_pr_keeps_the_specs_claim() {
+    let scenario = linear_spec();
+    scenario.issue_labelled(SPEC, &["ready-for-agent"]);
+    scenario.agent_does_for(22, "exit 1");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(spec_pr(&scenario)["isDraft"], true);
+    assert_eq!(scenario.issue_labels(SPEC), ["in-progress"]);
+}
+
+#[test]
+fn a_merge_run_of_a_spec_ends_with_the_spec_closed_and_its_claim_removed() {
+    let scenario = linear_spec();
+    scenario.issue_labelled(SPEC, &["ready-for-agent", "enhancement"]);
+    for ticket in [21, 22] {
+        scenario.issue_labelled(ticket, &["ready-for-agent"]);
+    }
+
+    let result = scenario.run(&["merge", &spec_url(&scenario)]);
+
+    assert_spec_pr_merged(&scenario, &result);
+    assert_eq!(scenario.issue_labels(SPEC), ["enhancement"]);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: removing in-progress from issue #20\n",
+    );
+    for ticket in [21, 22] {
+        assert_eq!(scenario.issue_labels(ticket), ["ready-for-agent"]);
+    }
 }

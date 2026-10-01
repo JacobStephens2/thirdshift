@@ -20,7 +20,7 @@ _Avoid_: originating workspace, launch repo
 The rule that the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the **Launch directory**. A mismatch stops the run before any work happens.
 
 **Base branch**:
-The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** whose command names a branch, that branch, whatever is checked out; for a **Ticket**'s **Run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
+The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** or a **Pickup run** whose command names a branch, that branch, whatever is checked out; for a **Ticket**'s **Run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
 
 **Factory skills**:
 The skills in `skills/`, loaded into the session as the `thirdshift` plugin: adapted copies of Matt Pocock's skills, designed to run headless with no human in the loop.
@@ -70,8 +70,12 @@ _Avoid_: watch, daemon, queue run, poll
 The number of open issues carrying a **Claim** at which a **Pickup run** takes no more, set in the **User config**. It keeps a broken **Base branch** from failing every **Ready issue** in turn, and pull requests from piling up unreviewed.
 _Avoid_: WIP limit, concurrency (it counts issues waiting on the **Day shift**, not Runs in flight)
 
+**Sweep**:
+A **Pickup run**'s removal of `in-progress` from every closed issue in the repository that still has it, such as one whose pull request was merged by hand, with the issue's other labels kept. Each Pickup run that is not skipped for the lock makes one, before it holds the repository against its **Claim limit**. A Sweep that fails is a warning, never a failure.
+_Avoid_: cleanup, garbage collection
+
 **Ready issue**:
-An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no label that makes an **Unready Ticket**, not a sub-issue, not a **Base fix**'s issue, with no open blocker, never started (no **Issue branch** and no pull request), and left untouched long enough that whoever is shaping it has finished. On a **Spec**, the label says its **Tickets** are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
+An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no label that makes an **Unready Ticket** and no **Claim**, not a sub-issue, not a **Base fix**'s issue, with no open blocker, never started (no **Issue branch** and no pull request), and left untouched long enough that whoever is shaping it has finished. On a **Spec**, the label says its **Tickets** are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
 _Avoid_: queued issue, backlog item
 
 **Architecture review**:
@@ -106,7 +110,7 @@ A **Run** asked to end with its pull request merged rather than left for review,
 _Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
 
 **Run notification**:
-A message thirdshift sends when a **Run**, a **Spec run** or an **Architect run** ends, whatever its outcome (ready, merged, failed or interrupted; for an Architect run that dispatched nothing, plan published, idea filed, idea already filed, review failed or skipped), to the address given with the email flag or the default in the **User config**. Each sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. After an **Inherited failure** it carries, beside the cause, what the Run says on stderr: where the checks fail on the **Base branch**, and the offer of a **Base fix** if nobody decided against one. An Architect run's notification tells how its **Architecture review** ended, naming the plan or idea issue, and how the Spec run or Run it dispatched ended, which sends none of its own; a skipped one's tells why it was skipped. A **Pickup run** that took a **Ready issue** sends one the same way, for the Spec run or Run it dispatched; a skipped one sends none. Failing to send one never changes the outcome.
+A message thirdshift sends when a **Run**, a **Spec run** or an **Architect run** ends, whatever its outcome (ready, merged, failed or interrupted; for an Architect run that dispatched nothing, plan published, idea filed, idea already filed, review failed or skipped), to the address given with the email flag or the default in the **User config**. Each sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. After an **Inherited failure** it carries, beside the cause, what the Run says on stderr: where the checks fail on the **Base branch**, and the offer of a **Base fix** if nobody decided against one. An Architect run's notification tells how its **Architecture review** ended, naming the plan or idea issue, and how the Spec run or Run it dispatched ended, which sends none of its own; a skipped one's tells why it was skipped. A **Pickup run** that took a **Ready issue** sends the one the Spec run or Run it dispatched would have sent, which sends none of its own; a skipped one sends none. Failing to send one never changes the outcome.
 _Avoid_: completion email, alert
 
 **User config**:
@@ -121,7 +125,7 @@ Writing the **User config** by answering a few questions, one per setting that m
 _Avoid_: init, onboarding, configure
 
 **Self-merge**:
-The step at the end of a **Merge run** in which thirdshift itself merges the pull request into the **Base branch** with a merge commit, once it is open, ready for review, mergeable and green on the head commit it merges. No human reviews it first. It ends with the **Issue branch** deleted and the issue closed by thirdshift, unless it is already closed.
+The step at the end of a **Merge run** in which thirdshift itself merges the pull request into the **Base branch** with a merge commit, once it is open, ready for review, mergeable and green on the head commit it merges. No human reviews it first. It ends with the **Issue branch** deleted, the issue closed by thirdshift, unless it is already closed, and the issue's **Claim** removed.
 
 **Policy refusal**:
 A merge the **Self-merge** tried that failed, where the round of the Repair loop that followed found nothing to fix: the **Base branch** unchanged, no conflict, CI green or absent, the pull request mergeable. The cause is a repository setting or rule, such as merge commits disallowed or a review required. thirdshift never reads GitHub's error text to decide it. The **Merge run** is a **Failed run** that leaves the pull request ready for review.

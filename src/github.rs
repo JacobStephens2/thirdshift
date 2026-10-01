@@ -43,7 +43,7 @@ pub fn issue_title(issue: &IssueUrl) -> Result<String> {
 }
 
 /// An issue as an Architect run reads the plan its Architecture review
-/// published.
+/// published, and as a Claim reads its issue after a Self-merge.
 pub struct Issue {
     pub is_open: bool,
     pub labels: Vec<String>,
@@ -58,23 +58,54 @@ pub fn issue(issue: &IssueUrl) -> Result<Issue> {
         .context("gh output has no createdAt")?;
     Ok(Issue {
         is_open: state_is_open(&json)?,
-        labels: json["labels"]
-            .as_array()
-            .context("gh output has no labels")?
-            .iter()
-            .filter_map(|label| label["name"].as_str().map(String::from))
-            .collect(),
+        labels: label_names(&json)?,
         created: DateTime::parse_from_rfc3339(created)
             .with_context(|| format!("gh output has an unreadable createdAt {created}"))?
             .to_utc(),
     })
 }
 
+/// The names of the labels of the issue `json` describes, with its `labels`.
+fn label_names(json: &Value) -> Result<Vec<String>> {
+    Ok(json["labels"]
+        .as_array()
+        .context("gh output has no labels")?
+        .iter()
+        .filter_map(|label| label["name"].as_str().map(String::from))
+        .collect())
+}
+
+/// Whether `label` is one of `labels`, whatever its case: GitHub's label
+/// names are case-insensitive.
+pub fn has_label(labels: &[String], label: &str) -> bool {
+    label_as_spelled(labels, label).is_some()
+}
+
+/// `label` as `labels` spells it, whatever its case, if it is one of them.
+pub fn label_as_spelled<'a>(labels: &'a [String], label: &str) -> Option<&'a String> {
+    labels.iter().find(|name| name.eq_ignore_ascii_case(label))
+}
+
+/// Take `label` out of `labels`, whatever its case there.
+pub fn drop_label(labels: &mut Vec<String>, label: &str) {
+    labels.retain(|name| !name.eq_ignore_ascii_case(label));
+}
+
+/// The labels of `issue`.
+pub fn issue_labels(issue: &IssueUrl) -> Result<Vec<String>> {
+    label_names(&issue_view(issue, "labels")?)
+}
+
+/// The REST API's path for the labels of `issue`.
+fn labels_path(issue: &IssueUrl) -> String {
+    format!("repos/{}/issues/{}/labels", issue.repo_slug(), issue.number)
+}
+
 /// Set `issue`'s labels to exactly `labels`, in one request, so a swap of
 /// one label for another can't stop halfway. Through the REST API: `gh issue
 /// edit` fails on the GitHub Projects (classic) sunset in older `gh`.
-pub fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
-    let path = format!("repos/{}/issues/{}/labels", issue.repo_slug(), issue.number);
+fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
+    let path = labels_path(issue);
     let fields: Vec<String> = labels
         .iter()
         .map(|label| format!("labels[]={label}"))
@@ -84,6 +115,52 @@ pub fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
         args.extend(["-f", field]);
     }
     gh(&args)
+}
+
+/// Set `issue`'s labels to `kept` and then each of `added`, in one request,
+/// as [`set_labels`] does. One of `kept` that is also one of `added`,
+/// whatever its case, as GitHub's label names are case-insensitive, is there
+/// once, as `added` spells it.
+pub fn set_labels_adding(issue: &IssueUrl, kept: &[String], added: &[&str]) -> Result<()> {
+    let mut labels: Vec<&str> = kept
+        .iter()
+        .map(String::as_str)
+        .filter(|kept| !added.iter().any(|added| added.eq_ignore_ascii_case(kept)))
+        .collect();
+    labels.extend(added);
+    set_labels(issue, &labels)
+}
+
+/// The REST API's path for `label` on `issue`.
+fn label_path(issue: &IssueUrl, label: &str) -> String {
+    format!("{}/{label}", labels_path(issue))
+}
+
+/// Take `label` off `issue`, in one request that keeps its other labels.
+/// Through the REST API, as [`set_labels`] is. GitHub refuses it if the issue
+/// does not have the label.
+pub fn remove_label(issue: &IssueUrl, label: &str) -> Result<()> {
+    gh(&[
+        "api",
+        "--method",
+        "DELETE",
+        &label_path(issue, label),
+        "--silent",
+    ])
+}
+
+/// The command that does what [`remove_label`] does, to run by hand.
+pub fn remove_label_command(issue: &IssueUrl, label: &str) -> String {
+    format!("gh api --method DELETE {}", label_path(issue, label))
+}
+
+/// The command that adds `label` to `issue`, keeping its other labels, to
+/// run by hand: unlike [`set_labels`], it needs none of the others named.
+pub fn add_label_command(issue: &IssueUrl, label: &str) -> String {
+    format!(
+        "gh api --method POST {} -f 'labels[]={label}'",
+        labels_path(issue)
+    )
 }
 
 /// A Spec's sub-issue, as a Spec run reads it.
@@ -121,35 +198,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 
 /// The sub-issues of `issue`, its Tickets if it has any, in one query.
 pub fn tickets(issue: &IssueUrl) -> Result<Vec<Ticket>> {
-    let json = gh_json(&[
-        "api",
-        "graphql",
-        "-f",
-        &format!("query={TICKETS_QUERY}"),
-        "-f",
-        &format!("owner={}", issue.owner),
-        "-f",
-        &format!("repo={}", issue.repo),
-        "-F",
-        &format!("number={}", issue.number),
-    ])?;
-    let nodes = |value: &Value, what: &str| -> Result<Vec<Value>> {
-        value["nodes"]
-            .as_array()
-            .cloned()
-            .with_context(|| format!("gh api graphql output has no {what}"))
-    };
-    let is_open = |node: &Value| -> Result<bool> {
-        Ok(node["state"]
-            .as_str()
-            .context("gh api graphql output has an issue with no state")?
-            == "OPEN")
-    };
-    let number = |node: &Value| {
-        node["number"]
-            .as_u64()
-            .context("gh api graphql output has an issue with no number")
-    };
+    let json = issue_query(issue, TICKETS_QUERY)?;
     nodes(
         &json["data"]["repository"]["issue"]["subIssues"],
         "subIssues",
@@ -159,27 +208,70 @@ pub fn tickets(issue: &IssueUrl) -> Result<Vec<Ticket>> {
         let mut blockers = Vec::new();
         let mut open_blockers = Vec::new();
         for blocker in nodes(&node["blockedBy"], "blockedBy")? {
-            blockers.push(number(&blocker)?);
-            if is_open(&blocker)? {
-                open_blockers.push(number(&blocker)?);
+            blockers.push(node_number(blocker)?);
+            if node_is_open(blocker)? {
+                open_blockers.push(node_number(blocker)?);
             }
         }
         Ok(Ticket {
-            number: number(node)?,
-            is_open: is_open(node)?,
+            number: node_number(node)?,
+            is_open: node_is_open(node)?,
             labels: nodes(&node["labels"], "labels")?
                 .iter()
                 .filter_map(|label| label["name"].as_str().map(String::from))
                 .collect(),
-            has_sub_issues: node["subIssues"]["totalCount"]
-                .as_u64()
-                .context("gh api graphql output has an issue with no subIssues count")?
-                > 0,
+            has_sub_issues: sub_issue_count(node)? > 0,
             blockers,
             open_blockers,
         })
     })
     .collect()
+}
+
+/// The answer to `query`, a GraphQL query about `issue` that takes its
+/// `$owner`, `$repo` and `$number`.
+fn issue_query(issue: &IssueUrl, query: &str) -> Result<Value> {
+    gh_json(&[
+        "api",
+        "graphql",
+        "-f",
+        &format!("query={query}"),
+        "-f",
+        &format!("owner={}", issue.owner),
+        "-f",
+        &format!("repo={}", issue.repo),
+        "-F",
+        &format!("number={}", issue.number),
+    ])
+}
+
+/// The `nodes` of `connection`, the `what` of a GraphQL answer.
+fn nodes<'a>(connection: &'a Value, what: &str) -> Result<&'a Vec<Value>> {
+    connection["nodes"]
+        .as_array()
+        .with_context(|| format!("gh api graphql output has no {what}"))
+}
+
+/// Whether the issue a GraphQL answer's `node` describes is open.
+fn node_is_open(node: &Value) -> Result<bool> {
+    Ok(node["state"]
+        .as_str()
+        .context("gh api graphql output has an issue with no state")?
+        == "OPEN")
+}
+
+/// The number of the issue a GraphQL answer's `node` describes.
+fn node_number(node: &Value) -> Result<u64> {
+    node["number"]
+        .as_u64()
+        .context("gh api graphql output has an issue with no number")
+}
+
+/// How many sub-issues the issue a GraphQL answer's `node` describes has.
+fn sub_issue_count(node: &Value) -> Result<u64> {
+    node["subIssues"]["totalCount"]
+        .as_u64()
+        .context("gh api graphql output has an issue with no subIssues count")
 }
 
 /// Close `issue` with `comment`.
@@ -195,22 +287,40 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     ])
 }
 
+/// An issue as a listing of its repository's issues gives it.
+pub struct ListedIssue {
+    pub issue: IssueUrl,
+    pub title: String,
+    pub labels: Vec<String>,
+}
+
 /// Every open issue labelled `label` in the repository `repo`, an
-/// `owner/repo`, with its title, newest first. They come from GitHub's issue
-/// list, not its search, whose index can be a while behind an issue just
-/// opened.
-pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<(IssueUrl, String)>> {
+/// `owner/repo`, newest first. They come from GitHub's issue list, not its
+/// search, whose index can be a while behind an issue just opened.
+pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
+    issues_labelled(repo, label, "open")
+}
+
+/// Every closed issue labelled `label` in the repository `repo`, an
+/// `owner/repo`, newest first.
+pub fn closed_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
+    issues_labelled(repo, label, "closed")
+}
+
+/// Every issue labelled `label` in the repository `repo` whose state is
+/// `state`, `open` or `closed`, newest first.
+fn issues_labelled(repo: &str, label: &str, state: &str) -> Result<Vec<ListedIssue>> {
     let json = gh_json(&[
         "issue",
         "list",
+        "--state",
+        state,
         "--repo",
         repo,
         "--label",
         label,
-        "--state",
-        "open",
         "--json",
-        "url,title",
+        "url,title,labels",
         "--limit",
         "1000",
     ])?;
@@ -223,9 +333,130 @@ pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<(IssueUrl, St
                     .as_str()
                     .with_context(|| format!("gh issue list output has no {name}"))
             };
-            Ok((IssueUrl::parse(field("url")?)?, field("title")?.to_string()))
+            Ok(ListedIssue {
+                issue: IssueUrl::parse(field("url")?)?,
+                title: field("title")?.to_string(),
+                labels: label_names(listed)?,
+            })
         })
         .collect()
+}
+
+/// An open issue labelled for a Pickup run to take, as the Pickup run reads
+/// what its listing doesn't give.
+pub struct Candidate {
+    /// The issue it is a sub-issue of, if it is one.
+    pub parent: Option<IssueUrl>,
+    /// It has sub-issues of its own.
+    pub has_sub_issues: bool,
+    /// The numbers of the open issues it is blocked by.
+    pub open_blockers: Vec<u64>,
+    /// The latest of the changes that shape it, if its timeline has one.
+    pub last_shaped: Option<Shaped>,
+}
+
+/// A change that shapes an issue, and when it was made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shaped {
+    pub by: Shaping,
+    pub at: DateTime<Utc>,
+}
+
+/// What shapes an issue for a Pickup run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shaping {
+    /// The label a Pickup run lists issues by was applied.
+    Labelled,
+    /// A sub-issue was added or removed.
+    SubIssues,
+    /// A "blocked by" link was added or removed.
+    Blockers,
+}
+
+/// An issue's parent, whether it has sub-issues, the issues it is blocked
+/// by, and the events of its timeline that shape it: each time a label was
+/// applied, of which only the last hundred are read, and the last sub-issue
+/// or "blocked by" link added or removed. They are read from the timeline
+/// because adding a sub-issue does not change the issue's update time.
+const CANDIDATE_QUERY: &str = "\
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      parent { url }
+      subIssues { totalCount }
+      blockedBy(first: 100) { nodes { number state } }
+      labelled: timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
+        nodes { ... on LabeledEvent { createdAt label { name } } }
+      }
+      linked: timelineItems(
+        last: 1
+        itemTypes: [
+          SUB_ISSUE_ADDED_EVENT
+          SUB_ISSUE_REMOVED_EVENT
+          BLOCKED_BY_ADDED_EVENT
+          BLOCKED_BY_REMOVED_EVENT
+        ]
+      ) {
+        nodes {
+          __typename
+          ... on SubIssueAddedEvent { createdAt }
+          ... on SubIssueRemovedEvent { createdAt }
+          ... on BlockedByAddedEvent { createdAt }
+          ... on BlockedByRemovedEvent { createdAt }
+        }
+      }
+    }
+  }
+}";
+
+/// `issue` as a Pickup run that lists issues by `label` reads it, in one
+/// query.
+pub fn candidate(issue: &IssueUrl, label: &str) -> Result<Candidate> {
+    let json = issue_query(issue, CANDIDATE_QUERY)?;
+    let issue = &json["data"]["repository"]["issue"];
+    let parent = issue["parent"]["url"]
+        .as_str()
+        .map(IssueUrl::parse)
+        .transpose()?;
+    let mut open_blockers = Vec::new();
+    for blocker in nodes(&issue["blockedBy"], "blockedBy")? {
+        if node_is_open(blocker)? {
+            open_blockers.push(node_number(blocker)?);
+        }
+    }
+    let at = |event: &Value| -> Result<DateTime<Utc>> {
+        let at = event["createdAt"]
+            .as_str()
+            .context("gh api graphql output has an event with no createdAt")?;
+        Ok(DateTime::parse_from_rfc3339(at)
+            .with_context(|| format!("gh api graphql output has an unreadable createdAt {at}"))?
+            .to_utc())
+    };
+    let mut shaped = Vec::new();
+    for event in nodes(&issue["labelled"], "labelled")? {
+        // GitHub's label names are case-insensitive.
+        let name = event["label"]["name"].as_str();
+        if name.is_some_and(|name| name.eq_ignore_ascii_case(label)) {
+            shaped.push(Shaped {
+                by: Shaping::Labelled,
+                at: at(event)?,
+            });
+        }
+    }
+    for event in nodes(&issue["linked"], "linked")? {
+        let by = match event["__typename"].as_str() {
+            Some("SubIssueAddedEvent" | "SubIssueRemovedEvent") => Shaping::SubIssues,
+            Some("BlockedByAddedEvent" | "BlockedByRemovedEvent") => Shaping::Blockers,
+            other => bail!("gh api graphql output has an unknown event {other:?}"),
+        };
+        shaped.push(Shaped { by, at: at(event)? });
+    }
+    Ok(Candidate {
+        parent,
+        has_sub_issues: sub_issue_count(issue)? > 0,
+        open_blockers,
+        last_shaped: shaped.into_iter().max_by_key(|shaped| shaped.at),
+    })
 }
 
 /// Add each of `labels` to the repository `repo`, an `owner/repo`, with its

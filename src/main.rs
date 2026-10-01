@@ -4,6 +4,7 @@ mod base_fix;
 mod branch;
 mod child_run;
 mod ci;
+mod claim;
 mod config;
 mod email;
 mod failed_run;
@@ -12,7 +13,9 @@ mod github;
 mod host;
 mod interrupt;
 mod issue;
+mod launch;
 mod notification;
+mod pickup;
 mod plugin;
 mod poll;
 mod preflight;
@@ -29,14 +32,16 @@ mod spec_run;
 mod update;
 mod worktree;
 
+use std::num::NonZeroUsize;
 use std::process::ExitCode;
 
 use architect::{Outcome, Reviewed};
-use args::{ArchitectArgs, Command, RunArgs};
+use args::{ArchitectArgs, Command, DispatchArgs, PickupArgs, RunArgs};
 use base_fix::BaseFixAsk;
 use config::UserConfig;
-use notification::{ArchitectNotification, NotificationAsk, RunNotification};
-use run::{Goal, StartedBy};
+use issue::IssueUrl;
+use notification::{ArchitectNotification, NotificationAsk, PickupNotification, RunNotification};
+use run::{Ended, Goal, StartedBy};
 use spec_run::Parallel;
 
 const HELP: &str = "\
@@ -49,6 +54,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift architect [<focus>]                 Review the Base branch's architecture, publish a plan for a refactor, and run it
        thirdshift architect [<focus>] --plan-only     Publish and mark ready the plan for a refactor, and stop there
        thirdshift architect base <branch> [<focus>]   Do either with <branch> as the Base branch, from a clone on any branch
+       thirdshift pickup                              Take the lowest-numbered Ready issue in the repository and run it
+       thirdshift pickup base <branch>                Do that with <branch> as the Base branch, from a clone on any branch
        thirdshift email-test [<address>]              Send a test email through Resend, to check the email setup
        thirdshift setup                               Choose your defaults, then write the User config with every setting
        thirdshift update                              Update thirdshift to the latest release
@@ -80,6 +87,16 @@ watches CI there again: a check that failed on a flaky test then passes and the 
 If CI is red again, a failed check can't be re-run (only GitHub Actions jobs can), or GitHub
 refuses the re-run, the Run fails.
 
+A Run or a Spec run makes the Claim on its issue once its checks pass, before any work: it
+labels the issue in-progress, in place of ready-for-agent if it has that, keeping its other
+labels and creating the label if the repository lacks it. A Ticket's Run in a Spec run and a
+Base fix make none, and an issue already in-progress is left as it is. A Run whose Claim
+can't be made stops there, naming the cause. The Claim is released, the issue's labels put
+back as they were, when the Run or the Spec run fails with nothing on origin to take over:
+no Issue branch or Spec branch and no pull request. It is removed once a Self-merge has left
+the issue closed, and otherwise stays: a failure to release or remove it is a warning naming
+the command to run by hand.
+
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec
 PR opens as a draft, with a Tickets checklist, once the first Ticket lands, and is marked ready
@@ -109,8 +126,8 @@ a single Ticket. thirdshift then checks that the plan is open, new and not label
 ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
 labels it architect-plan, creating the label if the repository lacks it, and dispatches it
 as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket. A Spec's
-Tickets are never labelled architect-plan. The Architect run ends as that run does, with
-its exit code and its PR's URL.
+Tickets are never labelled architect-plan. That run makes the Claim on the plan, which keeps
+architect-plan. The Architect run ends as that run does, with its exit code and its PR's URL.
 merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run, as do the
 User config's defaults; parallel <n> fails it if the plan is a single Ticket. The review
 itself watches no CI, so only that run can start a Base fix. With --plan-only, the
@@ -130,8 +147,8 @@ The review starts at <branch>'s head on origin, and the run the plan is dispatch
 off <branch> and targets it with its pull request. <branch> must exist on origin, with no local
 copy of it ahead, and launch.pull updates the clone only when <branch> is the branch checked
 out. base goes with --plan-only too, before or after the focus and the other flags. base is
-for architect only: thirdshift <Issue URL> doesn't take it. Without base, the Base branch is
-the branch checked out.
+for architect and pickup only: thirdshift <Issue URL> doesn't take it. Without base, the Base
+branch is the branch checked out.
 
 A review that finds no Strong candidate publishes no plan. It files its top recommendation as
 one idea issue labelled needs-triage, or names the open issue that already covers it, and
@@ -142,11 +159,12 @@ A review that fails, is interrupted, or ends without naming one of these issues 
 Architect run and leaves any plan it published labelled needs-triage. One that finds no
 deepening opportunity at all has no issue to name, so it fails the Architect run too.
 
-Only one Architect run per repository runs at a time on a machine. One started while another
-on the same repository is still running, the Spec run or Run it dispatched included, is
-skipped: it prints an Architect run is already running on <owner>/<repo>, does nothing else
-and exits 0. Nothing is left to clear once that other run ends, however it ends. Runs
-started on an Issue URL are never skipped this way.
+Only one Architect run or Pickup run per repository runs at a time on a machine. An Architect
+run started while another on the same repository, or a Pickup run, is still running, the Spec
+run or Run it dispatched included, is skipped: it prints an Architect run or a Pickup run is
+already running on <owner>/<repo>, does nothing else and exits 0. Nothing is left to clear
+once that other run ends, however it ends. Runs started on an Issue URL are never skipped
+this way.
 
 An Architect run that finds an open issue labelled architect-plan is skipped too, before
 any review, with or without --plan-only: the last Architect plan is not finished. It names
@@ -157,6 +175,61 @@ Architect plan, so one whose run failed stays open until you pick it up.
 
 To run an Architect run on a schedule, have the operating system's scheduler, such as cron, run
 thirdshift architect base main from the clone: the README's \"On a schedule\" has a crontab entry.
+
+pickup starts a Pickup run from the clone, with no Issue URL: one pass, which takes the
+lowest-numbered Ready issue in the repository and dispatches it as thirdshift <Issue URL>
+would: a Spec run on a Spec, a Run otherwise. A Ready issue is an open issue labelled
+ready-for-agent that has none of ready-for-human, needs-info, wontfix and needs-triage, is
+not in-progress, is not a sub-issue, is not labelled base-fix, has no open blocker, and was
+never started: no Issue branch for it is on origin, and no pull request from one exists,
+open, merged or closed. It must also be settled: ten minutes have passed since
+ready-for-agent was applied to it, and since a sub-issue or a \"blocked by\" link of its
+was last added or removed, so a Spec is not taken while its Tickets are being attached. A
+sub-issue is reached through its Spec, when the Spec is itself a Ready issue.
+
+Each ready-for-agent issue a pass looks at and does not take gets one line on stderr with
+the first reason that applies, such as #21 is a Ticket of #20, which is not ready or #30
+blocked by #29, before the line that says what the pass did. A line names the issue taken,
+and the run it is dispatched as makes the Claim on it. The Pickup run ends as that run does,
+with its exit code and its PR's URL. merge, --no-merge, base-fix, --no-base-fix and
+parallel <n> apply to that run, as do the User config's defaults; parallel <n> is ignored
+when the issue is not a Spec. base <branch> names the Pickup run's Base branch as it does an
+Architect run's, and the dispatched run branches off <branch> and targets it:
+
+    thirdshift pickup base main
+
+pickup takes nothing else: no focus and no --plan-only.
+
+A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why,
+after any lines on issues it passed over, when the repository has no Ready issue, when the
+repository is at its Claim limit, and while an Architect run or another Pickup run on the same
+repository is still running on this machine.
+
+A Pickup run takes nothing while as many open issues are labelled in-progress, whoever
+started them, as the Claim limit, 3 unless set, so a broken Base branch can't fail every
+Ready issue in turn, and pull requests can't pile up unreviewed. The skipped run's line names
+the count and the limit. pickup.limit in the User config sets the Claim limit, a whole number
+from 1 up:
+
+    [pickup]
+    limit = 5
+
+There is no flag for it.
+
+Each Pickup run that gets the lock first makes the Sweep: it takes in-progress off every
+closed issue that still has it, keeping the issue's other labels, so an issue merged by hand
+doesn't look taken. Closed issues never count against the Claim limit. A label it can't take
+off is a warning: line, and the pass carries on.
+
+--email, --email <address> and --no-email ask a Pickup run for its Run notification as they
+do a Run, and email.always sets the default. A pass that took an issue sends one: the
+notification the run it dispatched would send by hand, with that run's subject, outcome and
+body. The dispatched run sends none of its own. A skipped pass sends none, even when asked.
+The notification's checks, an address and a Resend API key, are made before any other work
+on every pass, so one that would be skipped fails on them too, with exit 1.
+
+To run a Pickup run on a schedule, have a scheduler, such as cron, run thirdshift pickup base main
+from the clone: the README's \"A Pickup run on a schedule\" has a crontab entry.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
@@ -232,6 +305,7 @@ fn main() -> ExitCode {
             );
         }
         Ok(Command::Architect(architect_args)) => return architect(architect_args),
+        Ok(Command::Pickup(pickup_args)) => return pickup(pickup_args),
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
@@ -297,10 +371,10 @@ fn main() -> ExitCode {
 /// issue that already covers its top recommendation. One whose review or
 /// plan fails puts the cause and the session log on stderr. One that is
 /// skipped says why on stderr, and is no failure: as another on its
-/// repository is still running, it puts nothing on stdout, and as Architect
-/// plans are still open there, the URL of each. If asked, by the command or
-/// the User config, it sends one Run notification, however it ended, skipped
-/// included; the run it dispatched sends none of its own.
+/// repository, or a Pickup run, is still running, it puts nothing on stdout,
+/// and as Architect plans are still open there, the URL of each. If asked, by
+/// the command or the User config, it sends one Run notification, however it
+/// ended, skipped included; the run it dispatched sends none of its own.
 fn architect(args: ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -330,24 +404,10 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
             ));
-            Some(run::run_to_end(
-                plan,
-                dispatch.goal.unwrap_or(config.default_goal()),
-                &config.logs_dir,
-                config.launch_pull,
-                Parallel::new(dispatch.parallel, config.spec_parallel),
-                StartedBy::ArchitectRun { base },
-                dispatch.base_fix.clone().unwrap_or_else(|| {
-                    // The plan is retried as a Run of its own: another
-                    // Architect run would start a new review instead.
-                    config.default_base_fix(args::retry_with_base_fix(
-                        plan,
-                        dispatch.goal,
-                        email_flag.as_ref(),
-                        dispatch.parallel,
-                    ))
-                }),
-            ))
+            // The plan is retried as a Run of its own: another Architect
+            // run would start a new review instead.
+            let (email, parallel) = (email_flag.as_ref(), dispatch.parallel);
+            Some(dispatched(plan, base, dispatch, email, parallel, &config))
         }
         _ => None,
     };
@@ -360,6 +420,87 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         notification.send(&ended, dispatched.as_ref());
     }
     code
+}
+
+/// A Pickup run: the search for the lowest-numbered Ready issue in the Launch
+/// directory's repository, then that issue dispatched as `thirdshift <Issue
+/// URL>` with the same flags would be, but on the Pickup run's Base branch,
+/// whatever the Launch directory has checked out. The dispatched run's ending
+/// is the Pickup run's. One that is skipped, as when the repository is at the
+/// User config's Claim limit, says why on stderr, puts nothing on stdout, and
+/// is no failure. If asked, by the command or the User config, one that took
+/// an issue sends one Run notification, the one the dispatched run would send
+/// started by hand, and that run sends none of its own; one that is skipped
+/// sends none. The notification's checks are made before any other work all
+/// the same, so a pass that would be skipped fails on them too.
+fn pickup(args: PickupArgs) -> ExitCode {
+    let config = match user_config() {
+        Ok(config) => config,
+        Err(failure) => return failure,
+    };
+    // First, so no interrupt can end the Pickup run once its notification is
+    // checked.
+    if let Err(error) = interrupt::install() {
+        return failure(&error);
+    }
+    let email = args.email.clone().unwrap_or(config.email.default_ask());
+    let notification = match asked(email, |to| PickupNotification::new(to, &config.email)) {
+        Ok(notification) => notification,
+        Err(error) => return failure(&error),
+    };
+    let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
+        Ok(pickup::Outcome::Taken(taken)) => taken,
+        Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
+        Err(error) => return failure(&error),
+    };
+    let notification = notification.map(|checked| checked.of_taken(&taken.issue, taken.title));
+    // Ignored for an issue that is not a Spec: the command can't know which
+    // it will take. Left out of the command a Base fix is offered with too,
+    // as the issue is retried as a Run of its own: another Pickup run never
+    // takes an issue that was started.
+    let parallel = args.dispatch.parallel.filter(|_| taken.is_spec);
+    let ended = dispatched(
+        &taken.issue,
+        &taken.base,
+        &args.dispatch,
+        args.email.as_ref(),
+        parallel,
+        &config,
+    );
+    let code = run_ending::show(&ended);
+    if let Some(notification) = notification {
+        notification.send(&ended);
+    }
+    code
+}
+
+/// The end of the Spec run or Run that an Architect run or a Pickup run
+/// dispatches `issue` as, on its Base branch `base`: what `thirdshift <Issue
+/// URL>` would start, with the flags `dispatch` and the User config `config`
+/// for the rest. It runs as many Tickets at once as `parallel` asks, which is
+/// `dispatch`'s unless that is to be ignored. The command it offers a Base
+/// fix with is that one on `issue`, with those flags and with `email` as the
+/// command gave it.
+fn dispatched(
+    issue: &IssueUrl,
+    base: &str,
+    dispatch: &DispatchArgs,
+    email: Option<&NotificationAsk>,
+    parallel: Option<NonZeroUsize>,
+    config: &UserConfig,
+) -> Ended {
+    run::run_to_end(
+        issue,
+        dispatch.goal.unwrap_or(config.default_goal()),
+        &config.logs_dir,
+        config.launch_pull,
+        Parallel::new(parallel, config.spec_parallel),
+        StartedBy::Dispatch { base },
+        dispatch.base_fix.clone().unwrap_or_else(|| {
+            let retry = args::retry_with_base_fix(issue, dispatch.goal, email, parallel);
+            config.default_base_fix(retry)
+        }),
+    )
 }
 
 /// The Run notification `email` asks for, if it asks for one: what `checked`

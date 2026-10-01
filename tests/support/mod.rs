@@ -90,6 +90,17 @@ pub struct TerminalResult {
     pub user_config: Option<String>,
 }
 
+/// An event on an issue's timeline that a Pickup run reads to tell whether
+/// the issue has settled.
+pub enum TimelineEvent<'a> {
+    /// This label was applied.
+    Labelled(&'a str),
+    SubIssueAdded,
+    SubIssueRemoved,
+    BlockedByAdded,
+    BlockedByRemoved,
+}
+
 pub struct RunResult {
     pub stdout: String,
     /// stderr with the time each progress line was printed removed, so it
@@ -601,6 +612,40 @@ test -f {root}/{COPY_REPLACED}
         self.write_gh_state(&gh);
     }
 
+    /// Make issue `number` blocked by `blockers` on the fake GitHub, by its
+    /// "blocked by" links. A blocker the fake GitHub doesn't know yet is
+    /// open.
+    pub fn issue_blocked_by(&self, number: u32, blockers: &[u32]) {
+        let mut gh = self.gh_state();
+        gh["blocked_by"][number.to_string()] = json!(blockers);
+        self.write_gh_state(&gh);
+    }
+
+    /// Set issue `number`'s timeline on the fake GitHub to `events`, oldest
+    /// first, each with how many minutes ago it happened.
+    pub fn issue_timeline(&self, number: u32, events: &[(TimelineEvent, i64)]) {
+        let events: Vec<Value> = events
+            .iter()
+            .map(|(event, minutes_ago)| {
+                let at = chrono::Utc::now() - chrono::TimeDelta::minutes(*minutes_ago);
+                let at = at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                let event = match event {
+                    TimelineEvent::Labelled(label) => {
+                        return json!({"event": "labeled", "label": label, "at": at});
+                    }
+                    TimelineEvent::SubIssueAdded => "sub_issue_added",
+                    TimelineEvent::SubIssueRemoved => "sub_issue_removed",
+                    TimelineEvent::BlockedByAdded => "blocked_by_added",
+                    TimelineEvent::BlockedByRemoved => "blocked_by_removed",
+                };
+                json!({"event": event, "at": at})
+            })
+            .collect();
+        let mut gh = self.gh_state();
+        gh["timeline"][number.to_string()] = json!(events);
+        self.write_gh_state(&gh);
+    }
+
     /// Give issue `number` the labels `labels` on the fake GitHub.
     pub fn issue_labelled(&self, number: u32, labels: &[&str]) {
         let mut gh = self.gh_state();
@@ -625,6 +670,22 @@ test -f {root}/{COPY_REPLACED}
             .collect()
     }
 
+    /// Give the repository the labels `labels` on the fake GitHub.
+    pub fn repo_has_labels(&self, labels: &[&str]) {
+        let mut gh = self.gh_state();
+        gh["repo_labels"] = json!(labels);
+        self.write_gh_state(&gh);
+    }
+
+    /// The repository's labels on the fake GitHub.
+    pub fn repo_labels(&self) -> Vec<String> {
+        let labels = &self.gh_state()["repo_labels"];
+        let labels = labels.as_array().into_iter().flatten();
+        labels
+            .map(|label| label.as_str().unwrap().to_string())
+            .collect()
+    }
+
     /// Give issue `number` the title `title` on the fake GitHub.
     pub fn issue_titled(&self, number: u32, title: &str) {
         let mut gh = self.gh_state();
@@ -642,13 +703,20 @@ test -f {root}/{COPY_REPLACED}
 
     /// Make every `gh api user` call fail.
     pub fn github_profile_fails(&self) {
+        self.gh_fails("api user");
+    }
+
+    /// Make every `gh <call>` fail, `call` being the command's first two
+    /// arguments, e.g. `label list`, or more of them, e.g. `api --method
+    /// DELETE`.
+    pub fn gh_fails(&self, call: &str) {
         let mut gh = self.gh_state();
         let failing = gh.as_object_mut().unwrap().entry("failing");
         failing
             .or_insert(json!([]))
             .as_array_mut()
             .unwrap()
-            .push(json!("api user"));
+            .push(json!(call));
         self.write_gh_state(&gh);
     }
 

@@ -1,5 +1,5 @@
-//! Pre-flight checks: everything that must hold before a Run or an Architect
-//! run creates anything.
+//! Pre-flight checks: everything that must hold before a Run, an Architect
+//! run or a Pickup run creates anything.
 
 use anyhow::{Result, bail};
 

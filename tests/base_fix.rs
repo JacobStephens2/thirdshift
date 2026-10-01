@@ -589,8 +589,24 @@ fn without_base_fix_an_inherited_failure_fails_the_run_and_writes_no_issue() {
         result.stderr
     );
     assert!(scenario.gh_calls_of("issue", "create").is_empty());
-    assert!(scenario.gh_calls_of("label", "list").is_empty());
+    // Only the Run's own Claim adds a label to the repository.
+    assert_eq!(scenario.repo_labels(), ["in-progress"]);
     assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn a_base_fix_changes_no_label_on_its_issue_while_the_run_claims_its_own() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    scenario.agent_does_for(8, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
+
+    let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(8), ["base-fix", "ready-for-agent"]);
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(!result.stderr.contains("labelling #8"), "{}", result.stderr);
 }
 
 /// The cause of a Run that failed on `test`, an Inherited failure from
@@ -750,9 +766,7 @@ fn a_base_branch_check_with_no_url_is_named_alone() {
 #[test]
 fn a_label_the_repository_lacks_is_added_and_one_it_has_is_left_alone() {
     let scenario = Scenario::new();
-    let mut gh = scenario.gh_state();
-    gh["repo_labels"] = serde_json::json!(["bug", "Ready-For-Agent"]);
-    scenario.write_gh_state(&gh);
+    scenario.repo_has_labels(&["bug", "Ready-For-Agent", "in-progress"]);
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
     scenario.agent_does_for(8, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
 
@@ -763,8 +777,8 @@ fn a_label_the_repository_lacks_is_added_and_one_it_has_is_left_alone() {
     assert_eq!(created.len(), 1, "{created:?}");
     assert_eq!(created[0][2], "base-fix");
     assert_eq!(
-        scenario.gh_state()["repo_labels"],
-        serde_json::json!(["bug", "Ready-For-Agent", "base-fix"])
+        scenario.repo_labels(),
+        ["bug", "Ready-For-Agent", "in-progress", "base-fix"]
     );
 }
 

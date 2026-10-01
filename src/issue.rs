@@ -43,6 +43,12 @@ impl IssueUrl {
         }
     }
 
+    /// Whether `other` is in the same repository, whatever the case their
+    /// URLs spell it in.
+    pub fn in_same_repo(&self, other: &IssueUrl) -> bool {
+        self.owner.eq_ignore_ascii_case(&other.owner) && self.repo.eq_ignore_ascii_case(&other.repo)
+    }
+
     /// `owner/repo`, as `gh --repo` takes it.
     pub fn repo_slug(&self) -> String {
         format!("{}/{}", self.owner, self.repo)

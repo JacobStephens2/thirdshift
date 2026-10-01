@@ -6,26 +6,24 @@
 //! dispatch. A review that found no Strong candidate published no plan, and
 //! the Architect run ends on the issue it named instead: the idea issue it
 //! filed for its top recommendation, or the open issue that already covers
-//! it. Only one Architect run per repository runs at a time on a machine: one
-//! started while another is still running is skipped, before any review. So
-//! is one that finds an Architect plan still open on the repository: it never
-//! retries or dispatches an Architect plan that is already there.
+//! it. Only one Architect run or Pickup run per repository runs at a time on
+//! a machine: an Architect run started while another of either is still
+//! running is skipped, before any review. So is one that finds an Architect
+//! plan still open on the repository: it never retries or dispatches an
+//! Architect plan that is already there.
 
 use std::fmt;
-use std::fs::{self, File, TryLockError};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
-use crate::config;
 use crate::failed_run::FailedRun;
-use crate::git::Git;
 use crate::github;
 use crate::interrupt;
-use crate::issue::{IssueUrl, Repo};
+use crate::issue::IssueUrl;
+use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::plugin::Plugin;
-use crate::preflight;
 use crate::progress;
 use crate::prompt;
 use crate::run;
@@ -69,7 +67,7 @@ impl Outcome {
     /// The URLs of the issues the Architect run ended on, as its stdout
     /// carries them when nothing was dispatched: the issue its Architecture
     /// review ended on, or each open Architect plan it was skipped for. None
-    /// when it was skipped as another is still running.
+    /// when it was skipped as another, or a Pickup run, is still running.
     pub fn urls(&self) -> Vec<&str> {
         match self {
             Self::Skipped(Skipped::AlreadyRunning(_)) => Vec::new(),
@@ -94,9 +92,9 @@ impl fmt::Display for Outcome {
 /// skipped run's progress line and its Run notification give it.
 #[derive(Debug)]
 pub enum Skipped {
-    /// Another Architect run on this repository is still running on this
-    /// machine, the Spec run or Run it dispatched included.
-    AlreadyRunning(Repo),
+    /// Another Architect run on this repository, or a Pickup run, is still
+    /// running on this machine, the Spec run or Run it dispatched included.
+    AlreadyRunning(AlreadyRunning),
     /// These Architect plans, each with its title, are still open on this
     /// repository: at least one.
     OpenPlans(Vec<(IssueUrl, String)>),
@@ -105,9 +103,7 @@ pub enum Skipped {
 impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::AlreadyRunning(repo) => {
-                write!(f, "an Architect run is already running on {}", repo.slug())
-            }
+            Self::AlreadyRunning(running) => running.fmt(f),
             Self::OpenPlans(plans) => {
                 let still_open: Vec<String> = plans
                     .iter()
@@ -190,9 +186,8 @@ impl fmt::Display for Reviewed {
 /// after the plan is published leaves its labels as the review left them.
 ///
 /// Once the preflight checks pass, and before anything else, the Architect
-/// run is skipped, with nothing done, if another on the same repository is
-/// still running on this machine. Otherwise this process is that repository's
-/// one Architect run until it exits, through whatever it dispatches. It is
+/// run is skipped, with nothing done, if another on the same repository, or a
+/// Pickup run, is still running on this machine: see [`launch::start`]. It is
 /// then skipped, likewise, if the repository has an open Architect plan: only
 /// then, so that the plan of an Architect run still running is never taken
 /// for an unfinished one.
@@ -204,29 +199,22 @@ pub fn run(
 ) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
     let timestamp = started.format("%Y%m%dT%H%M%SZ").to_string();
-    let (launch, origin, repo) = launch()?;
-    preflight::check_identity(&launch)?;
-    let checked_out = launch
-        .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .ok();
-    let base = base
-        .or(checked_out.as_deref())
-        .context(
-            "HEAD is detached; check out the branch the Architecture review should scan, \
-             or name it with base <branch>",
-        )?
-        .to_string();
-    preflight::check_base_branch(&launch, &base)?;
-    let Some(lock) = try_run_lock(&repo)? else {
-        return Ok(Outcome::Skipped(Skipped::AlreadyRunning(repo)));
+    let Launch {
+        git: launch,
+        origin,
+        repo,
+        checked_out,
+        base,
+    } = match launch::start(base)? {
+        Start::Clear(launch) => launch,
+        Start::AlreadyRunning(running) => {
+            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
+        }
     };
-    // Never closed, so the lock is held for as long as this process lives,
-    // through the Spec run or Run its plan is dispatched as, and the
-    // operating system releases it however the process ends.
-    std::mem::forget(lock);
     let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN_LABEL)?;
     if !open_plans.is_empty() {
-        return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans)));
+        let open_plans = open_plans.into_iter().map(|plan| (plan.issue, plan.title));
+        return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans.collect())));
     }
     if launch_pull {
         run::pull_base_branch(&launch, checked_out.as_deref(), &base);
@@ -245,44 +233,6 @@ pub fn run(
             log: log.exists().then_some(log),
             ..FailedRun::from(error)
         })
-}
-
-/// The Launch directory, the URL of its `origin`, and the GitHub repository
-/// that names: an Architect run's, as it has no Issue URL to name one.
-fn launch() -> Result<(Git, String, Repo)> {
-    let launch = Git::new(std::env::current_dir().context("no current directory")?);
-    let origin = launch.run(&["config", "remote.origin.url"])?;
-    let repo = Repo::of_origin(&origin)
-        .with_context(|| format!("origin {origin} is not a GitHub repository"))?;
-    Ok((launch, origin, repo))
-}
-
-/// The repository an Architect run started from the Launch directory is on.
-pub fn repo() -> Result<Repo> {
-    launch().map(|(_, _, repo)| repo)
-}
-
-/// Try, without waiting, for the lock that makes its holder the one Architect
-/// run on `repo` on this machine: an advisory lock on a file under
-/// `~/.thirdshift` named for the repository, as GitHub compares names,
-/// whatever their case. It is held until the file returned is closed, or the
-/// process ends. `None` if another process holds it: an Architect run on
-/// `repo` is still running. The lock file itself is never deleted, and means
-/// nothing unless locked.
-fn try_run_lock(repo: &Repo) -> Result<Option<File>> {
-    let dir = config::home()?
-        .join(".thirdshift/architect-locks")
-        .join(repo.owner.to_ascii_lowercase());
-    fs::create_dir_all(&dir).with_context(|| format!("can't create {}", dir.display()))?;
-    let path = dir.join(format!("{}.lock", repo.name.to_ascii_lowercase()));
-    let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(error)) => {
-            Err(error).with_context(|| format!("can't lock {}", path.display()))
-        }
-    }
 }
 
 /// The Architecture review session in `worktree`, which is removed once the
@@ -384,15 +334,7 @@ fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Res
         &plan.repo_slug(),
         &[(ARCHITECT_PLAN_LABEL, ARCHITECT_PLAN_DESCRIPTION)],
     )?;
-    let added = [READY_FOR_AGENT, ARCHITECT_PLAN_LABEL];
-    // GitHub's label names are case-insensitive.
-    let mut labels: Vec<&str> = kept
-        .iter()
-        .map(String::as_str)
-        .filter(|kept| !added.iter().any(|added| added.eq_ignore_ascii_case(kept)))
-        .collect();
-    labels.extend(added);
-    github::set_labels(plan, &labels)
+    github::set_labels_adding(plan, &kept, &[READY_FOR_AGENT, ARCHITECT_PLAN_LABEL])
 }
 
 /// The labels `plan` keeps once it is marked ready: all it has but

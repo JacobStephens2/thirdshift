@@ -179,3 +179,68 @@ fn a_git_identity_set_only_in_the_launch_repository_is_enough() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
 }
+
+/// Assert that the Run `args` start on #`issue`, labelled `bug` and
+/// `ready-for-agent`, is stopped with `message` before any work, with the
+/// issue's labels and the repository's as they were.
+fn assert_stopped_with_no_label_changed(
+    scenario: &Scenario,
+    issue: u32,
+    args: &[&str],
+    message: &str,
+) {
+    scenario.issue_labelled(issue, &["bug", "ready-for-agent"]);
+
+    let result = scenario.run(args);
+
+    scenario.assert_rejected_before_any_work(&result, message);
+    assert_eq!(
+        scenario.issue_labels(issue),
+        ["bug", "ready-for-agent"],
+        "{message}"
+    );
+    assert!(scenario.repo_labels().is_empty(), "{message}");
+}
+
+#[test]
+fn a_run_stopped_by_a_preflight_check_changes_no_label() {
+    let scenario = Scenario::new();
+    scenario.issue_is(7, "CLOSED");
+    assert_stopped_with_no_label_changed(
+        &scenario,
+        7,
+        &[&scenario.issue_url(7)],
+        "issue #7 is closed",
+    );
+
+    let scenario = Scenario::new();
+    scenario.commit_locally("unpushed.txt", "unpushed\n", "Unpushed work");
+    assert_stopped_with_no_label_changed(
+        &scenario,
+        7,
+        &[&scenario.issue_url(7)],
+        "local main is 1 commit(s) ahead of origin/main",
+    );
+
+    let scenario = Scenario::new();
+    assert_stopped_with_no_label_changed(
+        &scenario,
+        7,
+        &[&scenario.issue_url(7), "parallel", "2"],
+        "parallel is only for a Spec, and #7 has no sub-issues",
+    );
+}
+
+#[test]
+fn a_spec_run_stopped_by_a_preflight_check_changes_no_label() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(20, &[(21, &[])]);
+    scenario.issue_is(21, "CLOSED");
+
+    assert_stopped_with_no_label_changed(
+        &scenario,
+        20,
+        &[&scenario.issue_url(20)],
+        "every Ticket is closed and there is no Spec branch; nothing to do",
+    );
+}

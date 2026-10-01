@@ -24,6 +24,12 @@ pub fn step(message: impl Display) {
     write_line(&stamped(message));
 }
 
+/// Report `error`, then a warning saying what to do about it by hand.
+pub fn warn(error: &anyhow::Error, warning: std::fmt::Arguments) {
+    step(format_args!("{error:#}"));
+    step(format_args!("warning: {warning}"));
+}
+
 /// The progress line [`step`] prints for `message`.
 pub fn stamped(message: impl Display) -> String {
     progress_line(Local::now().format(STAMP), message)

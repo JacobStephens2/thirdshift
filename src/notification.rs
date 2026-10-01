@@ -1,13 +1,13 @@
 //! The Run notification: one email when a Run, a Spec run or an Architect run
-//! ends, whatever its outcome, through the same checks and the same send as
-//! `email-test`.
+//! ends, whatever its outcome, or when a Pickup run that took an issue does,
+//! through the same checks and the same send as `email-test`.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::architect::{self, Outcome};
+use crate::architect::Outcome;
 use crate::base_fix::Advice;
 use crate::config::EmailSettings;
 use crate::email::Resend;
@@ -15,11 +15,13 @@ use crate::failed_run::FailedRun;
 use crate::github;
 use crate::host;
 use crate::issue::{IssueUrl, Repo};
+use crate::launch;
 use crate::progress;
 use crate::run::Ended;
 
-/// What a Run or an Architect run asks about its Run notification, by its
-/// command or, without `email` or `no-email`, by the User config.
+/// What a Run, an Architect run or a Pickup run asks about its Run
+/// notification, by its command or, without `email` or `no-email`, by the
+/// User config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationAsk {
     /// Send one, to this address, else to `email.to`.
@@ -28,13 +30,32 @@ pub enum NotificationAsk {
     Skip,
 }
 
-/// A Run notification, checked and waiting for the Run to end.
-pub struct RunNotification {
+/// A Run notification's checks, passed, and when they were made: what every
+/// run that asks for one holds from before any work until it ends.
+struct Checked {
     resend: Resend,
-    issue: IssueUrl,
-    /// The issue's title, if GitHub gave it when the Run started.
-    title: Option<String>,
     started: Instant,
+}
+
+impl Checked {
+    /// The checks of a Run notification sent to `to`, else to `email.to`,
+    /// for a run starting now. Fails with the same checks as `email-test`: an
+    /// address is known and a Resend API key is found.
+    fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
+        let started = Instant::now();
+        let resend = Resend::new(to, settings)?;
+        Ok(Checked { resend, started })
+    }
+}
+
+/// A Run notification, checked and waiting for the Run or Spec run on its
+/// issue to end.
+pub struct RunNotification {
+    checked: Checked,
+    issue: IssueUrl,
+    /// The issue's title, if it is known: as GitHub gave it when the Run
+    /// started, or as the Pickup run that took the issue listed it.
+    title: Option<String>,
 }
 
 impl RunNotification {
@@ -45,15 +66,13 @@ impl RunNotification {
     /// watching, rather than after the Run, when a hung `gh` could keep the
     /// notification from ever going.
     pub fn new(to: Option<String>, settings: &EmailSettings, issue: &IssueUrl) -> Result<Self> {
-        let started = Instant::now();
-        let resend = Resend::new(to, settings)?;
+        let checked = Checked::new(to, settings)?;
         Ok(RunNotification {
-            resend,
+            checked,
             issue: issue.clone(),
             // Left out of the subject if GitHub can't be asked; the Run's own
             // preflight reports why.
             title: github::issue_title(issue).ok(),
-            started,
         })
     }
 
@@ -63,17 +82,41 @@ impl RunNotification {
     pub fn send(self, ended: &Ended) {
         let ending = Ending::of(ended);
         let subject = subject(&self.issue, self.title.as_deref(), ending.outcome);
-        send(&self.resend, &subject, self.started, None, &ending);
+        send(&self.checked, &subject, None, &ending);
+    }
+}
+
+/// A Pickup run's Run notification, checked and waiting for the issue the
+/// Pickup run takes. One that is skipped takes none, and so sends none.
+pub struct PickupNotification(Checked);
+
+impl PickupNotification {
+    /// The Run notification for a Pickup run starting now, sent to `to`, else
+    /// to `email.to`. Fails, before any work, with the checks
+    /// [`RunNotification::new`] makes.
+    pub fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
+        Checked::new(to, settings).map(PickupNotification)
+    }
+
+    /// The Run notification of the Spec run or Run that `issue`, the Ready
+    /// issue the Pickup run took, titled `title`, is dispatched as: the one
+    /// that run would send started by hand, which the Pickup run sends in
+    /// its place.
+    pub fn of_taken(self, issue: &IssueUrl, title: String) -> RunNotification {
+        RunNotification {
+            checked: self.0,
+            issue: issue.clone(),
+            title: Some(title),
+        }
     }
 }
 
 /// An Architect run's Run notification, checked and waiting for the Architect
 /// run to end.
 pub struct ArchitectNotification {
-    resend: Resend,
+    checked: Checked,
     /// The repository the Launch directory's `origin` names, if it names one.
     repo: Option<Repo>,
-    started: Instant,
 }
 
 impl ArchitectNotification {
@@ -81,14 +124,12 @@ impl ArchitectNotification {
     /// directory, sent to `to`, else to `email.to`. Fails, before any work,
     /// with the checks [`RunNotification::new`] makes.
     pub fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
-        let started = Instant::now();
-        let resend = Resend::new(to, settings)?;
+        let checked = Checked::new(to, settings)?;
         Ok(ArchitectNotification {
-            resend,
+            checked,
             // Left out of the subject if origin names none; the Architect
             // run's own preflight reports why.
-            repo: architect::repo().ok(),
-            started,
+            repo: launch::repo().ok(),
         })
     }
 
@@ -126,7 +167,7 @@ impl ArchitectNotification {
             Err(failed) => reviewed(failure_outcome(failed, "failed").to_string()),
         };
         let subject = architect_subject(self.repo.as_ref(), ending.outcome);
-        send(&self.resend, &subject, self.started, Some(lines), &ending);
+        send(&self.checked, &subject, Some(lines), &ending);
     }
 }
 
@@ -189,16 +230,10 @@ fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
     }
 }
 
-/// Send the notification with `subject` for what `started` then and ended as
-/// `ending`, in an Architect run with its `architect` lines first. A failed
-/// send is only a warning.
-fn send(
-    resend: &Resend,
-    subject: &str,
-    started: Instant,
-    architect: Option<ArchitectLines>,
-    ending: &Ending,
-) {
+/// Send the notification with `subject` for what started when `checked` was
+/// and ended as `ending`, in an Architect run with its `architect` lines
+/// first. A failed send is only a warning.
+fn send(checked: &Checked, subject: &str, architect: Option<ArchitectLines>, ending: &Ending) {
     let host = host::name();
     let body = Body {
         architect,
@@ -208,10 +243,10 @@ fn send(
         base_fix: ending.base_fix,
         log: ending.log,
         host: host.as_deref().unwrap_or("unknown host"),
-        took: started.elapsed(),
+        took: checked.started.elapsed(),
         tickets: ending.tickets,
     };
-    if let Err(error) = resend.send(subject, &body.text()) {
+    if let Err(error) = checked.resend.send(subject, &body.text()) {
         progress::step(format_args!(
             "warning: could not send the Run notification: {error:#}"
         ));
@@ -522,7 +557,7 @@ mod tests {
     fn a_skipped_architect_runs_body_starts_with_why_it_was_skipped() {
         let body = Body {
             architect: Some(ArchitectLines::Skipped(
-                "an Architect run is already running on acme/widgets".to_string(),
+                "an Architect run or a Pickup run is already running on acme/widgets".to_string(),
             )),
             pr_url: None,
             cause: None,
@@ -535,7 +570,7 @@ mod tests {
         };
         assert_eq!(
             body.text(),
-            "Skipped:      an Architect run is already running on acme/widgets\n\
+            "Skipped:      an Architect run or a Pickup run is already running on acme/widgets\n\
              Host:         droplet-1\n\
              Took:         0s\n"
         );

@@ -13,8 +13,9 @@
 //! The Base branch is the branch checked out in the Launch directory, or the
 //! one `base <branch>` names, whatever is checked out there, which the run
 //! the plan is dispatched as takes as its Base branch too.
-//! An Architect run started while another on the repository is still running,
-//! or while an Architect plan is still open there, is skipped.
+//! An Architect run started while another on the repository, or a Pickup run,
+//! is still running, or while an Architect plan is still open there, is
+//! skipped.
 
 mod support;
 
@@ -32,6 +33,10 @@ const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 /// The label thirdshift marks an Architect plan with.
 const ARCHITECT_PLAN: &str = "architect-plan";
 
+/// The label of a Claimed issue, which the run a plan is dispatched as
+/// swaps the plan's `ready-for-agent` for.
+const IN_PROGRESS: &str = "in-progress";
+
 const NO_FINAL_LINE: &str =
     "the Architecture review ended without the final line its prompt asks for";
 
@@ -46,9 +51,7 @@ printf 'Published the plan.\n\nArchitecture review plan: %s\n' "$url" > "$FAKE_C
 /// issues with, as `gh issue create` refuses a label the repository lacks.
 fn scenario() -> Scenario {
     let scenario = Scenario::new();
-    let mut gh = scenario.gh_state();
-    gh["repo_labels"] = serde_json::json!(["needs-triage", "ready-for-agent", "architecture"]);
-    scenario.write_gh_state(&gh);
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent", "architecture"]);
     scenario
 }
 
@@ -250,23 +253,17 @@ printf 'Architecture review plan: %s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(scenario.issue_labels(9), ["ready-for-agent"]);
 }
 
-/// The repository's labels on the fake GitHub.
-fn repo_labels(scenario: &Scenario) -> Vec<String> {
-    let labels = scenario.gh_state()["repo_labels"].clone();
-    serde_json::from_value(labels).unwrap()
-}
-
 #[test]
 fn the_architect_plan_label_is_created_when_the_repository_lacks_it() {
     let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
-    assert!(!repo_labels(&scenario).contains(&ARCHITECT_PLAN.to_string()));
+    assert!(!scenario.repo_labels().contains(&ARCHITECT_PLAN.to_string()));
 
     let result = scenario.run(&["architect", "--plan-only"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(
-        repo_labels(&scenario),
+        scenario.repo_labels(),
         [
             "needs-triage",
             "ready-for-agent",
@@ -282,15 +279,13 @@ fn the_architect_plan_label_is_created_when_the_repository_lacks_it() {
 #[test]
 fn a_repository_that_has_the_architect_plan_label_keeps_it_as_it_is() {
     let scenario = scenario();
-    let mut gh = scenario.gh_state();
-    gh["repo_labels"] = serde_json::json!(["needs-triage", "Architect-Plan"]);
-    scenario.write_gh_state(&gh);
+    scenario.repo_has_labels(&["needs-triage", "Architect-Plan"]);
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
     let result = scenario.run(&["architect", "--plan-only"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(repo_labels(&scenario), ["needs-triage", "Architect-Plan"]);
+    assert_eq!(scenario.repo_labels(), ["needs-triage", "Architect-Plan"]);
     assert!(scenario.gh_calls_of("label", "create").is_empty());
     assert_eq!(
         scenario.issue_labels(8),
@@ -613,7 +608,7 @@ fn a_detached_head_is_rejected_before_any_work() {
 
     scenario.assert_rejected_before_any_work(
         &result,
-        "HEAD is detached; check out the branch the Architecture review should scan, \
+        "HEAD is detached; check out the branch the work should be based on, \
          or name it with base <branch>",
     );
 }
@@ -698,10 +693,7 @@ fn a_single_ticket_plan_starts_a_run_on_it_and_ends_as_that_run_does() {
     let pr = pr_from(&scenario, "issue-8");
     assert_ended_with_pr(&result, &pr, "ready for review");
     assert_eq!(pr["url"], PR_URL);
-    assert_eq!(
-        scenario.issue_labels(8),
-        ["ready-for-agent", ARCHITECT_PLAN]
-    );
+    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 2, "sessions: {calls:?}");
     let prompt = calls[1]["prompt"].as_str().unwrap();
@@ -730,10 +722,7 @@ fn a_plan_with_tickets_starts_a_spec_run_on_it_and_ends_as_that_spec_run_does() 
     assert_eq!(spec_pr["base"], "main");
     assert_eq!(spec_pr["state"], "OPEN");
     assert_eq!(spec_pr["isDraft"], false);
-    assert_eq!(
-        scenario.issue_labels(8),
-        ["ready-for-agent", ARCHITECT_PLAN]
-    );
+    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
     let dispatch = format!("dispatching the plan {PLAN_URL}, as thirdshift {PLAN_URL} would\n");
     let dispatched = result.stderr.find(&dispatch);
     let started = result.stderr.find("thirdshift: starting #9\n");
@@ -1040,10 +1029,7 @@ fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(
-        scenario.issue_labels(8),
-        ["ready-for-agent", ARCHITECT_PLAN]
-    );
+    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
 }
 
 #[test]
@@ -1697,7 +1683,8 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
 
 /// What a skipped Architect run says when another is running on the
 /// scenario's repository.
-const ALREADY_RUNNING: &str = "thirdshift: an Architect run is already running on acme/widgets\n";
+const ALREADY_RUNNING: &str =
+    "thirdshift: an Architect run or a Pickup run is already running on acme/widgets\n";
 
 /// Assert the Architect run was skipped as one is already running: exit 0,
 /// that line alone on stderr, and nothing on stdout.
@@ -1886,7 +1873,7 @@ fn a_skipped_architect_run_sends_one_notification_with_skipped_in_its_subject_an
     assert_eq!(subject, "[thirdshift] acme/widgets Architect run: skipped");
     assert!(
         text.starts_with(
-            "Skipped:      an Architect run is already running on acme/widgets\n\
+            "Skipped:      an Architect run or a Pickup run is already running on acme/widgets\n\
              Host:         "
         ),
         "{text}"
@@ -2095,6 +2082,11 @@ fn a_plan_whose_dispatched_run_failed_stays_open_and_the_next_architect_run_neve
     scenario.agent_does_for(8, "exit 3");
     let first = scenario.run(&["architect"]);
     assert_eq!(first.code, Some(1), "stderr: {}", first.stderr);
+    // The run left nothing on origin, so its Claim on the plan is released.
+    assert_eq!(
+        scenario.issue_labels(8),
+        [ARCHITECT_PLAN, "ready-for-agent"]
+    );
     let sessions = scenario.claude_calls().len();
 
     let second = scenario.run(&["architect"]);

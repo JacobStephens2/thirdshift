@@ -32,8 +32,8 @@ use crate::worktree::Worktree;
 pub const NEEDS_TRIAGE: &str = "needs-triage";
 
 /// The triage label of an issue an agent can take on: what thirdshift swaps
-/// a plan's `needs-triage` for once the plan passes its checks, and what a
-/// Base fix issue is opened with.
+/// a plan's `needs-triage` for once the plan passes its checks, what a Base
+/// fix issue is opened with, and what a Claim takes off.
 pub const READY_FOR_AGENT: &str = "ready-for-agent";
 
 /// The triage labels that make an open Ticket an Unready Ticket.
@@ -345,11 +345,12 @@ fn next_ready(
         .min()
 }
 
-/// The first of the Unready Ticket labels among an issue's `labels`, if any.
+/// The first of the Unready Ticket labels among an issue's `labels`, if any,
+/// whatever its case there: GitHub's label names are case-insensitive.
 pub fn unready_label(labels: &[String]) -> Option<&'static str> {
     UNREADY_LABELS
         .into_iter()
-        .find(|label| labels.iter().any(|name| name == label))
+        .find(|label| github::has_label(labels, label))
 }
 
 /// A line on each Ticket that landed in this Spec run, with its PR, and on
