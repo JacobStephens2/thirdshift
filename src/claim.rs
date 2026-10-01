@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 
+use crate::branch;
 use crate::git::Git;
 use crate::github::{self, ListedIssue};
 use crate::interrupt;
@@ -37,9 +38,10 @@ pub fn is_on(labels: &[String]) -> bool {
     github::has_label(labels, IN_PROGRESS)
 }
 
-/// `label` as `labels` spells it, whatever its case, if it is one of them.
-fn spelling<'a>(labels: &'a [String], label: &str) -> Option<&'a String> {
-    labels.iter().find(|name| name.eq_ignore_ascii_case(label))
+/// `in-progress` as an issue with `labels` spells it, if it carries a Claim:
+/// what to take off it, since GitHub's label names are case-insensitive.
+fn as_spelled(labels: &[String]) -> Option<&String> {
+    github::label_as_spelled(labels, IN_PROGRESS)
 }
 
 /// Make the Claim on `issue`: label it `in-progress`, in place of
@@ -79,16 +81,18 @@ fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
             &[(IN_PROGRESS, IN_PROGRESS_DESCRIPTION)],
         )?;
     }
-    labels.retain(|name| !name.eq_ignore_ascii_case(READY_FOR_AGENT));
+    github::drop_label(&mut labels, READY_FOR_AGENT);
     github::set_labels_adding(issue, &labels, &[IN_PROGRESS])?;
     Ok(claim)
 }
 
 impl Claim<'_> {
     /// Release the Claim if the Run or the Spec run that made it ended with
-    /// nothing on origin to take over: neither `branch`, its Issue branch or
-    /// Spec branch, which `launch` asks origin for, nor a pull request from
-    /// it. The issue's labels then go back as they were before the Claim:
+    /// nothing on origin to take over: no Issue branch for its issue, which
+    /// for a Spec is its Spec branch, as `launch` asks origin, and no pull
+    /// request from one, open, merged or closed. So an issue is released
+    /// only if it was never started, as a Ready issue never was. The issue's
+    /// labels then go back as they were before the Claim:
     /// `in-progress` comes off if the Claim added it, and `ready-for-agent`
     /// goes back if the Claim took it off, in one request that keeps the
     /// issue's other labels, those added since included. An issue that is no
@@ -98,13 +102,13 @@ impl Claim<'_> {
     ///
     /// The run has ended as it has, so this never fails: a failure is a
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
-    pub fn release_if_nothing_on_origin(&self, launch: &Git, branch: &str) {
+    pub fn release_if_nothing_on_origin(&self, launch: &Git) {
         if !self.added_in_progress && !self.removed_ready_for_agent {
             return;
         }
-        if let Err(error) = interrupt::retry_if_interrupted(|| {
-            self.put_labels_back_unless_on_origin(launch, branch)
-        }) {
+        if let Err(error) =
+            interrupt::retry_if_interrupted(|| self.put_labels_back_unless_on_origin(launch))
+        {
             progress::warn(
                 &error,
                 format_args!(
@@ -119,28 +123,28 @@ impl Claim<'_> {
 
     /// [`Claim::release_if_nothing_on_origin`], its failure as `git` or `gh`
     /// gave it.
-    fn put_labels_back_unless_on_origin(&self, launch: &Git, branch: &str) -> Result<()> {
+    fn put_labels_back_unless_on_origin(&self, launch: &Git) -> Result<()> {
         let issue = self.issue;
-        if launch.on_origin(branch)? || github::pull_request_for(issue, branch)?.is_some() {
+        if branch::started(launch, issue)?.is_some() {
             return Ok(());
         }
         let mut labels = github::issue_labels(issue)?;
-        if !is_on(&labels) {
+        let Some(in_progress) = as_spelled(&labels).cloned() else {
             return Ok(());
-        }
+        };
         let number = issue.number;
         if !self.removed_ready_for_agent {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: removing {IN_PROGRESS}"
             ));
-            return github::remove_label(issue, IN_PROGRESS);
+            return github::remove_label(issue, &in_progress);
         }
         if self.added_in_progress {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: labelling it {READY_FOR_AGENT}, \
                  in place of {IN_PROGRESS}"
             ));
-            labels.retain(|name| !name.eq_ignore_ascii_case(IN_PROGRESS));
+            github::drop_label(&mut labels, IN_PROGRESS);
         } else {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: labelling it {READY_FOR_AGENT} again"
@@ -174,14 +178,17 @@ impl Claim<'_> {
     /// [`Claim::remove_if_closed`], its failure as `gh` gave it.
     fn unlabel_if_closed(&self) -> Result<()> {
         let issue = github::issue(self.issue)?;
-        if issue.is_open || !is_on(&issue.labels) {
+        if issue.is_open {
             return Ok(());
         }
+        let Some(in_progress) = as_spelled(&issue.labels) else {
+            return Ok(());
+        };
         progress::step(format_args!(
             "removing {IN_PROGRESS} from issue #{}",
             self.issue.number
         ));
-        github::remove_label(self.issue, IN_PROGRESS)
+        github::remove_label(self.issue, in_progress)
     }
 
     /// The commands that release the Claim by hand.
@@ -217,8 +224,7 @@ pub fn sweep(repo: &Repo) {
         }
     };
     for ListedIssue { issue, labels, .. } in closed {
-        // As the issue spells it: GitHub's label names are case-insensitive.
-        let Some(label) = spelling(&labels, IN_PROGRESS) else {
+        let Some(label) = as_spelled(&labels) else {
             continue;
         };
         progress::step(format_args!(

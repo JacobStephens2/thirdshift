@@ -211,10 +211,10 @@ from 1 up:
 
 There is no flag for it.
 
-Each Pickup run that gets the lock first takes in-progress off every closed issue that still
-has it, keeping the issue's other labels, so issues merged by hand are cleaned up and don't
-look taken. Closed issues never count against the Claim limit. A label it can't take off is a
-warning: line, and the pass carries on.
+Each Pickup run that gets the lock first makes the Sweep: it takes in-progress off every
+closed issue that still has it, keeping the issue's other labels, so an issue merged by hand
+doesn't look taken. Closed issues never count against the Claim limit. A label it can't take
+off is a warning: line, and the pass carries on.
 
 --email, --email <address> and --no-email ask a Pickup run for its Run notification as they
 do a Run, and email.always sets the default. A pass that took an issue sends one: the

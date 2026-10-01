@@ -196,7 +196,6 @@ fn run(
             anyhow!("every Ticket is closed and there is no Spec branch; nothing to do").into(),
         );
     }
-    let branch = selection.branch().to_string();
     let base = selection.base_branch(started_by.given_base(), checked_out.as_deref())?;
     preflight::check_base_branch(&launch, &base)?;
     if launch_pull {
@@ -227,7 +226,7 @@ fn run(
             Ok(reached) if reached.goal == Goal::Merged => claim.remove_if_closed(),
             // Ready for review: the Claim stays while the pull request waits.
             Ok(_) => {}
-            Err(_) => claim.release_if_nothing_on_origin(&launch, &branch),
+            Err(_) => claim.release_if_nothing_on_origin(&launch),
         }
     }
     outcome

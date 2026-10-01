@@ -78,7 +78,17 @@ fn label_names(json: &Value) -> Result<Vec<String>> {
 /// Whether `label` is one of `labels`, whatever its case: GitHub's label
 /// names are case-insensitive.
 pub fn has_label(labels: &[String], label: &str) -> bool {
-    labels.iter().any(|name| name.eq_ignore_ascii_case(label))
+    label_as_spelled(labels, label).is_some()
+}
+
+/// `label` as `labels` spells it, whatever its case, if it is one of them.
+pub fn label_as_spelled<'a>(labels: &'a [String], label: &str) -> Option<&'a String> {
+    labels.iter().find(|name| name.eq_ignore_ascii_case(label))
+}
+
+/// Take `label` out of `labels`, whatever its case there.
+pub fn drop_label(labels: &mut Vec<String>, label: &str) {
+    labels.retain(|name| !name.eq_ignore_ascii_case(label));
 }
 
 /// The labels of `issue`.

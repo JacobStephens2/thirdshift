@@ -253,8 +253,8 @@ fn help_documents_the_claim_limit_and_taking_in_progress_off_closed_issues() {
         "pickup.limit in the User config sets the Claim limit, a whole number from 1 up",
         "[pickup] limit = 5",
         "There is no flag for it",
-        "Each Pickup run that gets the lock first takes in-progress off every closed issue that still has it",
-        "so issues merged by hand are cleaned up",
+        "Each Pickup run that gets the lock first makes the Sweep: it takes in-progress off every closed issue that still has it",
+        "so an issue merged by hand doesn't look taken",
         "A label it can't take off is a warning: line, and the pass carries on",
     ] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");

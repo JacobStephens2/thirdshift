@@ -301,6 +301,25 @@ fn a_failed_run_that_pushed_nothing_releases_its_claim() {
 }
 
 #[test]
+fn a_failed_retry_keeps_its_claim_when_an_earlier_issue_branch_left_a_pull_request() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.github_has_pr("issue-7", "main", "CLOSED");
+    scenario.agent_does("exit 1");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.origin_log("issue-7-branch-2"), None);
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(
+        !result.stderr.contains("releasing the Claim"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
 fn a_released_claim_gives_no_ready_for_agent_to_an_issue_that_had_none() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["bug"]);
