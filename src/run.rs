@@ -528,7 +528,7 @@ impl RepairLoop<'_> {
                 // A Declined CI fix, unless the head's one Check re-run turns
                 // the branch's own checks green: it gets no second Repair.
                 Some((_, failed)) => match ci::rerun(issue, &head, compared_with, &failed)? {
-                    Some(ci) if !has_own_failures(&ci) => ci,
+                    Some(ci) if !ci.has_own_failures() => ci,
                     _ => bail!(
                         "CI red on {} and the Repair found nothing to fix on the branch",
                         ci::short(&head)
@@ -646,11 +646,6 @@ impl RepairLoop<'_> {
             Round::NewHead(head)
         })
     }
-}
-
-/// Whether `ci` is red on a check that is the branch's own to fix.
-fn has_own_failures(ci: &Ci) -> bool {
-    matches!(ci, Ci::Failed(failed) if !failed.own.is_empty())
 }
 
 /// Mark the PR whose head is `branch` ready for review, failing unless it

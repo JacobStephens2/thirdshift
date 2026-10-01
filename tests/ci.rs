@@ -349,8 +349,12 @@ fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_succe
 }
 
 /// Assert that the Run ended as a Declined CI fix with no Check re-run asked
-/// for, or with only `requests`.
-fn assert_declined_ci_fix(scenario: &Scenario, result: &support::RunResult, requests: &[&str]) {
+/// for, or with only `requests`. Returns the head whose CI it watched.
+fn assert_declined_ci_fix(
+    scenario: &Scenario,
+    result: &support::RunResult,
+    requests: &[&str],
+) -> String {
     assert_ne!(result.code, Some(0));
     assert_one_repair(scenario, result);
     assert_eq!(rerun_requests(scenario), requests);
@@ -363,6 +367,7 @@ fn assert_declined_ci_fix(scenario: &Scenario, result: &support::RunResult, requ
         result.stderr
     );
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+    watched.trim().to_string()
 }
 
 #[test]
@@ -376,9 +381,8 @@ fn a_check_re_run_that_fails_again_is_a_failed_run_with_no_second_repair_or_re_r
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_declined_ci_fix(&scenario, &result, &["900"]);
-    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
-    let cause = declined_ci_fix(watched.trim());
+    let watched = assert_declined_ci_fix(&scenario, &result, &["900"]);
+    let cause = declined_ci_fix(&watched);
     assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
     assert_eq!(
         result.stderr.matches("CI failed on").count(),
@@ -406,8 +410,7 @@ fn a_failed_commit_status_cant_be_re_run_so_nothing_is() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_declined_ci_fix(&scenario, &result, &[]);
-    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    let watched = assert_declined_ci_fix(&scenario, &result, &[]);
     assert!(
         result.stderr.contains(&format!(
             "thirdshift: the failed checks on {} can't be re-run: not GitHub Actions jobs: deploy/preview\n",
@@ -432,11 +435,12 @@ fn a_check_re_run_github_refuses_is_a_declined_ci_fix_that_shows_the_refusal() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_declined_ci_fix(&scenario, &result, &["900"]);
+    let watched = assert_declined_ci_fix(&scenario, &result, &["900"]);
     assert!(
-        result.stderr.contains(
-            "thirdshift: GitHub refused the re-run: gh run rerun 900 --failed --repo acme/widgets failed: HTTP 502: Bad Gateway"
-        ),
+        result.stderr.contains(&format!(
+            "thirdshift: the failed checks on {} were not re-run: gh run rerun 900 --failed --repo acme/widgets failed: HTTP 502: Bad Gateway",
+            &watched[..7]
+        )),
         "stderr: {}",
         result.stderr
     );
@@ -610,8 +614,7 @@ fn a_check_re_run_that_never_appears_is_a_declined_ci_fix() {
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_declined_ci_fix(&scenario, &result, &["900"]);
-    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    let watched = assert_declined_ci_fix(&scenario, &result, &["900"]);
     assert!(
         result.stderr.contains(&format!(
             "thirdshift: no re-run appeared on {} within 0s\n",

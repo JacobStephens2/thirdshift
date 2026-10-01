@@ -1056,6 +1056,11 @@ fn set_checks(state: &mut Json, sha: &str, mut checks: Json) {
     state.entry("checks", object([])).set(sha, checks);
 }
 
+/// Whether a check run or job that came to `conclusion` failed.
+fn is_failure(conclusion: &str) -> bool {
+    !["success", "skipped", "neutral"].contains(&conclusion)
+}
+
 /// `gh run rerun <run> --failed`: start a new attempt of each failed check
 /// run of the workflow run `<run>`, which comes to what the check's `rerun`
 /// says, or fails as the attempt before it did. With no failed check run of
@@ -1078,7 +1083,7 @@ fn run_rerun(state: &mut Json, positional: &[String], flags: &Flags) {
     let mut rerun_any = false;
     for check in commits.iter_mut().flat_map(|(_, list)| list.items_mut()) {
         let conclusion = check.at("conclusion").clone();
-        let failed = !["success", "skipped", "neutral"].contains(&conclusion.str());
+        let failed = is_failure(conclusion.str());
         let url = check.get("url").and_then(Json::as_str).unwrap_or("");
         if !failed || !url.contains(&of_run) {
             continue;
@@ -1295,7 +1300,7 @@ fn run_view(state: &Json, positional: &[String], flags: &Flags) {
     let jobs = run.get("jobs").map(Json::items).unwrap_or_default();
     let failed: Vec<String> = jobs
         .iter()
-        .filter(|job| !["success", "skipped", "neutral"].contains(&job.at("conclusion").str()))
+        .filter(|job| is_failure(job.at("conclusion").str()))
         .map(|job| job.at("name").python())
         .collect();
     println!("{}", failed.join(", "));

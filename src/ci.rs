@@ -17,6 +17,13 @@ pub enum Ci {
     Failed(FailedChecks),
 }
 
+impl Ci {
+    /// Whether it is red on a check that is the branch's own to fix.
+    pub fn has_own_failures(&self) -> bool {
+        matches!(self, Ci::Failed(failed) if !failed.own.is_empty())
+    }
+}
+
 /// The checks that failed on a commit, at least one, split by whether the
 /// branch is the one to fix them.
 pub struct FailedChecks {
@@ -61,7 +68,8 @@ pub fn watch(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<C
 ///
 /// `None` if there is no re-run to watch, each for a reason told in a
 /// progress line: one of those checks is no GitHub Actions job, so nothing
-/// is asked for, since the commit could not go green; GitHub refused; or no
+/// is asked for, since the commit could not go green; the request failed, as when GitHub
+/// refuses it; or no
 /// new attempt appeared.
 pub fn rerun(
     issue: &IssueUrl,
@@ -87,14 +95,16 @@ pub fn rerun(
     workflow_runs.dedup();
     for workflow_run in &workflow_runs {
         if let Err(error) = github::rerun_failed_jobs(issue, *workflow_run) {
-            progress::step(format_args!("GitHub refused the re-run: {error:#}"));
+            progress::step(format_args!(
+                "the failed checks on {short} were not re-run: {error:#}"
+            ));
             return Ok(None);
         }
     }
 
     // GitHub re-runs every failed job of a workflow run, so an Inherited
     // failure that shares one with the branch's own gets a new attempt too.
-    let before_rerun: Vec<u64> = jobs_of(&failed.own)
+    let previous_attempt: Vec<u64> = jobs_of(&failed.own)
         .chain(jobs_of(&failed.inherited))
         .filter(|job| workflow_runs.contains(&job.workflow_run))
         .map(|job| job.check_run)
@@ -102,7 +112,7 @@ pub fn rerun(
     let grace = poll::grace_period();
     let new_attempt = poll::within(grace, || {
         let checks = github::checks_on(issue, sha)?;
-        let still_listed = jobs_of(&checks).any(|job| before_rerun.contains(&job.check_run));
+        let still_listed = jobs_of(&checks).any(|job| previous_attempt.contains(&job.check_run));
         Ok((!still_listed).then_some(()))
     })?;
     if new_attempt.is_none() {
