@@ -8,7 +8,8 @@
 //! origin.git/        bare repo standing in for github.com/<owner>/<repo>;
 //!                    it rejects non-fast-forward pushes, so no rebase or
 //!                    force-push can reach it
-//! home/              $HOME: .gitconfig with identity and the insteadOf rule
+//! home/              $HOME: .gitconfig with identity, the insteadOf rule and
+//!                    auto maintenance off
 //! home/.thirdshift/  the User config, config.toml, if the test writes one
 //! home/.config/      $XDG_CONFIG_HOME, where an install receipt would be
 //! bin/               fake gh and claude, first on PATH
@@ -781,10 +782,18 @@ impl Scenario {
         self.launch_git(&["config", "remote.origin.url", url]);
     }
 
+    /// Auto maintenance is off because a newer git detaches it into the
+    /// background after a commit, where it can still be writing into
+    /// `.git/objects` once the command has returned: a test script that then
+    /// deletes its temporary clone with `rm -rf` fails with `Directory not
+    /// empty`. `gc.auto` says the same to a git too old to know
+    /// `maintenance.auto`.
     fn write_gitconfig(&self) {
         let config = format!(
             "[user]\n\tname = Test Runner\n\temail = runner@example.com\n\
              [init]\n\tdefaultBranch = main\n\
+             [maintenance]\n\tauto = false\n\
+             [gc]\n\tauto = 0\n\
              [url \"{origin}\"]\n\tinsteadOf = {github}\n",
             origin = self.origin_dir().display(),
             github = self.github_url(),
