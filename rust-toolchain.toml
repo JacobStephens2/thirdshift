@@ -1,0 +1,8 @@
+# The Rust version CI, the release builds and a contributor's `cargo` in this
+# checkout all build with. rustup reads this file; nothing else names the
+# version. To move the pin, change `channel` in a pull request, so the new
+# compiler gets its own CI run (README, "The Rust version").
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

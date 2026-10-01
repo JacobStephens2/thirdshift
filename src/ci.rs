@@ -177,11 +177,16 @@ fn jobs_of(checks: &[Check]) -> impl Iterator<Item = ActionsJob> + '_ {
 pub fn check_list(checks: &[Check]) -> String {
     checks
         .iter()
-        .map(|check| match &check.url {
-            Some(url) => format!("- {}: {url}\n", check.name),
-            None => format!("- {}\n", check.name),
-        })
+        .map(|check| format!("- {}\n", check_with_url(check)))
         .collect()
+}
+
+/// The name of `check`, and its URL if it has one, as in `test: <url>`.
+pub fn check_with_url(check: &Check) -> String {
+    match &check.url {
+        Some(url) => format!("{}: {url}", check.name),
+        None => check.name.clone(),
+    }
 }
 
 /// `sha` shortened to 7 characters, as in progress messages.

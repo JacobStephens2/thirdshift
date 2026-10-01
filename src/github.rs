@@ -195,15 +195,16 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     ])
 }
 
-/// Every open issue labelled `label` in the repository of `issue`, with its
-/// title. They come from GitHub's issue list, not its search, whose index can
-/// be a while behind an issue just opened.
-pub fn open_issues_labelled(issue: &IssueUrl, label: &str) -> Result<Vec<(IssueUrl, String)>> {
+/// Every open issue labelled `label` in the repository `repo`, an
+/// `owner/repo`, with its title, newest first. They come from GitHub's issue
+/// list, not its search, whose index can be a while behind an issue just
+/// opened.
+pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<(IssueUrl, String)>> {
     let json = gh_json(&[
         "issue",
         "list",
         "--repo",
-        &issue.repo_slug(),
+        repo,
         "--label",
         label,
         "--state",
@@ -227,19 +228,11 @@ pub fn open_issues_labelled(issue: &IssueUrl, label: &str) -> Result<Vec<(IssueU
         .collect()
 }
 
-/// Open an issue titled `title`, with `body` and `labels`, in the repository
-/// of `issue`, and return it. Each label is first added to the repository,
-/// with its description, if the repository lacks it: `gh` refuses a label it
-/// doesn't know.
-pub fn create_issue(
-    issue: &IssueUrl,
-    title: &str,
-    body: &str,
-    labels: &[(&str, &str)],
-) -> Result<IssueUrl> {
-    let repo = issue.repo_slug();
+/// Add each of `labels` to the repository `repo`, an `owner/repo`, with its
+/// description, unless the repository has it already.
+pub fn ensure_labels(repo: &str, labels: &[(&str, &str)]) -> Result<()> {
     let known = gh_json(&[
-        "label", "list", "--repo", &repo, "--json", "name", "--limit", "1000",
+        "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
     ])?;
     let known: Vec<&str> = known
         .as_array()
@@ -255,12 +248,27 @@ pub fn create_issue(
                 "create",
                 name,
                 "--repo",
-                &repo,
+                repo,
                 "--description",
                 description,
             ])?;
         }
     }
+    Ok(())
+}
+
+/// Open an issue titled `title`, with `body` and `labels`, in the repository
+/// of `issue`, and return it. Each label is first added to the repository,
+/// with its description, if the repository lacks it: `gh` refuses a label it
+/// doesn't know.
+pub fn create_issue(
+    issue: &IssueUrl,
+    title: &str,
+    body: &str,
+    labels: &[(&str, &str)],
+) -> Result<IssueUrl> {
+    let repo = issue.repo_slug();
+    ensure_labels(&repo, labels)?;
     let names: Vec<&str> = labels.iter().map(|(name, _)| *name).collect();
     let url = gh_stdout(&[
         "issue",
