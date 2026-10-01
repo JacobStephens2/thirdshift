@@ -188,10 +188,11 @@ when the repository has no Ready issue, when the repository is at its Claim limi
 an Architect run or another Pickup run on the same repository is still running on this
 machine.
 
-A Pickup run takes nothing while 3 or more open issues are labelled in-progress, whoever
-started them: the Claim limit, so a broken Base branch can't fail every Ready issue in turn,
-and pull requests can't pile up unreviewed. The skipped run's line names the count and the
-limit. pickup.limit in the User config sets the Claim limit, a whole number from 1 up:
+A Pickup run takes nothing while as many open issues are labelled in-progress, whoever
+started them, as the Claim limit, 3 unless set, so a broken Base branch can't fail every
+Ready issue in turn, and pull requests can't pile up unreviewed. The skipped run's line names
+the count and the limit. pickup.limit in the User config sets the Claim limit, a whole number
+from 1 up:
 
     [pickup]
     limit = 5

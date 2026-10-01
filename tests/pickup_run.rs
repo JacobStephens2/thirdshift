@@ -832,6 +832,21 @@ fn pickup_limit_in_the_user_config_raises_and_lowers_the_claim_limit() {
 }
 
 #[test]
+fn over_the_claim_limit_the_pass_is_skipped_naming_the_count_and_the_limit() {
+    let scenario = ready_ticket();
+    claimed_issues(&scenario, &[1, 2, 3, 4]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        "thirdshift: at the Claim limit on acme/widgets: 4 open issue(s) labelled in-progress, \
+         pickup.limit is 3\n",
+    );
+}
+
+#[test]
 fn a_closed_issue_labelled_in_progress_does_not_count_against_the_claim_limit() {
     let scenario = ready_ticket();
     claimed_issues(&scenario, &[1, 2, 3]);
@@ -889,7 +904,7 @@ fn a_pass_takes_in_progress_off_every_closed_issue_and_leaves_its_other_labels()
     }
 }
 
-/// What the sweep says as it takes `in-progress` off closed issue #3.
+/// What the Sweep says as it takes `in-progress` off closed issue #3.
 const SWEEPING_3: &str = "thirdshift: taking in-progress off #3, which is closed\n";
 
 #[test]
@@ -958,6 +973,21 @@ fn a_sweep_that_fails_prints_a_warning_and_the_pass_carries_on() {
     }
     assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
     assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+}
+
+#[test]
+fn a_sweep_that_cannot_list_the_closed_issues_prints_a_warning_and_the_pass_carries_on() {
+    let scenario = ready_ticket();
+    closed_issue_in_progress(&scenario, 3, &["bug"]);
+    scenario.gh_fails("issue list --state closed");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    let warning = "thirdshift: warning: could not list the closed issues labelled in-progress: \
+                   gh issue list failed: HTTP 502";
+    assert!(result.stderr.contains(warning), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
 }
 
 #[test]

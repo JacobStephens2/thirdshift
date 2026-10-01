@@ -128,14 +128,12 @@ impl UserConfig {
                     ("email", "to" | "from", _) => {
                         bail!("{section}.{key} must be a quoted email address in {file}")
                     }
-                    ("spec", "parallel", value) => match whole_number_from_1(value) {
-                        Some(parallel) => config.spec_parallel = parallel,
-                        None => bail!("spec.parallel must be a whole number from 1 up in {file}"),
-                    },
-                    ("pickup", "limit", value) => match whole_number_from_1(value) {
-                        Some(limit) => config.pickup_limit = limit,
-                        None => bail!("pickup.limit must be a whole number from 1 up in {file}"),
-                    },
+                    ("spec", "parallel", value) => {
+                        config.spec_parallel = whole_number_from_1(value, "spec.parallel", &file)?
+                    }
+                    ("pickup", "limit", value) => {
+                        config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
+                    }
                     _ => bail!("unknown key {section}.{key} in {file}"),
                 }
             }
@@ -645,12 +643,14 @@ fn suggested_address(home: &Path) -> Option<String> {
     })
 }
 
-/// `value` as a whole number from 1 up, or `None` if it is anything else.
-fn whole_number_from_1(value: &Value) -> Option<NonZeroUsize> {
+/// `value`, which `file` gives the setting `key`, as a whole number from 1
+/// up, or an error naming both if it is anything else.
+fn whole_number_from_1(value: &Value, key: &str, file: &str) -> Result<NonZeroUsize> {
     value
         .as_integer()
         .and_then(|n| usize::try_from(n).ok())
         .and_then(NonZeroUsize::new)
+        .with_context(|| format!("{key} must be a whole number from 1 up in {file}"))
 }
 
 /// `$HOME`, and the User config's path under it.

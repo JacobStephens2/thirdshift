@@ -3,8 +3,8 @@
 //! repository, for the command to dispatch. Only one Pickup run or Architect
 //! run per repository runs at a time on a machine: one started while another
 //! is still running is skipped, before any search. One that runs first
-//! sweeps the Claim off the repository's closed issues, and is then skipped
-//! if it finds the repository at its Claim limit, or with no Ready issue.
+//! makes the Sweep, and is then skipped if it finds the repository at its
+//! Claim limit, or with no Ready issue.
 
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -87,9 +87,9 @@ impl fmt::Display for Skipped {
 /// skipped if an Architect run or another Pickup run on the same repository
 /// is still running on this machine. Otherwise this process is that
 /// repository's one such run until it exits, through whatever it dispatches.
-/// It first sweeps the Claim off the repository's closed issues, and is then
-/// skipped, still before any search, if the repository is at its Claim
-/// limit: `limit` or more of its open issues carry a Claim.
+/// It first makes the Sweep, taking the Claim off the repository's closed
+/// issues, and is then skipped, still before any search, if the repository
+/// is at its Claim limit: `limit` or more of its open issues carry a Claim.
 pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
     let Launch {
         git, repo, base, ..

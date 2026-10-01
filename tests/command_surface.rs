@@ -239,7 +239,7 @@ fn help_documents_the_claim_limit_and_taking_in_progress_off_closed_issues() {
 
     for mention in [
         "when the repository is at its Claim limit",
-        "A Pickup run takes nothing while 3 or more open issues are labelled in-progress, whoever started them",
+        "A Pickup run takes nothing while as many open issues are labelled in-progress, whoever started them, as the Claim limit, 3 unless set",
         "so a broken Base branch can't fail every Ready issue in turn, and pull requests can't pile up unreviewed",
         "pickup.limit in the User config sets the Claim limit, a whole number from 1 up",
         "[pickup] limit = 5",

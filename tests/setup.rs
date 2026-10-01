@@ -785,6 +785,12 @@ limit = 5
     );
 
     assert_eq!(result.user_config.as_deref(), Some(mine));
+    // Setup asks nothing about the Claim limit.
+    assert!(
+        !result.stderr.contains("limit"),
+        "terminal: {}",
+        result.stderr
+    );
     for current in ["[Y/n]", "mine@example.net", "ts@acme.dev"] {
         assert!(
             result.stderr.contains(current),

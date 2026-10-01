@@ -25,12 +25,12 @@ pub fn is_on(labels: &[String]) -> bool {
 /// Whether `label` is one of `labels`, whatever its case: GitHub's label
 /// names are case-insensitive.
 fn has(labels: &[String], label: &str) -> bool {
-    labels.iter().any(|name| name.eq_ignore_ascii_case(label))
+    spelling(labels, label).is_some()
 }
 
-/// Whether `name` is the label of a Claimed issue, whatever its case.
-fn is_in_progress(name: &str) -> bool {
-    name.eq_ignore_ascii_case(IN_PROGRESS)
+/// `label` as `labels` spells it, whatever its case, if it is one of them.
+fn spelling<'a>(labels: &'a [String], label: &str) -> Option<&'a String> {
+    labels.iter().find(|name| name.eq_ignore_ascii_case(label))
 }
 
 /// Make the Claim on `issue`: label it `in-progress`, in place of
@@ -75,7 +75,7 @@ pub fn open_count(repo: &Repo) -> Result<usize> {
     Ok(github::open_issues_labelled(&repo.slug(), IN_PROGRESS)?.len())
 }
 
-/// The sweep: take `in-progress` off every closed issue in `repo` that still
+/// The Sweep: take `in-progress` off every closed issue in `repo` that still
 /// carries it, as an issue merged by hand does, leaving its other labels. A
 /// failure, to list them or to take the label off one, is only a warning.
 pub fn sweep(repo: &Repo) {
@@ -90,7 +90,7 @@ pub fn sweep(repo: &Repo) {
     };
     for ListedIssue { issue, labels, .. } in closed {
         // As the issue spells it: GitHub's label names are case-insensitive.
-        let Some(label) = labels.iter().find(|name| is_in_progress(name)) else {
+        let Some(label) = spelling(&labels, IN_PROGRESS) else {
             continue;
         };
         progress::step(format_args!(

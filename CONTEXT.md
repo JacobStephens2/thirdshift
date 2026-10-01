@@ -70,6 +70,10 @@ _Avoid_: watch, daemon, queue run, poll
 The number of open issues carrying a **Claim** at which a **Pickup run** takes no more, set in the **User config**. It keeps a broken **Base branch** from failing every **Ready issue** in turn, and pull requests from piling up unreviewed.
 _Avoid_: WIP limit, concurrency (it counts issues waiting on the **Day shift**, not Runs in flight)
 
+**Sweep**:
+A **Pickup run**'s removal of `in-progress` from every closed issue in the repository that still has it, such as one whose pull request was merged by hand, with the issue's other labels kept. Each Pickup run that is not skipped for the lock makes one, before it holds the repository against its **Claim limit**. A Sweep that fails is a warning, never a failure.
+_Avoid_: cleanup, garbage collection
+
 **Ready issue**:
 An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no label that makes an **Unready Ticket**, not a sub-issue, not a **Base fix**'s issue, with no open blocker, never started (no **Issue branch** and no pull request), and left untouched long enough that whoever is shaping it has finished. On a **Spec**, the label says its **Tickets** are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
 _Avoid_: queued issue, backlog item

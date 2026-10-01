@@ -37,7 +37,7 @@ The **Claim** is the mark that the factory has taken an issue, so the issue list
 - A [Continuation](#continuation) on an issue that is already `in-progress` changes nothing and makes no request. One on an issue that isn't Claimed yet Claims it.
 - If the Claim can't be made, the Run stops there, before any work, with exit `1` and the cause: `could not make the Claim on #<n>: <gh's error>`.
 
-A Run doesn't take `in-progress` off again yet: the label stays when the Run ends, whatever its outcome. A [Pickup run](#pickup-runs) takes it off issues that have since been closed, in [the sweep](#the-sweep).
+A Run doesn't take `in-progress` off again yet: the label stays when the Run ends, whatever its outcome. A [Pickup run](#pickup-runs) takes it off issues that have since been closed, in the [Sweep](#the-sweep).
 
 ### Status
 
@@ -568,7 +568,7 @@ A Pickup run:
 
 1. Makes the checks an [Architect run](#architect-runs) makes, before anything else: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached unless `base <branch>` names the Base branch, and the Base branch exists on `origin` with your local copy not ahead of it. A check that fails stops the pass with exit `1`, before any label is read or changed.
 2. Tries the lock an Architect run takes, and is [skipped](#one-at-a-time) if an Architect run or another Pickup run on the repository is still running on the machine.
-3. Takes `in-progress` off the repository's closed issues: [the sweep](#the-sweep).
+3. Takes `in-progress` off the repository's closed issues: the [Sweep](#the-sweep).
 4. Counts the repository's open issues labelled `in-progress`, and is skipped if the repository is at its [Claim limit](#the-claim-limit).
 5. Lists the repository's open issues labelled `ready-for-agent`, lowest number first, and takes the first that is a Ready issue, saying so on stderr: `taking Ready issue #<n> "<title>", as thirdshift <Issue URL> would`. One issue a pass: the rest wait for the next.
 6. Dispatches it exactly as `thirdshift <Issue URL>` would from the same clone on the Pickup run's Base branch: a [Spec run](#spec-runs) when the issue has sub-issues, a Run otherwise. That run makes the Claim, so the issue's `ready-for-agent` is swapped for `in-progress` and no later pass takes it again.
@@ -579,11 +579,11 @@ A Pickup run:
 
 The dispatched run's ending is the Pickup run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Pickup run fails as that [Failed run](#failed-runs) or Failed spec run does. After an [Inherited failure](#an-inherited-failure-links-the-base-branchs-checks), the command it offers is `thirdshift <Issue URL>` with the dispatched run's flags and `base-fix`, since another Pickup run would not take a started issue again.
 
-A pass is **skipped** when the lock is held, when the repository is at its Claim limit, or when the repository has no Ready issue: it exits `0` with stdout empty and one line of reason on stderr, `an Architect run or a Pickup run is already running on <owner>/<repo>`, `at the Claim limit on <owner>/<repo>: <count> open issue(s) labelled in-progress, pickup.limit is <limit>` or `no Ready issue on <owner>/<repo>`. Skipped is not a failure. A skipped pass starts no agent session, makes no Claim, and sends no Run notification. One skipped for the lock changes no label at all; the others have made the sweep, whose lines come before the reason.
+A pass is **skipped** when the lock is held, when the repository is at its Claim limit, or when the repository has no Ready issue: it exits `0` with stdout empty and one line of reason on stderr, `an Architect run or a Pickup run is already running on <owner>/<repo>`, `at the Claim limit on <owner>/<repo>: <count> open issue(s) labelled in-progress, pickup.limit is <limit>` or `no Ready issue on <owner>/<repo>`. Skipped is not a failure. A skipped pass starts no agent session, makes no Claim, and sends no Run notification. One skipped for the lock changes no label at all; the others have made the Sweep, whose lines come before the reason.
 
 ### The Claim limit
 
-A Pickup run takes nothing while the repository is at its **Claim limit**: 3 or more open issues carry a [Claim](#the-claim), that is, are labelled `in-progress`. It keeps a broken Base branch from failing every Ready issue in turn, one a pass, and pull requests from piling up unreviewed: once three issues wait on you, the factory waits too.
+A Pickup run takes nothing while the repository is at its **Claim limit**: as many open issues carry a [Claim](#the-claim), that is, are labelled `in-progress`, as the limit, which is 3 unless you set it. It keeps a broken Base branch from failing every Ready issue in turn, one a pass, and pull requests from piling up unreviewed: once that many issues wait on you, the factory waits too.
 
 - The count is every open issue labelled `in-progress` in the repository, whoever started it: a Run you started by hand counts as one a Pickup run dispatched does. Closed issues don't count.
 - `pickup.limit` in the [User config](#user-config) sets the limit, a whole number from 1 up, by default 3. Raise it on a machine where you review quickly; `limit = 1` takes one issue at a time. There is no command-line flag for it.
@@ -591,9 +591,9 @@ A Pickup run takes nothing while the repository is at its **Claim limit**: 3 or 
 - An issue leaves the count when it is closed, as merging its pull request does, or when you take its `in-progress` label off.
 - If the issues can't be counted, the pass stops with exit `1` and `gh`'s error.
 
-### The sweep
+### The Sweep
 
-Each Pickup run, once it holds the lock and before it counts, lists the repository's closed issues labelled `in-progress` and takes the label off each, so an issue whose pull request you merged by hand doesn't look taken for ever.
+In the **Sweep**, each Pickup run, once it holds the lock and before it counts, lists the repository's closed issues labelled `in-progress` and takes the label off each, so an issue whose pull request you merged by hand doesn't look taken for ever.
 
 - Only `in-progress` is removed, in one request per issue: the closed issue's other labels stay. stderr says `taking in-progress off #<n>, which is closed`.
 - It runs on every pass that gets the lock, one that is then skipped for the Claim limit or for having no Ready issue included, and not on one skipped because the lock is held.
