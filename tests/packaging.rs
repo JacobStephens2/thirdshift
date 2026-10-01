@@ -58,6 +58,11 @@ fn package_carries_the_factory_skills_with_their_license_and_credits() {
     }
 }
 
+/// Not `--offline`: `--target all` reads the manifest of every locked crate,
+/// and a build only downloads the host's, so a fresh registry (a new clone, or
+/// CI after a Rust release drops its cache) lacks the Windows and Android
+/// ones. cargo downloads those here; with them present it stays off the
+/// network, and `--locked` keeps it from resolving anything new.
 #[test]
 fn the_binary_never_links_openssl() {
     let output = Command::new(env!("CARGO"))
@@ -71,7 +76,7 @@ fn the_binary_never_links_openssl() {
             "{p}",
             "--target",
             "all",
-            "--offline",
+            "--locked",
         ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
