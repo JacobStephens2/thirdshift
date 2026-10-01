@@ -322,6 +322,7 @@ fn ctrl_c_after_the_merge_finishes_the_post_merge_steps_and_exits_as_merged() {
         scenario.gh_state()["comments"]["7"],
         serde_json::json!([CLOSING_COMMENT])
     );
+    assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
     scenario.assert_cleaned_up("issue-7");
 }
 
@@ -1020,4 +1021,83 @@ fn a_merge_run_whose_red_checks_also_fail_on_the_base_branch_commit_does_not_mer
     assert_eq!(gh["prs"][0]["isDraft"], true);
     assert_eq!(gh["issues"]["7"], "OPEN");
     assert_eq!(scenario.origin_file("main", "feature.txt"), None);
+}
+
+#[test]
+fn a_merge_run_ends_with_the_issue_closed_and_its_claim_removed() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    scenario.agent_does(AGENT_OPENS_PR);
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
+    assert_eq!(scenario.issue_labels(7), ["bug"]);
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: removing in-progress from issue #7\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("warning"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn an_issue_github_closed_after_the_merge_has_its_claim_removed_too() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake after-merge 'gh fake issue 7 CLOSED'\n"
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(scenario.gh_calls_of("issue", "close").is_empty());
+    assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+}
+
+#[test]
+fn an_issue_left_open_by_a_failed_close_keeps_its_claim() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    merge_into_develop(&scenario, "gh fake fails 'issue close'\n");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+}
+
+#[test]
+fn a_failed_claim_removal_still_exits_as_merged_with_a_warning() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(&format!("{AGENT_OPENS_PR}gh fake fails 'api --method'\n"));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(
+        result.stderr.contains(
+            "warning: could not remove in-progress from issue #7, so remove it by hand: \
+             gh api --method DELETE repos/acme/widgets/issues/7/labels/in-progress\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: PR {PR_URL} is merged").as_str())
+    );
 }

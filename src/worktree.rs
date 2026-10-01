@@ -129,9 +129,8 @@ impl Worktree {
         else {
             return Ok(());
         };
-        let reference = format!("refs/heads/{}", self.branch);
-        match self.git.run(&["ls-remote", "origin", &reference]) {
-            Ok(refs) if refs.is_empty() => Ok(()),
+        match self.git.on_origin(&self.branch) {
+            Ok(false) => Ok(()),
             _ => Err(error),
         }
     }

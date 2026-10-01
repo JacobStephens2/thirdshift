@@ -332,6 +332,8 @@ fn help_documents_the_claim() {
         "creating the label if the repository lacks it",
         "A Ticket's Run in a Spec run and a Base fix make none",
         "A Run whose Claim can't be made stops there",
+        "The Claim is released, the issue's labels put back as they were, when the Run or the Spec run fails with nothing on origin to take over: no Issue branch or Spec branch and no pull request",
+        "It is removed once a Self-merge has left the issue closed, and otherwise stays",
         "That run makes the Claim on the plan, which keeps architect-plan",
     ] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");

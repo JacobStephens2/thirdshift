@@ -276,3 +276,156 @@ fn assert_kept(scenario: &Scenario, result: &RunResult) {
         result.stderr
     );
 }
+
+#[test]
+fn a_failed_run_that_pushed_nothing_releases_its_claim() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent", "architecture"]);
+    scenario.agent_does("exit 1");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.origin_log("issue-7"), None);
+    assert_eq!(
+        scenario.issue_labels(7),
+        ["bug", "architecture", "ready-for-agent"]
+    );
+    assert!(
+        result.stderr.contains(
+            "thirdshift: releasing the Claim on #7: labelling it ready-for-agent, in place of in-progress\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_released_claim_gives_no_ready_for_agent_to_an_issue_that_had_none() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug"]);
+    scenario.agent_does("exit 1");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.issue_labels(7), ["bug"]);
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: releasing the Claim on #7: removing in-progress\n"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn an_interrupted_run_that_left_nothing_on_origin_releases_its_claim() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(&format!(
+        "touch {}\nsleep 30\n",
+        scenario.path("agent-started").display()
+    ));
+
+    let result = scenario.run_and_signal(&[&scenario.issue_url(7)], "agent-started", "INT");
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.origin_log("issue-7"), None);
+    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    assert!(
+        result.stderr.contains(
+            "thirdshift: releasing the Claim on #7: labelling it ready-for-agent, in place of in-progress\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_released_claim_leaves_an_issue_that_was_already_in_progress_in_progress() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["in-progress", "ready-for-agent"]);
+    scenario.agent_does("exit 1");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.issue_labels(7), ["in-progress", "ready-for-agent"]);
+    assert!(
+        result.stderr.contains(
+            "thirdshift: releasing the Claim on #7: labelling it ready-for-agent again\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_failed_run_that_pushed_its_issue_branch_keeps_its_claim() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(AGENT_LEAVES_WORK_AND_EXITS_3);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert!(scenario.origin_log("issue-7").is_some());
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(
+        !result.stderr.contains("releasing the Claim"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_released_claim_keeps_a_label_the_issue_was_given_during_the_run() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does("gh fake labels 7 '[\"in-progress\", \"needs-info\"]'\nexit 1\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.issue_labels(7), ["needs-info", "ready-for-agent"]);
+}
+
+#[test]
+fn an_issue_whose_claim_someone_took_off_during_the_run_is_left_as_it_is() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does("gh fake labels 7 '[\"ready-for-human\"]'\nexit 1\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.issue_labels(7), ["ready-for-human"]);
+    assert!(
+        !result.stderr.contains("releasing the Claim"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_claim_that_cannot_be_released_is_a_warning_naming_the_commands_to_run_by_hand() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does("gh fake fails 'api --method'\nexit 1\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(
+        result.stderr.contains(
+            "thirdshift: warning: could not release the Claim on #7, so if nothing of the run \
+             is on origin, release it by hand: \
+             gh api --method DELETE repos/acme/widgets/issues/7/labels/in-progress && \
+             gh api --method POST repos/acme/widgets/issues/7/labels -f 'labels[]=ready-for-agent'\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}
