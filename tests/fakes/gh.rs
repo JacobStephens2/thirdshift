@@ -6,6 +6,7 @@
 //! {"repo": "owner/repo",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
 //!  "titles"?: {"<number>": "<title>"},
+//!  "bodies"?: {"<number>": "<body>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
 //!           "mergeable"?, "unknown_polls"?}],
@@ -14,6 +15,7 @@
 //!  "runs"?: [{"databaseId", "url", "branch", "workflow", "event", "headSha", "status",
 //!             "conclusion", "jobs"?, "hidden_polls"?, "pending_polls"?}],
 //!  "on_ci_read"?: {"times", "script", "seen"},
+//!  "on_issue_view"?: {"<number>": "<script>"},
 //!  "on_merge"?: {"times", "script"},
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
@@ -21,6 +23,7 @@
 //!  "user_email"?: "<address>" | null,
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
 //!  "labels"?: {"<number>": ["<label>", ...]},
+//!  "repo_labels"?: ["<label>", ...],
 //!  "blocked_by"?: {"<number>": [<number>, ...]}}
 //! ```
 //!
@@ -74,6 +77,16 @@
 //! `gh issue close` closes the issue, recording its `--comment`; on an issue
 //! already closed it only warns, as gh does.
 //!
+//! `gh issue list --label <label> --json <fields>` lists the open issues with
+//! that label, whatever its case, newest first.
+//!
+//! `gh issue create --title <title> --body <body> --label <label>,<label>`
+//! opens an issue numbered one past the highest issue, with that title, body
+//! (in `bodies`) and labels, and prints its URL. A label the repository does
+//! not have, one not in `repo_labels`, fails it, as gh does. `gh label list
+//! --json name` lists the repository's labels, and `gh label create <name>`
+//! adds one, failing if the repository has it already.
+//!
 //! A PR's mergeable state reports as UNKNOWN for its first `unknown_polls`
 //! reads. A check run reports as in progress for its first `pending_polls`
 //! reads, then as completed with its `conclusion`.
@@ -96,6 +109,8 @@
 //!                                         thirdshift reads CI on each new sha,
 //!                                         for the next <times> shas, with the
 //!                                         sha in $FAKE_CI_SHA
+//! gh fake on-issue-view <number> '<script>'  run <script> in bash the first
+//!                                         time issue <number> is viewed
 //! gh fake on-merge <times> '<script>'     run <script> in bash before each of
 //!                                         the next <times> `gh pr merge` calls
 //! gh fake refuse-merges <times> '<error>' fail the next <times> `gh pr merge`
@@ -111,6 +126,7 @@
 //! gh fake user-email '<JSON>'             set the public profile email, an
 //!                                         address or null
 //! gh fake labels <number> '<JSON list>'   set issue <number>'s labels
+//! gh fake repo-labels '<JSON list>'       set the repository's labels
 //! ```
 //!
 //! Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
@@ -568,21 +584,75 @@ fn unknown_issue(number: &str) -> ! {
     )
 }
 
-fn issue_view(state: &Json, positional: &[String], flags: &Flags) {
-    let n = &positional[0];
-    let Some(issue_state) = state.at("issues").get(n) else {
-        unknown_issue(n)
-    };
+/// The JSON fields of issue `n`, in state `issue_state`.
+fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
     let title = match state.get("titles").and_then(|titles| titles.get(n)) {
         Some(title) => title.clone(),
         None => string(format!("Issue {n}")),
     };
-    let fields = object([
+    let url = format!("https://github.com/{}/issues/{n}", state.at("repo").str());
+    object([
         ("number", number(n.parse::<i64>().unwrap())),
         ("state", issue_state.clone()),
         ("title", title),
-    ]);
+        ("url", string(url)),
+    ])
+}
+
+/// After the issue's `on-issue-view` script, if it has one still to run.
+fn issue_view(state: &mut Json, positional: &[String], flags: &Flags) {
+    let n = &positional[0];
+    run_issue_view_hook(state, n);
+    let Some(issue_state) = state.at("issues").get(n) else {
+        unknown_issue(n)
+    };
+    let fields = issue_fields(state, n, issue_state);
     println!("{}", json_fields(&fields, &wanted_fields(flags)));
+}
+
+/// `gh issue list --label <label> --json <fields>`: the open issues with the
+/// label, whatever its case, newest first.
+fn issue_list(state: &Json, flags: &Flags) {
+    let supported = ["label", "state", "json", "limit", "repo", "R"];
+    let label = flag(flags, "label");
+    if flags.keys().any(|name| !supported.contains(&name.as_str()))
+        || !matches!(flag(flags, "state"), None | Some("open"))
+        || label.is_none_or(|label| label.contains(','))
+    {
+        die(
+            &format!("fake gh: unsupported issue list flags {flags:?}"),
+            2,
+        );
+    }
+    let label = label.unwrap();
+    let Json::Object(issues) = state.at("issues") else {
+        panic!("issues is an object")
+    };
+    let labels = state.get("labels");
+    let mut open: Vec<(i64, &Json)> = issues
+        .iter()
+        .filter(|(n, issue_state)| {
+            let labels = labels.and_then(|labels| labels.get(n));
+            issue_state.str() == "OPEN"
+                && labels
+                    .map(Json::items)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|name| name.str().eq_ignore_ascii_case(label))
+        })
+        .map(|(n, issue_state)| (n.parse().unwrap(), issue_state))
+        .collect();
+    open.sort_by_key(|(n, _)| -n);
+    let limit: usize = flag(flags, "limit").unwrap_or("30").parse().unwrap();
+    let wanted = wanted_fields(flags);
+    let listed = open
+        .into_iter()
+        .take(limit)
+        .map(|(n, issue_state)| {
+            json_fields(&issue_fields(state, &n.to_string(), issue_state), &wanted)
+        })
+        .collect();
+    println!("{}", Array(listed));
 }
 
 fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
@@ -602,6 +672,85 @@ fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
             .push(string(comment));
     }
     state.at_mut("issues").set(n, string("CLOSED"));
+    save(state);
+}
+
+/// Open an issue with `--title`, `--body` and the comma-separated `--label`s,
+/// numbered one past the highest issue, and print its URL.
+fn issue_create(state: &mut Json, flags: &Flags) {
+    let labels: Vec<&str> = flag(flags, "label")
+        .map(|labels| labels.split(',').collect())
+        .unwrap_or_default();
+    for label in &labels {
+        if !has_repo_label(state, label) {
+            die(&format!("could not add label: '{label}' not found"), 1);
+        }
+    }
+    let Json::Object(issues) = state.at("issues") else {
+        panic!("issues is an object")
+    };
+    let highest = issues
+        .iter()
+        .filter_map(|(n, _)| n.parse::<i64>().ok())
+        .max();
+    let n = (highest.unwrap_or(0) + 1).to_string();
+    state.at_mut("issues").set(&n, string("OPEN"));
+    let title = flag(flags, "title").expect("no --title");
+    state.entry("titles", object([])).set(&n, string(title));
+    let body = flag(flags, "body").expect("no --body");
+    state.entry("bodies", object([])).set(&n, string(body));
+    let labels = labels.into_iter().map(string).collect();
+    state.entry("labels", object([])).set(&n, Array(labels));
+    save(state);
+    println!("https://github.com/{}/issues/{n}", state.at("repo").str());
+}
+
+/// Whether the repository has the label `name`, whatever its case.
+fn has_repo_label(state: &Json, name: &str) -> bool {
+    let labels = state
+        .get("repo_labels")
+        .map(Json::items)
+        .unwrap_or_default();
+    labels
+        .iter()
+        .any(|label| label.str().eq_ignore_ascii_case(name))
+}
+
+/// `gh label list --json name`: the repository's labels.
+fn label_list(state: &Json, flags: &Flags) {
+    if flag(flags, "json") != Some("name") {
+        die(
+            &format!("fake gh: unsupported label list flags {flags:?}"),
+            2,
+        );
+    }
+    let labels = state
+        .get("repo_labels")
+        .map(Json::items)
+        .unwrap_or_default();
+    let listed = labels
+        .iter()
+        .map(|label| object([("name", label.clone())]))
+        .collect();
+    println!("{}", Array(listed));
+}
+
+/// `gh label create <name>`: add a label to the repository, failing if it has
+/// it already, as gh does without `--force`.
+fn label_create(state: &mut Json, positional: &[String]) {
+    let name = &positional[0];
+    if has_repo_label(state, name) {
+        die(
+            &format!(
+                "label with name \"{name}\" already exists; use `--force` to update its color and description"
+            ),
+            1,
+        );
+    }
+    state
+        .entry("repo_labels", Array(Vec::new()))
+        .items_mut()
+        .push(string(name));
     save(state);
 }
 
@@ -1127,6 +1276,27 @@ fn run_ci_read_hook(state: &mut Json, sha: &str) {
     run_hook(state, "on_ci_read", &[("FAKE_CI_SHA", sha)]);
 }
 
+/// Run the `on-issue-view` script of issue `n`, if it has one that has not
+/// yet run, e.g. to close the issue as thirdshift waits on it. Leaves `state`
+/// as the script left it.
+fn run_issue_view_hook(state: &mut Json, n: &str) {
+    let Some(hook) = state
+        .get_mut("on_issue_view")
+        .and_then(|hooks| hooks.get_mut(n))
+        .filter(|hook| hook.truthy())
+    else {
+        return;
+    };
+    let script = hook.str().to_owned();
+    *hook = Null;
+    save(state);
+    unlock();
+    let succeeded = run_script(&script, &[]);
+    lock();
+    assert!(succeeded, "the on-issue-view script failed");
+    *state = load();
+}
+
 /// Run the script of hook `name`, if it has runs left, with `env` added to
 /// the environment. Leaves `state` as the script left it.
 fn run_hook(state: &mut Json, name: &str, env: &[(&str, &str)]) {
@@ -1181,6 +1351,9 @@ fn fake_command(state: &mut Json, args: &[&str]) {
                 ("seen", Array(Vec::new())),
             ]),
         ),
+        ["on-issue-view", n, script] => state
+            .entry("on_issue_view", object([]))
+            .set(n, string(*script)),
         ["on-merge", n, script] => state.set(
             "on_merge",
             object([("times", times(n)), ("script", string(*script))]),
@@ -1192,6 +1365,7 @@ fn fake_command(state: &mut Json, args: &[&str]) {
         ["after-merge", script] => state.set("after_merge", string(*script)),
         ["issue", n, issue_state] => state.at_mut("issues").set(n, string(*issue_state)),
         ["labels", n, labels] => state.entry("labels", object([])).set(n, parse_json(labels)),
+        ["repo-labels", labels] => state.set("repo_labels", parse_json(labels)),
         ["user-email", email] => state.set("user_email", parse_json(email)),
         ["fails", call] => state
             .entry("failing", Array(Vec::new()))
@@ -1250,11 +1424,27 @@ pub fn main(args: Vec<String>) {
         }
         ["issue", "view", rest @ ..] => {
             let (positional, flags) = parsed(rest);
-            issue_view(&state, &positional, &flags);
+            issue_view(&mut state, &positional, &flags);
+        }
+        ["issue", "list", rest @ ..] => {
+            let (_, flags) = parsed(rest);
+            issue_list(&state, &flags);
         }
         ["issue", "close", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             issue_close(&mut state, &positional, &flags);
+        }
+        ["issue", "create", rest @ ..] => {
+            let (_, flags) = parsed(rest);
+            issue_create(&mut state, &flags);
+        }
+        ["label", "list", rest @ ..] => {
+            let (_, flags) = parsed(rest);
+            label_list(&state, &flags);
+        }
+        ["label", "create", rest @ ..] => {
+            let (positional, _) = parsed(rest);
+            label_create(&mut state, &positional);
         }
         ["run", "list", rest @ ..] => {
             let (_, flags) = parsed(rest);

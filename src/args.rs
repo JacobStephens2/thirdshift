@@ -5,6 +5,8 @@ use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result, bail};
 
+use crate::base_fix::BaseFixAsk;
+use crate::child_run::Kind;
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
@@ -20,11 +22,17 @@ pub enum Command {
     Run(RunArgs),
 }
 
+/// The word that lets a Run start a Base fix, which a Spec run passes on to
+/// each Ticket's Run.
+pub const BASE_FIX: &str = "base-fix";
+
 /// The hidden argument a Spec run starts each Ticket's Run with, followed by
-/// the Spec branch: it makes the Run a Merge run into the Spec branch that
-/// sends no Run notification and leaves the Launch directory alone. Not in
-/// help.
+/// the Spec branch: it makes the Run a [`Kind::Ticket`]. Not in help.
 pub const SPEC_BRANCH: &str = "--spec-branch";
+
+/// The hidden argument a Run starts its Base fix with, followed by the Run's
+/// Base branch: it makes the Run a [`Kind::BaseFix`]. Not in help.
+pub const BASE_FIX_INTO: &str = "--base-fix-into";
 
 /// A Run's arguments.
 pub struct RunArgs {
@@ -38,8 +46,12 @@ pub struct RunArgs {
     /// How many Tickets a Spec run runs at once, if `parallel <n>` was
     /// given; without it, the User config decides.
     pub parallel: Option<NonZeroUsize>,
-    /// The Spec branch, given with [`SPEC_BRANCH`] to a Ticket's Run.
-    pub spec_branch: Option<String>,
+    /// What `base-fix` or `no-base-fix` asked for, if either was given;
+    /// without one, the User config decides.
+    pub base_fix: Option<BaseFixAsk>,
+    /// What the Run is, if another thirdshift started it, given with
+    /// [`SPEC_BRANCH`] or [`BASE_FIX_INTO`].
+    pub child: Option<Kind>,
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
@@ -48,7 +60,8 @@ pub struct RunArgs {
 /// before or after it.
 /// `email` may be followed by the address to send the Run notification to,
 /// and `parallel` must be followed by a whole number from 1 up.
-/// `merge` and `no-merge` contradict each other, as do `email` and `no-email`.
+/// `merge` and `no-merge` contradict each other, as do `email` and `no-email`,
+/// and `base-fix` and `no-base-fix`.
 pub fn parse(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
@@ -73,7 +86,8 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let mut goal = None;
     let mut email = None;
     let mut parallel = None;
-    let mut spec_branch = None;
+    let mut base_fix = None;
+    let mut child = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -99,11 +113,22 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 };
                 parallel = Some(n);
             }
-            SPEC_BRANCH => {
-                if spec_branch.is_some() {
+            BASE_FIX | "--base-fix" => {
+                ask_once(&mut base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
+            }
+            "no-base-fix" | "--no-base-fix" => {
+                ask_once(&mut base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
+            }
+            SPEC_BRANCH | BASE_FIX_INTO => {
+                if child.is_some() {
                     bail!("repeated argument: {arg}");
                 }
-                spec_branch = Some(args.next().context("missing Spec branch")?.clone());
+                let base = args.next().context("missing Base branch")?.clone();
+                child = Some(if arg == SPEC_BRANCH {
+                    Kind::Ticket { spec_branch: base }
+                } else {
+                    Kind::BaseFix { base }
+                });
             }
             _ => {
                 if issue.is_some() {
@@ -121,12 +146,14 @@ pub fn parse(args: &[String]) -> Result<Command> {
         goal,
         email,
         parallel,
-        spec_branch,
+        base_fix,
+        child,
     }))
 }
 
 const MERGE_FLAGS: &str = "merge and no-merge";
 const EMAIL_FLAGS: &str = "email and no-email";
+const BASE_FIX_FLAGS: &str = "base-fix and no-base-fix";
 
 /// Record in `given` what the flag `arg` asked for: the same kind of ask
 /// twice is a repeated argument, and a different one contradicts the first,

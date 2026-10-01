@@ -21,7 +21,7 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 3. Creates a git worktree next to your clone, named `<repo>-<Issue branch>`, so your own checkout is never touched.
 4. Runs a headless Claude Code session in that worktree with the **Factory skills** in [`skills/`](skills/) loaded, started with one of the **Session prompts** in [`prompts/`](prompts/). The agent implements the issue, reviews its work against the Base branch, addresses the **Standards findings** and **Spec findings** it agrees with, and opens a ready-for-review pull request that lists every **Unaddressed finding** with a reason and closes the issue.
 5. Takes over deterministically: pushes the Issue branch, skipping your repo's git hooks since the session runs the tests and CI gates the pull request, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
-6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 5 per Run. If a CI-fix Repair leaves the head unchanged, with no commit of its own and no Base branch move to merge, the Run ends as a [Failed run](#failed-runs), since CI would stay red on the same head. If the Base branch moves while CI runs, it merges it again and goes round, at most 5 times per Run. In a Merge run, each round also takes in **Foreign commits** first: see [Foreign commits in a Merge run](#foreign-commits-in-a-merge-run).
+6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 5 per Run. A failed check that also failed, under the same name, on the Base branch commit the head last merged in is an **Inherited failure**, not the branch's to fix: the CI-fix Repair is given only the branch's own failures, with the Inherited failures listed as not to fix. If every failed check is an Inherited failure, no Repair starts: the Run merges the Base branch again if it has moved since, and otherwise ends as a [Failed run](#failed-runs) that says to fix the Base branch first, unless it was given `base-fix` or the [User config](#user-config) sets `base.fix`, when it starts a [Base fix](#base-fix) first. A check that is pending, passed or missing on that Base branch commit is the branch's own, and thirdshift never triggers or waits for the Base branch's CI. If a CI-fix Repair leaves the head unchanged, with no commit of its own and no Base branch move to merge, the Run ends as a Failed run, since CI would stay red on the same head. If the Base branch moves while CI runs, it merges it again and goes round, at most 5 times per Run. In a Merge run, each round also takes in **Foreign commits** first: see [Foreign commits in a Merge run](#foreign-commits-in-a-merge-run).
 7. In a **Merge run** (`thirdshift merge <Issue URL>`), does the **Self-merge**: once the pull request is open, ready for review, mergeable and green, thirdshift merges it into the Base branch with a merge commit, on exactly the head commit whose CI it watched (`gh pr merge --merge --match-head-commit <sha>`). It never uses GitHub's auto-merge ([ADR-0004](docs/adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)). A merge that fails goes back round step 6, within the same budgets, and is tried again on the new green head. If that round finds nothing to fix, the refusal is a **policy refusal**, such as merge commits being disallowed or a review being required. After the merge, thirdshift deletes the Issue branch on `origin`, and closes the issue if it is still open, with the comment `Closed by #<pr>, merged into <base> by a thirdshift Merge run.` GitHub closes it on its own only for a merge into the repository's default branch, and then thirdshift leaves it alone.
 8. Cleans up: removes the worktree, the local Issue branch and the temporary plugin directory, whether the Run succeeded or not. The one exception is a **Failed run** whose work could not be pushed: see below.
 
@@ -148,6 +148,9 @@ A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults fo
 [merge]
 always = true   # every Run is a Merge run, without the merge word
 
+[base]
+fix = true      # every Run may start a Base fix, without the base-fix word
+
 [launch]
 pull = true     # every Run first fast-forwards your checkout of the Base branch
 
@@ -169,6 +172,9 @@ parallel = 2   # how many Tickets a Spec run runs at once, instead of 3
 [merge]
 always = false   # every Run is a Merge run, without the merge word; default false
 
+[base]
+fix = false      # every Run may start a Base fix, without the base-fix word; default false
+
 [launch]
 pull = false     # every Run first fast-forwards your checkout of the Base branch; default false
 
@@ -187,15 +193,18 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
 
 1. Every Run a Merge run? (`merge.always`)
-2. Every Run first fast-forwards your checkout of the Base branch? (`launch.pull`)
-3. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
-4. With notifications on, the Resend API key, with input hidden. With none saved it asks `Resend API key (input hidden, Enter to skip):`; with one in the [Credentials](#email), `Resend API key (input hidden, Enter keeps the saved one):`, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn't start with `re_` is asked again. A key you give is saved in the Credentials, `~/.thirdshift/credentials.toml`, created with mode 600 (and `~/.thirdshift` with it) or edited in place, keeping its comments and anything else in it and changing only `resend.key`; `setup` then prints `wrote the Credentials <path>`. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun `thirdshift setup`, or set `RESEND_API_KEY`. With `RESEND_API_KEY` set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from `RESEND_API_KEY`. With a key found or given, it offers to send a test email (default No), as `thirdshift email-test` does, once the files are written.
+2. With that on, every Run may start a Base fix when the Base branch's CI is red? (`base.fix`). With it off, this is not asked, and `base.fix` is written at its default, `false`.
+3. Every Run first fast-forwards your checkout of the Base branch? (`launch.pull`)
+4. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
+5. With notifications on, the Resend API key, with input hidden. With none saved it asks `Resend API key (input hidden, Enter to skip):`; with one in the [Credentials](#email), `Resend API key (input hidden, Enter keeps the saved one):`, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn't start with `re_` is asked again. A key you give is saved in the Credentials, `~/.thirdshift/credentials.toml`, created with mode 600 (and `~/.thirdshift` with it) or edited in place, keeping its comments and anything else in it and changing only `resend.key`; `setup` then prints `wrote the Credentials <path>`. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun `thirdshift setup`, or set `RESEND_API_KEY`. With `RESEND_API_KEY` set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from `RESEND_API_KEY`. With a key found or given, it offers to send a test email (default No), as `thirdshift email-test` does, once the files are written.
 
 Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir` is not asked about. The answers are written like everything else below: in place, keeping your comments. Ctrl-C during the questions, the key included, writes nothing: neither the User config nor the Credentials. With notifications off, nothing about a key is asked, and saved Credentials stay as they were, so `--email` on a single Run still works. Credentials a Run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
 The first Run on a machine with no User config, started from a terminal, offers Setup before any work, on stderr: `No User config at <path>. Set your defaults now? [Y/n]`. Yes (or Enter) asks the questions above, writes the file, and the Run carries on using your answers; a flag in the command, such as `--no-merge`, `--email` or `--no-email`, still wins over them. No writes every setting at its default, as `setup` with no terminal does, asks nothing about a key, writes no Credentials, says that `thirdshift setup` changes it, and the Run carries on; later Runs find the file and don't offer again. If the file can't be written, stderr gets a `warning:` line and the Run carries on with the defaults. Ctrl-C during the offer or the questions writes nothing and ends the command before any work, with no Run notification. A command thirdshift can't parse exits `2` before any offer. A Run with no terminal, as from cron, CI, `nohup` or an agent's shell, offers nothing, writes nothing, and runs on the defaults, so a later Run from a terminal still gets the offer.
 
 With `merge.always = true`, `thirdshift <Issue URL>` is a Merge run, and `thirdshift --no-merge <Issue URL>` (or `no-merge`, before or after the URL) leaves that one Run's pull request ready for review.
+
+With `base.fix = true`, every Run may start a [Base fix](#base-fix), as if given `base-fix`, and `thirdshift --no-base-fix <Issue URL>` (or `no-base-fix`, before or after the URL) forbids it for that one Run.
 
 With `launch.pull = true`, every Run brings the Base branch checked out in the directory you start it from (the **Launch directory**) up to date with `origin`, so you no longer `git pull` by hand before each Run. It happens after the pre-flight checks pass and before the worktree is created, as `git merge --ff-only origin/<Base branch>`: fast-forward only, never a merge commit or a rebase, always from `origin`, whatever the branch's upstream or your `pull.*` settings. A progress line on stderr says when it updates the branch; an already up-to-date branch is left quietly as it is. It is skipped when the checked-out branch isn't the Base branch, as in a Continuation whose open pull request targets another base, or on a detached HEAD. If the update can't happen, for example because uncommitted changes are in the way, stderr gets a `warning:` line with git's error and the command to run by hand, your changes are left as they were, and the Run carries on with the same outcome and exit code. The setting only affects your checkout: the Run's worktree starts from `origin/<Base branch>` either way.
 
@@ -280,6 +289,42 @@ Review Repairs are logged as `repair-<i>`, numbered with the other Repairs, coun
 
 A Run without `merge` does none of this: it never fetches someone else's commits into its branch.
 
+## Base fix
+
+A Base branch whose CI is broken fails every Run on it with an Inherited failure. To have a Run fix the Base branch itself and carry on, give it `base-fix` (or `--base-fix`), before or after the URL:
+
+```sh
+thirdshift base-fix https://github.com/acme/widgets/issues/7
+```
+
+To allow it for every Run on a machine, set `base.fix` in the [User config](#user-config); `no-base-fix` (or `--no-base-fix`), before or after the URL, then forbids it for one Run. Giving either flag twice, or `base-fix` together with `no-base-fix`, is an argument error.
+
+When the Run's only red checks are Inherited failures and the Base branch has not moved since, a Run allowed to then starts a **Base fix**, at most one per Run ([ADR-0008](docs/adr/0008-inherited-failures-fail-the-run.md)):
+
+1. thirdshift looks for an open issue labelled `base-fix`, other than the Run's own, whose title names the same Base branch and every one of those checks. If there is one, another Run's Base fix is already under way, and the Run waits on that one instead: see [One Base fix per Base branch](#one-base-fix-per-base-branch).
+2. Otherwise, thirdshift opens an issue from a fixed template, with no agent session: titled `CI red on <base>: <check>[, <check>…]`, its body naming the checks with their URLs on the Base branch, the Base branch and its short sha, and the Run's pull request, labelled `base-fix` and `ready-for-agent`. A label the repository lacks is added to it first.
+3. It starts a child `thirdshift` on that issue from the same Launch directory, as a Merge run into the Run's Base branch, whatever the Run's own goal. Its progress lines are relayed with a `#<n>: ` prefix, after `starting Base fix #<n> into <base>: <issue URL>` and `waiting on Base fix #<n>`. The Base fix sends no Run notification, treats every red check as its own to fix rather than as an Inherited failure, and never starts a Base fix of its own.
+4. Once the Base fix has merged, and its Self-merge has closed its issue, the Run merges the Base branch in again and watches CI, and goes on as usual: ready for review, or merged in a Merge run.
+
+If the Base fix fails, the Run is a [Failed run](#failed-runs) with the cause `Base fix <issue URL> failed: <its cause>`. If the checks are still Inherited failures once the Base fix has merged, there is no second one, and the cause is `CI red on <check>, which also fails on <base> at <short sha>, even after Base fix <issue URL> merged; fix <base> first`. The Run's last progress lines include `Base fix: <issue URL> merged`, or `not merged`, and its own [Run notification](#run-notifications) has the same `Base fix:` line.
+
+On a Spec, `base-fix`, `no-base-fix` or the User config's `base.fix` holds for each Ticket's Run, whose Base fix goes into the Spec branch, its Base branch, and for the Spec PR, whose Base fix goes into the Base branch. Tickets running at once that meet the same Inherited failure share one Base fix: the first starts it, and the others wait on it. A Ticket's Run sends no Run notification, so the Spec run reports its Base fix: a Ticket that landed after one has `#<n> landed with <PR URL>, after Base fix <issue URL> merged`, or `closed` for one it waited on, as its line in the Tickets checklist and in the Spec run's Run notification, and one whose Base fix failed has the cause naming the issue.
+
+### One Base fix per Base branch
+
+A Run that finds an open Base fix issue for its Base branch and checks starts none of its own. After `waiting on Base fix #<n>, already open: <issue URL>`, it waits for that issue to close, as the Base fix's Self-merge leaves it, then merges the Base branch in again and watches CI. Waiting is the Run's one Base fix: if the checks are still Inherited failures once the issue has closed, the cause is `CI red on <check>, which also fails on <base> at <short sha>, even after Base fix <issue URL> closed; fix <base> first`, and its Run notification's `Base fix:` line says `closed`, or `not closed` if the Run ended first.
+
+An issue that covers more checks than the Run's counts; one for another Base branch, or that leaves out one of the Run's checks, does not. The wait has no time limit: a Base fix issue from another clone or machine that nobody is working on has to be closed, or the Run interrupted, by hand.
+
+Runs from one Launch directory, as a Spec run's Tickets are, look for the issue and write it one at a time, under a lock in the clone's git directory, so those that meet the same Inherited failure at once get one Base fix issue and one Base fix. There, a Run also knows whether a Base fix started from that Launch directory is still running:
+
+- A Run waiting on one that fails, leaving its issue open, fails too, with the cause `Base fix <issue URL> ended with its issue still open`.
+- A Run that finds the issue open after that Base fix has ended starts it again on the same issue, as its one Base fix, after `Base fix #<n> is open but no longer running; starting it again into <base>: <issue URL>`. It continues the Base fix's Issue branch, as any Run on an issue with one does: see [Continuation](#continuation).
+
+Across clones and machines the look is only a best-effort lock, and two Runs that look at the same moment may each start a Base fix.
+
+Without `base-fix` or `base.fix`, or with `no-base-fix`, an Inherited failure fails the Run as described in [What a Run does](#what-a-run-does).
+
 ## Continuation
 
 Running thirdshift again on an issue picks up where the last Run stopped ([ADR-0002](docs/adr/0002-existing-issue-branch-means-continue.md)). It looks at the highest-numbered Issue branch:
@@ -294,7 +339,7 @@ A Run is not idempotent: re-running builds on whatever is already on the branch,
 
 ## Failed runs
 
-A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI, or, for a Merge run, without that pull request merged. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, a CI-fix Repair that finds nothing on the branch to fix (a **declined CI fix**: the head is unchanged after it, so CI would stay red), a session that still ends while waiting on background work after its Resume, and a Base branch that keeps moving while CI runs, or in a Merge run, an Issue branch that keeps getting Foreign commits.
+A **Failed run** is one that ends, including by Ctrl-C or a closed terminal, without an open pull request from its Issue branch that targets the Base branch, is mergeable and has passing CI, or, for a Merge run, without that pull request merged. Causes include the session exiting non-zero, no pull request or one with the wrong base, running out of Repairs, CI red only on **Inherited failures** (`CI red on <check>[, <check>…], which also fails on <base> at <short sha>; fix <base> first`), a CI-fix Repair that finds nothing on the branch to fix (a **declined CI fix**: the head is unchanged after it, so CI would stay red), a session that still ends while waiting on background work after its Resume, and a Base branch that keeps moving while CI runs, or in a Merge run, an Issue branch that keeps getting Foreign commits.
 
 A Failed run:
 
@@ -310,7 +355,7 @@ A **Spec** is an issue with sub-issues, its **Tickets**. `thirdshift <Issue URL>
 
 The Spec PR opens as a draft as soon as the first Ticket lands, titled from the Spec, with `Closes #<spec>` and a Tickets checklist: one line per Ticket, ticked once it is done, with its pull request, or saying it is running, failed, blocked or unready. thirdshift rewrites the checklist between its `<!-- thirdshift:tickets -->` markers as each Ticket starts and ends, leaving the rest of the body as it is. Once every Ticket is done, the **Spec review** rewrites the body, and thirdshift puts the checklist back, appending it if the markers are gone, before marking the Spec PR ready.
 
-The Spec review session reviews the whole Spec branch against the Base branch and the Spec. Once it is marked ready, the Spec PR goes through the same step 6 as a Run's pull request, with the Spec as the issue and the Spec branch as the Issue branch: the Base branch is merged in (never rebased), CI watched, and a conflict or red CI handed to a Repair, within the same budgets.
+The Spec review session reviews the whole Spec branch against the Base branch and the Spec. Once it is marked ready, the Spec PR goes through the same step 6 as a Run's pull request, with the Spec as the issue and the Spec branch as the Issue branch: the Base branch is merged in (never rebased), CI watched, and a conflict or red CI handed to a Repair, within the same budgets. Inherited failures are told apart the same way everywhere: the Spec PR's against the Base branch, and a Ticket's against the Spec branch, its Base branch, with the cause shown on the Ticket's line of the checklist.
 
 Tickets always merge into the Spec branch, whatever the command or the User config says. `merge` (or `--merge`, or `merge.always = true` without `no-merge`) applies to the Spec PR alone: the Spec run ends with the Self-merge of the Spec PR into the Base branch, then deletes the Spec branch on `origin` and closes the Spec if the merge did not. Without it, the Spec run ends with the Spec PR ready for review. A Spec PR that fails from the Spec review on follows the [Failed run](#failed-runs) rules for its pull request, back to draft unless only the Self-merge could not happen (a policy refusal), and the Spec run exits `1`.
 

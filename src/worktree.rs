@@ -110,6 +110,11 @@ impl Worktree {
         &self.git
     }
 
+    /// The Launch directory the worktree was added from.
+    pub fn launch(&self) -> &Git {
+        &self.launch
+    }
+
     /// Push the Issue branch to origin (a no-op if it is already there).
     /// The target repo's hooks are skipped: the session runs the tests and CI
     /// gates the PR, so a local hook doesn't decide whether work reaches
@@ -156,6 +161,15 @@ impl Worktree {
         progress::step(format_args!("merging origin/{base} into {}", self.branch));
         self.git.run(&["fetch", "origin", base])?;
         self.merge(&format!("origin/{base}"))
+    }
+
+    /// The Base branch commit the Issue branch last merged in: the newest
+    /// commit of `origin/<base>`, as last fetched, that its head contains.
+    /// Another Run's fetch may have moved the shared remote-tracking ref on
+    /// since the merge, which this is unaffected by.
+    pub fn merged_base_commit(&self, base: &str) -> Result<String> {
+        self.git
+            .run(&["merge-base", "HEAD", &format!("origin/{base}")])
     }
 
     /// The Issue branch on origin, as fetched: `origin/<branch>`.
@@ -275,14 +289,7 @@ impl Drop for Worktree {
 /// worktrees and local Issue branches one at a time: `git worktree add -b`
 /// and `git branch -D` can fail partway on a lock file another holds.
 fn lock_launch(launch: &Git) -> Result<File> {
-    let common_dir = launch
-        .dir()
-        .join(launch.run(&["rev-parse", "--git-common-dir"])?);
-    let path = common_dir.join("thirdshift-worktrees.lock");
-    let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
-    file.lock()
-        .with_context(|| format!("can't lock {}", path.display()))?;
-    Ok(file)
+    launch.lock("thirdshift-worktrees.lock")
 }
 
 #[cfg(test)]
