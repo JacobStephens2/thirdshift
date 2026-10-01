@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::architect;
+use crate::architect::{self, Outcome};
 use crate::base_fix::Advice;
 use crate::config::EmailSettings;
 use crate::email::Resend;
@@ -92,24 +92,16 @@ impl ArchitectNotification {
         })
     }
 
-    /// Send the one notification for the Architect run whose Architecture
-    /// review ended as `reviewed` and, if its plan was dispatched, whose Spec
-    /// run or Run `dispatched`, with what became of the Base fix that took,
-    /// if any. A failed send is only a warning: it never changes the
-    /// Architect run's outcome.
-    pub fn send(
-        self,
-        reviewed: &Result<architect::Outcome, FailedRun>,
-        dispatched: Option<&Ended>,
-    ) {
-        let review = match reviewed {
-            Ok(outcome) => format!("{}: {}", outcome.review(), outcome.url()),
-            Err(failed) => failure_outcome(failed, "failed").to_string(),
-        };
-        let ending = match (reviewed, dispatched) {
-            (_, Some(ended)) => Ending::of(ended),
+    /// Send the one notification for the Architect run that `ended` so, by
+    /// being skipped or with its Architecture review, and, if its plan was
+    /// dispatched, whose Spec run or Run `dispatched`, with what became of
+    /// the Base fix that took, if any. A failed send is only a warning: it
+    /// never changes the Architect run's outcome.
+    pub fn send(self, ended: &Result<Outcome, FailedRun>, dispatched: Option<&Ended>) {
+        let ending = match (ended, dispatched) {
+            (_, Some(dispatched)) => Ending::of(dispatched),
             (Ok(outcome), None) => Ending {
-                outcome: outcome.review(),
+                outcome: outcome.name(),
                 pr_url: None,
                 cause: None,
                 advice: &[],
@@ -122,9 +114,16 @@ impl ArchitectNotification {
                 ..Ending::of_failure(failed)
             },
         };
-        let lines = ArchitectLines {
-            review: &review,
+        let reviewed = |review: String| ArchitectLines::Reviewed {
+            review,
             dispatched: dispatched.map(|_| ending.outcome),
+        };
+        let lines = match ended {
+            Ok(Outcome::Skipped(skipped)) => ArchitectLines::Skipped(skipped.to_string()),
+            Ok(Outcome::Reviewed(review)) => {
+                reviewed(format!("{}: {}", review.review(), review.url()))
+            }
+            Err(failed) => reviewed(failure_outcome(failed, "failed").to_string()),
         };
         let subject = architect_subject(self.repo.as_ref(), ending.outcome);
         send(&self.resend, &subject, self.started, Some(lines), &ending);
@@ -234,22 +233,28 @@ fn subject(issue: &IssueUrl, title: Option<&str>, outcome: &str) -> String {
 /// repository if it isn't known.
 fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
     let repo = repo
-        .map(|repo| format!(" {}/{}", repo.owner, repo.name))
+        .map(|repo| format!(" {}", repo.slug()))
         .unwrap_or_default();
     format!("[thirdshift]{repo} Architect run: {outcome}")
 }
 
 /// What an Architect run's notification says before what a Run's does.
-struct ArchitectLines<'a> {
-    /// How the Architecture review ended, with the issue it ended on.
-    review: &'a str,
-    /// How the Spec run or Run the plan was dispatched as ended, if it was.
-    dispatched: Option<&'a str>,
+enum ArchitectLines {
+    /// Why it was skipped.
+    Skipped(String),
+    /// It went on to its Architecture review, which may have failed.
+    Reviewed {
+        /// How the Architecture review ended, with the issue it ended on.
+        review: String,
+        /// How the Spec run or Run the plan was dispatched as ended, if it
+        /// was.
+        dispatched: Option<&'static str>,
+    },
 }
 
 /// What the notification's plain-text body says.
 struct Body<'a> {
-    architect: Option<ArchitectLines<'a>>,
+    architect: Option<ArchitectLines>,
     pr_url: Option<&'a str>,
     cause: Option<&'a str>,
     /// What the Run says after its cause, if Inherited failures failed it
@@ -267,11 +272,17 @@ struct Body<'a> {
 impl Body<'_> {
     fn text(&self) -> String {
         let mut text = String::new();
-        if let Some(architect) = &self.architect {
-            text += &format!("Review:       {}\n", architect.review);
-            if let Some(dispatched) = architect.dispatched {
-                text += &format!("Dispatched:   {dispatched}\n");
+        match &self.architect {
+            Some(ArchitectLines::Skipped(reason)) => {
+                text += &format!("Skipped:      {reason}\n");
             }
+            Some(ArchitectLines::Reviewed { review, dispatched }) => {
+                text += &format!("Review:       {review}\n");
+                if let Some(dispatched) = dispatched {
+                    text += &format!("Dispatched:   {dispatched}\n");
+                }
+            }
+            None => {}
         }
         if let Some(pr_url) = self.pr_url {
             text += &format!("Pull request: {pr_url}\n");
@@ -470,8 +481,8 @@ mod tests {
     #[test]
     fn an_architect_runs_body_starts_with_the_review_and_the_dispatched_runs_outcome() {
         let body = Body {
-            architect: Some(ArchitectLines {
-                review: "plan published: https://github.com/acme/widgets/issues/8",
+            architect: Some(ArchitectLines::Reviewed {
+                review: "plan published: https://github.com/acme/widgets/issues/8".to_string(),
                 dispatched: Some("merged"),
             }),
             pr_url: Some("https://github.com/acme/widgets/pull/1"),
@@ -492,8 +503,8 @@ mod tests {
              Took:         4s\n"
         );
         let body = Body {
-            architect: Some(ArchitectLines {
-                review: "idea filed: https://github.com/acme/widgets/issues/8",
+            architect: Some(ArchitectLines::Reviewed {
+                review: "idea filed: https://github.com/acme/widgets/issues/8".to_string(),
                 dispatched: None,
             }),
             pr_url: None,
@@ -504,6 +515,29 @@ mod tests {
             "Review:       idea filed: https://github.com/acme/widgets/issues/8\n\
              Host:         droplet-1\n\
              Took:         4s\n"
+        );
+    }
+
+    #[test]
+    fn a_skipped_architect_runs_body_starts_with_why_it_was_skipped() {
+        let body = Body {
+            architect: Some(ArchitectLines::Skipped(
+                "an Architect run is already running on acme/widgets".to_string(),
+            )),
+            pr_url: None,
+            cause: None,
+            advice: &[],
+            base_fix: None,
+            log: None,
+            host: "droplet-1",
+            took: Duration::from_secs(0),
+            tickets: &[],
+        };
+        assert_eq!(
+            body.text(),
+            "Skipped:      an Architect run is already running on acme/widgets\n\
+             Host:         droplet-1\n\
+             Took:         0s\n"
         );
     }
 

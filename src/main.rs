@@ -31,12 +31,13 @@ mod worktree;
 use std::io::Write;
 use std::process::ExitCode;
 
+use architect::{Outcome, Reviewed};
 use args::{ArchitectArgs, Command, RunArgs};
 use base_fix::{Advice, BaseFixAsk};
 use config::UserConfig;
 use failed_run::FailedRun;
 use notification::{ArchitectNotification, NotificationAsk, RunNotification};
-use run::{Ended, Goal};
+use run::{Ended, Goal, StartedBy};
 use spec_run::Parallel;
 
 const HELP: &str = "\
@@ -48,6 +49,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift --email <Issue URL>                 Run the factory on the issue, then email how the Run ended
        thirdshift architect [<focus>]                 Review the Base branch's architecture, publish a plan for a refactor, and run it
        thirdshift architect [<focus>] --plan-only     Publish and mark ready the plan for a refactor, and stop there
+       thirdshift architect base <branch> [<focus>]   Do either with <branch> as the Base branch, from a clone on any branch
        thirdshift email-test [<address>]              Send a test email through Resend, to check the email setup
        thirdshift setup                               Choose your defaults, then write the User config with every setting
        thirdshift update                              Update thirdshift to the latest release
@@ -100,8 +102,10 @@ Architecture review, an agent session in its own worktree at the Base branch's h
 looks for deepening opportunities and publishes the top one as a plan: a Spec with Tickets, or
 a single Ticket. thirdshift then checks that the plan is open, new and not labelled
 ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
-and dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single
-Ticket. The Architect run ends as that run does, with its exit code and its PR's URL.
+labels it architect-plan, creating the label if the repository lacks it, and dispatches it
+as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket. A Spec's
+Tickets are never labelled architect-plan. The Architect run ends as that run does, with
+its exit code and its PR's URL.
 merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run, as do the
 User config's defaults; parallel <n> fails it if the plan is a single Ticket. The review
 itself watches no CI, so only that run can start a Base fix. With --plan-only, the
@@ -111,6 +115,19 @@ that points the review at an area:
 
     thirdshift architect \"the Spec run\"
 
+base <branch> (or --base <branch>) names the Architect run's Base branch, whatever branch the
+clone has checked out, so it can start from a clone on another branch, on a detached HEAD or
+with uncommitted changes:
+
+    thirdshift architect base main
+
+The review starts at <branch>'s head on origin, and the run the plan is dispatched as branches
+off <branch> and targets it with its pull request. <branch> must exist on origin, with no local
+copy of it ahead, and launch.pull updates the clone only when <branch> is the branch checked
+out. base goes with --plan-only too, before or after the focus and the other flags. base is
+for architect only: thirdshift <Issue URL> doesn't take it. Without base, the Base branch is
+the branch checked out.
+
 A review that finds no Strong candidate publishes no plan. It files its top recommendation as
 one idea issue labelled needs-triage, or names the open issue that already covers it, and
 thirdshift prints that issue's URL instead, changing no label. Its last line says which: the
@@ -118,14 +135,30 @@ review filed the idea, or it filed nothing.
 
 A review that fails, is interrupted, or ends without naming one of these issues fails the
 Architect run and leaves any plan it published labelled needs-triage. One that finds no
-deepening opportunity at all has no issue to name, so it fails the Architect run too. Start
-one Architect run per repository at a time: two at once may publish the same plan.
+deepening opportunity at all has no issue to name, so it fails the Architect run too.
+
+Only one Architect run per repository runs at a time on a machine. One started while another
+on the same repository is still running, the Spec run or Run it dispatched included, is
+skipped: it prints an Architect run is already running on <owner>/<repo>, does nothing else
+and exits 0. Nothing is left to clear once that other run ends, however it ends. Runs
+started on an Issue URL are never skipped this way.
+
+An Architect run that finds an open issue labelled architect-plan is skipped too, before
+any review, with or without --plan-only: the last Architect plan is not finished. It names
+each open Architect plan, prints its URL on stdout, gives the command that picks it up,
+thirdshift <plan URL>, and exits 0. No flag overrides this: finish or close the Architect
+plan, or remove its label. An Architect run never retries or dispatches an existing
+Architect plan, so one whose run failed stays open until you pick it up.
+
+To run an Architect run on a schedule, have the operating system's scheduler, such as cron, run
+thirdshift architect base main from the clone: the README's \"On a schedule\" has a crontab entry.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
 for the whole Architect run, however it ends: how the review ended, with the plan or idea
 issue it named, and how the run the plan was dispatched as ended, with a line on each Ticket
-of a Spec run. The run the plan is dispatched as sends none of its own.
+of a Spec run. The run the plan is dispatched as sends none of its own. A skipped run still
+sends its Run notification, with the outcome skipped and the reason.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
@@ -238,7 +271,7 @@ fn main() -> ExitCode {
         &config.logs_dir,
         launch_pull,
         Parallel::new(parallel, config.spec_parallel),
-        child.as_ref(),
+        child.as_ref().map_or(StartedBy::Command, StartedBy::Child),
         base_fix,
     );
     let code = run_outcome(&ended);
@@ -250,15 +283,19 @@ fn main() -> ExitCode {
 
 /// An Architect run: the Architecture review and its plan marked ready, then,
 /// unless the command asked to stop at the plan, the plan dispatched as
-/// `thirdshift <plan URL>` with the same flags would be, whose ending is the
-/// Architect run's, with the Base fix it took, if any. One that stops at the
-/// plan, or whose review found no Strong candidate and so published no plan
-/// to dispatch, puts the URL of the issue it ended on on stdout: the plan,
-/// the idea issue the review filed, or the issue that already covers its top
-/// recommendation. One whose review or plan fails puts the cause and the
-/// session log on stderr. If asked, by the command or the User config, it
-/// sends one Run notification, however it ended; the run it dispatched sends
-/// none of its own.
+/// `thirdshift <plan URL>` with the same flags would be, but on the Architect
+/// run's Base branch, whatever the Launch directory has checked out. The
+/// dispatched run's ending is the Architect run's, with the Base fix it took,
+/// if any. One that stops at the plan, or whose review found no Strong
+/// candidate and so published no plan to dispatch, puts the URL of the issue
+/// it ended on on stdout: the plan, the idea issue the review filed, or the
+/// issue that already covers its top recommendation. One whose review or
+/// plan fails puts the cause and the session log on stderr. One that is
+/// skipped says why on stderr, and is no failure: as another on its
+/// repository is still running, it puts nothing on stdout, and as Architect
+/// plans are still open there, the URL of each. If asked, by the command or
+/// the User config, it sends one Run notification, however it ended, skipped
+/// included; the run it dispatched sends none of its own.
 fn architect(args: ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -276,9 +313,14 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let reviewed = architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull);
-    let dispatched = match (&reviewed, &args.dispatch) {
-        (Ok(architect::Outcome::PlanReady(plan)), Some(dispatch)) => {
+    let ended = architect::run(
+        args.focus.as_deref(),
+        args.base.as_deref(),
+        &config.logs_dir,
+        config.launch_pull,
+    );
+    let dispatched = match (&ended, &args.dispatch) {
+        (Ok(Outcome::Reviewed(Reviewed::PlanReady { plan, base })), Some(dispatch)) => {
             progress::step(format_args!(
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
@@ -289,7 +331,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 &config.logs_dir,
                 config.launch_pull,
                 Parallel::new(dispatch.parallel, config.spec_parallel),
-                None,
+                StartedBy::ArchitectRun { base },
                 dispatch.base_fix.clone().unwrap_or_else(|| {
                     // The plan is retried as a Run of its own: another
                     // Architect run would start a new review instead.
@@ -304,18 +346,18 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         }
         _ => None,
     };
-    let code = match (&reviewed, &dispatched) {
-        (_, Some(ended)) => run_outcome(ended),
+    let code = match (&ended, &dispatched) {
+        (_, Some(dispatched)) => run_outcome(dispatched),
         (Ok(outcome), None) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("{outcome}"));
-            print_url(outcome.url());
+            outcome.urls().into_iter().for_each(print_url);
             ExitCode::SUCCESS
         }
         (Err(failed), None) => report(failed, &[]),
     };
     if let Some(notification) = notification {
-        notification.send(&reviewed, dispatched.as_ref());
+        notification.send(&ended, dispatched.as_ref());
     }
     code
 }

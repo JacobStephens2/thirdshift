@@ -475,7 +475,7 @@ fn open_fix_covering(
     inherited: &[Check],
 ) -> Result<Option<IssueUrl>> {
     let before_checks = issue_title(base, "");
-    let covering = github::open_issues_labelled(issue, BASE_FIX_LABEL)?
+    let covering = github::open_issues_labelled(&issue.repo_slug(), BASE_FIX_LABEL)?
         .into_iter()
         .filter(|(open, title)| {
             open.number != issue.number
