@@ -32,12 +32,11 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use args::{ArchitectArgs, Command, RunArgs};
-use base_fix::{BaseFix, BaseFixAsk};
-use child_run::Kind;
+use base_fix::BaseFixAsk;
 use config::UserConfig;
 use failed_run::FailedRun;
 use notification::{ArchitectNotification, NotificationAsk, RunNotification};
-use run::{Goal, Reached};
+use run::{Ended, Goal};
 use spec_run::Parallel;
 
 const HELP: &str = "\
@@ -224,20 +223,18 @@ fn main() -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let mut base_fix = BaseFix::new(child.as_ref(), base_fix);
-    let ended = run::run(
+    let ended = run::run_to_end(
         &issue,
         goal,
         &config.logs_dir,
         launch_pull,
         Parallel::new(parallel, config.spec_parallel),
-        child.as_ref().map(Kind::base),
-        &mut base_fix,
+        child.as_ref(),
+        base_fix,
     );
-    let base_fix = base_fix.report();
-    let code = run_outcome(&ended, base_fix.as_deref());
+    let code = run_outcome(&ended);
     if let Some(notification) = notification {
-        notification.send(&ended, base_fix.as_deref());
+        notification.send(&ended);
     }
     code
 }
@@ -245,11 +242,12 @@ fn main() -> ExitCode {
 /// An Architect run: the Architecture review and its plan marked ready, then,
 /// unless the command asked to stop at the plan, the plan dispatched as
 /// `thirdshift <plan URL>` with the same flags would be, whose ending is the
-/// Architect run's, with the Base fix it took, if any. One that stops at the plan, or whose review found no
-/// Strong candidate and so published no plan to dispatch, puts the URL of the
-/// issue it ended on on stdout: the plan, the idea issue the review filed, or
-/// the issue that already covers its top recommendation. One whose review or
-/// plan fails puts the cause and the session log on stderr. If asked, by the
+/// Architect run's, with the Base fix it took, if any. One that stops at the
+/// plan, or whose review found no Strong candidate and so published no plan
+/// to dispatch, puts the URL of the issue it ended on on stdout: the plan,
+/// the idea issue the review filed, or the issue that already covers its top
+/// recommendation. One whose review or plan fails puts the cause and the
+/// session log on stderr. If asked, by the
 /// command or the User config, it sends one Run notification, however it
 /// ended; the run it dispatched sends none of its own.
 fn architect(args: ArchitectArgs) -> ExitCode {
@@ -274,26 +272,20 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
             ));
-            let base_fix = dispatch.base_fix.unwrap_or(config.default_base_fix());
-            let mut base_fix = BaseFix::new(None, base_fix);
-            let ended = run::run(
+            Some(run::run_to_end(
                 plan,
                 dispatch.goal.unwrap_or(config.default_goal()),
                 &config.logs_dir,
                 config.launch_pull,
                 Parallel::new(dispatch.parallel, config.spec_parallel),
                 None,
-                &mut base_fix,
-            );
-            Some((ended, base_fix.report()))
+                dispatch.base_fix.unwrap_or(config.default_base_fix()),
+            ))
         }
         _ => None,
     };
-    let dispatched = dispatched
-        .as_ref()
-        .map(|(ended, base_fix)| (ended, base_fix.as_deref()));
-    let code = match (&reviewed, dispatched) {
-        (_, Some((ended, base_fix))) => run_outcome(ended, base_fix),
+    let code = match (&reviewed, &dispatched) {
+        (_, Some(ended)) => run_outcome(ended),
         (Ok(outcome), None) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("{outcome}"));
@@ -303,7 +295,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         (Err(failed), None) => report(failed),
     };
     if let Some(notification) = notification {
-        notification.send(&reviewed, dispatched);
+        notification.send(&reviewed, dispatched.as_ref());
     }
     code
 }
@@ -321,14 +313,14 @@ fn asked<N>(
 }
 
 /// How a Run or a Spec run that `ended` shows: what became of its Base fix,
-/// `base_fix`, if it took one, then its pull request's URL on stdout once it
-/// reached its goal, or as a Failed run does.
-fn run_outcome(ended: &Result<Reached, FailedRun>, base_fix: Option<&str>) -> ExitCode {
+/// if it took one, then its pull request's URL on stdout once it reached its
+/// goal, or as a Failed run does.
+fn run_outcome(ended: &Ended) -> ExitCode {
     // Before the outcome, which a failed child Run's last lines are read as.
-    if let Some(report) = base_fix {
+    if let Some(report) = &ended.base_fix {
         progress::step(format_args!("{}{report}", base_fix::REPORT));
     }
-    match ended {
+    match &ended.outcome {
         Ok(reached) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!(

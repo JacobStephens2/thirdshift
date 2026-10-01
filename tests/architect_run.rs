@@ -889,46 +889,52 @@ fn without_base_fix_the_dispatched_run_fails_on_an_inherited_failure() {
 }
 
 #[test]
-fn base_fix_reaches_each_tickets_run_of_the_dispatched_spec_run() {
-    // The plan is a Spec, #8, with one Ticket, #9, whose Run meets an
-    // Inherited failure from the Spec branch. Its Base fix issue is #10.
-    let scenario = scenario();
-    scenario.agent_does_in_session(
-        1,
-        r#"
-spec=$(gh issue create --title "Deepen the session module" --body "The Spec" --label needs-triage)
-gh issue create --title "Move the logs" --body "A Ticket" --label ready-for-agent
-gh fake sub-issues 8 '[9]'
-printf 'Architecture review plan: %s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
-"#,
-    );
-    scenario.agent_does_for(
-        9,
-        &format!(
-            "{}{}{}",
-            agent_opens_pr(9, "issue-8"),
-            checks_on_head(RED),
-            checks_on_origin("issue-8", RED)
+fn base_fix_or_the_user_configs_reaches_each_tickets_run_of_the_dispatched_spec_run() {
+    for (args, config) in [
+        (vec!["architect", "base-fix", "parallel", "1"], None),
+        (
+            vec!["architect", "parallel", "1"],
+            Some("[base]\nfix = true\n"),
         ),
-    );
-    scenario.agent_does_for(10, &base_fix_opens_pr(10, "issue-8"));
+    ] {
+        // The first Ticket's Run, #9's, meets an Inherited failure from the
+        // Spec branch. One Ticket at a time, so the Spec branch can't move
+        // under it, which would have it merged in again instead. The Base
+        // fix issue is the next after the Tickets, #11.
+        let scenario = spec_plan("");
+        scenario.agent_does_for(
+            9,
+            &format!(
+                "{}{}{}",
+                agent_opens_pr(9, "issue-8"),
+                checks_on_head(RED),
+                checks_on_origin("issue-8", RED)
+            ),
+        );
+        scenario.agent_does_for(11, &base_fix_opens_pr(11, "issue-8"));
+        if let Some(config) = config {
+            scenario.user_config_is(config);
+        }
 
-    let result = scenario.run(&["architect", "base-fix"]);
+        let result = scenario.run(&args);
 
-    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
-    assert!(
-        result.stderr.contains(
-            "#9: starting Base fix #10 into issue-8: https://github.com/acme/widgets/issues/10\n"
-        ),
-        "stderr: {}",
-        result.stderr
-    );
-    let fix = pr_from(&scenario, "issue-10");
-    assert_eq!(fix["base"], "issue-8");
-    assert_eq!(fix["state"], "MERGED");
-    assert_eq!(pr_from(&scenario, "issue-9")["state"], "MERGED");
-    for file in ["issue-9.txt", "ci-fix.txt"] {
-        assert!(scenario.origin_file("issue-8", file).is_some(), "{file}");
+        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+        assert!(
+            result.stderr.contains(
+                "#9: starting Base fix #11 into issue-8: https://github.com/acme/widgets/issues/11\n"
+            ),
+            "{args:?}: stderr: {}",
+            result.stderr
+        );
+        let fix = pr_from(&scenario, "issue-11");
+        assert_eq!(fix["base"], "issue-8");
+        assert_eq!(fix["state"], "MERGED");
+        for ticket in ["issue-9", "issue-10"] {
+            assert_eq!(pr_from(&scenario, ticket)["state"], "MERGED", "{ticket}");
+        }
+        for file in ["issue-9.txt", "issue-10.txt", "ci-fix.txt"] {
+            assert!(scenario.origin_file("issue-8", file).is_some(), "{file}");
+        }
     }
 }
 

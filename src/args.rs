@@ -85,8 +85,8 @@ pub struct RunArgs {
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
 /// `setup`, `email-test` and `architect` are commands only as the first
-/// argument. Otherwise it is a Run: one Issue URL, with each Run flag at most once,
-/// before or after it.
+/// argument. Otherwise it is a Run: one Issue URL, with each Run flag at
+/// most once, before or after it.
 /// `email` may be followed by the address to send the Run notification to,
 /// and `parallel` must be followed by a whole number from 1 up.
 /// `merge` and `no-merge` contradict each other, as do `email` and `no-email`,

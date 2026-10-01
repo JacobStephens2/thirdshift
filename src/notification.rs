@@ -15,7 +15,7 @@ use crate::github;
 use crate::host;
 use crate::issue::{IssueUrl, Repo};
 use crate::progress;
-use crate::run::Reached;
+use crate::run::Ended;
 
 /// What a Run or an Architect run asks about its Run notification, by its
 /// command or, without `email` or `no-email`, by the User config.
@@ -56,11 +56,11 @@ impl RunNotification {
         })
     }
 
-    /// Send the notification for the Run that `ended`, with `base_fix`, what
-    /// became of the Base fix it started or waited on, if any. A failed send is
-    /// only a warning: it never changes the Run's outcome.
-    pub fn send(self, ended: &Result<Reached, FailedRun>, base_fix: Option<&str>) {
-        let ending = Ending::of(ended, base_fix);
+    /// Send the notification for the Run that `ended`, with what became of
+    /// the Base fix it started or waited on, if any. A failed send is only a
+    /// warning: it never changes the Run's outcome.
+    pub fn send(self, ended: &Ended) {
+        let ending = Ending::of(ended);
         let subject = subject(&self.issue, self.title.as_deref(), ending.outcome);
         send(&self.resend, &subject, self.started, None, &ending);
     }
@@ -99,14 +99,14 @@ impl ArchitectNotification {
     pub fn send(
         self,
         reviewed: &Result<architect::Outcome, FailedRun>,
-        dispatched: Option<(&Result<Reached, FailedRun>, Option<&str>)>,
+        dispatched: Option<&Ended>,
     ) {
         let review = match reviewed {
             Ok(outcome) => format!("{}: {}", outcome.review(), outcome.url()),
             Err(failed) => failure_outcome(failed, "failed").to_string(),
         };
         let ending = match (reviewed, dispatched) {
-            (_, Some((ended, base_fix))) => Ending::of(ended, base_fix),
+            (_, Some(ended)) => Ending::of(ended),
             (Ok(outcome), None) => Ending {
                 outcome: outcome.review(),
                 pr_url: None,
@@ -143,10 +143,9 @@ struct Ending<'a> {
 }
 
 impl<'a> Ending<'a> {
-    /// How the Run or Spec run that `ended` did, with `base_fix`, what
-    /// became of the Base fix it started or waited on, if any.
-    fn of(ended: &'a Result<Reached, FailedRun>, base_fix: Option<&'a str>) -> Self {
-        match ended {
+    fn of(ended: &'a Ended) -> Self {
+        let base_fix = ended.base_fix.as_deref();
+        match &ended.outcome {
             Ok(reached) => Ending {
                 outcome: reached.goal.outcome(),
                 pr_url: Some(&reached.pr_url),
