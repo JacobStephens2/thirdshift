@@ -126,6 +126,13 @@ impl HeldRun {
         assert!(status.success());
     }
 
+    /// Kill the Run, unless it had already exited, and wait until it is gone.
+    /// What it started lives on.
+    pub fn kill(&mut self) {
+        self.signal("KILL");
+        self.child.wait().unwrap();
+    }
+
     /// Wait for the Run to exit, and for everything it started to let go of
     /// its stdout and stderr.
     pub fn finish(self) -> RunResult {

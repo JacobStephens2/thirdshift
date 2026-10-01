@@ -1383,6 +1383,14 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
 /// scenario's repository.
 const ALREADY_RUNNING: &str = "thirdshift: an Architect run is already running on acme/widgets\n";
 
+/// Assert the Architect run was skipped as one is already running: exit 0,
+/// that line alone on stderr, and nothing on stdout.
+fn assert_skipped_as_already_running(result: &RunResult) {
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stderr, ALREADY_RUNNING);
+    assert_eq!(result.stdout, "");
+}
+
 /// A script in which the agent touches `started` in the scenario root, then
 /// waits there until the test touches `release`, or until the scenario is
 /// gone, as after a test that failed while holding it.
@@ -1411,9 +1419,7 @@ fn a_second_architect_run_on_the_repository_is_skipped_while_the_first_is_mid_re
 
     let second = scenario.run(&["architect"]);
 
-    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
-    assert_eq!(second.stderr, ALREADY_RUNNING);
-    assert_eq!(second.stdout, "");
+    assert_skipped_as_already_running(&second);
     assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
     assert_eq!(
         scenario.launch_git(&["rev-parse", "refs/heads/main"]),
@@ -1448,9 +1454,7 @@ fn a_second_architect_run_is_skipped_while_the_firsts_dispatched_run_or_spec_run
 
         let second = scenario.run(&["architect"]);
 
-        assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
-        assert_eq!(second.stderr, ALREADY_RUNNING);
-        assert_eq!(second.stdout, "");
+        assert_skipped_as_already_running(&second);
         release(&scenario);
         let first = first.finish();
         assert_ended_with_pr(&first, &pr_from(&scenario, "issue-8"), "ready for review");
@@ -1483,19 +1487,18 @@ fn once_the_first_architect_run_is_killed_a_new_one_runs_with_nothing_to_clean_u
     scenario.agent_does_in_session(1, AGENT_WAITS_FOR_RELEASE);
     scenario.agent_does_in_session(2, AGENT_PUBLISHES_A_TICKET);
     let mut first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
-    first.signal("KILL");
-    // The killed run could not stop its session, which outlives it until
-    // released.
-    release(&scenario);
-    assert_eq!(first.finish().code, None);
+    first.kill();
     assert_eq!(scenario.entries("work"), [REPO, "widgets-architect"]);
 
+    // The killed run could not stop its session, which is still going.
     let second = scenario.run(&["architect", "--plan-only"]);
 
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert_eq!(second.stdout, format!("{PLAN_URL}\n"));
     assert_eq!(scenario.claude_calls().len(), 2);
     assert_eq!(scenario.entries("work"), [REPO]);
+    release(&scenario);
+    assert_eq!(first.finish().code, None);
 }
 
 #[test]
@@ -1542,9 +1545,7 @@ fn a_skipped_architect_run_sends_one_notification_with_skipped_in_its_subject_an
         &["architect", "--email", "me@example.com"],
     );
 
-    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
-    assert_eq!(second.stderr, ALREADY_RUNNING);
-    assert_eq!(second.stdout, "");
+    assert_skipped_as_already_running(&second);
     let (subject, text) = the_one_notification(&resend);
     assert_eq!(subject, "[thirdshift] acme/widgets Architect run: skipped");
     assert!(

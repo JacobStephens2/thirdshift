@@ -44,6 +44,17 @@ pub enum Outcome {
     Reviewed(Reviewed),
 }
 
+impl Outcome {
+    /// How the Architect run ended, as its Run notification's subject says
+    /// it when nothing was dispatched.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Skipped(_) => "skipped",
+            Self::Reviewed(reviewed) => reviewed.review(),
+        }
+    }
+}
+
 impl fmt::Display for Outcome {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -148,9 +159,13 @@ pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<Ou
         .ok()
         .context("HEAD is detached; check out the branch the Architecture review should scan")?;
     preflight::check_base_branch(&launch, &base)?;
-    if !take_run_lock(&repo)? {
+    let Some(lock) = try_run_lock(&repo)? else {
         return Ok(Outcome::Skipped(Skipped::AlreadyRunning(repo)));
-    }
+    };
+    // Never closed, so the lock is held for as long as this process lives,
+    // through the Spec run or Run its plan is dispatched as, and the
+    // operating system releases it however the process ends.
+    std::mem::forget(lock);
     if launch_pull {
         run::pull_base_branch(&launch, Some(&base), &base);
     }
@@ -185,14 +200,14 @@ pub fn repo() -> Result<Repo> {
     launch().map(|(_, _, repo)| repo)
 }
 
-/// Become the one Architect run on `repo` on this machine, until this process
-/// exits: take, without waiting, an advisory lock on a file under
+/// Try, without waiting, for the lock that makes its holder the one Architect
+/// run on `repo` on this machine: an advisory lock on a file under
 /// `~/.thirdshift` named for the repository, as GitHub compares names,
-/// whatever their case. `false` if another process holds it: an Architect run
-/// on `repo` is still running. The operating system releases the lock when
-/// this process ends, however it ends, so no lock is ever stale, and the file
-/// is left where it is.
-fn take_run_lock(repo: &Repo) -> Result<bool> {
+/// whatever their case. It is held until the file returned is closed, or the
+/// process ends. `None` if another process holds it: an Architect run on
+/// `repo` is still running. The lock file itself is never deleted, and means
+/// nothing unless locked.
+fn try_run_lock(repo: &Repo) -> Result<Option<File>> {
     let dir = config::home()?
         .join(".thirdshift/architect-locks")
         .join(repo.owner.to_ascii_lowercase());
@@ -200,13 +215,8 @@ fn take_run_lock(repo: &Repo) -> Result<bool> {
     let path = dir.join(format!("{}.lock", repo.name.to_ascii_lowercase()));
     let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
     match file.try_lock() {
-        Ok(()) => {
-            // Never closed, so the lock is held for as long as the process
-            // lives, through the Spec run or Run it dispatches.
-            std::mem::forget(file);
-            Ok(true)
-        }
-        Err(TryLockError::WouldBlock) => Ok(false),
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
         Err(TryLockError::Error(error)) => {
             Err(error).with_context(|| format!("can't lock {}", path.display()))
         }

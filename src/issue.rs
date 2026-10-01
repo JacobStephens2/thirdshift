@@ -102,7 +102,7 @@ impl Repo {
         }
     }
 
-    /// `owner/repo`, as its URL spells it.
+    /// `owner/name`, as its URL spells it.
     pub fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }

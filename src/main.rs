@@ -275,8 +275,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let reviewed = architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull);
-    let dispatched = match (&reviewed, &args.dispatch) {
+    let ended = architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull);
+    let dispatched = match (&ended, &args.dispatch) {
         (Ok(Outcome::Reviewed(Reviewed::PlanReady(plan))), Some(dispatch)) => {
             progress::step(format_args!(
                 "dispatching the plan {url}, as thirdshift {url} would",
@@ -294,8 +294,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         }
         _ => None,
     };
-    let code = match (&reviewed, &dispatched) {
-        (_, Some(ended)) => run_outcome(ended),
+    let code = match (&ended, &dispatched) {
+        (_, Some(dispatched)) => run_outcome(dispatched),
         (Ok(outcome), None) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("{outcome}"));
@@ -307,7 +307,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         (Err(failed), None) => report(failed),
     };
     if let Some(notification) = notification {
-        notification.send(&reviewed, dispatched.as_ref());
+        notification.send(&ended, dispatched.as_ref());
     }
     code
 }

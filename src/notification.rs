@@ -91,35 +91,37 @@ impl ArchitectNotification {
         })
     }
 
-    /// Send the one notification for the Architect run that was skipped, or
-    /// whose Architecture review ended, as `reviewed` and, if its plan was
+    /// Send the one notification for the Architect run that `ended` so, by
+    /// being skipped or with its Architecture review, and, if its plan was
     /// dispatched, whose Spec run or Run `dispatched`, with what became of
     /// the Base fix that took, if any. A failed send is only a warning: it
     /// never changes the Architect run's outcome.
-    pub fn send(
-        self,
-        reviewed: &Result<architect::Outcome, FailedRun>,
-        dispatched: Option<&Ended>,
-    ) {
-        let ending = match (reviewed, dispatched) {
-            (_, Some(ended)) => Ending::of(ended),
-            (Ok(Outcome::Skipped(_)), None) => Ending::of_outcome("skipped"),
-            (Ok(Outcome::Reviewed(reviewed)), None) => Ending::of_outcome(reviewed.review()),
+    pub fn send(self, ended: &Result<Outcome, FailedRun>, dispatched: Option<&Ended>) {
+        let ending = match (ended, dispatched) {
+            (_, Some(dispatched)) => Ending::of(dispatched),
+            (Ok(outcome), None) => Ending {
+                outcome: outcome.name(),
+                pr_url: None,
+                cause: None,
+                base_fix: None,
+                log: None,
+                tickets: &[],
+            },
             (Err(failed), None) => Ending {
                 outcome: failure_outcome(failed, "review failed"),
                 ..Ending::of_failure(failed)
             },
         };
-        let lines = match reviewed {
+        let reviewed = |review: String| ArchitectLines::Reviewed {
+            review,
+            dispatched: dispatched.map(|_| ending.outcome),
+        };
+        let lines = match ended {
             Ok(Outcome::Skipped(skipped)) => ArchitectLines::Skipped(skipped.to_string()),
-            Ok(Outcome::Reviewed(reviewed)) => ArchitectLines::Reviewed {
-                review: format!("{}: {}", reviewed.review(), reviewed.url()),
-                dispatched: dispatched.map(|_| ending.outcome),
-            },
-            Err(failed) => ArchitectLines::Reviewed {
-                review: failure_outcome(failed, "failed").to_string(),
-                dispatched: dispatched.map(|_| ending.outcome),
-            },
+            Ok(Outcome::Reviewed(review)) => {
+                reviewed(format!("{}: {}", review.review(), review.url()))
+            }
+            Err(failed) => reviewed(failure_outcome(failed, "failed").to_string()),
         };
         let subject = architect_subject(self.repo.as_ref(), ending.outcome);
         send(&self.resend, &subject, self.started, Some(lines), &ending);
@@ -140,18 +142,6 @@ struct Ending<'a> {
 }
 
 impl<'a> Ending<'a> {
-    /// An ending that is all in its `outcome`: no pull request, no failure.
-    fn of_outcome(outcome: &'static str) -> Self {
-        Ending {
-            outcome,
-            pr_url: None,
-            cause: None,
-            base_fix: None,
-            log: None,
-            tickets: &[],
-        }
-    }
-
     fn of(ended: &'a Ended) -> Self {
         let base_fix = ended.base_fix.as_deref();
         match &ended.outcome {
