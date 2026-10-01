@@ -14,7 +14,7 @@ use crate::progress;
 use crate::spec_run::READY_FOR_AGENT;
 
 /// The label of a Claimed issue.
-const IN_PROGRESS: &str = "in-progress";
+pub const IN_PROGRESS: &str = "in-progress";
 
 /// The description the `in-progress` label is added to the repository with
 /// if the repository lacks it.
@@ -34,7 +34,7 @@ pub struct Claim<'a> {
 /// Whether an issue with `labels` carries a Claim, whatever else it is
 /// labelled.
 pub fn is_on(labels: &[String]) -> bool {
-    has_label(labels, IN_PROGRESS)
+    github::has_label(labels, IN_PROGRESS)
 }
 
 /// Make the Claim on `issue`: label it `in-progress`, in place of
@@ -51,7 +51,7 @@ pub fn make(issue: &IssueUrl) -> Result<Claim<'_>> {
 /// [`make`], its failure as `gh` gave it.
 fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
     let mut labels = github::issue_labels(issue)?;
-    let (claimed, ready) = (is_on(&labels), has_label(&labels, READY_FOR_AGENT));
+    let (claimed, ready) = (is_on(&labels), github::has_label(&labels, READY_FOR_AGENT));
     let claim = Claim {
         issue,
         added_in_progress: !claimed,
@@ -77,12 +77,6 @@ fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
     labels.retain(|name| !name.eq_ignore_ascii_case(READY_FOR_AGENT));
     github::set_labels_adding(issue, &labels, &[IN_PROGRESS])?;
     Ok(claim)
-}
-
-/// Whether `label` is one of `labels`, whatever its case: GitHub's label
-/// names are case-insensitive.
-fn has_label(labels: &[String], label: &str) -> bool {
-    labels.iter().any(|name| name.eq_ignore_ascii_case(label))
 }
 
 impl Claim<'_> {
