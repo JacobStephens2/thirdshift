@@ -13,11 +13,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 
 use crate::args;
-use crate::base_fix::{self, Advice, BaseFixAsk};
-use crate::failed_run;
+use crate::base_fix::BaseFixAsk;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
+use crate::run_ending;
 
 /// How often to check whether a child Run has ended, or been interrupted.
 const POLL: Duration = Duration::from_millis(100);
@@ -160,28 +160,17 @@ pub fn name_this_process() {
 /// child, which is waited for as it goes down its Failed run path, and it
 /// ended `Interrupted`. Otherwise it reached its goal if it exits 0, with
 /// the Base fix it reported, and failed otherwise, with the cause and
-/// session log it ended on.
+/// session log it showed, or with its exit status as the cause if it showed
+/// none.
 pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
     // Relay on its own thread, so this one can watch for an interrupt.
     let stderr = child.stderr.take().context("no stderr from the Run")?;
-    // A failed Run ends on its error, then its session log if it has one,
-    // with any advice between them.
     let relay = thread::spawn(move || -> std::io::Result<_> {
-        let mut last_lines: [Option<String>; 2] = [None, None];
-        let mut base_fix = None;
+        let mut reader = run_ending::Reader::default();
         for line in BufReader::new(stderr).lines() {
-            let line = line?;
-            let message = progress::relay(format_args!("#{number}"), &line).to_string();
-            if let Some(report) = message.strip_prefix(base_fix::REPORT) {
-                base_fix = Some(report.to_string());
-            }
-            // Between its cause and its session log, and neither.
-            if Advice::is_line(&message) {
-                continue;
-            }
-            last_lines = [last_lines[1].take(), Some(message)];
+            reader.read(progress::relay(number, &line?));
         }
-        Ok((last_lines, base_fix))
+        Ok(reader)
     });
     let mut passed_on = false;
     let status = loop {
@@ -202,7 +191,7 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
         }
         thread::sleep(POLL);
     };
-    let (last_lines, base_fix) = relay
+    let reader = relay
         .join()
         .map_err(|_| anyhow!("the relay of the Run for #{number} panicked"))?
         .with_context(|| format!("could not read the Run for #{number}"))?;
@@ -213,26 +202,17 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
         .context("no stdout from the Run")?
         .read_to_string(&mut stdout)
         .with_context(|| format!("could not read the Run for #{number}"))?;
-    if status.success() {
-        return Ok(Ended::Reached {
-            pr_url: stdout.lines().last().map(String::from),
-            base_fix,
-        });
-    }
-    if interrupt::requested() {
-        return Ok(Ended::Interrupted);
-    }
-    let [before, last] = last_lines;
-    let (cause, log) = match last {
-        Some(last) => match last.strip_prefix(failed_run::SESSION_LOG) {
-            Some(log) => (before, Some(log.to_string())),
-            None => (Some(last), None),
+    let ending = reader.finish(&stdout, status.success());
+    Ok(match ending.outcome {
+        Ok(pr_url) => Ended::Reached {
+            pr_url,
+            base_fix: ending.base_fix,
         },
-        None => (None, None),
-    };
-    Ok(Ended::Failed {
-        cause: cause.unwrap_or_else(|| format!("the Run {status}")),
-        log,
+        Err(_) if interrupt::requested() => Ended::Interrupted,
+        Err(failure) => Ended::Failed {
+            cause: failure.cause.unwrap_or_else(|| format!("the Run {status}")),
+            log: failure.log,
+        },
     })
 }
 

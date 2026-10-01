@@ -23,21 +23,20 @@ mod prompts_page;
 mod questions;
 mod resend_key;
 mod run;
+mod run_ending;
 mod session;
 mod spec_run;
 mod update;
 mod worktree;
 
-use std::io::Write;
 use std::process::ExitCode;
 
 use architect::{Outcome, Reviewed};
 use args::{ArchitectArgs, Command, RunArgs};
-use base_fix::{Advice, BaseFixAsk};
+use base_fix::BaseFixAsk;
 use config::UserConfig;
-use failed_run::FailedRun;
 use notification::{ArchitectNotification, NotificationAsk, RunNotification};
-use run::{Ended, Goal, StartedBy};
+use run::{Goal, StartedBy};
 use spec_run::Parallel;
 
 const HELP: &str = "\
@@ -274,7 +273,7 @@ fn main() -> ExitCode {
         child.as_ref().map_or(StartedBy::Command, StartedBy::Child),
         base_fix,
     );
-    let code = run_outcome(&ended);
+    let code = run_ending::show(&ended);
     if let Some(notification) = notification {
         notification.send(&ended);
     }
@@ -347,14 +346,9 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         _ => None,
     };
     let code = match (&ended, &dispatched) {
-        (_, Some(dispatched)) => run_outcome(dispatched),
-        (Ok(outcome), None) => {
-            // Also on stderr, so the outcome shows even when stdout is captured.
-            progress::step(format_args!("{outcome}"));
-            outcome.urls().into_iter().for_each(print_url);
-            ExitCode::SUCCESS
-        }
-        (Err(failed), None) => report(failed, &[]),
+        (_, Some(dispatched)) => run_ending::show(dispatched),
+        (Ok(outcome), None) => run_ending::show_architect(outcome),
+        (Err(failed), None) => run_ending::show_failure(failed),
     };
     if let Some(notification) = notification {
         notification.send(&ended, dispatched.as_ref());
@@ -374,29 +368,6 @@ fn asked<N>(
     }
 }
 
-/// How a Run or a Spec run that `ended` shows: what became of its Base fix,
-/// if it took one, then its pull request's URL on stdout once it reached its
-/// goal, or as a Failed run does.
-fn run_outcome(ended: &Ended) -> ExitCode {
-    // Before the outcome, which a failed child Run's last lines are read as.
-    if let Some(report) = &ended.base_fix {
-        progress::step(format_args!("{}{report}", base_fix::REPORT));
-    }
-    match &ended.outcome {
-        Ok(reached) => {
-            // Also on stderr, so the outcome shows even when stdout is captured.
-            progress::step(format_args!(
-                "PR {} is {}",
-                reached.pr_url,
-                reached.goal.outcome()
-            ));
-            print_url(&reached.pr_url);
-            ExitCode::SUCCESS
-        }
-        Err(failed) => report(failed, &ended.advice),
-    }
-}
-
 /// The User config, after offering Setup where there is none, or the failure
 /// to exit with, its error reported.
 fn user_config() -> Result<UserConfig, ExitCode> {
@@ -409,30 +380,6 @@ fn user_config() -> Result<UserConfig, ExitCode> {
 fn failure(error: &anyhow::Error) -> ExitCode {
     progress::step(format_args!("{error:#}"));
     ExitCode::FAILURE
-}
-
-/// How a Failed run, or a failed Architect run, shows: its cause, its
-/// `advice`, if it has any, and its session log on stderr, and its pull
-/// request's URL, if it left one, on stdout.
-fn report(failed: &FailedRun, advice: &[Advice]) -> ExitCode {
-    progress::step(format_args!("{:#}", failed.error));
-    for line in advice {
-        progress::step(line);
-    }
-    if let Some(log) = &failed.log {
-        progress::step(format_args!("{}{}", failed_run::SESSION_LOG, log.display()));
-    }
-    if let Some(pr_url) = &failed.pr_url {
-        print_url(pr_url);
-    }
-    ExitCode::FAILURE
-}
-
-/// A pull request's URL, or the URL of the issue an Architect run ended on,
-/// on stdout. A failed write, as once the terminal has closed, is ignored, so
-/// the Run notification still goes.
-fn print_url(url: &str) {
-    let _ = writeln!(std::io::stdout(), "{url}");
 }
 
 /// The end of a command other than a Run: the line that says how it went,
