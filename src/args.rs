@@ -1,4 +1,5 @@
-//! The command line: which command, and for a Run, its Issue URL and flags.
+//! The command line: which command, and for a Run, its Issue URL and flags,
+//! or for an Architect run, its focus.
 
 use std::mem::discriminant;
 use std::num::NonZeroUsize;
@@ -17,7 +18,20 @@ pub enum Command {
     Setup,
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
+    Architect(ArchitectArgs),
     Run(RunArgs),
+}
+
+/// The flag that stops an Architect run once its plan is published and
+/// marked ready.
+const PLAN_ONLY: &str = "--plan-only";
+
+/// An Architect run's arguments.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ArchitectArgs {
+    /// The free text that points the Architecture review at an area, if
+    /// given.
+    pub focus: Option<String>,
 }
 
 /// The hidden argument a Spec run starts each Ticket's Run with, followed by
@@ -43,8 +57,8 @@ pub struct RunArgs {
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
-/// `setup` and `email-test` are commands only as the first argument.
-/// Otherwise it is a Run: one Issue URL, with each Run flag at most once,
+/// `setup`, `email-test` and `architect` are commands only as the first
+/// argument. Otherwise it is a Run: one Issue URL, with each Run flag at most once,
 /// before or after it.
 /// `email` may be followed by the address to send the Run notification to,
 /// and `parallel` must be followed by a whole number from 1 up.
@@ -67,6 +81,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 [_, extra, ..] => bail!("unexpected argument after the address: {extra}"),
             };
         }
+        Some("architect") => return parse_architect(&args[1..]).map(Command::Architect),
         _ => {}
     }
     let mut issue = None;
@@ -125,6 +140,36 @@ pub fn parse(args: &[String]) -> Result<Command> {
     }))
 }
 
+/// Parse the arguments after `architect`: at most one focus, and
+/// [`PLAN_ONLY`] once, in either order. Nothing dispatches a plan yet, so
+/// without the flag there is nothing an Architect run could go on to do, and
+/// it is asked for. Any other argument that starts with a dash is unexpected
+/// rather than a focus.
+fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
+    let mut focus = None;
+    let mut plan_only = false;
+    for arg in args {
+        if arg == PLAN_ONLY {
+            if plan_only {
+                bail!("repeated argument: {arg}");
+            }
+            plan_only = true;
+        } else if arg.starts_with('-') {
+            bail!("unexpected argument after architect: {arg}");
+        } else if focus.is_some() {
+            bail!("unexpected argument after the focus: {arg}");
+        } else if arg.trim().is_empty() {
+            bail!("the focus is empty");
+        } else {
+            focus = Some(arg.clone());
+        }
+    }
+    if !plan_only {
+        bail!("architect needs {PLAN_ONLY}: it can't yet implement the plan it publishes");
+    }
+    Ok(ArchitectArgs { focus })
+}
+
 const MERGE_FLAGS: &str = "merge and no-merge";
 const EMAIL_FLAGS: &str = "email and no-email";
 
@@ -154,13 +199,94 @@ mod tests {
 
     const URL: &str = "https://github.com/acme/widgets/issues/7";
 
+    fn parse_strs(args: &[&str]) -> Result<Command> {
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        parse(&args)
+    }
+
     /// The Run `args` parse to.
     fn run_args(args: &[&str]) -> RunArgs {
-        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
-        match parse(&args) {
+        match parse_strs(args) {
             Ok(Command::Run(run_args)) => run_args,
             Ok(_) => panic!("{args:?}: not a Run"),
             Err(error) => panic!("{args:?}: {error:#}"),
+        }
+    }
+
+    /// The Architect run `args` parse to.
+    fn architect_args(args: &[&str]) -> ArchitectArgs {
+        match parse_strs(args) {
+            Ok(Command::Architect(architect_args)) => architect_args,
+            Ok(_) => panic!("{args:?}: not an Architect run"),
+            Err(error) => panic!("{args:?}: {error:#}"),
+        }
+    }
+
+    /// The error `args` are rejected with.
+    fn rejection(args: &[&str]) -> String {
+        match parse_strs(args) {
+            Ok(_) => panic!("{args:?}: not rejected"),
+            Err(error) => format!("{error:#}"),
+        }
+    }
+
+    #[test]
+    fn architect_takes_plan_only_with_or_without_a_focus_on_either_side_of_it() {
+        let focus = || Some("the Spec run".to_string());
+        for (args, expected) in [
+            (vec!["architect", "--plan-only"], None),
+            (vec!["architect", "the Spec run", "--plan-only"], focus()),
+            (vec!["architect", "--plan-only", "the Spec run"], focus()),
+        ] {
+            assert_eq!(architect_args(&args).focus, expected, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn architect_without_plan_only_is_rejected_as_nothing_implements_the_plan_yet() {
+        for args in [vec!["architect"], vec!["architect", "the Spec run"]] {
+            assert_eq!(
+                rejection(&args),
+                "architect needs --plan-only: it can't yet implement the plan it publishes",
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn architect_rejects_stray_arguments() {
+        for (args, error) in [
+            (
+                vec!["architect", "the Spec run", "the Run", "--plan-only"],
+                "unexpected argument after the focus: the Run",
+            ),
+            (
+                vec!["architect", "--plan-only", "--plan-only"],
+                "repeated argument: --plan-only",
+            ),
+            (
+                vec!["architect", "--merge", "--plan-only"],
+                "unexpected argument after architect: --merge",
+            ),
+            (vec!["architect", " ", "--plan-only"], "the focus is empty"),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn architect_is_a_command_only_as_the_first_argument() {
+        for (args, error) in [
+            (
+                vec![URL, "architect"],
+                "unexpected argument after the Issue URL: architect",
+            ),
+            (
+                vec!["merge", "architect", "--plan-only"],
+                "not a GitHub issue URL: architect",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
         }
     }
 

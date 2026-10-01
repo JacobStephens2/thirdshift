@@ -24,6 +24,7 @@
 //! claude-calls.json  what the fake agent was asked to do
 //! claude-calls.json.after-result.<n>  stream lines the n-th session emits
 //!                    after its closing result
+//! claude-calls.json.final-message.<n>  the n-th session's final message
 //! gh-calls.json      every gh command run, by thirdshift or the fake agent
 //! ```
 
@@ -500,6 +501,23 @@ impl Scenario {
         let mut gh = self.gh_state();
         gh["labels"][number.to_string()] = json!(labels);
         self.write_gh_state(&gh);
+    }
+
+    /// Set when issue `number` was created on the fake GitHub, as GitHub
+    /// writes a time: `2026-10-01T12:00:00Z`.
+    pub fn issue_created(&self, number: u32, time: &str) {
+        let mut gh = self.gh_state();
+        gh["created"][number.to_string()] = json!(time);
+        self.write_gh_state(&gh);
+    }
+
+    /// The labels of issue `number` on the fake GitHub.
+    pub fn issue_labels(&self, number: u32) -> Vec<String> {
+        let labels = &self.gh_state()["labels"][number.to_string()];
+        let labels = labels.as_array().into_iter().flatten();
+        labels
+            .map(|label| label.as_str().unwrap().to_string())
+            .collect()
     }
 
     /// Give issue `number` the title `title` on the fake GitHub.

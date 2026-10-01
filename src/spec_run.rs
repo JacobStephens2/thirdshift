@@ -32,7 +32,7 @@ use crate::worktree::Worktree;
 const POLL: Duration = Duration::from_millis(100);
 
 /// The triage labels that make an open Ticket an Unready Ticket.
-const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "needs-triage"];
+pub const UNREADY_LABELS: [&str; 4] = ["ready-for-human", "needs-info", "wontfix", "needs-triage"];
 
 /// The Spec review session's kind, in its progress lines and log name.
 const SPEC_REVIEW: &str = "spec-review";

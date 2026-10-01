@@ -1,5 +1,5 @@
-//! Pre-flight checks: everything that must hold before a Run creates
-//! anything.
+//! Pre-flight checks: everything that must hold before a Run or an Architect
+//! run creates anything.
 
 use anyhow::{Result, bail};
 
@@ -21,6 +21,11 @@ pub fn check(launch: &Git, issue: &IssueUrl) -> Result<()> {
     if !github::issue_is_open(issue)? {
         bail!("issue #{} is closed", issue.number);
     }
+    check_identity(launch)
+}
+
+/// Check that git has the name and email an agent commits with.
+pub fn check_identity(launch: &Git) -> Result<()> {
     for (key, example_value) in [
         ("user.name", r#""Your Name""#),
         ("user.email", "you@example.com"),

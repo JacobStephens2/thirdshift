@@ -50,10 +50,11 @@ const OWN_HEAD: &str = "<own head>";
 const CHECK: &str = "<failing check>";
 const CHECK_URL: &str = "<check URL>";
 const BACKGROUND_WORK: &str = "<background work>";
+const FOCUS: &str = "<focus>";
 const PLUGIN_DIR: &str = "<plugin dir>";
 const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
-const PLACEHOLDERS: [&str; 14] = [
+const PLACEHOLDERS: [&str; 15] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -65,6 +66,7 @@ const PLACEHOLDERS: [&str; 14] = [
     CHECK,
     CHECK_URL,
     BACKGROUND_WORK,
+    FOCUS,
     PLUGIN_DIR,
     SESSION_ID,
     PROMPT,
@@ -76,6 +78,8 @@ struct Prompt {
     id: &'static str,
     title: &'static str,
     when: &'static str,
+    /// None for the prompt an Architect run sends: the press units are a
+    /// Run's.
     units: &'static [Unit],
     text: String,
 }
@@ -124,6 +128,13 @@ fn prompts() -> Vec<Prompt> {
             when: "In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.",
             units: &[REVIEW],
             text: prompt::spec_review(&spec, BASE, SPEC_BRANCH, PR_URL),
+        },
+        Prompt {
+            id: "prompt-architecture-review",
+            title: "Architecture review",
+            when: "Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.",
+            units: &[],
+            text: prompt::architecture_review(BASE, Some(FOCUS)),
         },
         Prompt {
             id: "prompt-conflict-repair",
@@ -340,14 +351,14 @@ fn prompt_section(html: &mut String) {
             r##"      <article class="job-sheet" id="{id}" aria-labelledby="{id}-title">
         <h3 id="{id}-title">{title}</h3>
         <p>{when}</p>
-        <p class="sent-by">Sent by {units}</p>
+        <p class="sent-by">Sent by {sender}</p>
         <pre class="job-text"><code>{text}</code></pre>
       </article>
 "##,
             id = prompt.id,
             title = prompt.title,
             when = prompt.when,
-            units = unit_links(prompt.units),
+            sender = sender(prompt.units),
             text = highlighted(&prompt.text),
         );
     }
@@ -440,6 +451,15 @@ fn file_block(html: &mut String, file: &File, indent: &str) {
         path = escape(&path),
         text = escape(text),
     );
+}
+
+/// Who sends a prompt: its `units`, or, with none, an Architect run.
+fn sender(units: &[Unit]) -> String {
+    if units.is_empty() {
+        "an Architect run, before any unit".to_string()
+    } else {
+        unit_links(units)
+    }
 }
 
 /// Links to `units` on the home page, as a list ending "or".

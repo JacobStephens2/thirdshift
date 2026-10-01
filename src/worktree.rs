@@ -1,6 +1,7 @@
 //! The Run's worktree: a sibling of the launch repository, on the Issue
 //! branch, removed together with the local Issue branch when dropped unless
-//! it is kept.
+//! it is kept. And the Architecture review's: a sibling too, on no branch,
+//! always removed when dropped.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -75,21 +76,12 @@ impl Worktree {
         branch_args: &[&str],
         start: &str,
     ) -> Result<Self> {
-        let root = PathBuf::from(launch.run(&["rev-parse", "--show-toplevel"])?);
-        let path = root
-            .parent()
-            .context("the repository root has no parent directory")?
-            .join(format!("{repo}-{branch}"));
-        let path_arg = path.to_str().context("worktree path is not UTF-8")?;
-
+        let (root, path) = sibling(launch, &format!("{repo}-{branch}"))?;
         progress::step(format_args!(
             "creating worktree {} on {branch} from {start}",
             path.display()
         ));
-        let mut args = vec!["worktree", "add"];
-        args.extend_from_slice(branch_args);
-        args.extend([path_arg, start]);
-        launch.run(&args)?;
+        add_worktree(launch, branch_args, &path, start)?;
         Ok(Worktree {
             launch: Git::new(root),
             branch: branch.to_string(),
@@ -268,6 +260,73 @@ impl Drop for Worktree {
             }
         }
     }
+}
+
+/// The worktree an Architecture review runs in: detached at the head of the
+/// Base branch on origin, with no Issue branch, and removed when dropped,
+/// whatever the session left in it. Nothing in it is committed or pushed.
+pub struct ReviewWorktree {
+    launch: Git,
+    path: PathBuf,
+}
+
+impl ReviewWorktree {
+    /// Check out `origin/<base>`, detached, in a new worktree next to the
+    /// launch repository's root, named `<repo>-architect`.
+    pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
+        launch.run(&["fetch", "origin", base])?;
+        let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
+        let start = format!("origin/{base}");
+        progress::step(format_args!(
+            "creating worktree {} detached at {start}",
+            path.display()
+        ));
+        add_worktree(launch, &["--detach"], &path, &start)?;
+        Ok(ReviewWorktree {
+            launch: Git::new(root),
+            path,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ReviewWorktree {
+    fn drop(&mut self) {
+        progress::step("cleaning up the worktree");
+        let _lock = lock_launch(&self.launch).inspect_err(|error| {
+            progress::step(format_args!("cleaning up without the lock: {error:#}"))
+        });
+        let path = self.path.to_string_lossy();
+        if let Err(error) = self.launch.run(&["worktree", "remove", "--force", &path]) {
+            progress::step(format_args!("cleanup incomplete: {error:#}"));
+        }
+    }
+}
+
+/// The launch repository's root, and the path of the worktree `name` next to
+/// it.
+fn sibling(launch: &Git, name: &str) -> Result<(PathBuf, PathBuf)> {
+    let root = PathBuf::from(launch.run(&["rev-parse", "--show-toplevel"])?);
+    let path = root
+        .parent()
+        .context("the repository root has no parent directory")?
+        .join(name);
+    Ok((root, path))
+}
+
+/// `git worktree add <checkout> <path> <start>` in the launch repository,
+/// where `checkout` says what the worktree is on: a branch, or nothing.
+fn add_worktree(launch: &Git, checkout: &[&str], path: &Path, start: &str) -> Result<()> {
+    let path = path.to_str().context("worktree path is not UTF-8")?;
+    let mut args = vec!["worktree", "add"];
+    args.extend_from_slice(checkout);
+    args.extend([path, start]);
+    launch.run(&args)?;
+    Ok(())
 }
 
 /// Wait for, then hold until the file is dropped, the Launch directory's

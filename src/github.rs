@@ -5,6 +5,7 @@ use std::fmt;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::issue::IssueUrl;
@@ -38,6 +39,58 @@ pub fn issue_title(issue: &IssueUrl) -> Result<String> {
         .as_str()
         .context("gh output has no title")?
         .to_string())
+}
+
+/// An issue as an Architect run reads the plan its Architecture review
+/// published.
+pub struct Issue {
+    pub is_open: bool,
+    pub labels: Vec<String>,
+    pub created: DateTime<Utc>,
+}
+
+/// `issue`'s state, labels and when it was created.
+pub fn issue(issue: &IssueUrl) -> Result<Issue> {
+    let json = gh_json(&[
+        "issue",
+        "view",
+        &issue.number.to_string(),
+        "--repo",
+        &issue.repo_slug(),
+        "--json",
+        "state,labels,createdAt",
+    ])?;
+    let created = json["createdAt"]
+        .as_str()
+        .context("gh output has no createdAt")?;
+    Ok(Issue {
+        is_open: json["state"].as_str().context("gh output has no state")? == "OPEN",
+        labels: json["labels"]
+            .as_array()
+            .context("gh output has no labels")?
+            .iter()
+            .filter_map(|label| label["name"].as_str().map(String::from))
+            .collect(),
+        created: DateTime::parse_from_rfc3339(created)
+            .with_context(|| format!("gh output has an unreadable createdAt {created}"))?
+            .to_utc(),
+    })
+}
+
+/// Set `issue`'s labels to exactly `labels`, in one request, so a swap of
+/// one label for another can't stop halfway. Through the REST API: `gh issue
+/// edit` fails on the GitHub Projects (classic) sunset in older `gh`.
+pub fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
+    let path = format!("repos/{}/issues/{}/labels", issue.repo_slug(), issue.number);
+    let fields: Vec<String> = labels
+        .iter()
+        .map(|label| format!("labels[]={label}"))
+        .collect();
+    let mut args = vec!["api", "--method", "PUT", &path, "--silent"];
+    for field in &fields {
+        args.extend(["-f", field]);
+    }
+    gh(&args)
 }
 
 /// A Spec's sub-issue, as a Spec run reads it.

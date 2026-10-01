@@ -1,0 +1,235 @@
+//! One Architect run: an Architecture review of the Base branch, from the
+//! Launch directory with no Issue URL, then the checks on the plan it
+//! published and the label swap that marks the plan ready.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Utc};
+
+use crate::failed_run::FailedRun;
+use crate::git::Git;
+use crate::github;
+use crate::interrupt;
+use crate::issue::{IssueUrl, Repo};
+use crate::plugin::Plugin;
+use crate::preflight;
+use crate::progress;
+use crate::prompt;
+use crate::run;
+use crate::session::{Logs, Sessions};
+use crate::spec_run::UNREADY_LABELS;
+use crate::worktree::ReviewWorktree;
+
+/// The Architecture review session's kind, in its progress lines and log
+/// name.
+const REVIEW: &str = "architecture-review";
+
+/// The triage label the Architecture review publishes its plan with, and the
+/// one thirdshift swaps it for once the plan passes its checks.
+const NEEDS_TRIAGE: &str = "needs-triage";
+const READY_FOR_AGENT: &str = "ready-for-agent";
+
+/// Run an Architecture review of the branch checked out in the Launch
+/// directory, the Base branch, pointed at `focus` if given, and mark the plan
+/// it publishes ready. Returns the plan's URL. With `launch_pull`, the Launch
+/// directory's checkout of the Base branch is first brought up to date with
+/// origin. The review's worktree and the plugin directory are gone when this
+/// returns. A failure after the plan is published leaves its labels as the
+/// review left them.
+pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<String, FailedRun> {
+    let started = Utc::now();
+    let timestamp = started.format("%Y%m%dT%H%M%SZ").to_string();
+    let launch = Git::new(std::env::current_dir().context("no current directory")?);
+
+    let origin = launch.run(&["config", "remote.origin.url"])?;
+    let repo = Repo::of_origin(&origin)
+        .with_context(|| format!("origin {origin} is not a GitHub repository"))?;
+    preflight::check_identity(&launch)?;
+    let base = launch
+        .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .ok()
+        .context("HEAD is detached; check out the branch the Architecture review should scan")?;
+    preflight::check_base_branch(&launch, &base)?;
+    if launch_pull {
+        run::pull_base_branch(&launch, Some(&base), &base);
+    }
+
+    if interrupt::requested() {
+        return Err(anyhow!("interrupted").into());
+    }
+    let worktree = ReviewWorktree::create(&launch, &repo.name, &base)?;
+    let logs = Logs::of_architect_run(&repo, logs_dir, &timestamp);
+    let mut log = logs.path(REVIEW);
+    review(worktree, &base, focus, &logs, &mut log)
+        .and_then(|final_message| mark_plan_ready(final_message.as_deref(), &origin, started))
+        .map_err(|error| FailedRun {
+            log: log.exists().then_some(log),
+            ..FailedRun::from(error)
+        })
+}
+
+/// The Architecture review session in `worktree`, which is removed once the
+/// session ends. Returns the session's final message. `log` is left at the
+/// most recent session's log.
+fn review(
+    worktree: ReviewWorktree,
+    base: &str,
+    focus: Option<&str>,
+    logs: &Logs,
+    log: &mut PathBuf,
+) -> Result<Option<String>> {
+    let plugin = Plugin::write()?;
+    let sessions = Sessions {
+        logs,
+        worktree: worktree.path(),
+        plugin_dir: plugin.path(),
+    };
+    match focus {
+        Some(focus) => progress::step(format_args!(
+            "starting the Architecture review of {base}, focused on: {focus}"
+        )),
+        None => progress::step(format_args!("starting the Architecture review of {base}")),
+    }
+    sessions.final_message(REVIEW, &prompt::architecture_review(base, focus), log)
+}
+
+/// What an Architecture review reported in the last line of its final
+/// message.
+#[derive(Debug, PartialEq, Eq)]
+enum Report {
+    /// The plan it published: a Spec, or a single Ticket.
+    Plan(IssueUrl),
+    /// The issue it filed for a top recommendation that is not Strong.
+    Idea(IssueUrl),
+    /// The open issue that already covers that recommendation.
+    AlreadyFiled(IssueUrl),
+}
+
+impl Report {
+    /// Read the last line of `final_message` that isn't blank. `None` unless
+    /// it is one of the lines the Architecture review prompt asks for, with
+    /// an Issue URL and nothing else after it.
+    fn read(final_message: &str) -> Option<Self> {
+        let line = final_message
+            .lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty())?;
+        let naming = |start: &str, kind: fn(IssueUrl) -> Report| {
+            let url = line.strip_prefix(start)?;
+            IssueUrl::parse(url).ok().map(kind)
+        };
+        naming(prompt::PLAN_LINE, Report::Plan)
+            .or_else(|| naming(prompt::IDEA_LINE, Report::Idea))
+            .or_else(|| naming(prompt::ALREADY_FILED_LINE, Report::AlreadyFiled))
+    }
+}
+
+/// Mark ready the plan that the review's `final_message` names, and return
+/// its URL: check it, then swap its `needs-triage` for `ready-for-agent`.
+/// Fails, changing no label, without a final line naming a plan, or if the
+/// plan fails its checks: it is in the repository at `origin`, open, created
+/// since the Architect run `started`, and has no label that makes an Unready
+/// Ticket other than `needs-triage`.
+fn mark_plan_ready(
+    final_message: Option<&str>,
+    origin: &str,
+    started: DateTime<Utc>,
+) -> Result<String> {
+    let plan = match final_message.and_then(Report::read) {
+        Some(Report::Plan(plan)) => plan,
+        Some(Report::Idea(idea)) => bail!(
+            "the Architecture review published no plan: it filed the idea {}",
+            idea.url
+        ),
+        Some(Report::AlreadyFiled(issue)) => bail!(
+            "the Architecture review published no plan: {} already covers its top recommendation",
+            issue.url
+        ),
+        None => bail!("the Architecture review ended without a final line naming its plan"),
+    };
+    progress::step(format_args!(
+        "the Architecture review published the plan {}",
+        plan.url
+    ));
+    if !plan.matches_origin(origin) {
+        bail!(
+            "the plan {} is not in the repository at origin {origin}",
+            plan.url
+        );
+    }
+    let issue = github::issue(&plan)?;
+    if !issue.is_open {
+        bail!("the plan {} is closed", plan.url);
+    }
+    // GitHub's times are to the second.
+    if issue.created.timestamp() < started.timestamp() {
+        bail!(
+            "the plan {} was created before this Architect run started",
+            plan.url
+        );
+    }
+    let unready = UNREADY_LABELS
+        .iter()
+        .find(|&&unready| unready != NEEDS_TRIAGE && issue.labels.iter().any(|l| l == unready));
+    if let Some(unready) = unready {
+        bail!("the plan {} is labelled {unready}", plan.url);
+    }
+    if interrupt::requested() {
+        bail!("interrupted");
+    }
+    progress::step(format_args!(
+        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} on #{}",
+        plan.number
+    ));
+    let mut labels: Vec<&str> = issue
+        .labels
+        .iter()
+        .map(String::as_str)
+        .filter(|&label| label != NEEDS_TRIAGE && label != READY_FOR_AGENT)
+        .collect();
+    labels.push(READY_FOR_AGENT);
+    github::set_labels(&plan, &labels)?;
+    Ok(plan.url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const URL: &str = "https://github.com/acme/widgets/issues/8";
+
+    fn issue() -> IssueUrl {
+        IssueUrl::parse(URL).unwrap()
+    }
+
+    #[test]
+    fn the_report_is_the_last_line_whichever_of_the_three_it_is() {
+        for (line, report) in [
+            ("Architecture review plan: ", Report::Plan(issue())),
+            ("Architecture review idea: ", Report::Idea(issue())),
+            (
+                "Architecture review already filed: ",
+                Report::AlreadyFiled(issue()),
+            ),
+        ] {
+            let message = format!("Reviewed the codebase.\n\n{line}{URL}\n\n");
+            assert_eq!(Report::read(&message), Some(report), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_final_message_without_the_line_as_asked_for_reports_nothing() {
+        for message in [
+            "",
+            "Published the plan.",
+            "Architecture review plan: https://github.com/acme/widgets/pull/8",
+            "Architecture review plan: #8",
+            "Architecture review plan: https://github.com/acme/widgets/issues/8 (a Spec)",
+            "The plan: https://github.com/acme/widgets/issues/8",
+            "Architecture review plan: https://github.com/acme/widgets/issues/8\nThat's all.",
+        ] {
+            assert_eq!(Report::read(message), None, "{message:?}");
+        }
+    }
+}

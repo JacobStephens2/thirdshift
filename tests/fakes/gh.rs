@@ -6,6 +6,7 @@
 //! {"repo": "owner/repo",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
 //!  "titles"?: {"<number>": "<title>"},
+//!  "created"?: {"<number>": "<ISO 8601 time>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
 //!           "mergeable"?, "unknown_polls"?}],
@@ -34,7 +35,15 @@
 //! `--json` rejects a field the fake does not have, such as a PR's
 //! `closingIssuesReferences`, with gh's `Unknown JSON field`, as gh 2.45 does.
 //!
-//! An issue's title is its entry in `titles`, else `Issue <number>`.
+//! An issue's title is its entry in `titles`, else `Issue <number>`, and its
+//! `createdAt` its entry in `created`, else the first second of 2020.
+//!
+//! `gh issue create` opens an issue numbered one above the highest there is,
+//! with its `--title`, the labels in its `--label`, separated by commas, and
+//! the time as its `createdAt`, and prints its URL. Its `--body` is not kept.
+//!
+//! `gh api --method PUT repos/<repo>/issues/<number>/labels -f
+//! labels[]=<label> ...` sets an issue's labels to exactly those given.
 //!
 //! `gh api user` answers with the signed-in user's profile, whose public
 //! `email` is `user_email`, else null. `gh fake fails 'api user'` makes it
@@ -111,6 +120,7 @@
 //! gh fake user-email '<JSON>'             set the public profile email, an
 //!                                         address or null
 //! gh fake labels <number> '<JSON list>'   set issue <number>'s labels
+//! gh fake created <number> <time>         set issue <number>'s `createdAt`
 //! ```
 //!
 //! Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
@@ -577,12 +587,90 @@ fn issue_view(state: &Json, positional: &[String], flags: &Flags) {
         Some(title) => title.clone(),
         None => string(format!("Issue {n}")),
     };
+    let labels = issue_labels(state, n)
+        .iter()
+        .map(|label| object([("name", label.clone())]))
+        .collect();
+    let created = match state.get("created").and_then(|created| created.get(n)) {
+        Some(created) => created.clone(),
+        None => string("2020-01-01T00:00:00Z"),
+    };
     let fields = object([
         ("number", number(n.parse::<i64>().unwrap())),
         ("state", issue_state.clone()),
         ("title", title),
+        ("labels", Array(labels)),
+        ("createdAt", created),
     ]);
     println!("{}", json_fields(&fields, &wanted_fields(flags)));
+}
+
+/// The labels of issue `n`.
+fn issue_labels<'a>(state: &'a Json, n: &str) -> &'a [Json] {
+    state
+        .get("labels")
+        .and_then(|labels| labels.get(n))
+        .map(Json::items)
+        .unwrap_or_default()
+}
+
+/// The time, as GitHub writes one: `2026-10-01T12:00:00Z`.
+fn now() -> String {
+    let date = Command::new("date")
+        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
+        .output()
+        .unwrap();
+    String::from_utf8(date.stdout).unwrap().trim().to_owned()
+}
+
+fn issue_create(state: &mut Json, flags: &Flags) {
+    let Json::Object(issues) = state.at("issues") else {
+        panic!("issues is an object")
+    };
+    let highest = issues
+        .iter()
+        .filter_map(|(n, _)| n.parse::<i64>().ok())
+        .max();
+    let n = (highest.unwrap_or(0) + 1).to_string();
+    let labels = flag(flags, "label").unwrap_or("");
+    let labels = labels.split(',').filter(|label| !label.is_empty());
+    state.at_mut("issues").set(&n, string("OPEN"));
+    state
+        .entry("titles", object([]))
+        .set(&n, string(flag(flags, "title").expect("no --title")));
+    state
+        .entry("labels", object([]))
+        .set(&n, Array(labels.map(string).collect()));
+    state.entry("created", object([])).set(&n, string(now()));
+    save(state);
+    println!("https://github.com/{}/issues/{n}", state.at("repo").str());
+}
+
+/// `gh api --method PUT repos/<repo>/issues/<number>/labels -f
+/// labels[]=<label> ...`: set the issue's labels to exactly those given.
+fn issue_labels_put(state: &mut Json, args: &[&str]) {
+    let (positional, _) = parse(args);
+    let issue = positional.first().and_then(|path| {
+        let (repo, rest) = repo_prefix(path)?;
+        let n = rest.strip_prefix("issues/")?.strip_suffix("/labels")?;
+        Some((repo, n))
+    });
+    let fields = args.windows(2).filter(|pair| pair[0] == "-f");
+    let labels: Option<Vec<Json>> = fields
+        .map(|pair| pair[1].strip_prefix("labels[]=").map(string))
+        .collect();
+    let (Some((repo, n)), Some(labels)) = (issue, labels) else {
+        die(
+            &format!("fake gh: unsupported api PUT {}", python_list(args)),
+            2,
+        )
+    };
+    check_repo_is(state, Some(repo));
+    if !state.at("issues").has(n) {
+        die("gh: Not Found (HTTP 404)", 1);
+    }
+    state.entry("labels", object([])).set(n, Array(labels));
+    save(state);
 }
 
 fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
@@ -1192,6 +1280,7 @@ fn fake_command(state: &mut Json, args: &[&str]) {
         ["after-merge", script] => state.set("after_merge", string(*script)),
         ["issue", n, issue_state] => state.at_mut("issues").set(n, string(*issue_state)),
         ["labels", n, labels] => state.entry("labels", object([])).set(n, parse_json(labels)),
+        ["created", n, time] => state.entry("created", object([])).set(n, string(*time)),
         ["user-email", email] => state.set("user_email", parse_json(email)),
         ["fails", call] => state
             .entry("failing", Array(Vec::new()))
@@ -1252,6 +1341,10 @@ pub fn main(args: Vec<String>) {
             let (positional, flags) = parsed(rest);
             issue_view(&state, &positional, &flags);
         }
+        ["issue", "create", rest @ ..] => {
+            let (_, flags) = parsed(rest);
+            issue_create(&mut state, &flags);
+        }
         ["issue", "close", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             issue_close(&mut state, &positional, &flags);
@@ -1270,6 +1363,7 @@ pub fn main(args: Vec<String>) {
         }
         ["api", "graphql", rest @ ..] => graphql(&state, rest),
         ["api", "--method", "PATCH", rest @ ..] => pr_patch(&mut state, rest),
+        ["api", "--method", "PUT", rest @ ..] => issue_labels_put(&mut state, rest),
         ["api", path, ..] if generate_notes_repo(path).is_some() => {
             generate_notes(&state, &args[1..]);
         }
