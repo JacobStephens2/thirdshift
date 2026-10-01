@@ -484,21 +484,21 @@ PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 ```
 
 - **`PATH`** is set because cron doesn't read your shell profile, and `thirdshift`, `claude`, `gh`, `git` and the repository's build tools must all be found. List every directory that holds one, written out in full: cron expands neither `~` nor `$HOME` on that line. `command -v thirdshift claude gh git` in your own shell shows where they are.
-- **`cd`** goes to a clone of the repository, as for a hand-typed Architect run, and **`base main`** names the [Base branch](#architect-runs), so the branch checked out in the clone doesn't matter: the pass runs from the clone you work in, whatever you left it on.
-- **One line per repository, at different hours**, so the passes don't compete for the machine. thirdshift keeps no list of repositories.
+- **`cd`** makes a clone of the repository the **Launch directory**, as for a hand-typed Architect run, and **`base main`** names the [Base branch](#architect-runs), so the branch checked out in the clone doesn't matter: it runs from the clone you work in, whatever you left it on.
+- **One line per repository, at different hours**, so the Architect runs don't compete for the machine. thirdshift keeps no list of repositories.
 - **The log file** takes everything the command prints. A failure before the [Run notification](#one-run-notification)'s checks have passed, such as a broken [User config](#user-config), a missing Resend key or a bad argument, shows up only there: no email is sent for it. Make its directory first, with `mkdir -p ~/.thirdshift/logs`, or the shell can't open the log and never starts the command.
 - **`claude` and `gh` must already be logged in** for the user the schedule runs as, with git able to push, as the [Prerequisites](#prerequisites) say. Without a terminal an Architect run behaves as it does from one, except that it never offers Setup.
 
-The command's flags and the User config decide what a pass does, as for a hand-typed run: with `merge.always` it merges the plan's pull request, and without it the pull request is left for review. These are the cautious variants, whatever the User config says:
+The command's flags and the User config decide what a scheduled Architect run does, as for a hand-typed one: with `merge.always` it merges the Architect plan's pull request, and without it the pull request is left for review. These are the cautious variants, whatever the User config says:
 
 ```
 0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main no-merge >> ~/.thirdshift/logs/architect-cron.log 2>&1
 0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/architect-cron.log 2>&1
 ```
 
-The first leaves the pull request for you to review, and the second stops at the plan, for you to read and run with `thirdshift <Issue URL>`.
+The first leaves the pull request for you to review, and the second stops at the Architect plan, for you to read and run with `thirdshift <Issue URL>`.
 
-A scheduled pass is skipped when another Architect run on the repository is [still running](#one-at-a-time), last night's Spec run included, or when an [Architect plan is still open](#one-architect-plan-at-a-time): until you merge or close last night's pull request, or pick up its failed run, no new refactor is planned. A skip exits `0`, so the scheduler sees no failure, and the log has the line that says why. With Run notifications on, by `email.always = true` in the User config or `email` on the line, every night sends one email, a skipped night included, so a night without one means something is wrong: look in the log file.
+A scheduled Architect run is skipped when another on the repository is [still running](#one-at-a-time), last night's Spec run included, or when an [Architect plan is still open](#one-architect-plan-at-a-time): no new refactor is planned until last night's is finished, by merging its pull request or by picking up its failed run with `thirdshift <plan URL>`, or until you close its Architect plan or remove that issue's `architect-plan` label. Closing the pull request alone leaves the Architect plan open. A skip exits `0`, so the scheduler sees no failure, and the log has the line that says why. With Run notifications on, by `email.always = true` in the User config or `email` on the line, every night sends one email, a skipped night included, so a night without one means something is wrong: look in the log file.
 
 Any scheduler that runs the command works; a systemd user timer needs lingering on (`loginctl enable-linger`) to fire while you are logged out.
 

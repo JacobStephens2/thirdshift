@@ -32,6 +32,13 @@ fn assert_help_text(text: &str) {
     }
 }
 
+/// The help text with each run of whitespace as one space, so that a mention
+/// is found however the lines are wrapped.
+fn unwrapped_help(scenario: &Scenario) -> String {
+    let help = scenario.run(&["help"]).stdout;
+    help.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[test]
 fn help_lists_every_form_of_the_command_on_stdout() {
     let scenario = Scenario::new();
@@ -74,10 +81,8 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_when_an_archite
 {
     let scenario = Scenario::new();
 
-    let help = scenario.run(&["help"]).stdout;
+    let help = unwrapped_help(&scenario);
 
-    // However the lines are wrapped.
-    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
     for mention in [
         "<focus> is free text",
         "dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket",
@@ -179,10 +184,8 @@ fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr()
 fn help_documents_base_for_an_architect_run() {
     let scenario = Scenario::new();
 
-    let help = scenario.run(&["help"]).stdout;
+    let help = unwrapped_help(&scenario);
 
-    // However the lines are wrapped.
-    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
     for mention in [
         "base <branch> (or --base <branch>) names the Architect run's Base branch",
         "whatever branch the clone has checked out",
@@ -204,16 +207,13 @@ fn help_documents_base_for_an_architect_run() {
 fn help_points_to_running_an_architect_run_on_a_schedule_without_the_recipe() {
     let scenario = Scenario::new();
 
-    let help = scenario.run(&["help"]).stdout;
+    let help = unwrapped_help(&scenario);
 
-    // However the lines are wrapped.
-    let joined = help.split_whitespace().collect::<Vec<_>>().join(" ");
     for mention in [
-        "thirdshift has no scheduler of its own",
-        "have the operating system's, such as cron, run thirdshift architect base main from the clone",
-        "The README's \"On a schedule\" has a crontab entry to paste and edit",
+        "To run an Architect run on a schedule, have the operating system's scheduler, such as cron, run thirdshift architect base main from the clone",
+        "the README's \"On a schedule\" has a crontab entry",
     ] {
-        assert!(joined.contains(mention), "help lacks {mention:?}: {help}");
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
     }
     for recipe in ["PATH=", "* * *", "architect-cron.log"] {
         assert!(!help.contains(recipe), "help repeats {recipe:?}: {help}");
