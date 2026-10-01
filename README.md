@@ -590,7 +590,7 @@ A Pickup run:
 5. Lists the repository's open issues labelled `ready-for-agent`, lowest number first, and takes the first that is a Ready issue, saying so on stderr: `taking Ready issue #<n> "<title>", as thirdshift <Issue URL> would`. Each one it passes over on the way gets [a line saying why](#why-an-issue-was-passed-over). One issue a pass: the rest wait for the next.
 6. Dispatches it exactly as `thirdshift <Issue URL>` would from the same clone on the Pickup run's Base branch: a [Spec run](#spec-runs) when the issue has sub-issues, a Run otherwise. That run makes the Claim, so the issue's `ready-for-agent` is swapped for `in-progress` and no later pass takes it again.
 
-`merge`, `no-merge`, `base-fix`, `no-base-fix` and `parallel <n>`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`, as do `email`, optionally followed by an address, and `no-email` for the Pickup run's [Run notification](#one-run-notification-for-the-issue-taken). The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `launch.pull` and `logs.dir`. A User config a Run would refuse stops the pass the same way, before any check. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it.
+`merge`, `no-merge`, `base-fix`, `no-base-fix` and `parallel <n>`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`, as do `email`, optionally followed by an address, and `no-email` for the Pickup run's [Run notification](#one-run-notification-for-the-issue-taken). The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `launch.pull` and `logs.dir`. A User config a Run would refuse stops the pass the same way, before any check. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it. It is what lets a Pickup run be started [on a schedule](#a-pickup-run-on-a-schedule).
 
 `pickup` is a command only as the first argument, and takes nothing but those flags, each at most once: a focus, `--plan-only`, an Issue URL, a repeated or contradictory flag, or any other argument is an argument error (exit `2`).
 
@@ -654,6 +654,32 @@ The email goes after the outcome is final and printed, and a failed send is only
 A skipped pass sends no notification, even when one was asked for: a pass every half hour would otherwise send dozens a day. This differs from a skipped Architect run, which does send one.
 
 The notification's checks, an address and a Resend API key, are made before any other work on every pass, before the checks in step 1, the lock and any label read or changed. A broken setup therefore stops the pass with exit `1`, naming what is missing, even a pass that would have been skipped, so it shows in the scheduler's log on the first pass, not only once an issue is ready. A pass that asks for no notification makes none of these checks.
+
+### A Pickup run on a schedule
+
+thirdshift has no scheduler of its own ([ADR 0009](docs/adr/0009-the-operating-system-schedules-thirdshift.md)): the operating system's scheduler runs the ordinary command, one pass each time. This crontab entry, written for a Linux machine with cron, starts a pass every half hour. Add it with `crontab -e`, with your own paths in place of `/home/you` and `~/repos/widgets`:
+
+```
+PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+*/30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/pickup-cron.log 2>&1
+```
+
+The `PATH` line, the `cd` and `base main`, the log file's directory, the logins `claude` and `gh` need, and schedulers other than cron are as for an Architect run: see its [On a schedule](#on-a-schedule). What differs for a Pickup run:
+
+- **The interval** sets how soon a Ready issue is taken and how much work is started: a pass takes one issue, so `*/30` starts at most one every half hour. A pass lasts as long as the run it dispatched, and the passes that fire meanwhile are skipped, so a repository has one issue built at a time, and the first pass after it ends takes the next. An issue you have just labelled also waits out its ten minutes of settling.
+- **One line per repository.** thirdshift keeps no list of repositories. A Pickup run and an Architect run on one repository each skip while the other is still running, the Spec run or Run it dispatched included, so both lines can go in one crontab and the two never build that repository at once. Passes on different repositories do run at the same time.
+- **A pass is skipped** when the [lock is held](#one-at-a-time), when the repository has no Ready issue, and when it is at its [Claim limit](#the-claim-limit). A skip exits `0`, so the scheduler sees no failure, and sends no email, even with Run notifications on. The log file holds each skip's line and, before it, [why each issue was passed over](#why-an-issue-was-passed-over).
+- **A Run notification**, by `email.always = true` in the [User config](#user-config) or `email` on the line, is sent [only for an issue taken](#one-run-notification-for-the-issue-taken). So a day without email doesn't say the passes are running: a pass that fails before it takes an issue, on a broken User config, a missing Resend key or a failed check, shows up only in the log file.
+
+The command's flags and the User config decide what a pass does with the issue it takes, as for a hand-typed `thirdshift <Issue URL>`: with `merge.always` it merges the pull request, and without it the pull request is left for review. This is the cautious variant, whatever the User config says:
+
+```
+*/30 * * * * cd ~/repos/widgets && thirdshift pickup base main no-merge >> ~/.thirdshift/logs/pickup-cron.log 2>&1
+```
+
+An issue whose run failed [keeps its Claim](#when-the-claim-ends) and waits for the **Day shift**: it stays `in-progress`, with the Issue branch and any draft pull request the run left, no later pass takes it, and it counts towards the Claim limit until it is closed or you take the label off. To send it round again by hand, run `thirdshift <Issue URL>` from the clone, which picks up where the failed run stopped, as a [Continuation](#continuation) does. Labelling it `ready-for-agent` again doesn't do it: a Pickup run never takes an issue that was started. The one failure a later pass does retry is one that left nothing on `origin`, such as a usage limit or an expired login: its Claim is released, so the issue is a Ready issue again once it has settled.
+
+If you shape your issues with the upstream skills, [mattpocock/skills](https://github.com/mattpocock/skills), unchanged: `ready-for-agent` on a **Spec** must mean its **Tickets** are published, every Ticket attached as a sub-issue and every "blocked by" link in place. Upstream, the spec skill labels the Spec `ready-for-agent` when it publishes it, minutes or days before the ticket skill attaches the Tickets, and a Spec with no Tickets yet looks exactly like a standalone Ticket, so a pass would start a plain Run on it. Label such a Spec `needs-triage` until its Tickets are attached, then swap that for `ready-for-agent`, as this repository's own copies of the two skills do ([`docs/agents/triage-labels.md`](docs/agents/triage-labels.md)). The ten-minute settle time is only a second line of defence: it covers Tickets attached within minutes of the label, not a Spec left labelled and without Tickets for longer.
 
 ## Building from source
 
