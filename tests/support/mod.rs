@@ -782,12 +782,14 @@ impl Scenario {
         self.launch_git(&["config", "remote.origin.url", url]);
     }
 
-    /// Auto maintenance is off because a newer git detaches it into the
-    /// background after a commit, where it can still be writing into
-    /// `.git/objects` once the command has returned: a test script that then
-    /// deletes its temporary clone with `rm -rf` fails with `Directory not
-    /// empty`. `gc.auto` says the same to a git too old to know
-    /// `maintenance.auto`.
+    /// Write the gitconfig every git command in the scenario reads: the
+    /// identity, the default branch, the insteadOf rule, and auto maintenance
+    /// off. From 2.47 git detaches auto maintenance into the background after
+    /// a commit or a push, where it can still be writing into `.git/objects`
+    /// once the command has returned: a script that then deletes its
+    /// temporary clone with `rm -rf` fails with `Directory not empty`, and one
+    /// that clones the origin again can find an object gone mid-copy (#263).
+    /// `gc.auto` says the same to a git too old to know `maintenance.auto`.
     fn write_gitconfig(&self) {
         let config = format!(
             "[user]\n\tname = Test Runner\n\temail = runner@example.com\n\
