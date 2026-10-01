@@ -1,7 +1,9 @@
 //! A Run's ending, both ways: how a Run, a Spec run or an Architect run
 //! shows how it ended, and how a Run reads back the ending of a child Run it
 //! started. The lines a Run prints are all a child Run tells what started
-//! it (ADR-0006), so which line carries what is known only here.
+//! it (ADR-0006, ADR-0008), so which line carries what, and in what order,
+//! is known only here. What a line of advice looks like is the Base fix
+//! module's to say, and which lines are a child's own the progress module's.
 
 use std::io::Write;
 use std::process::ExitCode;

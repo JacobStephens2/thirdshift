@@ -71,9 +71,7 @@ pub struct Advice {
 }
 
 impl Advice {
-    /// Whether `message`, a line a Run printed on stderr, is one of these:
-    /// a child Run's is relayed, but is neither its cause nor its session
-    /// log.
+    /// Whether `message`, a line a Run printed on stderr, is one of these.
     pub fn is_line(message: &str) -> bool {
         [BASE_CHECK, RETRY_WITH, OR_SET].iter().any(|label| {
             message

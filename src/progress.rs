@@ -50,13 +50,13 @@ impl<'a> ChildLine<'a> {
             return ChildLine::Continuation;
         };
         let message = split_stamp(rest).map_or(rest, |(_, message)| message);
-        let relayed = message
+        let from_its_own_child = message
             .strip_prefix('#')
             .and_then(|rest| rest.split_once(": "))
             .is_some_and(|(number, _)| {
                 !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
             });
-        if relayed {
+        if from_its_own_child {
             ChildLine::Relayed
         } else {
             ChildLine::Own(message)
