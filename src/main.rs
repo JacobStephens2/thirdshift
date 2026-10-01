@@ -31,6 +31,7 @@ mod worktree;
 use std::io::Write;
 use std::process::ExitCode;
 
+use architect::{Outcome, Reviewed};
 use args::{ArchitectArgs, Command, RunArgs};
 use base_fix::BaseFixAsk;
 use config::UserConfig;
@@ -131,14 +132,20 @@ review filed the idea, or it filed nothing.
 
 A review that fails, is interrupted, or ends without naming one of these issues fails the
 Architect run and leaves any plan it published labelled needs-triage. One that finds no
-deepening opportunity at all has no issue to name, so it fails the Architect run too. Start
-one Architect run per repository at a time: two at once may publish the same plan.
+deepening opportunity at all has no issue to name, so it fails the Architect run too.
+
+Only one Architect run per repository runs at a time on a machine. One started while another
+on the same repository is still running, the Spec run or Run it dispatched included, is
+skipped: it prints an Architect run is already running on <owner>/<repo>, does nothing else
+and exits 0. Nothing is left to clear once that other run ends, however it ends. Runs
+started on an Issue URL are never skipped this way.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
 for the whole Architect run, however it ends: how the review ended, with the plan or idea
 issue it named, and how the run the plan was dispatched as ended, with a line on each Ticket
-of a Spec run. The run the plan is dispatched as sends none of its own.
+of a Spec run. The run the plan is dispatched as sends none of its own. A skipped run still
+sends its Run notification, with the outcome skipped and the reason.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
@@ -264,9 +271,11 @@ fn main() -> ExitCode {
 /// to dispatch, puts the URL of the issue it ended on on stdout: the plan,
 /// the idea issue the review filed, or the issue that already covers its top
 /// recommendation. One whose review or plan fails puts the cause and the
-/// session log on stderr. If asked, by the command or the User config, it
-/// sends one Run notification, however it ended; the run it dispatched sends
-/// none of its own.
+/// session log on stderr. One that is skipped, as another on its repository
+/// is still running, says so on stderr, puts nothing on stdout, and is no
+/// failure. If asked, by the command or the User config, it sends one Run
+/// notification, however it ended, skipped included; the run it dispatched
+/// sends none of its own.
 fn architect(args: ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -282,14 +291,14 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let reviewed = architect::run(
+    let ended = architect::run(
         args.focus.as_deref(),
         args.base.as_deref(),
         &config.logs_dir,
         config.launch_pull,
     );
-    let dispatched = match (&reviewed, &args.dispatch) {
-        (Ok(architect::Outcome::PlanReady { plan, base }), Some(dispatch)) => {
+    let dispatched = match (&ended, &args.dispatch) {
+        (Ok(Outcome::Reviewed(Reviewed::PlanReady { plan, base })), Some(dispatch)) => {
             progress::step(format_args!(
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
@@ -306,18 +315,20 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         }
         _ => None,
     };
-    let code = match (&reviewed, &dispatched) {
-        (_, Some(ended)) => run_outcome(ended),
+    let code = match (&ended, &dispatched) {
+        (_, Some(dispatched)) => run_outcome(dispatched),
         (Ok(outcome), None) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("{outcome}"));
-            print_url(outcome.url());
+            if let Outcome::Reviewed(reviewed) = outcome {
+                print_url(reviewed.url());
+            }
             ExitCode::SUCCESS
         }
         (Err(failed), None) => report(failed),
     };
     if let Some(notification) = notification {
-        notification.send(&reviewed, dispatched.as_ref());
+        notification.send(&ended, dispatched.as_ref());
     }
     code
 }
