@@ -477,13 +477,14 @@ fn open_fix_covering(
     let before_checks = issue_title(base, "");
     let covering = github::open_issues_labelled(&issue.repo_slug(), BASE_FIX_LABEL)?
         .into_iter()
-        .filter(|(open, title)| {
-            open.number != issue.number
-                && title
+        .filter(|open| {
+            open.issue.number != issue.number
+                && open
+                    .title
                     .strip_prefix(&before_checks)
                     .is_some_and(|checks| inherited.iter().all(|check| names(checks, &check.name)))
         })
-        .map(|(open, _)| open)
+        .map(|open| open.issue)
         .min_by_key(|open| open.number);
     Ok(covering)
 }

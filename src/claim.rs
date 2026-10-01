@@ -31,6 +31,12 @@ pub struct Claim<'a> {
     removed_ready_for_agent: bool,
 }
 
+/// Whether an issue with `labels` carries a Claim, whatever else it is
+/// labelled.
+pub fn is_on(labels: &[String]) -> bool {
+    has_label(labels, IN_PROGRESS)
+}
+
 /// Make the Claim on `issue`: label it `in-progress`, in place of
 /// `ready-for-agent` if it has that, in one request that keeps its other
 /// labels, having added `in-progress` to the repository if it lacks it. An
@@ -45,10 +51,7 @@ pub fn make(issue: &IssueUrl) -> Result<Claim<'_>> {
 /// [`make`], its failure as `gh` gave it.
 fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
     let mut labels = github::issue_labels(issue)?;
-    let (claimed, ready) = (
-        has_label(&labels, IN_PROGRESS),
-        has_label(&labels, READY_FOR_AGENT),
-    );
+    let (claimed, ready) = (is_on(&labels), has_label(&labels, READY_FOR_AGENT));
     let claim = Claim {
         issue,
         added_in_progress: !claimed,
@@ -76,8 +79,8 @@ fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
     Ok(claim)
 }
 
-/// Whether `label` is one of `labels`: GitHub's label names are
-/// case-insensitive.
+/// Whether `label` is one of `labels`, whatever its case: GitHub's label
+/// names are case-insensitive.
 fn has_label(labels: &[String], label: &str) -> bool {
     labels.iter().any(|name| name.eq_ignore_ascii_case(label))
 }
@@ -123,7 +126,7 @@ impl Claim<'_> {
             return Ok(());
         }
         let mut labels = github::issue_labels(issue)?;
-        if !has_label(&labels, IN_PROGRESS) {
+        if !is_on(&labels) {
             return Ok(());
         }
         let number = issue.number;
@@ -172,7 +175,7 @@ impl Claim<'_> {
     /// [`Claim::remove_if_closed`], its failure as `gh` gave it.
     fn unlabel_if_closed(&self) -> Result<()> {
         let issue = github::issue(self.issue)?;
-        if issue.is_open || !has_label(&issue.labels, IN_PROGRESS) {
+        if issue.is_open || !is_on(&issue.labels) {
             return Ok(());
         }
         progress::step(format_args!(

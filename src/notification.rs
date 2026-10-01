@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::architect::{self, Outcome};
+use crate::architect::Outcome;
 use crate::base_fix::Advice;
 use crate::config::EmailSettings;
 use crate::email::Resend;
@@ -15,6 +15,7 @@ use crate::failed_run::FailedRun;
 use crate::github;
 use crate::host;
 use crate::issue::{IssueUrl, Repo};
+use crate::launch;
 use crate::progress;
 use crate::run::Ended;
 
@@ -87,7 +88,7 @@ impl ArchitectNotification {
             resend,
             // Left out of the subject if origin names none; the Architect
             // run's own preflight reports why.
-            repo: architect::repo().ok(),
+            repo: launch::repo().ok(),
             started,
         })
     }
@@ -522,7 +523,7 @@ mod tests {
     fn a_skipped_architect_runs_body_starts_with_why_it_was_skipped() {
         let body = Body {
             architect: Some(ArchitectLines::Skipped(
-                "an Architect run is already running on acme/widgets".to_string(),
+                "an Architect run or a Pickup run is already running on acme/widgets".to_string(),
             )),
             pr_url: None,
             cause: None,
@@ -535,7 +536,7 @@ mod tests {
         };
         assert_eq!(
             body.text(),
-            "Skipped:      an Architect run is already running on acme/widgets\n\
+            "Skipped:      an Architect run or a Pickup run is already running on acme/widgets\n\
              Host:         droplet-1\n\
              Took:         0s\n"
         );

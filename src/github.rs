@@ -256,11 +256,17 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     ])
 }
 
+/// An open issue as a listing of its repository's issues gives it.
+pub struct ListedIssue {
+    pub issue: IssueUrl,
+    pub title: String,
+    pub labels: Vec<String>,
+}
+
 /// Every open issue labelled `label` in the repository `repo`, an
-/// `owner/repo`, with its title, newest first. They come from GitHub's issue
-/// list, not its search, whose index can be a while behind an issue just
-/// opened.
-pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<(IssueUrl, String)>> {
+/// `owner/repo`, newest first. They come from GitHub's issue list, not its
+/// search, whose index can be a while behind an issue just opened.
+pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
     let json = gh_json(&[
         "issue",
         "list",
@@ -271,7 +277,7 @@ pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<(IssueUrl, St
         "--state",
         "open",
         "--json",
-        "url,title",
+        "url,title,labels",
         "--limit",
         "1000",
     ])?;
@@ -284,7 +290,11 @@ pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<(IssueUrl, St
                     .as_str()
                     .with_context(|| format!("gh issue list output has no {name}"))
             };
-            Ok((IssueUrl::parse(field("url")?)?, field("title")?.to_string()))
+            Ok(ListedIssue {
+                issue: IssueUrl::parse(field("url")?)?,
+                title: field("title")?.to_string(),
+                labels: label_names(listed)?,
+            })
         })
         .collect()
 }

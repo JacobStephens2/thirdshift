@@ -345,11 +345,12 @@ fn next_ready(
         .min()
 }
 
-/// The first of the Unready Ticket labels among an issue's `labels`, if any.
+/// The first of the Unready Ticket labels among an issue's `labels`, if any,
+/// whatever its case there: GitHub's label names are case-insensitive.
 pub fn unready_label(labels: &[String]) -> Option<&'static str> {
     UNREADY_LABELS
         .into_iter()
-        .find(|label| labels.iter().any(|name| name == label))
+        .find(|label| labels.iter().any(|name| name.eq_ignore_ascii_case(label)))
 }
 
 /// A line on each Ticket that landed in this Spec run, with its PR, and on

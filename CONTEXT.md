@@ -20,7 +20,7 @@ _Avoid_: originating workspace, launch repo
 The rule that the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the **Launch directory**. A mismatch stops the run before any work happens.
 
 **Base branch**:
-The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** whose command names a branch, that branch, whatever is checked out; for a **Ticket**'s **Run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
+The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** or a **Pickup run** whose command names a branch, that branch, whatever is checked out; for a **Ticket**'s **Run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
 
 **Factory skills**:
 The skills in `skills/`, loaded into the session as the `thirdshift` plugin: adapted copies of Matt Pocock's skills, designed to run headless with no human in the loop.
