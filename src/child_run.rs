@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 
 use crate::args;
-use crate::base_fix::{self, BaseFixAsk};
+use crate::base_fix::{self, Advice, BaseFixAsk};
 use crate::failed_run;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -68,8 +68,9 @@ pub enum Ended {
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
 /// Launch directory. If `base_fix` allows one, it is given `base-fix`, so it
-/// may start a Base fix.
-pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: BaseFixAsk) -> Result<Child> {
+/// may start a Base fix; if nobody decided, it is given the command to offer
+/// one with.
+pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: &BaseFixAsk) -> Result<Child> {
     start_from(&own_executable()?, issue, kind, base_fix)
 }
 
@@ -95,8 +96,13 @@ fn start_from(
     executable: &Path,
     issue: &IssueUrl,
     kind: &Kind,
-    base_fix: BaseFixAsk,
+    base_fix: &BaseFixAsk,
 ) -> Result<Child> {
+    let base_fix = match base_fix {
+        BaseFixAsk::Allow => vec![args::BASE_FIX],
+        BaseFixAsk::Forbid => Vec::new(),
+        BaseFixAsk::Undecided { retry } => vec![args::OFFER_BASE_FIX, retry],
+    };
     let mut command = Command::new(executable);
     // On Linux `executable` is a link, and the child goes by this process's
     // command instead.
@@ -107,7 +113,7 @@ fn start_from(
     }
     command
         .args([kind.hidden_argument(), kind.base()])
-        .args((base_fix == BaseFixAsk::Allow).then_some(args::BASE_FIX))
+        .args(base_fix)
         .arg(&issue.url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -158,7 +164,8 @@ pub fn name_this_process() {
 pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
     // Relay on its own thread, so this one can watch for an interrupt.
     let stderr = child.stderr.take().context("no stderr from the Run")?;
-    // A failed Run ends on its error, then its session log if it has one.
+    // A failed Run ends on its error, then its session log if it has one,
+    // with any advice between them.
     let relay = thread::spawn(move || -> std::io::Result<_> {
         let mut last_lines: [Option<String>; 2] = [None, None];
         let mut base_fix = None;
@@ -167,6 +174,10 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
             let message = progress::relay(format_args!("#{number}"), &line).to_string();
             if let Some(report) = message.strip_prefix(base_fix::REPORT) {
                 base_fix = Some(report.to_string());
+            }
+            // Between its cause and its session log, and neither.
+            if Advice::is(&message) {
+                continue;
             }
             last_lines = [last_lines[1].take(), Some(message)];
         }
@@ -235,7 +246,7 @@ mod tests {
         let kind = Kind::Ticket {
             spec_branch: "issue-237".to_string(),
         };
-        let error = start_from(executable, &issue, &kind, BaseFixAsk::Forbid).unwrap_err();
+        let error = start_from(executable, &issue, &kind, &BaseFixAsk::Forbid).unwrap_err();
         format!("{error:#}")
     }
 
