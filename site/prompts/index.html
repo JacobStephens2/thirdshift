@@ -552,7 +552,7 @@ policy:
         <h4 id="file-improve-codebase-architecture-skill-md"><code>improve-codebase-architecture/SKILL.md</code></h4>
         <pre class="job-text"><code>---
 name: improve-codebase-architecture
-description: "Scan a codebase for deepening opportunities, take the top recommendation, and publish it to the issue tracker: as a plan when it is Strong, as an idea otherwise."
+description: "Scan a codebase for deepening opportunities, take the top recommendation, and publish it to the issue tracker: as a plan when it is Strong, as an idea otherwise. Only for an Architecture review."
 disable-model-invocation: false
 ---
 
@@ -621,7 +621,7 @@ Rank the candidates: which you'd tackle first and why. Then take the **top recom
 
 Every other candidate is dropped. Don't file it, and don't list it in the plan or the idea: the next Architecture review starts from the codebase as it is by then.
 
-If the scan surfaced no candidate at all, file nothing and say so plainly in place of the final line.
+If the scan surfaced no candidate at all, file nothing, and say so plainly in place of the final line of step 6: there is no issue for it to name.
 
 **Use CONTEXT.md vocabulary for the domain, and the `/thirdshift:codebase-design` vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
 
@@ -659,9 +659,10 @@ The plan's top issue, the Spec or the single Ticket, is labelled `needs-triage` 
 
 The plan's top issue carries, whichever shape it takes:
 
-- **Every decision from step 3, each with its reason.** In a Spec, under Implementation Decisions and Testing Decisions. In a single Ticket, under a `## Decisions` heading after the acceptance criteria.
-- **The report**: the candidate's card as Markdown with a Mermaid before/after diagram. In a Spec, under Further Notes. In a single Ticket, under a `## Architecture review` heading at the end. See [REPORT.md](REPORT.md) for the card.
-- **The `CONTEXT.md` and ADR changes** recorded in step 3, as part of a Ticket's work, so they land through its pull request.
+- **Every decision from step 3, each with its reason.** In a Spec, under Implementation Decisions and Testing Decisions. In a single Ticket, under a `## Decisions` heading added after the issue template's sections.
+- **The report**: the candidate's card as Markdown with a Mermaid before/after diagram. In a Spec, under Further Notes. In a single Ticket, under an `## Architecture review` heading added last, after `## Decisions`. See [REPORT.md](REPORT.md) for the card.
+
+The `CONTEXT.md` and ADR changes recorded in step 3 go into the acceptance criteria of the Ticket whose work they belong to, a Spec's Ticket or the single Ticket, so they land through its pull request.
 
 ### 5. File the idea
 
@@ -673,7 +674,7 @@ Publish nothing else: no Spec, no Tickets, and no second idea.
 
 ### 6. End with the final line
 
-End your final message with the one final line the Session prompt asks for, in exactly the format it gives. The format is defined there and nowhere else. The line names one issue:
+Unless the scan surfaced no candidate at all, end your final message with the one final line the Session prompt asks for, in exactly the format it gives. The format is defined there and nowhere else. The line names one issue:
 
 - the plan's top issue, when you published a plan;
 - the idea issue, when you filed one;
@@ -684,7 +685,7 @@ thirdshift reads only that line, so everything else you want read belongs in the
         <h4 id="file-improve-codebase-architecture-report-md"><code>improve-codebase-architecture/REPORT.md</code></h4>
         <pre class="job-text"><code># Report Format
 
-The architectural review's report is Markdown, written into the issue it publishes: the plan's top issue, or the idea issue. GitHub renders Mermaid in a fenced `mermaid` block, so the diagrams live where the issue is read. Write no file, and open nothing.
+The Architecture review's report is Markdown, written into the issue it publishes: the plan's top issue, or the idea issue. GitHub renders Mermaid in a fenced `mermaid` block, so the diagrams live where the issue is read. Write no file, and open nothing.
 
 The report is one candidate's card: the top recommendation's. The candidates that weren't chosen get no card.
 
@@ -1205,7 +1206,7 @@ test("calculateTotal sums line items", () =&gt; {
         <h4 id="file-to-spec-skill-md"><code>to-spec/SKILL.md</code></h4>
         <pre class="job-text"><code>---
 name: to-spec
-description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled."
+description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled. Only for an Architecture review."
 disable-model-invocation: false
 ---
 
@@ -1213,7 +1214,7 @@ This skill takes the current session context and codebase understanding and prod
 
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to `gh issue create`. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
 
-The spec is all this skill writes. Write nothing to the repository: no files, commits or branches. A `CONTEXT.md` or ADR change the spec needs is work for one of its tickets.
+The spec is all this skill writes. Write nothing to the repository: no spec file, commits or branches. A `CONTEXT.md` or ADR change the spec needs is work for one of its tickets.
 
 ## Process
 
@@ -1295,7 +1296,7 @@ policy:
         <h4 id="file-to-tickets-skill-md"><code>to-tickets/SKILL.md</code></h4>
         <pre class="job-text"><code>---
 name: to-tickets
-description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links.
+description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links. Only for an Architecture review.
 disable-model-invocation: false
 ---
 
@@ -1305,7 +1306,7 @@ Break a plan, spec, or session into a set of **tickets**: tracer-bullet vertical
 
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to the `gh` CLI. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
 
-The tickets are all this skill writes. Write nothing to the repository: no files, commits or branches. A `CONTEXT.md` or ADR change the work needs is part of a ticket's work, named in its acceptance criteria.
+The tickets are all this skill writes. Write nothing to the repository: no ticket files, commits or branches. A `CONTEXT.md` or ADR change the work needs is part of a ticket's work, named in its acceptance criteria.
 
 ## Process
 

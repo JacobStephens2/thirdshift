@@ -280,18 +280,16 @@ fn fence(text: &str) -> String {
 
 /// What uses each Factory skill: the unit whose session does, linked, and
 /// when, if not always; or the Architecture review, which is no unit of a Run.
-fn skill_user(skill: &str) -> String {
-    let (unit, note) = match skill {
-        "implement" | "tdd" => (IMPLEMENT, None),
-        "code-review" | "pr" => (REVIEW, None),
-        "resolving-merge-conflicts" => (FINISH, Some("in a Repair")),
+fn skill_used_by(skill: &str) -> String {
+    match skill {
+        "implement" | "tdd" => unit_links(&[IMPLEMENT]),
+        "code-review" | "pr" => unit_links(&[REVIEW]),
+        "resolving-merge-conflicts" => format!("{}, in a Repair", unit_links(&[FINISH])),
         "improve-codebase-architecture" | "to-spec" | "to-tickets" | "codebase-design" => {
-            return "the Architecture review, in an Architect run".to_string();
+            "the Architecture review, in an Architect run".to_string()
         }
-        _ => panic!("the Factory skill {skill} has no user: add it to skill_user"),
-    };
-    let note = note.map_or(String::new(), |note| format!(", {note}"));
-    format!("{}{note}", unit_links(&[unit]))
+        _ => panic!("the Factory skill {skill} has no user: add it to skill_used_by"),
+    }
 }
 
 /// The fragment: the command line, the prompts, the skills, and the skills'
@@ -377,9 +375,9 @@ fn skills_section(html: &mut String) {
             html,
             r##"      <article class="job-sheet" id="skill-{name}" aria-labelledby="skill-{name}-title">
         <h3 id="skill-{name}-title">{name}</h3>
-        <p class="sent-by">Used by {user}</p>
+        <p class="sent-by">Used by {used_by}</p>
 "##,
-            user = skill_user(&name),
+            used_by = skill_used_by(&name),
         );
         let mut files = Vec::new();
         collect_files(skill, &mut files);

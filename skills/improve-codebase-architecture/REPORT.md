@@ -1,6 +1,6 @@
 # Report Format
 
-The architectural review's report is Markdown, written into the issue it publishes: the plan's top issue, or the idea issue. GitHub renders Mermaid in a fenced `mermaid` block, so the diagrams live where the issue is read. Write no file, and open nothing.
+The Architecture review's report is Markdown, written into the issue it publishes: the plan's top issue, or the idea issue. GitHub renders Mermaid in a fenced `mermaid` block, so the diagrams live where the issue is read. Write no file, and open nothing.
 
 The report is one candidate's card: the top recommendation's. The candidates that weren't chosen get no card.
 

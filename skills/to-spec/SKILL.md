@@ -1,6 +1,6 @@
 ---
 name: to-spec
-description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled."
+description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled. Only for an Architecture review."
 disable-model-invocation: false
 ---
 
@@ -8,7 +8,7 @@ This skill takes the current session context and codebase understanding and prod
 
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to `gh issue create`. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
 
-The spec is all this skill writes. Write nothing to the repository: no files, commits or branches. A `CONTEXT.md` or ADR change the spec needs is work for one of its tickets.
+The spec is all this skill writes. Write nothing to the repository: no spec file, commits or branches. A `CONTEXT.md` or ADR change the spec needs is work for one of its tickets.
 
 ## Process
 

@@ -1,6 +1,6 @@
 ---
 name: improve-codebase-architecture
-description: "Scan a codebase for deepening opportunities, take the top recommendation, and publish it to the issue tracker: as a plan when it is Strong, as an idea otherwise."
+description: "Scan a codebase for deepening opportunities, take the top recommendation, and publish it to the issue tracker: as a plan when it is Strong, as an idea otherwise. Only for an Architecture review."
 disable-model-invocation: false
 ---
 
@@ -69,7 +69,7 @@ Rank the candidates: which you'd tackle first and why. Then take the **top recom
 
 Every other candidate is dropped. Don't file it, and don't list it in the plan or the idea: the next Architecture review starts from the codebase as it is by then.
 
-If the scan surfaced no candidate at all, file nothing and say so plainly in place of the final line.
+If the scan surfaced no candidate at all, file nothing, and say so plainly in place of the final line of step 6: there is no issue for it to name.
 
 **Use CONTEXT.md vocabulary for the domain, and the `/thirdshift:codebase-design` vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
 
@@ -107,9 +107,10 @@ The plan's top issue, the Spec or the single Ticket, is labelled `needs-triage` 
 
 The plan's top issue carries, whichever shape it takes:
 
-- **Every decision from step 3, each with its reason.** In a Spec, under Implementation Decisions and Testing Decisions. In a single Ticket, under a `## Decisions` heading after the acceptance criteria.
-- **The report**: the candidate's card as Markdown with a Mermaid before/after diagram. In a Spec, under Further Notes. In a single Ticket, under a `## Architecture review` heading at the end. See [REPORT.md](REPORT.md) for the card.
-- **The `CONTEXT.md` and ADR changes** recorded in step 3, as part of a Ticket's work, so they land through its pull request.
+- **Every decision from step 3, each with its reason.** In a Spec, under Implementation Decisions and Testing Decisions. In a single Ticket, under a `## Decisions` heading added after the issue template's sections.
+- **The report**: the candidate's card as Markdown with a Mermaid before/after diagram. In a Spec, under Further Notes. In a single Ticket, under an `## Architecture review` heading added last, after `## Decisions`. See [REPORT.md](REPORT.md) for the card.
+
+The `CONTEXT.md` and ADR changes recorded in step 3 go into the acceptance criteria of the Ticket whose work they belong to, a Spec's Ticket or the single Ticket, so they land through its pull request.
 
 ### 5. File the idea
 
@@ -121,7 +122,7 @@ Publish nothing else: no Spec, no Tickets, and no second idea.
 
 ### 6. End with the final line
 
-End your final message with the one final line the Session prompt asks for, in exactly the format it gives. The format is defined there and nowhere else. The line names one issue:
+Unless the scan surfaced no candidate at all, end your final message with the one final line the Session prompt asks for, in exactly the format it gives. The format is defined there and nowhere else. The line names one issue:
 
 - the plan's top issue, when you published a plan;
 - the idea issue, when you filed one;
