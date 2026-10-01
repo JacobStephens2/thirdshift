@@ -3,7 +3,10 @@
 //!
 //! Only the `update` command calls this; a Run never checks for updates. The
 //! release's installer moves the new binary into place with a rename, so a Run
-//! still using the old binary keeps running it.
+//! or a Spec run still using the old binary keeps running it. On Linux so do
+//! the child Runs it starts afterwards, which the child Run module starts from
+//! the running binary rather than from its install path; on macOS those are
+//! started from the install path, and run the new binary.
 
 use std::fmt::Display;
 
