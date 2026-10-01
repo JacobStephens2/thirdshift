@@ -69,7 +69,7 @@ pub struct Reached {
 /// Tickets are all closed with no Spec branch to continue.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
-/// start when its only red checks are Inherited failures.
+/// start, or wait on, when its only red checks are Inherited failures.
 pub fn run(
     issue: &IssueUrl,
     goal: Goal,
@@ -477,8 +477,14 @@ impl RepairLoop<'_> {
                             self.budgets.count_base_move(base, "while CI ran")?;
                             continue;
                         }
-                        self.base_fix
-                            .fix(issue, pr_url, base, &base_commit, &failed.inherited)?;
+                        self.base_fix.fix(
+                            worktree.launch(),
+                            issue,
+                            pr_url,
+                            base,
+                            &base_commit,
+                            &failed.inherited,
+                        )?;
                         continue;
                     }
                     let kind = self.budgets.next_repair("CI red")?;

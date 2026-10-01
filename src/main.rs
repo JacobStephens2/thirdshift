@@ -64,7 +64,10 @@ failures fails, saying to fix the Base branch first. With base-fix, it starts a 
 instead, once: it opens an issue for those checks, labelled base-fix and ready-for-agent,
 runs a Merge run on it into the Base branch, waits for it to merge, then merges the Base
 branch in and watches CI again. If the Base fix fails, or the checks still fail on the Base
-branch once it has merged, the Run fails, naming the Base fix issue.
+branch once it has merged, the Run fails, naming the Base fix issue. A Run that finds an
+open base-fix issue for the same Base branch and checks waits for that one to close
+instead of starting another, and a Spec run's Tickets that meet the same Inherited failure
+share one Base fix.
 
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec

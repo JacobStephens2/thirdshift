@@ -110,6 +110,11 @@ impl Worktree {
         &self.git
     }
 
+    /// The launch repository the worktree was added from.
+    pub fn launch(&self) -> &Git {
+        &self.launch
+    }
+
     /// Push the Issue branch to origin (a no-op if it is already there).
     /// The target repo's hooks are skipped: the session runs the tests and CI
     /// gates the PR, so a local hook doesn't decide whether work reaches
@@ -284,14 +289,7 @@ impl Drop for Worktree {
 /// worktrees and local Issue branches one at a time: `git worktree add -b`
 /// and `git branch -D` can fail partway on a lock file another holds.
 fn lock_launch(launch: &Git) -> Result<File> {
-    let common_dir = launch
-        .dir()
-        .join(launch.run(&["rev-parse", "--git-common-dir"])?);
-    let path = common_dir.join("thirdshift-worktrees.lock");
-    let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
-    file.lock()
-        .with_context(|| format!("can't lock {}", path.display()))?;
-    Ok(file)
+    launch.lock("thirdshift-worktrees.lock")
 }
 
 #[cfg(test)]

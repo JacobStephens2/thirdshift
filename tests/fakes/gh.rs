@@ -15,6 +15,7 @@
 //!  "runs"?: [{"databaseId", "url", "branch", "workflow", "event", "headSha", "status",
 //!             "conclusion", "jobs"?, "hidden_polls"?, "pending_polls"?}],
 //!  "on_ci_read"?: {"times", "script", "seen"},
+//!  "on_issue_view"?: {"<number>": "<script>"},
 //!  "on_merge"?: {"times", "script"},
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
@@ -76,6 +77,9 @@
 //! `gh issue close` closes the issue, recording its `--comment`; on an issue
 //! already closed it only warns, as gh does.
 //!
+//! `gh issue list --label <label> --json <fields>` lists the open issues with
+//! that label, whatever its case, newest first.
+//!
 //! `gh issue create --title <title> --body <body> --label <label>,<label>`
 //! opens an issue numbered one past the highest issue, with that title, body
 //! (in `bodies`) and labels, and prints its URL. A label the repository does
@@ -105,6 +109,8 @@
 //!                                         thirdshift reads CI on each new sha,
 //!                                         for the next <times> shas, with the
 //!                                         sha in $FAKE_CI_SHA
+//! gh fake on-issue-view <number> '<script>'  run <script> in bash the first
+//!                                         time issue <number> is viewed
 //! gh fake on-merge <times> '<script>'     run <script> in bash before each of
 //!                                         the next <times> `gh pr merge` calls
 //! gh fake refuse-merges <times> '<error>' fail the next <times> `gh pr merge`
@@ -578,21 +584,75 @@ fn unknown_issue(number: &str) -> ! {
     )
 }
 
-fn issue_view(state: &Json, positional: &[String], flags: &Flags) {
-    let n = &positional[0];
-    let Some(issue_state) = state.at("issues").get(n) else {
-        unknown_issue(n)
-    };
+/// The JSON fields of issue `n`, in state `issue_state`.
+fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
     let title = match state.get("titles").and_then(|titles| titles.get(n)) {
         Some(title) => title.clone(),
         None => string(format!("Issue {n}")),
     };
-    let fields = object([
+    let url = format!("https://github.com/{}/issues/{n}", state.at("repo").str());
+    object([
         ("number", number(n.parse::<i64>().unwrap())),
         ("state", issue_state.clone()),
         ("title", title),
-    ]);
+        ("url", string(url)),
+    ])
+}
+
+/// After the issue's `on-issue-view` script, if it has one still to run.
+fn issue_view(state: &mut Json, positional: &[String], flags: &Flags) {
+    let n = &positional[0];
+    run_issue_view_hook(state, n);
+    let Some(issue_state) = state.at("issues").get(n) else {
+        unknown_issue(n)
+    };
+    let fields = issue_fields(state, n, issue_state);
     println!("{}", json_fields(&fields, &wanted_fields(flags)));
+}
+
+/// `gh issue list --label <label> --json <fields>`: the open issues with the
+/// label, whatever its case, newest first.
+fn issue_list(state: &Json, flags: &Flags) {
+    let supported = ["label", "state", "json", "limit", "repo", "R"];
+    let label = flag(flags, "label");
+    if flags.keys().any(|name| !supported.contains(&name.as_str()))
+        || !matches!(flag(flags, "state"), None | Some("open"))
+        || label.is_none_or(|label| label.contains(','))
+    {
+        die(
+            &format!("fake gh: unsupported issue list flags {flags:?}"),
+            2,
+        );
+    }
+    let label = label.unwrap();
+    let Json::Object(issues) = state.at("issues") else {
+        panic!("issues is an object")
+    };
+    let labels = state.get("labels");
+    let mut open: Vec<(i64, &Json)> = issues
+        .iter()
+        .filter(|(n, issue_state)| {
+            let labels = labels.and_then(|labels| labels.get(n));
+            issue_state.str() == "OPEN"
+                && labels
+                    .map(Json::items)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|name| name.str().eq_ignore_ascii_case(label))
+        })
+        .map(|(n, issue_state)| (n.parse().unwrap(), issue_state))
+        .collect();
+    open.sort_by_key(|(n, _)| -n);
+    let limit: usize = flag(flags, "limit").unwrap_or("30").parse().unwrap();
+    let wanted = wanted_fields(flags);
+    let listed = open
+        .into_iter()
+        .take(limit)
+        .map(|(n, issue_state)| {
+            json_fields(&issue_fields(state, &n.to_string(), issue_state), &wanted)
+        })
+        .collect();
+    println!("{}", Array(listed));
 }
 
 fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
@@ -1216,6 +1276,27 @@ fn run_ci_read_hook(state: &mut Json, sha: &str) {
     run_hook(state, "on_ci_read", &[("FAKE_CI_SHA", sha)]);
 }
 
+/// Run the `on-issue-view` script of issue `n`, if it has one that has not
+/// yet run, e.g. to close the issue as thirdshift waits on it. Leaves `state`
+/// as the script left it.
+fn run_issue_view_hook(state: &mut Json, n: &str) {
+    let Some(hook) = state
+        .get_mut("on_issue_view")
+        .and_then(|hooks| hooks.get_mut(n))
+        .filter(|hook| hook.truthy())
+    else {
+        return;
+    };
+    let script = hook.str().to_owned();
+    *hook = Null;
+    save(state);
+    unlock();
+    let succeeded = run_script(&script, &[]);
+    lock();
+    assert!(succeeded, "the on-issue-view script failed");
+    *state = load();
+}
+
 /// Run the script of hook `name`, if it has runs left, with `env` added to
 /// the environment. Leaves `state` as the script left it.
 fn run_hook(state: &mut Json, name: &str, env: &[(&str, &str)]) {
@@ -1270,6 +1351,9 @@ fn fake_command(state: &mut Json, args: &[&str]) {
                 ("seen", Array(Vec::new())),
             ]),
         ),
+        ["on-issue-view", n, script] => state
+            .entry("on_issue_view", object([]))
+            .set(n, string(*script)),
         ["on-merge", n, script] => state.set(
             "on_merge",
             object([("times", times(n)), ("script", string(*script))]),
@@ -1340,7 +1424,11 @@ pub fn main(args: Vec<String>) {
         }
         ["issue", "view", rest @ ..] => {
             let (positional, flags) = parsed(rest);
-            issue_view(&state, &positional, &flags);
+            issue_view(&mut state, &positional, &flags);
+        }
+        ["issue", "list", rest @ ..] => {
+            let (_, flags) = parsed(rest);
+            issue_list(&state, &flags);
         }
         ["issue", "close", rest @ ..] => {
             let (positional, flags) = parsed(rest);
