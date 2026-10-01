@@ -984,3 +984,73 @@ can i run thirdshift merge https://github.com/JacobStephens2/thirdshift/issues/2
 ## 10
 pr the glossary commit
 
+
+# oct 1 2026, pickup ready-for-agent issues, spec 212
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/212
+
+## 2
+I'm thinking as well that if an issue has a parent issue then then the run should start on the parent issue as so become a spec run. so as to keep the whole spec and tickets in order and context. Or maybe or I'm wondering if it's good enough to just do the ready for tickets, ready for agent tickets issues that are not blocked and which are open not closed. But I think I lean towards just doing the spec run on the parent if there is a parent issue. 
+
+1 - I want to compare a and b. So one option for b would be a daemon?
+
+2 - agree
+
+3 - agree
+
+4 - agree
+
+5 - agree
+
+6 - agree I think. What is the machine lock here?
+
+7 - agree - this prioritizes older isues, which is fine.
+
+8 - agree, so the way the Pickup run works on the issue is largely based on the User config.
+
+## 3
+1 - my machine can't use the running several issues at once? Why not?
+
+9 - Agree, though I just want to be wary of the process of a spec issue being created and having the ready for agent label put on it a couple minutes before the tickets are created and have and added to that spec issue. I'm trying to decide whether to handle that just at the creation level to try to revise perhaps my grilling with docs process so that I don't apply the ready for agent label until all the tickets are on the spec issue or to handle that somehow at the at this level I'm also wondering about the architect runs and their ability to create a spec issue with a ready for agent label, possibly I I'm not sure, possibly before they create sub-issue tickets and add it add them to that parent issue. 
+
+10 - agree
+
+11 - agree
+
+12 - agree, though I'm considering whether or not to make this configurable in User config in the case that thirdshift is running on larger linux machines with more capacity. I suppose though how much disruption and merge conflict handling pressure we'd want or not there is the question that remains - and maybe less.
+
+## 4
+I'm thinking as well about the ability for thirdshift to remove the in-progress label after the issue has been closed.
+
+1 - agree
+
+13 - agree. Just in modifying the two spec skill, I want to be careful to allow for the possibility of a spec without tickets because I have seen that and that is a legitimate configuration, even though typically specs do get tickets. 
+
+14 - agree
+
+## 5
+15 - agree
+16 - agree
+17 - agree
+18 - agree
+19 - agree
+20 - agree
+
+## 6
+21 - agree
+22 - agree
+23 - agree
+
+## 7
+24 - agree
+25 - agree
+26 - agree
+27 - agree
+
+## 8
+PR the adr and context updates, then /to-spec
+
+## 9
+/to-tickets
+
+## 10
+File these as ticket sub-issues of the spec issue.

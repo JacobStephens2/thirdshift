@@ -7,6 +7,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use crate::architect;
+use crate::base_fix::Advice;
 use crate::failed_run::FailedRun;
 use crate::progress::{self, ChildLine};
 use crate::run::Ended;
@@ -29,17 +30,17 @@ pub fn show(ended: &Ended) -> ExitCode {
 /// log on stderr, and its pull request's URL, if it left one, on stdout.
 /// Returns its exit code.
 pub fn show_failure(failed: &FailedRun) -> ExitCode {
-    Shown::of_failure(failed).print()
+    Shown::of_failure(failed, &[]).print()
 }
 
-/// Show an Architect run that ended on an issue, having dispatched no run:
-/// the line that says how it ended on stderr, and the issue's URL on stdout.
-/// Returns its exit code.
+/// Show an Architect run that dispatched no run, skipped or ended on an
+/// issue: the line that says how it ended on stderr, and its URLs, if it has
+/// any, on stdout. Returns its exit code.
 pub fn show_architect(outcome: &architect::Outcome) -> ExitCode {
     Shown {
         // Also on stderr, so the outcome shows even when stdout is captured.
         steps: vec![outcome.to_string()],
-        url: Some(outcome.url().to_string()),
+        urls: outcome.urls().into_iter().map(String::from).collect(),
         success: true,
     }
     .print()
@@ -49,9 +50,9 @@ pub fn show_architect(outcome: &architect::Outcome) -> ExitCode {
 struct Shown {
     /// The messages of its progress lines on stderr, in order.
     steps: Vec<String>,
-    /// The URL on stdout: the pull request's, or that of the issue an
-    /// Architect run ended on.
-    url: Option<String>,
+    /// The URLs on stdout, a line each: the pull request's, or those of the
+    /// issues an Architect run ended on.
+    urls: Vec<String>,
     /// Whether it exits 0.
     success: bool,
 }
@@ -67,10 +68,10 @@ impl Shown {
                     reached.pr_url,
                     reached.goal.outcome()
                 )],
-                url: Some(reached.pr_url.clone()),
+                urls: vec![reached.pr_url.clone()],
                 success: true,
             },
-            Err(failed) => Shown::of_failure(failed),
+            Err(failed) => Shown::of_failure(failed, &ended.advice),
         };
         if let Some(report) = &ended.base_fix {
             shown.steps.insert(0, format!("{BASE_FIX}{report}"));
@@ -78,14 +79,17 @@ impl Shown {
         shown
     }
 
-    fn of_failure(failed: &FailedRun) -> Self {
+    /// A Failed run's cause, its `advice`, if it has any, then its session
+    /// log.
+    fn of_failure(failed: &FailedRun, advice: &[Advice]) -> Self {
         let mut steps = vec![format!("{:#}", failed.error)];
+        steps.extend(advice.iter().map(Advice::to_string));
         if let Some(log) = &failed.log {
             steps.push(format!("{SESSION_LOG}{}", log.display()));
         }
         Shown {
             steps,
-            url: failed.pr_url.clone(),
+            urls: failed.pr_url.iter().cloned().collect(),
             success: false,
         }
     }
@@ -94,7 +98,7 @@ impl Shown {
         for step in self.steps {
             progress::step(step);
         }
-        if let Some(url) = self.url {
+        for url in self.urls {
             // A failed write, as once the terminal has closed, is ignored,
             // so the Run notification still goes.
             let _ = writeln!(std::io::stdout(), "{url}");
@@ -129,11 +133,13 @@ pub struct ChildFailure {
 /// stderr, as it is relayed, then how it exited. Only the child's own
 /// progress lines count: a line that continues one, as the later lines of a
 /// cause do, tells nothing, nor does a line the child relayed from a Run it
-/// started itself.
+/// started itself. Its advice, between its cause and its session log, is
+/// neither.
 #[derive(Default)]
 pub struct Reader {
-    /// The last progress line that names neither a session log nor a Base
-    /// fix: once a failed child has shown its ending, its cause.
+    /// The last progress line that is no advice and names neither a session
+    /// log nor a Base fix: once a failed child has shown its ending, its
+    /// cause.
     cause: Option<String>,
     /// The session log named since that line.
     log: Option<String>,
@@ -150,7 +156,7 @@ impl Reader {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {
             self.log = Some(log.to_string());
-        } else {
+        } else if !Advice::is_line(message) {
             self.cause = Some(message.to_string());
             self.log = None;
         }
@@ -195,6 +201,7 @@ mod tests {
                 ticket_lines: Vec::new(),
             }),
             base_fix: None,
+            advice: Vec::new(),
         }
     }
 
@@ -208,6 +215,7 @@ mod tests {
                 ticket_lines: Vec::new(),
             }),
             base_fix: None,
+            advice: Vec::new(),
         }
     }
 
@@ -241,7 +249,7 @@ mod tests {
             reader.read(ChildLine::of(line));
         }
         let stdout = shown
-            .url
+            .urls
             .iter()
             .map(|url| format!("{url}\n"))
             .collect::<String>();
@@ -326,6 +334,38 @@ mod tests {
                 read_back(&failed(cause, log, None)),
                 ChildEnding {
                     outcome: failure("git push failed: exit status: 1", log),
+                    base_fix: None,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn the_advice_a_failed_run_gives_is_neither_its_cause_nor_its_session_log() {
+        let advice = vec![
+            Advice {
+                label: "Base check",
+                value: "test: https://ci.example/main/test".to_string(),
+            },
+            Advice {
+                label: "Retry with",
+                value: "thirdshift base-fix https://github.com/acme/widgets/issues/21".to_string(),
+            },
+            Advice {
+                label: "Or set",
+                value: "base.fix = true".to_string(),
+            },
+        ];
+        let cause = "CI red on test, which fails on main too: fix main first";
+        for log in [Some(LOG), None] {
+            let ended = Ended {
+                advice: advice.clone(),
+                ..failed(cause, log, Some(PR))
+            };
+            assert_eq!(
+                read_back(&ended),
+                ChildEnding {
+                    outcome: failure(cause, log),
                     base_fix: None,
                 }
             );

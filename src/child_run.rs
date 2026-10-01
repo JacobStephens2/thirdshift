@@ -2,7 +2,10 @@
 //! Spec run for one of its Tickets (ADR-0006) or by a Run for its Base fix
 //! (ADR-0008).
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -65,17 +68,91 @@ pub enum Ended {
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
 /// Launch directory. If `base_fix` allows one, it is given `base-fix`, so it
-/// may start a Base fix.
-pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: BaseFixAsk) -> Result<Child> {
-    Command::new(std::env::current_exe().context("no thirdshift executable")?)
+/// may start a Base fix; if nobody decided, it is given the command to offer
+/// one with.
+pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: &BaseFixAsk) -> Result<Child> {
+    start_from(&own_executable()?, issue, kind, base_fix)
+}
+
+/// The executable this process is running, as a child `thirdshift` is
+/// started: the same binary, so the hidden arguments it is given never meet
+/// another version.
+///
+/// On Linux that is the kernel's own link to it, which still reaches it once
+/// the file at its install path has been replaced or removed, as an update
+/// does while a Run is going. The path that link resolves to names no file by
+/// then, so a child can't be started by it (#261). Elsewhere there is no such
+/// link, and it is the executable's path.
+fn own_executable() -> Result<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok(PathBuf::from("/proc/self/exe"))
+    } else {
+        std::env::current_exe().context("no thirdshift executable")
+    }
+}
+
+/// [`start`], with the `thirdshift` at `executable` as the child.
+fn start_from(
+    executable: &Path,
+    issue: &IssueUrl,
+    kind: &Kind,
+    base_fix: &BaseFixAsk,
+) -> Result<Child> {
+    let base_fix = match base_fix {
+        BaseFixAsk::Allow => vec![args::BASE_FIX],
+        BaseFixAsk::Forbid => Vec::new(),
+        BaseFixAsk::Undecided { retry } => vec![args::OFFER_BASE_FIX, retry],
+    };
+    let mut command = Command::new(executable);
+    // On Linux `executable` is a link, and the child goes by this process's
+    // command instead.
+    if cfg!(target_os = "linux")
+        && let Some(own) = own_command()
+    {
+        command.arg0(own);
+    }
+    command
         .args([kind.hidden_argument(), kind.base()])
-        .args((base_fix == BaseFixAsk::Allow).then_some(args::BASE_FIX))
+        .args(base_fix)
         .arg(&issue.url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("could not start the Run for #{}", issue.number))
+        .with_context(|| {
+            // Where `executable` is a link, the file it leads to says more.
+            let leads_to = match std::fs::read_link(executable) {
+                Ok(target) => format!(" ({})", target.display()),
+                Err(_) => String::new(),
+            };
+            format!(
+                "could not start the Run for #{} from {}{leads_to}",
+                issue.number,
+                executable.display()
+            )
+        })
+}
+
+/// The command this process was started as, its `argv[0]`.
+fn own_command() -> Option<OsString> {
+    std::env::args_os().next()
+}
+
+/// Name this process after the command it was started as, for `pgrep`,
+/// `pkill` and `top`. The kernel names a process after the last part of the
+/// path it was started by, which for a child Run on Linux is the link to the
+/// running executable: every child Run would be an `exe`. Elsewhere a child
+/// Run is started by the executable's path, and has its name already.
+pub fn name_this_process() {
+    #[cfg(target_os = "linux")]
+    if let Some(own) = own_command()
+        && let Some(name) = Path::new(&own).file_name()
+        && let Ok(name) = std::ffi::CString::new(name.as_encoded_bytes())
+    {
+        // SAFETY: PR_SET_NAME reads a NUL-terminated string, which `name`
+        // is, and keeps only as much of it as a name holds.
+        unsafe { libc::prctl(libc::PR_SET_NAME, name.as_ptr()) };
+    }
 }
 
 /// Relay the stderr of `child`, the Run for issue `number`, with a
@@ -137,4 +214,46 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
             log: failure.log,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Why Ticket #248's Run could not be started from `executable`.
+    fn cause_of_not_starting_from(executable: &Path) -> String {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/248").unwrap();
+        let kind = Kind::Ticket {
+            spec_branch: "issue-237".to_string(),
+        };
+        let error = start_from(executable, &issue, &kind, &BaseFixAsk::Forbid).unwrap_err();
+        format!("{error:#}")
+    }
+
+    #[test]
+    fn a_child_run_that_cannot_be_started_names_the_executable_that_was_tried() {
+        let cause = cause_of_not_starting_from(Path::new("/no/such/thirdshift"));
+
+        assert!(
+            cause.starts_with("could not start the Run for #248 from /no/such/thirdshift: "),
+            "{cause}"
+        );
+    }
+
+    #[test]
+    fn a_child_run_that_cannot_be_started_from_a_link_names_the_file_it_leads_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("exe");
+        std::os::unix::fs::symlink("/no/such/thirdshift (deleted)", &link).unwrap();
+
+        let cause = cause_of_not_starting_from(&link);
+
+        assert!(
+            cause.starts_with(&format!(
+                "could not start the Run for #248 from {} (/no/such/thirdshift (deleted)): ",
+                link.display()
+            )),
+            "{cause}"
+        );
+    }
 }

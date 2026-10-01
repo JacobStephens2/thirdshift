@@ -11,9 +11,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install the Rust version and components rust-toolchain.toml names
+        run: |
+          rustup toolchain install
+          rustc --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
@@ -25,7 +26,10 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the Rust version rust-toolchain.toml names
+        run: |
+          rustup toolchain install
+          rustc --version
       - uses: Swatinem/rust-cache@v2
       # nextest runs tests from every test binary in parallel, where cargo test
       # runs the binaries one after another; that matters on the slower macOS
