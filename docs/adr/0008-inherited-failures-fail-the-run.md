@@ -1,0 +1,17 @@
+# A check that also fails on the Base branch fails the Run, unless a Base fix is allowed
+
+A Base branch with broken CI used to block every Run on its repository: each red check started a CI-fix Repair that could find nothing on the branch to fix (JacobStephens2/cascade#19, JacobStephens2/chart35#71). Now, before starting a CI-fix Repair, thirdshift compares the failed checks on the head with the checks on the Base branch commit that head last merged in, by check name and Failed state. A check red on both is an **Inherited failure**. No Repair is started for it. If the Base branch has moved since that merge, the Run merges the newer Base branch in and goes round again. Otherwise it is a **Failed run** whose cause names the checks and the Base branch, `fix <base> first`, and its pull request goes back to a draft. Nothing merges, and no pull request is marked ready, past red CI. A user who trusts thirdshift with more of the codebase's upkeep can allow a **Base fix**, by flag or in the User config: a Merge run into the Base branch that fixes the check, after which the Run goes round again.
+
+## Considered Options
+
+- **Ready, but don't merge**: a plain Run leaves the pull request ready for review despite the Inherited failure. Rejected: "ready for review" would stop meaning green, and the factory would be standing behind work that fails CI.
+- **Merge past it**, possibly behind an opt-in. Rejected: in cascade#19 the broken check was the only compile step for the code the branch changed, so ignoring it would merge code nothing had built. A Base fix offers the same trust without ever merging past red.
+- **The latest workflow run on the Base branch** as the comparison, rather than the checks on the commit the head merged in. Rejected: it can describe a newer or older Base branch commit than the one the head contains, it needs workflow IDs, and it misses commit statuses.
+- **The CI-fix Repair reports "red on Base" back to thirdshift.** Rejected: it spends a session (as in chart35#71) to reach what two API calls decide, and leaves the outcome to the agent's judgement instead of a deterministic check.
+- **A Base fix as a Repair on the Issue branch**, or pushed straight to the Base branch. Rejected: the first mixes an unrelated fix into the branch's pull request and leaves every other Run on the repository red; the second skips review.
+
+## Consequences
+
+- Matching is by check name and conclusion, never by log text, consistent with the Self-merge never reading GitHub's error text. If the branch breaks a check in a different way while the Base branch's copy is already red, the branch's failure hides behind it. Without a Base fix that is safe, because nothing merges. With one, the Run watches CI again once the fix has landed and sees the branch's failure then.
+- A check with no finished result on the Base branch commit (no CI on pushes, missing, or still pending) is not an Inherited failure. Its Run behaves as before: a CI-fix Repair, then possibly a Declined CI fix. thirdshift never triggers CI on the Base branch to find out.
+- A Base fix is always a Merge run, since only a merged fix lets the Run go on. It treats every red check as its own and never starts a Base fix itself. Runs that meet the same Inherited failure share one Base fix, found by its label. In a Spec run, a Ticket's Base fix targets the Spec branch, its Base branch, and the fix reaches the real Base branch through the Spec PR.
