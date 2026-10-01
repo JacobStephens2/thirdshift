@@ -1,8 +1,12 @@
 //! An Architect run up to its plan: an Architecture review of the Base
 //! branch, from the Launch directory with no Issue URL, then the checks on
 //! the plan it published and the label swap that marks the plan ready, for
-//! the command to stop at or to dispatch.
+//! the command to stop at or to dispatch. A review that found no Strong
+//! candidate published no plan, and the Architect run ends on the issue it
+//! named instead: the idea issue it filed for its top recommendation, or the
+//! open issue that already covers it.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -30,14 +34,57 @@ const REVIEW: &str = "architecture-review";
 /// plan passes its checks.
 const READY_FOR_AGENT: &str = "ready-for-agent";
 
+/// How an Architect run ended, short of a failure, with the issue it ended
+/// on. Its `Display` is the line that says how it ended, naming that issue.
+#[derive(Debug)]
+pub enum Outcome {
+    /// The plan the review published is marked ready.
+    PlanReady(IssueUrl),
+    /// The review found no Strong candidate, and filed its top
+    /// recommendation as this issue.
+    IdeaFiled(IssueUrl),
+    /// The review found no Strong candidate, and filed nothing: this open
+    /// issue already covers its top recommendation.
+    AlreadyFiled(IssueUrl),
+}
+
+impl Outcome {
+    /// The URL of the issue the Architect run ended on.
+    pub fn url(&self) -> &str {
+        match self {
+            Self::PlanReady(issue) | Self::IdeaFiled(issue) | Self::AlreadyFiled(issue) => {
+                &issue.url
+            }
+        }
+    }
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let url = self.url();
+        match self {
+            Self::PlanReady(_) => write!(f, "plan {url} is ready for an agent"),
+            Self::IdeaFiled(_) => write!(
+                f,
+                "no Strong candidate: the Architecture review filed the idea {url}"
+            ),
+            Self::AlreadyFiled(_) => write!(
+                f,
+                "no Strong candidate: {url} already covers the Architecture review's top recommendation, so it filed nothing"
+            ),
+        }
+    }
+}
+
 /// Run an Architecture review of the branch checked out in the Launch
 /// directory, the Base branch, pointed at `focus` if given, and mark the plan
-/// it publishes ready. Returns the plan. With `launch_pull`, the Launch
-/// directory's checkout of the Base branch is first brought up to date with
-/// origin. The review's worktree and the plugin directory are gone when this
-/// returns. A failure after the plan is published leaves its labels as the
-/// review left them.
-pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<IssueUrl, FailedRun> {
+/// it publishes ready. A review that reports an idea issue it filed, or the
+/// open issue that already covers its top recommendation, instead of a plan,
+/// changes no label. With `launch_pull`, the Launch directory's checkout of
+/// the Base branch is first brought up to date with origin. The review's
+/// worktree and the plugin directory are gone when this returns. A failure
+/// after the plan is published leaves its labels as the review left them.
+pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
     let timestamp = started.format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
@@ -62,7 +109,7 @@ pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<Is
     let logs = Logs::of_architect_run(&repo, logs_dir, &timestamp);
     let mut log = logs.path(REVIEW);
     review(worktree, &base, focus, &logs, &mut log)
-        .and_then(|final_message| mark_plan_ready(final_message.as_deref(), &origin, started))
+        .and_then(|final_message| conclude(final_message.as_deref(), &origin, started))
         .map_err(|error| FailedRun {
             log: log.exists().then_some(log),
             ..FailedRun::from(error)
@@ -125,21 +172,32 @@ impl Report {
     }
 }
 
-/// Mark ready the plan that the review's `final_message` names, and return
-/// it: check it, then swap its `needs-triage` for `ready-for-agent`, in
-/// one request. Fails, changing no label, without a final line naming a
-/// plan, or if the plan fails its checks.
-fn mark_plan_ready(
-    final_message: Option<&str>,
-    origin: &str,
-    started: DateTime<Utc>,
-) -> Result<IssueUrl> {
-    let plan = reported_plan(final_message)?;
+/// End the Architect run on the issue the last line of the review's
+/// `final_message` names: a plan is marked ready, and an idea issue, or the
+/// issue that already covers the top recommendation, is left as it is. Fails if the session had no
+/// final message, if its last line is not one the prompt asks for, or if the
+/// plan can't be marked ready.
+fn conclude(final_message: Option<&str>, origin: &str, started: DateTime<Utc>) -> Result<Outcome> {
+    match final_message.and_then(Report::read) {
+        Some(Report::Plan(plan)) => {
+            mark_plan_ready(&plan, origin, started)?;
+            Ok(Outcome::PlanReady(plan))
+        }
+        Some(Report::Idea(idea)) => Ok(Outcome::IdeaFiled(idea)),
+        Some(Report::AlreadyFiled(issue)) => Ok(Outcome::AlreadyFiled(issue)),
+        None => bail!("the Architecture review ended without the final line its prompt asks for"),
+    }
+}
+
+/// Mark `plan` ready: check it, then swap its `needs-triage` for
+/// `ready-for-agent`, in one request. Fails, changing no label, if the plan
+/// fails its checks.
+fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<()> {
     progress::step(format_args!(
         "the Architecture review published the plan {}",
         plan.url
     ));
-    let kept = labels_to_keep(&plan, origin, started)?;
+    let kept = labels_to_keep(plan, origin, started)?;
     if interrupt::requested() {
         bail!("interrupted");
     }
@@ -153,26 +211,7 @@ fn mark_plan_ready(
         .filter(|&label| label != READY_FOR_AGENT)
         .collect();
     labels.push(READY_FOR_AGENT);
-    github::set_labels(&plan, &labels)?;
-    Ok(plan)
-}
-
-/// The plan the last line of the review's `final_message` names. Fails if
-/// the session had no final message, if its last line is not one the prompt
-/// asks for, or if that line names an issue that is not a plan.
-fn reported_plan(final_message: Option<&str>) -> Result<IssueUrl> {
-    match final_message.and_then(Report::read) {
-        Some(Report::Plan(plan)) => Ok(plan),
-        Some(Report::Idea(idea)) => bail!(
-            "the Architecture review published no plan: it filed the idea {}",
-            idea.url
-        ),
-        Some(Report::AlreadyFiled(issue)) => bail!(
-            "the Architecture review published no plan: {} already covers its top recommendation",
-            issue.url
-        ),
-        None => bail!("the Architecture review ended without a final line naming its plan"),
-    }
+    github::set_labels(plan, &labels)
 }
 
 /// The labels `plan` keeps once it is marked ready: all it has but

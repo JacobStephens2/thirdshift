@@ -82,6 +82,8 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_r
         "merge, --no-merge and parallel <n> apply to that run",
         "With --plan-only, the Architect run prints the plan's URL and stops instead",
         "thirdshift architect \"the Spec run\"",
+        "A review that finds no Strong candidate publishes no plan",
+        "thirdshift prints that issue's URL instead, changing no label",
         "Start one Architect run per repository at a time",
     ] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");

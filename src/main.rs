@@ -96,9 +96,14 @@ that points the review at an area:
 
     thirdshift architect \"the Spec run\"
 
-A review that fails, is interrupted, or ends without naming a plan fails the Architect run and
-leaves any plan it published labelled needs-triage. Start one Architect run per repository at a
-time: two at once may publish the same plan.
+A review that finds no Strong candidate publishes no plan. It files its top recommendation as
+one idea issue labelled needs-triage, or names the open issue that already covers it, and
+thirdshift prints that issue's URL instead, changing no label. Its last line says which: the
+review filed the idea, or it filed nothing.
+
+A review that fails, is interrupted, or ends without naming one of these issues fails the
+Architect run and leaves any plan it published labelled needs-triage. Start one Architect run
+per repository at a time: two at once may publish the same plan.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
@@ -207,8 +212,11 @@ fn main() -> ExitCode {
 /// unless the command asked to stop at the plan, the plan dispatched as
 /// `thirdshift <plan URL>` with the same flags would be, whose ending is the
 /// Architect run's, though it sends no Run notification. One that stops at
-/// the plan puts the plan's URL on stdout; one whose review or plan fails,
-/// the cause and the session log on stderr.
+/// the plan, or whose review found no Strong candidate and so published no
+/// plan to dispatch, puts the URL of the issue it ended on on stdout: the
+/// plan, the idea issue the review filed, or the issue that already covers
+/// its top recommendation. One whose review or plan fails puts the cause and
+/// the session log on stderr.
 fn architect(args: &ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -217,14 +225,15 @@ fn architect(args: &ArchitectArgs) -> ExitCode {
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    let plan = match architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull) {
-        Ok(plan) => plan,
+    let outcome = match architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull)
+    {
+        Ok(outcome) => outcome,
         Err(failed) => return report(&failed),
     };
-    let Some(dispatch) = &args.dispatch else {
+    let (architect::Outcome::PlanReady(plan), Some(dispatch)) = (&outcome, &args.dispatch) else {
         // Also on stderr, so the outcome shows even when stdout is captured.
-        progress::step(format_args!("plan {} is ready for an agent", plan.url));
-        print_url(&plan.url);
+        progress::step(format_args!("{outcome}"));
+        print_url(outcome.url());
         return ExitCode::SUCCESS;
     };
     progress::step(format_args!(
@@ -232,7 +241,7 @@ fn architect(args: &ArchitectArgs) -> ExitCode {
         url = plan.url
     ));
     run_outcome(&run::run(
-        &plan,
+        plan,
         dispatch.goal.unwrap_or(config.default_goal()),
         &config.logs_dir,
         config.launch_pull,
@@ -287,8 +296,9 @@ fn report(failed: &FailedRun) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// A pull request's or a plan's URL on stdout. A failed write, as once the
-/// terminal has closed, is ignored, so the Run notification still goes.
+/// A pull request's URL, or the URL of the issue an Architect run ended on,
+/// on stdout. A failed write, as once the terminal has closed, is ignored, so
+/// the Run notification still goes.
 fn print_url(url: &str) {
     let _ = writeln!(std::io::stdout(), "{url}");
 }

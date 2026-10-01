@@ -3,7 +3,9 @@
 //! the plan the review published and swaps its `needs-triage` for
 //! `ready-for-agent`. With `--plan-only` it prints the plan's URL and stops.
 //! Without, it dispatches the plan as `thirdshift <plan URL>` would, a Spec
-//! run or a Run, and ends as that does.
+//! run or a Run, and ends as that does. A review with no Strong candidate
+//! has no plan: the Architect run prints the URL of the idea issue it filed,
+//! or of the open issue that already covers it, and dispatches nothing.
 
 mod support;
 
@@ -17,7 +19,8 @@ const PLAN_URL: &str = "https://github.com/acme/widgets/issues/8";
 /// The first pull request opened on the fake GitHub.
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
-const NO_FINAL_LINE: &str = "the Architecture review ended without a final line naming its plan";
+const NO_FINAL_LINE: &str =
+    "the Architecture review ended without the final line its prompt asks for";
 
 /// The agent publishes a single Ticket as the plan, labelled `needs-triage`,
 /// and names it in the last line of its final message.
@@ -167,6 +170,22 @@ fn assert_failed(scenario: &Scenario, result: &RunResult, cause: &str) {
         "stderr: {}",
         result.stderr
     );
+    assert_nothing_left_behind(scenario);
+}
+
+/// What every Architect run whose review found no Strong candidate shares:
+/// exit 0, `url` alone on stdout, `outcome` as stderr's last line, the
+/// review as its only session, and nothing left behind.
+fn assert_ended_without_a_plan(scenario: &Scenario, result: &RunResult, url: &str, outcome: &str) {
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{url}\n"));
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: {outcome}").as_str()),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
     assert_nothing_left_behind(scenario);
 }
 
@@ -379,30 +398,67 @@ fn a_session_that_ends_without_a_valid_final_line_fails_the_architect_run() {
 }
 
 #[test]
-fn a_review_that_published_no_plan_fails_the_architect_run_naming_the_issue_it_reported() {
-    for (line, cause) in [
-        (
-            "Architecture review idea: ",
-            format!("the Architecture review published no plan: it filed the idea {PLAN_URL}"),
-        ),
-        (
-            "Architecture review already filed: ",
-            format!(
-                "the Architecture review published no plan: {PLAN_URL} already covers its top recommendation"
-            ),
-        ),
-    ] {
-        let scenario = Scenario::new();
-        scenario.agent_does(&format!(
-            "gh issue create --title Idea --body Idea --label needs-triage > /dev/null\n{}",
-            ends_with(&format!("{line}{PLAN_URL}"))
-        ));
+fn a_review_that_files_an_idea_prints_its_url_and_changes_no_label() {
+    let scenario = Scenario::new();
+    let idea = scenario.issue_url(8);
+    scenario.agent_does(
+        r#"
+url=$(gh issue create --title "Deepen the session module" --body "The idea" --label needs-triage)
+printf 'No Strong candidate.\n\nArchitecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
 
-        let result = scenario.run(&["architect", "--plan-only"]);
+    let result = scenario.run(&["architect", "--plan-only"]);
 
-        assert_failed(&scenario, &result, &cause);
-        assert_eq!(scenario.issue_labels(8), ["needs-triage"], "{line}");
-    }
+    assert_ended_without_a_plan(
+        &scenario,
+        &result,
+        &idea,
+        &format!("no Strong candidate: the Architecture review filed the idea {idea}"),
+    );
+    assert_eq!(scenario.issue_labels(8), ["needs-triage"]);
+}
+
+#[test]
+fn a_review_whose_idea_is_already_filed_prints_that_issues_url_and_files_and_changes_nothing() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["needs-triage"]);
+    let url = scenario.issue_url(7);
+    scenario.agent_does(&ends_with(&format!(
+        "Architecture review already filed: {url}"
+    )));
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_ended_without_a_plan(
+        &scenario,
+        &result,
+        &url,
+        &format!(
+            "no Strong candidate: {url} already covers the Architecture review's top recommendation, so it filed nothing"
+        ),
+    );
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn a_review_with_no_strong_candidate_dispatches_nothing_without_plan_only() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["needs-triage"]);
+    let url = scenario.issue_url(7);
+    scenario.agent_does(&ends_with(&format!("Architecture review idea: {url}")));
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["architect", "merge"]);
+
+    assert_ended_without_a_plan(
+        &scenario,
+        &result,
+        &url,
+        &format!("no Strong candidate: the Architecture review filed the idea {url}"),
+    );
+    assert_eq!(scenario.gh_state(), github);
 }
 
 #[test]
