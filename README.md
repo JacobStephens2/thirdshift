@@ -412,7 +412,7 @@ The focus is optional free text, given as one argument, anywhere among the flags
 
 `merge`, `no-merge`, `base-fix`, `no-base-fix` and `parallel <n>` (or `--merge`, `--no-merge`, `--base-fix`, `--no-base-fix` and `--parallel <n>`) are for the run the plan is dispatched as, and mean what they do for `thirdshift <Issue URL>`, so none of them is ever read as the focus. `--plan-only` stops the Architect run once the plan is marked ready, and dispatches nothing. `email`, optionally followed by an address, and `no-email` (or `--email` and `--no-email`) are for the Architect run's own [Run notification](#one-run-notification), with or without `--plan-only`. The word after `email` is the address only if it contains `@`, so a focus without one is never taken for it.
 
-`base <branch>` (or `--base <branch>`) names the Architect run's **Base branch**, so the branch your clone has checked out stops mattering: start it from a clone on another branch, on a detached HEAD, or with uncommitted changes. The Architecture review's worktree starts at the head of `<branch>` on `origin`, and the run the plan is dispatched as takes `<branch>` as its Base branch too: a Run's **Issue branch**, or a Spec run's **Spec branch**, is branched off it, and the pull request or **Spec PR** targets it. It goes before or after the focus and the other flags, `--plan-only` included, and the word after it is always the branch, never the focus. Without `base`, the Base branch is the branch checked out. `base` is a flag of `architect` only: `thirdshift <Issue URL>` doesn't take it.
+`base <branch>` (or `--base <branch>`) names the Architect run's **Base branch**, so the branch your clone has checked out stops mattering: start it from a clone on another branch, on a detached HEAD, or with uncommitted changes. The Architecture review's worktree starts at the head of `<branch>` on `origin`, and the run the plan is dispatched as takes `<branch>` as its Base branch too: a Run's **Issue branch**, or a Spec run's **Spec branch**, is branched off it, and the pull request or **Spec PR** targets it. It goes before or after the focus and the other flags, `--plan-only` included, and the word after it is always the branch, never the focus. Without `base`, the Base branch is the branch checked out. `base` is a flag of `architect` only: `thirdshift <Issue URL>` doesn't take it. It is what lets an Architect run be started [on a schedule](#on-a-schedule).
 
 A second focus, a repeated flag, `merge` with `no-merge`, `base-fix` with `no-base-fix`, `email` with `no-email`, `parallel` without a whole number from 1 up, `base` with no branch after it, any other argument starting with a dash, or an empty focus is an argument error (exit `2`). So is `merge`, `no-merge`, `base-fix`, `no-base-fix` or `parallel` with `--plan-only`, since nothing is dispatched for them to apply to.
 
@@ -473,6 +473,34 @@ It applies to every Architect run, with or without `--plan-only`, and no flag ov
 An Architect run never retries or dispatches an existing Architect plan. One whose dispatched run failed stays open, and picking it up is yours to do, with `thirdshift <plan URL>`, which continues whatever branch and pull request the failed run left. What isn't labelled `architect-plan` never counts: an idea issue a review filed with [no Strong candidate](#no-strong-candidate), or a plan that a failed or interrupted review left `needs-triage`.
 
 The check comes after the lock so that the plan of an Architect run that is still running, labelled already while its Spec run or Run goes on, is reported as [already running](#one-at-a-time), not as an unfinished plan. A skipped run asked for a [Run notification](#one-run-notification) sends its one, with the open Architect plans and their commands in its `Skipped:` line.
+
+### On a schedule
+
+thirdshift has no scheduler of its own: the operating system's scheduler runs the ordinary command. This crontab entry, written for a Linux machine with cron, starts an Architect run every night at 02:00. Add it with `crontab -e`, with your own paths in place of `/home/you` and `~/repos/thirdshift`:
+
+```
+PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main >> ~/.thirdshift/logs/architect-cron.log 2>&1
+```
+
+- **`PATH`** is set because cron doesn't read your shell profile, and `thirdshift`, `claude`, `gh`, `git` and the repository's build tools must all be found. List every directory that holds one, written out in full: cron expands neither `~` nor `$HOME` on that line. `command -v thirdshift claude gh git` in your own shell shows where they are.
+- **`cd`** goes to a clone of the repository, as for a hand-typed Architect run, and **`base main`** names the [Base branch](#architect-runs), so the branch checked out in the clone doesn't matter: the pass runs from the clone you work in, whatever you left it on.
+- **One line per repository, at different hours**, so the passes don't compete for the machine. thirdshift keeps no list of repositories.
+- **The log file** takes everything the command prints. A failure before the [Run notification](#one-run-notification)'s checks have passed, such as a broken [User config](#user-config), a missing Resend key or a bad argument, shows up only there: no email is sent for it. Make its directory first, with `mkdir -p ~/.thirdshift/logs`, or the shell can't open the log and never starts the command.
+- **`claude` and `gh` must already be logged in** for the user the schedule runs as, with git able to push, as the [Prerequisites](#prerequisites) say. Without a terminal an Architect run behaves as it does from one, except that it never offers Setup.
+
+The command's flags and the User config decide what a pass does, as for a hand-typed run: with `merge.always` it merges the plan's pull request, and without it the pull request is left for review. These are the cautious variants, whatever the User config says:
+
+```
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main no-merge >> ~/.thirdshift/logs/architect-cron.log 2>&1
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/architect-cron.log 2>&1
+```
+
+The first leaves the pull request for you to review, and the second stops at the plan, for you to read and run with `thirdshift <Issue URL>`.
+
+A scheduled pass is skipped when another Architect run on the repository is [still running](#one-at-a-time), last night's Spec run included, or when an [Architect plan is still open](#one-architect-plan-at-a-time): until you merge or close last night's pull request, or pick up its failed run, no new refactor is planned. A skip exits `0`, so the scheduler sees no failure, and the log has the line that says why. With Run notifications on, by `email.always = true` in the User config or `email` on the line, every night sends one email, a skipped night included, so a night without one means something is wrong: look in the log file.
+
+Any scheduler that runs the command works; a systemd user timer needs lingering on (`loginctl enable-linger`) to fire while you are logged out.
 
 ## Building from source
 

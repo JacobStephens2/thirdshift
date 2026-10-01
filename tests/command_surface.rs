@@ -201,6 +201,26 @@ fn help_documents_base_for_an_architect_run() {
 }
 
 #[test]
+fn help_points_to_running_an_architect_run_on_a_schedule_without_the_recipe() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    // However the lines are wrapped.
+    let joined = help.split_whitespace().collect::<Vec<_>>().join(" ");
+    for mention in [
+        "thirdshift has no scheduler of its own",
+        "have the operating system's, such as cron, run thirdshift architect base main from the clone",
+        "The README's \"On a schedule\" has a crontab entry to paste and edit",
+    ] {
+        assert!(joined.contains(mention), "help lacks {mention:?}: {help}");
+    }
+    for recipe in ["PATH=", "* * *", "architect-cron.log"] {
+        assert!(!help.contains(recipe), "help repeats {recipe:?}: {help}");
+    }
+}
+
+#[test]
 fn base_on_a_run_is_an_argument_error() {
     let scenario = Scenario::new();
     let url = scenario.issue_url(7);
