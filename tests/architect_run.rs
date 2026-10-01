@@ -803,14 +803,19 @@ const KEY: &str = "re_test_123";
 
 const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
 
+/// The environment for an Architect run against `resend`, with a Resend API
+/// key.
+fn resend_env(resend: &ResendStandIn) -> [(&str, &str); 2] {
+    [
+        ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ("RESEND_API_KEY", KEY),
+    ]
+}
+
 /// Run thirdshift with `args` against `resend`, with a Resend API key in the
 /// environment.
 fn run_with_resend(scenario: &Scenario, resend: &ResendStandIn, args: &[&str]) -> RunResult {
-    let env = [
-        ("THIRDSHIFT_RESEND_URL", resend.url()),
-        ("RESEND_API_KEY", KEY),
-    ];
-    scenario.run_with_env(args, &env)
+    scenario.run_with_env(args, &resend_env(resend))
 }
 
 /// The subject and the text of the one Run notification `resend` received.
@@ -1091,10 +1096,7 @@ sleep 60"#,
 
     let result = scenario.run_and_signal_with_env(
         &["architect", "--email", "me@example.com"],
-        &[
-            ("THIRDSHIFT_RESEND_URL", resend.url()),
-            ("RESEND_API_KEY", KEY),
-        ],
+        &resend_env(&resend),
         "started",
         "TERM",
     );
@@ -1107,4 +1109,59 @@ sleep 60"#,
     );
     assert!(text.starts_with("Review:       interrupted\n"), "{text}");
     assert!(!text.contains("Cause:"), "{text}");
+}
+
+#[test]
+fn a_plan_that_fails_its_checks_sends_one_notification_naming_it_in_the_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&publishes_a_ticket_then("gh fake issue 8 CLOSED"));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: review failed"
+    );
+    assert!(
+        text.starts_with(&format!(
+            "Review:       failed\n\
+             Cause:        the plan {PLAN_URL} is closed\n"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_outcome() {
+    let scenario = spec_plan("exit 3");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Architect run: failed");
+    assert!(
+        text.starts_with(&format!(
+            "Review:       plan published: {PLAN_URL}\n\
+             Dispatched:   failed\n"
+        )),
+        "{text}"
+    );
+    let (_, tickets) = text.split_once("\nTickets:\n").expect(&text);
+    let landed = pr_from(&scenario, "issue-9");
+    let landed = format!("#9 landed with {}\n", landed["url"].as_str().unwrap());
+    assert!(tickets.contains(&landed), "expected {landed:?} in: {text}");
+    assert!(tickets.contains("#10 failed: "), "{text}");
 }

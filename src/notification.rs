@@ -100,52 +100,34 @@ impl ArchitectNotification {
         dispatched: Option<&Result<Reached, FailedRun>>,
     ) {
         let review = match reviewed {
-            Ok(outcome) => format!("{}: {}", review_outcome(outcome), outcome.url()),
-            Err(failed) => failure_outcome(failed).to_string(),
+            Ok(outcome) => format!("{}: {}", outcome.review(), outcome.url()),
+            Err(failed) => failure_outcome(failed, "failed").to_string(),
         };
         let ending = match (reviewed, dispatched) {
             (_, Some(ended)) => Ending::of(ended),
             (Ok(outcome), None) => Ending {
-                outcome: review_outcome(outcome),
-                ..Ending::default()
+                outcome: outcome.review(),
+                pr_url: None,
+                cause: None,
+                log: None,
+                tickets: &[],
             },
             (Err(failed), None) => Ending {
-                outcome: if failed.interrupted {
-                    "interrupted"
-                } else {
-                    "review failed"
-                },
+                outcome: failure_outcome(failed, "review failed"),
                 ..Ending::of_failure(failed)
             },
         };
-        let architect = Architect {
+        let lines = ArchitectLines {
             review: &review,
             dispatched: dispatched.map(|_| ending.outcome),
         };
         let subject = architect_subject(self.repo.as_ref(), ending.outcome);
-        send(
-            &self.resend,
-            &subject,
-            self.started,
-            Some(architect),
-            &ending,
-        );
-    }
-}
-
-/// How an Architecture review that did not fail ended, as an Architect run's
-/// Run notification says it.
-fn review_outcome(outcome: &architect::Outcome) -> &'static str {
-    match outcome {
-        architect::Outcome::PlanReady(_) => "plan published",
-        architect::Outcome::IdeaFiled(_) => "idea filed",
-        architect::Outcome::AlreadyFiled(_) => "idea already filed",
+        send(&self.resend, &subject, self.started, Some(lines), &ending);
     }
 }
 
 /// How a Run, a Spec run or an Architecture review ended, as a Run
 /// notification tells it.
-#[derive(Default)]
 struct Ending<'a> {
     outcome: &'static str,
     pr_url: Option<&'a str>,
@@ -171,7 +153,7 @@ impl<'a> Ending<'a> {
 
     fn of_failure(failed: &'a FailedRun) -> Self {
         Ending {
-            outcome: failure_outcome(failed),
+            outcome: failure_outcome(failed, "failed"),
             pr_url: failed.pr_url.as_deref(),
             cause: (!failed.interrupted).then(|| format!("{:#}", failed.error)),
             log: failed.log.as_deref(),
@@ -180,23 +162,23 @@ impl<'a> Ending<'a> {
     }
 }
 
-/// `interrupted` or `failed`.
-fn failure_outcome(failed: &FailedRun) -> &'static str {
+/// `interrupted`, or `failure` for a failure that was not an interrupt.
+fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
     if failed.interrupted {
         "interrupted"
     } else {
-        "failed"
+        failure
     }
 }
 
 /// Send the notification with `subject` for what `started` then and ended as
-/// `ending`, in an Architect run with `architect`'s lines first. A failed
+/// `ending`, in an Architect run with its `architect` lines first. A failed
 /// send is only a warning.
 fn send(
     resend: &Resend,
     subject: &str,
     started: Instant,
-    architect: Option<Architect>,
+    architect: Option<ArchitectLines>,
     ending: &Ending,
 ) {
     let host = host::name();
@@ -237,7 +219,7 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 }
 
 /// What an Architect run's notification says before what a Run's does.
-struct Architect<'a> {
+struct ArchitectLines<'a> {
     /// How the Architecture review ended, with the issue it ended on.
     review: &'a str,
     /// How the Spec run or Run the plan was dispatched as ended, if it was.
@@ -246,7 +228,7 @@ struct Architect<'a> {
 
 /// What the notification's plain-text body says.
 struct Body<'a> {
-    architect: Option<Architect<'a>>,
+    architect: Option<ArchitectLines<'a>>,
     pr_url: Option<&'a str>,
     cause: Option<&'a str>,
     log: Option<&'a Path>,
@@ -394,7 +376,7 @@ mod tests {
     #[test]
     fn an_architect_runs_body_starts_with_the_review_and_the_dispatched_runs_outcome() {
         let body = Body {
-            architect: Some(Architect {
+            architect: Some(ArchitectLines {
                 review: "plan published: https://github.com/acme/widgets/issues/8",
                 dispatched: Some("merged"),
             }),
@@ -414,7 +396,7 @@ mod tests {
              Took:         4s\n"
         );
         let body = Body {
-            architect: Some(Architect {
+            architect: Some(ArchitectLines {
                 review: "idea filed: https://github.com/acme/widgets/issues/8",
                 dispatched: None,
             }),

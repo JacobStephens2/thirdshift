@@ -168,7 +168,7 @@ fn main() -> ExitCode {
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),
             );
         }
-        Ok(Command::Architect(architect_args)) => return architect(&architect_args),
+        Ok(Command::Architect(architect_args)) => return architect(architect_args),
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
@@ -190,11 +190,7 @@ fn main() -> ExitCode {
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    let notification = match email {
-        NotificationAsk::Send(to) => RunNotification::new(to, &config.email, &issue).map(Some),
-        NotificationAsk::Skip => Ok(None),
-    };
-    let notification = match notification {
+    let notification = match asked(email, |to| RunNotification::new(to, &config.email, &issue)) {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
@@ -223,7 +219,7 @@ fn main() -> ExitCode {
 /// plan fails puts the cause and the session log on stderr. If asked, by the
 /// command or the User config, it sends one Run notification, however it
 /// ended; the run it dispatched sends none of its own.
-fn architect(args: &ArchitectArgs) -> ExitCode {
+fn architect(args: ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
@@ -233,13 +229,8 @@ fn architect(args: &ArchitectArgs) -> ExitCode {
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    let notification = match args.email.as_ref().unwrap_or(&config.email.default_ask()) {
-        NotificationAsk::Send(to) => {
-            ArchitectNotification::new(to.clone(), &config.email).map(Some)
-        }
-        NotificationAsk::Skip => Ok(None),
-    };
-    let notification = match notification {
+    let email = args.email.unwrap_or(config.email.default_ask());
+    let notification = match asked(email, |to| ArchitectNotification::new(to, &config.email)) {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
@@ -275,6 +266,18 @@ fn architect(args: &ArchitectArgs) -> ExitCode {
         notification.send(&reviewed, dispatched.as_ref());
     }
     code
+}
+
+/// The Run notification `email` asks for, if it asks for one: what `checked`
+/// makes of the address it gave, or its error if a check fails.
+fn asked<N>(
+    email: NotificationAsk,
+    checked: impl FnOnce(Option<String>) -> anyhow::Result<N>,
+) -> anyhow::Result<Option<N>> {
+    match email {
+        NotificationAsk::Send(to) => checked(to).map(Some),
+        NotificationAsk::Skip => Ok(None),
+    }
 }
 
 /// How a Run or a Spec run that `ended` shows: its pull request's URL on

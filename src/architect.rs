@@ -49,6 +49,16 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// How the Architecture review ended, as the Architect run's Run
+    /// notification says it.
+    pub fn review(&self) -> &'static str {
+        match self {
+            Self::PlanReady(_) => "plan published",
+            Self::IdeaFiled(_) => "idea filed",
+            Self::AlreadyFiled(_) => "idea already filed",
+        }
+    }
+
     /// The URL of the issue the Architect run ended on.
     pub fn url(&self) -> &str {
         match self {
