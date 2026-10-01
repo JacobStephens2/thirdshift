@@ -1,13 +1,14 @@
 //! An Architect run up to its plan: an Architecture review of the Base
 //! branch, the one its command named or else the one checked out in the
 //! Launch directory, from the Launch directory with no Issue URL, then the checks on
-//! the plan it published and the label swap that marks the plan ready, for
-//! the command to stop at or to dispatch. A review that found no Strong
+//! the plan it published and the label swap that marks the plan ready, and
+//! an Architect plan, for the command to stop at or to dispatch. A review that found no Strong
 //! candidate published no plan, and the Architect run ends on the issue it
 //! named instead: the idea issue it filed for its top recommendation, or the
 //! open issue that already covers it. Only one Architect run per repository
 //! runs at a time on a machine: one started while another is still running
-//! is skipped, before any review.
+//! is skipped, before any review. So is one that finds an Architect plan
+//! still open on the repository: it never retries or dispatches that plan.
 
 use std::fmt;
 use std::fs::{self, File, TryLockError};
@@ -34,6 +35,17 @@ use crate::worktree::ReviewWorktree;
 /// The Architecture review session's kind, in its progress lines and log
 /// name.
 const REVIEW: &str = "architecture-review";
+
+/// The label thirdshift marks an Architect plan with, which a later Architect
+/// run finds an open one by.
+const ARCHITECT_PLAN: &str = "architect-plan";
+
+/// That label, with the description it is added to the repository with if
+/// the repository lacks it.
+const ARCHITECT_PLAN_LABEL: (&str, &str) = (
+    ARCHITECT_PLAN,
+    "An Architect plan: the Spec or Ticket an Architecture review published",
+);
 
 /// How an Architect run ended, short of a failure and before any dispatch.
 /// Its `Display` is the line that says how it ended.
@@ -72,6 +84,20 @@ pub enum Skipped {
     /// Another Architect run on this repository is still running on this
     /// machine, the Spec run or Run it dispatched included.
     AlreadyRunning(Repo),
+    /// These Architect plans, each with its title, are still open on this
+    /// repository: at least one.
+    OpenPlans(Vec<(IssueUrl, String)>),
+}
+
+impl Skipped {
+    /// The open Architect plans it was skipped for, if that is why.
+    pub fn open_plans(&self) -> impl Iterator<Item = &IssueUrl> {
+        let plans = match self {
+            Self::AlreadyRunning(_) => &[][..],
+            Self::OpenPlans(plans) => plans,
+        };
+        plans.iter().map(|(plan, _)| plan)
+    }
 }
 
 impl fmt::Display for Skipped {
@@ -79,6 +105,18 @@ impl fmt::Display for Skipped {
         match self {
             Self::AlreadyRunning(repo) => {
                 write!(f, "an Architect run is already running on {}", repo.slug())
+            }
+            Self::OpenPlans(plans) => {
+                let still_open: Vec<String> = plans
+                    .iter()
+                    .map(|(plan, title)| {
+                        format!(
+                            "Architect plan #{} \"{title}\" is still open: pick it up with thirdshift {}",
+                            plan.number, plan.url
+                        )
+                    })
+                    .collect();
+                f.write_str(&still_open.join("; "))
             }
         }
     }
@@ -153,7 +191,10 @@ impl fmt::Display for Reviewed {
 /// Once the preflight checks pass, and before anything else, the Architect
 /// run is skipped, with nothing done, if another on the same repository is
 /// still running on this machine. Otherwise this process is that repository's
-/// one Architect run until it exits, through whatever it dispatches.
+/// one Architect run until it exits, through whatever it dispatches. It is
+/// then skipped, likewise, if the repository has an open Architect plan: only
+/// then, so that the plan of an Architect run still running is never taken
+/// for an unfinished one.
 pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
@@ -182,6 +223,10 @@ pub fn run(
     // through the Spec run or Run its plan is dispatched as, and the
     // operating system releases it however the process ends.
     std::mem::forget(lock);
+    let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
+    if !open_plans.is_empty() {
+        return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans)));
+    }
     if launch_pull {
         run::pull_base_branch(&launch, checked_out.as_deref(), &base);
     }
@@ -319,8 +364,9 @@ fn conclude(
 }
 
 /// Mark `plan` ready: check it, then swap its `needs-triage` for
-/// `ready-for-agent`, in one request. Fails, changing no label, if the plan
-/// fails its checks.
+/// `ready-for-agent` and label it `architect-plan`, in one request, having
+/// added that label to the repository if it lacks it. Fails, changing no
+/// label, if the plan fails its checks.
 fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<()> {
     progress::step(format_args!(
         "the Architecture review published the plan {}",
@@ -331,15 +377,16 @@ fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Res
         bail!("interrupted");
     }
     progress::step(format_args!(
-        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} on #{}",
+        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} and adding {ARCHITECT_PLAN} on #{}",
         plan.number
     ));
+    github::ensure_labels(&plan.repo_slug(), &[ARCHITECT_PLAN_LABEL])?;
     let mut labels: Vec<&str> = kept
         .iter()
         .map(String::as_str)
-        .filter(|&label| label != READY_FOR_AGENT)
+        .filter(|label| ![READY_FOR_AGENT, ARCHITECT_PLAN].contains(label))
         .collect();
-    labels.push(READY_FOR_AGENT);
+    labels.extend([READY_FOR_AGENT, ARCHITECT_PLAN]);
     github::set_labels(plan, &labels)
 }
 
