@@ -21,30 +21,77 @@ const STAMP: &str = "%H:%M:%S";
 
 /// Print one of thirdshift's own steps, stamped with the time now.
 pub fn step(message: impl Display) {
-    write_line(Local::now().format(STAMP), message);
+    write_line(&stamped(message));
 }
 
-/// Print `line`, from the stderr of a child thirdshift, under `label`,
-/// keeping the time the child stamped it with (or stamping it now, if it
-/// has none), and return its message: the line without prefix or time.
-pub fn relay(label: impl Display, line: &str) -> &str {
-    let line = line.strip_prefix(PREFIX).unwrap_or(line);
-    match split_stamp(line) {
-        Some((time, message)) => {
-            write_line(time, format_args!("{label}: {message}"));
-            message
-        }
-        None => {
-            step(format_args!("{label}: {line}"));
-            line
+/// The progress line [`step`] prints for `message`.
+pub fn stamped(message: impl Display) -> String {
+    progress_line(Local::now().format(STAMP), message)
+}
+
+/// What a line from the stderr of a child thirdshift is.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ChildLine<'a> {
+    /// One of the child's own progress lines, with its message: the line
+    /// without prefix or time.
+    Own(&'a str),
+    /// A progress line the child relayed from a child of its own.
+    Relayed,
+    /// A line that continues the one before it, as the later lines of an
+    /// error of several lines do.
+    Continuation,
+}
+
+impl<'a> ChildLine<'a> {
+    /// What `line` is: a progress line if it starts with their prefix,
+    /// relayed if its message then starts as [`relayed`] starts one.
+    pub fn of(line: &'a str) -> Self {
+        let Some(rest) = line.strip_prefix(PREFIX) else {
+            return ChildLine::Continuation;
+        };
+        let message = split_stamp(rest).map_or(rest, |(_, message)| message);
+        let from_its_own_child = message
+            .strip_prefix('#')
+            .and_then(|rest| rest.split_once(": "))
+            .is_some_and(|(number, _)| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            });
+        if from_its_own_child {
+            ChildLine::Relayed
+        } else {
+            ChildLine::Own(message)
         }
     }
 }
 
-fn write_line(time: impl Display, message: impl Display) {
+/// Print `line`, from the stderr of the child thirdshift running issue
+/// `number`, as [`relayed`] gives it, and return what the line is.
+pub fn relay(number: u64, line: &str) -> ChildLine<'_> {
+    write_line(&relayed(number, line));
+    ChildLine::of(line)
+}
+
+/// The progress line that relays `line`, from the stderr of the child
+/// thirdshift running issue `number`: its message after `#<number>: `,
+/// keeping the time the child stamped it with (or stamped now, if it has
+/// none).
+pub fn relayed(number: u64, line: &str) -> String {
+    let rest = line.strip_prefix(PREFIX).unwrap_or(line);
+    match split_stamp(rest) {
+        Some((time, message)) => progress_line(time, format_args!("#{number}: {message}")),
+        None => stamped(format_args!("#{number}: {rest}")),
+    }
+}
+
+/// The progress line for `message`, stamped with `time`.
+fn progress_line(time: impl Display, message: impl Display) -> String {
+    format!("{PREFIX}{time} {message}")
+}
+
+fn write_line(line: &str) {
     // Ignored if it fails, as it does once the terminal has closed: the Run
     // still has to clean up and send its Run notification.
-    let _ = writeln!(std::io::stderr(), "{PREFIX}{time} {message}");
+    let _ = writeln!(std::io::stderr(), "{line}");
 }
 
 /// A line without its prefix split into its `HH:MM:SS` stamp and message,
@@ -566,6 +613,61 @@ mod tests {
             "é2:14:49 pushing",
         ] {
             assert_eq!(split_stamp(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_relayed_line_keeps_its_time_under_the_issues_number() {
+        assert_eq!(
+            relayed(21, "thirdshift: 12:14:49 could not push issue-21"),
+            "thirdshift: 12:14:49 #21: could not push issue-21"
+        );
+    }
+
+    #[test]
+    fn a_relayed_line_with_no_time_is_stamped_now() {
+        let line = relayed(21, "hint: fetch first");
+        let (_, message) = split_stamp(line.strip_prefix(PREFIX).unwrap()).unwrap();
+        assert_eq!(message, "#21: hint: fetch first");
+    }
+
+    #[test]
+    fn a_childs_line_that_starts_with_the_prefix_is_its_own_progress_line() {
+        assert_eq!(
+            ChildLine::of("thirdshift: 12:14:49 could not push issue-21"),
+            ChildLine::Own("could not push issue-21")
+        );
+        assert_eq!(
+            ChildLine::of(&stamped("#21 failed: claude exited 1")),
+            ChildLine::Own("#21 failed: claude exited 1")
+        );
+    }
+
+    #[test]
+    fn a_childs_line_without_the_prefix_continues_the_one_before() {
+        for line in [
+            "hint: fetch first",
+            "12:14:49 thirdshift: pushing",
+            " thirdshift: 12:14:49 pushing",
+            "#8: claude exited 1",
+            "",
+        ] {
+            assert_eq!(ChildLine::of(line), ChildLine::Continuation, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_line_a_child_relayed_is_not_its_own_progress_line() {
+        for line in [
+            "thirdshift: 12:14:49 claude exited 1",
+            "hint: fetch first",
+            "thirdshift: 12:14:49 #9: relayed before",
+        ] {
+            assert_eq!(
+                ChildLine::of(&relayed(8, line)),
+                ChildLine::Relayed,
+                "{line}"
+            );
         }
     }
 
