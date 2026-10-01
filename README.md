@@ -365,7 +365,7 @@ An Architect run:
 5. Marks the plan ready, in one request: `needs-triage` is swapped for `ready-for-agent`, and its other labels are kept. A Spec's Tickets are left as the review labelled them.
 6. Removes the worktree and the temporary plugin directory, whatever the outcome.
 
-Once the plan is marked ready it exits `0` with the plan's URL alone on stdout, and `plan <url> is ready for an agent` as stderr's last line. Read or edit the plan, then run it with `thirdshift <Issue URL>`. Progress lines on stderr say when the review starts, which plan it reported, and when the labels are swapped.
+Once the plan is marked ready it exits `0` with the plan's URL alone on stdout, and `plan <url> is ready for an agent` as stderr's last line. Read or edit the plan, then run it with `thirdshift <Issue URL>`. Progress lines on stderr say when the review starts, which plan it reported, and when the labels are swapped; with no Strong candidate, the last line says which issue the Architect run ended on instead.
 
 A review session that fails or is interrupted, a final message without one of the lines the prompt asks for, or a plan that fails a check ends the Architect run as a failure: exit `1`, nothing on stdout, the cause on stderr and then the path of the session log. No label is changed, so a plan the review did publish stays `needs-triage` for you to finish or close.
 
@@ -374,7 +374,7 @@ A review session that fails or is interrupted, a final message without one of th
 Only a Strong top recommendation becomes a plan. When the review's top recommendation is Worth exploring or Speculative, it publishes no plan, and the Architect run ends in one of two ways, both a success: exit `0`, with one issue's URL alone on stdout. thirdshift changes no label on that issue, and there is nothing to run.
 
 - **An idea issue.** The review files its top recommendation as one issue labelled `needs-triage`, for the **Day shift** to flesh out, and ends its final message with `Architecture review idea: <Issue URL>`. stdout carries the idea issue's URL, and stderr's last line is `no Strong candidate: the Architecture review filed the idea <url>`.
-- **Already filed.** An open issue already covers that recommendation, so the review files nothing and ends its final message with `Architecture review already filed: <Issue URL>`. stdout carries that issue's URL, and stderr's last line is `no Strong candidate: <url> already covers the Architecture review's top idea, so it filed nothing`.
+- **Already filed.** An open issue already covers that recommendation, so the review files nothing and ends its final message with `Architecture review already filed: <Issue URL>`. stdout carries that issue's URL, and stderr's last line is `no Strong candidate: <url> already covers the Architecture review's top recommendation, so it filed nothing`.
 
 Start one Architect run per repository at a time. Nothing stops a second one, but two at once may pick the same opportunity and publish the same plan, and the second can't create its worktree while the first's is there.
 

@@ -90,10 +90,10 @@ that points the review at an area:
 
     thirdshift architect \"the Spec run\" --plan-only
 
-A review that finds no Strong candidate publishes no plan. It files its top idea as one issue
-labelled needs-triage, or names the open issue that already covers it, and thirdshift prints
-that issue's URL instead, changing no label. Its last line says which: it filed the idea, or
-it filed nothing.
+A review that finds no Strong candidate publishes no plan. It files its top recommendation as
+one idea issue labelled needs-triage, or names the open issue that already covers it, and
+thirdshift prints that issue's URL instead, changing no label. Its last line says which: the
+review filed the idea, or it filed nothing.
 
 A review that fails, is interrupted, or ends without naming one of these issues fails the
 Architect run and leaves any plan it published labelled needs-triage. Start one Architect run
@@ -220,8 +220,8 @@ fn main() -> ExitCode {
 
 /// An Architect run that stops at the plan: the URL of the issue it ended on
 /// on stdout, the plan once it is marked ready or, with no Strong candidate,
-/// the idea the review filed or the issue that already covers it, or the
-/// cause and the session log on stderr.
+/// the idea issue the review filed or the issue that already covers its top
+/// recommendation, or the cause and the session log on stderr.
 fn architect(args: &ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -270,8 +270,8 @@ fn report(failed: &FailedRun) -> ExitCode {
 }
 
 /// A pull request's URL, or the URL of the issue an Architect run ended on,
-/// on stdout. A failed write, as once the
-/// terminal has closed, is ignored, so the Run notification still goes.
+/// on stdout. A failed write, as once the terminal has closed, is ignored, so
+/// the Run notification still goes.
 fn print_url(url: &str) {
     let _ = writeln!(std::io::stdout(), "{url}");
 }
