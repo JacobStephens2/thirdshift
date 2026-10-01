@@ -1,6 +1,7 @@
-//! One Architect run: an Architecture review of the Base branch, from the
-//! Launch directory with no Issue URL, then the checks on the plan it
-//! published and the label swap that marks the plan ready.
+//! An Architect run up to its plan: an Architecture review of the Base
+//! branch, from the Launch directory with no Issue URL, then the checks on
+//! the plan it published and the label swap that marks the plan ready, for
+//! the command to stop at or to dispatch.
 
 use std::path::{Path, PathBuf};
 
@@ -31,12 +32,12 @@ const READY_FOR_AGENT: &str = "ready-for-agent";
 
 /// Run an Architecture review of the branch checked out in the Launch
 /// directory, the Base branch, pointed at `focus` if given, and mark the plan
-/// it publishes ready. Returns the plan's URL. With `launch_pull`, the Launch
+/// it publishes ready. Returns the plan. With `launch_pull`, the Launch
 /// directory's checkout of the Base branch is first brought up to date with
 /// origin. The review's worktree and the plugin directory are gone when this
 /// returns. A failure after the plan is published leaves its labels as the
 /// review left them.
-pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<String, FailedRun> {
+pub fn run(focus: Option<&str>, logs_dir: &Path, launch_pull: bool) -> Result<IssueUrl, FailedRun> {
     let started = Utc::now();
     let timestamp = started.format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
@@ -125,14 +126,14 @@ impl Report {
 }
 
 /// Mark ready the plan that the review's `final_message` names, and return
-/// its URL: check it, then swap its `needs-triage` for `ready-for-agent`, in
+/// it: check it, then swap its `needs-triage` for `ready-for-agent`, in
 /// one request. Fails, changing no label, without a final line naming a
 /// plan, or if the plan fails its checks.
 fn mark_plan_ready(
     final_message: Option<&str>,
     origin: &str,
     started: DateTime<Utc>,
-) -> Result<String> {
+) -> Result<IssueUrl> {
     let plan = reported_plan(final_message)?;
     progress::step(format_args!(
         "the Architecture review published the plan {}",
@@ -153,7 +154,7 @@ fn mark_plan_ready(
         .collect();
     labels.push(READY_FOR_AGENT);
     github::set_labels(&plan, &labels)?;
-    Ok(plan.url)
+    Ok(plan)
 }
 
 /// The plan the last line of the review's `final_message` names. Fails if

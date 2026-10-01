@@ -1,5 +1,5 @@
 //! The command line: which command, and for a Run, its Issue URL and flags,
-//! or for an Architect run, its focus.
+//! or for an Architect run, its focus and flags.
 
 use std::mem::discriminant;
 use std::num::NonZeroUsize;
@@ -32,6 +32,17 @@ pub struct ArchitectArgs {
     /// The free text that points the Architecture review at an area, if
     /// given.
     pub focus: Option<String>,
+    /// The flags for the Spec run or Run the plan is dispatched as, or none
+    /// with [`PLAN_ONLY`], which dispatches nothing.
+    pub dispatch: Option<DispatchArgs>,
+}
+
+/// What an Architect run's flags ask of the Spec run or Run it dispatches
+/// its plan as, each meaning what it does in [`RunArgs`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DispatchArgs {
+    pub goal: Option<Goal>,
+    pub parallel: Option<NonZeroUsize>,
 }
 
 /// The hidden argument a Spec run starts each Ticket's Run with, followed by
@@ -103,17 +114,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             "no-email" | "--no-email" => {
                 ask_once(&mut email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
             }
-            "parallel" | "--parallel" => {
-                if parallel.is_some() {
-                    bail!("repeated argument: {arg}");
-                }
-                let n = args.next();
-                let Some(n) = n.and_then(|n| n.parse::<NonZeroUsize>().ok()) else {
-                    let given = n.map(|n| format!(", not {n}")).unwrap_or_default();
-                    bail!("{arg} must be followed by a whole number from 1 up{given}");
-                };
-                parallel = Some(n);
-            }
+            "parallel" | "--parallel" => ask_parallel(&mut parallel, arg, args.next())?,
             SPEC_BRANCH => {
                 if spec_branch.is_some() {
                     bail!("repeated argument: {arg}");
@@ -140,34 +141,51 @@ pub fn parse(args: &[String]) -> Result<Command> {
     }))
 }
 
-/// Parse the arguments after `architect`: at most one focus, and
-/// [`PLAN_ONLY`] once, in either order. Nothing dispatches a plan yet, so
-/// without the flag there is nothing an Architect run could go on to do, and
-/// it is asked for. Any other argument that starts with a dash is unexpected
-/// rather than a focus.
+/// Parse the arguments after `architect`: at most one focus, and its flags,
+/// each at most once, in any order. [`PLAN_ONLY`] dispatches nothing, so the
+/// flags for the dispatched run, `merge`, `no-merge` and `parallel`, which a
+/// Run takes too, can't go with it. They are never the focus, and any other
+/// argument that starts with a dash is unexpected rather than a focus.
 fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     let mut focus = None;
     let mut plan_only = false;
-    for arg in args {
-        if arg == PLAN_ONLY {
-            if plan_only {
-                bail!("repeated argument: {arg}");
+    let mut dispatch = DispatchArgs::default();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            PLAN_ONLY => {
+                if plan_only {
+                    bail!("repeated argument: {arg}");
+                }
+                plan_only = true;
             }
-            plan_only = true;
-        } else if arg.starts_with('-') {
-            bail!("unexpected argument after architect: {arg}");
-        } else if focus.is_some() {
-            bail!("unexpected argument after the focus: {arg}");
-        } else if arg.trim().is_empty() {
-            bail!("the focus is empty");
-        } else {
-            focus = Some(arg.clone());
+            "merge" | "--merge" => ask_once(&mut dispatch.goal, Goal::Merged, arg, MERGE_FLAGS)?,
+            "no-merge" | "--no-merge" => {
+                ask_once(&mut dispatch.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
+            }
+            "parallel" | "--parallel" => ask_parallel(&mut dispatch.parallel, arg, args.next())?,
+            _ if arg.starts_with('-') => bail!("unexpected argument after architect: {arg}"),
+            _ if focus.is_some() => bail!("unexpected argument after the focus: {arg}"),
+            _ if arg.trim().is_empty() => bail!("the focus is empty"),
+            _ => focus = Some(arg.clone()),
         }
     }
     if !plan_only {
-        bail!("architect needs {PLAN_ONLY}: it can't yet implement the plan it publishes");
+        return Ok(ArchitectArgs {
+            focus,
+            dispatch: Some(dispatch),
+        });
     }
-    Ok(ArchitectArgs { focus })
+    if dispatch != DispatchArgs::default() {
+        bail!(
+            "merge, no-merge and parallel can't be used with {PLAN_ONLY}: \
+             it dispatches no run for them to apply to"
+        );
+    }
+    Ok(ArchitectArgs {
+        focus,
+        dispatch: None,
+    })
 }
 
 const MERGE_FLAGS: &str = "merge and no-merge";
@@ -184,6 +202,20 @@ fn ask_once<T>(given: &mut Option<T>, asked: T, arg: &str, flags: &str) -> Resul
         }
         Some(_) => bail!("{flags} can't be used together"),
     }
+    Ok(())
+}
+
+/// Record in `parallel` the number `n` that follows the flag `arg`: a whole
+/// number from 1 up, given once.
+fn ask_parallel(parallel: &mut Option<NonZeroUsize>, arg: &str, n: Option<&String>) -> Result<()> {
+    if parallel.is_some() {
+        bail!("repeated argument: {arg}");
+    }
+    let Some(n) = n.and_then(|n| n.parse::<NonZeroUsize>().ok()) else {
+        let given = n.map(|n| format!(", not {n}")).unwrap_or_default();
+        bail!("{arg} must be followed by a whole number from 1 up{given}");
+    };
+    *parallel = Some(n);
     Ok(())
 }
 
@@ -238,16 +270,110 @@ mod tests {
             (vec!["architect", "the Spec run", "--plan-only"], focus()),
             (vec!["architect", "--plan-only", "the Spec run"], focus()),
         ] {
-            assert_eq!(architect_args(&args).focus, expected, "{args:?}");
+            let architect_args = architect_args(&args);
+            assert_eq!(architect_args.focus, expected, "{args:?}");
+            assert_eq!(architect_args.dispatch, None, "{args:?}");
         }
     }
 
     #[test]
-    fn architect_without_plan_only_is_rejected_as_nothing_implements_the_plan_yet() {
-        for args in [vec!["architect"], vec!["architect", "the Spec run"]] {
+    fn architect_without_plan_only_dispatches_its_plan_with_or_without_a_focus() {
+        for (args, focus) in [
+            (vec!["architect"], None),
+            (
+                vec!["architect", "the Spec run"],
+                Some("the Spec run".to_string()),
+            ),
+        ] {
+            let architect_args = architect_args(&args);
+            assert_eq!(architect_args.focus, focus, "{args:?}");
+            assert_eq!(
+                architect_args.dispatch,
+                Some(DispatchArgs {
+                    goal: None,
+                    parallel: None
+                }),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn architect_takes_the_merge_and_parallel_flags_for_the_run_it_dispatches() {
+        let two = NonZeroUsize::new(2);
+        for (args, goal, parallel) in [
+            (vec!["architect", "merge"], Some(Goal::Merged), None),
+            (vec!["architect", "--merge"], Some(Goal::Merged), None),
+            (
+                vec!["architect", "no-merge"],
+                Some(Goal::ReadyForReview),
+                None,
+            ),
+            (
+                vec!["architect", "--no-merge"],
+                Some(Goal::ReadyForReview),
+                None,
+            ),
+            (vec!["architect", "parallel", "2"], None, two),
+            (
+                vec!["architect", "--parallel", "2", "the Spec run", "merge"],
+                Some(Goal::Merged),
+                two,
+            ),
+        ] {
+            assert_eq!(
+                architect_args(&args).dispatch,
+                Some(DispatchArgs { goal, parallel }),
+                "{args:?}"
+            );
+        }
+        let args = ["architect", "--parallel", "2", "the Spec run", "merge"];
+        assert_eq!(architect_args(&args).focus.as_deref(), Some("the Spec run"));
+    }
+
+    #[test]
+    fn architect_rejects_contradictory_repeated_and_malformed_dispatch_flags() {
+        for (args, error) in [
+            (
+                vec!["architect", "merge", "--no-merge"],
+                "merge and no-merge can't be used together",
+            ),
+            (
+                vec!["architect", "no-merge", "the Spec run", "merge"],
+                "merge and no-merge can't be used together",
+            ),
+            (
+                vec!["architect", "merge", "--merge"],
+                "repeated argument: --merge",
+            ),
+            (
+                vec!["architect", "parallel", "2", "parallel", "3"],
+                "repeated argument: parallel",
+            ),
+            (
+                vec!["architect", "parallel"],
+                "parallel must be followed by a whole number from 1 up",
+            ),
+            (
+                vec!["architect", "parallel", "the Spec run"],
+                "parallel must be followed by a whole number from 1 up, not the Spec run",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn architect_rejects_the_dispatch_flags_with_plan_only_which_dispatches_nothing() {
+        for args in [
+            vec!["architect", "--plan-only", "merge"],
+            vec!["architect", "--no-merge", "--plan-only"],
+            vec!["architect", "the Spec run", "parallel", "2", "--plan-only"],
+        ] {
             assert_eq!(
                 rejection(&args),
-                "architect needs --plan-only: it can't yet implement the plan it publishes",
+                "merge, no-merge and parallel can't be used with --plan-only: \
+                 it dispatches no run for them to apply to",
                 "{args:?}"
             );
         }
@@ -265,8 +391,8 @@ mod tests {
                 "repeated argument: --plan-only",
             ),
             (
-                vec!["architect", "--merge", "--plan-only"],
-                "unexpected argument after architect: --merge",
+                vec!["architect", "--email", "--plan-only"],
+                "unexpected argument after architect: --email",
             ),
             (vec!["architect", " ", "--plan-only"], "the focus is empty"),
         ] {
