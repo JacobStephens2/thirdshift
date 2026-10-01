@@ -11,6 +11,7 @@
 //! home/              $HOME: .gitconfig with identity and the insteadOf rule
 //! home/.thirdshift/  the User config, config.toml, if the test writes one
 //! home/.config/      $XDG_CONFIG_HOME, where an install receipt would be
+//! installed/         a copy of thirdshift, if the test runs one to replace it
 //! bin/               fake gh and claude, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
 //! work/<repo>/       the launch clone, origin https://github.com/<owner>/<repo>.git
@@ -36,7 +37,7 @@ pub mod resend;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -51,6 +52,13 @@ pub const REPO: &str = "widgets";
 /// Run waits this long: on a busy machine a Run that is getting there can
 /// take many times what it takes on an idle one (#200).
 pub const WAIT_BOUND: Duration = Duration::from_secs(120);
+
+/// The file in a scenario's root a session touches once it is waiting for
+/// the copy of thirdshift its Run was started from to be replaced.
+const COPY_IN_USE: &str = "copy-in-use";
+
+/// The file in a scenario's root that says the copy has been replaced.
+const COPY_REPLACED: &str = "copy-replaced";
 
 pub struct Scenario {
     /// Deletes the temp root when the scenario is dropped.
@@ -258,9 +266,69 @@ impl Scenario {
         started: &str,
         signal: &str,
     ) -> RunResult {
-        let mut child = self
-            .command(args)
-            .envs(env.iter().copied())
+        let mut command = self.command(args);
+        command.envs(env.iter().copied());
+        let mut child = self.spawn_until_started(command, started);
+        // A Run that has exited is past signalling, and its process id may
+        // be another process's by now.
+        if child.try_wait().unwrap().is_none() {
+            let status = Command::new("kill")
+                .args([&format!("-{signal}"), &child.id().to_string()])
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        child.wait_with_output().unwrap().into()
+    }
+
+    /// Run a copy of thirdshift, `installed/thirdshift` in the scenario root,
+    /// as an installed one is run, and call `replace` with the copy's path
+    /// once a session whose script has [`Scenario::waits_to_be_replaced`]
+    /// reaches it. That session goes on once `replace` has returned, so
+    /// whatever the Run starts after it starts with the copy replaced.
+    pub fn run_copy_replaced_midway(
+        &self,
+        args: &[&str],
+        replace: impl FnOnce(&Path),
+    ) -> RunResult {
+        let copy = self.path("installed/thirdshift");
+        fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        // Copied by `cp`, not by this process: a file open for writing here
+        // would be inherited by whatever another test starts meanwhile, and
+        // can't be run until that has let go of it ("Text file busy").
+        let copied = Command::new("cp")
+            .arg(env!("CARGO_BIN_EXE_thirdshift"))
+            .arg(&copy)
+            .status()
+            .unwrap();
+        assert!(copied.success());
+        let child = self.spawn_until_started(self.command_running(&copy, args), COPY_IN_USE);
+        replace(&copy);
+        fs::write(self.path(COPY_REPLACED), "").unwrap();
+        child.wait_with_output().unwrap().into()
+    }
+
+    /// Bash for a session of a Run started by
+    /// [`Scenario::run_copy_replaced_midway`]: it waits up to [`WAIT_BOUND`]
+    /// for the copy of thirdshift to be replaced, failing if it never is.
+    pub fn waits_to_be_replaced(&self) -> String {
+        let looks = WAIT_BOUND.as_millis() / 50;
+        format!(
+            r#"
+touch {root}/{COPY_IN_USE}
+for _ in $(seq {looks}); do test -f {root}/{COPY_REPLACED} && break; sleep 0.05; done
+test -f {root}/{COPY_REPLACED}
+"#,
+            root = self.root.display()
+        )
+    }
+
+    /// Spawn `command`, its stdout and stderr piped, and wait until the fake
+    /// agent has touched the file `started` in the scenario root. Panics with
+    /// the Run's stderr if the Run exits without the file there, or if the
+    /// file isn't there within [`WAIT_BOUND`].
+    fn spawn_until_started(&self, mut command: Command, started: &str) -> Child {
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -269,10 +337,10 @@ impl Scenario {
         // Whether the Run has exited is read before whether the agent has
         // started, so a Run that starts the agent and exits between the two
         // reads still counts as started.
-        let exited = loop {
+        loop {
             let exited = child.try_wait().unwrap().is_some();
             if self.path(started).exists() {
-                break exited;
+                return child;
             }
             if exited {
                 let result = RunResult::from(child.wait_with_output().unwrap());
@@ -283,17 +351,7 @@ impl Scenario {
             }
             assert!(Instant::now() < deadline, "the agent never started");
             std::thread::sleep(Duration::from_millis(20));
-        };
-        // A Run that has exited is past signalling, and its process id may
-        // be another process's by now.
-        if !exited {
-            let status = Command::new("kill")
-                .args([&format!("-{signal}"), &child.id().to_string()])
-                .status()
-                .unwrap();
-            assert!(status.success());
         }
-        child.wait_with_output().unwrap().into()
     }
 
     /// Run thirdshift with stdin and stderr on a pseudo-terminal, as from an
@@ -414,12 +472,17 @@ impl Scenario {
     }
 
     fn command(&self, args: &[&str]) -> Command {
+        self.command_running(Path::new(env!("CARGO_BIN_EXE_thirdshift")), args)
+    }
+
+    /// Like [`Scenario::command`], running the thirdshift at `executable`.
+    fn command_running(&self, executable: &Path, args: &[&str]) -> Command {
         let path = format!(
             "{}:{}",
             self.path("bin").display(),
             std::env::var("PATH").unwrap()
         );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        let mut command = Command::new(executable);
         command
             .args(args)
             .current_dir(self.launch_dir())
