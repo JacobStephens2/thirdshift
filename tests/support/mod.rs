@@ -268,10 +268,10 @@ impl Scenario {
     ) -> RunResult {
         let mut command = self.command(args);
         command.envs(env.iter().copied());
-        let (child, exited) = self.spawn_until_started(command, started);
+        let mut child = self.spawn_until_started(command, started);
         // A Run that has exited is past signalling, and its process id may
         // be another process's by now.
-        if !exited {
+        if child.try_wait().unwrap().is_none() {
             let status = Command::new("kill")
                 .args([&format!("-{signal}"), &child.id().to_string()])
                 .status()
@@ -293,8 +293,16 @@ impl Scenario {
     ) -> RunResult {
         let copy = self.path("installed/thirdshift");
         fs::create_dir_all(copy.parent().unwrap()).unwrap();
-        fs::copy(env!("CARGO_BIN_EXE_thirdshift"), &copy).unwrap();
-        let (child, _) = self.spawn_until_started(self.command_of(&copy, args), COPY_IN_USE);
+        // Copied by `cp`, not by this process: a file open for writing here
+        // would be inherited by whatever another test starts meanwhile, and
+        // can't be run until that has let go of it ("Text file busy").
+        let copied = Command::new("cp")
+            .arg(env!("CARGO_BIN_EXE_thirdshift"))
+            .arg(&copy)
+            .status()
+            .unwrap();
+        assert!(copied.success());
+        let child = self.spawn_until_started(self.command_running(&copy, args), COPY_IN_USE);
         replace(&copy);
         fs::write(self.path(COPY_REPLACED), "").unwrap();
         child.wait_with_output().unwrap().into()
@@ -316,11 +324,10 @@ test -f {root}/{COPY_REPLACED}
     }
 
     /// Spawn `command`, its stdout and stderr piped, and wait until the fake
-    /// agent has touched the file `started` in the scenario root. Returns the
-    /// child and whether it has already exited. Panics with the Run's stderr
-    /// if the Run exits without the file there, or if the file isn't there
-    /// within [`WAIT_BOUND`].
-    fn spawn_until_started(&self, mut command: Command, started: &str) -> (Child, bool) {
+    /// agent has touched the file `started` in the scenario root. Panics with
+    /// the Run's stderr if the Run exits without the file there, or if the
+    /// file isn't there within [`WAIT_BOUND`].
+    fn spawn_until_started(&self, mut command: Command, started: &str) -> Child {
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -333,7 +340,7 @@ test -f {root}/{COPY_REPLACED}
         loop {
             let exited = child.try_wait().unwrap().is_some();
             if self.path(started).exists() {
-                return (child, exited);
+                return child;
             }
             if exited {
                 let result = RunResult::from(child.wait_with_output().unwrap());
@@ -465,11 +472,11 @@ test -f {root}/{COPY_REPLACED}
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        self.command_of(Path::new(env!("CARGO_BIN_EXE_thirdshift")), args)
+        self.command_running(Path::new(env!("CARGO_BIN_EXE_thirdshift")), args)
     }
 
     /// Like [`Scenario::command`], running the thirdshift at `executable`.
-    fn command_of(&self, executable: &Path, args: &[&str]) -> Command {
+    fn command_running(&self, executable: &Path, args: &[&str]) -> Command {
         let path = format!(
             "{}:{}",
             self.path("bin").display(),

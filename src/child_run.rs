@@ -2,6 +2,7 @@
 //! Spec run for one of its Tickets (ADR-0006) or by a Run for its Base fix
 //! (ADR-0008).
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -97,10 +98,12 @@ fn start_from(
     base_fix: BaseFixAsk,
 ) -> Result<Child> {
     let mut command = Command::new(executable);
-    // The child goes by this process's name, not by the link it is started
-    // through.
-    if let Some(name) = std::env::args_os().next() {
-        command.arg0(name);
+    // On Linux `executable` is a link, and the child goes by this process's
+    // command instead.
+    if cfg!(target_os = "linux")
+        && let Some(own) = own_command()
+    {
+        command.arg0(own);
     }
     command
         .args([kind.hidden_argument(), kind.base()])
@@ -111,12 +114,22 @@ fn start_from(
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| {
+            // Where `executable` is a link, the file it leads to says more.
+            let leads_to = match std::fs::read_link(executable) {
+                Ok(target) => format!(" ({})", target.display()),
+                Err(_) => String::new(),
+            };
             format!(
-                "could not start the Run for #{} from {}",
+                "could not start the Run for #{} from {}{leads_to}",
                 issue.number,
                 executable.display()
             )
         })
+}
+
+/// The command this process was started as, its `argv[0]`.
+fn own_command() -> Option<OsString> {
+    std::env::args_os().next()
 }
 
 /// Name this process after the command it was started as, for `pgrep`,
@@ -124,10 +137,10 @@ fn start_from(
 /// path it was started by, which for a child Run on Linux is the link to the
 /// running executable: every child Run would be an `exe`. Elsewhere a child
 /// Run is started by the executable's path, and has its name already.
-pub fn keep_name() {
+pub fn name_this_process() {
     #[cfg(target_os = "linux")]
-    if let Some(command) = std::env::args_os().next()
-        && let Some(name) = Path::new(&command).file_name()
+    if let Some(own) = own_command()
+        && let Some(name) = Path::new(&own).file_name()
         && let Ok(name) = std::ffi::CString::new(name.as_encoded_bytes())
     {
         // SAFETY: PR_SET_NAME reads a NUL-terminated string, which `name`
@@ -216,24 +229,39 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_child_run_that_cannot_be_started_names_the_executable_that_was_tried() {
+    /// Why Ticket #248's Run could not be started from `executable`.
+    fn cause_of_not_starting_from(executable: &Path) -> String {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/248").unwrap();
         let kind = Kind::Ticket {
             spec_branch: "issue-237".to_string(),
         };
+        let error = start_from(executable, &issue, &kind, BaseFixAsk::Forbid).unwrap_err();
+        format!("{error:#}")
+    }
 
-        let error = start_from(
-            Path::new("/no/such/thirdshift"),
-            &issue,
-            &kind,
-            BaseFixAsk::Forbid,
-        )
-        .unwrap_err();
+    #[test]
+    fn a_child_run_that_cannot_be_started_names_the_executable_that_was_tried() {
+        let cause = cause_of_not_starting_from(Path::new("/no/such/thirdshift"));
 
-        let cause = format!("{error:#}");
         assert!(
             cause.starts_with("could not start the Run for #248 from /no/such/thirdshift: "),
+            "{cause}"
+        );
+    }
+
+    #[test]
+    fn a_child_run_that_cannot_be_started_from_a_link_names_the_file_it_leads_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("exe");
+        std::os::unix::fs::symlink("/no/such/thirdshift (deleted)", &link).unwrap();
+
+        let cause = cause_of_not_starting_from(&link);
+
+        assert!(
+            cause.starts_with(&format!(
+                "could not start the Run for #248 from {} (/no/such/thirdshift (deleted)): ",
+                link.display()
+            )),
             "{cause}"
         );
     }
