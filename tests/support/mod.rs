@@ -8,7 +8,8 @@
 //! origin.git/        bare repo standing in for github.com/<owner>/<repo>;
 //!                    it rejects non-fast-forward pushes, so no rebase or
 //!                    force-push can reach it
-//! home/              $HOME: .gitconfig with identity and the insteadOf rule
+//! home/              $HOME: .gitconfig with identity, the insteadOf rule and
+//!                    auto maintenance off
 //! home/.thirdshift/  the User config, config.toml, if the test writes one
 //! home/.config/      $XDG_CONFIG_HOME, where an install receipt would be
 //! installed/         a copy of thirdshift, if the test runs one to replace it
@@ -885,10 +886,21 @@ test -f {root}/{COPY_REPLACED}
         self.launch_git(&["config", "remote.origin.url", url]);
     }
 
+    /// Write the gitconfig every git command in the scenario reads: the
+    /// identity, the default branch, the insteadOf rule, and auto maintenance
+    /// off. From 2.47 git detaches auto maintenance into the background after
+    /// a commit or a push, where it can still be writing into `.git/objects`
+    /// once the command has returned: a script that then clones the origin
+    /// again can find an object gone mid-copy, and one that deletes its
+    /// temporary clone with `rm -rf` can fail with `Directory not empty`
+    /// (#263). `gc.auto` says the same to a git too old to know
+    /// `maintenance.auto`.
     fn write_gitconfig(&self) {
         let config = format!(
             "[user]\n\tname = Test Runner\n\temail = runner@example.com\n\
              [init]\n\tdefaultBranch = main\n\
+             [maintenance]\n\tauto = false\n\
+             [gc]\n\tauto = 0\n\
              [url \"{origin}\"]\n\tinsteadOf = {github}\n",
             origin = self.origin_dir().display(),
             github = self.github_url(),

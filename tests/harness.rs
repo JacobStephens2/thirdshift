@@ -1,6 +1,7 @@
-//! The harness's waits: a test that waits for a Run to reach a point, the
-//! fake agent starting or a prompt showing on the terminal, fails as soon as
-//! the Run exits without reaching it, however long a slow Run may take.
+//! The harness itself. Its waits: a test that waits for a Run to reach a
+//! point, the fake agent starting or a prompt showing on the terminal, fails
+//! as soon as the Run exits without reaching it, however long a slow Run may
+//! take. And its gitconfig, which turns git's auto maintenance off.
 
 mod support;
 
@@ -57,4 +58,14 @@ fn waiting_for_a_prompt_that_never_shows_fails_with_the_terminal_once_the_run_ex
     );
     assert!(message.contains("the Run exited first"), "{message}");
     assert!(message.contains(CLOSED_ISSUE), "{message}");
+}
+
+#[test]
+fn a_scenarios_gitconfig_turns_auto_maintenance_off() {
+    let scenario = Scenario::new();
+
+    for (setting, off) in [("maintenance.auto", "false"), ("gc.auto", "0")] {
+        let value = scenario.launch_git(&["config", "--get", setting]);
+        assert_eq!(value.trim(), off, "{setting}");
+    }
 }
