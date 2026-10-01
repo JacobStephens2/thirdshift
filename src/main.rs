@@ -86,7 +86,11 @@ A Run or a Spec run makes the Claim on its issue once its checks pass, before an
 labels the issue in-progress, in place of ready-for-agent if it has that, keeping its other
 labels and creating the label if the repository lacks it. A Ticket's Run in a Spec run and a
 Base fix make none, and an issue already in-progress is left as it is. A Run whose Claim
-can't be made stops there, naming the cause.
+can't be made stops there, naming the cause. The Claim is released, the issue's labels put
+back as they were, when the Run or the Spec run fails with nothing on origin to take over:
+no Issue branch or Spec branch and no pull request. It is removed once a Self-merge has left
+the issue closed, and otherwise stays: a failure to release or remove it is a warning naming
+the command to run by hand.
 
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec

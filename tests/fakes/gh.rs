@@ -43,7 +43,10 @@
 //! `createdAt` its entry in `created`, else the first second of 2020.
 //!
 //! `gh api --method PUT repos/<repo>/issues/<number>/labels -f
-//! labels[]=<label> ...` sets an issue's labels to exactly those given.
+//! labels[]=<label> ...` sets an issue's labels to exactly those given, and
+//! `gh api --method DELETE repos/<repo>/issues/<number>/labels/<label>` takes
+//! one off, whatever its case, failing if the issue does not have it, as
+//! GitHub does.
 //!
 //! `gh api user` answers with the signed-in user's profile, whose public
 //! `email` is `user_email`, else null. `gh fake fails 'api user'` makes it
@@ -670,6 +673,34 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
         die("gh: Not Found (HTTP 404)", 1);
     }
     state.entry("labels", object([])).set(n, Array(labels));
+    save(state);
+}
+
+/// `gh api --method DELETE repos/<repo>/issues/<number>/labels/<label>`: take
+/// the label off the issue, whatever its case, failing if it is not there.
+fn issue_label_delete(state: &mut Json, args: &[&str]) {
+    let (positional, _) = parse(args);
+    let label = positional.first().and_then(|path| {
+        let (repo, rest) = repo_prefix(path)?;
+        let (n, label) = rest.strip_prefix("issues/")?.split_once("/labels/")?;
+        Some((repo, n, label))
+    });
+    let Some((repo, n, label)) = label else {
+        die(
+            &format!("fake gh: unsupported api DELETE {}", python_list(args)),
+            2,
+        )
+    };
+    check_repo_is(state, Some(repo));
+    let kept: Vec<Json> = issue_labels(state, n)
+        .iter()
+        .filter(|name| !name.str().eq_ignore_ascii_case(label))
+        .cloned()
+        .collect();
+    if !state.at("issues").has(n) || kept.len() == issue_labels(state, n).len() {
+        die("gh: Label does not exist (HTTP 404)", 1);
+    }
+    state.entry("labels", object([])).set(n, Array(kept));
     save(state);
 }
 
@@ -1601,6 +1632,7 @@ pub fn main(args: Vec<String>) {
         ["api", "graphql", rest @ ..] => graphql(&state, rest),
         ["api", "--method", "PATCH", rest @ ..] => pr_patch(&mut state, rest),
         ["api", "--method", "PUT", rest @ ..] => issue_labels_put(&mut state, rest),
+        ["api", "--method", "DELETE", rest @ ..] => issue_label_delete(&mut state, rest),
         ["api", path, ..] if generate_notes_repo(path).is_some() => {
             generate_notes(&state, &args[1..]);
         }

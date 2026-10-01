@@ -43,7 +43,7 @@ pub fn issue_title(issue: &IssueUrl) -> Result<String> {
 }
 
 /// An issue as an Architect run reads the plan its Architecture review
-/// published.
+/// published, and as a Claim reads its issue after a Self-merge.
 pub struct Issue {
     pub is_open: bool,
     pub labels: Vec<String>,
@@ -86,11 +86,16 @@ pub fn issue_labels(issue: &IssueUrl) -> Result<Vec<String>> {
     label_names(&issue_view(issue, "labels")?)
 }
 
+/// The REST API's path for the labels of `issue`.
+fn labels_path(issue: &IssueUrl) -> String {
+    format!("repos/{}/issues/{}/labels", issue.repo_slug(), issue.number)
+}
+
 /// Set `issue`'s labels to exactly `labels`, in one request, so a swap of
 /// one label for another can't stop halfway. Through the REST API: `gh issue
 /// edit` fails on the GitHub Projects (classic) sunset in older `gh`.
 fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
-    let path = format!("repos/{}/issues/{}/labels", issue.repo_slug(), issue.number);
+    let path = labels_path(issue);
     let fields: Vec<String> = labels
         .iter()
         .map(|label| format!("labels[]={label}"))
@@ -114,6 +119,38 @@ pub fn set_labels_adding(issue: &IssueUrl, kept: &[String], added: &[&str]) -> R
         .collect();
     labels.extend(added);
     set_labels(issue, &labels)
+}
+
+/// The REST API's path for `label` on `issue`.
+fn label_path(issue: &IssueUrl, label: &str) -> String {
+    format!("{}/{label}", labels_path(issue))
+}
+
+/// Take `label` off `issue`, in one request that keeps its other labels.
+/// Through the REST API, as [`set_labels`] is. GitHub refuses it if the issue
+/// does not have the label.
+pub fn remove_label(issue: &IssueUrl, label: &str) -> Result<()> {
+    gh(&[
+        "api",
+        "--method",
+        "DELETE",
+        &label_path(issue, label),
+        "--silent",
+    ])
+}
+
+/// The command that does what [`remove_label`] does, to run by hand.
+pub fn remove_label_command(issue: &IssueUrl, label: &str) -> String {
+    format!("gh api --method DELETE {}", label_path(issue, label))
+}
+
+/// The command that adds `label` to `issue`, keeping its other labels, to
+/// run by hand: unlike [`set_labels`], it needs none of the others named.
+pub fn add_label_command(issue: &IssueUrl, label: &str) -> String {
+    format!(
+        "gh api --method POST {} -f 'labels[]={label}'",
+        labels_path(issue)
+    )
 }
 
 /// A Spec's sub-issue, as a Spec run reads it.

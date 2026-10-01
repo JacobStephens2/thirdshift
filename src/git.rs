@@ -65,6 +65,13 @@ impl Git {
         Ok(file)
     }
 
+    /// Whether origin has the branch `branch`, as origin itself answers.
+    pub fn on_origin(&self, branch: &str) -> Result<bool> {
+        let reference = format!("refs/heads/{branch}");
+        let found = self.run(&["ls-remote", "--heads", "origin", &reference])?;
+        Ok(!found.is_empty())
+    }
+
     /// Run `git <args>` and report whether it exited zero, for commands whose
     /// exit status is the answer.
     pub fn succeeds(&self, args: &[&str]) -> Result<bool> {
