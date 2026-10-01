@@ -371,6 +371,48 @@ fn ctrl_c_before_the_merge_is_a_failed_run() {
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
 }
 
+#[test]
+fn a_check_re_run_that_passes_after_a_ci_fix_repair_made_no_commit_lets_the_merge_run_merge() {
+    let scenario = Scenario::new();
+    // A check with a flaky test: it fails, the Repair commits nothing, and
+    // its Check re-run passes.
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(
+            r#"[{"name": "test", "conclusion": "failure",
+                 "url": "https://github.com/acme/widgets/actions/runs/900/job/1",
+                 "rerun": {"conclusion": "success"}}]"#
+        )
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2, "1 Repair");
+    assert_eq!(
+        scenario.gh_calls_of("run", "rerun"),
+        vec![vec![
+            "run",
+            "rerun",
+            "900",
+            "--failed",
+            "--repo",
+            "acme/widgets"
+        ]]
+    );
+    let head = assert_issue_7_merged_into(&scenario, "main");
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: re-running the failed checks on {}: test\n",
+            &head[..7]
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+}
+
 /// Bash that has someone else push `file` with `content` to issue-7 from
 /// another clone, as a commit with `subject`: a Foreign commit.
 fn someone_pushes_to_issue_7(file: &str, content: &str, subject: &str) -> String {

@@ -74,6 +74,12 @@ fails, naming the Base fix issue. A Run that finds an open base-fix issue for th
 branch and checks waits for that one to close instead of starting another, and a Spec run's
 Tickets that meet the same Inherited failure share one Base fix.
 
+A failed check that is the branch's own starts a CI-fix Repair. If the Repair leaves the head
+commit as it was, thirdshift asks GitHub to re-run those failed checks, once per head, and
+watches CI there again: a check that failed on a flaky test then passes and the Run goes on.
+If CI is red again, a failed check can't be re-run (only GitHub Actions jobs can), or GitHub
+refuses the re-run, the Run fails.
+
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec
 PR opens as a draft, with a Tickets checklist, once the first Ticket lands, and is marked ready

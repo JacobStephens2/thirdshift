@@ -110,6 +110,7 @@ fn prompts() -> Vec<Prompt> {
         name: name.to_string(),
         state: CheckState::Failed,
         url: Some(CHECK_URL.to_string()),
+        job: None,
     };
     let failed = FailedChecks {
         own: vec![check(CHECK)],
