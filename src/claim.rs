@@ -19,13 +19,7 @@ const IN_PROGRESS_DESCRIPTION: &str = "A Claim: thirdshift has taken this issue"
 /// Whether an issue with `labels` carries a Claim, whatever else it is
 /// labelled.
 pub fn is_on(labels: &[String]) -> bool {
-    has(labels, IN_PROGRESS)
-}
-
-/// Whether `label` is one of `labels`, whatever its case: GitHub's label
-/// names are case-insensitive.
-fn has(labels: &[String], label: &str) -> bool {
-    labels.iter().any(|name| name.eq_ignore_ascii_case(label))
+    github::has_label(labels, IN_PROGRESS)
 }
 
 /// Make the Claim on `issue`: label it `in-progress`, in place of
@@ -42,7 +36,7 @@ pub fn make(issue: &IssueUrl) -> Result<()> {
 /// [`make`], its failure as `gh` gave it.
 fn label_in_progress(issue: &IssueUrl) -> Result<()> {
     let mut labels = github::issue_labels(issue)?;
-    let (claimed, ready) = (is_on(&labels), has(&labels, READY_FOR_AGENT));
+    let (claimed, ready) = (is_on(&labels), github::has_label(&labels, READY_FOR_AGENT));
     if claimed && !ready {
         return Ok(());
     }

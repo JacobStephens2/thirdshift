@@ -554,7 +554,7 @@ A Ready issue is an open issue that:
 - is labelled `ready-for-agent`: an issue without the label is never taken;
 - has none of the labels that make an **Unready Ticket**, `ready-for-human`, `needs-info`, `wontfix` and `needs-triage`, so a contradictory label errs on the side of not running;
 - carries no [Claim](#the-claim): it is not labelled `in-progress`;
-- has no parent issue. A sub-issue is a **Ticket** of a **Spec**, and is never run on its own, whatever the Spec's labels: it is reached through its Spec, when the Spec is itself a Ready issue, so its work always goes through the **Spec branch**. Labelling one Ticket never promotes its Spec, either;
+- is not a sub-issue. A sub-issue is a **Ticket** of a **Spec**, and is never run on its own, whatever the Spec's labels: it is reached through its Spec, when the Spec is itself a Ready issue, so its work always goes through the **Spec branch**. Labelling one Ticket never promotes its Spec, either;
 - is not labelled `base-fix`: the Run that opened a [Base fix](#base-fix)'s issue owns it;
 - has no open blocker, by GitHub's "blocked by" links, never the text of its body. Once every blocker is closed, it can be taken;
 - was never started: no **Issue branch** for it is on `origin`, and no pull request from one exists, open, merged or closed. So a Pickup run never does a [Continuation](#continuation), and an issue whose Run failed waits for you;
@@ -564,7 +564,7 @@ A Pickup run:
 
 1. Makes the checks an [Architect run](#architect-runs) makes, before anything else: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached unless `base <branch>` names the Base branch, and the Base branch exists on `origin` with your local copy not ahead of it. A check that fails stops the pass with exit `1`, before any label is read or changed.
 2. Tries the lock an Architect run takes, and is [skipped](#one-at-a-time) if an Architect run or another Pickup run on the repository is still running on the machine.
-3. Lists the repository's open issues labelled `ready-for-agent`, lowest number first, and takes the first that is a Ready issue, saying so on stderr: `taking Ready issue #<n> "<title>", as thirdshift <Issue URL> would`. Each one it passes over on the way gets [a line saying why](#why-an-issue-was-passed-over). One issue a pass: the rest wait for the next, and are not looked at.
+3. Lists the repository's open issues labelled `ready-for-agent`, lowest number first, and takes the first that is a Ready issue, saying so on stderr: `taking Ready issue #<n> "<title>", as thirdshift <Issue URL> would`. Each one it passes over on the way gets [a line saying why](#why-an-issue-was-passed-over). One issue a pass: the rest wait for the next.
 4. Dispatches it exactly as `thirdshift <Issue URL>` would from the same clone on the Pickup run's Base branch: a [Spec run](#spec-runs) when the issue has sub-issues, a Run otherwise. That run makes the Claim, so the issue's `ready-for-agent` is swapped for `in-progress` and no later pass takes it again.
 
 `merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel <n>`, `email`, optionally followed by an address, and `no-email`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`. The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `launch.pull` and `logs.dir`. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it.
@@ -587,13 +587,13 @@ thirdshift: 03:00:03 #26 labelled base-fix
 thirdshift: 03:00:04 #30 blocked by #29
 thirdshift: 03:00:05 #31 already started: issue-31 is on origin
 thirdshift: 03:00:06 #32 already started: PR https://github.com/acme/widgets/pull/33
-thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than ten minutes ago
-thirdshift: 03:00:07 #35 not settled: a sub-issue added or removed less than ten minutes ago
-thirdshift: 03:00:08 #36 not settled: a "blocked by" link added or removed less than ten minutes ago
+thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than 10 minutes ago
+thirdshift: 03:00:07 #35 not settled: a sub-issue added or removed less than 10 minutes ago
+thirdshift: 03:00:08 #36 not settled: a "blocked by" link added or removed less than 10 minutes ago
 thirdshift: 03:00:08 no Ready issue on acme/widgets
 ```
 
-A line with `blocked by` names every open blocker. A Ticket's line names its Spec, the issue to label, or to unblock, for the Ticket to run. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
+A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
 
 ```
 thirdshift: 03:00:02 #18 labelled needs-info

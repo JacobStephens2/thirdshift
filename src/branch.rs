@@ -1,8 +1,6 @@
 //! Issue branch selection: start a fresh Issue branch, or continue the one
 //! already on origin (ADR-0002).
 
-use std::fmt;
-
 use anyhow::{Context, Result, bail};
 
 use crate::git::Git;
@@ -109,15 +107,6 @@ pub enum Started {
     Branch(String),
     /// A pull request from an Issue branch for it exists, with this URL.
     PullRequest(String),
-}
-
-impl fmt::Display for Started {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Branch(branch) => write!(f, "{branch} is on origin"),
-            Self::PullRequest(url) => write!(f, "PR {url}"),
-        }
-    }
 }
 
 /// What shows `issue` was ever started, if it was: the first Issue branch for

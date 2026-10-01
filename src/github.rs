@@ -75,6 +75,12 @@ fn label_names(json: &Value) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Whether `label` is one of `labels`, whatever its case: GitHub's label
+/// names are case-insensitive.
+pub fn has_label(labels: &[String], label: &str) -> bool {
+    labels.iter().any(|name| name.eq_ignore_ascii_case(label))
+}
+
 /// The labels of `issue`.
 pub fn issue_labels(issue: &IssueUrl) -> Result<Vec<String>> {
     label_names(&issue_view(issue, "labels")?)

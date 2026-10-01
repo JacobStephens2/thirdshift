@@ -1,7 +1,8 @@
 //! Pickup runs: `thirdshift pickup` takes the lowest-numbered Ready issue in
 //! the repository, an open issue labelled `ready-for-agent` with no label
-//! that makes an Unready Ticket, no Claim, no parent issue, no `base-fix`
-//! label, no open blocker and nothing started on it, that has settled, and
+//! that makes an Unready Ticket, no Claim and no `base-fix` label, that is
+//! not a sub-issue, has no open blocker and nothing started on it, and has
+//! settled, and
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
 //! way gets a line saying why. With no Ready issue, or while an Architect run
@@ -277,9 +278,10 @@ fn a_ready_for_agent_sub_issue_is_never_run_on_its_own_whatever_its_specs_labels
         // `ready-for-agent` itself.
         let spec = "#7 labelled needs-info";
         let ticket = "#8 is a Ticket of #7, which is not ready";
-        let lines = match spec_labels.contains(&READY_FOR_AGENT) {
-            true => vec![spec, ticket],
-            false => vec![ticket],
+        let lines = if spec_labels.contains(&READY_FOR_AGENT) {
+            vec![spec, ticket]
+        } else {
+            vec![ticket]
         };
         assert_skipped(&scenario, &result, &no_ready_issue_after(&lines));
         assert_eq!(scenario.issue_labels(8), [READY_FOR_AGENT]);
@@ -388,7 +390,7 @@ fn every_open_blocker_is_named_in_the_line() {
 /// What a Pickup run says of #7 when it was labelled `ready-for-agent` too
 /// recently to have settled.
 const LABELLED_TOO_RECENTLY: &str =
-    "#7 not settled: labelled ready-for-agent less than ten minutes ago";
+    "#7 not settled: labelled ready-for-agent less than 10 minutes ago";
 
 #[test]
 fn an_issue_labelled_ready_for_agent_less_than_ten_minutes_ago_is_not_taken() {
@@ -448,7 +450,7 @@ fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_ten_m
 
         let result = scenario.run(&["pickup"]);
 
-        let line = format!("#7 not settled: {changed} added or removed less than ten minutes ago");
+        let line = format!("#7 not settled: {changed} added or removed less than 10 minutes ago");
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     }
@@ -460,7 +462,7 @@ fn an_issue_passed_over_for_being_unsettled_is_taken_by_a_later_pass_once_it_has
     let labelled = (TimelineEvent::Labelled(READY_FOR_AGENT), 600);
     scenario.issue_timeline(7, &[labelled, (TimelineEvent::SubIssueAdded, 9)]);
     let first = scenario.run(&["pickup"]);
-    let line = "#7 not settled: a sub-issue added or removed less than ten minutes ago";
+    let line = "#7 not settled: a sub-issue added or removed less than 10 minutes ago";
     assert_skipped(&scenario, &first, &no_ready_issue_after(&[line]));
 
     // The same events, a few minutes on.
@@ -494,10 +496,11 @@ fn each_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
     scenario.spec_has_tickets(3, &[]);
     expect("#7 labelled base-fix");
     scenario.issue_labelled(7, &[READY_FOR_AGENT]);
-    scenario.issue_blocked_by(7, &[5]);
     expect("#7 blocked by #5");
     scenario.issue_blocked_by(7, &[]);
     expect("#7 already started: issue-7 is on origin");
+    scenario.origin_git(&["update-ref", "-d", "refs/heads/issue-7"]);
+    expect(LABELLED_TOO_RECENTLY);
 }
 
 /// A Ready issue, #7, that is a Spec with two Tickets that don't block each

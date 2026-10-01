@@ -177,7 +177,7 @@ impl<'a> Search<'a> {
         if let Some(standing) = &self.standings[at] {
             return Ok(standing.clone());
         }
-        let standing = stand(self.launch, &self.candidates[at])?;
+        let standing = standing_of(self.launch, &self.candidates[at])?;
         self.standings[at] = Some(standing.clone());
         Ok(standing)
     }
@@ -192,7 +192,7 @@ impl<'a> Search<'a> {
             Reason::Claimed => format!("labelled {}", claim::IN_PROGRESS),
             Reason::Ticket(spec) => {
                 let listed = self.candidates.iter().position(|candidate| {
-                    candidate.issue.number == spec.number && same_repo(&candidate.issue, spec)
+                    candidate.issue.number == spec.number && candidate.issue.in_same_repo(spec)
                 });
                 let spec_is_ready = match listed {
                     Some(spec) => matches!(self.standing(spec)?, Standing::Ready { .. }),
@@ -201,7 +201,7 @@ impl<'a> Search<'a> {
                 if spec_is_ready {
                     return Ok(None);
                 }
-                let spec = if same_repo(&self.candidates[at].issue, spec) {
+                let spec = if self.candidates[at].issue.in_same_repo(spec) {
                     format!("#{}", spec.number)
                 } else {
                     format!("{}#{}", spec.repo_slug(), spec.number)
@@ -216,34 +216,32 @@ impl<'a> Search<'a> {
                     .collect();
                 format!("blocked by {}", blockers.join(", "))
             }
-            Reason::Started(started) => format!("already started: {started}"),
+            Reason::Started(Started::Branch(branch)) => {
+                format!("already started: {branch} is on origin")
+            }
+            Reason::Started(Started::PullRequest(url)) => format!("already started: PR {url}"),
             Reason::Unsettled(shaping) => {
                 let shaped = match shaping {
                     Shaping::Labelled => format!("labelled {READY_FOR_AGENT}"),
                     Shaping::SubIssues => "a sub-issue added or removed".to_string(),
                     Shaping::Blockers => "a \"blocked by\" link added or removed".to_string(),
                 };
-                format!("not settled: {shaped} less than ten minutes ago")
+                let minutes = SETTLE.num_minutes();
+                format!("not settled: {shaped} less than {minutes} minutes ago")
             }
         };
         Ok(Some(format!("#{number} {why}")))
     }
 }
 
-/// Whether `one` and `other` are in the same repository, whatever the case
-/// their URLs spell it in.
-fn same_repo(one: &IssueUrl, other: &IssueUrl) -> bool {
-    one.owner.eq_ignore_ascii_case(&other.owner) && one.repo.eq_ignore_ascii_case(&other.repo)
-}
-
 /// Where `candidate`, an open issue labelled `ready-for-agent` in the
 /// repository of the Launch directory `launch`, stands. It is a Ready issue
-/// when it has no label that makes an Unready Ticket, no Claim, no parent
-/// issue, no `base-fix` label and no open blocker, was never started, and is
-/// settled: [`SETTLE`] has passed since it was last labelled
+/// when it has no label that makes an Unready Ticket and no Claim, is not a
+/// sub-issue, has no `base-fix` label and no open blocker, was never started,
+/// and is settled: [`SETTLE`] has passed since it was last labelled
 /// `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
 /// last added or removed.
-fn stand(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
+fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
     let passed_over = |reason| Ok(Standing::PassedOver(reason));
     if let Some(label) = spec_run::unready_label(&candidate.labels) {
         return passed_over(Reason::Unready(label));
