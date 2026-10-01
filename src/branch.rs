@@ -100,11 +100,25 @@ pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
     }
 }
 
-/// Whether `issue` was ever started: an Issue branch for it is on origin, or
-/// a pull request from one exists, open, merged or closed.
-pub fn started(launch: &Git, issue: &IssueUrl) -> Result<bool> {
+/// What shows an issue was started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Started {
+    /// This Issue branch for it is on origin.
+    Branch(String),
+    /// A pull request from an Issue branch for it exists, with this URL.
+    PullRequest(String),
+}
+
+/// What shows `issue` was ever started, if it was: the first Issue branch for
+/// it on origin, or else the newest pull request from one, open, merged or
+/// closed.
+pub fn started(launch: &Git, issue: &IssueUrl) -> Result<Option<Started>> {
     let Used { on_origin, prs } = used(launch, issue)?;
-    Ok(!on_origin.is_empty() || !prs.is_empty())
+    let branch = on_origin.iter().map(|(number, _)| *number).min();
+    let pr = prs.into_iter().map(|(_, pr)| pr).max_by_key(|pr| pr.number);
+    Ok(branch
+        .map(|number| Started::Branch(branch_name(issue, number)))
+        .or(pr.map(|pr| Started::PullRequest(pr.url))))
 }
 
 /// What has been used of an issue's Issue branches.

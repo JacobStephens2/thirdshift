@@ -89,6 +89,17 @@ pub struct TerminalResult {
     pub user_config: Option<String>,
 }
 
+/// An event on an issue's timeline that a Pickup run reads to tell whether
+/// the issue has settled.
+pub enum TimelineEvent<'a> {
+    /// This label was applied.
+    Labelled(&'a str),
+    SubIssueAdded,
+    SubIssueRemoved,
+    BlockedByAdded,
+    BlockedByRemoved,
+}
+
 pub struct RunResult {
     pub stdout: String,
     /// stderr with the time each progress line was printed removed, so it
@@ -597,6 +608,40 @@ test -f {root}/{COPY_REPLACED}
         for (ticket, blockers) in tickets {
             gh["blocked_by"][ticket.to_string()] = json!(blockers);
         }
+        self.write_gh_state(&gh);
+    }
+
+    /// Make issue `number` blocked by `blockers` on the fake GitHub, by its
+    /// "blocked by" links. A blocker the fake GitHub doesn't know yet is
+    /// open.
+    pub fn issue_blocked_by(&self, number: u32, blockers: &[u32]) {
+        let mut gh = self.gh_state();
+        gh["blocked_by"][number.to_string()] = json!(blockers);
+        self.write_gh_state(&gh);
+    }
+
+    /// Set issue `number`'s timeline on the fake GitHub to `events`, oldest
+    /// first, each with how many minutes ago it happened.
+    pub fn issue_timeline(&self, number: u32, events: &[(TimelineEvent, i64)]) {
+        let events: Vec<Value> = events
+            .iter()
+            .map(|(event, minutes_ago)| {
+                let at = chrono::Utc::now() - chrono::TimeDelta::minutes(*minutes_ago);
+                let at = at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                let event = match event {
+                    TimelineEvent::Labelled(label) => {
+                        return json!({"event": "labeled", "label": label, "at": at});
+                    }
+                    TimelineEvent::SubIssueAdded => "sub_issue_added",
+                    TimelineEvent::SubIssueRemoved => "sub_issue_removed",
+                    TimelineEvent::BlockedByAdded => "blocked_by_added",
+                    TimelineEvent::BlockedByRemoved => "blocked_by_removed",
+                };
+                json!({"event": event, "at": at})
+            })
+            .collect();
+        let mut gh = self.gh_state();
+        gh["timeline"][number.to_string()] = json!(events);
         self.write_gh_state(&gh);
     }
 

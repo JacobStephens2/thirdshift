@@ -565,13 +565,17 @@ A Ready issue is an open issue that:
 - is labelled `ready-for-agent`: an issue without the label is never taken;
 - has none of the labels that make an **Unready Ticket**, `ready-for-human`, `needs-info`, `wontfix` and `needs-triage`, so a contradictory label errs on the side of not running;
 - carries no [Claim](#the-claim): it is not labelled `in-progress`;
-- was never started: no **Issue branch** for it is on `origin`, and no pull request from one exists, open, merged or closed. So a Pickup run never does a [Continuation](#continuation), and an issue whose Run failed waits for you.
+- is not a sub-issue. A sub-issue is a **Ticket** of a **Spec**, and is never run on its own, whatever the Spec's labels: it is reached through its Spec, when the Spec is itself a Ready issue, so its work always goes through the **Spec branch**. Labelling one Ticket never promotes its Spec, either;
+- is not labelled `base-fix`: the Run that opened a [Base fix](#base-fix)'s issue owns it;
+- has no open blocker, by GitHub's "blocked by" links, never the text of its body. Once every blocker is closed, it can be taken;
+- was never started: no **Issue branch** for it is on `origin`, and no pull request from one exists, open, merged or closed. So a Pickup run never does a [Continuation](#continuation), and an issue whose Run failed waits for you;
+- is settled: ten minutes have passed since the latest of `ready-for-agent` being applied to it, a sub-issue being added to it or removed, and a "blocked by" link being added to it or removed. So a Spec is not taken while its Tickets are still being attached. These are read from the issue's timeline, since adding a sub-issue does not change the issue's update time, and the ten minutes is fixed, with no setting. A later pass takes the issue once it has settled.
 
 A Pickup run:
 
 1. Makes the checks an [Architect run](#architect-runs) makes, before anything else but the [Run notification](#one-run-notification-for-the-issue-taken)'s own: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached unless `base <branch>` names the Base branch, and the Base branch exists on `origin` with your local copy not ahead of it. A check that fails stops the pass with exit `1`, before any label is read or changed.
 2. Tries the lock an Architect run takes, and is [skipped](#one-at-a-time) if an Architect run or another Pickup run on the repository is still running on the machine.
-3. Lists the repository's open issues labelled `ready-for-agent`, lowest number first, and takes the first that is a Ready issue, saying so on stderr: `taking Ready issue #<n> "<title>", as thirdshift <Issue URL> would`. One issue a pass: the rest wait for the next.
+3. Lists the repository's open issues labelled `ready-for-agent`, lowest number first, and takes the first that is a Ready issue, saying so on stderr: `taking Ready issue #<n> "<title>", as thirdshift <Issue URL> would`. Each one it passes over on the way gets [a line saying why](#why-an-issue-was-passed-over). One issue a pass: the rest wait for the next.
 4. Dispatches it exactly as `thirdshift <Issue URL>` would from the same clone on the Pickup run's Base branch: a [Spec run](#spec-runs) when the issue has sub-issues, a Run otherwise. That run makes the Claim, so the issue's `ready-for-agent` is swapped for `in-progress` and no later pass takes it again.
 
 `merge`, `no-merge`, `base-fix`, `no-base-fix` and `parallel <n>`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`, as do `email`, optionally followed by an address, and `no-email` for the Pickup run's [Run notification](#one-run-notification-for-the-issue-taken). The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `launch.pull` and `logs.dir`. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it.
@@ -580,7 +584,33 @@ A Pickup run:
 
 The dispatched run's ending is the Pickup run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Pickup run fails as that [Failed run](#failed-runs) or Failed spec run does. After an [Inherited failure](#an-inherited-failure-links-the-base-branchs-checks), the command it offers is `thirdshift <Issue URL>` with the dispatched run's flags and `base-fix`, since another Pickup run would not take a started issue again.
 
-A pass is **skipped** when the lock is held, or when the repository has no Ready issue: it exits `0` with stdout empty and one line of reason on stderr, `an Architect run or a Pickup run is already running on <owner>/<repo>` or `no Ready issue on <owner>/<repo>`. Skipped is not a failure. A skipped pass starts no agent session, changes no label, and sends no Run notification.
+A pass is **skipped** when the lock is held, or when the repository has no Ready issue: it exits `0` with stdout empty and one line of reason on stderr, `an Architect run or a Pickup run is already running on <owner>/<repo>` or `no Ready issue on <owner>/<repo>`, after the lines on the issues it passed over. Skipped is not a failure. A skipped pass starts no agent session, changes no label, and sends no Run notification.
+
+### Why an issue was passed over
+
+Each open issue labelled `ready-for-agent` that a pass looks at and does not take gets one line on stderr, naming the issue and the first reason that applies, in the order of the Ready issue rule above. The lines come before the line that says what the pass did, so the cron log explains why nothing started:
+
+```
+thirdshift: 03:00:02 #18 labelled needs-info
+thirdshift: 03:00:02 #19 labelled in-progress
+thirdshift: 03:00:03 #21 is a Ticket of #20, which is not ready
+thirdshift: 03:00:03 #26 labelled base-fix
+thirdshift: 03:00:04 #30 blocked by #29
+thirdshift: 03:00:05 #31 already started: issue-31 is on origin
+thirdshift: 03:00:06 #32 already started: PR https://github.com/acme/widgets/pull/33
+thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than 10 minutes ago
+thirdshift: 03:00:07 #35 not settled: a sub-issue added or removed less than 10 minutes ago
+thirdshift: 03:00:08 #36 not settled: a "blocked by" link added or removed less than 10 minutes ago
+thirdshift: 03:00:08 no Ready issue on acme/widgets
+```
+
+A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
+
+```
+thirdshift: 03:00:02 #18 labelled needs-info
+thirdshift: 03:00:03 #20 blocked by #17
+thirdshift: 03:00:04 taking Ready issue #22 "Sharpen the widgets", as thirdshift https://github.com/acme/widgets/issues/22 would
+```
 
 ### One Run notification for the issue taken
 

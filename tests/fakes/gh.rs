@@ -25,7 +25,8 @@
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
 //!  "labels"?: {"<number>": ["<label>", ...]},
 //!  "repo_labels"?: ["<label>", ...],
-//!  "blocked_by"?: {"<number>": [<number>, ...]}}
+//!  "blocked_by"?: {"<number>": [<number>, ...]},
+//!  "timeline"?: {"<number>": [{"event", "label"?, "at"}, ...]}}
 //! ```
 //!
 //! `gh pr merge` makes a real merge commit of the PR's head into its base in
@@ -77,7 +78,14 @@
 //! `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 //! with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
 //! with its state, its `labels`, how many sub-issues it has of its own, and
-//! the issues it is `blocked_by` with their states. Any other query exits 2.
+//! the issues it is `blocked_by` with their states. It answers a query that
+//! asks for `timelineItems` as the one thirdshift reads a Pickup run's
+//! candidate with: issue `$number`'s parent, the issue whose `sub_issues` it is
+//! one of, how many sub-issues it has, the issues it is `blocked_by` with
+//! their states, and from its `timeline`, oldest first, every `labeled` event
+//! as `labelled` and the newest of its `sub_issue_added`, `sub_issue_removed`,
+//! `blocked_by_added` and `blocked_by_removed` events as `linked`. Any other
+//! query exits 2.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view` names the PR by its head branch or its number.
@@ -139,6 +147,8 @@
 //! gh fake sub-issues <number> '<JSON list>'  set issue <number>'s sub-issues,
 //!                                         by number, making it a Spec
 //! gh fake repo-labels '<JSON list>'       set the repository's labels
+//! gh fake timeline <number> '<JSON list>' set issue <number>'s timeline
+//!                                         events, oldest first
 //! ```
 //!
 //! Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
@@ -1287,14 +1297,14 @@ fn record_run(state: &mut Json, mut run: Json) {
     runs.push(run);
 }
 
-/// The Tickets query: `-f query=...` plus `-f`/`-F` variables.
+/// The Tickets query or the candidate query, told apart by the candidate
+/// query's `timelineItems`: `-f query=...` plus `-f`/`-F` variables.
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
-    if !["subIssues", "blockedBy", "labels", "totalCount"]
-        .iter()
-        .all(|field| query.contains(field))
-    {
+    let asks_for = |fields: &[&str]| fields.iter().all(|field| query.contains(field));
+    let is_candidate = asks_for(&["parent", "subIssues", "blockedBy", "timelineItems"]);
+    if !is_candidate && !asks_for(&["subIssues", "blockedBy", "labels", "totalCount"]) {
         die(&format!("fake gh: unsupported graphql query {query}"), 2);
     }
     check_repo_is(
@@ -1310,51 +1320,109 @@ fn graphql(state: &Json, args: &[&str]) {
             1,
         );
     }
-    let listed = |map: &str, key: &str| -> Vec<Json> {
-        state
-            .get(map)
-            .and_then(|map| map.get(key))
-            .map(|list| list.items().to_vec())
-            .unwrap_or_default()
+    let issue = if is_candidate {
+        candidate(state, n)
+    } else {
+        let nodes = listed(state, "sub_issues", n)
+            .iter()
+            .map(|ticket| {
+                let key = ticket.python();
+                let labels = listed(state, "labels", &key)
+                    .into_iter()
+                    .map(|label| object([("name", label)]))
+                    .collect();
+                let mut node = numbered_issue(state, ticket);
+                node.set("labels", object([("nodes", Array(labels))]));
+                node.set("subIssues", sub_issue_count(state, &key));
+                node.set("blockedBy", blockers(state, &key));
+                node
+            })
+            .collect();
+        object([("subIssues", object([("nodes", Array(nodes))]))])
     };
-    let issue = |n: &Json| {
-        let key = n.python();
-        let issue_state = state.at("issues").get(&key).cloned();
-        object([
-            ("number", n.clone()),
-            ("state", issue_state.unwrap_or(string("OPEN"))),
-        ])
-    };
-    let nodes = listed("sub_issues", n)
-        .iter()
-        .map(|ticket| {
-            let key = ticket.python();
-            let labels = listed("labels", &key)
-                .into_iter()
-                .map(|label| object([("name", label)]))
-                .collect();
-            let blockers = listed("blocked_by", &key).iter().map(issue).collect();
-            let mut node = issue(ticket);
-            node.set("labels", object([("nodes", Array(labels))]));
-            node.set(
-                "subIssues",
-                object([("totalCount", number(listed("sub_issues", &key).len()))]),
-            );
-            node.set("blockedBy", object([("nodes", Array(blockers))]));
-            node
-        })
-        .collect();
-    let answer = object([(
-        "data",
-        object([(
-            "repository",
-            object([(
-                "issue",
-                object([("subIssues", object([("nodes", Array(nodes))]))]),
-            )]),
-        )]),
-    )]);
+    let answer = object([("data", object([("repository", object([("issue", issue)]))]))]);
     println!("{answer}");
+}
+
+/// The list `map` holds for issue `key`, empty if it holds none.
+fn listed(state: &Json, map: &str, key: &str) -> Vec<Json> {
+    state
+        .get(map)
+        .and_then(|map| map.get(key))
+        .map(|list| list.items().to_vec())
+        .unwrap_or_default()
+}
+
+/// Issue `n` as a GraphQL node with its number and state, open if the fake
+/// does not know it.
+fn numbered_issue(state: &Json, n: &Json) -> Json {
+    let issue_state = state.at("issues").get(&n.python()).cloned();
+    object([
+        ("number", n.clone()),
+        ("state", issue_state.unwrap_or(string("OPEN"))),
+    ])
+}
+
+/// How many sub-issues issue `key` has, as GraphQL's `subIssues`.
+fn sub_issue_count(state: &Json, key: &str) -> Json {
+    object([("totalCount", number(listed(state, "sub_issues", key).len()))])
+}
+
+/// The issues issue `key` is blocked by, as GraphQL's `blockedBy`.
+fn blockers(state: &Json, key: &str) -> Json {
+    let blockers = listed(state, "blocked_by", key)
+        .iter()
+        .map(|blocker| numbered_issue(state, blocker))
+        .collect();
+    object([("nodes", Array(blockers))])
+}
+
+/// Issue `n` as the candidate query reads it.
+fn candidate(state: &Json, n: &str) -> Json {
+    let parent = match state.get("sub_issues") {
+        Some(Json::Object(specs)) => specs
+            .iter()
+            .find(|(_, tickets)| tickets.items().iter().any(|ticket| ticket.python() == n))
+            .map(|(spec, _)| spec.as_str()),
+        _ => None,
+    };
+    let parent = match parent {
+        Some(spec) => {
+            let url = format!(
+                "https://github.com/{}/issues/{spec}",
+                state.at("repo").str()
+            );
+            object([("url", string(url))])
+        }
+        None => Null,
+    };
+    let (mut labelled, mut linked) = (Vec::new(), None);
+    for event in listed(state, "timeline", n) {
+        let at = event.at("at").clone();
+        let link = match event.at("event").str() {
+            "labeled" => {
+                let label = object([("name", event.at("label").clone())]);
+                labelled.push(object([("createdAt", at), ("label", label)]));
+                continue;
+            }
+            "sub_issue_added" => "SubIssueAddedEvent",
+            "sub_issue_removed" => "SubIssueRemovedEvent",
+            "blocked_by_added" => "BlockedByAddedEvent",
+            "blocked_by_removed" => "BlockedByRemovedEvent",
+            other => die(&format!("fake gh: unsupported timeline event {other}"), 2),
+        };
+        linked = Some(object([("__typename", string(link)), ("createdAt", at)]));
+    }
+    object([
+        ("parent", parent),
+        ("subIssues", sub_issue_count(state, n)),
+        ("blockedBy", blockers(state, n)),
+        ("labelled", object([("nodes", Array(labelled))])),
+        (
+            "linked",
+            object([("nodes", Array(linked.into_iter().collect()))]),
+        ),
+    ])
 }
 
 /// Run the `on-ci-read` script, if it has runs left and has not yet run for
@@ -1466,6 +1534,9 @@ fn fake_command(state: &mut Json, args: &[&str]) {
             .entry("sub_issues", object([]))
             .set(n, parse_json(tickets)),
         ["repo-labels", labels] => state.set("repo_labels", parse_json(labels)),
+        ["timeline", n, events] => state
+            .entry("timeline", object([]))
+            .set(n, parse_json(events)),
         ["user-email", email] => state.set("user_email", parse_json(email)),
         ["fails", call] => state
             .entry("failing", Array(Vec::new()))
