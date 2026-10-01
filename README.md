@@ -303,9 +303,14 @@ On a Spec, `base-fix` goes to each Ticket's Run, whose Base fix goes into the Sp
 
 A Run that finds an open Base fix issue for its Base branch and checks starts none of its own. After `waiting on Base fix #<n>, already open: <issue URL>`, it waits for that issue to close, as the Base fix's Self-merge leaves it, then merges the Base branch in again and watches CI. Waiting is the Run's one Base fix: if the checks are still Inherited failures once the issue has closed, the cause is `CI red on <check>, which also fails on <base> at <short sha>, even after Base fix <issue URL> closed; fix <base> first`, and its Run notification's `Base fix:` line says `closed`, or `not closed` if the Run ended first.
 
-An issue that covers more checks than the Run's counts; one for another Base branch, or that leaves out one of the Run's checks, does not. The wait has no time limit: an issue nobody is working on has to be closed, or the Run interrupted, by hand.
+An issue that covers more checks than the Run's counts; one for another Base branch, or that leaves out one of the Run's checks, does not. The wait has no time limit: a Base fix issue from another clone or machine that nobody is working on has to be closed, or the Run interrupted, by hand.
 
-Runs from one Launch directory, as a Spec run's Tickets are, look for the issue and write it one at a time, under a lock in the clone's git directory, so those that meet the same Inherited failure at once get one Base fix issue and one Base fix. There, a Run waiting on a Base fix also sees it end: if it fails, leaving its issue open, the waiting Run fails too, with the cause `Base fix <issue URL> ended with its issue still open`. Across clones and machines the look is only a best-effort lock, and two Runs that look at the same moment may each start a Base fix.
+Runs from one Launch directory, as a Spec run's Tickets are, look for the issue and write it one at a time, under a lock in the clone's git directory, so those that meet the same Inherited failure at once get one Base fix issue and one Base fix. There, a Run also knows whether a Base fix started from that Launch directory is still running:
+
+- A Run waiting on one that fails, leaving its issue open, fails too, with the cause `Base fix <issue URL> ended with its issue still open`.
+- A Run that finds the issue open after that Base fix has ended starts it again on the same issue, as its one Base fix, after `Base fix #<n> is open but no longer running; starting it again into <base>: <issue URL>`. It continues the Base fix's Issue branch, as any Run on an issue with one does: see [Continuation](#continuation).
+
+Across clones and machines the look is only a best-effort lock, and two Runs that look at the same moment may each start a Base fix.
 
 Without `base-fix`, an Inherited failure fails the Run as described in [What a Run does](#what-a-run-does).
 

@@ -55,7 +55,7 @@ impl RunNotification {
     }
 
     /// Send the notification for the Run that `ended`, with `base_fix`, what
-    /// became of the Base fix it took, if it took one. A failed send is
+    /// became of the Base fix it started or waited on, if any. A failed send is
     /// only a warning: it never changes the Run's outcome.
     pub fn send(self, ended: &Result<Reached, FailedRun>, base_fix: Option<&str>) {
         let (outcome, pr_url, cause, log, tickets) = match ended {

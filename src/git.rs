@@ -1,5 +1,6 @@
 //! Running `git` in a directory.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -51,6 +52,17 @@ impl Git {
     /// The repository's common git directory, the one its worktrees share.
     pub fn common_dir(&self) -> Result<PathBuf> {
         Ok(self.dir.join(self.run(&["rev-parse", "--git-common-dir"])?))
+    }
+
+    /// Wait for, then hold until the file returned is dropped, a lock on the
+    /// file `name` in the repository's common git directory, which every Run
+    /// from one Launch directory shares.
+    pub fn lock(&self, name: &str) -> Result<File> {
+        let path = self.common_dir()?.join(name);
+        let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("can't lock {}", path.display()))?;
+        Ok(file)
     }
 
     /// Run `git <args>` and report whether it exited zero, for commands whose

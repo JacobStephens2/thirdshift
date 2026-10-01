@@ -408,6 +408,64 @@ fn a_found_base_fix_issue_that_closes_with_the_checks_still_red_fails_the_run_na
 }
 
 #[test]
+fn a_check_whose_name_has_a_comma_is_found_among_the_checks_an_open_base_fix_issue_names() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        &RUN_OPENS_PR_WITH_INHERITED_FAILURE
+            .replace(r#""name": "test""#, r#""name": "test (ubuntu, stable)""#),
+    );
+    another_runs_base_fix_is_open(
+        &scenario,
+        8,
+        "CI red on main: lint, test (ubuntu, stable)",
+        ANOTHER_RUNS_BASE_FIX_MERGES,
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: waiting on Base fix #8, already open: "),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+}
+
+#[test]
+fn a_base_fix_that_failed_and_left_its_issue_open_is_started_again_by_the_next_run_to_find_it() {
+    // Two Runs, as the second finding the first's Base fix is the behavior.
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    scenario.agent_does_for_in_session(8, 1, "exit 3\n");
+    let first = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+    assert_eq!(first.code, Some(1), "stderr: {}", first.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["8"], "OPEN");
+
+    // The Continuation's head, the Failed run commit, is as red as main.
+    scenario.agent_does_for_in_session(7, 2, RED_ON_HEAD);
+    scenario.agent_does_for_in_session(8, 2, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
+    let second = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert!(
+        second.stderr.contains(&format!(
+            "thirdshift: Base fix #8 is open but no longer running; starting it again into main: {BASE_FIX_URL}\n"
+        )),
+        "stderr: {}",
+        second.stderr
+    );
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
+    let gh = scenario.gh_state();
+    assert_eq!(gh["issues"]["8"], "CLOSED");
+    assert_eq!(gh["issues"].as_object().unwrap().len(), 2, "#7 and #8");
+    assert_eq!(gh["prs"][0]["isDraft"], false);
+    assert!(scenario.origin_file("issue-7", "ci-fix.txt").is_some());
+}
+
+#[test]
 fn an_open_base_fix_issue_for_another_base_branch_or_other_checks_is_not_waited_on() {
     let scenario = Scenario::new();
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);

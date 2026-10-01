@@ -477,8 +477,14 @@ impl RepairLoop<'_> {
                             self.budgets.count_base_move(base, "while CI ran")?;
                             continue;
                         }
-                        self.base_fix
-                            .fix(issue, pr_url, base, &base_commit, &failed.inherited)?;
+                        self.base_fix.fix(
+                            worktree.launch(),
+                            issue,
+                            pr_url,
+                            base,
+                            &base_commit,
+                            &failed.inherited,
+                        )?;
                         continue;
                     }
                     let kind = self.budgets.next_repair("CI red")?;
