@@ -206,7 +206,7 @@ fn help_documents_base_for_an_architect_run() {
 }
 
 #[test]
-fn help_documents_pickup_the_ready_issue_the_dispatch_and_when_a_pickup_run_is_skipped() {
+fn help_documents_pickup_the_ready_issue_the_dispatch_the_skips_and_the_run_notification() {
     let scenario = Scenario::new();
 
     let help = unwrapped_help(&scenario);
@@ -223,13 +223,18 @@ fn help_documents_pickup_the_ready_issue_the_dispatch_and_when_a_pickup_run_is_s
         "A sub-issue is reached through its Spec, when the Spec is itself a Ready issue",
         "Each ready-for-agent issue a pass looks at and does not take gets one line on stderr with the first reason that applies, such as #21 is a Ticket of #20, which is not ready or #30 blocked by #29, before the line that says what the pass did",
         "The Pickup run ends as that run does, with its exit code and its PR's URL",
-        "merge, --no-merge, base-fix, --no-base-fix, --email, --no-email and parallel <n> apply to that run, as do the User config's defaults",
+        "merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run, as do the User config's defaults",
         "parallel <n> is ignored when the issue is not a Spec",
         "base <branch> names the Pickup run's Base branch as it does an Architect run's",
         "pickup takes nothing else: no focus and no --plan-only",
         "A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why, after any lines on issues it passed over",
         "when the repository has no Ready issue",
         "while an Architect run or another Pickup run on the same repository is still running on this machine",
+        "--email, --email <address> and --no-email ask a Pickup run for its Run notification as they do a Run, and email.always sets the default",
+        "A pass that took an issue sends one: the notification the run it dispatched would send by hand, with that run's subject, outcome and body",
+        "The dispatched run sends none of its own",
+        "A skipped pass sends none, even when asked",
+        "The notification's checks, an address and a Resend API key, are made before any other work on every pass, so one that would be skipped fails on them too, with exit 1",
     ] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");
     }
