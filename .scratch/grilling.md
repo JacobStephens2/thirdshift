@@ -983,4 +983,3 @@ can i run thirdshift merge https://github.com/JacobStephens2/thirdshift/issues/2
 
 ## 10
 pr the glossary commit
-
