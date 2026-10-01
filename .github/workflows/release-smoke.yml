@@ -3,8 +3,8 @@
 # calls this after the builds, and its host job only publishes if it passes.
 #
 # On a tag push it always runs. On a pull request it only runs when the pull
-# request touches the release pipeline or the dependencies, so ordinary pull
-# requests don't pay for the slow Rocky and WSL jobs.
+# request touches the release pipeline, the dependencies or the Rust toolchain
+# pin, so ordinary pull requests don't pay for the slow Rocky and WSL jobs.
 name: Release smoke tests
 
 on:
@@ -38,7 +38,7 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ] ||
             git diff --name-only HEAD^1 HEAD |
-              grep -qxE '\.github/workflows/release.*\.yml|dist-workspace\.toml|Cargo\.(toml|lock)'
+              grep -qxE '\.github/workflows/release.*\.yml|dist-workspace\.toml|rust-toolchain\.toml|Cargo\.(toml|lock)'
           then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else

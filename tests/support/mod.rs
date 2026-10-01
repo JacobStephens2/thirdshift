@@ -11,6 +11,7 @@
 //! home/              $HOME: .gitconfig with identity and the insteadOf rule
 //! home/.thirdshift/  the User config, config.toml, if the test writes one
 //! home/.config/      $XDG_CONFIG_HOME, where an install receipt would be
+//! installed/         a copy of thirdshift, if the test runs one to replace it
 //! bin/               fake gh and claude, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
 //! work/<repo>/       the launch clone, origin https://github.com/<owner>/<repo>.git
@@ -51,6 +52,13 @@ pub const REPO: &str = "widgets";
 /// Run waits this long: on a busy machine a Run that is getting there can
 /// take many times what it takes on an idle one (#200).
 pub const WAIT_BOUND: Duration = Duration::from_secs(120);
+
+/// The file in a scenario's root a session touches once it is waiting for
+/// the copy of thirdshift its Run was started from to be replaced.
+const COPY_IN_USE: &str = "copy-in-use";
+
+/// The file in a scenario's root that says the copy has been replaced.
+const COPY_REPLACED: &str = "copy-replaced";
 
 pub struct Scenario {
     /// Deletes the temp root when the scenario is dropped.
@@ -103,8 +111,9 @@ impl From<Output> for RunResult {
     }
 }
 
-/// A Run started by [`Scenario::run_until`], which its fake agent's script
-/// may still be holding where it is.
+/// A Run started and waited on until its fake agent started, as by
+/// [`Scenario::run_until`], which its fake agent's script may still be
+/// holding where it is.
 pub struct HeldRun {
     child: Child,
     /// Whether the Run had exited by the time the agent was seen to start.
@@ -306,9 +315,60 @@ impl Scenario {
     /// without the file there, or if the file isn't there within
     /// [`WAIT_BOUND`].
     pub fn run_until(&self, args: &[&str], env: &[(&str, &str)], started: &str) -> HeldRun {
-        let mut child = self
-            .command(args)
-            .envs(env.iter().copied())
+        let mut command = self.command(args);
+        command.envs(env.iter().copied());
+        self.spawn_until_started(command, started)
+    }
+
+    /// Run a copy of thirdshift, `installed/thirdshift` in the scenario root,
+    /// as an installed one is run, and call `replace` with the copy's path
+    /// once a session whose script has [`Scenario::waits_to_be_replaced`]
+    /// reaches it. That session goes on once `replace` has returned, so
+    /// whatever the Run starts after it starts with the copy replaced.
+    pub fn run_copy_replaced_midway(
+        &self,
+        args: &[&str],
+        replace: impl FnOnce(&Path),
+    ) -> RunResult {
+        let copy = self.path("installed/thirdshift");
+        fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        // Copied by `cp`, not by this process: a file open for writing here
+        // would be inherited by whatever another test starts meanwhile, and
+        // can't be run until that has let go of it ("Text file busy").
+        let copied = Command::new("cp")
+            .arg(env!("CARGO_BIN_EXE_thirdshift"))
+            .arg(&copy)
+            .status()
+            .unwrap();
+        assert!(copied.success());
+        let held = self.spawn_until_started(self.command_running(&copy, args), COPY_IN_USE);
+        replace(&copy);
+        fs::write(self.path(COPY_REPLACED), "").unwrap();
+        held.finish()
+    }
+
+    /// Bash for a session of a Run started by
+    /// [`Scenario::run_copy_replaced_midway`]: it waits up to [`WAIT_BOUND`]
+    /// for the copy of thirdshift to be replaced, failing if it never is.
+    pub fn waits_to_be_replaced(&self) -> String {
+        let looks = WAIT_BOUND.as_millis() / 50;
+        format!(
+            r#"
+touch {root}/{COPY_IN_USE}
+for _ in $(seq {looks}); do test -f {root}/{COPY_REPLACED} && break; sleep 0.05; done
+test -f {root}/{COPY_REPLACED}
+"#,
+            root = self.root.display()
+        )
+    }
+
+    /// Spawn `command`, its stdout and stderr piped, and wait until the fake
+    /// agent has touched the file `started` in the scenario root, with the
+    /// Run still going unless it exited just after. Panics with the Run's
+    /// stderr if the Run exits without the file there, or if the file isn't
+    /// there within [`WAIT_BOUND`].
+    fn spawn_until_started(&self, mut command: Command, started: &str) -> HeldRun {
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -453,12 +513,17 @@ impl Scenario {
     }
 
     fn command(&self, args: &[&str]) -> Command {
+        self.command_running(Path::new(env!("CARGO_BIN_EXE_thirdshift")), args)
+    }
+
+    /// Like [`Scenario::command`], running the thirdshift at `executable`.
+    fn command_running(&self, executable: &Path, args: &[&str]) -> Command {
         let path = format!(
             "{}:{}",
             self.path("bin").display(),
             std::env::var("PATH").unwrap()
         );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        let mut command = Command::new(executable);
         command
             .args(args)
             .current_dir(self.launch_dir())

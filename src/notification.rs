@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::architect::{self, Outcome};
+use crate::base_fix::Advice;
 use crate::config::EmailSettings;
 use crate::email::Resend;
 use crate::failed_run::FailedRun;
@@ -19,7 +20,7 @@ use crate::run::Ended;
 
 /// What a Run or an Architect run asks about its Run notification, by its
 /// command or, without `email` or `no-email`, by the User config.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationAsk {
     /// Send one, to this address, else to `email.to`.
     Send(Option<String>),
@@ -103,6 +104,7 @@ impl ArchitectNotification {
                 outcome: outcome.name(),
                 pr_url: None,
                 cause: None,
+                advice: &[],
                 base_fix: None,
                 log: None,
                 tickets: &[],
@@ -134,6 +136,9 @@ struct Ending<'a> {
     outcome: &'static str,
     pr_url: Option<&'a str>,
     cause: Option<String>,
+    /// What the Run says after its cause, if Inherited failures failed it
+    /// with no Base fix taken.
+    advice: &'a [Advice],
     /// What became of the Base fix the Run started or waited on, if any.
     base_fix: Option<&'a str>,
     log: Option<&'a Path>,
@@ -149,11 +154,13 @@ impl<'a> Ending<'a> {
                 outcome: reached.goal.outcome(),
                 pr_url: Some(&reached.pr_url),
                 cause: None,
+                advice: &[],
                 base_fix,
                 log: reached.log.as_deref(),
                 tickets: &reached.ticket_lines,
             },
             Err(failed) => Ending {
+                advice: &ended.advice,
                 base_fix,
                 ..Ending::of_failure(failed)
             },
@@ -165,6 +172,7 @@ impl<'a> Ending<'a> {
             outcome: failure_outcome(failed, "failed"),
             pr_url: failed.pr_url.as_deref(),
             cause: (!failed.interrupted).then(|| format!("{:#}", failed.error)),
+            advice: &[],
             base_fix: None,
             log: failed.log.as_deref(),
             tickets: &failed.ticket_lines,
@@ -196,6 +204,7 @@ fn send(
         architect,
         pr_url: ending.pr_url,
         cause: ending.cause.as_deref(),
+        advice: ending.advice,
         base_fix: ending.base_fix,
         log: ending.log,
         host: host.as_deref().unwrap_or("unknown host"),
@@ -248,6 +257,9 @@ struct Body<'a> {
     architect: Option<ArchitectLines>,
     pr_url: Option<&'a str>,
     cause: Option<&'a str>,
+    /// What the Run says after its cause, if Inherited failures failed it
+    /// with no Base fix taken.
+    advice: &'a [Advice],
     /// What became of the Base fix the Run started or waited on, if any.
     base_fix: Option<&'a str>,
     log: Option<&'a Path>,
@@ -277,6 +289,9 @@ impl Body<'_> {
         }
         if let Some(cause) = self.cause {
             text += &format!("Cause:        {cause}\n");
+        }
+        for line in self.advice {
+            text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
         }
         if let Some(base_fix) = self.base_fix {
             text += &format!("Base fix:     {base_fix}\n");
@@ -335,6 +350,7 @@ mod tests {
             architect: None,
             pr_url: None,
             cause: Some("origin mismatch"),
+            advice: &[],
             base_fix: None,
             log: None,
             host: "droplet-1",
@@ -368,6 +384,7 @@ mod tests {
             architect: None,
             pr_url: Some("https://github.com/acme/widgets/pull/1"),
             cause: Some("claude exited 1"),
+            advice: &[],
             base_fix: Some("https://github.com/acme/widgets/issues/8 merged"),
             log: None,
             host: "droplet-1",
@@ -385,6 +402,41 @@ mod tests {
     }
 
     #[test]
+    fn the_body_gives_the_advice_after_the_cause_laid_out_like_its_other_lines() {
+        let advice = [
+            Advice {
+                label: "Base check",
+                value: "test: https://ci.example/main/test".to_string(),
+            },
+            Advice {
+                label: "Or set",
+                value: "base.fix = true".to_string(),
+            },
+        ];
+        let body = Body {
+            architect: None,
+            pr_url: Some("https://github.com/acme/widgets/pull/1"),
+            cause: Some("CI red on test, which also fails on main at 362b9ca; fix main first"),
+            advice: &advice,
+            base_fix: None,
+            log: Some(Path::new("/home/me/.thirdshift/logs/x.jsonl")),
+            host: "droplet-1",
+            took: Duration::from_secs(4),
+            tickets: &[],
+        };
+        assert_eq!(
+            body.text(),
+            "Pull request: https://github.com/acme/widgets/pull/1\n\
+             Cause:        CI red on test, which also fails on main at 362b9ca; fix main first\n\
+             Base check:   test: https://ci.example/main/test\n\
+             Or set:       base.fix = true\n\
+             Session log:  /home/me/.thirdshift/logs/x.jsonl\n\
+             Host:         droplet-1\n\
+             Took:         4s\n"
+        );
+    }
+
+    #[test]
     fn a_spec_runs_body_ends_with_a_line_per_ticket() {
         let tickets = [
             "#21 failed: claude exited 1".to_string(),
@@ -394,6 +446,7 @@ mod tests {
             architect: None,
             pr_url: None,
             cause: Some("Tickets not done: #21, #22"),
+            advice: &[],
             base_fix: None,
             log: None,
             host: "droplet-1",
@@ -434,6 +487,7 @@ mod tests {
             }),
             pr_url: Some("https://github.com/acme/widgets/pull/1"),
             cause: None,
+            advice: &[],
             base_fix: None,
             log: None,
             host: "droplet-1",
@@ -472,6 +526,7 @@ mod tests {
             )),
             pr_url: None,
             cause: None,
+            advice: &[],
             base_fix: None,
             log: None,
             host: "droplet-1",

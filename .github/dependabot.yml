@@ -1,0 +1,9 @@
+# Dependabot opens a pull request when a newer stable Rust is out than the one
+# rust-toolchain.toml pins, so the new compiler runs through CI before main
+# builds with it.
+version: 2
+updates:
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: weekly

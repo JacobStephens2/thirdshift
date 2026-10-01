@@ -48,22 +48,38 @@ An issue scoping one session of work, standing alone or as a sub-issue of a **Sp
 _Avoid_: task, sub-task
 
 **Run**:
-One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, or by an **Architect run** for the Ticket its **Architecture review** published.
+One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, or by a **Pickup run** for the **Ready issue** it took.
+
+**Claim**:
+The mark that the factory has taken an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Run** or a **Spec run** starts on it, whether started on its **Issue URL** or by an **Architect run** or a **Pickup run**. A **Ticket**'s Run in a Spec run and a **Base fix** make none. A Claim is released, `ready-for-agent` put back, only when the Run ends with nothing on `origin` to take over: no **Issue branch** and no pull request. Otherwise it stays while the issue is open, whether its pull request is ready for review or the Run failed, until the **Day shift** relabels it, and thirdshift takes the label off once the issue is closed.
+_Avoid_: lock (a lock is per machine and ends with its process), assignment
 
 **Spec run**:
 One invocation of the factory on a **Spec**'s **Issue URL**: it works through the Spec's **Tickets** in dependency order, starting a **Run** for each Ticket once the Tickets blocking it are done, several at once when the graph allows.
 _Avoid_: batch run, spec implementation
 
 **Architect run**:
-One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another Architect run on the same repository is still running on the machine, its Spec run or Run included, or when an earlier Architect plan is still open. Skipped is not a failure, and still sends the **Run notification** when one was asked for.
+One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another Architect run or a **Pickup run** on the same repository is still running on the machine, its Spec run or Run included, or when an earlier Architect plan is still open. Skipped is not a failure, and still sends the **Run notification** when one was asked for.
 _Avoid_: improve run, architecture run
+
+**Pickup run**:
+One invocation of the factory with no **Issue URL**: it takes the lowest-numbered **Ready issue** in the repository and starts a **Spec run** or a **Run** on it, as the command on that issue's URL would. One issue per invocation, and thirdshift never schedules itself: the operating system's scheduler starts each one. It is skipped, doing nothing, when another Pickup run or an **Architect run** on the same repository is still running on the machine, its Spec run or Run included, when there is no Ready issue, or when the repository is at its **Claim limit**. Skipped is not a failure, and sends no **Run notification**.
+_Avoid_: watch, daemon, queue run, poll
+
+**Claim limit**:
+The number of open issues carrying a **Claim** at which a **Pickup run** takes no more, set in the **User config**. It keeps a broken **Base branch** from failing every **Ready issue** in turn, and pull requests from piling up unreviewed.
+_Avoid_: WIP limit, concurrency (it counts issues waiting on the **Day shift**, not Runs in flight)
+
+**Ready issue**:
+An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no label that makes an **Unready Ticket**, not a sub-issue, not a **Base fix**'s issue, with no open blocker, never started (no **Issue branch** and no pull request), and left untouched long enough that whoever is shaping it has finished. On a **Spec**, the label says its **Tickets** are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
+_Avoid_: queued issue, backlog item
 
 **Architecture review**:
 The agent session that opens an **Architect run**: it scans the **Base branch** for deepening opportunities, skips any already covered by an open issue, and publishes the top recommendation as the **Architect plan**, but only when that recommendation is Strong. Otherwise it files the top recommendation as an issue labelled `needs-triage` for the **Day shift**, and nothing is implemented. It changes nothing in the repository.
 _Avoid_: planning session
 
 **Architect plan**:
-The **Spec**, or the standalone **Ticket** when one session is enough, that an **Architecture review** published: one or the other, never a third kind of issue. thirdshift labels it `architect-plan` once the review has ended cleanly, and it stays open until its work is merged or someone closes it. A failed **Run** or **Spec run** on it leaves it open for the **Day shift** to pick up; no later **Architect run** retries it.
+The **Spec**, or the standalone **Ticket** when one session is enough, that an **Architecture review** published: one or the other, never a third kind of issue. thirdshift labels it `architect-plan` once the review has ended cleanly, and it stays open until its work is merged or someone closes it. A failed **Run** or **Spec run** on it leaves it open for the **Day shift** to take over; no later **Architect run** or **Pickup run** retries it.
 _Avoid_: plan, plan doc
 
 **Spec branch**:
@@ -90,7 +106,7 @@ A **Run** asked to end with its pull request merged rather than left for review,
 _Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
 
 **Run notification**:
-A message thirdshift sends when a **Run**, a **Spec run** or an **Architect run** ends, whatever its outcome (ready, merged, failed or interrupted; for an Architect run that dispatched nothing, plan published, idea filed, idea already filed, review failed or skipped), to the address given with the email flag or the default in the **User config**. Each sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. An Architect run's notification tells how its **Architecture review** ended, naming the plan or idea issue, and how the Spec run or Run it dispatched ended, which sends none of its own; a skipped one's tells why it was skipped. Failing to send one never changes the outcome.
+A message thirdshift sends when a **Run**, a **Spec run** or an **Architect run** ends, whatever its outcome (ready, merged, failed or interrupted; for an Architect run that dispatched nothing, plan published, idea filed, idea already filed, review failed or skipped), to the address given with the email flag or the default in the **User config**. Each sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. After an **Inherited failure** it carries, beside the cause, what the Run says on stderr: where the checks fail on the **Base branch**, and the offer of a **Base fix** if nobody decided against one. An Architect run's notification tells how its **Architecture review** ended, naming the plan or idea issue, and how the Spec run or Run it dispatched ended, which sends none of its own; a skipped one's tells why it was skipped. A **Pickup run** that took a **Ready issue** sends one the same way, for the Spec run or Run it dispatched; a skipped one sends none. Failing to send one never changes the outcome.
 _Avoid_: completion email, alert
 
 **User config**:
@@ -114,7 +130,7 @@ A merge the **Self-merge** tried that failed, where the round of the Repair loop
 A CI-fix **Repair** that found nothing on the branch to fix, for example because the failure is not the branch's but was not recognised as an **Inherited failure**, since the **Base branch** commit had no finished result for that check: once the Repair ends and the **Base branch** is merged in again, the head of the **Issue branch** is still the commit whose CI just failed. Going round again would only watch the same red CI, so the **Run** is a **Failed run** with the cause `CI red on <short sha> and the Repair found nothing to fix on the branch`, rather than spending its remaining Repairs.
 
 **Inherited failure**:
-A failed check on the head of the **Issue branch** that also failed, under the same check name, on the **Base branch** commit that head last merged in. It is not the branch's to fix: no **Repair** is started for it, and a **Run** whose only red checks are Inherited failures is a **Failed run** with the cause `CI red on <check>, which also fails on <base> at <short sha>; fix <base> first`. A check with no finished result on that Base branch commit is not one. When asked to, by a flag or the **User config**, the Run starts a **Base fix** before failing.
+A failed check on the head of the **Issue branch** that also failed, under the same check name, on the **Base branch** commit that head last merged in. It is not the branch's to fix: no **Repair** is started for it, and a **Run** whose only red checks are Inherited failures is a **Failed run** with the cause `CI red on <check>, which also fails on <base> at <short sha>; fix <base> first`. A check with no finished result on that Base branch commit is not one. When asked to, by a flag or the **User config**, the Run starts a **Base fix** before failing. A Run that fails on one with no Base fix taken links each check where it fails on the Base branch, after its cause, and, if neither a flag nor the User config decided against a Base fix, offers one: the command that starts the Run again with one allowed, and the User config setting that allows one for every Run.
 _Avoid_: base-red check, flaky check, shared failure
 
 **Base fix**:
