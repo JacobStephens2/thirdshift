@@ -500,6 +500,92 @@ fn a_spec_pr_whose_red_check_also_fails_on_the_base_branch_commit_gets_no_repair
 }
 
 #[test]
+fn with_base_fix_the_spec_prs_inherited_failure_gets_a_base_fix_into_the_base_branch() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        &format!("{}{}", checks_on_head(RED), checks_on_origin("main", RED)),
+    );
+    // The Base fix issue is the next after the Tickets.
+    scenario.agent_does_for(
+        24,
+        &format!(
+            r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on main"
+gh pr create --base main --head issue-24 --title "Fix CI on main" --body "Closes #24"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: starting Base fix #24 into main: https://github.com/acme/widgets/issues/24\n",
+    );
+    let gh = scenario.gh_state();
+    assert_eq!(gh["titles"]["24"], "CI red on main: test");
+    let fix = pr_from(&scenario, "issue-24").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "main");
+    assert_eq!(fix["state"], "MERGED");
+    let spec = spec_pr(&scenario);
+    assert_eq!(spec["state"], "OPEN");
+    assert_eq!(spec["isDraft"], false);
+    assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_some());
+}
+
+#[test]
+fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
+    let scenario = spec_of(&[(21, &[])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}{}{}",
+            agent_lands(21, "first.txt"),
+            checks_on_head(RED),
+            checks_on_origin("issue-20", RED)
+        ),
+    );
+    // The Base fix issue is the next after the Ticket.
+    scenario.agent_does_for(
+        22,
+        &format!(
+            r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "#21: starting Base fix #22 into issue-20: https://github.com/acme/widgets/issues/22\n",
+    );
+    assert_eq!(
+        scenario.gh_state()["titles"]["22"],
+        "CI red on issue-20: test"
+    );
+    let fix = pr_from(&scenario, "issue-22").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "issue-20");
+    assert_eq!(fix["state"], "MERGED");
+    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "MERGED");
+    for file in ["first.txt", "ci-fix.txt"] {
+        assert!(scenario.origin_file("issue-20", file).is_some(), "{file}");
+    }
+    assert_eq!(spec_pr(&scenario)["isDraft"], false);
+}
+
+#[test]
 fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
     let scenario = linear_spec();
     scenario.agent_does_for(

@@ -1,5 +1,7 @@
 mod args;
+mod base_fix;
 mod branch;
+mod child_run;
 mod ci;
 mod config;
 mod email;
@@ -29,6 +31,8 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use args::{Command, RunArgs};
+use base_fix::BaseFix;
+use child_run::Kind;
 use config::UserConfig;
 use notification::{NotificationAsk, RunNotification};
 use run::Goal;
@@ -47,12 +51,20 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
 
-merge, --no-merge, --email, --no-email and parallel <n> (or --parallel <n>) go before or
-after the Issue URL, in any order.
+merge, --no-merge, --email, --no-email, base-fix and parallel <n> (or --parallel <n>) go
+before or after the Issue URL, in any order.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
 after --email is the address only if it has an @ and isn't a URL.
+
+A check that fails on the pull request and also on the Base branch commit it last merged in
+is an Inherited failure, not the branch's to fix: a Run whose only red checks are Inherited
+failures fails, saying to fix the Base branch first. With base-fix, it starts a Base fix
+instead, once: it opens an issue for those checks, labelled base-fix and ready-for-agent,
+runs a Merge run on it into the Base branch, waits for it to merge, then merges the Base
+branch in and watches CI again. If the Base fix fails, or the checks still fail on the Base
+branch once it has merged, the Run fails, naming the Base fix issue.
 
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec
@@ -117,7 +129,8 @@ fn main() -> ExitCode {
         goal,
         email,
         parallel,
-        spec_branch,
+        base_fix,
+        child,
     } = match args::parse(&args) {
         Ok(Command::Help) => {
             print!("{HELP}");
@@ -144,9 +157,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // A Ticket's Run in a Spec run is always a Merge run, and leaves the Run
-    // notification and the Launch directory to the Spec run.
-    let (goal, email, launch_pull) = match spec_branch {
+    // A child Run, a Ticket's Run in a Spec run or a Base fix, is always a
+    // Merge run, and leaves the Run notification and the Launch directory to
+    // what started it.
+    let (goal, email, launch_pull) = match child {
         Some(_) => (Goal::Merged, NotificationAsk::Skip, false),
         None => (
             goal.unwrap_or(config.default_goal()),
@@ -170,6 +184,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let mut base_fix = BaseFix::new(child.as_ref(), base_fix);
     let parallel = Parallel {
         tickets: parallel.unwrap_or(config.spec_parallel),
         asked: parallel.is_some(),
@@ -180,7 +195,8 @@ fn main() -> ExitCode {
         &config.logs_dir,
         launch_pull,
         parallel,
-        spec_branch.as_deref(),
+        child.as_ref().map(Kind::base),
+        &mut base_fix,
     );
     let code = match &ended {
         Ok(reached) => {
@@ -205,7 +221,7 @@ fn main() -> ExitCode {
         }
     };
     if let Some(notification) = notification {
-        notification.send(&ended);
+        notification.send(&ended, base_fix.report().as_deref());
     }
     code
 }

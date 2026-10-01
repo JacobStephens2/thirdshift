@@ -18,15 +18,6 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
-/// Every `gh <command> <subcommand>` call made, e.g. `gh pr merge`.
-fn gh_calls_of(scenario: &Scenario, command: &str, subcommand: &str) -> Vec<Vec<String>> {
-    scenario
-        .gh_calls()
-        .into_iter()
-        .filter(|call| call.starts_with(&[command.to_string(), subcommand.to_string()]))
-        .collect()
-}
-
 /// Launch from `develop`, a branch other than the default, and have the agent
 /// open its PR into it, then run `then`.
 fn merge_into_develop(scenario: &Scenario, then: &str) {
@@ -43,7 +34,7 @@ const CLOSING_COMMENT: &str = "Closed by #1, merged into develop by a thirdshift
 /// Assert that `base`'s tip on origin is a merge commit of the head commit
 /// thirdshift asked `gh pr merge` to match, and return that head.
 fn assert_issue_7_merged_into(scenario: &Scenario, base: &str) -> String {
-    let calls = gh_calls_of(scenario, "pr", "merge");
+    let calls = scenario.gh_calls_of("pr", "merge");
     let head = calls
         .last()
         .and_then(|call| call.last())
@@ -111,7 +102,7 @@ fn an_issue_already_closed_after_the_merge_is_not_closed_again() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
-    assert!(gh_calls_of(&scenario, "issue", "close").is_empty());
+    assert!(scenario.gh_calls_of("issue", "close").is_empty());
     assert_eq!(scenario.gh_state()["comments"], serde_json::Value::Null);
 }
 
@@ -150,7 +141,7 @@ fn the_merge_is_a_merge_commit_of_exactly_the_watched_head() {
         result.stderr
     );
     assert_eq!(
-        gh_calls_of(&scenario, "pr", "merge"),
+        scenario.gh_calls_of("pr", "merge"),
         vec![vec![
             "pr",
             "merge",
@@ -202,7 +193,7 @@ fn a_run_without_merge_leaves_the_pr_open_and_ready() {
         result.stderr.lines().last(),
         Some(format!("thirdshift: PR {PR_URL} is ready for review").as_str())
     );
-    assert!(gh_calls_of(&scenario, "pr", "merge").is_empty());
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
     let pr = &scenario.gh_state()["prs"][0];
     assert_eq!(pr["state"], "OPEN");
     assert_eq!(pr["isDraft"], false);
@@ -374,7 +365,7 @@ fn ctrl_c_before_the_merge_is_a_failed_run() {
         "stderr: {}",
         result.stderr
     );
-    assert!(gh_calls_of(&scenario, "pr", "merge").is_empty());
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
     assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
@@ -478,7 +469,7 @@ fn a_foreign_commit_pushed_during_ci_is_merged_in_reviewed_then_merged() {
         result.stderr
     );
     // Found before the merge was tried, so the one merge is of the reviewed head.
-    assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 1);
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
     let head = assert_issue_7_merged_into(&scenario, "main");
     assert_eq!(head, late);
     assert_eq!(scenario.origin_file("main", "late.txt").unwrap(), "late\n");
@@ -511,7 +502,7 @@ fn a_foreign_commit_that_lands_as_the_merge_is_tried_is_reviewed_then_merged() {
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 2);
     assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &late));
-    assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 2);
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 2);
     assert_eq!(assert_issue_7_merged_into(&scenario, "main"), late);
 }
 
@@ -698,7 +689,7 @@ fn foreign_commits_that_keep_coming_spend_the_upstream_move_budget() {
         6,
         "the implement session and a review Repair for each of 5 rounds"
     );
-    assert!(gh_calls_of(&scenario, "pr", "merge").is_empty());
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
 }
 
@@ -742,7 +733,7 @@ fn a_review_repair_counts_against_the_repair_cap() {
         result.stderr
     );
     assert_eq!(scenario.claude_calls().len(), 6);
-    assert!(gh_calls_of(&scenario, "pr", "merge").is_empty());
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
 }
 
 #[test]
@@ -844,7 +835,7 @@ fn a_merge_that_fails_on_a_base_branch_conflict_gets_a_conflict_repair_then_merg
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[1]["merging"], true);
-    assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 2);
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 2);
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
     assert_issue_7_merged_into(&scenario, "main");
     assert_eq!(
@@ -888,8 +879,8 @@ fn a_merge_that_fails_then_finds_red_ci_on_a_new_head_gets_a_ci_fix_repair_then_
         calls[1]["prompt"]
     );
     let head = assert_issue_7_merged_into(&scenario, "main");
-    assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 2);
-    assert_eq!(gh_calls_of(&scenario, "pr", "merge")[1].last(), Some(&head));
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 2);
+    assert_eq!(scenario.gh_calls_of("pr", "merge")[1].last(), Some(&head));
     assert!(
         scenario
             .origin_log("main")
@@ -923,7 +914,7 @@ fn merge_failures_that_keep_moving_the_base_branch_spend_the_base_move_budget() 
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 6);
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 6);
     let pr = &scenario.gh_state()["prs"][0];
     assert_eq!(pr["state"], "OPEN");
     assert_eq!(
@@ -961,7 +952,7 @@ fn a_repair_needed_after_a_failed_merge_counts_against_the_repair_cap() {
         result.stderr
     );
     assert_eq!(scenario.claude_calls().len(), 6);
-    assert_eq!(gh_calls_of(&scenario, "pr", "merge").len(), 1);
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
 }
 
@@ -998,7 +989,7 @@ fn a_merge_refused_with_nothing_left_to_fix_leaves_the_pr_ready_for_review() {
         .origin_git(&["rev-parse", "refs/heads/issue-7"])
         .trim()
         .to_string();
-    assert_eq!(gh_calls_of(&scenario, "pr", "merge")[0].last(), Some(&head));
+    assert_eq!(scenario.gh_calls_of("pr", "merge")[0].last(), Some(&head));
     assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
     scenario.assert_cleaned_up("issue-7");
@@ -1023,7 +1014,7 @@ fn a_merge_run_whose_red_checks_also_fail_on_the_base_branch_commit_does_not_mer
     );
     assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
     assert_eq!(scenario.claude_calls().len(), 1, "the implement session");
-    assert!(gh_calls_of(&scenario, "pr", "merge").is_empty());
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
     let gh = scenario.gh_state();
     assert_eq!(gh["prs"][0]["state"], "OPEN");
     assert_eq!(gh["prs"][0]["isDraft"], true);

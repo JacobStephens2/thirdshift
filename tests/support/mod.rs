@@ -534,6 +534,14 @@ impl Scenario {
         }
     }
 
+    /// Every `gh <command> <subcommand>` call made, e.g. `gh pr merge`.
+    pub fn gh_calls_of(&self, command: &str, subcommand: &str) -> Vec<Vec<String>> {
+        self.gh_calls()
+            .into_iter()
+            .filter(|call| call.starts_with(&[command.to_string(), subcommand.to_string()]))
+            .collect()
+    }
+
     /// Push `branch` to origin: `from` plus one commit per subject in
     /// `commits`, oldest first.
     pub fn origin_has_branch(&self, branch: &str, from: &str, commits: &[&str]) {

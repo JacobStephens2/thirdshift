@@ -6,6 +6,7 @@
 //! {"repo": "owner/repo",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
 //!  "titles"?: {"<number>": "<title>"},
+//!  "bodies"?: {"<number>": "<body>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
 //!           "mergeable"?, "unknown_polls"?}],
@@ -21,6 +22,7 @@
 //!  "user_email"?: "<address>" | null,
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
 //!  "labels"?: {"<number>": ["<label>", ...]},
+//!  "repo_labels"?: ["<label>", ...],
 //!  "blocked_by"?: {"<number>": [<number>, ...]}}
 //! ```
 //!
@@ -74,6 +76,13 @@
 //! `gh issue close` closes the issue, recording its `--comment`; on an issue
 //! already closed it only warns, as gh does.
 //!
+//! `gh issue create --title <title> --body <body> --label <label>,<label>`
+//! opens an issue numbered one past the highest issue, with that title, body
+//! (in `bodies`) and labels, and prints its URL. A label the repository does
+//! not have, one not in `repo_labels`, fails it, as gh does. `gh label list
+//! --json name` lists the repository's labels, and `gh label create <name>`
+//! adds one, failing if the repository has it already.
+//!
 //! A PR's mergeable state reports as UNKNOWN for its first `unknown_polls`
 //! reads. A check run reports as in progress for its first `pending_polls`
 //! reads, then as completed with its `conclusion`.
@@ -111,6 +120,7 @@
 //! gh fake user-email '<JSON>'             set the public profile email, an
 //!                                         address or null
 //! gh fake labels <number> '<JSON list>'   set issue <number>'s labels
+//! gh fake repo-labels '<JSON list>'       set the repository's labels
 //! ```
 //!
 //! Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
@@ -602,6 +612,85 @@ fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
             .push(string(comment));
     }
     state.at_mut("issues").set(n, string("CLOSED"));
+    save(state);
+}
+
+/// Open an issue with `--title`, `--body` and the comma-separated `--label`s,
+/// numbered one past the highest issue, and print its URL.
+fn issue_create(state: &mut Json, flags: &Flags) {
+    let labels: Vec<&str> = flag(flags, "label")
+        .map(|labels| labels.split(',').collect())
+        .unwrap_or_default();
+    for label in &labels {
+        if !has_repo_label(state, label) {
+            die(&format!("could not add label: '{label}' not found"), 1);
+        }
+    }
+    let Json::Object(issues) = state.at("issues") else {
+        panic!("issues is an object")
+    };
+    let highest = issues
+        .iter()
+        .filter_map(|(n, _)| n.parse::<i64>().ok())
+        .max();
+    let n = (highest.unwrap_or(0) + 1).to_string();
+    state.at_mut("issues").set(&n, string("OPEN"));
+    let title = flag(flags, "title").expect("no --title");
+    state.entry("titles", object([])).set(&n, string(title));
+    let body = flag(flags, "body").expect("no --body");
+    state.entry("bodies", object([])).set(&n, string(body));
+    let labels = labels.into_iter().map(string).collect();
+    state.entry("labels", object([])).set(&n, Array(labels));
+    save(state);
+    println!("https://github.com/{}/issues/{n}", state.at("repo").str());
+}
+
+/// Whether the repository has the label `name`, whatever its case.
+fn has_repo_label(state: &Json, name: &str) -> bool {
+    let labels = state
+        .get("repo_labels")
+        .map(Json::items)
+        .unwrap_or_default();
+    labels
+        .iter()
+        .any(|label| label.str().eq_ignore_ascii_case(name))
+}
+
+/// `gh label list --json name`: the repository's labels.
+fn label_list(state: &Json, flags: &Flags) {
+    if flag(flags, "json") != Some("name") {
+        die(
+            &format!("fake gh: unsupported label list flags {flags:?}"),
+            2,
+        );
+    }
+    let labels = state
+        .get("repo_labels")
+        .map(Json::items)
+        .unwrap_or_default();
+    let listed = labels
+        .iter()
+        .map(|label| object([("name", label.clone())]))
+        .collect();
+    println!("{}", Array(listed));
+}
+
+/// `gh label create <name>`: add a label to the repository, failing if it has
+/// it already, as gh does without `--force`.
+fn label_create(state: &mut Json, positional: &[String]) {
+    let name = &positional[0];
+    if has_repo_label(state, name) {
+        die(
+            &format!(
+                "label with name \"{name}\" already exists; use `--force` to update its color and description"
+            ),
+            1,
+        );
+    }
+    state
+        .entry("repo_labels", Array(Vec::new()))
+        .items_mut()
+        .push(string(name));
     save(state);
 }
 
@@ -1192,6 +1281,7 @@ fn fake_command(state: &mut Json, args: &[&str]) {
         ["after-merge", script] => state.set("after_merge", string(*script)),
         ["issue", n, issue_state] => state.at_mut("issues").set(n, string(*issue_state)),
         ["labels", n, labels] => state.entry("labels", object([])).set(n, parse_json(labels)),
+        ["repo-labels", labels] => state.set("repo_labels", parse_json(labels)),
         ["user-email", email] => state.set("user_email", parse_json(email)),
         ["fails", call] => state
             .entry("failing", Array(Vec::new()))
@@ -1255,6 +1345,18 @@ pub fn main(args: Vec<String>) {
         ["issue", "close", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             issue_close(&mut state, &positional, &flags);
+        }
+        ["issue", "create", rest @ ..] => {
+            let (_, flags) = parsed(rest);
+            issue_create(&mut state, &flags);
+        }
+        ["label", "list", rest @ ..] => {
+            let (_, flags) = parsed(rest);
+            label_list(&state, &flags);
+        }
+        ["label", "create", rest @ ..] => {
+            let (positional, _) = parsed(rest);
+            label_create(&mut state, &positional);
         }
         ["run", "list", rest @ ..] => {
             let (_, flags) = parsed(rest);
