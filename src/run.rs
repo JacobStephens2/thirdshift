@@ -396,6 +396,12 @@ impl RepairLoop<'_> {
     /// CI and then going round again, since the Base branch may have moved
     /// meanwhile. Green or absent CI also goes round again if the Base branch
     /// moved while CI ran, or, in a Merge run, if Foreign commits arrived.
+    /// A red check that also fails on the Base branch commit the head last
+    /// merged in is an Inherited failure, which no Repair is started for: the
+    /// CI-fix Repair is given the branch's own failures, and when there are
+    /// none, the loop goes round again if the Base branch moved since, counted
+    /// as a Base move, and otherwise fails naming the checks and the Base
+    /// branch commit.
     /// Returns the head commit whose CI was last watched and found green or
     /// absent. Fails with a Declined CI fix if, after a CI-fix Repair and the
     /// Base branch merged again, the head is still the one whose CI failed,
@@ -424,7 +430,8 @@ impl RepairLoop<'_> {
                     ci::short(&head)
                 );
             }
-            match ci::watch(issue, &head)? {
+            let base_commit = worktree.merged_base_commit(base)?;
+            match ci::watch(issue, &head, &base_commit)? {
                 Ci::Absent | Ci::Passed => {
                     if worktree.base_branch_moved(base)? {
                         self.budgets.count_base_move(base, "while CI ran")?;
@@ -435,6 +442,25 @@ impl RepairLoop<'_> {
                     }
                 }
                 Ci::Failed(failed) => {
+                    if !failed.inherited.is_empty() {
+                        progress::step(format_args!(
+                            "Inherited failures (also failing on {base} at {}): {}",
+                            ci::short(&base_commit),
+                            ci::check_names(&failed.inherited)
+                        ));
+                    }
+                    if failed.own.is_empty() {
+                        // Someone may have fixed the Base branch since.
+                        if worktree.base_branch_moved(base)? {
+                            self.budgets.count_base_move(base, "while CI ran")?;
+                            continue;
+                        }
+                        bail!(
+                            "CI red on {}, which also fails on {base} at {}; fix {base} first",
+                            ci::check_names(&failed.inherited),
+                            ci::short(&base_commit)
+                        );
+                    }
                     let kind = self.budgets.next_repair("CI red")?;
                     run_session(
                         &kind,
