@@ -284,10 +284,7 @@ impl Drop for Worktree {
 /// worktrees and local Issue branches one at a time: `git worktree add -b`
 /// and `git branch -D` can fail partway on a lock file another holds.
 fn lock_launch(launch: &Git) -> Result<File> {
-    let common_dir = launch
-        .dir()
-        .join(launch.run(&["rev-parse", "--git-common-dir"])?);
-    let path = common_dir.join("thirdshift-worktrees.lock");
+    let path = launch.common_dir()?.join("thirdshift-worktrees.lock");
     let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
     file.lock()
         .with_context(|| format!("can't lock {}", path.display()))?;

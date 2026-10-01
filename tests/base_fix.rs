@@ -3,6 +3,8 @@
 //! on that issue, waits for it, then merges the Base branch in and watches CI
 //! again. One Base fix per Run; if it fails, or the checks are still
 //! Inherited failures once it has merged, the Run fails naming its issue.
+//! A Run that finds an open Base fix issue for the same Base branch and
+//! checks waits on that one instead, as its one Base fix.
 
 mod support;
 
@@ -295,6 +297,149 @@ fn checks_still_inherited_failures_after_the_base_fix_merged_fail_the_run_with_n
     assert_eq!(gh["issues"].as_object().unwrap().len(), 2, "#7 and #8");
     assert_eq!(gh["prs"][0]["isDraft"], true);
     assert_eq!(prompts(&scenario).len(), 2, "no Repair");
+}
+
+/// The Base fix issue #`number` titled `title`, open, as another Run wrote
+/// it. `on_view` is bash that runs the first time thirdshift views it.
+fn another_runs_base_fix_is_open(scenario: &Scenario, number: u32, title: &str, on_view: &str) {
+    let number = number.to_string();
+    let mut gh = scenario.gh_state();
+    gh["issues"][&number] = serde_json::json!("OPEN");
+    gh["titles"][&number] = serde_json::json!(title);
+    gh["labels"][&number] = serde_json::json!(["base-fix", "ready-for-agent"]);
+    gh["on_issue_view"][&number] = serde_json::json!(on_view);
+    scenario.write_gh_state(&gh);
+}
+
+/// Bash that pushes a fix to `main` from another clone and closes the Base
+/// fix issue #8, as the Self-merge of another Run's Base fix does.
+const ANOTHER_RUNS_BASE_FIX_MERGES: &str = r#"
+other="$(mktemp -d)"
+git clone -q https://github.com/acme/widgets.git "$other"
+echo "fixed" > "$other/ci-fix.txt"
+git -C "$other" add ci-fix.txt
+git -C "$other" commit -q -m "Fix CI on main"
+git -C "$other" push -q origin main
+rm -rf "$other"
+gh fake issue 8 CLOSED
+"#;
+
+#[test]
+fn a_run_that_finds_an_open_base_fix_issue_for_its_checks_waits_on_it_and_starts_none() {
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    another_runs_base_fix_is_open(
+        &scenario,
+        8,
+        "CI red on main: test",
+        ANOTHER_RUNS_BASE_FIX_MERGES,
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    for line in [
+        format!("thirdshift: waiting on Base fix #8, already open: {BASE_FIX_URL}\n"),
+        "thirdshift: Base fix #8 closed; merging main in again\n".to_string(),
+    ] {
+        assert!(result.stderr.contains(&line), "stderr: {}", result.stderr);
+    }
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+    let gh = scenario.gh_state();
+    assert_eq!(gh["issues"].as_object().unwrap().len(), 2, "#7 and #8");
+    assert_eq!(prompts(&scenario).len(), 1, "no Base fix Run, no Repair");
+    // The Run merged the fixed main in, and left its PR ready for review.
+    assert_eq!(
+        scenario.origin_file("issue-7", "ci-fix.txt").as_deref(),
+        Some("fixed\n")
+    );
+    assert_eq!(gh["prs"][0]["state"], "OPEN");
+    assert_eq!(gh["prs"][0]["isDraft"], false);
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_found_base_fix_issue_that_closes_with_the_checks_still_red_fails_the_run_naming_it() {
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    // It covers test among other checks, and closes with main as it was.
+    another_runs_base_fix_is_open(
+        &scenario,
+        8,
+        "CI red on main: lint, test",
+        "gh fake issue 8 CLOSED\n",
+    );
+    let red_base = scenario.origin_git(&["rev-parse", "main"]);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_with_env(
+        &[
+            &scenario.issue_url(7),
+            "base-fix",
+            "email",
+            "me@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let cause = format!(
+        "CI red on test, which also fails on main at {}, even after Base fix {BASE_FIX_URL} closed; fix main first",
+        &red_base[..7]
+    );
+    assert!(
+        result.stderr.contains(&format!("thirdshift: {cause}\n")),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+    assert_eq!(prompts(&scenario).len(), 1, "no Base fix Run, no Repair");
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(
+        text.contains(&format!("Base fix:     {BASE_FIX_URL} closed\n")),
+        "text: {text}"
+    );
+}
+
+#[test]
+fn an_open_base_fix_issue_for_another_base_branch_or_other_checks_is_not_waited_on() {
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    another_runs_base_fix_is_open(&scenario, 8, "CI red on develop: test", "true");
+    another_runs_base_fix_is_open(&scenario, 9, "CI red on main: lint", "true");
+    // The Run's own Base fix issue is the next after those.
+    scenario.agent_does_for(
+        10,
+        &format!(
+            "{}{GREEN_ON_HEAD}",
+            BASE_FIX_OPENS_PR
+                .replace("issue-8", "issue-10")
+                .replace("#8", "#10")
+        ),
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "thirdshift: starting Base fix #10 into main: https://github.com/acme/widgets/issues/10\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    let gh = scenario.gh_state();
+    assert_eq!(gh["titles"]["10"], "CI red on main: test");
+    assert_eq!(gh["issues"]["10"], "CLOSED");
+    for other in ["8", "9"] {
+        assert_eq!(gh["issues"][other], "OPEN", "#{other}");
+    }
 }
 
 #[test]

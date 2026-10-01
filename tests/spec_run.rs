@@ -585,6 +585,115 @@ gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22
     assert_eq!(spec_pr(&scenario)["isDraft"], false);
 }
 
+/// A Spec #20 whose Tickets #21 and #22, neither blocked, each land a file
+/// and meet `test` red on their head and on the Spec branch.
+fn two_tickets_with_the_same_inherited_failure() -> Scenario {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    for ticket in [21, 22] {
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                "{}{}{}",
+                agent_lands(ticket, &format!("{ticket}.txt")),
+                checks_on_head(RED),
+                checks_on_origin("issue-20", RED)
+            ),
+        );
+    }
+    scenario
+}
+
+/// Bash that waits until both Tickets have looked for an open Base fix
+/// issue, so neither meets a Spec branch already fixed.
+const BOTH_TICKETS_HAVE_LOOKED: &str = r#"
+for _ in $(seq 200); do
+    looked="$(grep -A1 '"issue",' "$FAKE_GH_RECORD" | grep -c '"list",' || true)"
+    [ "$looked" -ge 2 ] && break
+    sleep 0.05
+done
+[ "$looked" -ge 2 ]
+"#;
+
+const BASE_FIX_23: &str = "https://github.com/acme/widgets/issues/23";
+
+#[test]
+fn two_tickets_meeting_the_same_inherited_failure_share_one_base_fix() {
+    let scenario = two_tickets_with_the_same_inherited_failure();
+    // The Base fix issue is the next after the Tickets.
+    scenario.agent_does_for(
+        23,
+        &format!(
+            r#"{BOTH_TICKETS_HAVE_LOOKED}
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-23 --title "Fix CI" --body "Closes #23"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix", "parallel", "2"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    for line in [
+        format!(": starting Base fix #23 into issue-20: {BASE_FIX_23}\n"),
+        format!(": waiting on Base fix #23, already open: {BASE_FIX_23}\n"),
+        ": Base fix #23 closed; merging issue-20 in again\n".to_string(),
+    ] {
+        assert_eq!(
+            result.stderr.matches(&line).count(),
+            1,
+            "{line:?} in stderr: {}",
+            result.stderr
+        );
+    }
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
+    let sessions = sessions_by_issue(&scenario);
+    assert_eq!(
+        sessions.iter().filter(|issue| *issue == "23").count(),
+        1,
+        "one Base fix Run: {sessions:?}"
+    );
+    let fix = pr_from(&scenario, "issue-23").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "issue-20");
+    assert_eq!(fix["state"], "MERGED");
+    for ticket in [21, 22] {
+        let pr = pr_from(&scenario, &format!("issue-{ticket}")).unwrap();
+        assert_eq!(pr["state"], "MERGED", "#{ticket}");
+    }
+    for file in ["21.txt", "22.txt", "ci-fix.txt"] {
+        assert!(scenario.origin_file("issue-20", file).is_some(), "{file}");
+    }
+    assert_eq!(spec_pr(&scenario)["isDraft"], false);
+}
+
+#[test]
+fn a_shared_base_fix_that_fails_fails_the_ticket_that_started_it_and_the_one_waiting_on_it() {
+    let scenario = two_tickets_with_the_same_inherited_failure();
+    scenario.agent_does_for(23, &format!("{BOTH_TICKETS_HAVE_LOOKED}exit 3\n"));
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix", "parallel", "2"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
+    assert_eq!(scenario.gh_state()["issues"]["23"], "OPEN");
+    let failed = |cause: &str| {
+        let line = format!(" failed: Base fix {BASE_FIX_23} {cause}");
+        let lines = result.stderr.lines();
+        lines
+            .filter(|at| at.starts_with("thirdshift: #2") && at.contains(&line))
+            .count()
+    };
+    assert_eq!(failed("failed: "), 1, "stderr: {}", result.stderr);
+    assert_eq!(
+        failed("ended with its issue still open"),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
+}
+
 #[test]
 fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
     let scenario = linear_spec();

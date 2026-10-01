@@ -149,6 +149,38 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     ])
 }
 
+/// Every open issue labelled `label` in the repository of `issue`, with its
+/// title. They come from GitHub's issue list, not its search, whose index can
+/// be a while behind an issue just opened.
+pub fn open_issues_labelled(issue: &IssueUrl, label: &str) -> Result<Vec<(IssueUrl, String)>> {
+    let json = gh_json(&[
+        "issue",
+        "list",
+        "--repo",
+        &issue.repo_slug(),
+        "--label",
+        label,
+        "--state",
+        "open",
+        "--json",
+        "url,title",
+        "--limit",
+        "1000",
+    ])?;
+    json.as_array()
+        .context("gh issue list did not return a list")?
+        .iter()
+        .map(|listed| {
+            let field = |name: &str| {
+                listed[name]
+                    .as_str()
+                    .with_context(|| format!("gh issue list output has no {name}"))
+            };
+            Ok((IssueUrl::parse(field("url")?)?, field("title")?.to_string()))
+        })
+        .collect()
+}
+
 /// Open an issue titled `title`, with `body` and `labels`, in the repository
 /// of `issue`, and return it. Each label is first added to the repository,
 /// with its description, if the repository lacks it: `gh` refuses a label it

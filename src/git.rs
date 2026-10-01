@@ -48,6 +48,11 @@ impl Git {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// The repository's common git directory, the one its worktrees share.
+    pub fn common_dir(&self) -> Result<PathBuf> {
+        Ok(self.dir.join(self.run(&["rev-parse", "--git-common-dir"])?))
+    }
+
     /// Run `git <args>` and report whether it exited zero, for commands whose
     /// exit status is the answer.
     pub fn succeeds(&self, args: &[&str]) -> Result<bool> {
