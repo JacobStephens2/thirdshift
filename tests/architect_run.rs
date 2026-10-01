@@ -1987,6 +1987,49 @@ fn a_skipped_architect_run_names_each_open_architect_plan_and_prints_its_url() {
 }
 
 #[test]
+fn base_skips_an_architect_run_from_a_clone_on_another_branch_or_a_detached_head_as_from_any() {
+    for detached in [false, true] {
+        let scenario = develop_on_origin(detached);
+        let launch_status = scenario.launch_git(&["status", "--porcelain"]);
+        scenario.agent_does(&format!(
+            "{AGENT_WAITS_FOR_RELEASE}{AGENT_PUBLISHES_A_TICKET}"
+        ));
+        let first = scenario.run_until(
+            &["architect", "base", "develop", "--plan-only"],
+            &[],
+            "started",
+        );
+
+        let second = scenario.run(&["architect", "base", "develop"]);
+
+        assert_skipped_as_already_running(&second);
+        release(&scenario);
+        let first = first.finish();
+        assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+
+        // The first run's Architect plan is open now.
+        let third = scenario.run(&["architect", "base", "develop"]);
+
+        assert_eq!(third.code, Some(0), "stderr: {}", third.stderr);
+        assert_eq!(
+            third.stdout,
+            format!("{PLAN_URL}\n"),
+            "detached: {detached}"
+        );
+        assert!(
+            third.stderr.contains("is still open: pick it up with"),
+            "stderr: {}",
+            third.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
+        assert_eq!(
+            scenario.launch_git(&["status", "--porcelain"]),
+            launch_status
+        );
+    }
+}
+
+#[test]
 fn an_architect_plan_that_is_closed_or_no_longer_labelled_lets_the_architect_run_go_ahead() {
     for lift_the_rule in [
         (|scenario| scenario.issue_is(7, "CLOSED")) as fn(&Scenario),

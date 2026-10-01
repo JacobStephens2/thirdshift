@@ -133,12 +133,12 @@ pub fn run_to_end(
 /// The Base branch `started_by` gave the Run, if it gave one, stands in for
 /// the checked-out branch as the Base branch: the Spec branch or the Base
 /// branch of the Run that started a child Run, or the Base branch of the
-/// Architect run that dispatched this one.
-/// Unless the Run is a child Run, an issue with sub-issues is a Spec, taken on by a Spec run
-/// instead, whose Spec branch is picked like an Issue branch, running as many
-/// Tickets at once as `parallel` says. A `parallel` the command asked for on
-/// an issue with no sub-issues fails before any work, as does a Spec whose
-/// Tickets are all closed with no Spec branch to continue.
+/// Architect run that dispatched this one. Unless the Run is a child Run, an
+/// issue with sub-issues is a Spec, taken on by a Spec run instead, whose
+/// Spec branch is picked like an Issue branch, running as many Tickets at
+/// once as `parallel` says. A `parallel` the command asked for on an issue
+/// with no sub-issues fails before any work, as does a Spec whose Tickets are
+/// all closed with no Spec branch to continue.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures.

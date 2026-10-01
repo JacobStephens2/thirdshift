@@ -286,10 +286,10 @@ pub struct ReviewWorktree {
 
 impl ReviewWorktree {
     /// Check out `origin/<base>`, detached, in a new worktree next to the
-    /// launch repository's root, named `<repo>-architect`. A worktree of the
-    /// launch repository left there by a process that ended before it could
-    /// remove it is removed first, so the caller sees that no Architecture
-    /// review is still running in it.
+    /// launch repository's root, named `<repo>-architect`. A worktree left
+    /// there by a process that ended before it could remove it is removed
+    /// first, so the caller sees that no Architecture review is still running
+    /// in it.
     pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;

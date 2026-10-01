@@ -1,14 +1,15 @@
 //! An Architect run up to its plan: an Architecture review of the Base
 //! branch, the one its command named or else the one checked out in the
-//! Launch directory, from the Launch directory with no Issue URL, then the checks on
-//! the plan it published and the label change that marks the plan ready and
-//! makes it the Architect plan, for the command to stop at or to dispatch. A
-//! review that found no Strong candidate published no plan, and the Architect run ends on the issue it
-//! named instead: the idea issue it filed for its top recommendation, or the
-//! open issue that already covers it. Only one Architect run per repository
-//! runs at a time on a machine: one started while another is still running
-//! is skipped, before any review. So is one that finds an Architect plan
-//! still open on the repository: it never retries or dispatches that plan.
+//! Launch directory, from the Launch directory with no Issue URL, then the
+//! checks on the Architect plan it published and the label change that marks
+//! it ready and labels it `architect-plan`, for the command to stop at or to
+//! dispatch. A review that found no Strong candidate published no plan, and
+//! the Architect run ends on the issue it named instead: the idea issue it
+//! filed for its top recommendation, or the open issue that already covers
+//! it. Only one Architect run per repository runs at a time on a machine: one
+//! started while another is still running is skipped, before any review. So
+//! is one that finds an Architect plan still open on the repository: it never
+//! retries or dispatches an Architect plan that is already there.
 
 use std::fmt;
 use std::fs::{self, File, TryLockError};
@@ -181,11 +182,10 @@ impl fmt::Display for Reviewed {
 /// given, and mark the plan it publishes ready. The Base branch is `base`,
 /// the branch the command named, whatever the Launch directory has checked
 /// out, or without one the branch checked out there. A review that reports
-/// an idea issue it filed, or the
-/// open issue that already covers its top recommendation, instead of a plan,
-/// changes no label. With `launch_pull`, the Launch directory's checkout of
-/// the Base branch, if that is the branch checked out, is first brought up
-/// to date with origin. The review's
+/// an idea issue it filed, or the open issue that already covers its top
+/// recommendation, instead of a plan, changes no label. With `launch_pull`,
+/// the Launch directory's checkout of the Base branch, if that is the branch
+/// checked out, is first brought up to date with origin. The review's
 /// worktree and the plugin directory are gone when this returns. A failure
 /// after the plan is published leaves its labels as the review left them.
 ///
@@ -342,11 +342,10 @@ impl Report {
 }
 
 /// End the Architecture review, of the Base branch `base`, on the issue the
-/// last line of its
-/// `final_message` names: a plan is marked ready, and an idea issue, or the
-/// issue that already covers the top recommendation, is left as it is. Fails
-/// if the session had no final message, if its last line is not one the
-/// prompt asks for, or if the plan can't be marked ready.
+/// last line of its `final_message` names: a plan is marked ready, and an
+/// idea issue, or the issue that already covers the top recommendation, is
+/// left as it is. Fails if the session had no final message, if its last line
+/// is not one the prompt asks for, or if the plan can't be marked ready.
 fn conclude(
     final_message: Option<&str>,
     origin: &str,

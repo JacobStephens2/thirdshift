@@ -277,18 +277,17 @@ fn main() -> ExitCode {
 /// unless the command asked to stop at the plan, the plan dispatched as
 /// `thirdshift <plan URL>` with the same flags would be, but on the Architect
 /// run's Base branch, whatever the Launch directory has checked out. The
-/// dispatched run's ending is the
-/// Architect run's, with the Base fix it took, if any. One that stops at the
-/// plan, or whose review found no Strong candidate and so published no plan
-/// to dispatch, puts the URL of the issue it ended on on stdout: the plan,
-/// the idea issue the review filed, or the issue that already covers its top
-/// recommendation. One whose review or plan fails puts the cause and the
-/// session log on stderr. One that is skipped says why on stderr, and is no
-/// failure: as another on its repository is still running, it puts nothing
-/// on stdout, and as Architect plans are still open there, the URL of each.
-/// If asked, by the command or the User config, it sends one Run
-/// notification, however it ended, skipped included; the run it dispatched
-/// sends none of its own.
+/// dispatched run's ending is the Architect run's, with the Base fix it took,
+/// if any. One that stops at the plan, or whose review found no Strong
+/// candidate and so published no plan to dispatch, puts the URL of the issue
+/// it ended on on stdout: the plan, the idea issue the review filed, or the
+/// issue that already covers its top recommendation. One whose review or
+/// plan fails puts the cause and the session log on stderr. One that is
+/// skipped says why on stderr, and is no failure: as another on its
+/// repository is still running, it puts nothing on stdout, and as Architect
+/// plans are still open there, the URL of each. If asked, by the command or
+/// the User config, it sends one Run notification, however it ended, skipped
+/// included; the run it dispatched sends none of its own.
 fn architect(args: ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,

@@ -233,6 +233,7 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 enum ArchitectLines {
     /// Why it was skipped.
     Skipped(String),
+    /// It went on to its Architecture review, which may have failed.
     Reviewed {
         /// How the Architecture review ended, with the issue it ended on.
         review: String,
