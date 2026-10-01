@@ -36,7 +36,7 @@ pub mod resend;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -100,6 +100,43 @@ impl From<Output> for RunResult {
             stamped_stderr,
             code: output.status.code(),
         }
+    }
+}
+
+/// A Run started by [`Scenario::run_until`], which its fake agent's script
+/// may still be holding where it is.
+pub struct HeldRun {
+    child: Child,
+    /// Whether the Run had exited by the time the agent was seen to start.
+    exited: bool,
+}
+
+impl HeldRun {
+    /// Send the Run `signal` (e.g. `"INT"`), unless it had already exited.
+    pub fn signal(&mut self, signal: &str) {
+        // A Run that has exited is past signalling, and its process id may
+        // be another process's by now.
+        if self.exited {
+            return;
+        }
+        let status = Command::new("kill")
+            .args([&format!("-{signal}"), &self.child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    /// Kill the Run, unless it had already exited, and wait until it is gone.
+    /// What it started lives on.
+    pub fn kill(&mut self) {
+        self.signal("KILL");
+        self.child.wait().unwrap();
+    }
+
+    /// Wait for the Run to exit, and for everything it started to let go of
+    /// its stdout and stderr.
+    pub fn finish(self) -> RunResult {
+        self.child.wait_with_output().unwrap().into()
     }
 }
 
@@ -258,6 +295,17 @@ impl Scenario {
         started: &str,
         signal: &str,
     ) -> RunResult {
+        let mut held = self.run_until(args, env, started);
+        held.signal(signal);
+        held.finish()
+    }
+
+    /// Start thirdshift and return once the fake agent has touched the file
+    /// `started` in the scenario root, with the Run still going unless it
+    /// exited just after. Panics with the Run's stderr if the Run exits
+    /// without the file there, or if the file isn't there within
+    /// [`WAIT_BOUND`].
+    pub fn run_until(&self, args: &[&str], env: &[(&str, &str)], started: &str) -> HeldRun {
         let mut child = self
             .command(args)
             .envs(env.iter().copied())
@@ -284,16 +332,7 @@ impl Scenario {
             assert!(Instant::now() < deadline, "the agent never started");
             std::thread::sleep(Duration::from_millis(20));
         };
-        // A Run that has exited is past signalling, and its process id may
-        // be another process's by now.
-        if !exited {
-            let status = Command::new("kill")
-                .args([&format!("-{signal}"), &child.id().to_string()])
-                .status()
-                .unwrap();
-            assert!(status.success());
-        }
-        child.wait_with_output().unwrap().into()
+        HeldRun { child, exited }
     }
 
     /// Run thirdshift with stdin and stderr on a pseudo-terminal, as from an
