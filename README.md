@@ -51,7 +51,7 @@ cargo install thirdshift
 thirdshift update
 ```
 
-It replaces the installed binary with the latest stable GitHub Release, or says it is already on it. Messages go to stderr and stdout stays empty. It exits `0` when it updated or was already up to date, and `1` on any failure, such as no network. Updating is safe while a Run is using the old binary, and a Run never checks for updates or updates itself.
+It replaces the installed binary with the latest stable GitHub Release, or says it is already on it. Messages go to stderr and stdout stays empty. It exits `0` when it updated or was already up to date, and `1` on any failure, such as no network. Updating is safe while a Run or a Spec run is using the old binary: it keeps running it. On Linux so do the child Runs it starts afterwards, a Ticket's Run or a Base fix, which it starts from the binary it is running rather than from the install path, so they run its version even once that path holds the new one or nothing at all. On macOS a child Run is started from the install path, so one started after the update runs the new binary. A Run never checks for updates or updates itself.
 
 `thirdshift update` only replaces a copy put in place by the shell installer (the `curl` command above), which leaves an install receipt in `~/.config/thirdshift/`. It refuses to touch any other copy and lists the command that updates each other kind of install: `cargo install thirdshift` for a crates.io install, pulling and reinstalling for a build from source (see [Building from source](#building-from-source)), and the `curl` command for a copy placed by hand.
 
@@ -260,7 +260,7 @@ The Credentials are read only when `RESEND_API_KEY` is unset or empty, and only 
 A Run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and a key is found, in `RESEND_API_KEY` or else the Credentials. If either fails, or the Credentials are broken, the Run stops, exits `1` naming what's wrong (with no key, the message above listing every way to give one), and sends nothing. A Run that asks for no notification never reads the Credentials, so a broken file can't stop it, and `update`, `version` and `help` never read it either. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
 
 - **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
-- **Body**, plain text: the pull request URL (if any), the failure cause (if failed), the session log path (if any), the hostname and how long the Run took.
+- **Body**, plain text: the pull request URL (if any), the failure cause (if failed), after an Inherited failure with no Base fix taken its [`Base check:`, `Retry with:` and `Or set:` lines](#an-inherited-failure-links-the-base-branchs-checks), the session log path (if any), the hostname and how long the Run took.
 
 A [Spec run](#spec-runs) sends at most one notification for the whole Spec, under the same rules, with its checks made once before any Ticket starts. Its subject names the Spec, its outcome is the Spec run's, and its body, after what a Run's holds (the Spec PR, if any), lists each Ticket's outcome, one line per Ticket as in the summary on stderr, such as `#21 landed with https://github.com/acme/widgets/pull/1` or `#22 blocked by #21`. The Ticket Runs inside it never send a notification of their own, whatever the User config says.
 
@@ -328,7 +328,7 @@ Runs from one Launch directory, as a Spec run's Tickets are, look for the issue 
 
 Across clones and machines the look is only a best-effort lock, and two Runs that look at the same moment may each start a Base fix.
 
-Without `base-fix` or `base.fix`, or with `no-base-fix`, an Inherited failure fails the Run as described in [What a Run does](#what-a-run-does).
+Without `base-fix` or `base.fix`, or with `no-base-fix`, an Inherited failure fails the Run as described in [What a Run does](#what-a-run-does), and the Run says [where the checks fail on the Base branch](#an-inherited-failure-links-the-base-branchs-checks), offering a Base fix if nobody decided against one.
 
 ## Continuation
 
@@ -353,6 +353,22 @@ A Failed run:
 3. Cleans up as usual, prints the reason to stderr and exits non-zero. If the push failed, the worktree and local Issue branch are kept instead, and stderr names the branch, its head commit and the worktree path, so you can recover the work or push it by hand.
 
 Merges, never rebases or force-pushes: a branch worked on from several servers never loses history.
+
+### An Inherited failure links the Base branch's checks
+
+A Run that fails on Inherited failures with no Base fix taken says more after its cause, on stderr and in its [Run notification](#run-notifications): a `Base check:` line for each of those checks, with its URL on the Base branch commit, as a [Base fix](#base-fix) issue lists them, or the name alone for a check with no URL. If nobody decided against a Base fix, with neither `base-fix` nor `no-base-fix` given and no `base.fix = true` in the [User config](#user-config), it also offers one: a `Retry with:` line with the command that starts the Run again with `base-fix` added, keeping the `merge`, `email` and `parallel` flags it was given, and an `Or set:` line naming `base.fix`:
+
+```
+thirdshift: 03:12:40 CI red on test, which also fails on main at 362b9ca; fix main first
+thirdshift: 03:12:40 Base check: test: https://github.com/acme/widgets/actions/runs/1/job/2
+thirdshift: 03:12:40 Retry with: thirdshift https://github.com/acme/widgets/issues/7 base-fix
+thirdshift: 03:12:40 Or set: base.fix = true in ~/.thirdshift/config.toml, to allow a Base fix for every Run on this machine
+thirdshift: 03:12:40 session log: ~/.thirdshift/logs/acme-widgets-issue-7-….jsonl
+```
+
+A Run given `no-base-fix` gets the `Base check:` lines and no offer. A Run that had its one Base fix gets neither: its `Base fix:` line already says what happened. The cause itself, and so the failure commit's message, is the same in every case, and no other cause adds a line.
+
+In a [Spec run](#spec-runs), a Ticket's Run says this on its own stderr, relayed with its `#<n>: ` prefix, and the command it offers is the Spec run's, with `base-fix` added. The Spec run's summary and its Run notification show the Ticket's cause alone. After an [Architect run](#architect-runs), the command offered is `thirdshift <plan URL>` with the dispatched run's flags and `base-fix`, since another Architect run would start a new review rather than take that plan up again.
 
 ## Spec runs
 
@@ -435,7 +451,7 @@ A review session that fails or is interrupted, a final message without one of th
 An Architect run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one, whatever its outcome and with or without `--plan-only`. It makes a Run's checks before any other work, an address and a Resend API key, and stops with exit `1` if either is missing. The email goes after the outcome is final and printed, and a failed send is only a `warning:` line on stderr: it changes neither the exit code nor stdout.
 
 - **Subject**: `[thirdshift] <owner>/<repo> Architect run: <outcome>`. With a dispatched run, the outcome is that run's: `ready for review`, `merged`, `failed` or `interrupted`. Without one, it is the review's: `plan published` (with `--plan-only`), `idea filed`, `idea already filed`, `review failed` (also for a plan that fails a check) or `interrupted`. The repository is left out if `origin` doesn't name one on GitHub.
-- **Body**, plain text: a `Review:` line saying how the Architecture review ended, with the URL of the plan or idea issue it named (`plan published: <url>`, `idea filed: <url>`, `idea already filed: <url>`, `failed` or `interrupted`); when the plan was dispatched, a `Dispatched:` line with that run's outcome; then what a Run's notification holds, for the dispatched run or else the failed review: the pull request URL (if any), the failure cause (if failed), a `Base fix:` line for a dispatched run that started or waited on a [Base fix](#base-fix), the session log path (if any), the hostname and how long the Architect run took. After a dispatched Spec run, it ends with a line per Ticket, as a Spec run's notification does.
+- **Body**, plain text: a `Review:` line saying how the Architecture review ended, with the URL of the plan or idea issue it named (`plan published: <url>`, `idea filed: <url>`, `idea already filed: <url>`, `failed` or `interrupted`); when the plan was dispatched, a `Dispatched:` line with that run's outcome; then what a Run's notification holds, for the dispatched run or else the failed review: the pull request URL (if any), the failure cause (if failed), with the [lines after it](#an-inherited-failure-links-the-base-branchs-checks) of a dispatched run that failed on an Inherited failure, a `Base fix:` line for a dispatched run that started or waited on a [Base fix](#base-fix), the session log path (if any), the hostname and how long the Architect run took. After a dispatched Spec run, it ends with a line per Ticket, as a Spec run's notification does.
 
 ### No Strong candidate
 

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::base_fix::{BaseFix, BaseFixAsk};
+use crate::base_fix::{Advice, BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
 use crate::ci::{self, Ci};
@@ -58,6 +58,9 @@ pub struct Ended {
     /// What became of the Base fix it started or waited on, if any, as
     /// [`BaseFix::report`] tells it.
     pub base_fix: Option<String>,
+    /// What it says after its cause, if Inherited failures failed it with no
+    /// Base fix taken, as [`BaseFix::into_advice`] gives it.
+    pub advice: Vec<Advice>,
 }
 
 /// [`run`] the Run on `issue` that asked `base_fix` about a Base fix, as the
@@ -85,6 +88,7 @@ pub fn run_to_end(
     Ended {
         outcome,
         base_fix: base_fix.report(),
+        advice: base_fix.into_advice(),
     }
 }
 

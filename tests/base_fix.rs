@@ -104,6 +104,31 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
     scenario.assert_cleaned_up("issue-8");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_run_whose_thirdshift_was_removed_after_it_started_still_starts_its_base_fix() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{RUN_OPENS_PR_WITH_INHERITED_FAILURE}{}",
+        scenario.waits_to_be_replaced()
+    ));
+    scenario.agent_does_for(8, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
+
+    let result = scenario
+        .run_copy_replaced_midway(&[&scenario.issue_url(7), "base-fix"], |installed| {
+            std::fs::remove_file(installed).unwrap()
+        });
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let gh = scenario.gh_state();
+    assert_eq!(gh["prs"][1]["base"], "main");
+    assert_eq!(gh["prs"][1]["state"], "MERGED");
+    assert_eq!(
+        scenario.origin_file("issue-7", "ci-fix.txt").as_deref(),
+        Some("fixed\n")
+    );
+}
+
 #[test]
 fn the_base_fix_repairs_the_check_as_its_own_and_only_the_run_sends_a_notification() {
     let scenario = Scenario::new();
@@ -294,6 +319,8 @@ fn a_failing_base_fix_fails_the_run_naming_its_issue() {
             && text.contains(&format!("Base fix:     {BASE_FIX_URL} not merged\n")),
         "text: {text}"
     );
+    assert_no_advice(&result.stderr, &ADVICE);
+    assert_no_advice(text, &ADVICE);
 }
 
 #[test]
@@ -321,6 +348,15 @@ fn checks_still_inherited_failures_after_the_base_fix_merged_fail_the_run_with_n
         &fixed_base[..7]
     );
     assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    // Its `Base fix:` line says what happened: nothing to link or offer.
+    assert!(
+        result
+            .stderr
+            .contains(&format!("thirdshift: Base fix: {BASE_FIX_URL} merged\n")),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_no_advice(&result.stderr, &ADVICE);
     let gh = scenario.gh_state();
     assert_eq!(gh["prs"][1]["state"], "MERGED");
     assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
@@ -432,9 +468,14 @@ fn a_found_base_fix_issue_that_closes_with_the_checks_still_red_fails_the_run_na
     assert_eq!(requests.len(), 1, "{requests:?}");
     let text = requests[0].body["text"].as_str().unwrap();
     assert!(
-        text.contains(&format!("Base fix:     {BASE_FIX_URL} closed\n")),
+        text.contains(&format!(
+            "Cause:        {cause}\n\
+             Base fix:     {BASE_FIX_URL} closed\n"
+        )),
         "text: {text}"
     );
+    assert_no_advice(&result.stderr, &ADVICE);
+    assert_no_advice(text, &ADVICE);
 }
 
 #[test]
@@ -550,6 +591,160 @@ fn without_base_fix_an_inherited_failure_fails_the_run_and_writes_no_issue() {
     assert!(scenario.gh_calls_of("issue", "create").is_empty());
     assert!(scenario.gh_calls_of("label", "list").is_empty());
     assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
+}
+
+/// The cause of a Run that failed on `test`, an Inherited failure from
+/// `main` at `base_commit`, with no Base fix taken.
+fn inherited_failure(base_commit: &str) -> String {
+    format!(
+        "CI red on test, which also fails on main at {}; fix main first",
+        &base_commit[..7]
+    )
+}
+
+/// Assert that `text`, a Run's stderr or its Run notification's body, has
+/// none of `labels`, each as it starts a line of advice.
+fn assert_no_advice(text: &str, labels: &[&str]) {
+    for label in labels {
+        assert!(!text.contains(label), "{label} in: {text}");
+    }
+}
+
+/// Every label a line of advice starts with.
+const ADVICE: [&str; 3] = ["Base check:", "Retry with:", "Or set:"];
+
+/// What links `test` where it fails on `main`, after `Base check:`.
+const BASE_CHECK: &str = "test: https://ci.example/main/test";
+
+/// What follows `Or set:`, after the retry command.
+const OR_SET: &str = "base.fix = true in ~/.thirdshift/config.toml, \
+                      to allow a Base fix for every Run on this machine";
+
+#[test]
+fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_offers_one() {
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    let cause = inherited_failure(&scenario.origin_git(&["rev-parse", "main"]));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let url = scenario.issue_url(7);
+
+    let result = scenario.run_with_env(
+        &["merge", &url, "--email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let retry = format!("thirdshift {url} merge --email me@example.com base-fix");
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: {cause}\n\
+             thirdshift: Base check: {BASE_CHECK}\n\
+             thirdshift: Retry with: {retry}\n\
+             thirdshift: Or set: {OR_SET}\n\
+             thirdshift: session log: "
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(
+        text.contains(&format!(
+            "Cause:        {cause}\n\
+             Base check:   {BASE_CHECK}\n\
+             Retry with:   {retry}\n\
+             Or set:       {OR_SET}\n\
+             Session log:  "
+        )),
+        "text: {text}"
+    );
+    // The cause alone is the Failed-run commit's message.
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        format!("thirdshift: failed run ({cause})")
+    );
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+}
+
+#[test]
+fn with_no_base_fix_the_base_branchs_failing_checks_are_linked_and_no_base_fix_is_offered() {
+    for flag in ["no-base-fix", "--no-base-fix"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+        let cause = inherited_failure(&scenario.origin_git(&["rev-parse", "main"]));
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = scenario.run_with_env(
+            &[&scenario.issue_url(7), flag, "email", "me@example.com"],
+            &[
+                ("THIRDSHIFT_RESEND_URL", resend.url()),
+                ("RESEND_API_KEY", "re_test_123"),
+            ],
+        );
+
+        assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains(&format!(
+                "thirdshift: {cause}\n\
+                 thirdshift: Base check: {BASE_CHECK}\n\
+                 thirdshift: session log: "
+            )),
+            "stderr: {}",
+            result.stderr
+        );
+        let requests = resend.requests();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        let text = requests[0].body["text"].as_str().unwrap();
+        assert!(
+            text.contains(&format!(
+                "Cause:        {cause}\n\
+                 Base check:   {BASE_CHECK}\n\
+                 Session log:  "
+            )),
+            "text: {text}"
+        );
+    }
+}
+
+#[test]
+fn with_base_fix_in_the_user_config_and_no_base_fix_given_no_base_fix_is_offered() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[base]\nfix = true\n");
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+
+    let result = scenario.run(&[&scenario.issue_url(7), "no-base-fix"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains(&format!("thirdshift: Base check: {BASE_CHECK}\n")),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_no_advice(&result.stderr, &["Retry with:", "Or set:"]);
+}
+
+#[test]
+fn a_base_branch_check_with_no_url_is_named_alone() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        &RUN_OPENS_PR_WITH_INHERITED_FAILURE
+            .replace(r#", "url": "https://ci.example/main/test""#, ""),
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("thirdshift: Base check: test\n"),
+        "stderr: {}",
+        result.stderr
+    );
 }
 
 #[test]
