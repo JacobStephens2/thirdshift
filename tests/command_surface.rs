@@ -79,7 +79,8 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_r
     for mention in [
         "<focus> is free text",
         "dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket",
-        "merge, --no-merge and parallel <n> apply to that run",
+        "merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run",
+        "as do the User config's defaults",
         "With --plan-only, the Architect run prints the plan's URL and stops instead",
         "thirdshift architect \"the Spec run\"",
         "A review that finds no Strong candidate publishes no plan",
@@ -93,8 +94,8 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_r
     }
 }
 
-const PLAN_ONLY_DISPATCHES_NOTHING: &str = "merge, no-merge and parallel can't be used with --plan-only: \
-     it dispatches no run for them to apply to";
+const PLAN_ONLY_DISPATCHES_NOTHING: &str = "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
+     --plan-only: it dispatches no run for them to apply to";
 
 #[test]
 fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr() {
@@ -127,6 +128,18 @@ fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr()
         ),
         (
             vec!["architect", "--plan-only", "parallel", "2"],
+            PLAN_ONLY_DISPATCHES_NOTHING,
+        ),
+        (
+            vec!["architect", "base-fix", "--no-base-fix"],
+            "base-fix and no-base-fix can't be used together",
+        ),
+        (
+            vec!["architect", "--plan-only", "base-fix"],
+            PLAN_ONLY_DISPATCHES_NOTHING,
+        ),
+        (
+            vec!["architect", "no-base-fix", "--plan-only"],
             PLAN_ONLY_DISPATCHES_NOTHING,
         ),
     ] {
@@ -260,6 +273,16 @@ fn a_repeated_flag_prints_an_error_and_the_help_to_stderr() {
             vec![url.as_str(), "email", "--email", "b@example.com"],
             "--email",
         ),
+        (vec!["base-fix", url.as_str(), "base-fix"], "base-fix"),
+        (vec![url.as_str(), "base-fix", "--base-fix"], "--base-fix"),
+        (
+            vec!["no-base-fix", url.as_str(), "no-base-fix"],
+            "no-base-fix",
+        ),
+        (
+            vec![url.as_str(), "no-base-fix", "--no-base-fix"],
+            "--no-base-fix",
+        ),
         (
             vec!["parallel", "2", url.as_str(), "parallel", "2"],
             "parallel",
@@ -323,6 +346,27 @@ fn email_with_no_email_prints_an_error_and_the_help_to_stderr() {
 }
 
 #[test]
+fn base_fix_with_no_base_fix_prints_an_error_and_the_help_to_stderr() {
+    let scenario = Scenario::new();
+    let url = scenario.issue_url(7);
+
+    for args in [
+        vec!["base-fix", url.as_str(), "no-base-fix"],
+        vec!["--no-base-fix", "--base-fix", url.as_str()],
+        vec![url.as_str(), "--base-fix", "no-base-fix"],
+    ] {
+        let result = scenario.run(&args);
+
+        assert_argument_error(
+            &scenario,
+            &result,
+            "base-fix and no-base-fix can't be used together",
+        );
+        assert!(scenario.claude_calls().is_empty(), "{args:?} started a Run");
+    }
+}
+
+#[test]
 fn no_merge_without_an_issue_url_prints_an_error_and_the_help_to_stderr() {
     let scenario = Scenario::new();
 
@@ -360,6 +404,17 @@ fn help_lists_the_email_settings() {
         "onboarding@resend.dev",
         "RESEND_API_KEY",
     ] {
+        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    }
+}
+
+#[test]
+fn help_lists_no_base_fix_and_base_fix_in_the_user_config() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    for mention in ["--no-base-fix", "base.fix", "[base]\n    fix = true\n"] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");
     }
 }

@@ -33,6 +33,16 @@ url=$(gh issue create --title "Deepen the session module" --body "The plan" --la
 printf 'Published the plan.\n\nArchitecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#;
 
+/// A scenario whose repository has the labels the fake agent publishes its
+/// issues with, as `gh issue create` refuses a label the repository lacks.
+fn scenario() -> Scenario {
+    let scenario = Scenario::new();
+    let mut gh = scenario.gh_state();
+    gh["repo_labels"] = serde_json::json!(["needs-triage", "ready-for-agent", "architecture"]);
+    scenario.write_gh_state(&gh);
+    scenario
+}
+
 /// A script in which the agent publishes the plan as
 /// [`AGENT_PUBLISHES_A_TICKET`] does, then does `then`.
 fn publishes_a_ticket_then(then: &str) -> String {
@@ -55,7 +65,7 @@ gh pr create --base {base} --head issue-{issue} --title "Work on {issue}" --body
 /// The Architecture review, the first session, publishes a single Ticket as
 /// the plan, #8, and the session that implements #8 opens its PR into `main`.
 fn single_ticket_plan() -> Scenario {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does_in_session(1, AGENT_PUBLISHES_A_TICKET);
     scenario.agent_does_for(8, &agent_opens_pr(8, "main"));
     scenario
@@ -66,7 +76,7 @@ fn single_ticket_plan() -> Scenario {
 /// Ticket's session opens its PR into the Spec branch, #10's after doing
 /// `before_ticket_10`.
 fn spec_plan(before_ticket_10: &str) -> Scenario {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does_in_session(
         1,
         r#"
@@ -195,7 +205,7 @@ fn assert_ended_without_a_plan(scenario: &Scenario, result: &RunResult, url: &st
 
 #[test]
 fn plan_only_marks_the_published_ticket_ready_and_prints_its_url() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
     let result = scenario.run(&["architect", "--plan-only"]);
@@ -208,7 +218,7 @@ fn plan_only_marks_the_published_ticket_ready_and_prints_its_url() {
 
 #[test]
 fn plan_only_marks_a_published_spec_ready_and_leaves_its_tickets_and_other_labels() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(
         r#"
 spec=$(gh issue create --title "Deepen the session module" --body "The Spec" --label needs-triage,architecture)
@@ -230,7 +240,7 @@ printf 'Architecture review plan: %s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
 
 #[test]
 fn the_session_prompt_names_the_factory_skills_the_base_branch_and_the_final_line() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.origin_has_branch("develop", "main", &["Develop work"]);
     scenario.launch_checks_out("develop");
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
@@ -260,7 +270,7 @@ fn a_focus_goes_into_the_session_prompt() {
         ["architect", "the Spec run", "--plan-only"],
         ["architect", "--plan-only", "the Spec run"],
     ] {
-        let scenario = Scenario::new();
+        let scenario = scenario();
         scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
         let result = scenario.run(&args);
@@ -276,7 +286,7 @@ fn a_focus_goes_into_the_session_prompt() {
 
 #[test]
 fn the_review_runs_detached_at_origins_base_branch_and_the_launch_directory_is_never_touched() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.origin_has_commit("main", "upstream.txt", "upstream\n", "Upstream work");
     let launch = scenario.launch_dir();
     fs::write(launch.join("README.md"), "widgets, edited\n").unwrap();
@@ -326,7 +336,7 @@ echo "widgets, by the review" > README.md
 
 #[test]
 fn progress_lines_cover_the_review_starting_the_plan_it_reported_and_the_label_swap() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
     let result = scenario.run(&["architect", "the Spec run", "--plan-only"]);
@@ -354,7 +364,7 @@ fn progress_lines_cover_the_review_starting_the_plan_it_reported_and_the_label_s
 
 #[test]
 fn a_failing_session_fails_the_architect_run_and_leaves_the_plan_needing_triage() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(&publishes_a_ticket_then("exit 3"));
 
     let result = scenario.run(&["architect", "--plan-only"]);
@@ -365,7 +375,7 @@ fn a_failing_session_fails_the_architect_run_and_leaves_the_plan_needing_triage(
 
 #[test]
 fn an_interrupted_session_fails_the_architect_run_and_leaves_the_plan_needing_triage() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(&publishes_a_ticket_then(
         r#"touch "$(dirname "$FAKE_CLAUDE_RECORD")/started"
 sleep 60"#,
@@ -385,7 +395,7 @@ fn a_session_that_ends_without_a_valid_final_line_fails_the_architect_run() {
         Some("Architecture review plan: #8"),
         Some("Architecture review plan: https://github.com/acme/widgets/issues/8, a Ticket"),
     ] {
-        let scenario = Scenario::new();
+        let scenario = scenario();
         let publish = "gh issue create --title Plan --body Plan --label needs-triage > /dev/null\n";
         let ending = final_message.map(ends_with).unwrap_or_default();
         scenario.agent_does(&format!("{publish}{ending}"));
@@ -403,7 +413,7 @@ fn a_session_that_ends_without_a_valid_final_line_fails_the_architect_run() {
 
 #[test]
 fn a_review_that_files_an_idea_prints_its_url_and_changes_no_label() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     let idea = scenario.issue_url(8);
     scenario.agent_does(
         r#"
@@ -425,7 +435,7 @@ printf 'No Strong candidate.\n\nArchitecture review idea: %s\n' "$url" > "$FAKE_
 
 #[test]
 fn a_review_whose_idea_is_already_filed_prints_that_issues_url_and_files_and_changes_nothing() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.issue_labelled(7, &["needs-triage"]);
     let url = scenario.issue_url(7);
     scenario.agent_does(&ends_with(&format!(
@@ -448,7 +458,7 @@ fn a_review_whose_idea_is_already_filed_prints_that_issues_url_and_files_and_cha
 
 #[test]
 fn a_review_with_no_strong_candidate_dispatches_nothing_without_plan_only() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.issue_labelled(7, &["needs-triage"]);
     let url = scenario.issue_url(7);
     scenario.agent_does(&ends_with(&format!("Architecture review idea: {url}")));
@@ -467,7 +477,7 @@ fn a_review_with_no_strong_candidate_dispatches_nothing_without_plan_only() {
 
 #[test]
 fn a_closed_plan_is_refused() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(&publishes_a_ticket_then("gh fake issue 8 CLOSED"));
 
     let result = scenario.run(&["architect", "--plan-only"]);
@@ -482,7 +492,7 @@ fn a_closed_plan_is_refused() {
 
 #[test]
 fn a_plan_older_than_the_architect_run_is_refused() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.issue_labelled(7, &["needs-triage"]);
     scenario.issue_created(7, "2026-09-30T23:59:59Z");
     let url = scenario.issue_url(7);
@@ -501,7 +511,7 @@ fn a_plan_older_than_the_architect_run_is_refused() {
 #[test]
 fn a_plan_with_another_unready_label_is_refused() {
     for label in ["ready-for-human", "needs-info", "wontfix"] {
-        let scenario = Scenario::new();
+        let scenario = scenario();
         scenario.agent_does(&publishes_a_ticket_then(&format!(
             r#"gh fake labels 8 '["needs-triage", "{label}"]'"#
         )));
@@ -519,7 +529,7 @@ fn a_plan_with_another_unready_label_is_refused() {
 
 #[test]
 fn a_plan_in_another_repository_is_refused() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     let url = "https://github.com/acme/gadgets/issues/8";
     scenario.agent_does(&ends_with(&format!("Architecture review plan: {url}")));
 
@@ -536,7 +546,7 @@ fn a_plan_in_another_repository_is_refused() {
 
 #[test]
 fn a_detached_head_is_rejected_before_any_work() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.launch_git(&["checkout", "-q", "--detach"]);
 
     let result = scenario.run(&["architect", "--plan-only"]);
@@ -549,7 +559,7 @@ fn a_detached_head_is_rejected_before_any_work() {
 
 #[test]
 fn a_base_branch_ahead_of_origin_is_rejected_before_any_work() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.commit_locally("local.txt", "local\n", "Local work");
 
     let result = scenario.run(&["architect", "--plan-only"]);
@@ -562,7 +572,7 @@ fn a_base_branch_ahead_of_origin_is_rejected_before_any_work() {
 
 #[test]
 fn a_missing_git_identity_is_rejected_before_any_work() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.git_email_is(None);
 
     let result = scenario.run(&["architect", "--plan-only"]);
@@ -572,7 +582,7 @@ fn a_missing_git_identity_is_rejected_before_any_work() {
 
 #[test]
 fn an_origin_that_is_not_on_github_is_rejected_before_any_work() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.set_origin_url("https://gitlab.com/acme/widgets.git");
 
     let result = scenario.run(&["architect", "--plan-only"]);
@@ -585,7 +595,7 @@ fn an_origin_that_is_not_on_github_is_rejected_before_any_work() {
 
 #[test]
 fn a_closed_issue_in_the_repository_does_not_stop_an_architect_run() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.issue_is(7, "CLOSED");
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
@@ -597,7 +607,7 @@ fn a_closed_issue_in_the_repository_does_not_stop_an_architect_run() {
 
 #[test]
 fn launch_pull_brings_the_launch_directorys_base_branch_up_to_date_first() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.origin_has_commit("main", "upstream.txt", "upstream\n", "Upstream work");
     scenario.user_config_is("[launch]\npull = true\n");
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
@@ -750,6 +760,184 @@ fn parallel_on_a_single_ticket_plan_fails_as_it_does_for_an_issue_that_is_not_a_
     assert_nothing_left_behind(&scenario);
 }
 
+const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
+
+const GREEN: &str = r#"[{"name": "test", "conclusion": "success"}]"#;
+
+/// A script that sets the check runs on the session's head to `checks`.
+fn checks_on_head(checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse HEAD)\" '{checks}'\n")
+}
+
+/// A script that sets the check runs on origin's `branch` to `checks`.
+fn checks_on_origin(branch: &str, checks: &str) -> String {
+    format!("gh fake checks \"$(git rev-parse origin/{branch})\" '{checks}'\n")
+}
+
+/// A script in which the agent for the Base fix issue `issue` commits a fix
+/// and opens its PR into `base`, with `test` green on its head.
+fn base_fix_opens_pr(issue: u32, base: &str) -> String {
+    format!(
+        r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on {base}"
+gh pr create --base {base} --head issue-{issue} --title "Fix CI on {base}" --body "Closes #{issue}"
+{green}"#,
+        green = checks_on_head(GREEN)
+    )
+}
+
+/// A single-Ticket plan, #8, whose Run opens its PR with `test` red on its
+/// head and on `main`: an Inherited failure. The agent for the Base fix
+/// issue, #9, the next issue, fixes it.
+fn single_ticket_plan_that_inherits_a_failure() -> Scenario {
+    let scenario = single_ticket_plan();
+    scenario.agent_does_for(
+        8,
+        &format!(
+            "{}{}{}",
+            agent_opens_pr(8, "main"),
+            checks_on_head(RED),
+            checks_on_origin("main", RED)
+        ),
+    );
+    scenario.agent_does_for(9, &base_fix_opens_pr(9, "main"));
+    scenario
+}
+
+/// The cause of a Run that failed on `test`, an Inherited failure from
+/// `main` as it was when the scenario started.
+fn inherited_failure(scenario: &Scenario) -> String {
+    let red_base = scenario.origin_git(&["rev-parse", "main"]);
+    format!(
+        "CI red on test, which also fails on main at {}; fix main first",
+        &red_base[..7]
+    )
+}
+
+#[test]
+fn base_fix_lets_the_dispatched_run_start_a_base_fix() {
+    for flag in ["base-fix", "--base-fix"] {
+        let scenario = single_ticket_plan_that_inherits_a_failure();
+
+        let result = scenario.run(&["architect", flag]);
+
+        let pr = pr_from(&scenario, "issue-8");
+        assert_ended_with_pr(&result, &pr, "ready for review");
+        assert!(
+            result.stderr.contains(
+                "thirdshift: starting Base fix #9 into main: https://github.com/acme/widgets/issues/9\n"
+            ),
+            "stderr: {}",
+            result.stderr
+        );
+        let gh = scenario.gh_state();
+        assert_eq!(gh["titles"]["9"], "CI red on main: test", "{flag}");
+        let fix = pr_from(&scenario, "issue-9");
+        assert_eq!(fix["base"], "main");
+        assert_eq!(fix["state"], "MERGED");
+        assert_eq!(
+            scenario.origin_file("issue-8", "ci-fix.txt").as_deref(),
+            Some("fixed\n")
+        );
+    }
+}
+
+#[test]
+fn the_user_configs_base_fix_applies_to_the_dispatched_run_unless_no_base_fix_is_given() {
+    let scenario = single_ticket_plan_that_inherits_a_failure();
+    scenario.user_config_is("[base]\nfix = true\n");
+
+    let result = scenario.run(&["architect"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+    assert_eq!(pr_from(&scenario, "issue-9")["state"], "MERGED");
+
+    for flag in ["no-base-fix", "--no-base-fix"] {
+        let scenario = single_ticket_plan_that_inherits_a_failure();
+        scenario.user_config_is("[base]\nfix = true\n");
+        let cause = inherited_failure(&scenario);
+
+        let result = scenario.run(&["architect", flag]);
+
+        assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains(&format!("thirdshift: {cause}\n")),
+            "stderr: {}",
+            result.stderr
+        );
+        // Only the plan was created: no Base fix issue.
+        assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1, "{flag}");
+    }
+}
+
+#[test]
+fn without_base_fix_the_dispatched_run_fails_on_an_inherited_failure() {
+    let scenario = single_ticket_plan_that_inherits_a_failure();
+    let cause = inherited_failure(&scenario);
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(&format!("thirdshift: {cause}\n")),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
+}
+
+#[test]
+fn base_fix_or_the_user_configs_reaches_each_tickets_run_of_the_dispatched_spec_run() {
+    for (args, config) in [
+        (vec!["architect", "base-fix", "parallel", "1"], None),
+        (
+            vec!["architect", "parallel", "1"],
+            Some("[base]\nfix = true\n"),
+        ),
+    ] {
+        // The first Ticket's Run, #9's, meets an Inherited failure from the
+        // Spec branch. One Ticket at a time, so the Spec branch can't move
+        // under it, which would have it merged in again instead. The Base
+        // fix issue is the next after the Tickets, #11.
+        let scenario = spec_plan("");
+        scenario.agent_does_for(
+            9,
+            &format!(
+                "{}{}{}",
+                agent_opens_pr(9, "issue-8"),
+                checks_on_head(RED),
+                checks_on_origin("issue-8", RED)
+            ),
+        );
+        scenario.agent_does_for(11, &base_fix_opens_pr(11, "issue-8"));
+        if let Some(config) = config {
+            scenario.user_config_is(config);
+        }
+
+        let result = scenario.run(&args);
+
+        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+        assert!(
+            result.stderr.contains(
+                "#9: starting Base fix #11 into issue-8: https://github.com/acme/widgets/issues/11\n"
+            ),
+            "{args:?}: stderr: {}",
+            result.stderr
+        );
+        let fix = pr_from(&scenario, "issue-11");
+        assert_eq!(fix["base"], "issue-8");
+        assert_eq!(fix["state"], "MERGED");
+        for ticket in ["issue-9", "issue-10"] {
+            assert_eq!(pr_from(&scenario, ticket)["state"], "MERGED", "{ticket}");
+        }
+        for file in ["issue-9.txt", "issue-10.txt", "ci-fix.txt"] {
+            assert!(scenario.origin_file("issue-8", file).is_some(), "{file}");
+        }
+    }
+}
+
 #[test]
 fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
     let scenario = single_ticket_plan();
@@ -829,7 +1017,7 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
 
 #[test]
 fn plan_only_sends_one_notification_naming_the_plan() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
@@ -857,7 +1045,7 @@ fn plan_only_sends_one_notification_naming_the_plan() {
 
 #[test]
 fn a_review_that_files_an_idea_sends_one_notification_naming_the_idea() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(
         r#"
 url=$(gh issue create --title "Deepen the session module" --body "The idea" --label needs-triage)
@@ -887,7 +1075,7 @@ printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
 
 #[test]
 fn a_review_whose_idea_is_already_filed_sends_one_notification_naming_that_issue() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     let url = scenario.issue_url(7);
     scenario.agent_does(&ends_with(&format!(
         "Architecture review already filed: {url}"
@@ -914,7 +1102,7 @@ fn a_review_whose_idea_is_already_filed_sends_one_notification_naming_that_issue
 
 #[test]
 fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(&publishes_a_ticket_then("exit 3"));
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
@@ -967,6 +1155,31 @@ fn email_always_sends_one_notification_for_the_review_and_the_run_it_dispatched(
             "Review:       plan published: {PLAN_URL}\n\
              Dispatched:   ready for review\n\
              Pull request: {PR_URL}\n"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_one_notification_says_what_became_of_the_dispatched_runs_base_fix() {
+    let scenario = single_ticket_plan_that_inherits_a_failure();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["architect", "base-fix"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: ready for review"
+    );
+    assert!(
+        text.starts_with(&format!(
+            "Review:       plan published: {PLAN_URL}\n\
+             Dispatched:   ready for review\n\
+             Pull request: {PR_URL}\n\
+             Base fix:     https://github.com/acme/widgets/issues/9 merged\n"
         )),
         "{text}"
     );
@@ -1053,7 +1266,7 @@ fn an_architect_run_that_is_not_asked_for_a_notification_sends_none() {
 
 #[test]
 fn with_no_address_known_the_architect_run_stops_before_any_work_and_sends_nothing() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
     let result = run_with_resend(&scenario, &resend, &["architect", "--email"]);
@@ -1064,7 +1277,7 @@ fn with_no_address_known_the_architect_run_stops_before_any_work_and_sends_nothi
 
 #[test]
 fn a_failed_send_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
     let resend = ResendStandIn::replying(500, "upstream exploded");
 
@@ -1087,7 +1300,7 @@ fn a_failed_send_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
 
 #[test]
 fn an_interrupted_review_sends_one_notification_that_it_was_interrupted() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(
         r#"touch "$(dirname "$FAKE_CLAUDE_RECORD")/started"
 sleep 60"#,
@@ -1113,7 +1326,7 @@ sleep 60"#,
 
 #[test]
 fn a_plan_that_fails_its_checks_sends_one_notification_naming_it_in_the_cause() {
-    let scenario = Scenario::new();
+    let scenario = scenario();
     scenario.agent_does(&publishes_a_ticket_then("gh fake issue 8 CLOSED"));
     let resend = ResendStandIn::replying(200, ACCEPTED);
 

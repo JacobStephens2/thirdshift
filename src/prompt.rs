@@ -1,6 +1,6 @@
 //! The prompts agent sessions are started with.
 
-use crate::github::Check;
+use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 
 /// Every prompt ends with this. Sessions run with `claude -p`, which exits
@@ -147,26 +147,30 @@ pub fn conflict_repair(issue: &IssueUrl, merging: &str, branch: &str, pr_url: &s
 }
 
 /// The CI-fix Repair prompt, for red CI on the PR's head commit, listing
-/// each check in `failed`.
+/// each of the branch's own failures in `failed` as one to fix, and after
+/// them its Inherited failures, if any, as not to fix.
 pub fn ci_fix_repair(
     issue: &IssueUrl,
     base: &str,
     branch: &str,
     pr_url: &str,
-    failed: &[Check],
+    failed: &FailedChecks,
 ) -> String {
-    let checks: String = failed
-        .iter()
-        .map(|check| match &check.url {
-            Some(url) => format!("- {}: {url}\n", check.name),
-            None => format!("- {}\n", check.name),
-        })
-        .collect();
+    let checks = ci::check_list(&failed.own);
+    let inherited = if failed.inherited.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nAlso failing on `{base}`; don't fix:\n{}",
+            ci::check_list(&failed.inherited)
+        )
+    };
     format!(
         "CI failed on pull request {pr_url} (branch {branch}, implementing {url}).\n\
          \n\
          Failed checks:\n\
          {checks}\
+         {inherited}\
          \n\
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
          Run the affected checks locally, commit, and push {branch}.\n\

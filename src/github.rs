@@ -195,6 +195,88 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
     ])
 }
 
+/// Every open issue labelled `label` in the repository of `issue`, with its
+/// title. They come from GitHub's issue list, not its search, whose index can
+/// be a while behind an issue just opened.
+pub fn open_issues_labelled(issue: &IssueUrl, label: &str) -> Result<Vec<(IssueUrl, String)>> {
+    let json = gh_json(&[
+        "issue",
+        "list",
+        "--repo",
+        &issue.repo_slug(),
+        "--label",
+        label,
+        "--state",
+        "open",
+        "--json",
+        "url,title",
+        "--limit",
+        "1000",
+    ])?;
+    json.as_array()
+        .context("gh issue list did not return a list")?
+        .iter()
+        .map(|listed| {
+            let field = |name: &str| {
+                listed[name]
+                    .as_str()
+                    .with_context(|| format!("gh issue list output has no {name}"))
+            };
+            Ok((IssueUrl::parse(field("url")?)?, field("title")?.to_string()))
+        })
+        .collect()
+}
+
+/// Open an issue titled `title`, with `body` and `labels`, in the repository
+/// of `issue`, and return it. Each label is first added to the repository,
+/// with its description, if the repository lacks it: `gh` refuses a label it
+/// doesn't know.
+pub fn create_issue(
+    issue: &IssueUrl,
+    title: &str,
+    body: &str,
+    labels: &[(&str, &str)],
+) -> Result<IssueUrl> {
+    let repo = issue.repo_slug();
+    let known = gh_json(&[
+        "label", "list", "--repo", &repo, "--json", "name", "--limit", "1000",
+    ])?;
+    let known: Vec<&str> = known
+        .as_array()
+        .context("gh label list did not return a list")?
+        .iter()
+        .filter_map(|label| label["name"].as_str())
+        .collect();
+    for (name, description) in labels {
+        // GitHub's label names are case-insensitive.
+        if !known.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+            gh(&[
+                "label",
+                "create",
+                name,
+                "--repo",
+                &repo,
+                "--description",
+                description,
+            ])?;
+        }
+    }
+    let names: Vec<&str> = labels.iter().map(|(name, _)| *name).collect();
+    let url = gh_stdout(&[
+        "issue",
+        "create",
+        "--repo",
+        &repo,
+        "--title",
+        title,
+        "--body",
+        body,
+        "--label",
+        &names.join(","),
+    ])?;
+    IssueUrl::parse(&url).context("gh issue create did not print the issue's URL")
+}
+
 /// The public email of the signed-in user's GitHub profile, or `None` if it
 /// is private. Private addresses need the `user` scope, which a default
 /// `gh auth login` token lacks, so thirdshift never asks for them.

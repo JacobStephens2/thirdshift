@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
+use crate::base_fix::BaseFixAsk;
 use crate::git::Git;
 use crate::notification::NotificationAsk;
 use crate::questions::{self, Answers};
@@ -24,6 +25,8 @@ use crate::{email, github, progress};
 pub struct UserConfig {
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
+    /// `base.fix`: every Run may start a Base fix unless told `no-base-fix`.
+    pub base_fix: bool,
     /// `launch.pull`: every Run fast-forwards the Launch directory's
     /// checkout of the Base branch to `origin`.
     pub launch_pull: bool,
@@ -68,6 +71,7 @@ impl UserConfig {
     fn defaults(home: &Path) -> Self {
         UserConfig {
             merge_always: false,
+            base_fix: false,
             launch_pull: false,
             logs_dir: home.join(".thirdshift/logs"),
             email: EmailSettings::default(),
@@ -88,7 +92,7 @@ impl UserConfig {
         for (section, value) in &table {
             let known = matches!(
                 section.as_str(),
-                "merge" | "launch" | "logs" | "email" | "spec"
+                "merge" | "base" | "launch" | "logs" | "email" | "spec"
             );
             let settings = match value {
                 Value::Table(settings) if known => settings,
@@ -100,6 +104,8 @@ impl UserConfig {
                 match (section.as_str(), key.as_str(), value) {
                     ("merge", "always", Value::Boolean(always)) => config.merge_always = *always,
                     ("merge", "always", _) => bail!("merge.always must be true or false in {file}"),
+                    ("base", "fix", Value::Boolean(fix)) => config.base_fix = *fix,
+                    ("base", "fix", _) => bail!("base.fix must be true or false in {file}"),
                     ("launch", "pull", Value::Boolean(pull)) => config.launch_pull = *pull,
                     ("launch", "pull", _) => bail!("launch.pull must be true or false in {file}"),
                     ("logs", "dir", Value::String(dir)) => match expand_home(dir, home) {
@@ -145,6 +151,16 @@ impl UserConfig {
             Goal::ReadyForReview
         }
     }
+
+    /// What a Run whose command gave no `base-fix` or `no-base-fix` asks
+    /// about a Base fix.
+    pub fn default_base_fix(&self) -> BaseFixAsk {
+        if self.base_fix {
+            BaseFixAsk::Allow
+        } else {
+            BaseFixAsk::Forbid
+        }
+    }
 }
 
 impl EmailSettings {
@@ -161,7 +177,8 @@ impl EmailSettings {
 
 /// Setup: write the User config. From a terminal, the Setup questions come
 /// first, each with the current value as its default answer, and the answers
-/// are written; with no terminal, nothing is asked, and every setting is at
+/// are written, with `base.fix`, asked about only when every Run is a Merge
+/// run, otherwise at its default; with no terminal, nothing is asked, and every setting is at
 /// its default, with `email.to` as the suggested address, if there is one.
 /// An existing User config is edited in place, once it parses as a Run would
 /// parse it: its comments and key order stay, as do the values Setup didn't
@@ -333,6 +350,7 @@ fn write_new(home: &Path, path: &Path, text: &str) -> Result<()> {
 fn with_answers(text: &str, answers: &Answers) -> Result<String> {
     let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
     set(&mut document, "merge", "always", answers.merge_always);
+    set(&mut document, "base", "fix", answers.base_fix);
     set(&mut document, "launch", "pull", answers.launch_pull);
     set(
         &mut document,
@@ -575,6 +593,9 @@ fn is_commented_out_email_to(line: &str) -> bool {
 const DEFAULTS: &str = r#"[merge]
 always = false   # every Run is a Merge run, without the merge word; default false
 
+[base]
+fix = false      # every Run may start a Base fix, without the base-fix word; default false
+
 [launch]
 pull = false     # every Run first fast-forwards your checkout of the Base branch; default false
 
@@ -697,6 +718,13 @@ mod tests {
     }
 
     #[test]
+    fn base_fix_is_read() {
+        assert!(parse("[base]\nfix = true\n").unwrap().base_fix);
+        assert!(!parse("[base]\nfix = false\n").unwrap().base_fix);
+        assert!(!parse("").unwrap().base_fix);
+    }
+
+    #[test]
     fn launch_pull_is_read() {
         assert!(parse("[launch]\npull = true\n").unwrap().launch_pull);
         assert!(!parse("[launch]\npull = false\n").unwrap().launch_pull);
@@ -790,6 +818,9 @@ mod tests {
                 "[merge]\nalways = 1\n",
                 "merge.always must be true or false",
             ),
+            ("[base]\nfx = true\n", "unknown key base.fx"),
+            ("base = true\n", "base must be the section [base]"),
+            ("[base]\nfix = \"yes\"\n", "base.fix must be true or false"),
             ("[launch]\npul = true\n", "unknown key launch.pul"),
             ("launch = true\n", "launch must be the section [launch]"),
             (
@@ -908,6 +939,7 @@ mod tests {
     fn notifications_to(to: &str) -> Answers {
         Answers {
             merge_always: false,
+            base_fix: false,
             launch_pull: false,
             notifications: Some(questions::Notifications {
                 to: to.to_string(),

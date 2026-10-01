@@ -14,12 +14,26 @@ pub enum Ci {
     Absent,
     Passed,
     /// Red, with the checks that failed.
-    Failed(Vec<Check>),
+    Failed(FailedChecks),
+}
+
+/// The checks that failed on a commit, at least one, split by whether the
+/// branch is the one to fix them.
+pub struct FailedChecks {
+    /// The branch's own failures, for a CI-fix Repair.
+    pub own: Vec<Check>,
+    /// Inherited failures: checks that also failed on the Base branch commit,
+    /// as did every check there of the same name.
+    pub inherited: Vec<Check>,
 }
 
 /// Wait up to the grace period for any check or status on `sha`, then watch
-/// them until they have all finished.
-pub fn watch(issue: &IssueUrl, sha: &str) -> Result<Ci> {
+/// them until they have all finished. Checks that failed are compared, by
+/// name, with the checks on `base_commit` as they stand: the Base branch's CI
+/// is never waited for or triggered, and no log text is read. With no
+/// `base_commit`, as in a Base fix, every check that failed is the branch's
+/// own.
+pub fn watch(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
     let grace = poll::grace_period();
     let short = short(sha);
     progress::step(format_args!(
@@ -52,22 +66,55 @@ pub fn watch(issue: &IssueUrl, sha: &str) -> Result<Ci> {
         }
         Ok(None)
     })?;
-    let failed: Vec<Check> = checks
-        .into_iter()
-        .filter(|check| check.state == CheckState::Failed)
-        .collect();
+    let failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
     if failed.is_empty() {
         progress::step(format_args!("CI passed on {short}"));
         return Ok(Ci::Passed);
     }
-    let names: Vec<&str> = failed.iter().map(|check| check.name.as_str()).collect();
-    progress::step(format_args!("CI failed on {short}: {}", names.join(", ")));
-    Ok(Ci::Failed(failed))
+    progress::step(format_args!(
+        "CI failed on {short}: {}",
+        check_names(&failed)
+    ));
+    let Some(base_commit) = base_commit else {
+        return Ok(Ci::Failed(FailedChecks {
+            own: failed,
+            inherited: Vec::new(),
+        }));
+    };
+    let on_base = github::checks_on(issue, base_commit)?;
+    let (inherited, own) = failed.into_iter().partition(|check| {
+        let mut same_name = on_base.iter().filter(|base| base.name == check.name);
+        // Checks sharing the name with only some of them failed there can't
+        // be told apart, so the failure stays the branch's own.
+        same_name.next().is_some_and(is_failed) && same_name.all(is_failed)
+    });
+    Ok(Ci::Failed(FailedChecks { own, inherited }))
+}
+
+/// The names of `checks`, as in "test, lint".
+pub fn check_names(checks: &[Check]) -> String {
+    let names: Vec<&str> = checks.iter().map(|check| check.name.as_str()).collect();
+    names.join(", ")
+}
+
+/// `checks` as a list, a line each: its name, and its URL if it has one.
+pub fn check_list(checks: &[Check]) -> String {
+    checks
+        .iter()
+        .map(|check| match &check.url {
+            Some(url) => format!("- {}: {url}\n", check.name),
+            None => format!("- {}\n", check.name),
+        })
+        .collect()
 }
 
 /// `sha` shortened to 7 characters, as in progress messages.
 pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
+}
+
+fn is_failed(check: &Check) -> bool {
+    check.state == CheckState::Failed
 }
 
 fn count(checks: &[Check], state: CheckState) -> usize {
