@@ -213,6 +213,11 @@ fn main() -> ExitCode {
         child.as_ref().map(Kind::base),
         &mut base_fix,
     );
+    let base_fix = base_fix.report();
+    // Before the outcome, which a failed child Run's last lines are read as.
+    if let Some(report) = &base_fix {
+        progress::step(format_args!("{}{report}", base_fix::REPORT));
+    }
     let code = match &ended {
         Ok(reached) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
@@ -236,7 +241,7 @@ fn main() -> ExitCode {
         }
     };
     if let Some(notification) = notification {
-        notification.send(&ended, base_fix.report().as_deref());
+        notification.send(&ended, base_fix.as_deref());
     }
     code
 }

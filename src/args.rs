@@ -22,6 +22,10 @@ pub enum Command {
     Run(RunArgs),
 }
 
+/// The word that lets a Run start a Base fix, which a Spec run passes on to
+/// each Ticket's Run.
+pub const BASE_FIX: &str = "base-fix";
+
 /// The hidden argument a Spec run starts each Ticket's Run with, followed by
 /// the Spec branch: it makes the Run a [`Kind::Ticket`]. Not in help.
 pub const SPEC_BRANCH: &str = "--spec-branch";
@@ -109,7 +113,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 };
                 parallel = Some(n);
             }
-            "base-fix" | "--base-fix" => {
+            BASE_FIX | "--base-fix" => {
                 ask_once(&mut base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
             }
             "no-base-fix" | "--no-base-fix" => {

@@ -110,7 +110,7 @@ impl Worktree {
         &self.git
     }
 
-    /// The launch repository the worktree was added from.
+    /// The Launch directory the worktree was added from.
     pub fn launch(&self) -> &Git {
         &self.launch
     }

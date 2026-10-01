@@ -597,6 +597,34 @@ fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branc
     assert_eq!(spec_pr(&scenario)["isDraft"], false);
 }
 
+#[test]
+fn a_ticket_that_landed_after_a_base_fix_says_so_in_the_notification_and_the_checklist() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    base_fix_lands_on_the_spec_branch(&scenario);
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[
+            "--email",
+            "me@example.com",
+            "base-fix",
+            &spec_url(&scenario),
+        ],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let landed = "#21 landed with https://github.com/acme/widgets/pull/1, \
+                  after Base fix https://github.com/acme/widgets/issues/22 merged\n";
+    let (_, text) = the_one_notification(&resend);
+    assert_contains(&text, landed);
+    // The Spec PR's own Repair loop took no Base fix.
+    assert!(!text.contains("Base fix:"), "{text}");
+    let body = spec_pr(&scenario)["body"].as_str().unwrap().to_string();
+    assert_contains(&body, &format!("- [x] {landed}"));
+}
+
 /// A Spec #20 whose Tickets #21 and #22, neither blocked, each land a file
 /// and meet `test` red on their head and on the Spec branch.
 fn two_tickets_with_the_same_inherited_failure() -> Scenario {
@@ -1588,7 +1616,8 @@ fn a_ticket_that_fails_once_the_spec_pr_is_open_is_shown_failed_in_its_checklist
 }
 
 #[test]
-fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the_checklist() {
+fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the_checklist_and_the_notification()
+ {
     let scenario = spec_of(&[(21, &[]), (22, &[])]);
     scenario.agent_does_for(
         22,
@@ -1600,8 +1629,20 @@ fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the
         ),
     );
 
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
     // One at a time, so #22 branches off a Spec branch #21 has landed on.
-    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[
+            "--email",
+            "me@example.com",
+            "parallel",
+            "1",
+            &spec_url(&scenario),
+        ],
+    );
 
     let cause = inherited_failure(&scenario, "issue-20");
     assert_failed_spec_run(
@@ -1614,6 +1655,8 @@ fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the
     );
     assert_eq!(sessions_by_issue(&scenario), ["21", "22"], "no Repair");
     assert_contains(&result.stderr, &format!("thirdshift: #22 failed: {cause}"));
+    let (_, text) = the_one_notification(&resend);
+    assert_contains(&text, &format!("#22 failed: {cause}"));
     assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "OPEN");
     assert_eq!(scenario.origin_file("issue-20", "22.txt"), None);
 }

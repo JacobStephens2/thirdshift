@@ -1,7 +1,6 @@
 //! The prompts agent sessions are started with.
 
-use crate::ci::FailedChecks;
-use crate::github::Check;
+use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 
 /// Every prompt ends with this. Sessions run with `claude -p`, which exits
@@ -117,13 +116,13 @@ pub fn ci_fix_repair(
     pr_url: &str,
     failed: &FailedChecks,
 ) -> String {
-    let checks = check_list(&failed.own);
+    let checks = ci::check_list(&failed.own);
     let inherited = if failed.inherited.is_empty() {
         String::new()
     } else {
         format!(
             "\nAlso failing on `{base}`; don't fix:\n{}",
-            check_list(&failed.inherited)
+            ci::check_list(&failed.inherited)
         )
     };
     format!(
@@ -141,17 +140,6 @@ pub fn ci_fix_repair(
          {HEADLESS}",
         url = issue.url,
     )
-}
-
-/// `checks` as a list, a line each: its name, and its URL if it has one.
-fn check_list(checks: &[Check]) -> String {
-    checks
-        .iter()
-        .map(|check| match &check.url {
-            Some(url) => format!("- {}: {url}\n", check.name),
-            None => format!("- {}\n", check.name),
-        })
-        .collect()
 }
 
 /// The review Repair prompt, for Foreign commits a Merge run has merged into

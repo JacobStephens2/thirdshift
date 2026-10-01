@@ -30,6 +30,10 @@ const LABELS: [(&str, &str); 2] = [
     ("ready-for-agent", "Ready for an agent to take on"),
 ];
 
+/// What starts the line on stderr saying what became of the Base fix a Run
+/// took, which a Spec run reads back from a Ticket's Run.
+pub const REPORT: &str = "Base fix: ";
+
 /// What a Run asks about a Base fix, by its command or, without `base-fix`
 /// or `no-base-fix`, by the User config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,10 +102,19 @@ impl BaseFix {
         self.on_inherited_failures != OnInheritedFailures::IsBaseFix
     }
 
-    /// Whether the Run may start a Base fix, as may then each Ticket's Run
-    /// of a Spec run.
-    pub fn may_start(&self) -> bool {
+    /// Whether the Run may start a Base fix.
+    fn may_start(&self) -> bool {
         self.on_inherited_failures == OnInheritedFailures::StartBaseFix
+    }
+
+    /// What each Ticket's Run of a Spec run asks about a Base fix: what the
+    /// Spec run may do, so may it.
+    pub fn ask_of_tickets(&self) -> BaseFixAsk {
+        if self.may_start() {
+            BaseFixAsk::Allow
+        } else {
+            BaseFixAsk::Forbid
+        }
     }
 
     /// Fix the checks `inherited`, the only red ones on the PR `pr_url` of
@@ -128,16 +141,19 @@ impl BaseFix {
     ) -> Result<()> {
         let checks = ci::check_names(inherited);
         let base_at = ci::short(base_commit);
-        if let Some(taken) = &self.taken {
+        if self.taken.is_some() || !self.may_start() {
+            let even_after = match &self.taken {
+                Some(taken) => format!(
+                    ", even after Base fix {} {}",
+                    taken.issue.url,
+                    taken.awaited_end()
+                ),
+                None => String::new(),
+            };
             bail!(
-                "CI red on {checks}, which also fails on {base} at {base_at}, \
-                 even after Base fix {} {}; fix {base} first",
-                taken.issue.url,
-                taken.awaited_end()
+                "CI red on {checks}, which also fails on {base} at {base_at}{even_after}; \
+                 fix {base} first"
             );
-        }
-        if !self.may_start() {
-            bail!("CI red on {checks}, which also fails on {base} at {base_at}; fix {base} first");
         }
         // Held from the look for an open Base fix issue until the one this
         // Run starts is written and marked as running.
@@ -191,10 +207,10 @@ impl BaseFix {
         let kind = Kind::BaseFix {
             base: base.to_string(),
         };
-        let child = child_run::start(&taken.issue, &kind, false)?;
+        let child = child_run::start(&taken.issue, &kind, BaseFixAsk::Forbid)?;
         progress::step(format_args!("waiting on Base fix #{number}"));
         match child_run::wait(number, child)? {
-            Ended::Reached(_) => {
+            Ended::Reached { .. } => {
                 taken.reached = true;
                 running.merged();
                 progress::step(format_args!(
@@ -258,7 +274,7 @@ impl BaseFix {
     }
 }
 
-/// The file, in the launch repository's common git directory, that marks
+/// The file, in the Launch directory's common git directory, that marks
 /// Base fix `number` as started from this Launch directory.
 fn mark_file(number: u64) -> String {
     format!("thirdshift-base-fix-{number}.lock")
@@ -372,13 +388,7 @@ fn issue_body(
     base_at: &str,
     failed: &[Check],
 ) -> String {
-    let mut checks = String::new();
-    for check in failed {
-        checks += &match &check.url {
-            Some(url) => format!("- {}: {url}\n", check.name),
-            None => format!("- {}\n", check.name),
-        };
-    }
+    let checks = ci::check_list(failed);
     format!(
         "CI is red on `{base}` at {base_at}: these checks fail there, so every pull request into `{base}` inherits them.\n\
          \n\

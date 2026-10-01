@@ -14,7 +14,7 @@ use std::thread;
 
 use anyhow::{Context, Result, bail};
 
-use crate::base_fix::BaseFix;
+use crate::base_fix::{BaseFix, BaseFixAsk};
 use crate::child_run::{self, Ended, Kind};
 use crate::failed_run::{self, FailedRun};
 use crate::github::{self, PullRequest, Ticket};
@@ -89,7 +89,7 @@ pub fn run(
         &worktree,
         base,
         parallel,
-        base_fix.may_start(),
+        base_fix.ask_of_tickets(),
         &mut spec_pr,
     );
     let ended = match landed {
@@ -154,8 +154,12 @@ fn open_and_review(
 enum TicketOutcome {
     /// It has started and not yet ended.
     Running,
-    /// Its PR, as the Run printed it.
-    Landed(Option<String>),
+    /// Its PR, as the Run printed it, and what became of the Base fix it
+    /// took, if any, as the Run reported it.
+    Landed {
+        pr_url: Option<String>,
+        base_fix: Option<String>,
+    },
     /// Why, and its session log, as the Run reported them.
     Failed { cause: String, log: Option<String> },
     /// Ended by an interrupt passed on to it.
@@ -170,14 +174,14 @@ enum TicketOutcome {
 /// not done, none if the Spec branch could not be pushed, and the last
 /// Tickets checklist if every Ticket is done: if not, it fails, after putting
 /// those lines on stderr unless an interrupt or another error ended it first.
-/// With `base_fix`, each Ticket's Run may start a Base fix.
+/// Each Ticket's Run may start a Base fix if `base_fix` allows one.
 fn land_tickets(
     spec: &IssueUrl,
     mut tickets: Vec<Ticket>,
     worktree: &Worktree,
     base: &str,
     parallel: NonZeroUsize,
-    base_fix: bool,
+    base_fix: BaseFixAsk,
     spec_pr: &mut Option<PullRequest>,
 ) -> (Vec<String>, Result<String>) {
     if let Err(error) = worktree.push() {
@@ -217,8 +221,8 @@ fn land_tickets(
 /// Ticket's outcome in `outcomes`, and the Tickets checklist of `spec_pr`,
 /// opened into `base` once a Ticket lands, up to date. An interrupt, or an
 /// error other than a Ticket failing, stops any more from starting, and
-/// fails this once those running have ended. With `base_fix`, each Ticket's
-/// Run may start a Base fix.
+/// fails this once those running have ended. Each Ticket's Run may start a
+/// Base fix if `base_fix` allows one.
 #[allow(clippy::too_many_arguments)]
 fn run_ready_tickets(
     spec: &IssueUrl,
@@ -227,7 +231,7 @@ fn run_ready_tickets(
     spec_branch: &str,
     base: &str,
     parallel: NonZeroUsize,
-    base_fix: bool,
+    base_fix: BaseFixAsk,
     spec_pr: &mut Option<PullRequest>,
 ) -> Result<()> {
     let (ended, endings) = mpsc::channel();
@@ -265,7 +269,7 @@ fn run_ready_tickets(
             error.get_or_insert(finish_error);
             TicketOutcome::Failed { cause, log: None }
         });
-        let landed = matches!(outcome, TicketOutcome::Landed(_));
+        let landed = matches!(outcome, TicketOutcome::Landed { .. });
         outcomes.insert(ticket, outcome);
         match github::tickets(spec) {
             Ok(reread) => *tickets = reread,
@@ -365,8 +369,16 @@ fn standing(
 ) -> String {
     let number = ticket.number;
     let landed = match outcomes.get(&number) {
-        Some(TicketOutcome::Landed(Some(pr_url))) => Some(format!("landed with {pr_url}")),
-        Some(TicketOutcome::Landed(None)) => Some("landed".to_string()),
+        Some(TicketOutcome::Landed { pr_url, base_fix }) => {
+            let mut landed = "landed".to_string();
+            if let Some(pr_url) = pr_url {
+                landed += &format!(" with {pr_url}");
+            }
+            if let Some(base_fix) = base_fix {
+                landed += &format!(", after Base fix {base_fix}");
+            }
+            Some(landed)
+        }
         _ => None,
     };
     if !ticket.is_open {
@@ -477,14 +489,14 @@ fn cycle_through(start: u64, tickets: &[Ticket]) -> Option<Vec<u64>> {
 }
 
 /// Start Ticket `number` of `spec` as a child `thirdshift`, a Merge run into
-/// `spec_branch` from the same Launch directory that, with `base_fix`, may
-/// start a Base fix, and a thread that sends `number` and how it ended on
-/// `ended`.
+/// `spec_branch` from the same Launch directory that may start a Base fix if
+/// `base_fix` allows one, and a thread that sends `number` and how it ended
+/// on `ended`.
 fn start_ticket(
     spec: &IssueUrl,
     number: u64,
     spec_branch: &str,
-    base_fix: bool,
+    base_fix: BaseFixAsk,
     ended: Sender<(u64, Result<TicketOutcome>)>,
 ) -> Result<()> {
     progress::step(format_args!("starting #{number}"));
@@ -502,9 +514,9 @@ fn start_ticket(
 /// it ended.
 fn finish_ticket(number: u64, child: Child) -> Result<TicketOutcome> {
     Ok(match child_run::wait(number, child)? {
-        Ended::Reached(pr_url) => {
+        Ended::Reached { pr_url, base_fix } => {
             progress::step(format_args!("#{number} landed"));
-            TicketOutcome::Landed(pr_url)
+            TicketOutcome::Landed { pr_url, base_fix }
         }
         Ended::Interrupted => {
             progress::step(format_args!("#{number} interrupted"));
@@ -631,7 +643,13 @@ mod tests {
             ticket(22, false, &[], &[]),
             ticket(23, true, &[21, 22], &[]),
         ];
-        let outcomes = BTreeMap::from([(21, TicketOutcome::Landed(None))]);
+        let outcomes = BTreeMap::from([(
+            21,
+            TicketOutcome::Landed {
+                pr_url: None,
+                base_fix: None,
+            },
+        )]);
 
         assert_eq!(next_ready(&tickets, &outcomes, &HashSet::from([22])), None);
         assert_eq!(next_ready(&tickets, &outcomes, &HashSet::new()), Some(23));
@@ -673,7 +691,10 @@ mod tests {
         let outcomes = BTreeMap::from([
             (
                 21,
-                TicketOutcome::Landed(Some("https://x/pull/1".to_string())),
+                TicketOutcome::Landed {
+                    pr_url: Some("https://x/pull/1".to_string()),
+                    base_fix: None,
+                },
             ),
             (
                 23,

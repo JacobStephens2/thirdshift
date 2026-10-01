@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 
 use crate::args;
+use crate::base_fix::{self, BaseFixAsk};
 use crate::failed_run;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -50,8 +51,12 @@ impl Kind {
 
 /// How a child Run ended.
 pub enum Ended {
-    /// It reached its goal, with its PR as it printed it.
-    Reached(Option<String>),
+    /// It reached its goal, with its PR as it printed it, and what became
+    /// of the Base fix it took, if any, as it reported it.
+    Reached {
+        pr_url: Option<String>,
+        base_fix: Option<String>,
+    },
     /// Why, and its session log, as it reported them.
     Failed { cause: String, log: Option<String> },
     /// Ended by an interrupt passed on to it.
@@ -59,12 +64,12 @@ pub enum Ended {
 }
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
-/// Launch directory. With `base_fix`, it is given `base-fix`, so it may start
-/// a Base fix.
-pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: bool) -> Result<Child> {
+/// Launch directory. If `base_fix` allows one, it is given `base-fix`, so it
+/// may start a Base fix.
+pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: BaseFixAsk) -> Result<Child> {
     Command::new(std::env::current_exe().context("no thirdshift executable")?)
         .args([kind.hidden_argument(), kind.base()])
-        .args(base_fix.then_some("base-fix"))
+        .args((base_fix == BaseFixAsk::Allow).then_some(args::BASE_FIX))
         .arg(&issue.url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -76,20 +81,25 @@ pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: bool) -> Result<Child> {
 /// Relay the stderr of `child`, the Run for issue `number`, with a
 /// `#<number>: ` prefix until it exits. An interrupt is passed on to the
 /// child, which is waited for as it goes down its Failed run path, and it
-/// ended `Interrupted`. Otherwise it reached its goal if it exits 0, and
-/// failed otherwise, with the cause and session log it ended on.
+/// ended `Interrupted`. Otherwise it reached its goal if it exits 0, with
+/// the Base fix it reported, and failed otherwise, with the cause and
+/// session log it ended on.
 pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
     // Relay on its own thread, so this one can watch for an interrupt.
     let stderr = child.stderr.take().context("no stderr from the Run")?;
     // A failed Run ends on its error, then its session log if it has one.
-    let relay = thread::spawn(move || -> std::io::Result<[Option<String>; 2]> {
+    let relay = thread::spawn(move || -> std::io::Result<_> {
         let mut last_lines: [Option<String>; 2] = [None, None];
+        let mut base_fix = None;
         for line in BufReader::new(stderr).lines() {
             let line = line?;
             let message = progress::relay(format_args!("#{number}"), &line).to_string();
+            if let Some(report) = message.strip_prefix(base_fix::REPORT) {
+                base_fix = Some(report.to_string());
+            }
             last_lines = [last_lines[1].take(), Some(message)];
         }
-        Ok(last_lines)
+        Ok((last_lines, base_fix))
     });
     let mut passed_on = false;
     let status = loop {
@@ -110,7 +120,7 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
         }
         thread::sleep(POLL);
     };
-    let last_lines = relay
+    let (last_lines, base_fix) = relay
         .join()
         .map_err(|_| anyhow!("the relay of the Run for #{number} panicked"))?
         .with_context(|| format!("could not read the Run for #{number}"))?;
@@ -122,7 +132,10 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
         .read_to_string(&mut stdout)
         .with_context(|| format!("could not read the Run for #{number}"))?;
     if status.success() {
-        return Ok(Ended::Reached(stdout.lines().last().map(String::from)));
+        return Ok(Ended::Reached {
+            pr_url: stdout.lines().last().map(String::from),
+            base_fix,
+        });
     }
     if interrupt::requested() {
         return Ok(Ended::Interrupted);

@@ -97,6 +97,17 @@ pub fn check_names(checks: &[Check]) -> String {
     names.join(", ")
 }
 
+/// `checks` as a list, a line each: its name, and its URL if it has one.
+pub fn check_list(checks: &[Check]) -> String {
+    checks
+        .iter()
+        .map(|check| match &check.url {
+            Some(url) => format!("- {}: {url}\n", check.name),
+            None => format!("- {}\n", check.name),
+        })
+        .collect()
+}
+
 /// `sha` shortened to 7 characters, as in progress messages.
 pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
