@@ -66,13 +66,16 @@ impl ResendKey {
 
 /// The key in `RESEND_API_KEY`, if it is set and not empty.
 fn from_environment() -> Option<ResendKey> {
-    std::env::var("RESEND_API_KEY")
-        .ok()
-        .filter(|key| !key.is_empty())
-        .map(|secret| ResendKey {
-            secret,
-            source: Source::Environment,
-        })
+    environment_key(std::env::var("RESEND_API_KEY").ok())
+}
+
+/// The key in `RESEND_API_KEY` when it holds `value`: none if it is unset or
+/// empty, so the Credentials are read instead.
+fn environment_key(value: Option<String>) -> Option<ResendKey> {
+    value.filter(|key| !key.is_empty()).map(|secret| ResendKey {
+        secret,
+        source: Source::Environment,
+    })
 }
 
 /// The Credentials, as read: the file's text, if there is one, and the key
@@ -252,4 +255,51 @@ fn missing(path: &Path) -> String {
          (a crontab line, CI secret, or a shell profile the Run's shell reads)",
         path.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resend_api_key_unset_or_empty_holds_no_key() {
+        for value in [None, Some(String::new())] {
+            assert!(environment_key(value.clone()).is_none(), "{value:?}");
+        }
+        let key = environment_key(Some("re_test_123".into())).unwrap();
+        assert_eq!(key.secret, "re_test_123");
+        assert_eq!(key.source, Source::Environment);
+    }
+
+    #[test]
+    fn the_credentials_key_is_read_and_an_empty_one_is_none() {
+        let file = Source::Credentials(PathBuf::from("/home/me/.thirdshift/credentials.toml"));
+
+        assert_eq!(
+            parse("[resend]\nkey = \"re_file_456\"\n", &file).unwrap(),
+            Some("re_file_456".to_string())
+        );
+        for text in ["", "[resend]\n", "[resend]\nkey = \"\"\n"] {
+            assert_eq!(parse(text, &file).unwrap(), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn broken_credentials_are_an_error_naming_the_file_and_what_is_wrong() {
+        let path = "/home/me/.thirdshift/credentials.toml";
+        let file = Source::Credentials(PathBuf::from(path));
+        for (text, named) in [
+            ("[resend\n", "can't parse"),
+            ("[resend]\nkye = \"re_file_456\"\n", "resend.kye"),
+            ("[resend]\nkey = true\n", "resend.key"),
+            ("resend = 1\n", "resend must be the section [resend]"),
+            ("[email]\n", "unknown section [email]"),
+            ("key = \"re_file_456\"\n", "unknown key key"),
+        ] {
+            let error = format!("{:#}", parse(text, &file).unwrap_err());
+            for part in [named, path] {
+                assert!(error.contains(part), "{text:?}: no {part:?} in {error}");
+            }
+        }
+    }
 }

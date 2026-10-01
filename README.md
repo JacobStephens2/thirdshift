@@ -375,7 +375,7 @@ Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR
 
 The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` arguments and the skills, and each Session prompt is also generated as a Markdown file in [`prompts/`](prompts/), with a [`README.md`](prompts/README.md) that lists them with the `claude` command lines. `cargo test` fails until they are regenerated after a change to any of them. Regenerate the page and `prompts/` with `UPDATE_PROMPTS=1 cargo test prompts_page`, which also deletes any file in `prompts/` that it doesn't generate.
 
-Running the test suite (`cargo test`) also needs **`python3`** on `PATH`: the integration tests swap in fake `gh` and `claude`, which are Python scripts in `tests/fakes/`.
+The integration tests swap in a fake `gh` and `claude`, from [`tests/fakes.rs`](tests/fakes.rs). The first test that needs them builds them with `rustc` (the one on `PATH`, or `$RUSTC`), so the suite needs nothing else on `PATH` beyond `git` and `bash`.
 
 ## Releasing
 

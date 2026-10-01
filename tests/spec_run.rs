@@ -7,8 +7,8 @@
 
 mod support;
 
-use support::Scenario;
 use support::resend::ResendStandIn;
+use support::{Scenario, WAIT_BOUND};
 
 const SPEC: u32 = 20;
 const SPEC_TITLE: &str = "Widgets, all of them";
@@ -491,6 +491,8 @@ fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
 
 #[test]
 fn repairs_exhausted_on_the_spec_pr_send_it_back_to_draft_and_exit_1() {
+    // Five real Repairs, as the cap runs out only after them. The Run's unit
+    // tests take the counting.
     let scenario = linear_spec();
     scenario.agent_does_for_in_session(SPEC, 1, &checks_on_head(RED));
     for session in 2..=6 {
@@ -806,15 +808,19 @@ fn help_does_not_mention_the_ticket_runs_hidden_argument() {
     assert!(!result.stdout.contains("spec-branch"), "{}", result.stdout);
 }
 
+/// How many times a session's script that waits on other sessions looks for
+/// them, 0.05 seconds apart: the harness's [`WAIT_BOUND`] of looking.
+const LOOKS: u128 = WAIT_BOUND.as_millis() / 50;
+
 /// Bash that touches `started-<ticket>` in the scenario root, then waits up
-/// to ten seconds for `started-<other>` there, failing if it never appears:
+/// to [`WAIT_BOUND`] for `started-<other>` there, failing if it never appears:
 /// the session for `ticket` only ends once `other`'s has started too.
 fn waits_for_other_session(scenario: &Scenario, ticket: u32, other: u32) -> String {
     let root = scenario.path("");
     format!(
         r#"
 touch {root}/started-{ticket}
-for _ in $(seq 200); do test -f {root}/started-{other} && break; sleep 0.05; done
+for _ in $(seq {LOOKS}); do test -f {root}/started-{other} && break; sleep 0.05; done
 test -f {root}/started-{other}
 "#,
         root = root.display()
@@ -957,19 +963,18 @@ fn two_tickets_starting_together_in_one_launch_directory_both_get_their_worktree
 
 #[test]
 fn parallel_1_runs_the_tickets_one_at_a_time() {
-    for args in [["parallel", "1"], ["--parallel", "1"]] {
-        let scenario = diamond_spec();
-        second_ticket_needs_the_first_landed(&scenario);
-        let url = spec_url(&scenario);
+    // One spelling end to end; the argument parsing's unit tests take both.
+    let scenario = diamond_spec();
+    second_ticket_needs_the_first_landed(&scenario);
+    let url = spec_url(&scenario);
 
-        let result = scenario.run(&[args[0], args[1], &url]);
+    let result = scenario.run(&["--parallel", "1", &url]);
 
-        assert_eq!(result.code, Some(0), "{args:?} stderr: {}", result.stderr);
-        assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
-        let landed = result.stderr.find("#21 landed\n").unwrap();
-        let started = result.stderr.find("starting #22\n").unwrap();
-        assert!(landed < started, "stderr: {}", result.stderr);
-    }
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
+    let landed = result.stderr.find("#21 landed\n").unwrap();
+    let started = result.stderr.find("starting #22\n").unwrap();
+    assert!(landed < started, "stderr: {}", result.stderr);
 }
 
 #[test]
@@ -1003,7 +1008,7 @@ fn without_a_limit_at_most_three_tickets_run_at_once() {
     scenario.spec_has_tickets(SPEC, &tickets.map(|ticket| (ticket, &[][..])));
     let root = scenario.path("").display().to_string();
     for ticket in tickets {
-        // Each session waits, up to ten seconds, until three are running or
+        // Each session waits, up to `WAIT_BOUND`, until three are running or
         // have been, then for a moment more, and records how many it saw at
         // once.
         scenario.agent_does_for(
@@ -1012,7 +1017,7 @@ fn without_a_limit_at_most_three_tickets_run_at_once() {
                 r#"
 mkdir -p {root}/running
 touch {root}/running/{ticket}
-for _ in $(seq 200); do
+for _ in $(seq {LOOKS}); do
   test -f {root}/three && break
   test "$(ls {root}/running | wc -l)" -ge 3 && touch {root}/three && break
   sleep 0.05
@@ -1078,28 +1083,25 @@ fn a_needs_info_ticket_and_what_it_blocks_are_not_run_while_an_independent_ticke
 }
 
 #[test]
-fn each_unready_label_keeps_a_ticket_from_running() {
-    for label in ["ready-for-human", "wontfix", "needs-triage"] {
-        let scenario = spec_of(&[(21, &[]), (22, &[])]);
-        scenario.issue_labelled(21, &[label]);
-        scenario.issue_labelled(22, &["ready-for-agent"]);
+fn an_unready_label_keeps_a_ticket_from_running() {
+    // One label end to end; the Spec run's unit tests take each of them.
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(21, &["wontfix"]);
+    scenario.issue_labelled(22, &["ready-for-agent"]);
 
-        let result = scenario.run(&[&spec_url(&scenario)]);
+    let result = scenario.run(&[&spec_url(&scenario)]);
 
-        assert_failed_spec_run(
-            &scenario,
-            &result,
-            &format!(
-                "- [ ] #21 unready: labelled {label}\n\
-                 - [x] #22 landed with https://github.com/acme/widgets/pull/1\n"
-            ),
-        );
-        assert_eq!(sessions_by_issue(&scenario), ["22"], "{label}");
-        assert_contains(
-            &result.stderr,
-            &format!("thirdshift: #21 unready: labelled {label}\n"),
-        );
-    }
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        "- [ ] #21 unready: labelled wontfix\n\
+         - [x] #22 landed with https://github.com/acme/widgets/pull/1\n",
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["22"]);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: #21 unready: labelled wontfix\n",
+    );
 }
 
 #[test]
@@ -1238,41 +1240,28 @@ fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_r
 }
 
 #[test]
-fn sigterm_while_a_ticket_runs_ends_it_through_its_failed_run_and_the_spec_run_as_interrupted() {
-    assert_interrupt_fails_the_spec_run("TERM");
-}
-
-#[test]
-fn sighup_while_a_ticket_runs_ends_it_through_its_failed_run_and_the_spec_run_as_interrupted() {
-    assert_interrupt_fails_the_spec_run("HUP");
-}
-
-#[test]
-fn sigint_to_the_spec_run_alone_is_passed_on_to_the_ticket_run() {
-    assert_interrupt_fails_the_spec_run("INT");
-}
-
-/// Send `signal` to the Spec run's process alone while #21's agent is at
-/// work, leaving it half done: #21's Run pushes that work as a failed run,
-/// #22 never starts, and the Spec run ends only after, as interrupted.
-fn assert_interrupt_fails_the_spec_run(signal: &str) {
+fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as_interrupted() {
+    // SIGTERM to the Spec run's process alone while #21's agent is at work,
+    // leaving it half done: #21's Run pushes that work as a failed run, #22
+    // never starts, and the Spec run ends only after, as interrupted. One
+    // signal end to end: the interrupt's unit tests show SIGINT, SIGTERM and
+    // SIGHUP are each recorded alike, and the Spec run passes any of them on
+    // to the Ticket's Run as SIGTERM.
     let scenario = linear_spec();
     let started = scenario.path("agent-started");
+    let outlived = scenario.path("agent-outlived-its-sleep");
     scenario.agent_does_for(
         21,
         &format!(
-            "echo 'half done' > wip.txt\ntouch {}\nsleep 30\n",
-            started.display()
+            "echo 'half done' > wip.txt\ntouch {}\nsleep 30\ntouch {}\n",
+            started.display(),
+            outlived.display()
         ),
     );
 
-    let began = std::time::Instant::now();
-    let result = scenario.run_and_signal(&[&spec_url(&scenario)], "agent-started", signal);
+    let result = scenario.run_and_signal(&[&spec_url(&scenario)], "agent-started", "TERM");
 
-    assert!(
-        began.elapsed() < std::time::Duration::from_secs(20),
-        "the Ticket's session was not stopped"
-    );
+    assert!(!outlived.exists(), "the Ticket's session was not stopped");
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");
     assert_eq!(sessions_by_issue(&scenario), ["21"]);
@@ -1664,6 +1653,7 @@ exit 1
 
 #[test]
 fn rerunning_a_failed_spec_run_continues_the_spec_branch_and_the_failed_tickets_issue_branch() {
+    // Two Spec runs, as the rerun is the behavior.
     let scenario = spec_of(&[(21, &[]), (22, &[21])]);
     scenario.agent_does_for_in_session(22, 1, TICKET_22_STARTS_THEN_FAILS);
     scenario.agent_does_for_in_session(

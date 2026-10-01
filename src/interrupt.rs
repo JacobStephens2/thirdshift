@@ -26,3 +26,22 @@ pub fn requested() -> bool {
         .get()
         .is_some_and(|flag| flag.load(Ordering::SeqCst))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sigint_sigterm_and_sighup_are_each_recorded_as_an_interrupt() {
+        install().unwrap();
+        let flag = REQUESTED.get().unwrap();
+        for signal in [SIGINT, SIGTERM, SIGHUP] {
+            flag.store(false, Ordering::SeqCst);
+
+            signal_hook::low_level::raise(signal).unwrap();
+
+            assert!(requested(), "signal {signal}");
+        }
+        flag.store(false, Ordering::SeqCst);
+    }
+}
