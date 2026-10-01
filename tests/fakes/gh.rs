@@ -11,7 +11,10 @@
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
 //!           "mergeable"?, "unknown_polls"?}],
-//!  "checks": {"<sha>": [{"name", "conclusion", "url", "pending_polls"?}]},
+//!  "checks": {"<sha>": [{"id", "name", "conclusion", "url", "pending_polls"?,
+//!                        "rerun"?: {"conclusion", "stale_polls"?, "pending_polls"?},
+//!                        "stale"?: {"id", "conclusion", "polls"}}]},
+//!  "next_check_id"?: <number>,
 //!  "statuses": {"<sha>": [{"context", "state", "url"}]},
 //!  "runs"?: [{"databaseId", "url", "branch", "workflow", "event", "headSha", "status",
 //!             "conclusion", "jobs"?, "hidden_polls"?, "pending_polls"?}],
@@ -97,11 +100,22 @@
 //! reads. A check run reports as in progress for its first `pending_polls`
 //! reads, then as completed with its `conclusion`.
 //!
+//! A check run whose `url` is `…/actions/runs/<run>/job/<job>` belongs to the
+//! GitHub Actions workflow run <run>. `gh run rerun <run> --failed` starts a
+//! new attempt of each check run of <run> that failed, on any commit, and
+//! fails, as gh does, if there is none. The new attempt has a new `id`, and
+//! comes to what the check's `rerun` says: for its first `stale_polls` reads
+//! GitHub still lists the attempt before it, failed as it was, then the new
+//! one reports as in progress for its `pending_polls` reads, then as
+//! completed with its `conclusion`. With no `rerun`, the new attempt fails as
+//! the one before it did.
+//!
 //! Tests and fake agents change that state with `gh fake …` (not a real gh
 //! command):
 //!
 //! ```text
-//! gh fake checks <sha> '<JSON list>'      set the check runs on <sha>
+//! gh fake checks <sha> '<JSON list>'      set the check runs on <sha>, each
+//!                                         given the next `id` if it has none
 //! gh fake statuses <sha> '<JSON list>'    set the commit statuses on <sha>
 //! gh fake run '<JSON>'                    record a workflow run, newer than
 //!                                         any recorded before it, numbered
@@ -180,7 +194,7 @@ fn save(state: &Json) {
     fs::write(state_path(), state.dump()).unwrap();
 }
 
-const BOOLEAN_FLAGS: [&str; 5] = ["draft", "undo", "paginate", "merge", "silent"];
+const BOOLEAN_FLAGS: [&str; 6] = ["draft", "undo", "paginate", "merge", "silent", "failed"];
 
 /// `--flag` values by name; a boolean flag's is `None`.
 type Flags = BTreeMap<String, Option<String>>;
@@ -977,6 +991,22 @@ fn read_checks(state: &mut Json, sha: &str) -> Vec<Json> {
         .get_mut("checks")
         .and_then(|checks| checks.get_mut(sha));
     for check in checks.map(Json::items_mut).into_iter().flatten() {
+        let details_url = check.get("url").cloned().unwrap_or(Null);
+        // The attempt before a re-run, while GitHub still lists it.
+        if let Some(stale) = check.get_mut("stale").filter(|stale| stale.truthy()) {
+            let polls = stale.at("polls").as_i64().unwrap();
+            if polls > 0 {
+                stale.set("polls", number(polls - 1));
+                runs.push(object([
+                    ("id", stale.at("id").clone()),
+                    ("name", check.at("name").clone()),
+                    ("status", string("completed")),
+                    ("conclusion", check.at("stale").at("conclusion").clone()),
+                    ("details_url", details_url),
+                ]));
+                continue;
+            }
+        }
         let pending_polls = check
             .get("pending_polls")
             .and_then(Json::as_i64)
@@ -986,6 +1016,7 @@ fn read_checks(state: &mut Json, sha: &str) -> Vec<Json> {
             check.set("pending_polls", number(pending_polls - 1));
         }
         runs.push(object([
+            ("id", check.get("id").cloned().unwrap_or(Null)),
             ("name", check.at("name").clone()),
             (
                 "status",
@@ -999,11 +1030,93 @@ fn read_checks(state: &mut Json, sha: &str) -> Vec<Json> {
                     check.at("conclusion").clone()
                 },
             ),
-            ("details_url", check.get("url").cloned().unwrap_or(Null)),
+            ("details_url", details_url),
         ]));
     }
     save(state);
     runs
+}
+
+/// The next check run `id`, each one higher than the last.
+fn next_check_id(state: &mut Json) -> Json {
+    let next = state.get("next_check_id").and_then(Json::as_i64);
+    let id = next.unwrap_or(1);
+    state.set("next_check_id", number(id + 1));
+    number(id)
+}
+
+/// `gh fake checks <sha> <list>`: set the check runs on `sha`, each given the
+/// next `id` if it has none.
+fn set_checks(state: &mut Json, sha: &str, mut checks: Json) {
+    for check in checks.items_mut() {
+        if !check.has("id") {
+            check.set("id", next_check_id(state));
+        }
+    }
+    state.entry("checks", object([])).set(sha, checks);
+}
+
+/// `gh run rerun <run> --failed`: start a new attempt of each failed check
+/// run of the workflow run `<run>`, which comes to what the check's `rerun`
+/// says, or fails as the attempt before it did. With no failed check run of
+/// that workflow run, it fails as gh does on a run it can't re-run.
+fn run_rerun(state: &mut Json, positional: &[String], flags: &Flags) {
+    let supported = ["failed", "repo", "R"];
+    if !flags.contains_key("failed") || flags.keys().any(|name| !supported.contains(&name.as_str()))
+    {
+        die(
+            &format!("fake gh: unsupported run rerun flags {flags:?}"),
+            2,
+        );
+    }
+    let run = &positional[0];
+    let of_run = format!("/actions/runs/{run}/job/");
+    let mut checks = state.get("checks").cloned().unwrap_or(object([]));
+    let Json::Object(commits) = &mut checks else {
+        panic!("checks is an object")
+    };
+    let mut rerun_any = false;
+    for check in commits.iter_mut().flat_map(|(_, list)| list.items_mut()) {
+        let conclusion = check.at("conclusion").clone();
+        let failed = !["success", "skipped", "neutral"].contains(&conclusion.str());
+        let url = check.get("url").and_then(Json::as_str).unwrap_or("");
+        if !failed || !url.contains(&of_run) {
+            continue;
+        }
+        rerun_any = true;
+        let polls = |name: &str| {
+            let rerun = check.get("rerun").filter(|rerun| rerun.truthy());
+            let polls = rerun
+                .and_then(|rerun| rerun.get(name))
+                .and_then(Json::as_i64);
+            number(polls.unwrap_or(0))
+        };
+        let (stale_polls, pending_polls) = (polls("stale_polls"), polls("pending_polls"));
+        if let Some(rerun) = check.get("rerun").filter(|rerun| rerun.truthy()) {
+            let comes_to = rerun.at("conclusion").clone();
+            check.set("conclusion", comes_to);
+        }
+        let before = check.at("id").clone();
+        check.set(
+            "stale",
+            object([
+                ("id", before),
+                ("conclusion", conclusion),
+                ("polls", stale_polls),
+            ]),
+        );
+        check.set("pending_polls", pending_polls);
+        check.set("rerun", Null);
+        check.set("id", next_check_id(state));
+    }
+    if !rerun_any {
+        die(
+            &format!("run {run} cannot be rerun; its workflow file may be broken"),
+            1,
+        );
+    }
+    state.set("checks", checks);
+    save(state);
 }
 
 /// The `-f`/`-F` fields of a `gh api` call, by name.
@@ -1404,8 +1517,11 @@ fn parse_json(text: &str) -> Json {
 fn fake_command(state: &mut Json, args: &[&str]) {
     let times = |text: &str| number(text.parse::<i64>().unwrap());
     match args {
-        [kind @ ("checks" | "statuses"), sha, list] => {
-            state.entry(kind, object([])).set(sha, parse_json(list));
+        ["checks", sha, list] => set_checks(state, sha, parse_json(list)),
+        ["statuses", sha, list] => {
+            state
+                .entry("statuses", object([]))
+                .set(sha, parse_json(list));
         }
         ["run", run] => record_run(state, parse_json(run)),
         ["on-ci-read", n, script] => state.set(
@@ -1518,6 +1634,10 @@ pub fn main(args: Vec<String>) {
         ["run", "list", rest @ ..] => {
             let (_, flags) = parsed(rest);
             run_list(&mut state, &flags);
+        }
+        ["run", "rerun", rest @ ..] => {
+            let (positional, flags) = parsed(rest);
+            run_rerun(&mut state, &positional, &flags);
         }
         ["run", "view", rest @ ..] => {
             let (positional, flags) = parsed(rest);

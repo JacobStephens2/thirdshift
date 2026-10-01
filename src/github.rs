@@ -531,9 +531,36 @@ pub struct Check {
     pub name: String,
     pub state: CheckState,
     pub url: Option<String>,
+    /// The GitHub Actions job it is, if it is one. No other check can be
+    /// re-run: not a commit status, nor a check run of another app.
+    pub job: Option<ActionsJob>,
 }
 
-/// Every check run and commit status on commit `sha`.
+/// A job of a GitHub Actions workflow run, as one of its attempts ran it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActionsJob {
+    /// Its check run's id, which a new attempt of the job does not keep.
+    pub check_run: u64,
+    /// The workflow run it belongs to.
+    pub workflow_run: u64,
+}
+
+impl ActionsJob {
+    /// The job whose check run is `check_run`, if `details_url`, the check
+    /// run's, is a job's page: `…/actions/runs/<workflow run>/job/<job>`.
+    fn of(check_run: Option<u64>, details_url: Option<&str>) -> Option<Self> {
+        let (_, after) = details_url?.split_once("/actions/runs/")?;
+        let (workflow_run, _) = after.split_once("/job/")?;
+        Some(ActionsJob {
+            check_run: check_run?,
+            workflow_run: workflow_run.parse().ok()?,
+        })
+    }
+}
+
+/// Every check run and commit status on commit `sha`. Of the check runs
+/// sharing a name, as the attempts of a re-run job do, only the latest is
+/// here.
 pub fn checks_on(issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
     let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
     let runs = gh_api_items(&format!("{commit}/check-runs?per_page=100"), "check_runs")?;
@@ -558,6 +585,7 @@ pub fn checks_on(issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
                 .context("a check run has no name")?
                 .to_string(),
             state,
+            job: ActionsJob::of(run["id"].as_u64(), run["details_url"].as_str()),
             url: url(&run["details_url"]).or_else(|| url(&run["html_url"])),
         });
     }
@@ -574,9 +602,23 @@ pub fn checks_on(issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
                 .to_string(),
             state,
             url: url(&status["target_url"]),
+            job: None,
         });
     }
     Ok(checks)
+}
+
+/// Ask GitHub to re-run the failed jobs of the GitHub Actions workflow run
+/// `workflow_run`, as a new attempt of it.
+pub fn rerun_failed_jobs(issue: &IssueUrl, workflow_run: u64) -> Result<()> {
+    gh(&[
+        "run",
+        "rerun",
+        &workflow_run.to_string(),
+        "--failed",
+        "--repo",
+        &issue.repo_slug(),
+    ])
 }
 
 /// Run `gh <args>`, failing with its stderr if it exits non-zero.
@@ -636,4 +678,31 @@ fn gh_json(args: &[&str]) -> Result<Value> {
     }
     serde_json::from_slice(&output.stdout)
         .with_context(|| format!("{command} returned invalid JSON"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_check_run_whose_details_are_a_jobs_page_is_an_actions_job() {
+        let job = "https://github.com/acme/widgets/actions/runs/900/job/41";
+        assert_eq!(
+            ActionsJob::of(Some(41), Some(job)),
+            Some(ActionsJob {
+                check_run: 41,
+                workflow_run: 900
+            })
+        );
+        for not_a_job in [
+            "https://ci.example/test",
+            "https://github.com/acme/widgets/actions/runs/900",
+            "https://github.com/acme/widgets/actions/runs/latest/job/41",
+            "https://github.com/acme/widgets/runs/41",
+        ] {
+            assert_eq!(ActionsJob::of(Some(41), Some(not_a_job)), None);
+        }
+        assert_eq!(ActionsJob::of(Some(41), None), None);
+        assert_eq!(ActionsJob::of(None, Some(job)), None);
+    }
 }

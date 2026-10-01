@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::base_fix::{BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
-use crate::ci::{self, Ci};
+use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{self, FailedRun, PolicyRefusal};
 use crate::git::Git;
 use crate::github::{self, Mergeable, PullRequest};
@@ -453,16 +453,20 @@ impl RepairLoop<'_> {
     /// as a Base move, and otherwise once its Base fix has merged, or fails
     /// naming the checks and the Base branch commit: see [`BaseFix::fix`]. A
     /// Base fix's own Run sees no Inherited failures.
+    /// If, after a CI-fix Repair and the Base branch merged again, the head
+    /// is still the one whose CI failed, it gets its Check re-run instead of
+    /// a watch, whatever the Repair concluded: see [`ci::rerun`]. CI then
+    /// green, or red only on Inherited failures, is taken as from any watch.
     /// Returns the head commit whose CI was last watched and found green or
-    /// absent. Fails with a Declined CI fix if, after a CI-fix Repair and the
-    /// Base branch merged again, the head is still the one whose CI failed,
-    /// and once a Repair beyond `MAX_REPAIRS`, or a round
-    /// beyond `MAX_UPSTREAM_MOVES`, would be needed.
+    /// absent. Fails with a Declined CI fix if that Check re-run leaves a
+    /// check of the branch's own red, or there can be none, and once a Repair
+    /// beyond `MAX_REPAIRS`, or a round beyond `MAX_UPSTREAM_MOVES`, would be
+    /// needed.
     fn run(&mut self, run_session: &mut impl FnMut(&str, &str) -> Result<()>) -> Result<String> {
         let (issue, worktree, base, pr_url) = (self.issue, self.worktree, self.base, self.pr_url);
         let branch = worktree.branch();
-        // The head whose red CI the last CI-fix Repair was given.
-        let mut handed_to_repair = None;
+        // The head the last CI-fix Repair was given, with its failed checks.
+        let mut handed_to_repair: Option<(String, FailedChecks)> = None;
         loop {
             if self.goal == Goal::Merged {
                 self.take_in_foreign_commits(run_session)?;
@@ -475,18 +479,27 @@ impl RepairLoop<'_> {
             }
             worktree.push()?;
             let head = worktree.head()?;
-            if handed_to_repair.as_ref() == Some(&head) {
-                bail!(
-                    "CI red on {} and the Repair found nothing to fix on the branch",
-                    ci::short(&head)
-                );
-            }
             let base_commit = worktree.merged_base_commit(base)?;
             let compared_with = self
                 .base_fix
                 .sees_inherited_failures()
                 .then_some(base_commit.as_str());
-            match ci::watch(issue, &head, compared_with)? {
+            let unchanged = handed_to_repair
+                .take()
+                .filter(|(handed, _)| *handed == head);
+            let ci = match unchanged {
+                None => ci::watch(issue, &head, compared_with)?,
+                // A Declined CI fix, unless the head's one Check re-run turns
+                // the branch's own checks green: it gets no second Repair.
+                Some((_, failed)) => match ci::rerun(issue, &head, compared_with, &failed)? {
+                    Some(ci) if !has_own_failures(&ci) => ci,
+                    _ => bail!(
+                        "CI red on {} and the Repair found nothing to fix on the branch",
+                        ci::short(&head)
+                    ),
+                },
+            };
+            match ci {
                 Ci::Absent | Ci::Passed => {
                     if worktree.base_branch_moved(base)? {
                         self.budgets.count_base_move(base, "while CI ran")?;
@@ -525,7 +538,7 @@ impl RepairLoop<'_> {
                         &kind,
                         &prompt::ci_fix_repair(issue, base, branch, pr_url, &failed),
                     )?;
-                    handed_to_repair = Some(head);
+                    handed_to_repair = Some((head, failed));
                 }
             }
         }
@@ -597,6 +610,11 @@ impl RepairLoop<'_> {
             Round::NewHead(head)
         })
     }
+}
+
+/// Whether `ci` is red on a check that is the branch's own to fix.
+fn has_own_failures(ci: &Ci) -> bool {
+    matches!(ci, Ci::Failed(failed) if !failed.own.is_empty())
 }
 
 /// Mark the PR whose head is `branch` ready for review, failing unless it

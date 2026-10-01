@@ -1,8 +1,9 @@
 //! Watching CI: after each push thirdshift waits for checks on the head
 //! commit, hands red CI to a CI-fix Repair, and gives up after 5 Repairs, or
-//! as soon as a CI-fix Repair makes no commit. A red check that also fails on
-//! the Base branch commit the head merged in is an Inherited failure, which
-//! gets no Repair.
+//! once a CI-fix Repair makes no commit and a Check re-run, if the failed
+//! checks can have one, leaves CI red. A red check that also fails on the
+//! Base branch commit the head merged in is an Inherited failure, which gets
+//! no Repair and no Check re-run.
 
 mod support;
 
@@ -255,6 +256,349 @@ fn a_second_ci_fix_repair_that_makes_no_commit_is_a_failed_run() {
         "Fix CI 1".to_string()
     );
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+}
+
+/// A check run named `name`, job `job` of the GitHub Actions workflow run
+/// `run`, that failed. With a `rerun`, as `{"conclusion": "success"}`, that is
+/// what its Check re-run comes to; with `null`, it fails again.
+fn actions_failure(name: &str, run: u32, job: u32, rerun: &str) -> String {
+    format!(
+        r#"{{"name": "{name}", "conclusion": "failure",
+             "url": "https://github.com/acme/widgets/actions/runs/{run}/job/{job}",
+             "rerun": {rerun}}}"#
+    )
+}
+
+const RERUN_PASSES: &str = r#"{"conclusion": "success"}"#;
+
+/// The workflow runs thirdshift asked GitHub to re-run the failed jobs of, in
+/// order.
+fn rerun_requests(scenario: &Scenario) -> Vec<String> {
+    scenario
+        .gh_calls_of("run", "rerun")
+        .into_iter()
+        .map(|call| {
+            assert_eq!(call[3..], ["--failed", "--repo", "acme/widgets"]);
+            call[2].clone()
+        })
+        .collect()
+}
+
+/// Assert that the Run started exactly one Repair.
+fn assert_one_repair(scenario: &Scenario, result: &support::RunResult) {
+    assert_eq!(
+        result.stderr.matches("starting Repair").count(),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        2,
+        "the implement session and 1 Repair"
+    );
+}
+
+#[test]
+fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_success() {
+    let scenario = Scenario::new();
+    // Two failed checks of one workflow run, and a third of another.
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(&format!(
+            "[{}, {}, {}]",
+            actions_failure("test", 900, 1, RERUN_PASSES),
+            actions_failure("lint", 900, 2, RERUN_PASSES),
+            actions_failure("docs", 901, 3, RERUN_PASSES)
+        ))
+    ));
+    // The Repair finds the failure flaky and commits nothing.
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_one_repair(&scenario, &result);
+    assert_eq!(rerun_requests(&scenario), ["900", "901"]);
+    let head = scenario.origin_git(&["rev-parse", "issue-7"]);
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: re-running the failed checks on {}: test, lint, docs\n",
+            &head[..7]
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains(&format!("CI passed on {}", &head[..7])),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            "Add feature".to_string(),
+            "Initial commit".to_string()
+        ])
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_check_re_run_that_fails_again_is_a_failed_run_with_no_second_repair_or_re_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(&format!("[{}]", actions_failure("test", 900, 1, "null")))
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    assert_one_repair(&scenario, &result);
+    assert_eq!(rerun_requests(&scenario), ["900"]);
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    let cause = declined_ci_fix(watched.trim());
+    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    assert_eq!(
+        result.stderr.matches("CI failed on").count(),
+        2,
+        "before the Repair and after the Check re-run; stderr: {}",
+        result.stderr
+    );
+    assert_session_log_is(&result, "repair-1");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            format!("thirdshift: failed run ({cause})"),
+            "Add feature".to_string(),
+            "Initial commit".to_string(),
+        ])
+    );
+}
+
+/// Assert that the Run ended as a Declined CI fix with no Check re-run asked
+/// for, or with only `requests`.
+fn assert_declined_ci_fix(scenario: &Scenario, result: &support::RunResult, requests: &[&str]) {
+    assert_ne!(result.code, Some(0));
+    assert_one_repair(scenario, result);
+    assert_eq!(rerun_requests(scenario), requests);
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    let cause = declined_ci_fix(watched.trim());
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        format!("thirdshift: failed run ({cause})"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+}
+
+#[test]
+fn a_failed_commit_status_cant_be_re_run_so_nothing_is() {
+    let scenario = Scenario::new();
+    // The check run could be re-run, but the commit status could not, so the
+    // head could not go green.
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}gh fake statuses \"$(git rev-parse HEAD)\" '{}'\n",
+        checks_on_head(&format!(
+            "[{}]",
+            actions_failure("test", 900, 1, RERUN_PASSES)
+        )),
+        r#"[{"context": "deploy/preview", "state": "error", "url": "https://deploy.example/7"}]"#,
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_declined_ci_fix(&scenario, &result, &[]);
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: the failed checks on {} can't be re-run: not GitHub Actions jobs: deploy/preview\n",
+            &watched[..7]
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_check_re_run_github_refuses_is_a_declined_ci_fix_that_shows_the_refusal() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}gh fake fails 'run rerun'\n",
+        checks_on_head(&format!(
+            "[{}]",
+            actions_failure("test", 900, 1, RERUN_PASSES)
+        ))
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_declined_ci_fix(&scenario, &result, &["900"]);
+    assert!(
+        result.stderr.contains(
+            "thirdshift: GitHub refused the re-run: gh run rerun 900 --failed --repo acme/widgets failed: HTTP 502: Bad Gateway"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        result.stderr.matches("CI failed on").count(),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_check_re_run_leaves_inherited_failures_alone() {
+    let scenario = Scenario::new();
+    let inherited = actions_failure("lint", 800, 1, RERUN_PASSES);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        checks_on_head(&format!(
+            "[{}, {inherited}]",
+            actions_failure("test", 900, 2, RERUN_PASSES)
+        )),
+        checks_on_base(&format!("[{inherited}]"))
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    // test is green after its Check re-run; lint is as red as on main.
+    assert_ne!(result.code, Some(0));
+    assert_one_repair(&scenario, &result);
+    assert_eq!(rerun_requests(&scenario), ["900"]);
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: re-running the failed checks on {}: test\n",
+            &watched[..7]
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    let base_commit = scenario.origin_git(&["rev-parse", "main"]);
+    let cause = inherited_failure("lint", &base_commit);
+    assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("nothing to fix on the branch"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_ci_fix_repair_that_commits_gets_no_check_re_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(&format!(
+            "[{}]",
+            actions_failure("test", 900, 1, RERUN_PASSES)
+        ))
+    ));
+    scenario.agent_does_in_session(2, &format!("{}{}", commits_fix(1), checks_on_head(GREEN)));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_one_repair(&scenario, &result);
+    assert_eq!(rerun_requests(&scenario), Vec::<String>::new());
+    assert!(
+        !result.stderr.contains("re-running"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn the_attempt_before_a_check_re_run_is_never_taken_for_its_result() {
+    let scenario = Scenario::new();
+    // GitHub goes on listing the failed attempt for a few reads after the
+    // re-run is asked for, then the new attempt, running, then passed.
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(&format!(
+            "[{}]",
+            actions_failure(
+                "test",
+                900,
+                1,
+                r#"{"conclusion": "success", "stale_polls": 3, "pending_polls": 2}"#
+            )
+        ))
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    // The default 300ms grace period holds only about three reads.
+    let result = scenario.run_with_env(
+        &[&scenario.issue_url(7)],
+        &[("THIRDSHIFT_CI_GRACE_MS", "5000")],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_one_repair(&scenario, &result);
+    assert_eq!(rerun_requests(&scenario), ["900"]);
+    assert_eq!(
+        result.stderr.matches("CI failed on").count(),
+        1,
+        "only before the Repair; stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("1 of 1 checks still running"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+}
+
+#[test]
+fn a_check_re_run_that_never_appears_is_a_declined_ci_fix() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(&format!(
+            "[{}]",
+            actions_failure(
+                "test",
+                900,
+                1,
+                r#"{"conclusion": "success", "stale_polls": 1000}"#
+            )
+        ))
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_declined_ci_fix(&scenario, &result, &["900"]);
+    let watched = scenario.origin_git(&["rev-parse", "issue-7~1"]);
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: no re-run appeared on {} within 0s\n",
+            &watched[..7]
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        result.stderr.matches("CI failed on").count(),
+        1,
+        "only before the Repair; stderr: {}",
+        result.stderr
+    );
 }
 
 /// Bash that pushes `file` with `content` to main from another clone, as if

@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use crate::github::{self, Check, CheckState};
+use crate::github::{self, ActionsJob, Check, CheckState};
 use crate::issue::IssueUrl;
 use crate::poll;
 use crate::progress;
@@ -49,7 +49,73 @@ pub fn watch(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<C
         ));
         return Ok(Ci::Absent);
     }
+    watch_to_end(issue, sha, base_commit)
+}
 
+/// The Check re-run of `sha`: ask GitHub to re-run the branch's own checks
+/// in `failed`, once for each GitHub Actions workflow run they belong to,
+/// then [`watch`] CI on `sha` again, from the new attempt on: it waits up to
+/// the grace period for GitHub to list none of the check runs that failed,
+/// so what the attempt before came to is never taken for the re-run's.
+/// Inherited failures are left as they are.
+///
+/// `None` if there is no re-run to watch, each for a reason told in a
+/// progress line: one of those checks is no GitHub Actions job, so nothing
+/// is asked for, since the commit could not go green; GitHub refused; or no
+/// new attempt appeared.
+pub fn rerun(
+    issue: &IssueUrl,
+    sha: &str,
+    base_commit: Option<&str>,
+    failed: &FailedChecks,
+) -> Result<Option<Ci>> {
+    let short = short(sha);
+    let (jobs, others): (Vec<&Check>, Vec<&Check>) =
+        failed.own.iter().partition(|check| check.job.is_some());
+    if !others.is_empty() {
+        progress::step(format_args!(
+            "the failed checks on {short} can't be re-run: not GitHub Actions jobs: {}",
+            names(&others)
+        ));
+        return Ok(None);
+    }
+    let jobs: Vec<ActionsJob> = jobs.iter().filter_map(|check| check.job).collect();
+    progress::step(format_args!(
+        "re-running the failed checks on {short}: {}",
+        check_names(&failed.own)
+    ));
+    let mut workflow_runs: Vec<u64> = jobs.iter().map(|job| job.workflow_run).collect();
+    workflow_runs.sort_unstable();
+    workflow_runs.dedup();
+    for workflow_run in workflow_runs {
+        if let Err(error) = github::rerun_failed_jobs(issue, workflow_run) {
+            progress::step(format_args!("GitHub refused the re-run: {error:#}"));
+            return Ok(None);
+        }
+    }
+
+    let grace = poll::grace_period();
+    let appeared = poll::within(grace, || {
+        let checks = github::checks_on(issue, sha)?;
+        let stale = checks
+            .iter()
+            .filter_map(|check| check.job)
+            .any(|job| jobs.iter().any(|failed| failed.check_run == job.check_run));
+        Ok((!stale).then_some(()))
+    })?;
+    if appeared.is_none() {
+        progress::step(format_args!(
+            "no re-run appeared on {short} within {}s",
+            grace.as_secs()
+        ));
+        return Ok(None);
+    }
+    watch_to_end(issue, sha, base_commit).map(Some)
+}
+
+/// [`watch`], once checks have appeared on `sha`.
+fn watch_to_end(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
+    let short = short(sha);
     let mut reported_pending = None;
     let checks = poll::until(|| {
         let checks = github::checks_on(issue, sha)?;
@@ -93,6 +159,10 @@ pub fn watch(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<C
 
 /// The names of `checks`, as in "test, lint".
 pub fn check_names(checks: &[Check]) -> String {
+    names(&checks.iter().collect::<Vec<_>>())
+}
+
+fn names(checks: &[&Check]) -> String {
     let names: Vec<&str> = checks.iter().map(|check| check.name.as_str()).collect();
     names.join(", ")
 }
