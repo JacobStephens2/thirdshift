@@ -270,6 +270,24 @@ fn a_fresh_run_claims_the_issue_in_place_of_ready_for_agent_and_keeps_its_other_
 }
 
 #[test]
+fn a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.ends_with(" is ready for review\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert_eq!(scenario.gh_calls_of("api", "--method").len(), 1);
+}
+
+#[test]
 fn a_run_on_an_issue_with_no_ready_for_agent_label_still_claims_it() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["bug"]);

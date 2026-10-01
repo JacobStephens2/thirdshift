@@ -24,6 +24,12 @@ pub fn step(message: impl Display) {
     write_line(Local::now().format(STAMP), message);
 }
 
+/// Report `error`, then a warning saying what to do about it by hand.
+pub fn warn(error: &anyhow::Error, warning: std::fmt::Arguments) {
+    step(format_args!("{error:#}"));
+    step(format_args!("warning: {warning}"));
+}
+
 /// Print `line`, from the stderr of a child thirdshift, under `label`,
 /// keeping the time the child stamped it with (or stamping it now, if it
 /// has none), and return its message: the line without prefix or time.
