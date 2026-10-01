@@ -1,7 +1,7 @@
-//! The harness's waits: a test that waits for a Run to reach a point, the
-//! fake agent starting or a prompt showing on the terminal, fails as soon as
-//! the Run exits without reaching it, however long a slow Run may take. And
-//! the scenario's gitconfig, which turns git's auto maintenance off.
+//! The harness itself. Its waits: a test that waits for a Run to reach a
+//! point, the fake agent starting or a prompt showing on the terminal, fails
+//! as soon as the Run exits without reaching it, however long a slow Run may
+//! take. And its gitconfig, which turns git's auto maintenance off.
 
 mod support;
 

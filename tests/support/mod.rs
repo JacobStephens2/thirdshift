@@ -890,10 +890,11 @@ test -f {root}/{COPY_REPLACED}
     /// identity, the default branch, the insteadOf rule, and auto maintenance
     /// off. From 2.47 git detaches auto maintenance into the background after
     /// a commit or a push, where it can still be writing into `.git/objects`
-    /// once the command has returned: a script that then deletes its
-    /// temporary clone with `rm -rf` fails with `Directory not empty`, and one
-    /// that clones the origin again can find an object gone mid-copy (#263).
-    /// `gc.auto` says the same to a git too old to know `maintenance.auto`.
+    /// once the command has returned: a script that then clones the origin
+    /// again can find an object gone mid-copy, and one that deletes its
+    /// temporary clone with `rm -rf` can fail with `Directory not empty`
+    /// (#263). `gc.auto` says the same to a git too old to know
+    /// `maintenance.auto`.
     fn write_gitconfig(&self) {
         let config = format!(
             "[user]\n\tname = Test Runner\n\temail = runner@example.com\n\
