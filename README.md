@@ -129,7 +129,8 @@ It sends one [Run notification](#run-notifications), whatever the outcome. To ha
 The other commands:
 
 ```sh
-thirdshift architect [<focus>] --plan-only   # review the Base branch's architecture and publish a plan (see Architect runs)
+thirdshift architect [<focus>]      # review the Base branch's architecture, publish a plan and run it (see Architect runs)
+thirdshift architect [<focus>] --plan-only   # publish the plan, mark it ready and stop there
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift update                   # update to the latest release (see Updating)
@@ -137,7 +138,7 @@ thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print every form of the command, each with a one-line description
 ```
 
-`version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too, with the URL of the issue it ended on, its plan or its idea, on stdout in place of a pull request's.
+`version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan.
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
 
@@ -346,15 +347,21 @@ Running the Spec again picks up where the last Spec run stopped. The Spec branch
 
 ## Architect runs
 
-`thirdshift architect --plan-only` starts an **Architect run**: the factory looks for architecture work itself, with no **Issue URL**. Start it from a clone of the repository, on the **Base branch**:
+`thirdshift architect` starts an **Architect run**: the factory looks for architecture work itself, with no **Issue URL**, publishes a plan for the top opportunity, and implements it. Start it from a clone of the repository, on the **Base branch**:
 
 ```sh
 cd ~/repos/widgets
-thirdshift architect --plan-only                  # review the whole codebase
-thirdshift architect "the Spec run" --plan-only   # point the review at an area
+thirdshift architect                              # review the whole codebase, then run the plan
+thirdshift architect "the Spec run"               # point the review at an area
+thirdshift architect merge parallel 2             # merge the plan's pull request, two Tickets at once
+thirdshift architect "the Spec run" --plan-only   # publish the plan, mark it ready and stop
 ```
 
-The focus is optional free text, given as one argument, before or after `--plan-only`; it goes into the Session prompt. `--plan-only` is required for now: an Architect run publishes its plan and stops, and can't yet go on to implement it. `architect` is a command only as the first argument. A second focus, `--plan-only` twice, any other argument starting with a dash, or an empty focus is an argument error (exit `2`), as is leaving `--plan-only` out.
+The focus is optional free text, given as one argument, anywhere among the flags; it goes into the Session prompt. `architect` is a command only as the first argument.
+
+`merge`, `no-merge` and `parallel <n>` (or `--merge`, `--no-merge` and `--parallel <n>`) are for the run the plan is dispatched as, and mean what they do for `thirdshift <Issue URL>`, so none of them is ever read as the focus. `--plan-only` stops the Architect run once the plan is marked ready, and dispatches nothing.
+
+A second focus, a repeated flag, `merge` with `no-merge`, `parallel` without a whole number from 1 up, any other argument starting with a dash, or an empty focus is an argument error (exit `2`). So is `merge`, `no-merge` or `parallel` with `--plan-only`, since nothing is dispatched for them to apply to.
 
 An Architect run:
 
@@ -364,14 +371,19 @@ An Architect run:
 4. Checks the plan: the issue is in this repository, is open, was created after the Architect run started, and carries no other label that says it is not agent work (`ready-for-human`, `needs-info` or `wontfix`).
 5. Marks the plan ready, in one request: `needs-triage` is swapped for `ready-for-agent`, and its other labels are kept. A Spec's Tickets are left as the review labelled them.
 6. Removes the worktree and the temporary plugin directory, whatever the outcome.
+7. Dispatches the plan, unless given `--plan-only`, exactly as `thirdshift <plan URL>` would from the same clone: a [Spec run](#spec-runs) when the plan has sub-issues, a Run otherwise. `merge` and `no-merge` apply to the Spec PR or the Run's pull request, and `parallel <n>` to the Spec run, as if given to that command, and the [User config](#user-config) sets what they leave unsaid: `merge.always`, `spec.parallel`, `launch.pull` and `logs.dir`. The one difference is that no [Run notification](#run-notifications) is sent, whatever `email.always` says.
 
-Once the plan is marked ready it exits `0` with the plan's URL alone on stdout, and `plan <url> is ready for an agent` as stderr's last line. Read or edit the plan, then run it with `thirdshift <Issue URL>`. Progress lines on stderr say when the review starts, which plan it reported, and when the labels are swapped; with no Strong candidate, the last line says which issue the Architect run ended on instead.
+The dispatched run's ending is the Architect run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Architect run fails as that Failed run or Failed spec run does, with the cause and the session log on stderr and the pull request's URL on stdout if it left one. The plan stays `ready-for-agent`, for `thirdshift <plan URL>` to take up again. `parallel <n>` on a plan that is a single Ticket fails the same way as it does for `thirdshift <Issue URL>` on an issue that isn't a Spec: `parallel is only for a Spec, and #<n> has no sub-issues`, exit `1`, before any implementing, with the plan left ready to run without it.
 
-A review session that fails or is interrupted, a final message without one of the lines the prompt asks for, or a plan that fails a check ends the Architect run as a failure: exit `1`, nothing on stdout, the cause on stderr and then the path of the session log. No label is changed, so a plan the review did publish stays `needs-triage` for you to finish or close.
+With `--plan-only`, it instead exits `0` with the plan's URL alone on stdout, and `plan <url> is ready for an agent` as stderr's last line. Read or edit the plan, then run it with `thirdshift <Issue URL>`.
+
+Progress lines on stderr say when the review starts, which plan it reported, when the labels are swapped, and when the plan is dispatched: `dispatching the plan <url>, as thirdshift <url> would`. The dispatched run's own progress lines follow. With no Strong candidate, the last line says which issue the Architect run ended on instead.
+
+A review session that fails or is interrupted, a final message without one of the lines the prompt asks for, or a plan that fails a check ends the Architect run as a failure: exit `1`, nothing on stdout, the cause on stderr and then the path of the session log. Nothing is dispatched and no label is changed, so a plan the review did publish stays `needs-triage` for you to finish or close.
 
 ### No Strong candidate
 
-Only a Strong top recommendation becomes a plan. When the review's top recommendation is Worth exploring or Speculative, it publishes no plan, and the Architect run ends in one of two ways, both a success: exit `0`, with one issue's URL alone on stdout. thirdshift changes no label on that issue, and there is nothing to run.
+Only a Strong top recommendation becomes a plan. When the review's top recommendation is Worth exploring or Speculative, it publishes no plan, and the Architect run ends in one of two ways, both a success, with or without `--plan-only`: exit `0`, with one issue's URL alone on stdout. thirdshift changes no label on that issue and dispatches nothing: there is nothing to run.
 
 - **An idea issue.** The review files its top recommendation as one issue labelled `needs-triage`, for the **Day shift** to flesh out, and ends its final message with `Architecture review idea: <Issue URL>`. stdout carries the idea issue's URL, and stderr's last line is `no Strong candidate: the Architecture review filed the idea <url>`.
 - **Already filed.** An open issue already covers that recommendation, so the review files nothing and ends its final message with `Architecture review already filed: <Issue URL>`. stdout carries that issue's URL, and stderr's last line is `no Strong candidate: <url> already covers the Architecture review's top recommendation, so it filed nothing`.

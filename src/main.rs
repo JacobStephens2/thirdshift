@@ -33,7 +33,7 @@ use args::{ArchitectArgs, Command, RunArgs};
 use config::UserConfig;
 use failed_run::FailedRun;
 use notification::{NotificationAsk, RunNotification};
-use run::Goal;
+use run::{Goal, Reached};
 use spec_run::Parallel;
 
 const HELP: &str = "\
@@ -43,7 +43,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift merge <Issue URL>                   Run the factory on the issue, then merge its pull request
        thirdshift --no-merge <Issue URL>              Run the factory on the issue and leave its pull request for review
        thirdshift --email <Issue URL>                 Run the factory on the issue, then email how the Run ended
-       thirdshift architect [<focus>] --plan-only     Review the Base branch's architecture and publish a plan for a refactor
+       thirdshift architect [<focus>]                 Review the Base branch's architecture, publish a plan for a refactor, and run it
+       thirdshift architect [<focus>] --plan-only     Publish and mark ready the plan for a refactor, and stop there
        thirdshift email-test [<address>]              Send a test email through Resend, to check the email setup
        thirdshift setup                               Choose your defaults, then write the User config with every setting
        thirdshift update                              Update thirdshift to the latest release
@@ -84,11 +85,16 @@ Architecture review, an agent session in its own worktree at the Base branch's h
 looks for deepening opportunities and publishes the top one as a plan: a Spec with Tickets, or
 a single Ticket. thirdshift then checks that the plan is open, new and not labelled
 ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
-and prints its URL, to read, edit and run with thirdshift <Issue URL>. --plan-only is
-required: an Architect run can't yet implement its plan. <focus> is free text, one argument,
+and dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single
+Ticket. The Architect run ends as that run does, with its exit code and its PR's URL.
+merge, --no-merge and parallel <n> apply to that run, as do the User config's defaults,
+except that it sends no Run notification, whatever email.always says;
+parallel <n> fails it if the plan is a single Ticket. With --plan-only, the Architect run
+prints the plan's URL and stops instead, for you to read, edit and run with
+thirdshift <Issue URL>, and takes none of those flags. <focus> is free text, one argument,
 that points the review at an area:
 
-    thirdshift architect \"the Spec run\" --plan-only
+    thirdshift architect \"the Spec run\"
 
 A review that finds no Strong candidate publishes no plan. It files its top recommendation as
 one idea issue labelled needs-triage, or names the open issue that already covers it, and
@@ -187,19 +193,67 @@ fn main() -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let parallel = Parallel {
-        tickets: parallel.unwrap_or(config.spec_parallel),
-        asked: parallel.is_some(),
-    };
     let ended = run::run(
         &issue,
         goal,
         &config.logs_dir,
         launch_pull,
-        parallel,
+        Parallel::new(parallel, config.spec_parallel),
         spec_branch.as_deref(),
     );
-    let code = match &ended {
+    let code = run_outcome(&ended);
+    if let Some(notification) = notification {
+        notification.send(&ended);
+    }
+    code
+}
+
+/// An Architect run: the Architecture review and its plan marked ready, then,
+/// unless the command asked to stop at the plan, the plan dispatched as
+/// `thirdshift <plan URL>` with the same flags would be, whose ending is the
+/// Architect run's, though it sends no Run notification. One that stops at
+/// the plan, or whose review found no Strong candidate and so published no
+/// plan to dispatch, puts the URL of the issue it ended on on stdout: the
+/// plan, the idea issue the review filed, or the issue that already covers
+/// its top recommendation. One whose review or plan fails puts the cause and
+/// the session log on stderr.
+fn architect(args: &ArchitectArgs) -> ExitCode {
+    let config = match user_config() {
+        Ok(config) => config,
+        Err(failure) => return failure,
+    };
+    if let Err(error) = interrupt::install() {
+        return failure(&error);
+    }
+    let outcome = match architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull)
+    {
+        Ok(outcome) => outcome,
+        Err(failed) => return report(&failed),
+    };
+    let (architect::Outcome::PlanReady(plan), Some(dispatch)) = (&outcome, &args.dispatch) else {
+        // Also on stderr, so the outcome shows even when stdout is captured.
+        progress::step(format_args!("{outcome}"));
+        print_url(outcome.url());
+        return ExitCode::SUCCESS;
+    };
+    progress::step(format_args!(
+        "dispatching the plan {url}, as thirdshift {url} would",
+        url = plan.url
+    ));
+    run_outcome(&run::run(
+        plan,
+        dispatch.goal.unwrap_or(config.default_goal()),
+        &config.logs_dir,
+        config.launch_pull,
+        Parallel::new(dispatch.parallel, config.spec_parallel),
+        None,
+    ))
+}
+
+/// How a Run or a Spec run that `ended` shows: its pull request's URL on
+/// stdout once it reached its goal, or as a Failed run does.
+fn run_outcome(ended: &Result<Reached, FailedRun>) -> ExitCode {
+    match ended {
         Ok(reached) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!(
@@ -211,33 +265,6 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(failed) => report(failed),
-    };
-    if let Some(notification) = notification {
-        notification.send(&ended);
-    }
-    code
-}
-
-/// An Architect run that stops at the plan: the URL of the issue it ended on
-/// on stdout, the plan once it is marked ready or, with no Strong candidate,
-/// the idea issue the review filed or the issue that already covers its top
-/// recommendation, or the cause and the session log on stderr.
-fn architect(args: &ArchitectArgs) -> ExitCode {
-    let config = match user_config() {
-        Ok(config) => config,
-        Err(failure) => return failure,
-    };
-    if let Err(error) = interrupt::install() {
-        return failure(&error);
-    }
-    match architect::run(args.focus.as_deref(), &config.logs_dir, config.launch_pull) {
-        Ok(outcome) => {
-            // Also on stderr, so the outcome shows even when stdout is captured.
-            progress::step(format_args!("{outcome}"));
-            print_url(outcome.url());
-            ExitCode::SUCCESS
-        }
-        Err(failed) => report(&failed),
     }
 }
 

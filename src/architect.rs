@@ -1,9 +1,10 @@
-//! One Architect run: an Architecture review of the Base branch, from the
-//! Launch directory with no Issue URL, then the checks on the plan it
-//! published and the label swap that marks the plan ready. A review that
-//! found no Strong candidate published no plan, and the Architect run ends
-//! on the issue it named instead: the idea issue it filed for its top
-//! recommendation, or the open issue that already covers it.
+//! An Architect run up to its plan: an Architecture review of the Base
+//! branch, from the Launch directory with no Issue URL, then the checks on
+//! the plan it published and the label swap that marks the plan ready, for
+//! the command to stop at or to dispatch. A review that found no Strong
+//! candidate published no plan, and the Architect run ends on the issue it
+//! named instead: the idea issue it filed for its top recommendation, or the
+//! open issue that already covers it.
 
 use std::fmt;
 use std::path::{Path, PathBuf};

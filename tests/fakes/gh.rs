@@ -121,6 +121,8 @@
 //!                                         address or null
 //! gh fake labels <number> '<JSON list>'   set issue <number>'s labels
 //! gh fake created <number> <time>         set issue <number>'s `createdAt`
+//! gh fake sub-issues <number> '<JSON list>'  set issue <number>'s sub-issues,
+//!                                         by number, making it a Spec
 //! ```
 //!
 //! Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
@@ -1281,6 +1283,9 @@ fn fake_command(state: &mut Json, args: &[&str]) {
         ["issue", n, issue_state] => state.at_mut("issues").set(n, string(*issue_state)),
         ["labels", n, labels] => state.entry("labels", object([])).set(n, parse_json(labels)),
         ["created", n, time] => state.entry("created", object([])).set(n, string(*time)),
+        ["sub-issues", n, tickets] => state
+            .entry("sub_issues", object([]))
+            .set(n, parse_json(tickets)),
         ["user-email", email] => state.set("user_email", parse_json(email)),
         ["fails", call] => state
             .entry("failing", Array(Vec::new()))

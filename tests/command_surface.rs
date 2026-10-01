@@ -12,6 +12,7 @@ fn assert_help_text(text: &str) {
         "thirdshift <Issue URL>",
         "thirdshift merge <Issue URL>",
         "thirdshift --email <Issue URL>",
+        "thirdshift architect [<focus>]",
         "thirdshift architect [<focus>] --plan-only",
         "thirdshift email-test [<address>]",
         "thirdshift setup",
@@ -68,7 +69,7 @@ fn help_does_not_mention_the_flag_aliases() {
 }
 
 #[test]
-fn help_documents_architect_its_focus_plan_only_and_one_architect_run_at_a_time() {
+fn help_documents_architect_its_focus_the_dispatch_plan_only_and_one_architect_run_at_a_time() {
     let scenario = Scenario::new();
 
     let help = scenario.run(&["help"]).stdout;
@@ -77,8 +78,10 @@ fn help_documents_architect_its_focus_plan_only_and_one_architect_run_at_a_time(
     let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
     for mention in [
         "<focus> is free text",
-        "--plan-only is required",
-        "thirdshift architect \"the Spec run\" --plan-only",
+        "dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket",
+        "merge, --no-merge and parallel <n> apply to that run",
+        "With --plan-only, the Architect run prints the plan's URL and stops instead",
+        "thirdshift architect \"the Spec run\"",
         "A review that finds no Strong candidate publishes no plan",
         "thirdshift prints that issue's URL instead, changing no label",
         "Start one Architect run per repository at a time",
@@ -87,22 +90,41 @@ fn help_documents_architect_its_focus_plan_only_and_one_architect_run_at_a_time(
     }
 }
 
+const PLAN_ONLY_DISPATCHES_NOTHING: &str = "merge, no-merge and parallel can't be used with --plan-only: \
+     it dispatches no run for them to apply to";
+
 #[test]
 fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr() {
     let scenario = Scenario::new();
 
     for (args, error) in [
         (
-            vec!["architect"],
-            "architect needs --plan-only: it can't yet implement the plan it publishes",
-        ),
-        (
             vec!["architect", "the Spec run", "the Run", "--plan-only"],
             "unexpected argument after the focus: the Run",
         ),
         (
-            vec!["architect", "--plan-only", "--merge"],
-            "unexpected argument after architect: --merge",
+            vec!["architect", "--plan-only", "--email"],
+            "unexpected argument after architect: --email",
+        ),
+        (
+            vec!["architect", "merge", "no-merge"],
+            "merge and no-merge can't be used together",
+        ),
+        (
+            vec!["architect", "parallel", "0"],
+            "parallel must be followed by a whole number from 1 up, not 0",
+        ),
+        (
+            vec!["architect", "--plan-only", "merge"],
+            PLAN_ONLY_DISPATCHES_NOTHING,
+        ),
+        (
+            vec!["architect", "no-merge", "--plan-only"],
+            PLAN_ONLY_DISPATCHES_NOTHING,
+        ),
+        (
+            vec!["architect", "--plan-only", "parallel", "2"],
+            PLAN_ONLY_DISPATCHES_NOTHING,
         ),
     ] {
         let result = scenario.run(&args);

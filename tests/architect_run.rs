@@ -1,9 +1,11 @@
-//! An Architect run that stops at the plan: `thirdshift architect --plan-only`
-//! runs the Architecture review in its own worktree, detached at the Base
-//! branch's head on origin, then checks the plan the review published, swaps
-//! its `needs-triage` for `ready-for-agent`, and prints its URL. A review
-//! with no Strong candidate has no plan: the Architect run prints the URL of
-//! the idea issue it filed, or of the open issue that already covers it.
+//! Architect runs: `thirdshift architect` runs the Architecture review in its
+//! own worktree, detached at the Base branch's head on origin, then checks
+//! the plan the review published and swaps its `needs-triage` for
+//! `ready-for-agent`. With `--plan-only` it prints the plan's URL and stops.
+//! Without, it dispatches the plan as `thirdshift <plan URL>` would, a Spec
+//! run or a Run, and ends as that does. A review with no Strong candidate
+//! has no plan: the Architect run prints the URL of the idea issue it filed,
+//! or of the open issue that already covers it, and dispatches nothing.
 
 mod support;
 
@@ -13,6 +15,9 @@ use support::{REPO, RunResult, Scenario};
 
 /// The first issue the fake agent creates: the scenario starts with issue #7.
 const PLAN_URL: &str = "https://github.com/acme/widgets/issues/8";
+
+/// The first pull request opened on the fake GitHub.
+const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
 const NO_FINAL_LINE: &str =
     "the Architecture review ended without the final line its prompt asks for";
@@ -28,6 +33,93 @@ printf 'Published the plan.\n\nArchitecture review plan: %s\n' "$url" > "$FAKE_C
 /// [`AGENT_PUBLISHES_A_TICKET`] does, then does `then`.
 fn publishes_a_ticket_then(then: &str) -> String {
     format!("{AGENT_PUBLISHES_A_TICKET}{then}\n")
+}
+
+/// A script in which the agent for issue `issue` commits its work and opens
+/// its PR into `base`, leaving the pushing to thirdshift.
+fn agent_opens_pr(issue: u32, base: &str) -> String {
+    format!(
+        r#"
+echo "{issue}" > issue-{issue}.txt
+git add issue-{issue}.txt
+git commit -q -m "Work on {issue}"
+gh pr create --base {base} --head issue-{issue} --title "Work on {issue}" --body "Closes #{issue}"
+"#
+    )
+}
+
+/// The Architecture review, the first session, publishes a single Ticket as
+/// the plan, #8, and the session that implements #8 opens its PR into `main`.
+fn single_ticket_plan() -> Scenario {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, AGENT_PUBLISHES_A_TICKET);
+    scenario.agent_does_for(8, &agent_opens_pr(8, "main"));
+    scenario
+}
+
+/// The Architecture review, the first session, publishes a Spec, #8, with
+/// two Tickets that don't block each other, #9 and #10, as the plan. Each
+/// Ticket's session opens its PR into the Spec branch, #10's after doing
+/// `before_ticket_10`.
+fn spec_plan(before_ticket_10: &str) -> Scenario {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        r#"
+spec=$(gh issue create --title "Deepen the session module" --body "The Spec" --label needs-triage)
+gh issue create --title "Move the logs" --body "A Ticket" --label ready-for-agent
+gh issue create --title "Move the sessions" --body "A Ticket" --label ready-for-agent
+gh fake sub-issues 8 '[9, 10]'
+printf 'Architecture review plan: %s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(9, &agent_opens_pr(9, "issue-8"));
+    scenario.agent_does_for(
+        10,
+        &format!("{before_ticket_10}\n{}", agent_opens_pr(10, "issue-8")),
+    );
+    scenario
+}
+
+/// The newest pull request from `head` on the fake GitHub.
+fn pr_from(scenario: &Scenario, head: &str) -> serde_json::Value {
+    let prs = scenario.gh_state()["prs"].clone();
+    let from_head = prs
+        .as_array()
+        .unwrap()
+        .iter()
+        .rfind(|pr| pr["head"] == head);
+    from_head
+        .unwrap_or_else(|| panic!("no PR from {head}: {prs}"))
+        .clone()
+}
+
+/// The issue number each agent session after the Architecture review was
+/// for, the first Issue URL its prompt names, in order.
+fn dispatched_sessions(scenario: &Scenario) -> Vec<String> {
+    scenario.claude_calls()[1..]
+        .iter()
+        .map(|call| {
+            let prompt = call["prompt"].as_str().unwrap();
+            let (_, after) = prompt.split_once("/issues/").unwrap();
+            after.chars().take_while(char::is_ascii_digit).collect()
+        })
+        .collect()
+}
+
+/// Assert the Architect run ended with `pr` in `outcome`, as a Run or a Spec
+/// run that reached its goal does: exit 0, the PR's URL alone on stdout, and
+/// the outcome as the last line on stderr.
+fn assert_ended_with_pr(result: &RunResult, pr: &serde_json::Value, outcome: &str) {
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let url = pr["url"].as_str().unwrap();
+    assert_eq!(result.stdout, format!("{url}\n"));
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: PR {url} is {outcome}").as_str()),
+        "stderr: {}",
+        result.stderr
+    );
 }
 
 /// A script in which the agent ends with `final_message`, publishing nothing.
@@ -351,6 +443,25 @@ fn a_review_whose_idea_is_already_filed_prints_that_issues_url_and_files_and_cha
 }
 
 #[test]
+fn a_review_with_no_strong_candidate_dispatches_nothing_without_plan_only() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["needs-triage"]);
+    let url = scenario.issue_url(7);
+    scenario.agent_does(&ends_with(&format!("Architecture review idea: {url}")));
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["architect", "merge"]);
+
+    assert_ended_without_a_plan(
+        &scenario,
+        &result,
+        &url,
+        &format!("no Strong candidate: the Architecture review filed the idea {url}"),
+    );
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
 fn a_closed_plan_is_refused() {
     let scenario = Scenario::new();
     scenario.agent_does(&publishes_a_ticket_then("gh fake issue 8 CLOSED"));
@@ -498,6 +609,187 @@ fn launch_pull_brings_the_launch_directorys_base_branch_up_to_date_first() {
         result
             .stderr
             .contains("thirdshift: updating main in the Launch directory from origin/main\n"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_single_ticket_plan_starts_a_run_on_it_and_ends_as_that_run_does() {
+    let scenario = single_ticket_plan();
+
+    let result = scenario.run(&["architect"]);
+
+    let pr = pr_from(&scenario, "issue-8");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(pr["url"], PR_URL);
+    assert_eq!(scenario.issue_labels(8), ["ready-for-agent"]);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2, "sessions: {calls:?}");
+    let prompt = calls[1]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.starts_with(&format!("/thirdshift:implement {PLAN_URL}\n")),
+        "{prompt}"
+    );
+    assert_eq!(calls[1]["branch"], "issue-8");
+    assert_eq!(pr["base"], "main");
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(
+        scenario.origin_log("issue-8").unwrap()[0],
+        "Work on 8".to_string()
+    );
+    scenario.assert_cleaned_up("issue-8");
+}
+
+#[test]
+fn a_plan_with_tickets_starts_a_spec_run_on_it_and_ends_as_that_spec_run_does() {
+    let scenario = spec_plan("");
+
+    let result = scenario.run(&["architect"]);
+
+    let spec_pr = pr_from(&scenario, "issue-8");
+    assert_ended_with_pr(&result, &spec_pr, "ready for review");
+    assert_eq!(spec_pr["base"], "main");
+    assert_eq!(spec_pr["state"], "OPEN");
+    assert_eq!(spec_pr["isDraft"], false);
+    assert_eq!(scenario.issue_labels(8), ["ready-for-agent"]);
+    let dispatch = format!("dispatching the plan {PLAN_URL}, as thirdshift {PLAN_URL} would\n");
+    let dispatched = result.stderr.find(&dispatch);
+    let started = result.stderr.find("thirdshift: starting #9\n");
+    assert!(
+        dispatched.is_some() && dispatched < started,
+        "stderr: {}",
+        result.stderr
+    );
+    let mut sessions = dispatched_sessions(&scenario);
+    assert_eq!(sessions.pop().as_deref(), Some("8"), "the Spec review");
+    sessions.sort();
+    assert_eq!(sessions, ["10", "9"]);
+    let gh = scenario.gh_state();
+    for ticket in [9, 10] {
+        let pr = pr_from(&scenario, &format!("issue-{ticket}"));
+        assert_eq!(pr["base"], "issue-8");
+        assert_eq!(pr["state"], "MERGED");
+        assert_eq!(gh["issues"][ticket.to_string()], "CLOSED");
+        assert_eq!(
+            scenario.origin_file("issue-8", &format!("issue-{ticket}.txt")),
+            Some(format!("{ticket}\n"))
+        );
+    }
+    scenario.assert_cleaned_up("issue-8");
+}
+
+#[test]
+fn merge_merges_the_runs_pull_request_or_the_spec_pr() {
+    for scenario in [single_ticket_plan(), spec_plan("")] {
+        let result = scenario.run(&["architect", "merge"]);
+
+        let pr = pr_from(&scenario, "issue-8");
+        assert_ended_with_pr(&result, &pr, "merged");
+        assert_eq!(pr["base"], "main");
+        assert_eq!(pr["state"], "MERGED");
+        assert!(
+            scenario.origin_log("issue-8").is_none(),
+            "issue-8 is still on origin"
+        );
+    }
+}
+
+#[test]
+fn the_user_configs_merge_default_applies_unless_no_merge_is_given() {
+    for plan in [single_ticket_plan, || spec_plan("")] {
+        for (args, outcome, state) in [
+            (vec!["architect"], "merged", "MERGED"),
+            (vec!["architect", "--no-merge"], "ready for review", "OPEN"),
+        ] {
+            let scenario = plan();
+            scenario.user_config_is("[merge]\nalways = true\n");
+
+            let result = scenario.run(&args);
+
+            let pr = pr_from(&scenario, "issue-8");
+            assert_ended_with_pr(&result, &pr, outcome);
+            assert_eq!(pr["state"], state, "{args:?}");
+        }
+    }
+}
+
+#[test]
+fn parallel_passes_through_to_the_spec_run() {
+    // #10's session only succeeds if #9 landed on the Spec branch before it
+    // started, as it has only when the Tickets run one at a time.
+    let scenario = spec_plan("test -f issue-9.txt");
+
+    let result = scenario.run(&["architect", "parallel", "1"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+    assert_eq!(dispatched_sessions(&scenario), ["9", "10", "8"]);
+}
+
+#[test]
+fn parallel_on_a_single_ticket_plan_fails_as_it_does_for_an_issue_that_is_not_a_spec() {
+    let scenario = single_ticket_plan();
+
+    let result = scenario.run(&["architect", "parallel", "2"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some("thirdshift: parallel is only for a Spec, and #8 has no sub-issues"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "a Run was started");
+    assert_eq!(scenario.issue_labels(8), ["ready-for-agent"]);
+    assert!(scenario.origin_log("issue-8").is_none());
+    assert_nothing_left_behind(&scenario);
+}
+
+#[test]
+fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
+    let scenario = single_ticket_plan();
+    scenario.agent_does_for(8, &format!("{}exit 3\n", agent_opens_pr(8, "main")));
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert!(
+        result.stderr.contains("thirdshift: claude exited 3\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    let last = result.stderr.lines().last().unwrap();
+    assert!(
+        last.starts_with("thirdshift: session log: ") && last.ends_with("-implement.jsonl"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(8), ["ready-for-agent"]);
+}
+
+#[test]
+fn progress_lines_show_the_dispatch_after_the_label_swap_and_before_the_run() {
+    let scenario = single_ticket_plan();
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let mut rest = result.stderr.as_str();
+    for line in [
+        "thirdshift: marking the plan ready: swapping needs-triage for ready-for-agent on #8\n"
+            .to_string(),
+        format!("thirdshift: dispatching the plan {PLAN_URL}, as thirdshift {PLAN_URL} would\n"),
+        "thirdshift: implement: session started\n".to_string(),
+    ] {
+        let Some(at) = rest.find(&line) else {
+            panic!("expected {line:?}, in order, in stderr: {}", result.stderr);
+        };
+        rest = &rest[at + line.len()..];
+    }
+    assert!(
+        !result.stderr.contains("is ready for an agent"),
         "stderr: {}",
         result.stderr
     );
