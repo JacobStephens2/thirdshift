@@ -31,8 +31,9 @@ fn package_list() -> Vec<String> {
 /// The lockfile names every package for every target without touching the
 /// registry, where `cargo tree --target all --offline` fails unless every
 /// platform's crates are already in the cargo cache. It also names the
-/// dev-dependencies, so this is stricter than ADR 0003's normal and build
-/// dependencies: a test-only OpenSSL is caught too.
+/// dev-dependencies, so this is stricter than the binary's own normal and
+/// build dependencies, which is all ADR 0003 needs: a test-only OpenSSL is
+/// caught too.
 fn openssl_packages(lockfile: &str) -> Vec<String> {
     let lockfile: toml::Table = lockfile.parse().expect("the lockfile is not TOML");
     lockfile["package"]
