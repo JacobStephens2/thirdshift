@@ -1,6 +1,6 @@
 //! The prompts agent sessions are started with.
 
-use crate::ci::Failed;
+use crate::ci::FailedChecks;
 use crate::github::Check;
 use crate::issue::IssueUrl;
 
@@ -115,7 +115,7 @@ pub fn ci_fix_repair(
     base: &str,
     branch: &str,
     pr_url: &str,
-    failed: &Failed,
+    failed: &FailedChecks,
 ) -> String {
     let checks = check_list(&failed.own);
     let inherited = if failed.inherited.is_empty() {

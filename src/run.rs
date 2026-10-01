@@ -446,7 +446,7 @@ impl RepairLoop<'_> {
                         progress::step(format_args!(
                             "Inherited failures (also failing on {base} at {}): {}",
                             ci::short(&base_commit),
-                            ci::names(&failed.inherited)
+                            ci::check_names(&failed.inherited)
                         ));
                     }
                     if failed.own.is_empty() {
@@ -457,7 +457,7 @@ impl RepairLoop<'_> {
                         }
                         bail!(
                             "CI red on {}, which also fails on {base} at {}; fix {base} first",
-                            ci::names(&failed.inherited),
+                            ci::check_names(&failed.inherited),
                             ci::short(&base_commit)
                         );
                     }

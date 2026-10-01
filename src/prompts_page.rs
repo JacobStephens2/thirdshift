@@ -11,7 +11,7 @@ use std::fmt::Write;
 
 use include_dir::{Dir, File};
 
-use crate::ci::Failed;
+use crate::ci::FailedChecks;
 use crate::github::{Check, CheckState};
 use crate::issue::IssueUrl;
 use crate::plugin::SKILLS;
@@ -99,11 +99,11 @@ fn prompts() -> Vec<Prompt> {
         state: CheckState::Failed,
         url: Some(CHECK_URL.to_string()),
     };
-    let failed = Failed {
+    let failed = FailedChecks {
         own: vec![check(CHECK)],
         inherited: Vec::new(),
     };
-    let failed_with_inherited = Failed {
+    let failed_with_inherited = FailedChecks {
         own: vec![check(CHECK)],
         inherited: vec![check(INHERITED_CHECK)],
     };

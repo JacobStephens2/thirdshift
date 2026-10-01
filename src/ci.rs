@@ -14,16 +14,16 @@ pub enum Ci {
     Absent,
     Passed,
     /// Red, with the checks that failed.
-    Failed(Failed),
+    Failed(FailedChecks),
 }
 
 /// The checks that failed on a commit, at least one, split by whether the
 /// branch is the one to fix them.
-pub struct Failed {
+pub struct FailedChecks {
     /// The branch's own failures, for a CI-fix Repair.
     pub own: Vec<Check>,
-    /// Inherited failures: checks that also failed, under the same name, on
-    /// the Base branch commit.
+    /// Inherited failures: checks that also failed on the Base branch commit,
+    /// as did every check there of the same name.
     pub inherited: Vec<Check>,
 }
 
@@ -64,26 +64,27 @@ pub fn watch(issue: &IssueUrl, sha: &str, base_commit: &str) -> Result<Ci> {
         }
         Ok(None)
     })?;
-    let failed: Vec<Check> = checks
-        .into_iter()
-        .filter(|check| check.state == CheckState::Failed)
-        .collect();
+    let failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
     if failed.is_empty() {
         progress::step(format_args!("CI passed on {short}"));
         return Ok(Ci::Passed);
     }
-    progress::step(format_args!("CI failed on {short}: {}", names(&failed)));
+    progress::step(format_args!(
+        "CI failed on {short}: {}",
+        check_names(&failed)
+    ));
     let on_base = github::checks_on(issue, base_commit)?;
     let (inherited, own) = failed.into_iter().partition(|check| {
-        on_base
-            .iter()
-            .any(|base| base.name == check.name && base.state == CheckState::Failed)
+        let mut same_name = on_base.iter().filter(|base| base.name == check.name);
+        // Checks sharing the name with only some of them failed there can't
+        // be told apart, so the failure stays the branch's own.
+        same_name.next().is_some_and(is_failed) && same_name.all(is_failed)
     });
-    Ok(Ci::Failed(Failed { own, inherited }))
+    Ok(Ci::Failed(FailedChecks { own, inherited }))
 }
 
 /// The names of `checks`, as in "test, lint".
-pub fn names(checks: &[Check]) -> String {
+pub fn check_names(checks: &[Check]) -> String {
     let names: Vec<&str> = checks.iter().map(|check| check.name.as_str()).collect();
     names.join(", ")
 }
@@ -91,6 +92,10 @@ pub fn names(checks: &[Check]) -> String {
 /// `sha` shortened to 7 characters, as in progress messages.
 pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
+}
+
+fn is_failed(check: &Check) -> bool {
+    check.state == CheckState::Failed
 }
 
 fn count(checks: &[Check], state: CheckState) -> usize {
