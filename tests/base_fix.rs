@@ -165,6 +165,36 @@ fn the_base_fix_repairs_the_check_as_its_own_and_only_the_run_sends_a_notificati
 }
 
 #[test]
+fn with_base_fix_in_the_user_config_the_base_fix_still_starts_none_of_its_own() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[base]\nfix = true\n");
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    // On the Base fix's head, test is as red as on main, which it branched
+    // off: its own to fix, in a Repair.
+    scenario.agent_does_for_in_session(8, 1, &format!("{BASE_FIX_OPENS_PR}{RED_ON_HEAD}"));
+    scenario.agent_does_for_in_session(
+        8,
+        2,
+        &format!(
+            "echo more > more.txt\ngit add more.txt\ngit commit -q -m 'Fix more'\n{GREEN_ON_HEAD}"
+        ),
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let prompts = prompts(&scenario);
+    assert_eq!(prompts.len(), 3, "prompts: {prompts:?}");
+    assert!(
+        prompts[2].starts_with("CI failed on pull request https://github.com/acme/widgets/pull/2"),
+        "prompt: {}",
+        prompts[2]
+    );
+    assert_eq!(scenario.gh_state()["prs"][1]["state"], "MERGED");
+    assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1);
+}
+
+#[test]
 fn a_merge_run_self_merges_once_its_base_fix_has_merged() {
     let scenario = Scenario::new();
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);

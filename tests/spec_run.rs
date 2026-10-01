@@ -538,8 +538,9 @@ gh pr create --base main --head issue-24 --title "Fix CI on main" --body "Closes
     assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_some());
 }
 
-#[test]
-fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
+/// A Spec #20 whose one Ticket, #21, lands with `test` red on its head and
+/// on the Spec branch: an Inherited failure.
+fn spec_whose_ticket_inherits_a_failure() -> Scenario {
     let scenario = spec_of(&[(21, &[])]);
     scenario.agent_does_for(
         21,
@@ -550,7 +551,12 @@ fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branc
             checks_on_origin("issue-20", RED)
         ),
     );
-    // The Base fix issue is the next after the Ticket.
+    scenario
+}
+
+/// The agent, on the Base fix issue #22, the next after the Ticket, commits
+/// a fix and opens its PR into the Spec branch, with `test` green on its head.
+fn base_fix_lands_on_the_spec_branch(scenario: &Scenario) {
     scenario.agent_does_for(
         22,
         &format!(
@@ -563,6 +569,12 @@ gh pr create --base issue-20 --head issue-22 --title "Fix CI" --body "Closes #22
             checks_on_head(GREEN)
         ),
     );
+}
+
+#[test]
+fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    base_fix_lands_on_the_spec_branch(&scenario);
 
     let result = scenario.run(&[&spec_url(&scenario), "base-fix"]);
 
@@ -692,6 +704,40 @@ fn a_shared_base_fix_that_fails_fails_the_ticket_that_started_it_and_the_one_wai
         "stderr: {}",
         result.stderr
     );
+}
+
+#[test]
+fn base_fix_in_the_user_config_gives_a_tickets_inherited_failure_a_base_fix() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    scenario.user_config_is("[base]\nfix = true\n");
+    base_fix_lands_on_the_spec_branch(&scenario);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let fix = pr_from(&scenario, "issue-22").expect("the Base fix's PR");
+    assert_eq!(fix["base"], "issue-20");
+    assert_eq!(fix["state"], "MERGED");
+    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "MERGED");
+}
+
+#[test]
+fn no_base_fix_on_a_spec_reaches_its_tickets_whatever_the_user_config_says() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    scenario.user_config_is("[base]\nfix = true\n");
+
+    let result = scenario.run(&[&spec_url(&scenario), "no-base-fix"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        &format!(
+            "thirdshift: #21 failed: {}",
+            inherited_failure(&scenario, "issue-20")
+        ),
+    );
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "OPEN");
 }
 
 #[test]

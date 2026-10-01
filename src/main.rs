@@ -31,7 +31,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use args::{Command, RunArgs};
-use base_fix::BaseFix;
+use base_fix::{BaseFix, BaseFixAsk};
 use child_run::Kind;
 use config::UserConfig;
 use notification::{NotificationAsk, RunNotification};
@@ -51,8 +51,8 @@ usage: thirdshift <Issue URL>              Run the factory on the issue, from th
        thirdshift version                  Print thirdshift's version
        thirdshift help                     Print this help
 
-merge, --no-merge, --email, --no-email, base-fix and parallel <n> (or --parallel <n>) go
-before or after the Issue URL, in any order.
+merge, --no-merge, --email, --no-email, base-fix, --no-base-fix and parallel <n> (or
+--parallel <n>) go before or after the Issue URL, in any order.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
@@ -97,6 +97,12 @@ With merge.always set, every Run is a Merge run unless given --no-merge:
 
     [merge]
     always = true
+
+With base.fix set, every Run may start a Base fix, as if given base-fix, unless given
+--no-base-fix:
+
+    [base]
+    fix = true
 
 With launch.pull set, every Run first fast-forwards the checked-out Base branch to origin:
 
@@ -161,14 +167,20 @@ fn main() -> ExitCode {
         }
     };
     // A child Run, a Ticket's Run in a Spec run or a Base fix, is always a
-    // Merge run, and leaves the Run notification and the Launch directory to
-    // what started it.
-    let (goal, email, launch_pull) = match child {
-        Some(_) => (Goal::Merged, NotificationAsk::Skip, false),
+    // Merge run, and leaves the Run notification, the Launch directory and
+    // whether it may start a Base fix to what started it.
+    let (goal, email, launch_pull, base_fix) = match child {
+        Some(_) => (
+            Goal::Merged,
+            NotificationAsk::Skip,
+            false,
+            base_fix.unwrap_or(BaseFixAsk::Forbid),
+        ),
         None => (
             goal.unwrap_or(config.default_goal()),
             email.unwrap_or(config.email.default_ask()),
             config.launch_pull,
+            base_fix.unwrap_or(config.default_base_fix()),
         ),
     };
     // First, so no interrupt can end the Run once its notification is checked.

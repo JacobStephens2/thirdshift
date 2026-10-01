@@ -3,7 +3,8 @@
 //! and `email.to` as the GitHub email it suggests, if it finds one; over an
 //! existing one, it keeps its values and comments and adds the keys it lacks.
 //! From a terminal, it first asks the Setup questions on stderr, each with the
-//! current value as its default answer.
+//! current value as its default answer. Base fixes are asked about only
+//! with every Run a Merge run.
 
 mod support;
 
@@ -64,10 +65,13 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     let sections: Vec<&str> = text.lines().filter(|line| line.starts_with('[')).collect();
     assert_eq!(
         sections,
-        ["[merge]", "[launch]", "[email]", "[logs]", "[spec]"],
+        [
+            "[merge]", "[base]", "[launch]", "[email]", "[logs]", "[spec]"
+        ],
         "{text}"
     );
     assert_eq!(config["merge"]["always"].as_bool(), Some(false));
+    assert_eq!(config["base"]["fix"].as_bool(), Some(false));
     assert_eq!(config["launch"]["pull"].as_bool(), Some(false));
     assert_eq!(config["email"]["always"].as_bool(), Some(false));
     assert_eq!(
@@ -104,6 +108,7 @@ fn every_key_is_written_with_a_comment_giving_what_it_does_and_its_default() {
         names,
         [
             "merge.always",
+            "base.fix",
             "launch.pull",
             "email.always",
             "email.to",
@@ -203,7 +208,8 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
 }
 
 /// Every key this version knows, as `section.key`, sorted.
-const EVERY_KEY: [&str; 7] = [
+const EVERY_KEY: [&str; 8] = [
+    "base.fix",
     "email.always",
     "email.from",
     "email.to",
@@ -464,6 +470,7 @@ fn setup_never_replaces_an_existing_email_to() {
 // Setup from a terminal.
 
 const MERGE: &str = "Merge run?";
+const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
 const NOTIFY: &str = "Run notifications, an email";
 const TO: &str = "Send Run notifications to";
@@ -540,6 +547,7 @@ fn on_a_terminal_the_answers_are_written_with_the_comments_on_each_key() {
         &[("RESEND_API_KEY", KEY)],
         &[
             (MERGE, "y"),
+            (BASE_FIX, "y"),
             (PULL, "yes"),
             (NOTIFY, "y"),
             (TO, "me@example.com"),
@@ -550,6 +558,7 @@ fn on_a_terminal_the_answers_are_written_with_the_comments_on_each_key() {
 
     let config = table(&result);
     assert_eq!(config["merge"]["always"].as_bool(), Some(true));
+    assert_eq!(config["base"]["fix"].as_bool(), Some(true));
     assert_eq!(config["launch"]["pull"].as_bool(), Some(true));
     assert_eq!(config["email"]["always"].as_bool(), Some(true));
     assert_eq!(config["email"]["to"].as_str(), Some("me@example.com"));
@@ -559,6 +568,7 @@ fn on_a_terminal_the_answers_are_written_with_the_comments_on_each_key() {
         key_names(&text),
         [
             "merge.always",
+            "base.fix",
             "launch.pull",
             "email.always",
             "email.to",
@@ -584,6 +594,90 @@ fn on_a_terminal_the_answers_are_written_with_the_comments_on_each_key() {
         "terminal: {}",
         result.stderr
     );
+}
+
+#[test]
+fn on_a_terminal_with_merging_on_setup_asks_about_base_fixes_and_writes_the_answer() {
+    for (answer, allowed) in [("y", true), ("", false), ("n", false)] {
+        let scenario = Scenario::new();
+        scenario.git_email_is(None);
+
+        let result = setup_on_terminal(
+            &scenario,
+            &[],
+            &[(MERGE, "y"), (BASE_FIX, answer), (PULL, ""), (NOTIFY, "")],
+        );
+
+        let config = table(&result);
+        assert_eq!(config["merge"]["always"].as_bool(), Some(true));
+        assert_eq!(config["base"]["fix"].as_bool(), Some(allowed), "{answer:?}");
+        assert!(
+            result.stderr.contains(&format!("{BASE_FIX} [y/N]")),
+            "terminal: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn on_a_terminal_with_merging_off_setup_asks_nothing_about_base_fixes_and_writes_the_default() {
+    for answer in ["", "n"] {
+        let scenario = Scenario::new();
+        scenario.git_email_is(None);
+
+        let result =
+            setup_on_terminal(&scenario, &[], &[(MERGE, answer), (PULL, ""), (NOTIFY, "")]);
+
+        assert!(
+            !result.stderr.contains(BASE_FIX),
+            "terminal: {}",
+            result.stderr
+        );
+        let config = table(&result);
+        assert_eq!(config["merge"]["always"].as_bool(), Some(false));
+        assert_eq!(config["base"]["fix"].as_bool(), Some(false));
+    }
+}
+
+#[test]
+fn on_a_terminal_the_base_fix_question_defaults_to_the_user_configs_base_fix() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    scenario.user_config_is("[merge]\nalways = true\n\n[base]\nfix = true # mine\n");
+
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &[(MERGE, ""), (BASE_FIX, ""), (PULL, ""), (NOTIFY, "")],
+    );
+
+    assert!(
+        result.stderr.contains(&format!("{BASE_FIX} [Y/n]")),
+        "terminal: {}",
+        result.stderr
+    );
+    let text = result.user_config.clone().unwrap();
+    assert!(text.contains("fix = true # mine\n"), "{text}");
+}
+
+#[test]
+fn on_a_terminal_turning_merging_off_writes_base_fix_at_its_default() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    scenario.user_config_is("[merge]\nalways = true\n\n[base]\nfix = true  # mine\n");
+
+    let result = setup_on_terminal(&scenario, &[], &[(MERGE, "n"), (PULL, ""), (NOTIFY, "")]);
+
+    assert!(
+        !result.stderr.contains(BASE_FIX),
+        "terminal: {}",
+        result.stderr
+    );
+    let config = table(&result);
+    assert_eq!(config["merge"]["always"].as_bool(), Some(false));
+    assert_eq!(config["base"]["fix"].as_bool(), Some(false));
+    let text = result.user_config.unwrap();
+    assert!(text.contains("fix = false # mine\n"), "{text}");
 }
 
 #[test]
@@ -626,6 +720,9 @@ fn on_a_terminal_pressing_enter_throughout_keeps_an_existing_user_config() {
 [merge]
 always = true
 
+[base]
+fix = true
+
 [launch]
 pull = true
 
@@ -647,6 +744,7 @@ parallel = 5
         &[("RESEND_API_KEY", KEY)],
         &[
             (MERGE, ""),
+            (BASE_FIX, ""),
             (PULL, ""),
             (NOTIFY, ""),
             (TO, ""),
@@ -686,6 +784,7 @@ always = false # quiet, please
         &[],
         &[
             (MERGE, "y"),
+            (BASE_FIX, ""),
             (PULL, ""),
             (NOTIFY, "y"),
             (TO, "me@example.com"),
@@ -1054,7 +1153,11 @@ fn on_a_terminal_accepting_the_test_email_sends_one_and_declining_sends_none() {
 fn ctrl_c_during_the_questions_writes_no_user_config() {
     let scenario = Scenario::new();
 
-    let result = scenario.run_on_terminal(&["setup"], &[], &[(MERGE, "y"), (PULL, CTRL_C)]);
+    let result = scenario.run_on_terminal(
+        &["setup"],
+        &[],
+        &[(MERGE, "y"), (BASE_FIX, ""), (PULL, CTRL_C)],
+    );
 
     assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
     assert_eq!(result.stdout, "");
