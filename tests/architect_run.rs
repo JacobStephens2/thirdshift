@@ -13,8 +13,9 @@
 //! The Base branch is the branch checked out in the Launch directory, or the
 //! one `base <branch>` names, whatever is checked out there, which the run
 //! the plan is dispatched as takes as its Base branch too.
-//! An Architect run started while another on the repository is still running,
-//! or while an Architect plan is still open there, is skipped.
+//! An Architect run started while another on the repository, or a Pickup run,
+//! is still running, or while an Architect plan is still open there, is
+//! skipped.
 
 mod support;
 
@@ -607,7 +608,7 @@ fn a_detached_head_is_rejected_before_any_work() {
 
     scenario.assert_rejected_before_any_work(
         &result,
-        "HEAD is detached; check out the branch the Architecture review should scan, \
+        "HEAD is detached; check out the branch the work should be based on, \
          or name it with base <branch>",
     );
 }
@@ -1682,7 +1683,8 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
 
 /// What a skipped Architect run says when another is running on the
 /// scenario's repository.
-const ALREADY_RUNNING: &str = "thirdshift: an Architect run is already running on acme/widgets\n";
+const ALREADY_RUNNING: &str =
+    "thirdshift: an Architect run or a Pickup run is already running on acme/widgets\n";
 
 /// Assert the Architect run was skipped as one is already running: exit 0,
 /// that line alone on stderr, and nothing on stdout.
@@ -1871,7 +1873,7 @@ fn a_skipped_architect_run_sends_one_notification_with_skipped_in_its_subject_an
     assert_eq!(subject, "[thirdshift] acme/widgets Architect run: skipped");
     assert!(
         text.starts_with(
-            "Skipped:      an Architect run is already running on acme/widgets\n\
+            "Skipped:      an Architect run or a Pickup run is already running on acme/widgets\n\
              Host:         "
         ),
         "{text}"

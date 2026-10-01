@@ -71,9 +71,10 @@ pub enum StartedBy<'a> {
     /// `thirdshift <Issue URL>`: the Base branch is the branch checked out
     /// in the Launch directory.
     Command,
-    /// An Architect run, dispatching its plan: the Base branch is the
-    /// Architect run's, whatever the Launch directory has checked out.
-    ArchitectRun { base: &'a str },
+    /// An Architect run, dispatching its plan, or a Pickup run, dispatching
+    /// the Ready issue it took: the Base branch is that run's, whatever the
+    /// Launch directory has checked out.
+    Dispatch { base: &'a str },
     /// Another thirdshift, as this child Run, a Ticket's Run in a Spec run or
     /// a Base fix: the Base branch is the one the child Run was given.
     Child(&'a Kind),
@@ -84,7 +85,7 @@ impl<'a> StartedBy<'a> {
     fn child(self) -> Option<&'a Kind> {
         match self {
             StartedBy::Child(kind) => Some(kind),
-            StartedBy::Command | StartedBy::ArchitectRun { .. } => None,
+            StartedBy::Command | StartedBy::Dispatch { .. } => None,
         }
     }
 
@@ -99,7 +100,7 @@ impl<'a> StartedBy<'a> {
     fn given_base(self) -> Option<&'a str> {
         match self {
             StartedBy::Command => None,
-            StartedBy::ArchitectRun { base } => Some(base),
+            StartedBy::Dispatch { base } => Some(base),
             StartedBy::Child(kind) => Some(kind.base()),
         }
     }
@@ -145,10 +146,10 @@ pub fn run_to_end(
 /// The Base branch `started_by` gave the Run, if it gave one, stands in for
 /// the checked-out branch as the Base branch: the Spec branch or the Base
 /// branch of the Run that started a child Run, or the Base branch of the
-/// Architect run that dispatched this one. Unless the Run is a child Run, an
-/// issue with sub-issues is a Spec, taken on by a Spec run instead, whose
-/// Spec branch is picked like an Issue branch, running as many Tickets at
-/// once as `parallel` says. A `parallel` the command asked for on an issue
+/// Architect run or the Pickup run that dispatched this one. Unless the Run
+/// is a child Run, an issue with sub-issues is a Spec, taken on by a Spec run
+/// instead, whose Spec branch is picked like an Issue branch, running as many
+/// Tickets at once as `parallel` says. A `parallel` the command asked for on an issue
 /// with no sub-issues fails before any work, as does a Spec whose Tickets are
 /// all closed with no Spec branch to continue.
 ///
