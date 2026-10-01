@@ -5,28 +5,24 @@
 mod support;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::time::{Duration, Instant};
-
 use support::Scenario;
 
-/// What Preflight says of the closed issue #7, which ends a Run before any
+/// What Pre-flight says of the closed issue #7, which ends a Run before any
 /// agent session.
-const CLOSED: &str = "issue #7 is closed";
+const CLOSED_ISSUE: &str = "issue #7 is closed";
 
 /// What a Run on a terminal asks first when there is no User config.
 const SETUP_OFFER: &str = "Set your defaults now? [Y/n]";
 
-/// The message `wait` panics with, and how long it took to.
-fn failure_of<T>(wait: impl FnOnce() -> T) -> (String, Duration) {
-    let began = Instant::now();
+/// The message `wait` panics with.
+fn failure_of<T>(wait: impl FnOnce() -> T) -> String {
     let Err(panic) = catch_unwind(AssertUnwindSafe(wait)) else {
         panic!("the wait did not fail");
     };
-    let message = match panic.downcast::<String>() {
+    match panic.downcast::<String>() {
         Ok(message) => *message,
         Err(panic) => panic.downcast::<&str>().unwrap().to_string(),
-    };
-    (message, began.elapsed())
+    }
 }
 
 #[test]
@@ -34,12 +30,12 @@ fn waiting_for_an_agent_that_never_starts_fails_with_the_runs_stderr_once_it_exi
     let scenario = Scenario::new();
     scenario.issue_is(7, "CLOSED");
 
-    let (message, took) =
+    let message =
         failure_of(|| scenario.run_and_signal(&[&scenario.issue_url(7)], "started", "INT"));
 
     assert!(message.contains("the agent never started"), "{message}");
-    assert!(message.contains(CLOSED), "{message}");
-    assert!(took < Duration::from_secs(60), "took {took:?}");
+    assert!(message.contains("the Run exited first"), "{message}");
+    assert!(message.contains(CLOSED_ISSUE), "{message}");
 }
 
 #[test]
@@ -47,7 +43,7 @@ fn waiting_for_a_prompt_that_never_shows_fails_with_the_terminal_once_the_run_ex
     let scenario = Scenario::new();
     scenario.issue_is(7, "CLOSED");
 
-    let (message, took) = failure_of(|| {
+    let message = failure_of(|| {
         scenario.run_on_terminal(
             &[&scenario.issue_url(7)],
             &[],
@@ -60,6 +56,5 @@ fn waiting_for_a_prompt_that_never_shows_fails_with_the_terminal_once_the_run_ex
         "{message}"
     );
     assert!(message.contains("the Run exited first"), "{message}");
-    assert!(message.contains(CLOSED), "{message}");
-    assert!(took < Duration::from_secs(60), "took {took:?}");
+    assert!(message.contains(CLOSED_ISSUE), "{message}");
 }

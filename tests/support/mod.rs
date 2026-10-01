@@ -49,7 +49,7 @@ pub const REPO: &str = "widgets";
 /// exits without reaching the point fails its test at once, so only a hung
 /// Run waits this long: on a busy machine a Run that is getting there can
 /// take many times what it takes on an idle one (#200).
-const WAIT_BOUND: Duration = Duration::from_secs(120);
+pub const WAIT_BOUND: Duration = Duration::from_secs(120);
 
 pub struct Scenario {
     /// Deletes the temp root when the scenario is dropped.
@@ -241,7 +241,10 @@ impl Scenario {
     }
 
     /// Run thirdshift and send it `signal` (e.g. `"INT"`) once the fake agent
-    /// has touched the file `started` in the scenario root.
+    /// has touched the file `started` in the scenario root. Panics with the
+    /// Run's stderr if the Run exits without the file there, or if the file
+    /// isn't there within [`WAIT_BOUND`]. A Run that exits just after the
+    /// file appears gets no signal.
     pub fn run_and_signal(&self, args: &[&str], started: &str, signal: &str) -> RunResult {
         self.run_and_signal_with_env(args, &[], started, signal)
     }
@@ -294,7 +297,9 @@ impl Scenario {
 
     /// Run thirdshift with stdin and stderr on a pseudo-terminal, as from an
     /// interactive shell, typing `keystrokes` in order. stdout is a pipe, so
-    /// what it prints there stays apart from the terminal.
+    /// what it prints there stays apart from the terminal. Panics with what
+    /// the terminal shows if the command exits without showing a prompt, or
+    /// doesn't show it within [`WAIT_BOUND`].
     pub fn run_on_terminal(
         &self,
         args: &[&str],
