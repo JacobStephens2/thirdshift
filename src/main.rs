@@ -167,6 +167,7 @@ With Run notifications on, thirdshift setup asks for it, hidden, and saves it th
 ";
 
 fn main() -> ExitCode {
+    child_run::keep_name();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let RunArgs {
         issue,

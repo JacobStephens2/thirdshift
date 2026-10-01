@@ -176,6 +176,128 @@ fn each_ticket_branches_off_the_spec_branch_and_its_prompts_name_it_as_the_base(
     }
 }
 
+/// A script standing in for a newer thirdshift: it only records, in the
+/// scenario root, that it was run.
+#[cfg(target_os = "linux")]
+fn replacement(scenario: &Scenario) -> String {
+    format!(
+        "#!/bin/sh\ntouch {}\nexit 1\n",
+        scenario.path("replacement-ran").display()
+    )
+}
+
+/// Rename a [`replacement`] over `installed`, as the release installer,
+/// `thirdshift update` and `cargo install` each put a new binary in place.
+#[cfg(target_os = "linux")]
+fn rename_a_replacement_over(scenario: &Scenario, installed: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let new = installed.with_extension("new");
+    std::fs::write(&new, replacement(scenario)).unwrap();
+    std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::rename(&new, installed).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_ticket_started_after_thirdshift_was_replaced_runs_the_spec_runs_own_binary() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}{}",
+            agent_lands(21, "first.txt"),
+            scenario.waits_to_be_replaced()
+        ),
+    );
+    // The session's script is run by the agent, which #22's Run started.
+    let name_of_run = scenario.path("name-of-run-22");
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "cat /proc/$(ps -o ppid= -p $PPID | tr -d ' ')/comm > {}\n{}",
+            name_of_run.display(),
+            agent_lands(22, "second.txt")
+        ),
+    );
+
+    let result = scenario.run_copy_replaced_midway(&[&spec_url(&scenario)], |installed| {
+        rename_a_replacement_over(&scenario, installed)
+    });
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(&result.stderr, "thirdshift: #22 landed\n");
+    assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
+    assert_eq!(
+        scenario.origin_file("issue-20", "second.txt").as_deref(),
+        Some("22\n")
+    );
+    assert!(
+        !scenario.path("replacement-ran").exists(),
+        "#22 ran the replacement"
+    );
+    // As `pgrep thirdshift` and `top` see #22's Run.
+    assert_eq!(
+        std::fs::read_to_string(name_of_run).unwrap(),
+        "thirdshift\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_ticket_started_after_thirdshift_was_replaced_can_still_start_its_base_fix() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}{}",
+            agent_lands(21, "21.txt"),
+            scenario.waits_to_be_replaced()
+        ),
+    );
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "{}{}{}",
+            agent_lands(22, "22.txt"),
+            checks_on_head(RED),
+            checks_on_origin("issue-20", RED)
+        ),
+    );
+    // The Base fix issue is the next after the Tickets.
+    scenario.agent_does_for(
+        23,
+        &format!(
+            r#"
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-23 --title "Fix CI" --body "Closes #23"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario
+        .run_copy_replaced_midway(&[&spec_url(&scenario), "base-fix"], |installed| {
+            rename_a_replacement_over(&scenario, installed)
+        });
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "#22: starting Base fix #23 into issue-20: https://github.com/acme/widgets/issues/23\n",
+    );
+    for head in ["issue-22", "issue-23"] {
+        assert_eq!(pr_from(&scenario, head).unwrap()["state"], "MERGED");
+    }
+    assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_some());
+    assert!(
+        !scenario.path("replacement-ran").exists(),
+        "a Run ran the replacement"
+    );
+}
+
 #[test]
 fn closed_tickets_are_not_run() {
     let scenario = linear_spec();

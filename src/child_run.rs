@@ -3,6 +3,8 @@
 //! (ADR-0008).
 
 use std::io::{BufRead, BufReader, Read};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -67,7 +69,40 @@ pub enum Ended {
 /// Launch directory. If `base_fix` allows one, it is given `base-fix`, so it
 /// may start a Base fix.
 pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: BaseFixAsk) -> Result<Child> {
-    Command::new(std::env::current_exe().context("no thirdshift executable")?)
+    start_from(&own_executable()?, issue, kind, base_fix)
+}
+
+/// The executable this process is running, as a child `thirdshift` is
+/// started: the same binary, so the hidden arguments it is given never meet
+/// another version.
+///
+/// On Linux that is the kernel's own link to it, which still reaches it once
+/// the file at its install path has been replaced or removed, as an update
+/// does while a Run is going. The path that link resolves to names no file by
+/// then, so a child can't be started by it (#261). Elsewhere there is no such
+/// link, and it is the executable's path.
+fn own_executable() -> Result<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok(PathBuf::from("/proc/self/exe"))
+    } else {
+        std::env::current_exe().context("no thirdshift executable")
+    }
+}
+
+/// [`start`], with the `thirdshift` at `executable` as the child.
+fn start_from(
+    executable: &Path,
+    issue: &IssueUrl,
+    kind: &Kind,
+    base_fix: BaseFixAsk,
+) -> Result<Child> {
+    let mut command = Command::new(executable);
+    // The child goes by this process's name, not by the link it is started
+    // through.
+    if let Some(name) = std::env::args_os().next() {
+        command.arg0(name);
+    }
+    command
         .args([kind.hidden_argument(), kind.base()])
         .args((base_fix == BaseFixAsk::Allow).then_some(args::BASE_FIX))
         .arg(&issue.url)
@@ -75,7 +110,30 @@ pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: BaseFixAsk) -> Result<Chil
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("could not start the Run for #{}", issue.number))
+        .with_context(|| {
+            format!(
+                "could not start the Run for #{} from {}",
+                issue.number,
+                executable.display()
+            )
+        })
+}
+
+/// Name this process after the command it was started as, for `pgrep`,
+/// `pkill` and `top`. The kernel names a process after the last part of the
+/// path it was started by, which for a child Run on Linux is the link to the
+/// running executable: every child Run would be an `exe`. Elsewhere a child
+/// Run is started by the executable's path, and has its name already.
+pub fn keep_name() {
+    #[cfg(target_os = "linux")]
+    if let Some(command) = std::env::args_os().next()
+        && let Some(name) = Path::new(&command).file_name()
+        && let Ok(name) = std::ffi::CString::new(name.as_encoded_bytes())
+    {
+        // SAFETY: PR_SET_NAME reads a NUL-terminated string, which `name`
+        // is, and keeps only as much of it as a name holds.
+        unsafe { libc::prctl(libc::PR_SET_NAME, name.as_ptr()) };
+    }
 }
 
 /// Relay the stderr of `child`, the Run for issue `number`, with a
@@ -152,4 +210,31 @@ pub fn wait(number: u64, mut child: Child) -> Result<Ended> {
         cause: cause.unwrap_or_else(|| format!("the Run {status}")),
         log,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_child_run_that_cannot_be_started_names_the_executable_that_was_tried() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/248").unwrap();
+        let kind = Kind::Ticket {
+            spec_branch: "issue-237".to_string(),
+        };
+
+        let error = start_from(
+            Path::new("/no/such/thirdshift"),
+            &issue,
+            &kind,
+            BaseFixAsk::Forbid,
+        )
+        .unwrap_err();
+
+        let cause = format!("{error:#}");
+        assert!(
+            cause.starts_with("could not start the Run for #248 from /no/such/thirdshift: "),
+            "{cause}"
+        );
+    }
 }
