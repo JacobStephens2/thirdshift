@@ -9,6 +9,7 @@ use crate::base_fix::{Advice, BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
 use crate::ci::{self, Ci};
+use crate::claim;
 use crate::failed_run::{self, FailedRun, PolicyRefusal};
 use crate::git::Git;
 use crate::github::{self, Mergeable, PullRequest};
@@ -144,6 +145,10 @@ pub fn run_to_end(
 /// with no sub-issues fails before any work, as does a Spec whose Tickets are
 /// all closed with no Spec branch to continue.
 ///
+/// Once those checks pass, and before the worktree is created, the Run, or
+/// the Spec run, makes the Claim on `issue`, unless it is a child Run. A Claim
+/// that can't be made fails it there, before any work.
+///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures.
 fn run(
@@ -189,6 +194,11 @@ fn run(
 
     if interrupt::requested() {
         return Err(anyhow!("interrupted").into());
+    }
+    // A Ticket's Run in a Spec run and a Base fix make no Claim: only the
+    // issue the Day shift would look at carries it.
+    if started_by.child().is_none() {
+        claim::make(issue)?;
     }
     let worktree = match &selection {
         Selection::Fresh { .. } => Worktree::create_fresh(&launch, &issue.repo, &branch, &base)?,

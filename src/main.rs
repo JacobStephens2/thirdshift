@@ -4,6 +4,7 @@ mod base_fix;
 mod branch;
 mod child_run;
 mod ci;
+mod claim;
 mod config;
 mod email;
 mod failed_run;
@@ -75,6 +76,12 @@ fails, naming the Base fix issue. A Run that finds an open base-fix issue for th
 branch and checks waits for that one to close instead of starting another, and a Spec run's
 Tickets that meet the same Inherited failure share one Base fix.
 
+A Run or a Spec run makes the Claim on its issue once its checks pass, before any work: it
+labels the issue in-progress, in place of ready-for-agent if it has that, keeping its other
+labels and creating the label if the repository lacks it. A Ticket's Run in a Spec run and a
+Base fix make none, and an issue already in-progress is left as it is. A Run whose Claim
+can't be made stops there, naming the cause.
+
 On a Spec, an issue with sub-issues, the Run is a Spec run: it takes every Ticket (sub-issue) it
 can reach, in the order their \"blocked by\" links allow, each merged into the Spec branch. Its Spec
 PR opens as a draft, with a Tickets checklist, once the first Ticket lands, and is marked ready
@@ -104,8 +111,8 @@ a single Ticket. thirdshift then checks that the plan is open, new and not label
 ready-for-human, needs-info or wontfix, swaps its needs-triage label for ready-for-agent,
 labels it architect-plan, creating the label if the repository lacks it, and dispatches it
 as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket. A Spec's
-Tickets are never labelled architect-plan. The Architect run ends as that run does, with
-its exit code and its PR's URL.
+Tickets are never labelled architect-plan. That run makes the Claim on the plan, which keeps
+architect-plan. The Architect run ends as that run does, with its exit code and its PR's URL.
 merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run, as do the
 User config's defaults; parallel <n> fails it if the plan is a single Ticket. The review
 itself watches no CI, so only that run can start a Base fix. With --plan-only, the

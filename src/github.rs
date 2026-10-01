@@ -58,16 +58,26 @@ pub fn issue(issue: &IssueUrl) -> Result<Issue> {
         .context("gh output has no createdAt")?;
     Ok(Issue {
         is_open: state_is_open(&json)?,
-        labels: json["labels"]
-            .as_array()
-            .context("gh output has no labels")?
-            .iter()
-            .filter_map(|label| label["name"].as_str().map(String::from))
-            .collect(),
+        labels: label_names(&json)?,
         created: DateTime::parse_from_rfc3339(created)
             .with_context(|| format!("gh output has an unreadable createdAt {created}"))?
             .to_utc(),
     })
+}
+
+/// The names of the labels of the issue `json` describes, with its `labels`.
+fn label_names(json: &Value) -> Result<Vec<String>> {
+    Ok(json["labels"]
+        .as_array()
+        .context("gh output has no labels")?
+        .iter()
+        .filter_map(|label| label["name"].as_str().map(String::from))
+        .collect())
+}
+
+/// The labels of `issue`.
+pub fn issue_labels(issue: &IssueUrl) -> Result<Vec<String>> {
+    label_names(&issue_view(issue, "labels")?)
 }
 
 /// Set `issue`'s labels to exactly `labels`, in one request, so a swap of

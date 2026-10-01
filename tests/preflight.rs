@@ -179,3 +179,36 @@ fn a_git_identity_set_only_in_the_launch_repository_is_enough() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
 }
+
+#[test]
+fn a_run_stopped_by_a_preflight_check_changes_no_label() {
+    type Stops = fn(&Scenario);
+    let stopped_by: [(&str, Stops, &[&str]); 3] = [
+        ("issue #7 is closed", |s| s.issue_is(7, "CLOSED"), &[]),
+        (
+            "local main is 1 commit(s) ahead of origin/main",
+            |s| s.commit_locally("unpushed.txt", "unpushed\n", "Unpushed work"),
+            &[],
+        ),
+        (
+            "parallel is only for a Spec, and #7 has no sub-issues",
+            |_| {},
+            &["parallel", "2"],
+        ),
+    ];
+    for (message, stops, flags) in stopped_by {
+        let scenario = Scenario::new();
+        scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+        stops(&scenario);
+
+        let result = scenario.run(&[&[scenario.issue_url(7).as_str()], flags].concat());
+
+        scenario.assert_rejected_before_any_work(&result, message);
+        assert_eq!(
+            scenario.issue_labels(7),
+            ["bug", "ready-for-agent"],
+            "{message}"
+        );
+        assert!(scenario.repo_labels().is_empty(), "{message}");
+    }
+}

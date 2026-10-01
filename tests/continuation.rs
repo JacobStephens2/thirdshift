@@ -283,15 +283,27 @@ fn selection_asks_github_once_for_the_pr_history() {
     scenario.run(&[&scenario.issue_url(7)]);
 
     // Pre-flight's `issue view` comes first, then the `api graphql` that finds
-    // no sub-issues; everything after it and before the post-session
-    // `pr view` is selection. The agent here makes no gh calls of its own.
+    // no sub-issues; what comes after it is selection, up to the Claim, which
+    // starts at the next `issue view` and ends before the post-session
+    // `pr view`. The agent here makes no gh calls of its own.
     let subcommands: Vec<String> = scenario
         .gh_calls()
         .iter()
         .map(|argv| argv[..2].join(" "))
         .take_while(|subcommand| subcommand != "pr view")
         .collect();
-    assert_eq!(subcommands, vec!["issue view", "api graphql", "pr list"]);
+    assert_eq!(
+        subcommands,
+        vec![
+            "issue view",
+            "api graphql",
+            "pr list",
+            "issue view",
+            "label list",
+            "label create",
+            "api --method"
+        ]
+    );
     assert!(
         scenario.gh_calls()[2]
             .windows(2)
@@ -318,4 +330,33 @@ fn an_open_pr_supplies_the_base_branch_even_on_a_detached_head() {
         "prompt: {}",
         scenario.first_prompt()
     );
+}
+
+#[test]
+fn a_continuation_on_an_issue_already_claimed_leaves_its_labels_as_they_are() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    scenario.issue_labelled(7, &["in-progress", "bug"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(7), ["in-progress", "bug"]);
+    assert!(scenario.gh_calls_of("api", "--method").is_empty());
+    assert!(scenario.gh_calls_of("label", "create").is_empty());
+    assert!(!result.stderr.contains("labelling #7"), "{}", result.stderr);
+}
+
+#[test]
+fn a_continuation_on_an_issue_not_yet_claimed_claims_it() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    scenario.issue_labelled(7, &["ready-for-agent", "bug"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(7), ["bug", "in-progress"]);
 }

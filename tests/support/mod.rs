@@ -624,6 +624,22 @@ test -f {root}/{COPY_REPLACED}
             .collect()
     }
 
+    /// Give the repository the labels `labels` on the fake GitHub.
+    pub fn repo_has_labels(&self, labels: &[&str]) {
+        let mut gh = self.gh_state();
+        gh["repo_labels"] = json!(labels);
+        self.write_gh_state(&gh);
+    }
+
+    /// The repository's labels on the fake GitHub.
+    pub fn repo_labels(&self) -> Vec<String> {
+        let labels = &self.gh_state()["repo_labels"];
+        let labels = labels.as_array().into_iter().flatten();
+        labels
+            .map(|label| label.as_str().unwrap().to_string())
+            .collect()
+    }
+
     /// Give issue `number` the title `title` on the fake GitHub.
     pub fn issue_titled(&self, number: u32, title: &str) {
         let mut gh = self.gh_state();
@@ -641,13 +657,19 @@ test -f {root}/{COPY_REPLACED}
 
     /// Make every `gh api user` call fail.
     pub fn github_profile_fails(&self) {
+        self.gh_fails("api user");
+    }
+
+    /// Make every `gh <call>` fail, `call` being the command's first two
+    /// arguments, e.g. `label list`.
+    pub fn gh_fails(&self, call: &str) {
         let mut gh = self.gh_state();
         let failing = gh.as_object_mut().unwrap().entry("failing");
         failing
             .or_insert(json!([]))
             .as_array_mut()
             .unwrap()
-            .push(json!("api user"));
+            .push(json!(call));
         self.write_gh_state(&gh);
     }
 

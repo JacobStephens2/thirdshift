@@ -253,3 +253,127 @@ fn another_issues_branch_and_pr_do_not_count_as_this_issues() {
         ])
     );
 }
+
+#[test]
+fn a_fresh_run_claims_the_issue_in_place_of_ready_for_agent_and_keeps_its_other_labels() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent", "architecture"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.issue_labels(7),
+        ["bug", "architecture", "in-progress"]
+    );
+}
+
+#[test]
+fn a_run_on_an_issue_with_no_ready_for_agent_label_still_claims_it() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(7), ["bug", "in-progress"]);
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: labelling #7 in-progress\n"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn the_claim_is_made_in_one_request_before_the_worktree_is_created() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let claimed = result
+        .stderr
+        .find("thirdshift: labelling #7 in-progress, in place of ready-for-agent\n");
+    let worktree = result.stderr.find("thirdshift: creating worktree ");
+    assert!(
+        claimed.is_some() && claimed < worktree,
+        "stderr: {}",
+        result.stderr
+    );
+    let requests = scenario.gh_calls_of("api", "--method");
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(
+        requests[0][2..],
+        [
+            "PUT",
+            "repos/acme/widgets/issues/7/labels",
+            "--silent",
+            "-f",
+            "labels[]=in-progress"
+        ]
+    );
+}
+
+#[test]
+fn the_in_progress_label_is_created_when_the_repository_lacks_it() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug", "ready-for-agent"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.repo_labels(),
+        ["bug", "ready-for-agent", "in-progress"]
+    );
+    let created = scenario.gh_calls_of("label", "create");
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(created[0][2], "in-progress");
+}
+
+#[test]
+fn a_repository_that_has_the_in_progress_label_keeps_it_as_it_is() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["In-Progress"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.repo_labels(), ["In-Progress"]);
+    assert!(scenario.gh_calls_of("label", "create").is_empty());
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+}
+
+#[test]
+fn a_run_whose_claim_cannot_be_made_stops_before_any_work_naming_the_cause() {
+    for (failing, cause) in [
+        ("label list", "gh label list failed: HTTP 502"),
+        (
+            "api --method",
+            "gh api --method PUT repos/acme/widgets/issues/7/labels --silent \
+             -f labels[]=in-progress failed: HTTP 502",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.issue_labelled(7, &["ready-for-agent"]);
+        scenario.gh_fails(failing);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!("thirdshift: could not make the Claim on #7: {cause}"),
+        );
+        assert_eq!(result.code, Some(1), "{failing}");
+        assert_eq!(scenario.issue_labels(7), ["ready-for-agent"], "{failing}");
+        assert!(scenario.origin_log("issue-7").is_none(), "{failing}");
+    }
+}
