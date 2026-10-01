@@ -171,10 +171,18 @@ pickup starts a Pickup run from the clone, with no Issue URL: one pass, which ta
 lowest-numbered Ready issue in the repository and dispatches it as thirdshift <Issue URL>
 would: a Spec run on a Spec, a Run otherwise. A Ready issue is an open issue labelled
 ready-for-agent that has none of ready-for-human, needs-info, wontfix and needs-triage, is
-not in-progress, and was never started: no Issue branch for it is on origin, and no pull
-request from one exists, open, merged or closed. A line on stderr names the issue taken, and
-the run it is dispatched as makes the Claim on it. The Pickup run ends as that run does, with
-its exit code and its PR's URL. merge, --no-merge, base-fix, --no-base-fix, --email,
+not in-progress, is not a sub-issue, is not labelled base-fix, has no open blocker, and was
+never started: no Issue branch for it is on origin, and no pull request from one exists,
+open, merged or closed. It must also be settled: ten minutes have passed since
+ready-for-agent was applied to it, and since a sub-issue or a \"blocked by\" link of its
+was last added or removed, so a Spec is not taken while its Tickets are being attached. A
+sub-issue is reached through its Spec, when the Spec is itself a Ready issue.
+
+Each ready-for-agent issue a pass looks at and does not take gets one line on stderr with
+the first reason that applies, such as #21 is a Ticket of #20, which is not ready or #30
+blocked by #29, before the line that says what the pass did. A line names the issue taken,
+and the run it is dispatched as makes the Claim on it. The Pickup run ends as that run does,
+with its exit code and its PR's URL. merge, --no-merge, base-fix, --no-base-fix, --email,
 --no-email and parallel <n> apply to that run, as do the User config's defaults; parallel <n>
 is ignored when the issue is not a Spec. base <branch> names the Pickup run's Base branch as
 it does an Architect run's, and the dispatched run branches off <branch> and targets it:
@@ -184,8 +192,9 @@ it does an Architect run's, and the dispatched run branches off <branch> and tar
 pickup takes nothing else: no focus and no --plan-only.
 
 A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why,
-when the repository has no Ready issue, and while an Architect run or another Pickup run on
-the same repository is still running on this machine.
+after any lines on issues it passed over, when the repository has no Ready issue, and while
+an Architect run or another Pickup run on the same repository is still running on this
+machine.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one

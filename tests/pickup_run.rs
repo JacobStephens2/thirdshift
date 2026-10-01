@@ -1,16 +1,18 @@
 //! Pickup runs: `thirdshift pickup` takes the lowest-numbered Ready issue in
 //! the repository, an open issue labelled `ready-for-agent` with no label
-//! that makes an Unready Ticket, no Claim and nothing started on it, and
+//! that makes an Unready Ticket, no Claim, no parent issue, no `base-fix`
+//! label, no open blocker and nothing started on it, that has settled, and
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
-//! ending as that does. With no Ready issue, or while an Architect run or
-//! another Pickup run on the repository is still running, it is skipped.
+//! ending as that does. Each `ready-for-agent` issue it passes over on the
+//! way gets a line saying why. With no Ready issue, or while an Architect run
+//! or another Pickup run on the repository is still running, it is skipped.
 
 mod support;
 
 use std::fs;
 
 use support::resend::ResendStandIn;
-use support::{REPO, RunResult, Scenario};
+use support::{REPO, RunResult, Scenario, TimelineEvent};
 
 /// The label of an issue a Pickup run may take.
 const READY_FOR_AGENT: &str = "ready-for-agent";
@@ -100,6 +102,16 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
 /// Ready issue.
 const NO_READY_ISSUE: &str = "thirdshift: no Ready issue on acme/widgets\n";
 
+/// What a Pickup run says when it passed over each `ready-for-agent` issue
+/// with one of `lines`, in order, and so found no Ready issue.
+fn no_ready_issue_after(lines: &[&str]) -> String {
+    let lines: String = lines
+        .iter()
+        .map(|line| format!("thirdshift: {line}\n"))
+        .collect();
+    lines + NO_READY_ISSUE
+}
+
 /// Assert the Pickup run was skipped with `reason` as its one line: exit 0,
 /// that line alone on stderr, nothing on stdout, and no session started.
 fn assert_skipped(scenario: &Scenario, result: &RunResult, reason: &str) {
@@ -169,7 +181,9 @@ fn an_issue_that_also_has_a_label_that_makes_an_unready_ticket_is_not_taken() {
 
         let result = scenario.run(&["pickup"]);
 
-        assert_skipped(&scenario, &result, NO_READY_ISSUE);
+        // The line names the label as thirdshift spells it.
+        let line = format!("#7 labelled {}", unready.to_lowercase());
+        assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, unready]);
     }
 }
@@ -181,7 +195,8 @@ fn an_issue_labelled_in_progress_is_not_taken() {
 
     let result = scenario.run(&["pickup"]);
 
-    assert_skipped(&scenario, &result, NO_READY_ISSUE);
+    let passed_over = no_ready_issue_after(&["#7 labelled in-progress"]);
+    assert_skipped(&scenario, &result, &passed_over);
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, IN_PROGRESS]);
 }
 
@@ -194,7 +209,8 @@ fn an_issue_with_an_issue_branch_on_origin_is_not_taken() {
 
         let result = scenario.run(&["pickup"]);
 
-        assert_skipped(&scenario, &result, NO_READY_ISSUE);
+        let line = format!("#7 already started: {branch} is on origin");
+        assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT], "{branch}");
     }
 }
@@ -204,31 +220,284 @@ fn an_issue_with_a_pull_request_from_an_issue_branch_in_any_state_is_not_taken()
     for state in ["OPEN", "MERGED", "CLOSED"] {
         let scenario = Scenario::new();
         ready_issue(&scenario, 7, &[]);
-        scenario.github_has_pr("issue-7", "main", state);
+        let pr = scenario.github_has_pr("issue-7", "main", state);
 
         let result = scenario.run(&["pickup"]);
 
-        assert_skipped(&scenario, &result, NO_READY_ISSUE);
+        let line = format!("#7 already started: PR {pr}");
+        assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT], "{state}");
     }
 }
 
 #[test]
-fn an_issue_that_was_started_is_passed_over_for_the_next_ready_issue() {
+fn when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_taken() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
-    scenario.github_has_pr("issue-7", "main", "CLOSED");
+    let pr = scenario.github_has_pr("issue-7", "main", "CLOSED");
     ready_issue(&scenario, 8, &["wontfix"]);
     ready_issue(&scenario, 9, &[IN_PROGRESS]);
     // Neither #7's Issue branch nor its pull request is one of #70's.
     ready_issue(&scenario, 70, &[]);
     scenario.agent_does_for(70, &agent_opens_pr(70, "main"));
+    // Never looked at: the pass ends with the first Ready issue.
+    ready_issue(&scenario, 71, &["needs-info"]);
 
     let result = scenario.run(&["pickup"]);
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-70"), "ready for review");
+    let url = scenario.issue_url(70);
+    let lines = format!(
+        "thirdshift: #7 already started: PR {pr}\n\
+         thirdshift: #8 labelled wontfix\n\
+         thirdshift: #9 labelled in-progress\n\
+         thirdshift: taking Ready issue #70 \"Issue 70\", as thirdshift {url} would\n"
+    );
+    assert!(
+        result.stderr.starts_with(&lines),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains("#71"), "stderr: {}", result.stderr);
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     assert_eq!(scenario.issue_labels(70), [IN_PROGRESS]);
+}
+
+#[test]
+fn a_ready_for_agent_sub_issue_is_never_run_on_its_own_whatever_its_specs_labels() {
+    for spec_labels in [&[][..], &["needs-triage"], &[READY_FOR_AGENT, "needs-info"]] {
+        let scenario = Scenario::new();
+        scenario.spec_has_tickets(7, &[(8, &[])]);
+        scenario.issue_labelled(7, spec_labels);
+        ready_issue(&scenario, 8, &[]);
+
+        let result = scenario.run(&["pickup"]);
+
+        // The Spec's own line is there only when it is labelled
+        // `ready-for-agent` itself.
+        let spec = "#7 labelled needs-info";
+        let ticket = "#8 is a Ticket of #7, which is not ready";
+        let lines = match spec_labels.contains(&READY_FOR_AGENT) {
+            true => vec![spec, ticket],
+            false => vec![ticket],
+        };
+        assert_skipped(&scenario, &result, &no_ready_issue_after(&lines));
+        assert_eq!(scenario.issue_labels(8), [READY_FOR_AGENT]);
+        assert_eq!(scenario.issue_labels(7), spec_labels);
+    }
+}
+
+#[test]
+fn a_ticket_numbered_below_its_spec_names_the_spec_that_is_not_ready() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.spec_has_tickets(20, &[(7, &[])]);
+    ready_issue(&scenario, 20, &[]);
+    scenario.issue_blocked_by(20, &[30]);
+
+    let result = scenario.run(&["pickup"]);
+
+    let lines = [
+        "#7 is a Ticket of #20, which is not ready",
+        "#20 blocked by #30",
+    ];
+    assert_skipped(&scenario, &result, &no_ready_issue_after(&lines));
+}
+
+#[test]
+fn a_spec_that_is_a_ready_issue_is_taken_and_its_tickets_get_no_lines() {
+    // #7 is a Ticket of the Spec #20, numbered below it, and #21 one numbered
+    // above it: both labelled `ready-for-agent`, as the Spec is.
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 20, &[]);
+    ready_issue(&scenario, 21, &[]);
+    scenario.spec_has_tickets(20, &[(7, &[]), (21, &[])]);
+    scenario.agent_does_for(7, &agent_opens_pr(7, "issue-20"));
+    scenario.agent_does_for(21, &agent_opens_pr(21, "issue-20"));
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-20"), "ready for review");
+    let taking = format!(
+        "thirdshift: taking Ready issue #20 \"Issue 20\", as thirdshift {} would\n",
+        scenario.issue_url(20)
+    );
+    assert!(
+        result.stderr.starts_with(&taking),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(20), [IN_PROGRESS]);
+    for ticket in [7, 21] {
+        let pr = pr_from(&scenario, &format!("issue-{ticket}"));
+        assert_eq!(pr["base"], "issue-20");
+        assert_eq!(pr["state"], "MERGED");
+    }
+}
+
+#[test]
+fn an_issue_labelled_base_fix_is_not_taken() {
+    // Whatever its case: GitHub's label names are case-insensitive.
+    for base_fix in ["base-fix", "Base-Fix"] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[base_fix]);
+
+        let result = scenario.run(&["pickup"]);
+
+        let passed_over = no_ready_issue_after(&["#7 labelled base-fix"]);
+        assert_skipped(&scenario, &result, &passed_over);
+        assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, base_fix]);
+    }
+}
+
+#[test]
+fn an_issue_with_an_open_blocker_is_not_taken_and_with_that_blocker_closed_it_is() {
+    let scenario = ready_ticket();
+    scenario.issue_blocked_by(7, &[5, 6]);
+    scenario.issue_is(5, "CLOSED");
+    scenario.issue_is(6, "OPEN");
+
+    let blocked = scenario.run(&["pickup"]);
+
+    let passed_over = no_ready_issue_after(&["#7 blocked by #6"]);
+    assert_skipped(&scenario, &blocked, &passed_over);
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+
+    scenario.issue_is(6, "CLOSED");
+    let unblocked = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(
+        &unblocked,
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+}
+
+#[test]
+fn every_open_blocker_is_named_in_the_line() {
+    let scenario = ready_ticket();
+    scenario.issue_blocked_by(7, &[5, 6]);
+
+    let result = scenario.run(&["pickup"]);
+
+    let passed_over = no_ready_issue_after(&["#7 blocked by #5, #6"]);
+    assert_skipped(&scenario, &result, &passed_over);
+}
+
+/// What a Pickup run says of #7 when it was labelled `ready-for-agent` too
+/// recently to have settled.
+const LABELLED_TOO_RECENTLY: &str =
+    "#7 not settled: labelled ready-for-agent less than ten minutes ago";
+
+#[test]
+fn an_issue_labelled_ready_for_agent_less_than_ten_minutes_ago_is_not_taken() {
+    let scenario = ready_ticket();
+    // Its other labels, however recent, and an earlier `ready-for-agent`
+    // don't count: only the last time `ready-for-agent` was applied does.
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 9),
+            (TimelineEvent::Labelled("bug"), 1),
+        ],
+    );
+
+    let result = scenario.run(&["pickup"]);
+
+    let passed_over = no_ready_issue_after(&[LABELLED_TOO_RECENTLY]);
+    assert_skipped(&scenario, &result, &passed_over);
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+}
+
+#[test]
+fn an_issue_labelled_ready_for_agent_more_than_ten_minutes_ago_is_taken() {
+    let scenario = ready_ticket();
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 11),
+            (TimelineEvent::Labelled("bug"), 1),
+        ],
+    );
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+}
+
+#[test]
+fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_ten_minutes_ago_is_not_taken()
+ {
+    for (event, changed) in [
+        (TimelineEvent::SubIssueAdded, "a sub-issue"),
+        (TimelineEvent::SubIssueRemoved, "a sub-issue"),
+        (TimelineEvent::BlockedByAdded, "a \"blocked by\" link"),
+        (TimelineEvent::BlockedByRemoved, "a \"blocked by\" link"),
+    ] {
+        let scenario = ready_spec("");
+        scenario.issue_timeline(
+            7,
+            &[
+                (TimelineEvent::Labelled(READY_FOR_AGENT), 600),
+                (TimelineEvent::SubIssueAdded, 590),
+                (event, 5),
+            ],
+        );
+
+        let result = scenario.run(&["pickup"]);
+
+        let line = format!("#7 not settled: {changed} added or removed less than ten minutes ago");
+        assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
+        assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    }
+}
+
+#[test]
+fn an_issue_passed_over_for_being_unsettled_is_taken_by_a_later_pass_once_it_has_settled() {
+    let scenario = ready_spec("");
+    let labelled = (TimelineEvent::Labelled(READY_FOR_AGENT), 600);
+    scenario.issue_timeline(7, &[labelled, (TimelineEvent::SubIssueAdded, 9)]);
+    let first = scenario.run(&["pickup"]);
+    let line = "#7 not settled: a sub-issue added or removed less than ten minutes ago";
+    assert_skipped(&scenario, &first, &no_ready_issue_after(&[line]));
+
+    // The same events, a few minutes on.
+    let labelled = (TimelineEvent::Labelled(READY_FOR_AGENT), 602);
+    scenario.issue_timeline(7, &[labelled, (TimelineEvent::SubIssueAdded, 11)]);
+    let later = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&later, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+}
+
+#[test]
+fn each_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
+    // Every reason applies to #7: each row takes the first one away.
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &["needs-info", IN_PROGRESS, "base-fix"]);
+    scenario.spec_has_tickets(3, &[(7, &[])]);
+    scenario.issue_blocked_by(7, &[5]);
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    scenario.issue_timeline(7, &[(TimelineEvent::Labelled(READY_FOR_AGENT), 1)]);
+    let expect = |line: &str| {
+        let result = scenario.run(&["pickup"]);
+        assert_skipped(&scenario, &result, &no_ready_issue_after(&[line]));
+    };
+
+    expect("#7 labelled needs-info");
+    scenario.issue_labelled(7, &[READY_FOR_AGENT, IN_PROGRESS, "base-fix"]);
+    expect("#7 labelled in-progress");
+    scenario.issue_labelled(7, &[READY_FOR_AGENT, "base-fix"]);
+    expect("#7 is a Ticket of #3, which is not ready");
+    scenario.spec_has_tickets(3, &[]);
+    expect("#7 labelled base-fix");
+    scenario.issue_labelled(7, &[READY_FOR_AGENT]);
+    scenario.issue_blocked_by(7, &[5]);
+    expect("#7 blocked by #5");
+    scenario.issue_blocked_by(7, &[]);
+    expect("#7 already started: issue-7 is on origin");
 }
 
 /// A Ready issue, #7, that is a Spec with two Tickets that don't block each

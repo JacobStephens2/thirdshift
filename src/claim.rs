@@ -10,7 +10,7 @@ use crate::progress;
 use crate::spec_run::READY_FOR_AGENT;
 
 /// The label of a Claimed issue.
-const IN_PROGRESS: &str = "in-progress";
+pub const IN_PROGRESS: &str = "in-progress";
 
 /// The description the `in-progress` label is added to the repository with
 /// if the repository lacks it.

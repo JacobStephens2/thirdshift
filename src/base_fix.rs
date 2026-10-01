@@ -23,7 +23,15 @@ use crate::progress;
 use crate::spec_run::READY_FOR_AGENT;
 
 /// The label that marks a Base fix issue, which a Run finds an open one by.
-const BASE_FIX_LABEL: &str = "base-fix";
+pub const BASE_FIX_LABEL: &str = "base-fix";
+
+/// Whether an issue with `labels` is a Base fix issue, whatever the case of
+/// its label: GitHub's label names are case-insensitive.
+pub fn is_issue(labels: &[String]) -> bool {
+    labels
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(BASE_FIX_LABEL))
+}
 
 /// The labels of a Base fix issue, each with the description it is added to
 /// the repository with if the repository lacks it.
