@@ -1,9 +1,9 @@
 //! An Architect run up to its plan: an Architecture review of the Base
 //! branch, the one its command named or else the one checked out in the
 //! Launch directory, from the Launch directory with no Issue URL, then the checks on
-//! the plan it published and the label swap that marks the plan ready, and
-//! an Architect plan, for the command to stop at or to dispatch. A review that found no Strong
-//! candidate published no plan, and the Architect run ends on the issue it
+//! the plan it published and the label change that marks the plan ready and
+//! makes it the Architect plan, for the command to stop at or to dispatch. A
+//! review that found no Strong candidate published no plan, and the Architect run ends on the issue it
 //! named instead: the idea issue it filed for its top recommendation, or the
 //! open issue that already covers it. Only one Architect run per repository
 //! runs at a time on a machine: one started while another is still running
@@ -38,14 +38,12 @@ const REVIEW: &str = "architecture-review";
 
 /// The label thirdshift marks an Architect plan with, which a later Architect
 /// run finds an open one by.
-const ARCHITECT_PLAN: &str = "architect-plan";
+const ARCHITECT_PLAN_LABEL: &str = "architect-plan";
 
-/// That label, with the description it is added to the repository with if
-/// the repository lacks it.
-const ARCHITECT_PLAN_LABEL: (&str, &str) = (
-    ARCHITECT_PLAN,
-    "An Architect plan: the Spec or Ticket an Architecture review published",
-);
+/// The description the `architect-plan` label is added to the repository
+/// with if the repository lacks it.
+const ARCHITECT_PLAN_DESCRIPTION: &str =
+    "An Architect plan: the Spec or Ticket an Architecture review published";
 
 /// How an Architect run ended, short of a failure and before any dispatch.
 /// Its `Display` is the line that says how it ended.
@@ -64,6 +62,20 @@ impl Outcome {
         match self {
             Self::Skipped(_) => "skipped",
             Self::Reviewed(reviewed) => reviewed.review(),
+        }
+    }
+
+    /// The URLs of the issues the Architect run ended on, as its stdout
+    /// carries them when nothing was dispatched: the issue its Architecture
+    /// review ended on, or each open Architect plan it was skipped for. None
+    /// when it was skipped as another is still running.
+    pub fn urls(&self) -> Vec<&str> {
+        match self {
+            Self::Skipped(Skipped::AlreadyRunning(_)) => Vec::new(),
+            Self::Skipped(Skipped::OpenPlans(plans)) => {
+                plans.iter().map(|(plan, _)| plan.url.as_str()).collect()
+            }
+            Self::Reviewed(reviewed) => vec![reviewed.url()],
         }
     }
 }
@@ -87,17 +99,6 @@ pub enum Skipped {
     /// These Architect plans, each with its title, are still open on this
     /// repository: at least one.
     OpenPlans(Vec<(IssueUrl, String)>),
-}
-
-impl Skipped {
-    /// The open Architect plans it was skipped for, if that is why.
-    pub fn open_plans(&self) -> impl Iterator<Item = &IssueUrl> {
-        let plans = match self {
-            Self::AlreadyRunning(_) => &[][..],
-            Self::OpenPlans(plans) => plans,
-        };
-        plans.iter().map(|(plan, _)| plan)
-    }
 }
 
 impl fmt::Display for Skipped {
@@ -223,7 +224,7 @@ pub fn run(
     // through the Spec run or Run its plan is dispatched as, and the
     // operating system releases it however the process ends.
     std::mem::forget(lock);
-    let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
+    let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN_LABEL)?;
     if !open_plans.is_empty() {
         return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans)));
     }
@@ -377,16 +378,21 @@ fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Res
         bail!("interrupted");
     }
     progress::step(format_args!(
-        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} and adding {ARCHITECT_PLAN} on #{}",
+        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} and adding {ARCHITECT_PLAN_LABEL} on #{}",
         plan.number
     ));
-    github::ensure_labels(&plan.repo_slug(), &[ARCHITECT_PLAN_LABEL])?;
+    github::ensure_labels(
+        &plan.repo_slug(),
+        &[(ARCHITECT_PLAN_LABEL, ARCHITECT_PLAN_DESCRIPTION)],
+    )?;
+    let added = [READY_FOR_AGENT, ARCHITECT_PLAN_LABEL];
+    // GitHub's label names are case-insensitive.
     let mut labels: Vec<&str> = kept
         .iter()
         .map(String::as_str)
-        .filter(|label| ![READY_FOR_AGENT, ARCHITECT_PLAN].contains(label))
+        .filter(|kept| !added.iter().any(|added| added.eq_ignore_ascii_case(kept)))
         .collect();
-    labels.extend([READY_FOR_AGENT, ARCHITECT_PLAN]);
+    labels.extend(added);
     github::set_labels(plan, &labels)
 }
 

@@ -143,11 +143,11 @@ and exits 0. Nothing is left to clear once that other run ends, however it ends.
 started on an Issue URL are never skipped this way.
 
 An Architect run that finds an open issue labelled architect-plan is skipped too, before
-any review, with or without --plan-only: the last plan is not finished. It names each open
-plan, prints its URL on stdout, gives the command that picks it up, thirdshift <plan URL>,
-and exits 0. No flag overrides this: finish or close the plan, or remove its label. An
-Architect run never retries or dispatches an existing plan, so one whose run failed stays
-open until you pick it up.
+any review, with or without --plan-only: the last Architect plan is not finished. It names
+each open Architect plan, prints its URL on stdout, gives the command that picks it up,
+thirdshift <plan URL>, and exits 0. No flag overrides this: finish or close the Architect
+plan, or remove its label. An Architect run never retries or dispatches an existing
+Architect plan, so one whose run failed stays open until you pick it up.
 
 --email, --email <address> and --no-email ask an Architect run for its Run notification as
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
@@ -330,12 +330,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         (Ok(outcome), None) => {
             // Also on stderr, so the outcome shows even when stdout is captured.
             progress::step(format_args!("{outcome}"));
-            match outcome {
-                Outcome::Skipped(skipped) => {
-                    skipped.open_plans().for_each(|plan| print_url(&plan.url));
-                }
-                Outcome::Reviewed(reviewed) => print_url(reviewed.url()),
-            }
+            outcome.urls().into_iter().for_each(print_url);
             ExitCode::SUCCESS
         }
         (Err(failed), None) => report(failed),

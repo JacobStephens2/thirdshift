@@ -1,7 +1,8 @@
 //! Architect runs: `thirdshift architect` runs the Architecture review in its
 //! own worktree, detached at the Base branch's head on origin, then checks
 //! the plan the review published, swaps its `needs-triage` for
-//! `ready-for-agent` and labels it `architect-plan`. With `--plan-only` it prints the plan's URL and stops.
+//! `ready-for-agent` and labels it `architect-plan`. With `--plan-only` it
+//! prints the plan's URL and stops.
 //! Without, it dispatches the plan as `thirdshift <plan URL>` would, a Spec
 //! run or a Run, and ends as that does. A review with no Strong candidate
 //! has no plan: the Architect run prints the URL of the idea issue it filed,
@@ -1755,11 +1756,16 @@ fn a_second_architect_run_is_skipped_while_the_firsts_dispatched_run_or_spec_run
             ),
         );
         let first = scenario.run_until(&["architect"], &[], "started");
+        assert!(
+            scenario
+                .issue_labels(8)
+                .contains(&ARCHITECT_PLAN.to_string())
+        );
 
         let second = scenario.run(&["architect"]);
 
-        // Never as one whose plan is still open: the first run's own plan,
-        // labelled by now, is behind the lock.
+        // Never as one whose Architect plan is still open: the lock is tried
+        // first, so the first run's own, labelled by now, is not reported.
         assert_skipped_as_already_running(&second);
         release(&scenario);
         let first = first.finish();
@@ -1982,14 +1988,14 @@ fn a_skipped_architect_run_names_each_open_architect_plan_and_prints_its_url() {
 
 #[test]
 fn an_architect_plan_that_is_closed_or_no_longer_labelled_lets_the_architect_run_go_ahead() {
-    for release in [
+    for lift_the_rule in [
         (|scenario| scenario.issue_is(7, "CLOSED")) as fn(&Scenario),
         |scenario| scenario.issue_labelled(7, &["ready-for-agent"]),
     ] {
         let scenario = scenario();
         open_architect_plan(&scenario, 7, "Deepen the session module");
         scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
-        release(&scenario);
+        lift_the_rule(&scenario);
 
         let result = scenario.run(&["architect", "--plan-only"]);
 
@@ -2052,8 +2058,9 @@ fn a_plan_whose_dispatched_run_failed_stays_open_and_the_next_architect_run_neve
 }
 
 #[test]
-fn an_architect_run_skipped_for_an_open_plan_sends_one_notification_naming_it_and_its_command() {
+fn an_architect_run_skipped_for_open_plans_sends_one_notification_naming_each_and_its_command() {
     let scenario = scenario();
+    open_architect_plan(&scenario, 5, "Deepen the worktree module");
     open_architect_plan(&scenario, 7, "Deepen the session module");
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
@@ -2064,15 +2071,13 @@ fn an_architect_run_skipped_for_an_open_plan_sends_one_notification_naming_it_an
     );
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
     let (subject, text) = the_one_notification(&resend);
     assert_eq!(subject, "[thirdshift] acme/widgets Architect run: skipped");
     assert!(
         text.starts_with(&format!(
-            "Skipped:      Architect plan #7 \"Deepen the session module\" is still open: \
-             pick it up with thirdshift {}\n\
-             Host:         ",
-            scenario.issue_url(7)
+            "Skipped:      {}; {}\nHost:         ",
+            still_open(&scenario, 7, "Deepen the session module"),
+            still_open(&scenario, 5, "Deepen the worktree module")
         )),
         "{text}"
     );
