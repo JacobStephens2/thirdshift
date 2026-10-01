@@ -79,6 +79,8 @@ fn help_documents_architect_its_focus_plan_only_and_one_architect_run_at_a_time(
         "<focus> is free text",
         "--plan-only is required",
         "thirdshift architect \"the Spec run\" --plan-only",
+        "A review that finds no Strong candidate publishes no plan",
+        "thirdshift prints that issue's URL instead, changing no label",
         "Start one Architect run per repository at a time",
     ] {
         assert!(help.contains(mention), "help lacks {mention:?}: {help}");
