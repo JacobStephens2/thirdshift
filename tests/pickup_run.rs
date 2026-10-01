@@ -156,7 +156,14 @@ fn a_closed_issue_labelled_ready_for_agent_is_not_taken() {
 
 #[test]
 fn an_issue_that_also_has_a_label_that_makes_an_unready_ticket_is_not_taken() {
-    for unready in ["ready-for-human", "needs-info", "wontfix", "needs-triage"] {
+    // Whatever its case: GitHub's label names are case-insensitive.
+    for unready in [
+        "ready-for-human",
+        "needs-info",
+        "wontfix",
+        "needs-triage",
+        "Needs-Info",
+    ] {
         let scenario = Scenario::new();
         ready_issue(&scenario, 7, &[unready]);
 
@@ -746,4 +753,16 @@ fn asked_for_a_notification_with_no_address_known_the_issue_taken_is_left_as_it_
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     assert!(scenario.claude_calls().is_empty(), "a session was started");
     assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn the_user_configs_spec_parallel_reaches_a_dispatched_spec_run() {
+    // As in `parallel_reaches_a_dispatched_spec_run`: one Ticket at a time.
+    let scenario = ready_spec("test -f issue-8.txt");
+    scenario.user_config_is("[spec]\nparallel = 1\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(sessions(&scenario), ["8", "9", "7"]);
 }

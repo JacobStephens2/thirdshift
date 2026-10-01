@@ -243,11 +243,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
             _ => focus = Some(arg.clone()),
         }
     }
-    let dispatch = DispatchArgs {
-        goal: flags.goal,
-        parallel: flags.parallel,
-        base_fix: flags.base_fix,
-    };
+    let (email, dispatch) = flags.for_dispatch();
     if plan_only && dispatch != DispatchArgs::default() {
         bail!(
             "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
@@ -257,7 +253,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     Ok(ArchitectArgs {
         focus,
         base,
-        email: flags.email,
+        email,
         dispatch: (!plan_only).then_some(dispatch),
     })
 }
@@ -277,14 +273,11 @@ fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
             _ => bail!("unexpected argument after pickup: {arg}"),
         }
     }
+    let (email, dispatch) = flags.for_dispatch();
     Ok(PickupArgs {
         base,
-        email: flags.email,
-        dispatch: DispatchArgs {
-            goal: flags.goal,
-            parallel: flags.parallel,
-            base_fix: flags.base_fix,
-        },
+        email,
+        dispatch,
     })
 }
 
@@ -299,6 +292,18 @@ struct RunFlags {
 }
 
 impl RunFlags {
+    /// The flags as an Architect run or a Pickup run takes them: what was
+    /// asked about its Run notification, and the flags for the run it
+    /// dispatches.
+    fn for_dispatch(self) -> (Option<NotificationAsk>, DispatchArgs) {
+        let dispatch = DispatchArgs {
+            goal: self.goal,
+            parallel: self.parallel,
+            base_fix: self.base_fix,
+        };
+        (self.email, dispatch)
+    }
+
     /// Record what `arg` asks for, if it is one of these flags, with or
     /// without its dashes, taking from `rest` the address after `email`, if
     /// one is there, and the number after `parallel`. False, taking nothing,

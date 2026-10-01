@@ -28,6 +28,14 @@ pub struct Launch {
     pub base: String,
 }
 
+/// How a run with no Issue URL starts.
+pub enum Start {
+    /// Its checks passed and its repository's lock is its own.
+    Clear(Launch),
+    /// It is skipped, with nothing done.
+    AlreadyRunning(AlreadyRunning),
+}
+
 /// Why a run with no Issue URL is skipped at its start: another on the
 /// repository, an Architect run or a Pickup run, is still running on this
 /// machine, the Spec run or Run it dispatched included. Its `Display` is the
@@ -48,15 +56,13 @@ impl fmt::Display for AlreadyRunning {
 /// Start a run with no Issue URL from the Launch directory, the current
 /// directory. Its Base branch is `base`, the branch its command named,
 /// whatever the Launch directory has checked out, or without one the branch
-/// checked out there; on a detached HEAD with neither, the failure says to
-/// check out the branch `detached_advice` describes, as in "the branch the
-/// work should be based on".
+/// checked out there, so a detached HEAD with neither fails it.
 ///
 /// Once the preflight checks pass, the run is [`AlreadyRunning`], with
 /// nothing done, if another on the same repository is still running on this
 /// machine. Otherwise this process is that repository's one such run until it
 /// exits, through whatever it dispatches.
-pub fn start(base: Option<&str>, detached_advice: &str) -> Result<Result<Launch, AlreadyRunning>> {
+pub fn start(base: Option<&str>) -> Result<Start> {
     let (git, origin, repo) = directory()?;
     preflight::check_identity(&git)?;
     let checked_out = git
@@ -64,19 +70,20 @@ pub fn start(base: Option<&str>, detached_advice: &str) -> Result<Result<Launch,
         .ok();
     let base = base
         .or(checked_out.as_deref())
-        .with_context(|| {
-            format!("HEAD is detached; check out {detached_advice}, or name it with base <branch>")
-        })?
+        .context(
+            "HEAD is detached; check out the branch the work should be based on, \
+             or name it with base <branch>",
+        )?
         .to_string();
     preflight::check_base_branch(&git, &base)?;
     let Some(lock) = try_run_lock(&repo)? else {
-        return Ok(Err(AlreadyRunning(repo)));
+        return Ok(Start::AlreadyRunning(AlreadyRunning(repo)));
     };
     // Never closed, so the lock is held for as long as this process lives,
     // through the Spec run or Run it dispatches, and the operating system
     // releases it however the process ends.
     std::mem::forget(lock);
-    Ok(Ok(Launch {
+    Ok(Start::Clear(Launch {
         git,
         origin,
         repo,

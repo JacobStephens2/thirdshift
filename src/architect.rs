@@ -22,7 +22,7 @@ use crate::failed_run::FailedRun;
 use crate::github;
 use crate::interrupt;
 use crate::issue::IssueUrl;
-use crate::launch::{self, AlreadyRunning, Launch};
+use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::plugin::Plugin;
 use crate::progress;
 use crate::prompt;
@@ -205,9 +205,11 @@ pub fn run(
         repo,
         checked_out,
         base,
-    } = match launch::start(base, "the branch the Architecture review should scan")? {
-        Ok(launch) => launch,
-        Err(running) => return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running))),
+    } = match launch::start(base)? {
+        Start::Clear(launch) => launch,
+        Start::AlreadyRunning(running) => {
+            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
+        }
     };
     let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN_LABEL)?;
     if !open_plans.is_empty() {

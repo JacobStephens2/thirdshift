@@ -58,7 +58,8 @@ impl Selection {
 }
 
 /// Pick the Issue branch for `issue` from the Issue branches on origin and
-/// their PRs in any state: the highest number seen on either decides. Fails if a local copy of the chosen branch in the launch repository differs from
+/// their PRs in any state: the highest number seen on either decides. Fails
+/// if a local copy of the chosen branch in the Launch directory differs from
 /// origin's: the Run replaces it and deletes it at cleanup.
 pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
     let first_branch = branch_name(issue, 1);

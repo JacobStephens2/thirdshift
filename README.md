@@ -492,7 +492,7 @@ The repository is the one `origin` names, so two clones of one repository count 
 
 thirdshift holds the rule with an operating-system lock on a file under `~/.thirdshift/architect-locks/`, one for both kinds of run, which the run's process takes without waiting, after its checks in step 1, and holds until it exits. The operating system releases the lock when that process ends for any reason, a crash, a kill or a reboot included, so there is never a stale lock to clear: the next Architect run or Pickup run on the repository runs normally. The file itself stays, and means nothing on its own. A review worktree that a killed Architect run left behind is removed by the next one.
 
-A skipped run asked for a [Run notification](#one-run-notification) still sends its one: the notification's checks are made before the lock is tried, so a skip is always notified.
+A skipped Architect run asked for a [Run notification](#one-run-notification) still sends its one: the notification's checks are made before the lock is tried, so a skip is always notified. A skipped Pickup run sends none.
 
 ### One Architect plan at a time
 

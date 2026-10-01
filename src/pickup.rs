@@ -14,7 +14,7 @@ use crate::claim;
 use crate::git::Git;
 use crate::github::{self, ListedIssue};
 use crate::issue::{IssueUrl, Repo};
-use crate::launch::{self, AlreadyRunning, Launch};
+use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::progress;
 use crate::spec_run::{self, READY_FOR_AGENT};
 
@@ -70,16 +70,18 @@ impl fmt::Display for Skipped {
 pub fn run(base: Option<&str>) -> Result<Outcome> {
     let Launch {
         git, repo, base, ..
-    } = match launch::start(base, "the branch the work should be based on")? {
-        Ok(launch) => launch,
-        Err(running) => return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running))),
+    } = match launch::start(base)? {
+        Start::Clear(launch) => launch,
+        Start::AlreadyRunning(running) => {
+            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
+        }
     };
-    let mut listed = github::open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
-    listed.sort_by_key(|listed| listed.issue.number);
+    let mut candidates = github::open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
+    candidates.sort_by_key(|candidate| candidate.issue.number);
     let mut ready = None;
-    for listed in listed {
-        if is_ready(&git, &listed)? {
-            ready = Some(listed);
+    for candidate in candidates {
+        if is_ready(&git, &candidate)? {
+            ready = Some(candidate);
             break;
         }
     }
@@ -98,11 +100,11 @@ pub fn run(base: Option<&str>) -> Result<Outcome> {
     }))
 }
 
-/// Whether `listed`, an open issue labelled `ready-for-agent` in the
+/// Whether `candidate`, an open issue labelled `ready-for-agent` in the
 /// repository of the Launch directory `launch`, is a Ready issue: it has no
 /// label that makes an Unready Ticket, no Claim, and was never started.
-fn is_ready(launch: &Git, listed: &ListedIssue) -> Result<bool> {
-    Ok(spec_run::unready_label(&listed.labels).is_none()
-        && !claim::is_on(&listed.labels)
-        && !branch::started(launch, &listed.issue)?)
+fn is_ready(launch: &Git, candidate: &ListedIssue) -> Result<bool> {
+    Ok(spec_run::unready_label(&candidate.labels).is_none()
+        && !claim::is_on(&candidate.labels)
+        && !branch::started(launch, &candidate.issue)?)
 }

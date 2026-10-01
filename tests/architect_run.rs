@@ -608,7 +608,7 @@ fn a_detached_head_is_rejected_before_any_work() {
 
     scenario.assert_rejected_before_any_work(
         &result,
-        "HEAD is detached; check out the branch the Architecture review should scan, \
+        "HEAD is detached; check out the branch the work should be based on, \
          or name it with base <branch>",
     );
 }

@@ -32,13 +32,15 @@ mod update;
 mod worktree;
 
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::process::ExitCode;
 
 use architect::{Outcome, Reviewed};
-use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
+use args::{ArchitectArgs, Command, DispatchArgs, PickupArgs, RunArgs};
 use base_fix::{Advice, BaseFixAsk};
 use config::UserConfig;
 use failed_run::FailedRun;
+use issue::IssueUrl;
 use notification::{ArchitectNotification, NotificationAsk, RunNotification};
 use run::{Ended, Goal, StartedBy};
 use spec_run::Parallel;
@@ -326,9 +328,9 @@ fn main() -> ExitCode {
 /// plan fails puts the cause and the session log on stderr. One that is
 /// skipped says why on stderr, and is no failure: as another on its
 /// repository, or a Pickup run, is still running, it puts nothing on stdout,
-/// and as Architect plans are still open there, the URL of each. If asked, by the command or
-/// the User config, it sends one Run notification, however it ended, skipped
-/// included; the run it dispatched sends none of its own.
+/// and as Architect plans are still open there, the URL of each. If asked, by
+/// the command or the User config, it sends one Run notification, however it
+/// ended, skipped included; the run it dispatched sends none of its own.
 fn architect(args: ArchitectArgs) -> ExitCode {
     let config = match user_config() {
         Ok(config) => config,
@@ -358,24 +360,10 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
             ));
-            Some(run::run_to_end(
-                plan,
-                dispatch.goal.unwrap_or(config.default_goal()),
-                &config.logs_dir,
-                config.launch_pull,
-                Parallel::new(dispatch.parallel, config.spec_parallel),
-                StartedBy::ArchitectRun { base },
-                dispatch.base_fix.clone().unwrap_or_else(|| {
-                    // The plan is retried as a Run of its own: another
-                    // Architect run would start a new review instead.
-                    config.default_base_fix(args::retry_with_base_fix(
-                        plan,
-                        dispatch.goal,
-                        email_flag.as_ref(),
-                        dispatch.parallel,
-                    ))
-                }),
-            ))
+            // The plan is retried as a Run of its own: another Architect
+            // run would start a new review instead.
+            let (email, parallel) = (email_flag.as_ref(), dispatch.parallel);
+            Some(dispatched(plan, base, dispatch, email, parallel, &config))
         }
         _ => None,
     };
@@ -424,33 +412,53 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let dispatch = args.dispatch;
     // Ignored for an issue that is not a Spec: the command can't know which
-    // it will take.
-    let parallel = dispatch.parallel.filter(|_| taken.is_spec);
-    let ended = run::run_to_end(
+    // it will take. Left out of the command a Base fix is offered with too,
+    // as the issue is retried as a Run of its own: another Pickup run never
+    // takes an issue that was started.
+    let parallel = args.dispatch.parallel.filter(|_| taken.is_spec);
+    let ended = dispatched(
         &taken.issue,
-        dispatch.goal.unwrap_or(config.default_goal()),
-        &config.logs_dir,
-        config.launch_pull,
-        Parallel::new(parallel, config.spec_parallel),
-        StartedBy::PickupRun { base: &taken.base },
-        dispatch.base_fix.unwrap_or_else(|| {
-            // The issue is retried as a Run of its own: another Pickup run
-            // never takes an issue that was started.
-            config.default_base_fix(args::retry_with_base_fix(
-                &taken.issue,
-                dispatch.goal,
-                args.email.as_ref(),
-                parallel,
-            ))
-        }),
+        &taken.base,
+        &args.dispatch,
+        args.email.as_ref(),
+        parallel,
+        &config,
     );
     let code = run_outcome(&ended);
     if let Some(notification) = notification {
         notification.send(&ended);
     }
     code
+}
+
+/// The end of the Spec run or Run that an Architect run or a Pickup run
+/// dispatches `issue` as, on its Base branch `base`: what `thirdshift <Issue
+/// URL>` would start, with the flags `dispatch` and the User config `config`
+/// for the rest. It runs as many Tickets at once as `parallel` asks, which is
+/// `dispatch`'s unless that is to be ignored. The command it offers a Base
+/// fix with is that one on `issue`, with those flags and with `email` as the
+/// command gave it.
+fn dispatched(
+    issue: &IssueUrl,
+    base: &str,
+    dispatch: &DispatchArgs,
+    email: Option<&NotificationAsk>,
+    parallel: Option<NonZeroUsize>,
+    config: &UserConfig,
+) -> Ended {
+    run::run_to_end(
+        issue,
+        dispatch.goal.unwrap_or(config.default_goal()),
+        &config.logs_dir,
+        config.launch_pull,
+        Parallel::new(parallel, config.spec_parallel),
+        StartedBy::Dispatch { base },
+        dispatch.base_fix.clone().unwrap_or_else(|| {
+            let retry = args::retry_with_base_fix(issue, dispatch.goal, email, parallel);
+            config.default_base_fix(retry)
+        }),
+    )
 }
 
 /// The Run notification `email` asks for, if it asks for one: what `checked`
