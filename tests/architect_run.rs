@@ -2,8 +2,6 @@
 //! own worktree, detached at the Base branch's head on origin, then checks
 //! the plan the review published and swaps its `needs-triage` for
 //! `ready-for-agent`. With `--plan-only` it prints the plan's URL and stops.
-//! The Base branch is the branch checked out in the Launch directory, or the
-//! one `base <branch>` names, whatever is checked out there.
 //! Without, it dispatches the plan as `thirdshift <plan URL>` would, a Spec
 //! run or a Run, and ends as that does. A review with no Strong candidate
 //! has no plan: the Architect run prints the URL of the idea issue it filed,
@@ -11,6 +9,9 @@
 //! Asked to, by `email` or the User config, it sends one Run notification,
 //! through Resend, here a local stand-in, however it ended, and the run it
 //! dispatched sends none.
+//! The Base branch is the branch checked out in the Launch directory, or the
+//! one `base <branch>` names, whatever is checked out there, which the run
+//! the plan is dispatched as takes as its Base branch too.
 
 mod support;
 
@@ -555,7 +556,8 @@ fn a_detached_head_is_rejected_before_any_work() {
 
     scenario.assert_rejected_before_any_work(
         &result,
-        "HEAD is detached; check out the branch the Architecture review should scan",
+        "HEAD is detached; check out the branch the Architecture review should scan, \
+         or name it with base <branch>",
     );
 }
 
@@ -1217,20 +1219,6 @@ fn launch_pull_leaves_the_checkout_alone_when_the_dispatched_run_starts_too() {
         !result.stderr.contains("Launch directory"),
         "stderr: {}",
         result.stderr
-    );
-}
-
-#[test]
-fn a_detached_head_without_base_says_base_can_name_the_branch() {
-    let scenario = scenario();
-    scenario.launch_git(&["checkout", "-q", "--detach"]);
-
-    let result = scenario.run(&["architect"]);
-
-    scenario.assert_rejected_before_any_work(
-        &result,
-        "HEAD is detached; check out the branch the Architecture review should scan, \
-         or name it with base <branch>",
     );
 }
 

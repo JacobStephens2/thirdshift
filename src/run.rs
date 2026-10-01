@@ -177,7 +177,7 @@ fn run(
         );
     }
     let branch = selection.branch().to_string();
-    let base = selection.base_branch(started_by.given_base().or(checked_out.as_deref()))?;
+    let base = selection.base_branch(started_by.given_base(), checked_out.as_deref())?;
     preflight::check_base_branch(&launch, &base)?;
     if launch_pull {
         pull_base_branch(&launch, checked_out.as_deref(), &base);

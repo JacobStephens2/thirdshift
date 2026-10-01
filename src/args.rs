@@ -631,13 +631,17 @@ mod tests {
 
     #[test]
     fn base_is_not_a_flag_of_a_run() {
-        for args in [vec![URL, "base", "develop"], vec!["--base", "develop", URL]] {
-            let rejection = rejection(&args);
-            assert!(
-                rejection.starts_with("unexpected argument after the Issue URL: ")
-                    || rejection.starts_with("not a GitHub issue URL: "),
-                "{args:?}: {rejection}"
-            );
+        for (args, error) in [
+            (
+                vec![URL, "base", "develop"],
+                "unexpected argument after the Issue URL: base",
+            ),
+            (
+                vec!["--base", "develop", URL],
+                "not a GitHub issue URL: --base",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
         }
     }
 
