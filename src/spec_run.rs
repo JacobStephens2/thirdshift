@@ -677,6 +677,26 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_tickets_line_says_its_cause() {
+        let tickets = [ticket(23, true, &[], &[])];
+        let cause = "git fetch origin issue-21 failed: \
+                     error: fetching ref refs/remotes/origin/issue-21 failed";
+        let outcomes = BTreeMap::from([(
+            23,
+            TicketOutcome::Failed {
+                cause: cause.to_string(),
+                log: None,
+            },
+        )]);
+
+        assert_eq!(
+            summarize(&tickets, &outcomes),
+            ["#23 failed: git fetch origin issue-21 failed: \
+              error: fetching ref refs/remotes/origin/issue-21 failed"]
+        );
+    }
+
+    #[test]
     fn the_checklist_ticks_done_tickets_and_says_where_each_other_stands() {
         let mut unready = ticket(26, true, &[], &[]);
         unready.labels = vec!["needs-info".to_string()];
