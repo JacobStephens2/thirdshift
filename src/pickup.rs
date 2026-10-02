@@ -301,7 +301,7 @@ fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
     if let Some(started) = branch::started(launch, &candidate.issue)? {
         return passed_over(Reason::Started(started));
     }
-    if spec_run::all_closed(read.sub_issues_open.iter().copied()) {
+    if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
         return passed_over(Reason::TicketsClosed);
     }
     if let Some(shaped) = read.last_shaped
@@ -310,6 +310,6 @@ fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
         return passed_over(Reason::Unsettled(shaped.by));
     }
     Ok(Standing::Ready {
-        is_spec: !read.sub_issues_open.is_empty(),
+        is_spec: read.has_sub_issues(),
     })
 }

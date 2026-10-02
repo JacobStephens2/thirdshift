@@ -347,12 +347,19 @@ fn issues_labelled(repo: &str, label: &str, state: &str) -> Result<Vec<ListedIss
 pub struct Candidate {
     /// The issue it is a sub-issue of, if it is one.
     pub parent: Option<IssueUrl>,
-    /// Whether each of its sub-issues is open: of none, it has none.
-    pub sub_issues_open: Vec<bool>,
+    /// For each of its sub-issues, whether that one is open.
+    pub sub_issue_is_open: Vec<bool>,
     /// The numbers of the open issues it is blocked by.
     pub open_blockers: Vec<u64>,
     /// The latest of the changes that shape it, if its timeline has one.
     pub last_shaped: Option<Shaped>,
+}
+
+impl Candidate {
+    /// It has sub-issues of its own.
+    pub fn has_sub_issues(&self) -> bool {
+        !self.sub_issue_is_open.is_empty()
+    }
 }
 
 /// A change that shapes an issue, and when it was made.
@@ -374,10 +381,13 @@ pub enum Shaping {
 }
 
 /// An issue's parent, the state of each of its sub-issues, the issues it is
-/// blocked by, and the events of its timeline that shape it: each time a label was
-/// applied, of which only the last hundred are read, and the last sub-issue
-/// or "blocked by" link added or removed. They are read from the timeline
-/// because adding a sub-issue does not change the issue's update time.
+/// blocked by, and the events of its timeline that shape it: each time a
+/// label was applied, of which only the last hundred are read, and the last
+/// sub-issue or "blocked by" link added or removed. They are read from the
+/// timeline because adding a sub-issue does not change the issue's update
+/// time. The sub-issues read are the first hundred, the ones
+/// [`TICKETS_QUERY`] reads, so a Pickup run and a Spec run see the same
+/// Tickets.
 const CANDIDATE_QUERY: &str = "\
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -453,7 +463,7 @@ pub fn candidate(issue: &IssueUrl, label: &str) -> Result<Candidate> {
     }
     Ok(Candidate {
         parent,
-        sub_issues_open: nodes(&issue["subIssues"], "subIssues")?
+        sub_issue_is_open: nodes(&issue["subIssues"], "subIssues")?
             .iter()
             .map(node_is_open)
             .collect::<Result<_>>()?,

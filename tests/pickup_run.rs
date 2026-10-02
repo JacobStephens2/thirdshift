@@ -478,6 +478,10 @@ fn an_issue_passed_over_for_being_unsettled_is_taken_by_a_later_pass_once_it_has
     assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
 }
 
+/// What a Pickup run says of #7 when it is a Spec whose Tickets are all
+/// closed, with nothing started on it.
+const EVERY_TICKET_CLOSED: &str = "#7 every Ticket is closed";
+
 #[test]
 fn each_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
     // Every reason applies to #7: each row takes the first one away.
@@ -510,10 +514,6 @@ fn each_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
     scenario.spec_has_tickets(7, &[]);
     expect(LABELLED_TOO_RECENTLY);
 }
-
-/// What a Pickup run says of #7 when it is a Spec whose Tickets are all
-/// closed, with nothing started on it.
-const EVERY_TICKET_CLOSED: &str = "#7 every Ticket is closed";
 
 /// An open issue labelled `ready-for-agent`, #7, that is a Spec whose
 /// Tickets, #5 and #6, are both closed, with no Spec branch.
