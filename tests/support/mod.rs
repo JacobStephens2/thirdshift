@@ -161,6 +161,18 @@ impl HeldRun {
     }
 }
 
+/// A script in which the agent starts a background task described as
+/// `description`, then ends its turn with it still running, so the task is
+/// killed after the session's last `result`.
+pub fn leaves_running(description: &str) -> String {
+    format!(
+        r#"
+echo '{{"type": "system", "subtype": "task_started", "task_id": "b1", "description": "{description}"}}'
+echo '{{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {{"status": "killed"}}}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#
+    )
+}
+
 /// `stderr` with the `HH:MM:SS ` that starts each progress line, after its
 /// `thirdshift: `, removed.
 pub fn unstamped(stderr: &str) -> String {

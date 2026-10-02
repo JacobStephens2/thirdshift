@@ -6,14 +6,11 @@
 
 mod support;
 
-use support::Scenario;
+use support::{Scenario, leaves_running};
 
-/// The agent starts a background test run, then ends its turn without waiting
-/// for it, so the task is killed after the session's last `result`.
-const AGENT_LEAVES_TESTS_RUNNING: &str = r#"
-echo '{"type": "system", "subtype": "task_started", "task_id": "b1", "description": "./mvnw test -Dtest=GamesPageTest"}'
-echo '{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"status": "killed"}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
-"#;
+/// What the background test run the agent leaves running, with
+/// [`leaves_running`], is described as.
+const TESTS: &str = "./mvnw test -Dtest=GamesPageTest";
 
 const AGENT_COMMITS_AND_OPENS_PR: &str = r#"
 echo "feature" > feature.txt
@@ -27,7 +24,7 @@ fn a_session_whose_background_work_was_killed_is_resumed_once_and_the_run_goes_o
     let scenario = Scenario::new();
     scenario.agent_does_in_session(
         1,
-        &format!("echo wip > feature.txt\n{AGENT_LEAVES_TESTS_RUNNING}"),
+        &format!("echo wip > feature.txt\n{}", leaves_running(TESTS)),
     );
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
@@ -80,8 +77,8 @@ fn a_session_whose_background_work_was_killed_is_resumed_once_and_the_run_goes_o
     scenario.assert_cleaned_up("issue-7");
 }
 
-/// How a session that ended with [`AGENT_LEAVES_TESTS_RUNNING`]'s task still
-/// running is said to have ended.
+/// How a session that ended with the [`TESTS`] still running is said to have
+/// ended.
 const LEFT_TESTS_RUNNING: &str = "ended with a background task still running \
                                   (./mvnw test -Dtest=GamesPageTest), which was killed";
 
@@ -90,14 +87,15 @@ fn a_resume_that_ends_with_killed_background_work_is_warned_about_and_the_run_go
     let scenario = Scenario::new();
     scenario.agent_does_in_session(
         1,
-        &format!("echo wip > feature.txt\n{AGENT_LEAVES_TESTS_RUNNING}"),
+        &format!("echo wip > feature.txt\n{}", leaves_running(TESTS)),
     );
     // The Resume opens the PR as a draft, abandoning a task of its own.
     scenario.agent_does_in_session(
         2,
         &format!(
-            "{}{AGENT_LEAVES_TESTS_RUNNING}",
-            AGENT_COMMITS_AND_OPENS_PR.replace("--title", "--draft --title")
+            "{}{}",
+            AGENT_COMMITS_AND_OPENS_PR.replace("--title", "--draft --title"),
+            leaves_running(TESTS)
         ),
     );
 
@@ -119,10 +117,35 @@ fn a_resume_that_ends_with_killed_background_work_is_warned_about_and_the_run_go
 }
 
 #[test]
+fn a_session_with_no_id_to_resume_that_ends_with_killed_background_work_is_warned_about_too() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_COMMITS_AND_OPENS_PR}{}",
+        leaves_running(TESTS)
+    ));
+
+    let result = scenario.run_with_env(
+        &[&scenario.issue_url(7)],
+        &[("FAKE_CLAUDE_NO_SESSION_ID", "1")],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(scenario.claude_calls().len(), 1);
+    let warning = format!("thirdshift: implement: the session {LEFT_TESTS_RUNNING}; carrying on");
+    assert!(
+        result.stderr.lines().any(|line| line.starts_with(&warning)),
+        "missing {warning:?} in stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
 fn a_run_that_fails_after_a_resume_ended_with_killed_background_work_names_that_work_too() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
-        "echo wip >> feature.txt\n{AGENT_LEAVES_TESTS_RUNNING}"
+        "echo wip >> feature.txt\n{}",
+        leaves_running(TESTS)
     ));
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
@@ -162,11 +185,12 @@ fn a_merge_refused_after_killed_background_work_still_leaves_the_pr_ready_for_re
     scenario.agent_does_in_session(
         1,
         &format!(
-            "{AGENT_COMMITS_AND_OPENS_PR}{AGENT_LEAVES_TESTS_RUNNING}\
-             gh fake refuse-merges 1 'Merge commits are not allowed on this repository.'\n"
+            "{AGENT_COMMITS_AND_OPENS_PR}{}\
+             gh fake refuse-merges 1 'Merge commits are not allowed on this repository.'\n",
+            leaves_running(TESTS)
         ),
     );
-    scenario.agent_does_in_session(2, AGENT_LEAVES_TESTS_RUNNING);
+    scenario.agent_does_in_session(2, &leaves_running(TESTS));
 
     let result = scenario.run(&["merge", &scenario.issue_url(7)]);
 
@@ -188,7 +212,7 @@ fn a_merge_refused_after_killed_background_work_still_leaves_the_pr_ready_for_re
 #[test]
 fn a_session_that_ends_in_an_error_with_killed_background_work_is_not_resumed_or_warned_about() {
     let scenario = Scenario::new();
-    scenario.agent_does(&format!("{AGENT_LEAVES_TESTS_RUNNING}exit 3\n"));
+    scenario.agent_does(&format!("{}exit 3\n", leaves_running(TESTS)));
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
@@ -216,7 +240,7 @@ fn a_repair_whose_background_work_was_killed_is_resumed_too() {
              '[{{\"name\": \"test\", \"conclusion\": \"failure\"}}]'\n"
         ),
     );
-    scenario.agent_does_in_session(2, AGENT_LEAVES_TESTS_RUNNING);
+    scenario.agent_does_in_session(2, &leaves_running(TESTS));
     scenario.agent_does_in_session(
         3,
         "echo fix > fix.txt\ngit add fix.txt\ngit commit -q -m Fix\n\

@@ -62,16 +62,19 @@ pub struct Sessions<'a> {
     logs: &'a Logs<'a>,
     worktree: &'a Path,
     plugin_dir: &'a Path,
-    /// How each session ended that left background work running past its
-    /// Resume, as [`left_running`] says it, oldest first.
-    left_running: RefCell<Vec<String>>,
+    /// How each session ended whose last ending, its Resume's if it got one,
+    /// left background work running, as in "implement session ended with a
+    /// background task still running (cargo test), which was killed", oldest
+    /// first.
+    endings_with_killed_work: RefCell<Vec<String>>,
 }
 
 impl<'a> Sessions<'a> {
     /// Take `steps`, which run their sessions through the `Sessions` they are
-    /// given. If a session ended with killed background work that its Resume
-    /// did not settle and `steps` then fail, the failure names that work
-    /// ahead of its own cause: the session may have stopped short of its job.
+    /// given. If a session's last ending, its Resume's if it got one, left
+    /// background work to be killed and `steps` then fail, the failure names
+    /// that work ahead of its own cause: the session may have stopped short
+    /// of its job.
     pub fn within<T>(
         logs: &'a Logs<'a>,
         worktree: &'a Path,
@@ -82,18 +85,15 @@ impl<'a> Sessions<'a> {
             logs,
             worktree,
             plugin_dir,
-            left_running: RefCell::default(),
+            endings_with_killed_work: RefCell::default(),
         };
         let taken = steps(&sessions);
-        let left_running = sessions.left_running.into_inner();
-        if left_running.is_empty() {
+        let endings = sessions.endings_with_killed_work.into_inner();
+        if endings.is_empty() {
             return taken;
         }
         taken.map_err(|error| {
-            error.context(format!(
-                "{}, and a later step failed",
-                left_running.join("; ")
-            ))
+            error.context(format!("{}, and a later step failed", endings.join("; ")))
         })
     }
 
@@ -118,7 +118,8 @@ impl<'a> Sessions<'a> {
         log: &mut PathBuf,
     ) -> Result<Option<String>> {
         let mut ended = self.start(kind, None, prompt, log)?;
-        let mut last = "session";
+        // What ended last, as the progress line on its killed work calls it.
+        let mut ended_last = "session";
         let killed = ended.killed_background_work();
         if let (false, Some(session_id)) = (killed.is_empty(), ended.session_id()) {
             let (session_id, resume_prompt) = (session_id.to_string(), prompt::resume(&killed));
@@ -131,17 +132,17 @@ impl<'a> Sessions<'a> {
                 &resume_prompt,
                 log,
             )?;
-            last = "Resume";
+            ended_last = "Resume";
         }
         let killed = ended.killed_background_work();
         if !killed.is_empty() {
-            let left_running = left_running(&killed);
+            let ending = ending_with(&killed);
             progress::step(format_args!(
-                "{kind}: the {last} {left_running}; carrying on, as it may have been abandoned"
+                "{kind}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
             ));
-            self.left_running
+            self.endings_with_killed_work
                 .borrow_mut()
-                .push(format!("{kind} session {left_running}"));
+                .push(format!("{kind} session {ending}"));
         }
         Ok(ended.final_message().map(String::from))
     }
@@ -161,8 +162,8 @@ impl<'a> Sessions<'a> {
 }
 
 /// How a session ended whose `killed` background work, by description, was
-/// still running, as in "implement session <ended so>".
-fn left_running(killed: &[&str]) -> String {
+/// still running: what follows "implement session" or "the Resume".
+fn ending_with(killed: &[&str]) -> String {
     match killed {
         [task] => format!("ended with a background task still running ({task}), which was killed"),
         _ => format!(

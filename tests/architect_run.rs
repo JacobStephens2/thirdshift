@@ -22,7 +22,7 @@ mod support;
 use std::fs;
 
 use support::resend::ResendStandIn;
-use support::{REPO, RunResult, Scenario};
+use support::{REPO, RunResult, Scenario, leaves_running};
 
 /// The first issue the fake agent creates: the scenario starts with issue #7.
 const PLAN_URL: &str = "https://github.com/acme/widgets/issues/8";
@@ -442,20 +442,13 @@ sleep 60"#,
     assert_eq!(scenario.issue_labels(8), ["needs-triage"]);
 }
 
-/// The review ends its turn with a background task still running, which is
-/// killed after the session's last `result`.
-const AGENT_LEAVES_A_SCAN_RUNNING: &str = r#"
-echo '{"type": "system", "subtype": "task_started", "task_id": "b1", "description": "cargo test"}'
-echo '{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"status": "killed"}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
-"#;
-
 #[test]
 fn a_review_whose_resume_ends_with_killed_background_work_is_read_by_the_resumes_final_message() {
     let scenario = scenario();
-    scenario.agent_does_in_session(1, AGENT_LEAVES_A_SCAN_RUNNING);
+    scenario.agent_does_in_session(1, &leaves_running("cargo test"));
     scenario.agent_does_in_session(
         2,
-        &format!("{AGENT_PUBLISHES_A_TICKET}{AGENT_LEAVES_A_SCAN_RUNNING}"),
+        &format!("{AGENT_PUBLISHES_A_TICKET}{}", leaves_running("cargo test")),
     );
 
     let result = scenario.run(&["architect", "--plan-only"]);
@@ -480,7 +473,7 @@ fn a_review_whose_resume_ends_with_killed_background_work_is_read_by_the_resumes
 #[test]
 fn an_architect_run_that_fails_after_killed_background_work_names_that_work_too() {
     let scenario = scenario();
-    scenario.agent_does(AGENT_LEAVES_A_SCAN_RUNNING);
+    scenario.agent_does(&leaves_running("cargo test"));
 
     let result = scenario.run(&["architect", "--plan-only"]);
 

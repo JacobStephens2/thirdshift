@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use support::resend::{Request, ResendStandIn};
-use support::{RunResult, Scenario};
+use support::{RunResult, Scenario, leaves_running};
 
 const KEY: &str = "re_test_123";
 
@@ -157,12 +157,7 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
 fn a_run_that_fails_after_killed_background_work_names_that_work_in_its_notification() {
     let scenario = Scenario::new();
     // The session, and its Resume, end with a task still running, and no PR.
-    scenario.agent_does(
-        r#"
-echo '{"type": "system", "subtype": "task_started", "task_id": "b1", "description": "cargo test"}'
-echo '{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"status": "killed"}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
-"#,
-    );
+    scenario.agent_does(&leaves_running("cargo test"));
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
     let result = run(
