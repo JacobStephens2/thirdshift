@@ -11,12 +11,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
-use crate::base_fix::BaseFixAsk;
 use crate::git::Git;
-use crate::notification::NotificationAsk;
 use crate::questions::{self, Answers};
 use crate::resend_key::Credentials;
-use crate::run::Goal;
 use crate::{email, github, progress};
 
 /// The settings a User config can hold. Each is what a Run does when its
@@ -139,38 +136,6 @@ impl UserConfig {
             }
         }
         Ok(config)
-    }
-
-    /// The goal of a Run whose command gave no `merge` or `no-merge`.
-    pub fn default_goal(&self) -> Goal {
-        if self.merge_always {
-            Goal::Merged
-        } else {
-            Goal::ReadyForReview
-        }
-    }
-
-    /// What a Run whose command gave no `base-fix` or `no-base-fix` asks
-    /// about a Base fix, `retry` being the command that starts it again
-    /// with one allowed: without `base.fix`, nobody decided.
-    pub fn default_base_fix(&self, retry: String) -> BaseFixAsk {
-        if self.base_fix {
-            BaseFixAsk::Allow
-        } else {
-            BaseFixAsk::Undecided { retry }
-        }
-    }
-}
-
-impl EmailSettings {
-    /// What a Run whose command gave no `email` or `no-email` asks about its
-    /// Run notification.
-    pub fn default_ask(&self) -> NotificationAsk {
-        if self.always {
-            NotificationAsk::Send(None)
-        } else {
-            NotificationAsk::Skip
-        }
     }
 }
 
@@ -769,24 +734,6 @@ mod tests {
         assert_eq!(parse("[email]\n").unwrap().email, EmailSettings::default());
         assert!(parse("[email]\nalways = true\n").unwrap().email.always);
         assert!(!parse("[email]\nalways = false\n").unwrap().email.always);
-    }
-
-    #[test]
-    fn email_always_asks_for_a_notification_to_email_to() {
-        let always = parse("[email]\nalways = true\n").unwrap();
-        assert_eq!(always.email.default_ask(), NotificationAsk::Send(None));
-        for text in [
-            "",
-            "[email]\nalways = false\n",
-            "[email]\nto = \"me@example.com\"\n",
-        ] {
-            let config = parse(text).unwrap();
-            assert_eq!(
-                config.email.default_ask(),
-                NotificationAsk::Skip,
-                "{text:?}"
-            );
-        }
     }
 
     #[test]
