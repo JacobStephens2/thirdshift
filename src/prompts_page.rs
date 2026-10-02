@@ -194,7 +194,7 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-resume",
             title: "Resume",
-            when: "Continues any session, once, that ended its turn while waiting on background work, which was killed with it.",
+            when: "Continues any session, once, that ended its turn with background work still running, which was killed with it.",
             sender: Units(&[IMPLEMENT, REVIEW, FINISH]),
             text: prompt::resume(&[BACKGROUND_WORK]),
         },

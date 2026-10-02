@@ -442,6 +442,61 @@ sleep 60"#,
     assert_eq!(scenario.issue_labels(8), ["needs-triage"]);
 }
 
+/// The review ends its turn with a background task still running, which is
+/// killed after the session's last `result`.
+const AGENT_LEAVES_A_SCAN_RUNNING: &str = r#"
+echo '{"type": "system", "subtype": "task_started", "task_id": "b1", "description": "cargo test"}'
+echo '{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"status": "killed"}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#;
+
+#[test]
+fn a_review_whose_resume_ends_with_killed_background_work_is_read_by_the_resumes_final_message() {
+    let scenario = scenario();
+    scenario.agent_does_in_session(1, AGENT_LEAVES_A_SCAN_RUNNING);
+    scenario.agent_does_in_session(
+        2,
+        &format!("{AGENT_PUBLISHES_A_TICKET}{AGENT_LEAVES_A_SCAN_RUNNING}"),
+    );
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(8)));
+    assert!(
+        result.stderr.contains(
+            "thirdshift: architecture-review: the Resume ended with a background task still \
+             running (cargo test), which was killed; carrying on"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.issue_labels(8),
+        ["ready-for-agent", ARCHITECT_PLAN]
+    );
+}
+
+#[test]
+fn an_architect_run_that_fails_after_killed_background_work_names_that_work_too() {
+    let scenario = scenario();
+    scenario.agent_does(AGENT_LEAVES_A_SCAN_RUNNING);
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    let cause = format!(
+        "architecture-review session ended with a background task still running (cargo test), \
+         which was killed, and a later step failed: {NO_FINAL_LINE}"
+    );
+    assert!(
+        result.stderr.contains(&format!("thirdshift: {cause}\n")),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
 #[test]
 fn a_session_that_ends_without_a_valid_final_line_fails_the_architect_run() {
     for final_message in [

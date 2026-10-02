@@ -154,6 +154,34 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
 }
 
 #[test]
+fn a_run_that_fails_after_killed_background_work_names_that_work_in_its_notification() {
+    let scenario = Scenario::new();
+    // The session, and its Resume, end with a task still running, and no PR.
+    scenario.agent_does(
+        r#"
+echo '{"type": "system", "subtype": "task_started", "task_id": "b1", "description": "cargo test"}'
+echo '{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"status": "killed"}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#,
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &["--email", "me@example.com", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_contains(
+        text(&request),
+        "implement session ended with a background task still running (cargo test), \
+         which was killed, and a later step failed: no PR found",
+    );
+}
+
+#[test]
 fn an_interrupted_run_sends_one_notification_that_it_was_interrupted() {
     // One signal end to end; the interrupt's unit tests take SIGINT, SIGTERM
     // and SIGHUP alike.

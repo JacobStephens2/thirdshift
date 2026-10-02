@@ -80,8 +80,8 @@ pub fn fail(
     let interrupted = interrupt::requested();
     let error = interrupted_or(error, interrupted);
     // Only the first line: the reason goes in the failure commit's subject.
-    let reason = error
-        .to_string()
+    // The whole cause, as stderr gives it, so it names every part of it.
+    let reason = format!("{error:#}")
         .lines()
         .next()
         .unwrap_or_default()

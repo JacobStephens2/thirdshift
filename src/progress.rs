@@ -123,7 +123,8 @@ fn split_stamp(line: &str) -> Option<(&str, &str)> {
 ///
 /// A background task still running when the session ends its turn for good is
 /// killed as the process exits, so a task killed after the last `result` is
-/// work the session was waiting on: see [`Progress::killed_background_work`].
+/// work the session may have been waiting on, or work it had given up on and
+/// left running: see [`Progress::killed_background_work`].
 #[derive(Default)]
 pub struct Progress {
     started: bool,
@@ -212,8 +213,10 @@ impl Progress {
     }
 
     /// Descriptions of the background tasks killed after the last `result`:
-    /// the work the session was still waiting on when it ended. None if that
-    /// `result` was an error: the session ended for another reason.
+    /// the work still running when the session ended, which it may have been
+    /// waiting on. The stream doesn't say whether it was, or had been
+    /// abandoned. None if that `result` was an error: the session ended for
+    /// another reason.
     pub fn killed_background_work(&self) -> Vec<&str> {
         if self.failed {
             return Vec::new();
