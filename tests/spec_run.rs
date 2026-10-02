@@ -8,7 +8,7 @@
 mod support;
 
 use support::resend::ResendStandIn;
-use support::{Scenario, WAIT_BOUND};
+use support::{Scenario, WAIT_BOUND, leaves_running};
 
 const SPEC: u32 = 20;
 const SPEC_TITLE: &str = "Widgets, all of them";
@@ -1191,6 +1191,39 @@ fn a_spec_review_that_keeps_the_markers_has_the_checklist_replaced_between_them(
     assert_eq!(
         spec_pr(&scenario)["body"],
         format!("Before.\n\n{DONE_CHECKLIST}\n\nAfter. Closes #20")
+    );
+}
+
+#[test]
+fn a_spec_review_whose_resume_ends_with_killed_background_work_still_delivers_the_spec_pr() {
+    let scenario = linear_spec();
+    // The Spec review rewrites the body without the checklist, and ends with
+    // a hung test run it could not stop. So does its Resume, the fourth
+    // session, after #21's, #22's and the Spec review.
+    let review = format!(
+        "gh fake pr issue-20 body '\"Reviewed.\\n\\nCloses #20\"'\n{}",
+        leaves_running("Run each browser test file")
+    );
+    scenario.agent_does_for(SPEC, &review);
+    scenario.agent_does_in_session(4, &review);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: spec-review-resume: session started",
+    );
+    assert_contains(
+        &result.stderr,
+        "thirdshift: spec-review: the Resume ended with a background task still running \
+         (Run each browser test file), which was killed; carrying on",
+    );
+    let spec = spec_pr(&scenario);
+    assert_eq!(spec["isDraft"], false);
+    assert_eq!(
+        spec["body"],
+        format!("Reviewed.\n\nCloses #20\n\n{DONE_CHECKLIST}\n")
     );
 }
 

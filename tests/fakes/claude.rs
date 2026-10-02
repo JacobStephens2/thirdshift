@@ -22,7 +22,8 @@
 //! exclusive lock on $FAKE_CLAUDE_RECORD.lock, and the script is chosen under
 //! it.
 //!
-//! The `init` line carries session id `fake-session-<n>` for the n-th call.
+//! The `init` line carries session id `fake-session-<n>` for the n-th call,
+//! or none if $FAKE_CLAUDE_NO_SESSION_ID is set.
 //! Lines the script appends to the file named by $FAKE_CLAUDE_AFTER_RESULT
 //! are emitted after the closing `result` line, e.g. to kill a background
 //! task as the session ends. What the script writes to the file named by
@@ -180,12 +181,14 @@ pub fn main(argv: Vec<String>) {
     }
 
     let session = records.len();
-    let init = object([
+    let mut init = object([
         ("type", string("system")),
         ("subtype", string("init")),
         ("cwd", string(cwd)),
-        ("session_id", string(format!("fake-session-{session}"))),
     ]);
+    if std::env::var_os("FAKE_CLAUDE_NO_SESSION_ID").is_none() {
+        init.set("session_id", string(format!("fake-session-{session}")));
+    }
     println!("{init}");
     // Beside the record, not in $TMPDIR, which tests expect to be left empty.
     let after_result = format!("{}.after-result.{session}", record_path.display());

@@ -28,6 +28,6 @@ claude -p --permission-mode auto --plugin-dir <plugin dir> --output-format strea
 | Review Repair | In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged. | [review-repair.md](review-repair.md) |
 | CI-fix Repair | Starts a Repair session when CI fails on the pull request's head commit, listing each failed check. | [ci-fix-repair.md](ci-fix-repair.md) |
 | CI-fix Repair, with Inherited failures | Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix. | [ci-fix-repair-inherited.md](ci-fix-repair-inherited.md) |
-| Resume | Continues any session, once, that ended its turn while waiting on background work, which was killed with it. | [resume.md](resume.md) |
+| Resume | Continues any session, once, that ended its turn with background work still running, which was killed with it. | [resume.md](resume.md) |
 
 The Factory skills the prompts name are in [`skills/`](../skills/), as the plugin writes them out.

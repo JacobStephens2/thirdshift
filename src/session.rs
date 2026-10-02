@@ -1,5 +1,6 @@
 //! Headless Claude Code sessions and their logs.
 
+use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -56,24 +57,60 @@ impl<'a> Logs<'a> {
 
 /// Where a Run's or an Architect run's sessions run: in `worktree`, with the
 /// Factory skills plugin at `plugin_dir` loaded, each logged in its `logs`.
+/// It lasts for the steps given to [`Sessions::within`].
 pub struct Sessions<'a> {
-    pub logs: &'a Logs<'a>,
-    pub worktree: &'a Path,
-    pub plugin_dir: &'a Path,
+    logs: &'a Logs<'a>,
+    worktree: &'a Path,
+    plugin_dir: &'a Path,
+    /// How each session ended whose last ending, its Resume's if it got one,
+    /// left background work running, as in "implement session ended with a
+    /// background task still running (cargo test), which was killed", oldest
+    /// first.
+    endings_with_killed_work: RefCell<Vec<String>>,
 }
 
-impl Sessions<'_> {
+impl<'a> Sessions<'a> {
+    /// Take `steps`, which run their sessions through the `Sessions` they are
+    /// given. If a session's last ending, its Resume's if it got one, left
+    /// background work to be killed and `steps` then fail, the failure names
+    /// that work ahead of its own cause: the session may have stopped short
+    /// of its job.
+    pub fn within<T>(
+        logs: &'a Logs<'a>,
+        worktree: &'a Path,
+        plugin_dir: &'a Path,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> Result<T> {
+        let sessions = Sessions {
+            logs,
+            worktree,
+            plugin_dir,
+            endings_with_killed_work: RefCell::default(),
+        };
+        let taken = steps(&sessions);
+        let endings = sessions.endings_with_killed_work.into_inner();
+        if endings.is_empty() {
+            return taken;
+        }
+        taken.map_err(|error| {
+            error.context(format!("{}, and a later step failed", endings.join("; ")))
+        })
+    }
+
     /// Run a session given `prompt`, logged and labelled as `kind`, pointing
-    /// `log` at each session's log as it starts. A session that ends while
-    /// waiting on background work, which was killed with it, gets one Resume,
-    /// as `<kind>-resume`; if that ends the same way, this fails and names the
-    /// killed work.
+    /// `log` at each session's log as it starts. A session that ends with
+    /// background work still running, which is killed with it, gets one
+    /// Resume, as `<kind>-resume`. If the Resume ends the same way, or the
+    /// session has no id to resume, the work may have been abandoned rather
+    /// than awaited: a progress line names it and this succeeds, leaving the
+    /// steps that follow to decide the outcome.
     pub fn run(&self, kind: &str, prompt: &str, log: &mut PathBuf) -> Result<()> {
         self.run_to_final_message(kind, prompt, log).map(drop)
     }
 
     /// Run a session as [`Sessions::run`] does, and return its final message:
-    /// what the agent said as it ended its last turn, if anything.
+    /// what the agent said as it ended its last turn, its Resume's if it got
+    /// one, if anything.
     pub fn run_to_final_message(
         &self,
         kind: &str,
@@ -81,6 +118,8 @@ impl Sessions<'_> {
         log: &mut PathBuf,
     ) -> Result<Option<String>> {
         let mut ended = self.start(kind, None, prompt, log)?;
+        // What ended last, as the progress line on its killed work calls it.
+        let mut ended_last = "session";
         let killed = ended.killed_background_work();
         if let (false, Some(session_id)) = (killed.is_empty(), ended.session_id()) {
             let (session_id, resume_prompt) = (session_id.to_string(), prompt::resume(&killed));
@@ -93,18 +132,19 @@ impl Sessions<'_> {
                 &resume_prompt,
                 log,
             )?;
+            ended_last = "Resume";
         }
         let killed = ended.killed_background_work();
-        match killed[..] {
-            [] => Ok(ended.final_message().map(String::from)),
-            [task] => bail!(
-                "{kind} session ended while waiting on a background task ({task}), which was killed"
-            ),
-            _ => bail!(
-                "{kind} session ended while waiting on background tasks ({}), which were killed",
-                killed.join("; ")
-            ),
+        if !killed.is_empty() {
+            let ending = ending_with(&killed);
+            progress::step(format_args!(
+                "{kind}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
+            ));
+            self.endings_with_killed_work
+                .borrow_mut()
+                .push(format!("{kind} session {ending}"));
         }
+        Ok(ended.final_message().map(String::from))
     }
 
     /// Run one session as `kind`, logged under its own path.
@@ -118,6 +158,18 @@ impl Sessions<'_> {
         *log = self.logs.path(kind);
         progress::step(format_args!("logging the session to {}", log.display()));
         run(kind, self.worktree, self.plugin_dir, resume, prompt, log)
+    }
+}
+
+/// How a session ended whose `killed` background work, by description, was
+/// still running: what follows "implement session" or "the Resume".
+fn ending_with(killed: &[&str]) -> String {
+    match killed {
+        [task] => format!("ended with a background task still running ({task}), which was killed"),
+        _ => format!(
+            "ended with background tasks still running ({}), which were killed",
+            killed.join("; ")
+        ),
     }
 }
 

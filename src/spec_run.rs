@@ -625,20 +625,17 @@ fn review_and_deliver(
     let spec_branch = worktree.branch();
     worktree.fast_forward_to_origin()?;
     let plugin = Plugin::write()?;
-    let sessions = Sessions {
-        logs,
-        worktree: worktree.path(),
-        plugin_dir: plugin.path(),
-    };
-    let mut run_session = |kind: &str, prompt: &str| sessions.run(kind, prompt, log);
-    run_session(
-        SPEC_REVIEW,
-        &prompt::spec_review(spec, base, spec_branch, &spec_pr.url),
-    )?;
-    worktree.push()?;
-    write_checklist(spec, spec_pr, checklist)?;
-    let pr = run::mark_pr_ready(spec, spec_branch, base)?;
-    run::deliver(spec, worktree, base, &pr, goal, base_fix, &mut run_session)
+    Sessions::within(logs, worktree.path(), plugin.path(), |sessions| {
+        let mut run_session = |kind: &str, prompt: &str| sessions.run(kind, prompt, log);
+        run_session(
+            SPEC_REVIEW,
+            &prompt::spec_review(spec, base, spec_branch, &spec_pr.url),
+        )?;
+        worktree.push()?;
+        write_checklist(spec, spec_pr, checklist)?;
+        let pr = run::mark_pr_ready(spec, spec_branch, base)?;
+        run::deliver(spec, worktree, base, &pr, goal, base_fix, &mut run_session)
+    })
 }
 
 #[cfg(test)]
