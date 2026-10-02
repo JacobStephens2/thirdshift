@@ -1,5 +1,6 @@
 mod architect;
 mod args;
+mod asks;
 mod base_fix;
 mod branch;
 mod child_run;
@@ -32,17 +33,14 @@ mod spec_run;
 mod update;
 mod worktree;
 
-use std::num::NonZeroUsize;
 use std::process::ExitCode;
 
 use architect::{Outcome, Reviewed};
-use args::{ArchitectArgs, Command, DispatchArgs, PickupArgs, RunArgs};
-use base_fix::BaseFixAsk;
+use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
+use asks::Asks;
 use config::UserConfig;
-use issue::IssueUrl;
 use notification::{ArchitectNotification, NotificationAsk, PickupNotification, RunNotification};
-use run::{Ended, Goal, StartedBy};
-use spec_run::Parallel;
+use run::StartedBy;
 
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, or a merged one, unattended.
@@ -284,10 +282,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let RunArgs {
         issue,
-        goal,
-        email,
-        parallel,
-        base_fix,
+        flags,
         child,
     } = match args::parse(&args) {
         Ok(Command::Help) => {
@@ -314,46 +309,20 @@ fn main() -> ExitCode {
         Ok(config) => config,
         Err(failure) => return failure,
     };
-    // A child Run, a Ticket's Run in a Spec run or a Base fix, is always a
-    // Merge run, and leaves the Run notification, the Launch directory and
-    // whether it may start a Base fix to what started it.
-    let (goal, email, launch_pull, base_fix) = match child {
-        Some(_) => (
-            Goal::Merged,
-            NotificationAsk::Skip,
-            false,
-            base_fix.unwrap_or(BaseFixAsk::Forbid),
-        ),
-        None => {
-            let base_fix = base_fix.unwrap_or_else(|| {
-                let retry = args::retry_with_base_fix(&issue, goal, email.as_ref(), parallel);
-                config.default_base_fix(retry)
-            });
-            (
-                goal.unwrap_or(config.default_goal()),
-                email.unwrap_or(config.email.default_ask()),
-                config.launch_pull,
-                base_fix,
-            )
-        }
-    };
+    let asks = Asks::of_run(&issue, &flags, child.as_ref(), &config);
     // First, so no interrupt can end the Run once its notification is checked.
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    let notification = match asked(email, |to| RunNotification::new(to, &config.email, &issue)) {
+    let checked = asked(&asks.notification, |to| {
+        RunNotification::new(to, &config.email, &issue)
+    });
+    let notification = match checked {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
-    let ended = run::run_to_end(
-        &issue,
-        goal,
-        &config.logs_dir,
-        launch_pull,
-        Parallel::new(parallel, config.spec_parallel),
-        child.as_ref().map_or(StartedBy::Command, StartedBy::Child),
-        base_fix,
-    );
+    let started_by = child.as_ref().map_or(StartedBy::Command, StartedBy::Child);
+    let ended = run::run_to_end(&issue, &asks, started_by, &config.logs_dir);
     let code = run_ending::show(&ended);
     if let Some(notification) = notification {
         notification.send(&ended);
@@ -386,10 +355,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    // As the command gave it, for the command a Base fix is offered with.
-    let email_flag = args.email.clone();
-    let email = args.email.unwrap_or(config.email.default_ask());
-    let notification = match asked(email, |to| ArchitectNotification::new(to, &config.email)) {
+    let email = args.flags.notification(&config);
+    let notification = match asked(&email, |to| ArchitectNotification::new(to, &config.email)) {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
@@ -399,16 +366,15 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         &config.logs_dir,
         config.launch_pull,
     );
-    let dispatched = match (&ended, &args.dispatch) {
-        (Ok(Outcome::Reviewed(Reviewed::PlanReady { plan, base })), Some(dispatch)) => {
+    let dispatched = match &ended {
+        Ok(Outcome::Reviewed(Reviewed::PlanReady { plan, base })) if !args.plan_only => {
             progress::step(format_args!(
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
             ));
-            // The plan is retried as a Run of its own: another Architect
-            // run would start a new review instead.
-            let (email, parallel) = (email_flag.as_ref(), dispatch.parallel);
-            Some(dispatched(plan, base, dispatch, email, parallel, &config))
+            let asks = Asks::of_architect_plan(plan, &args.flags, &config);
+            let started_by = StartedBy::Dispatch { base };
+            Some(run::run_to_end(plan, &asks, started_by, &config.logs_dir))
         }
         _ => None,
     };
@@ -444,8 +410,8 @@ fn pickup(args: PickupArgs) -> ExitCode {
     if let Err(error) = interrupt::install() {
         return failure(&error);
     }
-    let email = args.email.clone().unwrap_or(config.email.default_ask());
-    let notification = match asked(email, |to| PickupNotification::new(to, &config.email)) {
+    let email = args.flags.notification(&config);
+    let notification = match asked(&email, |to| PickupNotification::new(to, &config.email)) {
         Ok(notification) => notification,
         Err(error) => return failure(&error),
     };
@@ -455,19 +421,9 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Err(error) => return failure(&error),
     };
     let notification = notification.map(|checked| checked.of_taken(&taken.issue, taken.title));
-    // Ignored for an issue that is not a Spec: the command can't know which
-    // it will take. Left out of the command a Base fix is offered with too,
-    // as the issue is retried as a Run of its own: another Pickup run never
-    // takes an issue that was started.
-    let parallel = args.dispatch.parallel.filter(|_| taken.is_spec);
-    let ended = dispatched(
-        &taken.issue,
-        &taken.base,
-        &args.dispatch,
-        args.email.as_ref(),
-        parallel,
-        &config,
-    );
+    let asks = Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config);
+    let started_by = StartedBy::Dispatch { base: &taken.base };
+    let ended = run::run_to_end(&taken.issue, &asks, started_by, &config.logs_dir);
     let code = run_ending::show(&ended);
     if let Some(notification) = notification {
         notification.send(&ended);
@@ -475,43 +431,14 @@ fn pickup(args: PickupArgs) -> ExitCode {
     code
 }
 
-/// The end of the Spec run or Run that an Architect run or a Pickup run
-/// dispatches `issue` as, on its Base branch `base`: what `thirdshift <Issue
-/// URL>` would start, with the flags `dispatch` and the User config `config`
-/// for the rest. It runs as many Tickets at once as `parallel` asks, which is
-/// `dispatch`'s unless that is to be ignored. The command it offers a Base
-/// fix with is that one on `issue`, with those flags and with `email` as the
-/// command gave it.
-fn dispatched(
-    issue: &IssueUrl,
-    base: &str,
-    dispatch: &DispatchArgs,
-    email: Option<&NotificationAsk>,
-    parallel: Option<NonZeroUsize>,
-    config: &UserConfig,
-) -> Ended {
-    run::run_to_end(
-        issue,
-        dispatch.goal.unwrap_or(config.default_goal()),
-        &config.logs_dir,
-        config.launch_pull,
-        Parallel::new(parallel, config.spec_parallel),
-        StartedBy::Dispatch { base },
-        dispatch.base_fix.clone().unwrap_or_else(|| {
-            let retry = args::retry_with_base_fix(issue, dispatch.goal, email, parallel);
-            config.default_base_fix(retry)
-        }),
-    )
-}
-
 /// The Run notification `email` asks for, if it asks for one: what `checked`
 /// makes of the address it gave, or its error if a check fails.
 fn asked<N>(
-    email: NotificationAsk,
+    email: &NotificationAsk,
     checked: impl FnOnce(Option<String>) -> anyhow::Result<N>,
 ) -> anyhow::Result<Option<N>> {
     match email {
-        NotificationAsk::Send(to) => checked(to).map(Some),
+        NotificationAsk::Send(to) => checked(to.clone()).map(Some),
         NotificationAsk::Skip => Ok(None),
     }
 }

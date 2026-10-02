@@ -47,25 +47,6 @@ const SPEC_REVIEW: &str = "spec-review";
 const CHECKLIST_START: &str = "<!-- thirdshift:tickets -->";
 const CHECKLIST_END: &str = "<!-- /thirdshift:tickets -->";
 
-/// How many Tickets a Spec run runs at once.
-pub struct Parallel {
-    pub tickets: NonZeroUsize,
-    /// Whether the command asked for it with `parallel <n>`, rather than the
-    /// User config or the default deciding.
-    pub asked: bool,
-}
-
-impl Parallel {
-    /// As many Tickets at once as the command `asked` for with
-    /// `parallel <n>`, else as the User config's `default` says.
-    pub fn new(asked: Option<NonZeroUsize>, default: NonZeroUsize) -> Self {
-        Parallel {
-            tickets: asked.unwrap_or(default),
-            asked: asked.is_some(),
-        }
-    }
-}
-
 /// Whether an issue has Tickets, as a Spec has, and every one is closed:
 /// `open` says of each of its sub-issues whether it is open.
 pub fn all_closed(open: impl IntoIterator<Item = bool>) -> bool {

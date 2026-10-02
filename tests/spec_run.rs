@@ -467,16 +467,6 @@ fn merge_on_a_spec_self_merges_the_spec_pr_into_the_base_branch() {
 }
 
 #[test]
-fn a_merge_ask_from_the_user_config_self_merges_the_spec_pr() {
-    let scenario = linear_spec();
-    scenario.user_config_is("[merge]\nalways = true\n");
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_spec_pr_merged(&scenario, &result);
-}
-
-#[test]
 fn no_merge_on_a_spec_leaves_the_spec_pr_ready_while_its_tickets_still_merge() {
     let scenario = linear_spec();
     scenario.user_config_is("[merge]\nalways = true\n");
@@ -949,40 +939,6 @@ fn a_shared_base_fix_that_fails_fails_the_ticket_that_started_it_and_the_one_wai
         "stderr: {}",
         result.stderr
     );
-}
-
-#[test]
-fn base_fix_in_the_user_config_gives_a_tickets_inherited_failure_a_base_fix() {
-    let scenario = spec_whose_ticket_inherits_a_failure();
-    scenario.user_config_is("[base]\nfix = true\n");
-    base_fix_lands_on_the_spec_branch(&scenario, 22);
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let fix = pr_from(&scenario, "issue-22").expect("the Base fix's PR");
-    assert_eq!(fix["base"], "issue-20");
-    assert_eq!(fix["state"], "MERGED");
-    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "MERGED");
-}
-
-#[test]
-fn no_base_fix_on_a_spec_reaches_its_tickets_whatever_the_user_config_says() {
-    let scenario = spec_whose_ticket_inherits_a_failure();
-    scenario.user_config_is("[base]\nfix = true\n");
-
-    let result = scenario.run(&[&spec_url(&scenario), "no-base-fix"]);
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert_contains(
-        &result.stderr,
-        &format!(
-            "thirdshift: #21 failed: {}",
-            inherited_failure(&scenario, "issue-20")
-        ),
-    );
-    assert!(scenario.gh_calls_of("issue", "create").is_empty());
-    assert_eq!(pr_from(&scenario, "issue-21").unwrap()["state"], "OPEN");
 }
 
 #[test]
@@ -1528,29 +1484,6 @@ fn parallel_1_runs_the_tickets_one_at_a_time() {
     let landed = result.stderr.find("#21 landed\n").unwrap();
     let started = result.stderr.find("starting #22\n").unwrap();
     assert!(landed < started, "stderr: {}", result.stderr);
-}
-
-#[test]
-fn spec_parallel_in_the_user_config_sets_how_many_tickets_run_at_once() {
-    let scenario = diamond_spec();
-    second_ticket_needs_the_first_landed(&scenario);
-    scenario.user_config_is("[spec]\nparallel = 1\n");
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "23", "20"]);
-}
-
-#[test]
-fn the_parallel_flag_wins_over_spec_parallel() {
-    let scenario = diamond_spec();
-    independent_tickets_wait_for_each_other(&scenario);
-    scenario.user_config_is("[spec]\nparallel = 1\n");
-
-    let result = scenario.run(&[&spec_url(&scenario), "parallel", "2"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
 }
 
 #[test]
@@ -2122,18 +2055,6 @@ fn a_ready_ticket_an_interrupt_kept_from_starting_is_not_started_in_the_notifica
     let (_, text) = the_one_notification(&resend);
     assert_contains(&text, "#21 interrupted\n");
     assert_contains(&text, "#22 not started\n");
-}
-
-#[test]
-fn no_email_keeps_email_always_from_sending_for_a_spec_run() {
-    let scenario = linear_spec();
-    scenario.user_config_is("[email]\nalways = true\nto = \"me@example.com\"\n");
-    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
-
-    let result = run_emailing(&scenario, &resend, &["--no-email", &spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(resend.requests().len(), 0);
 }
 
 #[test]

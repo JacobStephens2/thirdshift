@@ -7,6 +7,7 @@ use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result, bail};
 
+use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::Kind;
 use crate::issue::IssueUrl;
@@ -39,12 +40,12 @@ pub struct ArchitectArgs {
     /// The Base branch `base <branch>` named, if given; without it, the
     /// branch checked out in the Launch directory is the Base branch.
     pub base: Option<String>,
-    /// What `email` or `no-email` asked for, if either was given; without
-    /// one, the User config decides.
-    pub email: Option<NotificationAsk>,
-    /// The flags for the Spec run or Run the plan is dispatched as, or none
-    /// with [`PLAN_ONLY`], which dispatches nothing.
-    pub dispatch: Option<DispatchArgs>,
+    /// The flags it shares with a Run: `email` and `no-email` for its own
+    /// Run notification, the rest for the Spec run or Run the plan is
+    /// dispatched as, which are never given with [`PLAN_ONLY`].
+    pub flags: Flags,
+    /// Whether [`PLAN_ONLY`] was given: the plan is dispatched as nothing.
+    pub plan_only: bool,
 }
 
 /// A Pickup run's arguments.
@@ -53,20 +54,10 @@ pub struct PickupArgs {
     /// The Base branch `base <branch>` named, if given; without it, the
     /// branch checked out in the Launch directory is the Base branch.
     pub base: Option<String>,
-    /// What `email` or `no-email` asked for, if either was given; without
-    /// one, the User config decides.
-    pub email: Option<NotificationAsk>,
-    /// The flags for the Spec run or Run the Ready issue is dispatched as.
-    pub dispatch: DispatchArgs,
-}
-
-/// What the flags of an Architect run or a Pickup run ask of the Spec run or
-/// Run it dispatches, each meaning what it does in [`RunArgs`].
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct DispatchArgs {
-    pub goal: Option<Goal>,
-    pub parallel: Option<NonZeroUsize>,
-    pub base_fix: Option<BaseFixAsk>,
+    /// The flags it shares with a Run: `email` and `no-email` for its own
+    /// Run notification, the rest for the Spec run or Run the Ready issue is
+    /// dispatched as.
+    pub flags: Flags,
 }
 
 /// The word that lets a Run start a Base fix, which a Spec run passes on to
@@ -90,18 +81,9 @@ pub const BASE_FIX_INTO: &str = "--base-fix-into";
 /// A Run's arguments.
 pub struct RunArgs {
     pub issue: IssueUrl,
-    /// The goal `merge` or `no-merge` asked for, if either was given; without
-    /// one, the User config decides.
-    pub goal: Option<Goal>,
-    /// What `email` or `no-email` asked for, if either was given; without
-    /// one, the User config decides.
-    pub email: Option<NotificationAsk>,
-    /// How many Tickets a Spec run runs at once, if `parallel <n>` was
-    /// given; without it, the User config decides.
-    pub parallel: Option<NonZeroUsize>,
-    /// What `base-fix` or `no-base-fix` asked for, if either was given;
-    /// without one, the User config decides.
-    pub base_fix: Option<BaseFixAsk>,
+    /// Its flags, as given: for each one the command left out, the User
+    /// config decides.
+    pub flags: Flags,
     /// What the Run is, if another thirdshift started it, given with
     /// [`SPEC_BRANCH`] or [`BASE_FIX_INTO`].
     pub child: Option<Kind>,
@@ -138,11 +120,11 @@ pub fn parse(args: &[String]) -> Result<Command> {
         _ => {}
     }
     let mut issue = None;
-    let mut flags = RunFlags::default();
+    let mut flags = Flags::default();
     let mut child = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        if flags.take(arg, &mut args)? {
+        if take_flag(&mut flags, arg, &mut args)? {
             continue;
         }
         match arg.as_str() {
@@ -175,39 +157,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
     };
     Ok(Command::Run(RunArgs {
         issue,
-        goal: flags.goal,
-        email: flags.email,
-        parallel: flags.parallel,
-        base_fix: flags.base_fix,
+        flags,
         child,
     }))
-}
-
-/// The command that starts the Run on `issue` again as its command asked for
-/// it, with `goal`, `email` and `parallel` as [`RunArgs`] has them, and with
-/// `base-fix` added.
-pub fn retry_with_base_fix(
-    issue: &IssueUrl,
-    goal: Option<Goal>,
-    email: Option<&NotificationAsk>,
-    parallel: Option<NonZeroUsize>,
-) -> String {
-    let mut command = format!("thirdshift {}", issue.url);
-    match goal {
-        Some(Goal::Merged) => command += " merge",
-        Some(Goal::ReadyForReview) => command += " --no-merge",
-        None => {}
-    }
-    match email {
-        Some(NotificationAsk::Send(Some(to))) => command += &format!(" --email {to}"),
-        Some(NotificationAsk::Send(None)) => command += " --email",
-        Some(NotificationAsk::Skip) => command += " --no-email",
-        None => {}
-    }
-    if let Some(parallel) = parallel {
-        command += &format!(" parallel {parallel}");
-    }
-    command + " " + BASE_FIX
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,
@@ -223,10 +175,10 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     let mut focus = None;
     let mut base = None;
     let mut plan_only = false;
-    let mut flags = RunFlags::default();
+    let mut flags = Flags::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        if flags.take(arg, &mut args)? {
+        if take_flag(&mut flags, arg, &mut args)? {
             continue;
         }
         match arg.as_str() {
@@ -243,8 +195,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
             _ => focus = Some(arg.clone()),
         }
     }
-    let (email, dispatch) = flags.for_dispatch();
-    if plan_only && dispatch != DispatchArgs::default() {
+    if plan_only && flags.any_for_dispatched_run() {
         bail!(
             "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
              {PLAN_ONLY}: it dispatches no run for them to apply to"
@@ -253,8 +204,8 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     Ok(ArchitectArgs {
         focus,
         base,
-        email,
-        dispatch: (!plan_only).then_some(dispatch),
+        flags,
+        plan_only,
     })
 }
 
@@ -262,10 +213,10 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 /// order, and nothing else. `base` must be followed by the Base branch.
 fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
     let mut base = None;
-    let mut flags = RunFlags::default();
+    let mut flags = Flags::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        if flags.take(arg, &mut args)? {
+        if take_flag(&mut flags, arg, &mut args)? {
             continue;
         }
         match arg.as_str() {
@@ -273,69 +224,45 @@ fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
             _ => bail!("unexpected argument after pickup: {arg}"),
         }
     }
-    let (email, dispatch) = flags.for_dispatch();
-    Ok(PickupArgs {
-        base,
-        email,
-        dispatch,
-    })
+    Ok(PickupArgs { base, flags })
 }
 
-/// The flags a Run, an Architect run and a Pickup run all take, as given so
-/// far: each field is what [`RunArgs`] says of the one it becomes.
-#[derive(Default)]
-struct RunFlags {
-    goal: Option<Goal>,
-    email: Option<NotificationAsk>,
-    parallel: Option<NonZeroUsize>,
-    base_fix: Option<BaseFixAsk>,
-}
-
-impl RunFlags {
-    /// The flags as an Architect run or a Pickup run takes them: what was
-    /// asked about its Run notification, and the flags for the run it
-    /// dispatches.
-    fn for_dispatch(self) -> (Option<NotificationAsk>, DispatchArgs) {
-        let dispatch = DispatchArgs {
-            goal: self.goal,
-            parallel: self.parallel,
-            base_fix: self.base_fix,
-        };
-        (self.email, dispatch)
-    }
-
-    /// Record what `arg` asks for, if it is one of these flags, with or
-    /// without its dashes, taking from `rest` the address after `email`, if
-    /// one is there, and the number after `parallel`. False, taking nothing,
-    /// if `arg` is none of them.
-    fn take<'a>(
-        &mut self,
-        arg: &str,
-        rest: &mut Peekable<impl Iterator<Item = &'a String>>,
-    ) -> Result<bool> {
-        match arg {
-            "merge" | "--merge" => ask_once(&mut self.goal, Goal::Merged, arg, MERGE_FLAGS)?,
-            "no-merge" | "--no-merge" => {
-                ask_once(&mut self.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
-            }
-            "email" | "--email" => {
-                let to = rest.next_if(|next| is_address(next)).cloned();
-                ask_once(&mut self.email, NotificationAsk::Send(to), arg, EMAIL_FLAGS)?
-            }
-            "no-email" | "--no-email" => {
-                ask_once(&mut self.email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
-            }
-            "parallel" | "--parallel" => ask_parallel(&mut self.parallel, arg, rest.next())?,
-            BASE_FIX | "--base-fix" => {
-                ask_once(&mut self.base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
-            }
-            "no-base-fix" | "--no-base-fix" => {
-                ask_once(&mut self.base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
-            }
-            _ => return Ok(false),
+/// Record in `flags` what `arg` asks for, if it is one of the flags a Run,
+/// an Architect run and a Pickup run all take, with or without its dashes,
+/// taking from `rest` the address after `email`, if one is there, and the
+/// number after `parallel`. False, taking nothing, if `arg` is none of them.
+fn take_flag<'a>(
+    flags: &mut Flags,
+    arg: &str,
+    rest: &mut Peekable<impl Iterator<Item = &'a String>>,
+) -> Result<bool> {
+    match arg {
+        "merge" | "--merge" => ask_once(&mut flags.goal, Goal::Merged, arg, MERGE_FLAGS)?,
+        "no-merge" | "--no-merge" => {
+            ask_once(&mut flags.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
         }
-        Ok(true)
+        "email" | "--email" => {
+            let to = rest.next_if(|next| is_address(next)).cloned();
+            ask_once(
+                &mut flags.email,
+                NotificationAsk::Send(to),
+                arg,
+                EMAIL_FLAGS,
+            )?
+        }
+        "no-email" | "--no-email" => {
+            ask_once(&mut flags.email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
+        }
+        "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
+        BASE_FIX | "--base-fix" => {
+            ask_once(&mut flags.base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
+        }
+        "no-base-fix" | "--no-base-fix" => {
+            ask_once(&mut flags.base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
+        }
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 const MERGE_FLAGS: &str = "merge and no-merge";
@@ -440,7 +367,7 @@ mod tests {
         ] {
             let architect_args = architect_args(&args);
             assert_eq!(architect_args.focus, expected, "{args:?}");
-            assert_eq!(architect_args.dispatch, None, "{args:?}");
+            assert!(architect_args.plan_only, "{args:?}");
         }
     }
 
@@ -455,11 +382,8 @@ mod tests {
         ] {
             let architect_args = architect_args(&args);
             assert_eq!(architect_args.focus, focus, "{args:?}");
-            assert_eq!(
-                architect_args.dispatch,
-                Some(DispatchArgs::default()),
-                "{args:?}"
-            );
+            assert!(!architect_args.plan_only, "{args:?}");
+            assert_eq!(architect_args.flags, Flags::default(), "{args:?}");
         }
     }
 
@@ -487,12 +411,12 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                architect_args(&args).dispatch,
-                Some(DispatchArgs {
+                architect_args(&args).flags,
+                Flags {
                     goal,
                     parallel,
-                    base_fix: None
-                }),
+                    ..Flags::default()
+                },
                 "{args:?}"
             );
         }
@@ -513,8 +437,7 @@ mod tests {
             ),
         ] {
             let architect_args = architect_args(&args);
-            let dispatch = architect_args.dispatch.expect("a dispatch");
-            assert_eq!(dispatch.base_fix, base_fix, "{args:?}");
+            assert_eq!(architect_args.flags.base_fix, base_fix, "{args:?}");
             let focus = args.contains(&"the Spec run").then_some("the Spec run");
             assert_eq!(architect_args.focus.as_deref(), focus, "{args:?}");
         }
@@ -549,7 +472,7 @@ mod tests {
             ),
         ] {
             let architect_args = architect_args(&args);
-            assert_eq!(architect_args.email, email, "{args:?}");
+            assert_eq!(architect_args.flags.email, email, "{args:?}");
             assert_eq!(architect_args.focus, focus, "{args:?}");
         }
     }
@@ -670,7 +593,7 @@ mod tests {
         ] {
             let architect_args = architect_args(&args);
             assert_eq!(architect_args.base.as_deref(), Some("develop"), "{args:?}");
-            assert_eq!(architect_args.dispatch, None, "{args:?}");
+            assert!(architect_args.plan_only, "{args:?}");
         }
     }
 
@@ -779,15 +702,14 @@ mod tests {
     fn pickup_takes_each_of_its_flags_with_or_without_dashes_in_any_order() {
         let none = PickupArgs {
             base: None,
-            email: None,
-            dispatch: DispatchArgs::default(),
+            flags: Flags::default(),
         };
         assert_eq!(pickup_args(&["pickup"]), none);
         let all = PickupArgs {
             base: Some("develop".to_string()),
-            email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
-            dispatch: DispatchArgs {
+            flags: Flags {
                 goal: Some(Goal::Merged),
+                email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
                 parallel: NonZeroUsize::new(2),
                 base_fix: Some(BaseFixAsk::Allow),
             },
@@ -820,9 +742,9 @@ mod tests {
         }
         let cautious = PickupArgs {
             base: None,
-            email: Some(NotificationAsk::Skip),
-            dispatch: DispatchArgs {
+            flags: Flags {
                 goal: Some(Goal::ReadyForReview),
+                email: Some(NotificationAsk::Skip),
                 parallel: None,
                 base_fix: Some(BaseFixAsk::Forbid),
             },
@@ -834,8 +756,8 @@ mod tests {
             assert_eq!(pickup_args(&args), cautious, "{args:?}");
         }
         let bare_email = pickup_args(&["pickup", "email", "merge"]);
-        assert_eq!(bare_email.email, Some(NotificationAsk::Send(None)));
-        assert_eq!(bare_email.dispatch.goal, Some(Goal::Merged));
+        assert_eq!(bare_email.flags.email, Some(NotificationAsk::Send(None)));
+        assert_eq!(bare_email.flags.goal, Some(Goal::Merged));
     }
 
     #[test]
@@ -947,7 +869,7 @@ mod tests {
             (vec!["--email", "flag@example.com", URL], to_flag_address()),
         ] {
             let run_args = run_args(&args);
-            assert_eq!(run_args.email, Some(asked), "{args:?}");
+            assert_eq!(run_args.flags.email, Some(asked), "{args:?}");
             assert_eq!(run_args.issue.url, URL, "{args:?}");
         }
     }
@@ -970,8 +892,8 @@ mod tests {
         ] {
             let run_args = run_args(&args);
             assert_eq!(run_args.issue.url, URL, "{args:?}");
-            assert_eq!(run_args.email, Some(asked), "{args:?}");
-            assert_eq!(run_args.goal, goal, "{args:?}");
+            assert_eq!(run_args.flags.email, Some(asked), "{args:?}");
+            assert_eq!(run_args.flags.goal, goal, "{args:?}");
         }
     }
 
@@ -979,44 +901,9 @@ mod tests {
     fn no_email_asks_for_no_notification_with_or_without_dashes() {
         for flag in ["no-email", "--no-email"] {
             assert_eq!(
-                run_args(&[flag, URL]).email,
+                run_args(&[flag, URL]).flags.email,
                 Some(NotificationAsk::Skip),
                 "{flag}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_retry_command_is_the_runs_own_flags_and_issue_url_with_base_fix_added() {
-        for (args, retry) in [
-            (vec![URL], format!("thirdshift {URL} base-fix")),
-            (
-                vec!["--merge", URL, "email"],
-                format!("thirdshift {URL} merge --email base-fix"),
-            ),
-            (
-                vec!["no-merge", "--no-email", URL, "--parallel", "2"],
-                format!("thirdshift {URL} --no-merge --no-email parallel 2 base-fix"),
-            ),
-            (
-                vec![URL, "email", "me@example.com"],
-                format!("thirdshift {URL} --email me@example.com base-fix"),
-            ),
-        ] {
-            let run = run_args(&args);
-            assert_eq!(
-                retry_with_base_fix(&run.issue, run.goal, run.email.as_ref(), run.parallel),
-                retry,
-                "{args:?}"
-            );
-            // The command it gives asks for what the Run was asked for.
-            let words: Vec<&str> = retry.split(' ').skip(1).collect();
-            let again = run_args(&words);
-            assert_eq!(again.base_fix, Some(BaseFixAsk::Allow), "{retry}");
-            assert_eq!(
-                (again.issue.url, again.goal, again.email, again.parallel),
-                (run.issue.url, run.goal, run.email, run.parallel),
-                "{retry}"
             );
         }
     }
@@ -1026,7 +913,7 @@ mod tests {
         let retry = format!("thirdshift {URL} base-fix");
         let run = run_args(&["--spec-branch", "issue-7", "--offer-base-fix", &retry, URL]);
 
-        assert_eq!(run.base_fix, Some(BaseFixAsk::Undecided { retry }));
+        assert_eq!(run.flags.base_fix, Some(BaseFixAsk::Undecided { retry }));
         assert_eq!(
             rejection(&[URL, "--offer-base-fix"]),
             "missing command to offer"
@@ -1037,7 +924,11 @@ mod tests {
     fn parallel_takes_the_number_after_it_with_or_without_dashes() {
         for flag in ["parallel", "--parallel"] {
             for args in [[flag, "1", URL], [URL, flag, "1"]] {
-                assert_eq!(run_args(&args).parallel, NonZeroUsize::new(1), "{args:?}");
+                assert_eq!(
+                    run_args(&args).flags.parallel,
+                    NonZeroUsize::new(1),
+                    "{args:?}"
+                );
             }
         }
     }
