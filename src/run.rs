@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::base_fix::{Advice, BaseFix, BaseFixAsk};
+use crate::asks::Asks;
+use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
 use crate::ci::{self, Ci, FailedChecks};
@@ -22,7 +23,7 @@ use crate::preflight;
 use crate::progress;
 use crate::prompt;
 use crate::session::{Logs, Sessions};
-use crate::spec_run::{self, Parallel};
+use crate::spec_run;
 use crate::worktree::{Merge, Worktree};
 
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
@@ -107,27 +108,13 @@ impl<'a> StartedBy<'a> {
     }
 }
 
-/// [`run`] the Run on `issue` that `started_by` started and that asked
-/// `base_fix` about a Base fix, to its end.
-pub fn run_to_end(
-    issue: &IssueUrl,
-    goal: Goal,
-    logs_dir: &Path,
-    launch_pull: bool,
-    parallel: Parallel,
-    started_by: StartedBy,
-    base_fix: BaseFixAsk,
-) -> Ended {
-    let mut base_fix = BaseFix::new(started_by.child(), base_fix);
-    let outcome = run(
-        issue,
-        goal,
-        logs_dir,
-        launch_pull,
-        parallel,
-        started_by,
-        &mut base_fix,
-    );
+/// [`run`] the Run on `issue` that `started_by` started and that is asked
+/// `asks`, to its end, logging its sessions under `logs_dir`. Its Run
+/// notification, if `asks` has it send one, is for what started the Run to
+/// send, once it has ended.
+pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy, logs_dir: &Path) -> Ended {
+    let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
+    let outcome = run(issue, asks, started_by, logs_dir, &mut base_fix);
     Ended {
         outcome,
         base_fix: base_fix.report(),
@@ -140,7 +127,7 @@ pub fn run_to_end(
 /// Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
-/// branch. With `launch_pull`, the Launch directory's checkout of the
+/// branch. With `asks.launch_pull`, the Launch directory's checkout of the
 /// Base branch, if that is the branch checked out, is first brought up to
 /// date with origin.
 ///
@@ -150,9 +137,10 @@ pub fn run_to_end(
 /// Architect run or the Pickup run that dispatched this one. Unless the Run
 /// is a child Run, an issue with sub-issues is a Spec, taken on by a Spec run
 /// instead, whose Spec branch is picked like an Issue branch, running as many
-/// Tickets at once as `parallel` says. A `parallel` the command asked for on an issue
-/// with no sub-issues fails before any work, as does a Spec whose Tickets are
-/// all closed with no Spec branch to continue.
+/// Tickets at once as `asks.tickets_at_once` says. A `parallel` the command
+/// asked for, as `asks.parallel_asked` says, on an issue with no sub-issues
+/// fails before any work, as does a Spec whose Tickets are all closed with
+/// no Spec branch to continue.
 ///
 /// Once those checks pass, and before the worktree is created, the Run, or
 /// the Spec run, makes the Claim on `issue`, unless it is a child Run. A Claim
@@ -161,14 +149,13 @@ pub fn run_to_end(
 /// Self-merge has left `issue` closed: see [`claim::Claim`].
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
-/// start, or wait on, when its only red checks are Inherited failures.
+/// start, or wait on, when its only red checks are Inherited failures: what
+/// `asks` ask about one is already in it.
 fn run(
     issue: &IssueUrl,
-    goal: Goal,
-    logs_dir: &Path,
-    launch_pull: bool,
-    parallel: Parallel,
+    asks: &Asks,
     started_by: StartedBy,
+    logs_dir: &Path,
     base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
@@ -179,7 +166,7 @@ fn run(
         Some(_) => Vec::new(),
         None => github::tickets(issue)?,
     };
-    if parallel.asked && tickets.is_empty() {
+    if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(
             "parallel is only for a Spec, and #{} has no sub-issues",
             issue.number
@@ -198,7 +185,7 @@ fn run(
     }
     let base = selection.base_branch(started_by.given_base(), checked_out.as_deref())?;
     preflight::check_base_branch(&launch, &base)?;
-    if launch_pull {
+    if asks.launch_pull {
         pull_base_branch(&launch, checked_out.as_deref(), &base);
     }
 
@@ -216,10 +203,10 @@ fn run(
         &launch,
         &selection,
         &base,
-        goal,
+        asks.goal,
         base_fix,
         &logs,
-        parallel.tickets,
+        asks.tickets_at_once,
     );
     if let Some(claim) = claim {
         match &outcome {

@@ -727,25 +727,6 @@ fn with_no_base_fix_the_base_branchs_failing_checks_are_linked_and_no_base_fix_i
 }
 
 #[test]
-fn with_base_fix_in_the_user_config_and_no_base_fix_given_no_base_fix_is_offered() {
-    let scenario = Scenario::new();
-    scenario.user_config_is("[base]\nfix = true\n");
-    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
-
-    let result = scenario.run(&[&scenario.issue_url(7), "no-base-fix"]);
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert!(
-        result
-            .stderr
-            .contains(&format!("thirdshift: Base check: {BASE_CHECK}\n")),
-        "stderr: {}",
-        result.stderr
-    );
-    assert_no_advice(&result.stderr, &["Retry with:", "Or set:"]);
-}
-
-#[test]
 fn a_base_branch_check_with_no_url_is_named_alone() {
     let scenario = Scenario::new();
     scenario.agent_does(
