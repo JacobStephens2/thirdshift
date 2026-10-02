@@ -127,7 +127,7 @@ pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy, logs_dir
 /// Failed run path. The worktree, the local
 /// Issue branch and the plugin directory are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
-/// branch. If `asks` say so, the Launch directory's checkout of the
+/// branch. With `asks.launch_pull`, the Launch directory's checkout of the
 /// Base branch, if that is the branch checked out, is first brought up to
 /// date with origin.
 ///
@@ -137,9 +137,10 @@ pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy, logs_dir
 /// Architect run or the Pickup run that dispatched this one. Unless the Run
 /// is a child Run, an issue with sub-issues is a Spec, taken on by a Spec run
 /// instead, whose Spec branch is picked like an Issue branch, running as many
-/// Tickets at once as `asks` say. A `parallel` the command asked for on an issue
-/// with no sub-issues fails before any work, as does a Spec whose Tickets are
-/// all closed with no Spec branch to continue.
+/// Tickets at once as `asks.tickets_at_once` says. A `parallel` the command
+/// asked for, as `asks.parallel_asked` says, on an issue with no sub-issues
+/// fails before any work, as does a Spec whose Tickets are all closed with
+/// no Spec branch to continue.
 ///
 /// Once those checks pass, and before the worktree is created, the Run, or
 /// the Spec run, makes the Claim on `issue`, unless it is a child Run. A Claim

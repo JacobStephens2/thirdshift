@@ -49,14 +49,13 @@ pub struct Asks {
 
 impl Asks {
     /// What the Run, or the Spec run, started on `issue`'s URL is asked: by
-    /// `flags`, else by `config`.
+    /// `flags`, else by `config`, unless another thirdshift started it as
+    /// the child Run `child`, a Ticket's Run in a Spec run or a Base fix.
     ///
-    /// Unless another thirdshift started it, as the child Run `child`, a
-    /// Ticket's Run in a Spec run or a Base fix. A child Run is always a
-    /// Merge run, sends no Run notification and leaves the Launch directory
-    /// alone, whatever `flags` and `config` say: those are for what started
-    /// it. It starts no Base fix either, unless `flags` allow one or give it
-    /// the command to offer one with.
+    /// A child Run is always a Merge run, sends no Run notification and
+    /// leaves the Launch directory alone, whatever `flags` and `config` say:
+    /// those are for what started it. It starts no Base fix either, unless
+    /// `flags` allow one or give it the command to offer one with.
     pub fn of_run(
         issue: &IssueUrl,
         flags: &Flags,
@@ -77,22 +76,17 @@ impl Asks {
     }
 
     /// What the Spec run or Run an Architect run dispatches its Architect
-    /// plan `plan` as is asked: what [`Asks::of_run`] would ask a Run started
-    /// on the plan's URL with the Architect run's `flags`, except that it
-    /// sends no Run notification of its own. The Architect run sends the
-    /// one, as [`Flags::notification`] asks. The command a Base fix is
-    /// offered with retries the plan as a Run of its own: another Architect
-    /// run would start a new review instead.
+    /// plan `plan` as is asked by the Architect run's `flags`, else by
+    /// `config`: see [`Asks::dispatched`]. The command a Base fix is offered
+    /// with retries the plan as a Run of its own: another Architect run
+    /// would start a new review instead.
     pub fn of_architect_plan(plan: &IssueUrl, flags: &Flags, config: &UserConfig) -> Asks {
-        Asks {
-            notification: NotificationAsk::Skip,
-            ..Asks::resolved(plan, flags, config)
-        }
+        Asks::dispatched(plan, flags, config)
     }
 
     /// What the Spec run or Run a Pickup run dispatches the Ready issue
-    /// `issue` as is asked, as [`Asks::of_architect_plan`] has it for a
-    /// plan, with one difference: `parallel` is ignored for an issue that is
+    /// `issue` as is asked by the Pickup run's `flags`, else by `config`:
+    /// see [`Asks::dispatched`]. `parallel` is ignored for an issue that is
     /// not a Spec, as `is_spec` says, since the command can't know which
     /// the Pickup run will take. It is left out of the command a Base fix is
     /// offered with too, which retries the issue as a Run of its own:
@@ -107,7 +101,19 @@ impl Asks {
             parallel: flags.parallel.filter(|_| is_spec),
             ..flags.clone()
         };
-        Asks::of_architect_plan(issue, &flags, config)
+        Asks::dispatched(issue, &flags, config)
+    }
+
+    /// What the Spec run or Run that an Architect run or a Pickup run
+    /// dispatches `issue` as is asked: what [`Asks::of_run`] would ask a Run
+    /// started on the Issue URL with `flags`, except that it sends no Run
+    /// notification of its own. The run that dispatched it sends the one, as
+    /// [`Flags::notification`] asks.
+    fn dispatched(issue: &IssueUrl, flags: &Flags, config: &UserConfig) -> Asks {
+        Asks {
+            notification: NotificationAsk::Skip,
+            ..Asks::resolved(issue, flags, config)
+        }
     }
 
     /// Each ask as `flags` gave it, else as `config` says. Where neither
@@ -139,6 +145,17 @@ impl Asks {
 }
 
 impl Flags {
+    /// Whether any flag here is for the Spec run or Run that an Architect
+    /// run or a Pickup run dispatches: every one but `email` and `no-email`,
+    /// which ask that run for its own Run notification.
+    pub fn any_for_dispatched_run(&self) -> bool {
+        let for_dispatched_run = Flags {
+            email: None,
+            ..self.clone()
+        };
+        for_dispatched_run != Flags::default()
+    }
+
     /// What a run with these flags is asked about its own Run notification:
     /// what `email` or `no-email` asked for, else what `config` says. It is
     /// a Run's ask, and an Architect run's or a Pickup run's for the one
@@ -378,8 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dispatched_architect_plan_is_asked_by_the_flags_else_the_user_config_and_sends_no_notification()
-     {
+    fn a_dispatched_architect_plan_sends_no_notification_whoever_decides_its_asks() {
         let asks = Asks::of_architect_plan(&issue(), &dispatch_flags(), &no_settings());
         assert_eq!(
             asks,
@@ -409,19 +425,58 @@ mod tests {
     }
 
     #[test]
-    fn a_dispatched_ready_issue_that_is_a_spec_is_asked_what_a_dispatched_architect_plan_is() {
-        for (flags, config) in [
-            (Flags::default(), every_setting()),
-            (dispatch_flags(), no_settings()),
-        ] {
-            let asks = Asks::of_ready_issue(&issue(), true, &flags, &config);
+    fn a_dispatched_ready_issue_that_is_a_spec_sends_no_notification_whoever_decides_its_asks() {
+        let asks = Asks::of_ready_issue(&issue(), true, &dispatch_flags(), &no_settings());
+        assert_eq!(
+            asks,
+            Asks {
+                goal: Goal::Merged,
+                notification: NotificationAsk::Skip,
+                tickets_at_once: n(2),
+                parallel_asked: true,
+                base_fix: undecided(" merge --email flag@example.com parallel 2"),
+                launch_pull: false,
+            }
+        );
 
-            assert_eq!(
-                asks,
-                Asks::of_architect_plan(&issue(), &flags, &config),
-                "{flags:?}"
-            );
-            assert_eq!(asks.notification, NotificationAsk::Skip, "{flags:?}");
+        let asks = Asks::of_ready_issue(&issue(), true, &Flags::default(), &every_setting());
+        assert_eq!(
+            asks,
+            Asks {
+                goal: Goal::Merged,
+                // Whatever `email.always` says: the Pickup run sends it.
+                notification: NotificationAsk::Skip,
+                tickets_at_once: n(5),
+                parallel_asked: false,
+                base_fix: BaseFixAsk::Allow,
+                launch_pull: true,
+            }
+        );
+    }
+
+    #[test]
+    fn only_the_email_flags_are_not_for_a_dispatched_run() {
+        let email_only = Flags {
+            email: Some(to("flag@example.com")),
+            ..Flags::default()
+        };
+        assert!(!Flags::default().any_for_dispatched_run());
+        assert!(!email_only.any_for_dispatched_run());
+        for flags in [
+            Flags {
+                goal: Some(Goal::ReadyForReview),
+                ..email_only.clone()
+            },
+            Flags {
+                parallel: Some(n(1)),
+                ..Flags::default()
+            },
+            Flags {
+                base_fix: Some(BaseFixAsk::Forbid),
+                ..Flags::default()
+            },
+        ] {
+            assert!(flags.any_for_dispatched_run(), "{flags:?}");
         }
     }
 

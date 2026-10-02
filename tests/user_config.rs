@@ -1,7 +1,8 @@
 //! The User config, `~/.thirdshift/config.toml`: `logs.dir` moves the session
-//! logs, and a config thirdshift can't use stops the Run before any work.
-//! What each setting asks of a Run that its command says nothing about is
-//! covered by the unit tests in `asks`.
+//! logs, a config thirdshift can't use stops the Run before any work, and an
+//! argument error comes before the config is read. What each setting asks of
+//! a Run that its command says nothing about is covered by the unit tests in
+//! `asks`.
 
 mod support;
 

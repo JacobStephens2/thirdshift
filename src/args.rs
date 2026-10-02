@@ -195,8 +195,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
             _ => focus = Some(arg.clone()),
         }
     }
-    let for_dispatch = flags.goal.is_some() || flags.parallel.is_some() || flags.base_fix.is_some();
-    if plan_only && for_dispatch {
+    if plan_only && flags.any_for_dispatched_run() {
         bail!(
             "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
              {PLAN_ONLY}: it dispatches no run for them to apply to"

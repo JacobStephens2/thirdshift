@@ -1097,19 +1097,14 @@ fn the_notification_of_a_failed_spec_run_has_each_tickets_outcome() {
 
 #[test]
 fn a_pass_skipped_for_having_no_ready_issue_sends_no_notification() {
-    for (config, args) in [
-        ("", vec!["pickup", "email", "me@example.com"]),
-        (EMAIL_ALWAYS, vec!["pickup"]),
-    ] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(config);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+    let scenario = Scenario::new();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run_with_resend(&scenario, &resend, &args);
+    let result = run_with_resend(&scenario, &resend, &["pickup"]);
 
-        assert_skipped(&scenario, &result, NO_READY_ISSUE);
-        assert!(resend.requests().is_empty(), "{args:?} with {config:?}");
-    }
+    assert_skipped(&scenario, &result, NO_READY_ISSUE);
+    assert!(resend.requests().is_empty());
 }
 
 /// Start a Pickup run that takes #7, made a Ready issue here, and holds the
@@ -1142,19 +1137,13 @@ fn a_pass_skipped_for_the_lock_sends_no_notification() {
 
 #[test]
 fn asked_for_a_notification_with_no_address_known_the_pass_stops_before_any_work() {
-    for (config, args) in [
-        ("", ["pickup", "--email"]),
-        ("[email]\nalways = true\n", ["pickup", "merge"]),
-    ] {
-        let scenario = ready_ticket();
-        scenario.user_config_is(config);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+    let scenario = ready_ticket();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run_with_resend(&scenario, &resend, &args);
+    let result = run_with_resend(&scenario, &resend, &["pickup", "--email"]);
 
-        assert_stopped_by_preflight(&scenario, &result, "no email address");
-        assert!(resend.requests().is_empty());
-    }
+    assert_stopped_by_preflight(&scenario, &result, "no email address");
+    assert!(resend.requests().is_empty());
 }
 
 #[test]
