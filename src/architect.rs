@@ -226,8 +226,7 @@ pub fn run(
     let worktree = ReviewWorktree::create(&launch, &repo.name, &base)?;
     let logs = Logs::of_architect_run(&repo, logs_dir, &timestamp);
     let mut log = logs.path(REVIEW);
-    review(worktree, &base, focus, &logs, &mut log)
-        .and_then(|final_message| conclude(final_message.as_deref(), &origin, started, base))
+    review(worktree, &base, focus, &origin, started, &logs, &mut log)
         .map(Outcome::Reviewed)
         .map_err(|error| FailedRun {
             log: log.exists().then_some(log),
@@ -235,29 +234,30 @@ pub fn run(
         })
 }
 
-/// The Architecture review session in `worktree`, which is removed once the
-/// session ends. Returns the session's final message. `log` is left at the
-/// most recent session's log.
+/// The Architecture review session in `worktree`, of the Base branch `base`,
+/// then [`conclude`] on its final message. The worktree is removed once the
+/// review is concluded. `log` is left at the most recent session's log.
 fn review(
     worktree: ReviewWorktree,
     base: &str,
     focus: Option<&str>,
+    origin: &str,
+    started: DateTime<Utc>,
     logs: &Logs,
     log: &mut PathBuf,
-) -> Result<Option<String>> {
+) -> Result<Reviewed> {
     let plugin = Plugin::write()?;
-    let sessions = Sessions {
-        logs,
-        worktree: worktree.path(),
-        plugin_dir: plugin.path(),
-    };
     match focus {
         Some(focus) => progress::step(format_args!(
             "starting the Architecture review of {base}, focused on: {focus}"
         )),
         None => progress::step(format_args!("starting the Architecture review of {base}")),
     }
-    sessions.run_to_final_message(REVIEW, &prompt::architecture_review(base, focus), log)
+    Sessions::within(logs, worktree.path(), plugin.path(), |sessions| {
+        let prompt = prompt::architecture_review(base, focus);
+        let final_message = sessions.run_to_final_message(REVIEW, &prompt, log)?;
+        conclude(final_message.as_deref(), origin, started, base)
+    })
 }
 
 /// What an Architecture review reported in the last line of its final
@@ -300,11 +300,12 @@ fn conclude(
     final_message: Option<&str>,
     origin: &str,
     started: DateTime<Utc>,
-    base: String,
+    base: &str,
 ) -> Result<Reviewed> {
     match final_message.and_then(Report::read) {
         Some(Report::Plan(plan)) => {
             mark_plan_ready(&plan, origin, started)?;
+            let base = base.to_string();
             Ok(Reviewed::PlanReady { plan, base })
         }
         Some(Report::Idea(idea)) => Ok(Reviewed::IdeaFiled(idea)),

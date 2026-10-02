@@ -22,7 +22,7 @@ mod support;
 use std::fs;
 
 use support::resend::ResendStandIn;
-use support::{REPO, RunResult, Scenario};
+use support::{REPO, RunResult, Scenario, leaves_running};
 
 /// The first issue the fake agent creates: the scenario starts with issue #7.
 const PLAN_URL: &str = "https://github.com/acme/widgets/issues/8";
@@ -440,6 +440,54 @@ sleep 60"#,
 
     assert_failed(&scenario, &result, "interrupted");
     assert_eq!(scenario.issue_labels(8), ["needs-triage"]);
+}
+
+#[test]
+fn a_review_whose_resume_ends_with_killed_background_work_is_read_by_the_resumes_final_message() {
+    let scenario = scenario();
+    scenario.agent_does_in_session(1, &leaves_running("cargo test"));
+    scenario.agent_does_in_session(
+        2,
+        &format!("{AGENT_PUBLISHES_A_TICKET}{}", leaves_running("cargo test")),
+    );
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(8)));
+    assert!(
+        result.stderr.contains(
+            "thirdshift: architecture-review: the Resume ended with a background task still \
+             running (cargo test), which was killed; carrying on"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.issue_labels(8),
+        ["ready-for-agent", ARCHITECT_PLAN]
+    );
+}
+
+#[test]
+fn an_architect_run_that_fails_after_killed_background_work_names_that_work_too() {
+    let scenario = scenario();
+    scenario.agent_does(&leaves_running("cargo test"));
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    let cause = format!(
+        "architecture-review session ended with a background task still running (cargo test), \
+         which was killed, and a later step failed: {NO_FINAL_LINE}"
+    );
+    assert!(
+        result.stderr.contains(&format!("thirdshift: {cause}\n")),
+        "stderr: {}",
+        result.stderr
+    );
 }
 
 #[test]
