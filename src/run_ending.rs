@@ -328,40 +328,23 @@ mod tests {
 
     #[test]
     fn a_cause_of_several_lines_reads_back_as_its_first_line() {
-        let cause = "git push failed: exit status: 1\n\
-                     error: failed to push some refs\n\
-                     hint: fetch first";
+        let cause = "git fetch origin issue-21 failed: \
+                     error: fetching ref refs/remotes/origin/issue-21 failed\n\
+                     From https://github.com/acme/widgets\n\
+                     * branch            issue-21   -> FETCH_HEAD";
         for log in [Some(LOG), None] {
             assert_eq!(
                 read_back(&failed(cause, log, None)),
                 ChildEnding {
-                    outcome: failure("git push failed: exit status: 1", log),
+                    outcome: failure(
+                        "git fetch origin issue-21 failed: \
+                         error: fetching ref refs/remotes/origin/issue-21 failed",
+                        log
+                    ),
                     base_fix: None,
                 }
             );
         }
-    }
-
-    #[test]
-    fn a_failed_git_command_reads_back_as_gits_own_error() {
-        let cause = "git fetch origin issue-1346 failed: \
-                     error: fetching ref refs/remotes/origin/issue-1346 failed: \
-                     incorrect old value provided\n\
-                     From https://github.com/acme/widgets\n\
-                     * branch                issue-1346 -> FETCH_HEAD\n\
-                     93d814703..8cf48f061  issue-1346 -> origin/issue-1346";
-        assert_eq!(
-            read_back(&failed(cause, None, None)),
-            ChildEnding {
-                outcome: failure(
-                    "git fetch origin issue-1346 failed: \
-                     error: fetching ref refs/remotes/origin/issue-1346 failed: \
-                     incorrect old value provided",
-                    None
-                ),
-                base_fix: None,
-            }
-        );
     }
 
     #[test]
