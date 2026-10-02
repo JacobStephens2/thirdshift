@@ -677,6 +677,40 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_tickets_line_says_its_cause_and_names_its_session_log() {
+        let tickets = [ticket(1348, true, &[], &[]), ticket(1349, true, &[], &[])];
+        let cause = "git fetch origin issue-1346 failed: \
+                     error: fetching ref refs/remotes/origin/issue-1346 failed: \
+                     incorrect old value provided";
+        let outcomes = BTreeMap::from([
+            (
+                1348,
+                TicketOutcome::Failed {
+                    cause: cause.to_string(),
+                    log: None,
+                },
+            ),
+            (
+                1349,
+                TicketOutcome::Failed {
+                    cause: "claude exited 1".to_string(),
+                    log: Some("/logs/1349.jsonl".to_string()),
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            summarize(&tickets, &outcomes),
+            [
+                "#1348 failed: git fetch origin issue-1346 failed: \
+                 error: fetching ref refs/remotes/origin/issue-1346 failed: \
+                 incorrect old value provided",
+                "#1349 failed: claude exited 1 (session log: /logs/1349.jsonl)",
+            ]
+        );
+    }
+
+    #[test]
     fn the_checklist_ticks_done_tickets_and_says_where_each_other_stands() {
         let mut unready = ticket(26, true, &[], &[]);
         unready.labels = vec!["needs-info".to_string()];

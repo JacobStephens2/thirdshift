@@ -23,9 +23,10 @@ impl Git {
     }
 
     /// Run `git <args>` and return its trimmed stdout. If it exits non-zero,
-    /// fail with the last lines of its stderr and then of its stdout, where a
-    /// hook's explanation can end up. While it fails on a lock file another
-    /// git holds, as when a Spec run's Tickets fetch or create worktrees from
+    /// fail with git's own `error:` or `fatal:` line, if it wrote one, then
+    /// the last lines of its stderr and of its stdout, where a hook's
+    /// explanation can end up. While it fails on a lock file another git
+    /// holds, as when a Spec run's Tickets fetch or create worktrees from
     /// one Launch directory at once, it is run again, for up to
     /// [`LOCK_WAIT`].
     pub fn run(&self, args: &[&str]) -> Result<String> {
@@ -36,10 +37,7 @@ impl Git {
             output = self.output(args)?;
         }
         if !output.status.success() {
-            let tail: Vec<String> = [&output.stderr, &output.stdout]
-                .into_iter()
-                .flat_map(|stream| last_lines(stream))
-                .collect();
+            let tail = [cause_first(&output.stderr), last_lines(&output.stdout)].concat();
             let mut message = format!("git {} failed", args.join(" "));
             if !tail.is_empty() {
                 message = format!("{message}: {}", tail.join("\n"));
@@ -92,12 +90,14 @@ const LOCK_WAIT: Duration = Duration::from_secs(10);
 
 /// Whether git's `stderr` says it failed because a lock file, such as
 /// `config.lock` or a ref's, already exists, or because another git moved a
-/// ref between reading and updating it, as two fetches of one branch can.
+/// ref between reading and updating it, as two fetches of one branch can,
+/// in older git's wording or git 2.52's.
 fn held_lock(stderr: &[u8]) -> bool {
     let stderr = String::from_utf8_lossy(stderr);
     stderr.contains(".lock': File exists")
         || stderr.contains("could not lock config file")
         || (stderr.contains("cannot lock ref") && stderr.contains("but expected"))
+        || stderr.contains("incorrect old value provided")
 }
 
 /// The most lines of each stream a failure reports.
@@ -105,15 +105,34 @@ const MAX_LINES: usize = 10;
 
 /// The last `MAX_LINES` non-empty lines of `stream`, trimmed.
 fn last_lines(stream: &[u8]) -> Vec<String> {
-    let text = String::from_utf8_lossy(stream);
-    let lines: Vec<&str> = text
+    let mut lines = lines(stream);
+    lines.drain(..lines.len().saturating_sub(MAX_LINES));
+    lines
+}
+
+/// The lines of a failed git's `stderr` to report, `MAX_LINES` at most: the
+/// first line starting `error:` or `fatal:`, which says what went wrong,
+/// then the last of the others. With no such line, its last lines. So a
+/// reader of the first line alone, as of a child Run's cause, reads git's
+/// error and not a banner such as a fetch's `From <url>`.
+fn cause_first(stderr: &[u8]) -> Vec<String> {
+    let mut lines = lines(stderr);
+    let cause = lines
+        .iter()
+        .position(|line| line.starts_with("error:") || line.starts_with("fatal:"))
+        .map(|at| lines.remove(at));
+    let others = MAX_LINES - cause.iter().count();
+    lines.drain(..lines.len().saturating_sub(others));
+    cause.into_iter().chain(lines).collect()
+}
+
+/// The non-empty lines of `stream`, trimmed.
+fn lines(stream: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(stream)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .collect();
-    lines[lines.len().saturating_sub(MAX_LINES)..]
-        .iter()
-        .map(|line| line.to_string())
+        .map(String::from)
         .collect()
 }
 
@@ -169,6 +188,39 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_starts_with_gits_own_error_line() {
+        let (_temp, git) = repo_with_origin();
+        let alias = "alias.fetch-main=!printf '%s\\n' \
+                     'From https://github.com/acme/widgets' \
+                     ' * branch            main       -> FETCH_HEAD' \
+                     '   93d8147..8cf48f0  main       -> origin/main' \
+                     'error: some local refs could not be updated' \
+                     'error: try again' >&2; \
+                     echo fetched; exit 1";
+
+        let error = git
+            .run(&["-c", alias, "fetch-main"])
+            .unwrap_err()
+            .to_string();
+
+        let lines: Vec<&str> = error.lines().collect();
+        assert!(
+            lines[0].ends_with(" fetch-main failed: error: some local refs could not be updated"),
+            "{error}"
+        );
+        assert_eq!(
+            lines[1..],
+            [
+                "From https://github.com/acme/widgets",
+                "* branch            main       -> FETCH_HEAD",
+                "93d8147..8cf48f0  main       -> origin/main",
+                "error: try again",
+                "fetched",
+            ]
+        );
+    }
+
+    #[test]
     fn a_failure_includes_stdout() {
         let (_temp, git) = repo_with_origin();
 
@@ -220,16 +272,20 @@ mod tests {
 
     #[test]
     fn a_ref_another_git_moved_meanwhile_is_tried_again() {
-        let (temp, git) = repo_with_origin();
-        let moved = temp.path().join("moved");
-        let alias = format!(
-            "alias.race=!test -f {0} && exit 0; touch {0}; \
-             echo \"error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2\" >&2; \
-             exit 1",
-            moved.display()
-        );
+        // The race as older git words it, then as git 2.52 does.
+        for error in [
+            "error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2",
+            "error: fetching ref refs/remotes/origin/main failed: incorrect old value provided",
+        ] {
+            let (temp, git) = repo_with_origin();
+            let moved = temp.path().join("moved");
+            let alias = format!(
+                "alias.race=!test -f {0} && exit 0; touch {0}; echo \"{error}\" >&2; exit 1",
+                moved.display()
+            );
 
-        git.run(&["-c", &alias, "race"]).unwrap();
+            git.run(&["-c", &alias, "race"]).unwrap();
+        }
     }
 
     #[test]

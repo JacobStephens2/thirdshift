@@ -343,6 +343,28 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_git_command_reads_back_as_gits_own_error() {
+        let cause = "git fetch origin issue-1346 failed: \
+                     error: fetching ref refs/remotes/origin/issue-1346 failed: \
+                     incorrect old value provided\n\
+                     From https://github.com/acme/widgets\n\
+                     * branch                issue-1346 -> FETCH_HEAD\n\
+                     93d814703..8cf48f061  issue-1346 -> origin/issue-1346";
+        assert_eq!(
+            read_back(&failed(cause, None, None)),
+            ChildEnding {
+                outcome: failure(
+                    "git fetch origin issue-1346 failed: \
+                     error: fetching ref refs/remotes/origin/issue-1346 failed: \
+                     incorrect old value provided",
+                    None
+                ),
+                base_fix: None,
+            }
+        );
+    }
+
+    #[test]
     fn the_advice_a_failed_run_gives_is_neither_its_cause_nor_its_session_log() {
         let advice = vec![
             Advice {
