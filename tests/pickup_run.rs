@@ -612,41 +612,14 @@ fn parallel_is_ignored_without_error_for_an_issue_that_is_not_a_spec() {
 }
 
 #[test]
-fn merge_and_no_merge_and_the_user_configs_default_reach_the_dispatched_run() {
-    for ready in [ready_ticket, || ready_spec("")] {
-        for (config, args, outcome, state) in [
-            ("", vec!["pickup"], "ready for review", "OPEN"),
-            ("", vec!["pickup", "merge"], "merged", "MERGED"),
-            ("", vec!["pickup", "--merge"], "merged", "MERGED"),
-            (
-                "[merge]\nalways = true\n",
-                vec!["pickup"],
-                "merged",
-                "MERGED",
-            ),
-            (
-                "[merge]\nalways = true\n",
-                vec!["pickup", "no-merge"],
-                "ready for review",
-                "OPEN",
-            ),
-            (
-                "[merge]\nalways = true\n",
-                vec!["pickup", "--no-merge"],
-                "ready for review",
-                "OPEN",
-            ),
-        ] {
-            let scenario = ready();
-            scenario.user_config_is(config);
+fn merge_reaches_the_dispatched_run() {
+    let scenario = ready_ticket();
 
-            let result = scenario.run(&args);
+    let result = scenario.run(&["pickup", "merge"]);
 
-            let pr = pr_from(&scenario, "issue-7");
-            assert_ended_with_pr(&result, &pr, outcome);
-            assert_eq!(pr["state"], state, "{args:?} with {config:?}");
-        }
-    }
+    let pr = pr_from(&scenario, "issue-7");
+    assert_ended_with_pr(&result, &pr, "merged");
+    assert_eq!(pr["state"], "MERGED");
 }
 
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
@@ -685,45 +658,20 @@ gh fake checks "$(git rev-parse HEAD)" '{GREEN}'
 }
 
 #[test]
-fn base_fix_and_no_base_fix_and_the_user_configs_default_reach_the_dispatched_run() {
-    for (config, args, fixed) in [
-        ("", vec!["pickup"], false),
-        ("", vec!["pickup", "base-fix"], true),
-        ("", vec!["pickup", "--base-fix"], true),
-        ("[base]\nfix = true\n", vec!["pickup"], true),
-        ("[base]\nfix = true\n", vec!["pickup", "no-base-fix"], false),
-        (
-            "[base]\nfix = true\n",
-            vec!["pickup", "--no-base-fix"],
-            false,
-        ),
-    ] {
-        let scenario = ready_ticket_that_inherits_a_failure();
-        scenario.user_config_is(config);
-        let red_base = scenario.origin_git(&["rev-parse", "main"]);
+fn base_fix_reaches_the_dispatched_run() {
+    let scenario = ready_ticket_that_inherits_a_failure();
 
-        let result = scenario.run(&args);
+    let result = scenario.run(&["pickup", "base-fix"]);
 
-        let started = result.stderr.contains(
+    assert!(
+        result.stderr.contains(
             "thirdshift: starting Base fix #8 into main: https://github.com/acme/widgets/issues/8\n",
-        );
-        assert_eq!(
-            started, fixed,
-            "{args:?} with {config:?}: {}",
-            result.stderr
-        );
-        if fixed {
-            assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
-            assert_eq!(pr_from(&scenario, "issue-8")["state"], "MERGED");
-        } else {
-            assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-            let cause = format!(
-                "thirdshift: CI red on test, which also fails on main at {}; fix main first\n",
-                &red_base[..7]
-            );
-            assert!(result.stderr.contains(&cause), "stderr: {}", result.stderr);
-        }
-    }
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(pr_from(&scenario, "issue-8")["state"], "MERGED");
 }
 
 #[test]
@@ -989,50 +937,18 @@ fn titled_ready_ticket() -> Scenario {
 const EMAIL_ALWAYS: &str = "[email]\nalways = true\nto = \"config@example.com\"\n";
 
 #[test]
-fn a_pass_that_took_an_issue_sends_one_notification_when_the_command_or_the_user_config_asks() {
-    for (config, args, to) in [
-        (
-            "",
-            vec!["pickup", "email", "me@example.com"],
-            Some("me@example.com"),
-        ),
-        (EMAIL_ALWAYS, vec!["pickup"], Some("config@example.com")),
-        (
-            EMAIL_ALWAYS,
-            vec!["pickup", "--email", "me@example.com"],
-            Some("me@example.com"),
-        ),
-        (
-            "[email]\nto = \"config@example.com\"\n",
-            vec!["pickup", "email"],
-            Some("config@example.com"),
-        ),
-        (EMAIL_ALWAYS, vec!["pickup", "no-email"], None),
-        (EMAIL_ALWAYS, vec!["pickup", "--no-email"], None),
-        (
-            "[email]\nto = \"config@example.com\"\n",
-            vec!["pickup"],
-            None,
-        ),
-    ] {
-        let scenario = titled_ready_ticket();
-        scenario.user_config_is(config);
-        let resend = ResendStandIn::replying(200, ACCEPTED);
+fn a_pass_that_took_an_issue_sends_one_notification_when_asked() {
+    let scenario = titled_ready_ticket();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
 
-        let result = run_with_resend(&scenario, &resend, &args);
+    let result = run_with_resend(&scenario, &resend, &["pickup"]);
 
-        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
-        let requests = resend.requests();
-        let sent: Vec<_> = requests.iter().map(|request| &request.body).collect();
-        match to {
-            // Exactly one: the dispatched run sends none of its own.
-            Some(to) => {
-                assert_eq!(sent.len(), 1, "{args:?} with {config:?}: {sent:?}");
-                assert_eq!(sent[0]["to"], to, "{args:?} with {config:?}");
-            }
-            None => assert!(sent.is_empty(), "{args:?} with {config:?}: {sent:?}"),
-        }
-    }
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    let requests = resend.requests();
+    // Exactly one: the dispatched run sends none of its own.
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].body["to"], "config@example.com");
 }
 
 #[test]
@@ -1351,18 +1267,6 @@ fn a_notification_that_cant_be_sent_is_a_warning_that_changes_neither_the_exit_c
             result.stderr
         );
     }
-}
-
-#[test]
-fn the_user_configs_spec_parallel_reaches_a_dispatched_spec_run() {
-    // As in `parallel_reaches_a_dispatched_spec_run`: one Ticket at a time.
-    let scenario = ready_spec("test -f issue-8.txt");
-    scenario.user_config_is("[spec]\nparallel = 1\n");
-
-    let result = scenario.run(&["pickup"]);
-
-    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
-    assert_eq!(sessions(&scenario), ["8", "9", "7"]);
 }
 
 /// Make each of `issues` open and labelled `in-progress` on the fake GitHub:

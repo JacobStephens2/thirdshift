@@ -767,25 +767,6 @@ fn merge_merges_the_runs_pull_request_or_the_spec_pr() {
 }
 
 #[test]
-fn the_user_configs_merge_default_applies_unless_no_merge_is_given() {
-    for plan in [single_ticket_plan, || spec_plan("")] {
-        for (args, outcome, state) in [
-            (vec!["architect"], "merged", "MERGED"),
-            (vec!["architect", "--no-merge"], "ready for review", "OPEN"),
-        ] {
-            let scenario = plan();
-            scenario.user_config_is("[merge]\nalways = true\n");
-
-            let result = scenario.run(&args);
-
-            let pr = pr_from(&scenario, "issue-8");
-            assert_ended_with_pr(&result, &pr, outcome);
-            assert_eq!(pr["state"], state, "{args:?}");
-        }
-    }
-}
-
-#[test]
 fn parallel_passes_through_to_the_spec_run() {
     // #10's session only succeeds if #9 landed on the Spec branch before it
     // started, as it has only when the Tickets run one at a time.
@@ -905,39 +886,6 @@ fn base_fix_lets_the_dispatched_run_start_a_base_fix() {
 }
 
 #[test]
-fn the_user_configs_base_fix_applies_to_the_dispatched_run_unless_no_base_fix_is_given() {
-    let scenario = single_ticket_plan_that_inherits_a_failure();
-    scenario.user_config_is("[base]\nfix = true\n");
-
-    let result = scenario.run(&["architect"]);
-
-    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
-    assert_eq!(pr_from(&scenario, "issue-9")["state"], "MERGED");
-
-    for flag in ["no-base-fix", "--no-base-fix"] {
-        let scenario = single_ticket_plan_that_inherits_a_failure();
-        scenario.user_config_is("[base]\nfix = true\n");
-        let cause = inherited_failure(&scenario);
-
-        let result = scenario.run(&["architect", flag]);
-
-        assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-        assert!(
-            result.stderr.contains(&format!("thirdshift: {cause}\n")),
-            "stderr: {}",
-            result.stderr
-        );
-        assert!(
-            !result.stderr.contains("Retry with:"),
-            "stderr: {}",
-            result.stderr
-        );
-        // Only the plan was created: no Base fix issue.
-        assert_eq!(scenario.gh_calls_of("issue", "create").len(), 1, "{flag}");
-    }
-}
-
-#[test]
 fn without_base_fix_the_dispatched_run_fails_on_an_inherited_failure() {
     let scenario = single_ticket_plan_that_inherits_a_failure();
     let cause = inherited_failure(&scenario);
@@ -960,52 +908,41 @@ fn without_base_fix_the_dispatched_run_fails_on_an_inherited_failure() {
 }
 
 #[test]
-fn base_fix_or_the_user_configs_reaches_each_tickets_run_of_the_dispatched_spec_run() {
-    for (args, config) in [
-        (vec!["architect", "base-fix", "parallel", "1"], None),
-        (
-            vec!["architect", "parallel", "1"],
-            Some("[base]\nfix = true\n"),
+fn base_fix_reaches_each_tickets_run_of_the_dispatched_spec_run() {
+    // The first Ticket's Run, #9's, meets an Inherited failure from the
+    // Spec branch. One Ticket at a time, so the Spec branch can't move
+    // under it, which would have it merged in again instead. The Base
+    // fix issue is the next after the Tickets, #11.
+    let scenario = spec_plan("");
+    scenario.agent_does_for(
+        9,
+        &format!(
+            "{}{}{}",
+            agent_opens_pr(9, "issue-8"),
+            checks_on_head(RED),
+            checks_on_origin("issue-8", RED)
         ),
-    ] {
-        // The first Ticket's Run, #9's, meets an Inherited failure from the
-        // Spec branch. One Ticket at a time, so the Spec branch can't move
-        // under it, which would have it merged in again instead. The Base
-        // fix issue is the next after the Tickets, #11.
-        let scenario = spec_plan("");
-        scenario.agent_does_for(
-            9,
-            &format!(
-                "{}{}{}",
-                agent_opens_pr(9, "issue-8"),
-                checks_on_head(RED),
-                checks_on_origin("issue-8", RED)
-            ),
-        );
-        scenario.agent_does_for(11, &base_fix_opens_pr(11, "issue-8"));
-        if let Some(config) = config {
-            scenario.user_config_is(config);
-        }
+    );
+    scenario.agent_does_for(11, &base_fix_opens_pr(11, "issue-8"));
 
-        let result = scenario.run(&args);
+    let result = scenario.run(&["architect", "base-fix", "parallel", "1"]);
 
-        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
-        assert!(
-            result.stderr.contains(
-                "#9: starting Base fix #11 into issue-8: https://github.com/acme/widgets/issues/11\n"
-            ),
-            "{args:?}: stderr: {}",
-            result.stderr
-        );
-        let fix = pr_from(&scenario, "issue-11");
-        assert_eq!(fix["base"], "issue-8");
-        assert_eq!(fix["state"], "MERGED");
-        for ticket in ["issue-9", "issue-10"] {
-            assert_eq!(pr_from(&scenario, ticket)["state"], "MERGED", "{ticket}");
-        }
-        for file in ["issue-9.txt", "issue-10.txt", "ci-fix.txt"] {
-            assert!(scenario.origin_file("issue-8", file).is_some(), "{file}");
-        }
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+    assert!(
+        result.stderr.contains(
+            "#9: starting Base fix #11 into issue-8: https://github.com/acme/widgets/issues/11\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    let fix = pr_from(&scenario, "issue-11");
+    assert_eq!(fix["base"], "issue-8");
+    assert_eq!(fix["state"], "MERGED");
+    for ticket in ["issue-9", "issue-10"] {
+        assert_eq!(pr_from(&scenario, ticket)["state"], "MERGED", "{ticket}");
+    }
+    for file in ["issue-9.txt", "issue-10.txt", "ci-fix.txt"] {
+        assert!(scenario.origin_file("issue-8", file).is_some(), "{file}");
     }
 }
 
@@ -1540,30 +1477,6 @@ fn a_dispatched_run_that_fails_sends_one_notification_with_its_outcome_and_cause
         )),
         "{text}"
     );
-}
-
-#[test]
-fn no_email_skips_the_notification_email_always_asks_for() {
-    let scenario = single_ticket_plan();
-    scenario.user_config_is(EMAIL_ALWAYS);
-    let resend = ResendStandIn::replying(200, ACCEPTED);
-
-    let result = run_with_resend(&scenario, &resend, &["architect", "--no-email"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert!(resend.requests().is_empty());
-}
-
-#[test]
-fn an_architect_run_that_is_not_asked_for_a_notification_sends_none() {
-    let scenario = single_ticket_plan();
-    scenario.user_config_is("[email]\nto = \"config@example.com\"\n");
-    let resend = ResendStandIn::replying(200, ACCEPTED);
-
-    let result = run_with_resend(&scenario, &resend, &["architect"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert!(resend.requests().is_empty());
 }
 
 #[test]

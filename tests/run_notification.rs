@@ -279,19 +279,6 @@ fn without_resend_api_key_the_run_stops_before_any_work_and_sends_nothing() {
 }
 
 #[test]
-fn a_run_without_the_flag_sends_nothing() {
-    let scenario = Scenario::new();
-    scenario.user_config_is("[email]\nto = \"me@example.com\"\n");
-    scenario.agent_does(AGENT_OPENS_PR);
-    let resend = ResendStandIn::replying(200, ACCEPTED);
-
-    let result = run(&scenario, &resend, &[&scenario.issue_url(7)], Some(KEY));
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert!(resend.requests().is_empty());
-}
-
-#[test]
 fn a_failed_send_is_a_warning_that_changes_neither_the_exit_code_nor_stdout() {
     // One reply end to end; the email's unit tests take the other shapes of
     // reply.
@@ -343,65 +330,10 @@ fn the_warning(result: &RunResult) -> &str {
         .unwrap_or_else(|| panic!("no warning in stderr: {}", result.stderr))
 }
 
-/// The User config of a machine where every Run sends a Run notification.
-const EMAIL_ALWAYS: &str = "[email]\nalways = true\nto = \"config@example.com\"\n";
-
-#[test]
-fn email_always_makes_a_run_without_the_flag_send_one_notification_to_email_to() {
-    let scenario = Scenario::new();
-    scenario.user_config_is(EMAIL_ALWAYS);
-    scenario.agent_does(AGENT_OPENS_PR);
-    let resend = ResendStandIn::replying(200, ACCEPTED);
-
-    let result = run(&scenario, &resend, &[&scenario.issue_url(7)], Some(KEY));
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let request = the_one_request(&resend);
-    assert_eq!(request.body["to"], "config@example.com");
-    assert!(
-        subject(&request).ends_with(": ready for review"),
-        "{}",
-        subject(&request)
-    );
-}
-
-#[test]
-fn no_email_skips_the_notification_email_always_asks_for() {
-    // One spelling end to end; the argument parsing's unit tests take both.
-    let scenario = Scenario::new();
-    scenario.user_config_is(EMAIL_ALWAYS);
-    scenario.agent_does(AGENT_OPENS_PR);
-    let resend = ResendStandIn::replying(200, ACCEPTED);
-    let url = scenario.issue_url(7);
-
-    let result = run(&scenario, &resend, &["--no-email", &url], Some(KEY));
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert!(resend.requests().is_empty());
-}
-
-#[test]
-fn with_email_always_an_address_after_the_flag_still_wins() {
-    let scenario = Scenario::new();
-    scenario.user_config_is(EMAIL_ALWAYS);
-    scenario.agent_does(AGENT_OPENS_PR);
-    let resend = ResendStandIn::replying(200, ACCEPTED);
-
-    let result = run(
-        &scenario,
-        &resend,
-        &[&scenario.issue_url(7), "--email", "flag@example.com"],
-        Some(KEY),
-    );
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(the_one_request(&resend).body["to"], "flag@example.com");
-}
-
 #[test]
 fn email_always_without_an_address_stops_the_run_before_any_work() {
     // Without a key it stops as a Run with the flag does, shown above; the
-    // User config's unit tests show email.always asks for a notification.
+    // unit tests in `asks` show email.always asks for a notification.
     let scenario = Scenario::new();
     scenario.user_config_is("[email]\nalways = true\n");
     let resend = ResendStandIn::replying(200, ACCEPTED);
@@ -410,21 +342,6 @@ fn email_always_without_an_address_stops_the_run_before_any_work() {
 
     scenario.assert_rejected_before_any_work(&result, "no email address");
     assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
-    assert!(resend.requests().is_empty());
-}
-
-#[test]
-fn email_always_false_makes_a_run_without_the_flag_send_nothing() {
-    // With no email.always, a Run without the flag is shown sending nothing
-    // above; the User config's unit tests take both.
-    let scenario = Scenario::new();
-    scenario.user_config_is("[email]\nalways = false\nto = \"me@example.com\"\n");
-    scenario.agent_does(AGENT_OPENS_PR);
-    let resend = ResendStandIn::replying(200, ACCEPTED);
-
-    let result = run(&scenario, &resend, &[&scenario.issue_url(7)], Some(KEY));
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert!(resend.requests().is_empty());
 }
 

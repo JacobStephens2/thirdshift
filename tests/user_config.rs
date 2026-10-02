@@ -1,8 +1,7 @@
-//! The User config, `~/.thirdshift/config.toml`: `merge.always` makes every
-//! Run a Merge run unless the command says `no-merge`, `base.fix` lets every
-//! Run start a Base fix unless the command says `no-base-fix`, `logs.dir`
-//! moves the session logs, and a config thirdshift can't use stops the Run
-//! before any work.
+//! The User config, `~/.thirdshift/config.toml`: `logs.dir` moves the session
+//! logs, and a config thirdshift can't use stops the Run before any work.
+//! What each setting asks of a Run that its command says nothing about is
+//! covered by the unit tests in `asks`.
 
 mod support;
 
@@ -30,86 +29,6 @@ fn assert_merged(scenario: &Scenario, result: &RunResult) {
         result.stderr
     );
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
-}
-
-/// Assert the Run ended with PR #1 open and ready for review, never merged.
-fn assert_ready_for_review(scenario: &Scenario, result: &RunResult) {
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{PR_URL}\n"));
-    assert_eq!(
-        result.stderr.lines().last(),
-        Some(format!("thirdshift: PR {PR_URL} is ready for review").as_str()),
-        "stderr: {}",
-        result.stderr
-    );
-    assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
-    assert!(
-        !scenario
-            .gh_calls()
-            .iter()
-            .any(|call| call.starts_with(&["pr".to_string(), "merge".to_string()])),
-        "thirdshift ran gh pr merge"
-    );
-}
-
-#[test]
-fn merge_always_makes_a_run_without_the_merge_word_a_merge_run() {
-    let scenario = Scenario::new();
-    scenario.user_config_is("[merge]\nalways = true\n");
-    scenario.agent_does(AGENT_OPENS_PR);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_merged(&scenario, &result);
-}
-
-#[test]
-fn no_merge_overrides_merge_always_for_one_run() {
-    for flag in ["no-merge", "--no-merge"] {
-        for flag_first in [true, false] {
-            let scenario = Scenario::new();
-            scenario.user_config_is("[merge]\nalways = true\n");
-            scenario.agent_does(AGENT_OPENS_PR);
-            let url = scenario.issue_url(7);
-            let args = if flag_first {
-                [flag, url.as_str()]
-            } else {
-                [url.as_str(), flag]
-            };
-
-            let result = scenario.run(&args);
-
-            assert_ready_for_review(&scenario, &result);
-        }
-    }
-}
-
-#[test]
-fn without_a_config_file_a_run_is_not_a_merge_run() {
-    let scenario = Scenario::new();
-    scenario.agent_does(AGENT_OPENS_PR);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_ready_for_review(&scenario, &result);
-}
-
-#[test]
-fn a_config_that_says_nothing_about_merging_leaves_a_run_not_a_merge_run() {
-    for config in [
-        "",
-        "# nothing set yet\n",
-        "[merge]\n",
-        "[merge]\nalways = false\n",
-    ] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(config);
-        scenario.agent_does(AGENT_OPENS_PR);
-
-        let result = scenario.run(&[&scenario.issue_url(7)]);
-
-        assert_ready_for_review(&scenario, &result);
-    }
 }
 
 #[test]
@@ -331,77 +250,6 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "failure
 gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "failure"}]'
 "#;
 
-/// The agent, on the Base fix issue #8, commits a fix and opens its PR into
-/// `main`, with `test` green on its head.
-const BASE_FIX_OPENS_PR: &str = r#"
-echo "fixed" > ci-fix.txt
-git add ci-fix.txt
-git commit -q -m "Fix CI on main"
-gh pr create --base main --head issue-8 --title "Fix CI on main" --body "Closes #8"
-gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "success"}]'
-"#;
-
-/// Assert the Run on #7 started a Base fix on #8 that merged, and ended with
-/// its own PR ready for review.
-fn assert_base_fix_merged(scenario: &Scenario, result: &RunResult) {
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let gh = scenario.gh_state();
-    assert_eq!(gh["titles"]["8"], "CI red on main: test");
-    assert_eq!(gh["prs"][1]["base"], "main");
-    assert_eq!(gh["prs"][1]["state"], "MERGED");
-    assert_eq!(gh["prs"][0]["state"], "OPEN");
-    assert_eq!(gh["prs"][0]["isDraft"], false);
-}
-
-/// Assert the Run on #7 failed on its Inherited failure, with no Base fix
-/// issue written.
-fn assert_failed_with_no_base_fix(scenario: &Scenario, result: &RunResult) {
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert!(
-        result
-            .stderr
-            .contains("CI red on test, which also fails on main at ")
-            && result.stderr.contains("; fix main first"),
-        "stderr: {}",
-        result.stderr
-    );
-    assert!(scenario.gh_calls_of("issue", "create").is_empty());
-    assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
-}
-
-#[test]
-fn base_fix_lets_a_run_without_the_base_fix_word_start_a_base_fix() {
-    let scenario = Scenario::new();
-    scenario.user_config_is("[base]\nfix = true\n");
-    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
-    scenario.agent_does_for(8, BASE_FIX_OPENS_PR);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_base_fix_merged(&scenario, &result);
-}
-
-#[test]
-fn no_base_fix_overrides_base_fix_for_one_run() {
-    for flag in ["no-base-fix", "--no-base-fix"] {
-        for flag_first in [true, false] {
-            let scenario = Scenario::new();
-            scenario.user_config_is("[base]\nfix = true\n");
-            scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
-            let url = scenario.issue_url(7);
-            let args = if flag_first {
-                [flag, url.as_str()]
-            } else {
-                [url.as_str(), flag]
-            };
-
-            let result = scenario.run(&args);
-
-            assert_failed_with_no_base_fix(&scenario, &result);
-        }
-    }
-}
-
 #[test]
 fn a_base_fix_setting_thirdshift_cant_use_stops_the_run_naming_it_and_the_file() {
     for (config, named) in [
@@ -423,19 +271,6 @@ fn a_base_fix_setting_thirdshift_cant_use_stops_the_run_naming_it_and_the_file()
             "expected {named:?} in stderr for {config:?}: {}",
             result.stderr
         );
-    }
-}
-
-#[test]
-fn without_base_fix_set_to_true_an_inherited_failure_fails_the_run() {
-    for config in ["", "[base]\n", "[base]\nfix = false\n"] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(config);
-        scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
-
-        let result = scenario.run(&[&scenario.issue_url(7)]);
-
-        assert_failed_with_no_base_fix(&scenario, &result);
     }
 }
 
