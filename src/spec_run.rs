@@ -47,9 +47,11 @@ const SPEC_REVIEW: &str = "spec-review";
 const CHECKLIST_START: &str = "<!-- thirdshift:tickets -->";
 const CHECKLIST_END: &str = "<!-- /thirdshift:tickets -->";
 
-/// Whether there are `tickets`, as a Spec has, and every one is closed.
-pub fn all_closed(tickets: &[Ticket]) -> bool {
-    !tickets.is_empty() && tickets.iter().all(|ticket| !ticket.is_open)
+/// Whether an issue has Tickets, as a Spec has, and every one is closed:
+/// `open` says of each of its sub-issues whether it is open.
+pub fn all_closed(open: impl IntoIterator<Item = bool>) -> bool {
+    let mut open = open.into_iter().peekable();
+    open.peek().is_some() && open.all(|is_open| !is_open)
 }
 
 /// Take the Spec `spec`, whose Tickets were last read as `tickets`, from

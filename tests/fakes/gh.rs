@@ -84,11 +84,11 @@
 //! the issues it is `blocked_by` with their states. It answers a query that
 //! asks for `timelineItems` as the one thirdshift reads a Pickup run's
 //! candidate with: issue `$number`'s parent, the issue whose `sub_issues` it is
-//! one of, how many sub-issues it has, the issues it is `blocked_by` with
-//! their states, and from its `timeline`, oldest first, every `labeled` event
-//! as `labelled` and the newest of its `sub_issue_added`, `sub_issue_removed`,
-//! `blocked_by_added` and `blocked_by_removed` events as `linked`. Any other
-//! query exits 2.
+//! one of, the state of each of its sub-issues, the issues it is `blocked_by`
+//! with their states, and from its `timeline`, oldest first, every `labeled`
+//! event as `labelled` and the newest of its `sub_issue_added`,
+//! `sub_issue_removed`, `blocked_by_added` and `blocked_by_removed` events as
+//! `linked`. Any other query exits 2.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view` names the PR by its head branch or its number.
@@ -1533,9 +1533,13 @@ fn candidate(state: &Json, n: &str) -> Json {
         };
         linked = Some(object([("__typename", string(link)), ("createdAt", at)]));
     }
+    let sub_issues = listed(state, "sub_issues", n)
+        .iter()
+        .map(|ticket| object([("state", numbered_issue(state, ticket).at("state").clone())]))
+        .collect();
     object([
         ("parent", parent),
-        ("subIssues", sub_issue_count(state, n)),
+        ("subIssues", object([("nodes", Array(sub_issues))])),
         ("blockedBy", blockers(state, n)),
         ("labelled", object([("nodes", Array(labelled))])),
         (
