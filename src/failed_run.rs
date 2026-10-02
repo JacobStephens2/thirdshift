@@ -79,9 +79,9 @@ pub fn fail(
 ) -> FailedRun {
     let interrupted = interrupt::requested();
     let error = interrupted_or(error, interrupted);
-    // Only the first line: the reason goes in the failure commit's subject.
-    let reason = error
-        .to_string()
+    // The cause as stderr gives it, down to what a session left running, cut
+    // to its first line: the reason goes in the failure commit's subject.
+    let reason = format!("{error:#}")
         .lines()
         .next()
         .unwrap_or_default()

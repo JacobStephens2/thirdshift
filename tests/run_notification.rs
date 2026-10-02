@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use support::resend::{Request, ResendStandIn};
-use support::{RunResult, Scenario};
+use support::{RunResult, Scenario, leaves_running};
 
 const KEY: &str = "re_test_123";
 
@@ -151,6 +151,29 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
     let text = text(&request);
     assert_contains(text, "claude exited 3");
     assert_contains(text, &the_one_log(&scenario));
+}
+
+#[test]
+fn a_run_that_fails_after_killed_background_work_names_that_work_in_its_notification() {
+    let scenario = Scenario::new();
+    // The session, and its Resume, end with a task still running, and no PR.
+    scenario.agent_does(&leaves_running("cargo test"));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &["--email", "me@example.com", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_contains(
+        text(&request),
+        "implement session ended with a background task still running (cargo test), \
+         which was killed, and a later step failed: no PR found",
+    );
 }
 
 #[test]

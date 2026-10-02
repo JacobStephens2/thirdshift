@@ -8,12 +8,17 @@ use crate::spec_run::{NEEDS_TRIAGE, READY_FOR_AGENT};
 /// once the agent ends its turn, killing any background task still running.
 /// Other sessions on the same machine run the same commands, so a wait on a
 /// process name can match theirs and outlast the session's own task.
+/// thirdshift can't tell a task the agent gave up on from one it was waiting
+/// on, so the agent is to stop the first kind itself, with `TaskStop`: auto
+/// mode may deny it a `kill`.
 const HEADLESS: &str = "You run headless: nobody is watching, and ending your turn ends the session. \
     Run tests and other long commands in the foreground, raising the Bash timeout if needed. \
     If a command is moved to the background, wait for that task by its own task id or output file, \
     never by process names or patterns (`pgrep`, `ps | grep`, and the like): \
     other sessions on this machine run the same commands. \
-    Never end your turn while a background task you depend on is still running: ending the turn kills it.\n";
+    Never end your turn while a background task you depend on is still running: ending the turn kills it. \
+    Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: \
+    a task still running when your turn ends is taken as work you were waiting on.\n";
 
 /// The fresh prompt, for a run that starts a new Issue branch.
 pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
@@ -210,7 +215,9 @@ pub fn resume(killed: &[&str]) -> String {
     format!(
         "Your background work ({killed}) was killed when your turn ended, because ending the turn ends the session.\n\
          \n\
-         Re-run whatever you were waiting on in the foreground, then finish your job.\n\
+         Re-run whatever you were waiting on in the foreground, then finish your job. \
+         If the re-run hangs or is moved to the background again, stop it with the `TaskStop` tool, by its task id, \
+         and say what could not be run, rather than leaving it running.\n\
          \n\
          {HEADLESS}",
         killed = killed.join("; "),

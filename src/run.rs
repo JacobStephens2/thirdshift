@@ -325,18 +325,15 @@ fn implement(
     log: &mut PathBuf,
 ) -> Result<String> {
     let plugin = Plugin::write()?;
-    let sessions = Sessions {
-        logs,
-        worktree: worktree.path(),
-        plugin_dir: plugin.path(),
-    };
-    let mut run_session = |kind: &str, prompt: &str| sessions.run(kind, prompt, log);
+    Sessions::within(logs, worktree.path(), plugin.path(), |sessions| {
+        let mut run_session = |kind: &str, prompt: &str| sessions.run(kind, prompt, log);
 
-    run_session("implement", prompt)?;
-    worktree.push()?;
-    let pr = mark_pr_ready(issue, worktree.branch(), base)?;
-    deliver(issue, worktree, base, &pr, goal, base_fix, &mut run_session)?;
-    Ok(pr.url)
+        run_session("implement", prompt)?;
+        worktree.push()?;
+        let pr = mark_pr_ready(issue, worktree.branch(), base)?;
+        deliver(issue, worktree, base, &pr, goal, base_fix, &mut run_session)?;
+        Ok(pr.url)
+    })
 }
 
 /// Take the ready PR `pr` for `issue`, from the branch checked out in
