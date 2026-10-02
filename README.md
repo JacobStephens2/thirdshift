@@ -579,6 +579,7 @@ A Ready issue is an open issue that:
 - is not labelled `base-fix`: the Run that opened a [Base fix](#base-fix)'s issue owns it;
 - has no open blocker, by GitHub's "blocked by" links, never the text of its body. Once every blocker is closed, it can be taken;
 - was never started: no **Issue branch** for it is on `origin`, and no pull request from one exists, open, merged or closed. So a Pickup run never does a [Continuation](#continuation), and an issue whose Run failed waits for you;
+- is not a **Spec** whose **Tickets** are all closed. With nothing started on it, such a Spec was done some other way, and the [Spec run](#spec-runs) it would be dispatched as stops with nothing to do, so a Pickup run passes it over rather than take it on every pass. Waiting never makes it a Ready issue, so this comes before the next condition, however lately the Spec was labelled: close it, or take its `ready-for-agent` off. A Spec with at least one open Ticket is taken;
 - is settled: ten minutes have passed since the latest of `ready-for-agent` being applied to it, a sub-issue being added to it or removed, and a "blocked by" link being added to it or removed. So a Spec is not taken while its Tickets are still being attached. These are read from the issue's timeline, since adding a sub-issue does not change the issue's update time, and the ten minutes is fixed, with no setting. A later pass takes the issue once it has settled.
 
 A Pickup run:
@@ -627,14 +628,15 @@ thirdshift: 03:00:03 #21 is a Ticket of #20, which is not ready
 thirdshift: 03:00:03 #26 labelled base-fix
 thirdshift: 03:00:04 #30 blocked by #29
 thirdshift: 03:00:05 #31 already started: issue-31 is on origin
-thirdshift: 03:00:06 #32 already started: PR https://github.com/acme/widgets/pull/33
+thirdshift: 03:00:06 #32 already started: PR https://github.com/acme/widgets/pull/37
+thirdshift: 03:00:06 #33 every Ticket is closed
 thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than 10 minutes ago
 thirdshift: 03:00:07 #35 not settled: a sub-issue added or removed less than 10 minutes ago
 thirdshift: 03:00:08 #36 not settled: a "blocked by" link added or removed less than 10 minutes ago
 thirdshift: 03:00:08 no Ready issue on acme/widgets
 ```
 
-A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
+A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A Spec with every Ticket closed that was started, with its Spec branch on `origin` or a pull request from it, gets the `already started` line, so `every Ticket is closed` is only ever said of one with nothing on `origin`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
 
 ```
 thirdshift: 03:00:02 #18 labelled needs-info

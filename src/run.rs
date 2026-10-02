@@ -191,7 +191,9 @@ fn run(
         .ok();
     let selection = branch::select(&launch, issue)?;
     // A Spec implemented some other way: the Spec run leaves it be.
-    if matches!(selection, Selection::Fresh { .. }) && spec_run::all_closed(&tickets) {
+    if matches!(selection, Selection::Fresh { .. })
+        && spec_run::all_closed(tickets.iter().map(|ticket| ticket.is_open))
+    {
         return Err(
             anyhow!("every Ticket is closed and there is no Spec branch; nothing to do").into(),
         );

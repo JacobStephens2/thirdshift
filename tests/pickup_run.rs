@@ -1,8 +1,8 @@
 //! Pickup runs: `thirdshift pickup` takes the lowest-numbered Ready issue in
 //! the repository, an open issue labelled `ready-for-agent` with no label
 //! that makes an Unready Ticket, no Claim and no `base-fix` label, that is
-//! not a sub-issue, has no open blocker and nothing started on it, and has
-//! settled, and
+//! not a sub-issue, has no open blocker and nothing started on it, is not a
+//! Spec whose Tickets are all closed, and has settled, and
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
 //! way gets a line saying why. With no Ready issue, with the repository at
@@ -486,6 +486,8 @@ fn each_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
     scenario.spec_has_tickets(3, &[(7, &[])]);
     scenario.issue_blocked_by(7, &[5]);
     scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    scenario.spec_has_tickets(7, &[(4, &[])]);
+    scenario.issue_is(4, "CLOSED");
     scenario.issue_timeline(7, &[(TimelineEvent::Labelled(READY_FOR_AGENT), 1)]);
     let expect = |line: &str| {
         let result = scenario.run(&["pickup"]);
@@ -504,7 +506,108 @@ fn each_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
     scenario.issue_blocked_by(7, &[]);
     expect("#7 already started: issue-7 is on origin");
     scenario.origin_git(&["update-ref", "-d", "refs/heads/issue-7"]);
+    expect(EVERY_TICKET_CLOSED);
+    scenario.spec_has_tickets(7, &[]);
     expect(LABELLED_TOO_RECENTLY);
+}
+
+/// What a Pickup run says of #7 when it is a Spec whose Tickets are all
+/// closed, with nothing started on it.
+const EVERY_TICKET_CLOSED: &str = "#7 every Ticket is closed";
+
+/// An open issue labelled `ready-for-agent`, #7, that is a Spec whose
+/// Tickets, #5 and #6, are both closed, with no Spec branch.
+fn spec_with_every_ticket_closed() -> Scenario {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.spec_has_tickets(7, &[(5, &[]), (6, &[])]);
+    scenario.issue_is(5, "CLOSED");
+    scenario.issue_is(6, "CLOSED");
+    scenario
+}
+
+#[test]
+fn a_spec_whose_tickets_are_all_closed_is_passed_over_and_the_next_ready_issue_is_taken() {
+    let scenario = spec_with_every_ticket_closed();
+    ready_issue(&scenario, 9, &[]);
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-9"), "ready for review");
+    let lines = format!(
+        "thirdshift: {EVERY_TICKET_CLOSED}\n\
+         thirdshift: taking Ready issue #9 \"Issue 9\", as thirdshift {} would\n",
+        scenario.issue_url(9)
+    );
+    assert!(
+        result.stderr.starts_with(&lines),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert_eq!(scenario.issue_labels(9), [IN_PROGRESS]);
+    assert_eq!(sessions(&scenario), ["9"]);
+}
+
+#[test]
+fn with_only_a_spec_whose_tickets_are_all_closed_the_pass_is_skipped_changing_nothing() {
+    let scenario = spec_with_every_ticket_closed();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let github = scenario.gh_state();
+
+    let result = run_with_resend(&scenario, &resend, &["pickup"]);
+
+    let passed_over = no_ready_issue_after(&[EVERY_TICKET_CLOSED]);
+    assert_skipped(&scenario, &result, &passed_over);
+    assert_eq!(scenario.gh_state(), github);
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn a_spec_whose_tickets_are_all_closed_and_that_was_started_keeps_its_already_started_line() {
+    let scenario = spec_with_every_ticket_closed();
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    let result = scenario.run(&["pickup"]);
+    let line = "#7 already started: issue-7 is on origin";
+    assert_skipped(&scenario, &result, &no_ready_issue_after(&[line]));
+
+    let scenario = spec_with_every_ticket_closed();
+    let pr = scenario.github_has_pr("issue-7", "main", "OPEN");
+    let result = scenario.run(&["pickup"]);
+    let line = format!("#7 already started: PR {pr}");
+    assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
+}
+
+#[test]
+fn a_spec_with_one_ticket_still_open_is_taken() {
+    let scenario = ready_spec("");
+    scenario.issue_is(8, "CLOSED");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    assert_eq!(sessions(&scenario), ["9", "7"]);
+}
+
+#[test]
+fn a_spec_whose_tickets_are_all_closed_is_never_said_to_be_not_settled() {
+    let scenario = spec_with_every_ticket_closed();
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::SubIssueAdded, 5),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 1),
+        ],
+    );
+
+    let result = scenario.run(&["pickup"]);
+
+    let passed_over = no_ready_issue_after(&[EVERY_TICKET_CLOSED]);
+    assert_skipped(&scenario, &result, &passed_over);
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
 }
 
 /// A Ready issue, #7, that is a Spec with two Tickets that don't block each

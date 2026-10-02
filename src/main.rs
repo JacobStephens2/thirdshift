@@ -182,7 +182,8 @@ would: a Spec run on a Spec, a Run otherwise. A Ready issue is an open issue lab
 ready-for-agent that has none of ready-for-human, needs-info, wontfix and needs-triage, is
 not in-progress, is not a sub-issue, is not labelled base-fix, has no open blocker, and was
 never started: no Issue branch for it is on origin, and no pull request from one exists,
-open, merged or closed. It must also be settled: ten minutes have passed since
+open, merged or closed. A Spec whose Tickets are all closed is not one either: a Spec run
+would find nothing to do. It must also be settled: ten minutes have passed since
 ready-for-agent was applied to it, and since a sub-issue or a \"blocked by\" link of its
 was last added or removed, so a Spec is not taken while its Tickets are being attached. A
 sub-issue is reached through its Spec, when the Spec is itself a Ready issue.

@@ -162,6 +162,9 @@ enum Reason {
     Blocked(Vec<u64>),
     /// It was started, as this shows.
     Started(Started),
+    /// It is a Spec whose Tickets are all closed, with nothing started: the
+    /// Spec run it would be dispatched as refuses it, having nothing to do.
+    TicketsClosed,
     /// It is not settled: it was last shaped, by this, less than [`SETTLE`]
     /// ago.
     Unsettled(Shaping),
@@ -255,6 +258,7 @@ impl<'a> Search<'a> {
                 format!("already started: {branch} is on origin")
             }
             Reason::Started(Started::PullRequest(url)) => format!("already started: PR {url}"),
+            Reason::TicketsClosed => "every Ticket is closed".to_string(),
             Reason::Unsettled(shaping) => {
                 let shaped = match shaping {
                     Shaping::Labelled => format!("labelled {READY_FOR_AGENT}"),
@@ -273,9 +277,9 @@ impl<'a> Search<'a> {
 /// repository of the Launch directory `launch`, stands. It is a Ready issue
 /// when it has no label that makes an Unready Ticket and no Claim, is not a
 /// sub-issue, has no `base-fix` label and no open blocker, was never started,
-/// and is settled: [`SETTLE`] has passed since it was last labelled
-/// `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
-/// last added or removed.
+/// is not a Spec whose Tickets are all closed, and is settled: [`SETTLE`] has
+/// passed since it was last labelled `ready-for-agent` and since a sub-issue
+/// or a "blocked by" link of its was last added or removed.
 fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
     let passed_over = |reason| Ok(Standing::PassedOver(reason));
     if let Some(label) = spec_run::unready_label(&candidate.labels) {
@@ -297,12 +301,15 @@ fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
     if let Some(started) = branch::started(launch, &candidate.issue)? {
         return passed_over(Reason::Started(started));
     }
+    if spec_run::all_closed(read.sub_issues_open.iter().copied()) {
+        return passed_over(Reason::TicketsClosed);
+    }
     if let Some(shaped) = read.last_shaped
         && Utc::now() - shaped.at < SETTLE
     {
         return passed_over(Reason::Unsettled(shaped.by));
     }
     Ok(Standing::Ready {
-        is_spec: read.has_sub_issues,
+        is_spec: !read.sub_issues_open.is_empty(),
     })
 }

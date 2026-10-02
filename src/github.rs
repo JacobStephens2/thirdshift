@@ -347,8 +347,8 @@ fn issues_labelled(repo: &str, label: &str, state: &str) -> Result<Vec<ListedIss
 pub struct Candidate {
     /// The issue it is a sub-issue of, if it is one.
     pub parent: Option<IssueUrl>,
-    /// It has sub-issues of its own.
-    pub has_sub_issues: bool,
+    /// Whether each of its sub-issues is open: of none, it has none.
+    pub sub_issues_open: Vec<bool>,
     /// The numbers of the open issues it is blocked by.
     pub open_blockers: Vec<u64>,
     /// The latest of the changes that shape it, if its timeline has one.
@@ -373,8 +373,8 @@ pub enum Shaping {
     Blockers,
 }
 
-/// An issue's parent, whether it has sub-issues, the issues it is blocked
-/// by, and the events of its timeline that shape it: each time a label was
+/// An issue's parent, the state of each of its sub-issues, the issues it is
+/// blocked by, and the events of its timeline that shape it: each time a label was
 /// applied, of which only the last hundred are read, and the last sub-issue
 /// or "blocked by" link added or removed. They are read from the timeline
 /// because adding a sub-issue does not change the issue's update time.
@@ -383,7 +383,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     issue(number: $number) {
       parent { url }
-      subIssues { totalCount }
+      subIssues(first: 100) { nodes { state } }
       blockedBy(first: 100) { nodes { number state } }
       labelled: timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
         nodes { ... on LabeledEvent { createdAt label { name } } }
@@ -453,7 +453,10 @@ pub fn candidate(issue: &IssueUrl, label: &str) -> Result<Candidate> {
     }
     Ok(Candidate {
         parent,
-        has_sub_issues: sub_issue_count(issue)? > 0,
+        sub_issues_open: nodes(&issue["subIssues"], "subIssues")?
+            .iter()
+            .map(node_is_open)
+            .collect::<Result<_>>()?,
         open_blockers,
         last_shaped: shaped.into_iter().max_by_key(|shaped| shaped.at),
     })
