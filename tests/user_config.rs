@@ -148,10 +148,12 @@ fn help_and_version_succeed_with_a_broken_config() {
 /// The agent commits nothing and exits 3, so the Run fails after one session.
 const AGENT_EXITS_3: &str = "exit 3\n";
 
-/// Assert the Run failed after logging its one session in `dir`, a directory
-/// under the scenario, and that the "session log:" line names that log.
+/// Assert the Run failed after logging its one session in `sessions/` under
+/// `dir`, a directory under the scenario, and that the "session log:" line
+/// names that log.
 fn assert_logged_in(scenario: &Scenario, result: &RunResult, dir: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let dir = &format!("{dir}/sessions");
     let logs = scenario.entries(dir);
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let log = scenario.path(dir).join(&logs[0]);

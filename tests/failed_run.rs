@@ -42,9 +42,11 @@ fn a_failing_session_pushes_a_failure_commit_with_the_uncommitted_work() {
 fn assert_failed(scenario: &Scenario, result: &RunResult, stdout: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, stdout);
-    let logs = scenario.entries("home/.thirdshift/logs");
+    let logs = scenario.entries("home/.thirdshift/logs/sessions");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
-    let log = scenario.path("home/.thirdshift/logs").join(&logs[0]);
+    let log = scenario
+        .path("home/.thirdshift/logs/sessions")
+        .join(&logs[0]);
     assert!(
         result.stderr.contains(log.to_str().unwrap()),
         "stderr: {}",

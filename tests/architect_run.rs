@@ -22,7 +22,7 @@ mod support;
 use std::fs;
 
 use support::resend::ResendStandIn;
-use support::{REPO, RunResult, Scenario, leaves_running};
+use support::{REPO, RunResult, Scenario, before_command_log, leaves_running};
 
 /// The first issue the fake agent creates: the scenario starts with issue #7.
 const PLAN_URL: &str = "https://github.com/acme/widgets/issues/8";
@@ -133,6 +133,11 @@ fn dispatched_sessions(scenario: &Scenario) -> Vec<String> {
         .collect()
 }
 
+/// `stderr` after the line saying the Architect run is starting.
+fn after_start(stderr: &str) -> &str {
+    support::after_start(stderr, "Architect run starting")
+}
+
 /// Assert the Architect run ended with `pr` in `outcome`, as a Run or a Spec
 /// run that reached its goal does: exit 0, the PR's URL alone on stdout, and
 /// the outcome as the last line on stderr.
@@ -172,8 +177,8 @@ fn assert_nothing_left_behind(scenario: &Scenario) {
 }
 
 /// What every failed Architect run shares once its review has started: exit
-/// 1, nothing on stdout, `cause` on stderr, then the session log as its last
-/// line, and nothing left behind.
+/// 1, nothing on stdout, `cause` on stderr, then the session log and the
+/// Command log as its last lines, and nothing left behind.
 fn assert_failed(scenario: &Scenario, result: &RunResult, cause: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");
@@ -182,17 +187,19 @@ fn assert_failed(scenario: &Scenario, result: &RunResult, cause: &str) {
         "expected {cause:?} in stderr: {}",
         result.stderr
     );
-    let logs = scenario.entries("home/.thirdshift/logs");
+    let logs = scenario.entries("home/.thirdshift/logs/sessions");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     assert!(
         logs[0].starts_with("acme-widgets-architect-")
             && logs[0].ends_with("-architecture-review.jsonl"),
         "logs: {logs:?}"
     );
-    let log = scenario.path("home/.thirdshift/logs").join(&logs[0]);
+    let log = scenario
+        .path("home/.thirdshift/logs/sessions")
+        .join(&logs[0]);
     assert_eq!(
-        result.stderr.lines().last(),
-        Some(format!("thirdshift: session log: {}", log.display()).as_str()),
+        before_command_log(&result.stderr).last(),
+        Some(&format!("thirdshift: session log: {}", log.display()).as_str()),
         "stderr: {}",
         result.stderr
     );
@@ -835,8 +842,8 @@ fn parallel_on_a_single_ticket_plan_fails_as_it_does_for_an_issue_that_is_not_a_
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");
     assert_eq!(
-        result.stderr.lines().last(),
-        Some("thirdshift: parallel is only for a Spec, and #8 has no sub-issues"),
+        before_command_log(&result.stderr).last(),
+        Some(&"thirdshift: parallel is only for a Spec, and #8 has no sub-issues"),
         "stderr: {}",
         result.stderr
     );
@@ -1008,7 +1015,7 @@ fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
         "stderr: {}",
         result.stderr
     );
-    let last = result.stderr.lines().last().unwrap();
+    let last = *before_command_log(&result.stderr).last().unwrap();
     assert!(
         last.starts_with("thirdshift: session log: ") && last.ends_with("-implement.jsonl"),
         "stderr: {}",
@@ -1405,13 +1412,15 @@ fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
         subject,
         "[thirdshift] acme/widgets Architect run: review failed"
     );
-    let log = result.stderr.lines().last().unwrap();
-    let log = log.strip_prefix("thirdshift: session log: ").unwrap();
+    let ending = result.stderr.lines().rev().take(2).collect::<Vec<_>>();
+    let command_log = ending[0].strip_prefix("thirdshift: command log: ").unwrap();
+    let log = ending[1].strip_prefix("thirdshift: session log: ").unwrap();
     assert!(
         text.starts_with(&format!(
             "Review:       failed\n\
              Cause:        claude exited 3\n\
-             Session log:  {log}\n"
+             Session log:  {log}\n\
+             Command log:  {command_log}\n"
         )),
         "{text}"
     );
@@ -1651,7 +1660,7 @@ const ALREADY_RUNNING: &str =
 /// that line alone on stderr, and nothing on stdout.
 fn assert_skipped_as_already_running(result: &RunResult) {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stderr, ALREADY_RUNNING);
+    assert_eq!(after_start(&result.stderr), ALREADY_RUNNING);
     assert_eq!(result.stdout, "");
 }
 
@@ -1904,7 +1913,7 @@ fn an_open_architect_plan_skips_the_architect_run_before_any_review_whatever_its
         assert_eq!(result.code, Some(0), "{args:?}: stderr: {}", result.stderr);
         assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
         assert_eq!(
-            result.stderr,
+            after_start(&result.stderr),
             format!(
                 "thirdshift: {}\n",
                 still_open(&scenario, 7, "Deepen the session module")
@@ -1935,7 +1944,7 @@ fn a_skipped_architect_run_names_each_open_architect_plan_and_prints_its_url() {
         format!("{}\n{}\n", scenario.issue_url(7), scenario.issue_url(5))
     );
     assert_eq!(
-        result.stderr,
+        after_start(&result.stderr),
         format!(
             "thirdshift: {}; {}\n",
             still_open(&scenario, 7, "Deepen the session module"),
@@ -2055,7 +2064,7 @@ fn a_plan_whose_dispatched_run_failed_stays_open_and_the_next_architect_run_neve
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert_eq!(second.stdout, format!("{PLAN_URL}\n"));
     assert_eq!(
-        second.stderr,
+        after_start(&second.stderr),
         format!(
             "thirdshift: {}\n",
             still_open(&scenario, 8, "Deepen the session module")

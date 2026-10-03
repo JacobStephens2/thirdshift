@@ -12,46 +12,48 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::command_log;
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::progress::{self, Progress};
 use crate::prompt;
 
-/// Where a Run's or an Architect run's session logs go: in `dir`, the User
-/// config's `logs.dir` or `~/.thirdshift/logs`, each named for what is run
-/// and its `timestamp`.
-pub struct Logs<'a> {
+/// Where a Run's or an Architect run's Session logs go: in `sessions/` under
+/// `logs_dir`, the User config's `logs.dir` or `~/.thirdshift/logs`, each
+/// named for what is run and stamped with the command's start stamp, which
+/// its Command log shares.
+pub struct Logs {
     /// What every log's name starts with: `<owner>-<repo>-issue-<n>` for a
     /// Run, `<owner>-<repo>-architect` for an Architect run.
     name: String,
-    dir: &'a Path,
-    timestamp: &'a str,
+    dir: PathBuf,
 }
 
-impl<'a> Logs<'a> {
-    /// The logs of the Run on `issue` that started at `timestamp`.
-    pub fn of_run(issue: &IssueUrl, dir: &'a Path, timestamp: &'a str) -> Self {
+impl Logs {
+    /// The logs of the Run on `issue`.
+    pub fn of_run(issue: &IssueUrl, logs_dir: &Path) -> Self {
         Logs {
             name: format!("{}-{}-issue-{}", issue.owner, issue.repo, issue.number),
-            dir,
-            timestamp,
+            dir: logs_dir.join("sessions"),
         }
     }
 
-    /// The logs of the Architect run on `repo` that started at `timestamp`.
-    pub fn of_architect_run(repo: &Repo, dir: &'a Path, timestamp: &'a str) -> Self {
+    /// The logs of the Architect run on `repo`.
+    pub fn of_architect_run(repo: &Repo, logs_dir: &Path) -> Self {
         Logs {
             name: format!("{}-{}-architect", repo.owner, repo.name),
-            dir,
-            timestamp,
+            dir: logs_dir.join("sessions"),
         }
     }
 
     /// Where a session's stream is logged:
-    /// `<dir>/<name>-<timestamp>-<kind>.jsonl`.
+    /// `<logs_dir>/sessions/<name>-<stamp>-<kind>.jsonl`.
     pub fn path(&self, kind: &str) -> PathBuf {
-        self.dir
-            .join(format!("{}-{}-{kind}.jsonl", self.name, self.timestamp))
+        self.dir.join(format!(
+            "{}-{}-{kind}.jsonl",
+            self.name,
+            command_log::stamp()
+        ))
     }
 }
 
@@ -59,7 +61,7 @@ impl<'a> Logs<'a> {
 /// Factory skills plugin at `plugin_dir` loaded, each logged in its `logs`.
 /// It lasts for the steps given to [`Sessions::within`].
 pub struct Sessions<'a> {
-    logs: &'a Logs<'a>,
+    logs: &'a Logs,
     worktree: &'a Path,
     plugin_dir: &'a Path,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -76,7 +78,7 @@ impl<'a> Sessions<'a> {
     /// that work ahead of its own cause: the session may have stopped short
     /// of its job.
     pub fn within<T>(
-        logs: &'a Logs<'a>,
+        logs: &'a Logs,
         worktree: &'a Path,
         plugin_dir: &'a Path,
         steps: impl FnOnce(&Self) -> Result<T>,

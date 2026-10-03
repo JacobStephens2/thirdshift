@@ -155,7 +155,7 @@ fn a_run_with_the_written_user_config_behaves_as_with_none() {
         result.stderr
     );
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
-    assert_eq!(scenario.entries("home/.thirdshift/logs").len(), 1);
+    assert_eq!(scenario.entries("home/.thirdshift/logs/sessions").len(), 1);
 }
 
 #[test]
@@ -380,7 +380,9 @@ fn setup_refuses_a_user_config_a_run_would_refuse_and_leaves_it_alone() {
             "stderr: {}",
             result.stderr
         );
-        assert_eq!(result.stderr, run.stderr, "{broken:?}");
+        // The Run's first line says it is starting; the rest is the same.
+        let (_, refused) = run.stderr.split_once('\n').unwrap();
+        assert_eq!(result.stderr, refused, "{broken:?}");
         assert_eq!(user_config(&scenario).as_deref(), Some(broken));
     }
 }
@@ -402,7 +404,7 @@ fn a_run_reads_the_completed_user_config_with_the_settings_it_had_before() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.entries("home/elsewhere/logs").len(), 1);
+    assert_eq!(scenario.entries("home/elsewhere/logs/sessions").len(), 1);
     assert!(!scenario.path("home/.thirdshift/logs").exists());
 }
 

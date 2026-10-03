@@ -1,14 +1,15 @@
 //! Progress lines on stderr: thirdshift's own steps, and a session's
 //! stream-json output condensed to one short line per notable event. Each
 //! line is stamped with the local time it was printed, so a stalled Run can
-//! be told from a busy one.
-
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::io::Write;
+//! be told from a busy one. Each is kept in the Command log too, if the
+//! command keeps one.
 
 use chrono::Local;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::fmt::Display;
+
+use crate::command_log;
 
 /// The longest detail a session line shows before it is cut short.
 const MAX_DETAIL: usize = 100;
@@ -95,9 +96,7 @@ fn progress_line(time: impl Display, message: impl Display) -> String {
 }
 
 fn write_line(line: &str) {
-    // Ignored if it fails, as it does once the terminal has closed: the Run
-    // still has to clean up and send its Run notification.
-    let _ = writeln!(std::io::stderr(), "{line}");
+    command_log::eprint(line);
 }
 
 /// A line without its prefix split into its `HH:MM:SS` stamp and message,

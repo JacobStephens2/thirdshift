@@ -158,7 +158,6 @@ fn run(
     logs_dir: &Path,
     base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
-    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
 
     preflight::check(&launch, issue)?;
@@ -198,7 +197,7 @@ fn run(
         .makes_claim()
         .then(|| claim::make(issue))
         .transpose()?;
-    let logs = Logs::of_run(issue, logs_dir, &timestamp);
+    let logs = Logs::of_run(issue, logs_dir);
     let outcome = run_in_worktree(
         issue,
         tickets,
