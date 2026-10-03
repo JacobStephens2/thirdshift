@@ -27,8 +27,9 @@ pub struct UserConfig {
     /// `launch.pull`: every Run fast-forwards the Launch directory's
     /// checkout of the Base branch to `origin`.
     pub launch_pull: bool,
-    /// `logs.dir`, with a leading `~` expanded: where session logs are
-    /// written, by default `~/.thirdshift/logs`.
+    /// `logs.dir`, with a leading `~` expanded: the root of the logs, with
+    /// Session logs in `sessions/` and Command logs in `commands/`, by
+    /// default `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
     /// The `[email]` section.
     pub email: EmailSettings,
@@ -569,7 +570,7 @@ always = false                  # every Run sends a Run notification, without th
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
 [logs]
-dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
+dir = "~/.thirdshift/logs"   # the root of the logs, sessions/ and commands/; default ~/.thirdshift/logs
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3

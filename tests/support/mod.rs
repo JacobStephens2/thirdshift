@@ -200,6 +200,30 @@ pub fn split_stamp(unprefixed: &str) -> Option<(&str, &str)> {
     is_stamp.then_some((time, message))
 }
 
+/// `stderr` after its first line, which must say the command is starting
+/// and when, as `thirdshift: <starting>, <date> <offset>` does for a Run, a
+/// Spec run, an Architect run and a Pickup run.
+pub fn after_start<'a>(stderr: &'a str, starting: &str) -> &'a str {
+    let (first, rest) = stderr.split_once('\n').unwrap_or((stderr, ""));
+    assert!(
+        first.starts_with(&format!("thirdshift: {starting}, ")),
+        "not starting as {starting:?}: {stderr}"
+    );
+    rest
+}
+
+/// The lines that end a Failed run's `stderr` once its cause is given, the
+/// line naming its Command log left off.
+pub fn before_command_log(stderr: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = stderr.lines().collect();
+    let last = lines.pop().unwrap_or_default();
+    assert!(
+        last.starts_with("thirdshift: command log: "),
+        "not ending with the Command log: {stderr}"
+    );
+    lines
+}
+
 impl Scenario {
     /// An origin with one commit on `main`, a launch clone of it with `main`
     /// checked out, and an open issue #7.

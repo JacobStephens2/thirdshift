@@ -5,17 +5,20 @@
 //! is known only here. What a line of advice looks like is the Base fix
 //! module's to say, and which lines are a child's own the progress module's.
 
-use std::io::Write;
 use std::process::ExitCode;
 
 use crate::architect;
 use crate::base_fix::Advice;
+use crate::command_log;
 use crate::failed_run::FailedRun;
 use crate::progress::{self, ChildLine};
 use crate::run::Ended;
 
 /// What starts the line naming a Failed run's session log.
 const SESSION_LOG: &str = "session log: ";
+
+/// What starts the line naming a Failed run's Command log.
+const COMMAND_LOG: &str = "command log: ";
 
 /// What starts the line saying what became of the Base fix a Run took.
 const BASE_FIX: &str = "Base fix: ";
@@ -28,9 +31,9 @@ pub fn show(ended: &Ended) -> ExitCode {
     Shown::of(ended).print()
 }
 
-/// Show a Failed run, or a failed Architect run: its cause and its session
-/// log on stderr, and its pull request's URL, if it left one, on stdout.
-/// Returns its exit code.
+/// Show a Failed run, or a failed Architect run: its cause, its session log
+/// and the Command log on stderr, and its pull request's URL, if it left
+/// one, on stdout. Returns its exit code.
 pub fn show_failure(failed: &FailedRun) -> ExitCode {
     Shown::of_failure(failed, &[]).print()
 }
@@ -82,12 +85,15 @@ impl Shown {
     }
 
     /// A Failed run's cause, its `advice`, if it has any, then its session
-    /// log.
+    /// log and the command's Command log.
     fn of_failure(failed: &FailedRun, advice: &[Advice]) -> Self {
         let mut steps = vec![format!("{:#}", failed.error)];
         steps.extend(advice.iter().map(Advice::to_string));
         if let Some(log) = &failed.log {
             steps.push(format!("{SESSION_LOG}{}", log.display()));
+        }
+        if let Some(log) = command_log::path() {
+            steps.push(format!("{COMMAND_LOG}{}", log.display()));
         }
         Shown {
             steps,
@@ -101,9 +107,7 @@ impl Shown {
             progress::step(step);
         }
         for url in self.urls {
-            // A failed write, as once the terminal has closed, is ignored,
-            // so the Run notification still goes.
-            let _ = writeln!(std::io::stdout(), "{url}");
+            command_log::print(&url);
         }
         if self.success {
             ExitCode::SUCCESS

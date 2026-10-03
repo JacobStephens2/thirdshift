@@ -34,8 +34,9 @@ const KEY_QUESTION: &str = "Resend API key (input hidden";
 const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip):";
 const KEY: &str = "re_secret_123";
 
-/// The first line a Run prints once it starts its work.
-const FIRST_STEP: &str = "thirdshift: ";
+/// The line a Run prints as it starts its work, after the one saying it is
+/// starting and when.
+const FIRST_STEP: &str = "thirdshift: creating worktree ";
 
 /// Assert the Run ended ready for review or merged, as `outcome` says, with
 /// only the PR's URL on stdout.

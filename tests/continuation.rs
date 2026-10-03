@@ -183,8 +183,8 @@ fn assert_nothing_created(scenario: &Scenario, local_branch: &str) {
     assert_eq!(scenario.entries("work"), vec!["widgets"]);
     assert_eq!(scenario.entries("tmp"), Vec::<String>::new());
     assert!(
-        !scenario.path("home/.thirdshift").exists(),
-        "a log was created"
+        !scenario.path("home/.thirdshift/logs/sessions").exists(),
+        "a session log was created"
     );
     assert_ne!(scenario.launch_git(&["branch", "--list", local_branch]), "");
 }

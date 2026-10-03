@@ -149,7 +149,7 @@ thirdshift --email you@example.com https://github.com/acme/widgets/issues/7
 It sends one [Run notification](#run-notifications), whatever the outcome. To have every Run on a machine send one, set `email.always` in the [User config](#user-config); `no-email` (or `--no-email`) then skips it for one Run.
 
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
-- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. Each line starts with the local time it was printed, as in `thirdshift: 12:14:49 pushing issue-7`, so a quiet terminal shows how long the Run has been on its last step. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
+- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. Each line starts with the local time it was printed, as in `thirdshift: 12:14:49 pushing issue-7`, so a quiet terminal shows how long the Run has been on its last step. The first line of a Run, a Spec run, an [Architect run](#architect-runs) or a [Pickup run](#pickup-runs) also names the date and the UTC offset, as in `thirdshift: 12:00:01 starting on https://github.com/acme/widgets/issues/7, 2026-10-03 -0400`, so a log that collects many commands, such as a crontab line's, reads as a dated list. Everything on stderr and stdout is kept in the command's [Command log](#logs) too. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
 - **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin`, closing the issue or removing `in-progress` from it then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the command is one thirdshift can't use: the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, a Run flag is repeated or contradicts another, or `parallel` isn't followed by a whole number from 1 up; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
 
 The other commands:
@@ -191,7 +191,7 @@ to = "you@example.com"                        # where email goes when the comman
 from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.dev if unset
 
 [logs]
-dir = "~/elsewhere/logs"   # where session logs go, instead of ~/.thirdshift/logs
+dir = "~/elsewhere/logs"   # the root of the logs, instead of ~/.thirdshift/logs
 
 [spec]
 parallel = 2   # how many Tickets a Spec run runs at once, instead of 3
@@ -218,7 +218,7 @@ always = false                  # every Run sends a Run notification, without th
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
 [logs]
-dir = "~/.thirdshift/logs"   # where session logs go; default ~/.thirdshift/logs
+dir = "~/.thirdshift/logs"   # the root of the logs, sessions/ and commands/; default ~/.thirdshift/logs
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
@@ -251,7 +251,7 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 
 `pickup.limit` sets the [Claim limit](#the-claim-limit): how many open issues labelled `in-progress` stop a [Pickup run](#pickup-runs) from taking another, by default 3. It must be a whole number from 1 up. There is no command-line flag for it.
 
-`logs.dir` sets the directory [session logs](#logs) are written to, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
+`logs.dir` sets the root of the [logs](#logs), with Session logs in its `sessions/` folder and Command logs in its `commands/` folder, each created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
 A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, or `0` for `spec.parallel` or `pickup.limit`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them, and they never offer Setup; nor does `email-test`.
 
@@ -297,7 +297,7 @@ The Credentials are read only when `RESEND_API_KEY` is unset or empty, and only 
 A Run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and a key is found, in `RESEND_API_KEY` or else the Credentials. If either fails, or the Credentials are broken, the Run stops, exits `1` naming what's wrong (with no key, the message above listing every way to give one), and sends nothing. A Run that asks for no notification never reads the Credentials, so a broken file can't stop it, and `update`, `version` and `help` never read it either. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
 
 - **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
-- **Body**, plain text: the pull request URL (if any), the failure cause (if failed), after an Inherited failure with no Base fix taken its [`Base check:`, `Retry with:` and `Or set:` lines](#an-inherited-failure-links-the-base-branchs-checks), the session log path (if any), the hostname and how long the Run took.
+- **Body**, plain text: the pull request URL (if any), the failure cause (if failed), after an Inherited failure with no Base fix taken its [`Base check:`, `Retry with:` and `Or set:` lines](#an-inherited-failure-links-the-base-branchs-checks), the session log path (if any), the [Command log](#logs) path as a `Command log:` line, the hostname and how long the Run took.
 
 A [Spec run](#spec-runs) sends at most one notification for the whole Spec, under the same rules, with its checks made once before any Ticket starts. Its subject names the Spec, its outcome is the Spec run's, and its body, after what a Run's holds (the Spec PR, if any), lists each Ticket's outcome, one line per Ticket as in the summary on stderr, such as `#21 landed with https://github.com/acme/widgets/pull/1` or `#22 blocked by #21`. The Ticket Runs inside it never send a notification of their own, whatever the User config says.
 
@@ -309,17 +309,30 @@ A notification that can't be sent is a `warning:` line on stderr with Resend's e
 
 ### Logs
 
-Each session's full transcript, as Claude Code's `stream-json` output, is written to its own file under `~/.thirdshift/logs/`, or the `logs.dir` set in the [User config](#user-config) (created if missing):
+Everything thirdshift logs goes under `~/.thirdshift/logs/`, or the `logs.dir` set in the [User config](#user-config), in two folders, each created if missing:
 
 ```
-~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-implement.jsonl
-~/.thirdshift/logs/<owner>-<repo>-issue-<n>-<timestamp>-repair-<i>.jsonl
-~/.thirdshift/logs/<owner>-<repo>-architect-<timestamp>-architecture-review.jsonl
+~/.thirdshift/logs/
+├── sessions/                 Session logs
+└── commands/
+    ├── architect/            <owner>-<repo>-<stamp>.log
+    ├── pickup/               <owner>-<repo>-issue-<n>-<stamp>.log
+    └── issue/                <owner>-<repo>-issue-<n>-<stamp>.log
+```
+
+A **Session log** is one session's full transcript, as Claude Code's `stream-json` output:
+
+```
+~/.thirdshift/logs/sessions/<owner>-<repo>-issue-<n>-<stamp>-implement.jsonl
+~/.thirdshift/logs/sessions/<owner>-<repo>-issue-<n>-<stamp>-repair-<i>.jsonl
+~/.thirdshift/logs/sessions/<owner>-<repo>-architect-<stamp>-architecture-review.jsonl
 ```
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.jsonl`.
 
-All sessions in a Run share the Run's UTC timestamp, so a Run's logs sort together. When a Run fails, stderr ends with the path of its most recent session log, the place to start looking.
+A **Command log** is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: `thirdshift <Issue URL>`, a Run or a Spec run, in `issue/`, `thirdshift pickup` in `pickup/`, named for the issue it took, and `thirdshift architect` in `architect/`. A Spec run's covers its Tickets' Runs, a Run's covers its [Base fix](#base-fix), and a Pickup run's or an Architect run's covers the Spec run or Run it dispatched: none of those keeps one of its own. So `ls -t ~/.thirdshift/logs/commands/pickup | head` lists the recent passes that took an issue. A Pickup run or an Architect run skipped before doing any work keeps none, and `setup`, `email-test`, `update`, `version` and `help` never keep one. Lines printed before the Command log's name is known, such as a Pickup run's lines on the issues it [passed over](#why-an-issue-was-passed-over) before it took one, are written first, and once it is created a progress line says `logging this command to <path>`. A Command log that can't be written, as when its folder can't be created or the disk is full, is one `warning:` line on stderr, and the command carries on with the same outcome, stdout and exit code.
+
+The stamp is the local time the command started, with its UTC offset, as in `20261003T120000-0400`, in the machine's time zone, or `TZ`'s if set, so it agrees with `date` and `ls -l`. A command's Command log and all of its Session logs, its Tickets' Runs' and its Base fix's included, share that one stamp, so they sort together and each can be found from the other. When a Run fails, stderr ends with the path of its most recent Session log, the place to start looking, then that of its Command log.
 
 ## Foreign commits in a Merge run
 
@@ -403,7 +416,8 @@ thirdshift: 03:12:40 CI red on test, which also fails on main at 362b9ca; fix ma
 thirdshift: 03:12:40 Base check: test: https://github.com/acme/widgets/actions/runs/1/job/2
 thirdshift: 03:12:40 Retry with: thirdshift https://github.com/acme/widgets/issues/7 base-fix
 thirdshift: 03:12:40 Or set: base.fix = true in ~/.thirdshift/config.toml, to allow a Base fix for every Run on this machine
-thirdshift: 03:12:40 session log: ~/.thirdshift/logs/acme-widgets-issue-7-….jsonl
+thirdshift: 03:12:40 session log: ~/.thirdshift/logs/sessions/acme-widgets-issue-7-….jsonl
+thirdshift: 03:12:40 command log: ~/.thirdshift/logs/commands/issue/acme-widgets-issue-7-….log
 ```
 
 A Run given `no-base-fix` gets the `Base check:` lines and no offer. A Run that had its one Base fix gets neither: its `Base fix:` line already says what happened. The cause itself, and so the failure commit's message, is the same in every case, and no other cause adds a line.
@@ -438,7 +452,7 @@ thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a tim
 When nothing is left to run and any Ticket is not done, the Spec run is a **Failed spec run**: it leaves the Spec PR a draft, its checklist showing what's missing, prints its URL on stdout (if any Ticket has landed, so there is one), exits `1`, and lists on stderr each Ticket that landed, with its pull request, and each one not done, with why:
 
 ```
-thirdshift: 03:12:40 #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme-widgets-issue-21-….jsonl)
+thirdshift: 03:12:40 #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/sessions/acme-widgets-issue-21-….jsonl)
 thirdshift: 03:12:40 #22 blocked by #21
 thirdshift: 03:12:40 #23 landed with https://github.com/acme/widgets/pull/1
 thirdshift: 03:12:40 #24 unready: labelled needs-info
@@ -483,20 +497,20 @@ An Architect run:
 6. Marks the plan ready, in one request: `needs-triage` is swapped for `ready-for-agent`, the plan is labelled `architect-plan`, the mark a later Architect run finds an open **Architect plan** by, and its other labels are kept. thirdshift adds that label, never the agent, and first creates it if the repository has none. A Spec's Tickets are left as the review labelled them, without `architect-plan`.
 7. Dispatches the plan, unless given `--plan-only`, exactly as `thirdshift <plan URL>` would from the same clone on the Architect run's Base branch: a [Spec run](#spec-runs) when the plan has sub-issues, a Run otherwise. Its Base branch is the Architect run's, so with `base <branch>` it is `<branch>`, not the branch checked out. `merge` and `no-merge` apply to the Spec PR or the Run's pull request, `parallel <n>` to the Spec run, and `base-fix` and `no-base-fix` to whether that run may start a [Base fix](#base-fix), as if given to that command, and the [User config](#user-config) sets what they leave unsaid: `merge.always`, `spec.parallel`, `base.fix`, `launch.pull` and `logs.dir`. The Architecture review itself never watches CI, so a Base fix can only happen in the dispatched run. It makes the [Claim](#the-claim) as that command would too: once its checks pass, the plan's `ready-for-agent` is swapped for `in-progress`, and the plan keeps `architect-plan`. The one difference is that it sends no [Run notification](#run-notifications) of its own, whatever `email.always` says: the Architect run sends [the one](#one-run-notification).
 
-The dispatched run's ending is the Architect run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Architect run fails as that Failed run or Failed spec run does, with the cause and the session log on stderr and the pull request's URL on stdout if it left one. The plan stays open and `architect-plan`, and `in-progress` unless the run left nothing on `origin` and so [released its Claim](#when-the-claim-ends), for `thirdshift <plan URL>` to take up again: no later Architect run [retries it](#one-architect-plan-at-a-time). `parallel <n>` on a plan that is a single Ticket fails the same way as it does for `thirdshift <Issue URL>` on an issue that isn't a Spec: `parallel is only for a Spec, and #<n> has no sub-issues`, exit `1`, before any implementing and before the Claim, with the plan left `ready-for-agent`, to run without it.
+The dispatched run's ending is the Architect run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Architect run fails as that Failed run or Failed spec run does, with the cause, the session log and the Command log on stderr and the pull request's URL on stdout if it left one. The plan stays open and `architect-plan`, and `in-progress` unless the run left nothing on `origin` and so [released its Claim](#when-the-claim-ends), for `thirdshift <plan URL>` to take up again: no later Architect run [retries it](#one-architect-plan-at-a-time). `parallel <n>` on a plan that is a single Ticket fails the same way as it does for `thirdshift <Issue URL>` on an issue that isn't a Spec: `parallel is only for a Spec, and #<n> has no sub-issues`, exit `1`, before any implementing and before the Claim, with the plan left `ready-for-agent`, to run without it.
 
 With `--plan-only`, it instead exits `0` with the plan's URL alone on stdout, and `plan <url> is ready for an agent` as stderr's last line. Read or edit the plan, then run it with `thirdshift <Issue URL>`. The plan is labelled `architect-plan` here too, so until it is finished or closed the next Architect run is [skipped](#one-architect-plan-at-a-time).
 
 Progress lines on stderr say when the review starts, which plan it reported, when the labels are swapped, and when the plan is dispatched: `dispatching the plan <url>, as thirdshift <url> would`. The dispatched run's own progress lines follow. With no Strong candidate, the last line says which issue the Architect run ended on instead.
 
-A review session that fails or is interrupted, a final message without one of the lines the prompt asks for, or a plan that fails a check ends the Architect run as a failure: exit `1`, nothing on stdout, the cause on stderr and then the path of the session log. Nothing is dispatched and no label is changed, so a plan the review did publish stays `needs-triage`, without `architect-plan`, for you to finish or close, and doesn't skip the next Architect run. A review that finds no deepening opportunity at all has no issue to name, so it ends without one of those lines and the Architect run fails this way too; its session log says what it looked at.
+A review session that fails or is interrupted, a final message without one of the lines the prompt asks for, or a plan that fails a check ends the Architect run as a failure: exit `1`, nothing on stdout, the cause on stderr and then the paths of the session log and the Command log. Nothing is dispatched and no label is changed, so a plan the review did publish stays `needs-triage`, without `architect-plan`, for you to finish or close, and doesn't skip the next Architect run. A review that finds no deepening opportunity at all has no issue to name, so it ends without one of those lines and the Architect run fails this way too; its session log says what it looked at.
 
 ### One Run notification
 
 An Architect run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one, whatever its outcome, skipped included, [either](#one-at-a-time) [way](#one-architect-plan-at-a-time), and with or without `--plan-only`. It makes a Run's checks before any other work, an address and a Resend API key, and stops with exit `1` if either is missing. The email goes after the outcome is final and printed, and a failed send is only a `warning:` line on stderr: it changes neither the exit code nor stdout.
 
 - **Subject**: `[thirdshift] <owner>/<repo> Architect run: <outcome>`. With a dispatched run, the outcome is that run's: `ready for review`, `merged`, `failed` or `interrupted`. Without one, it is the review's: `plan published` (with `--plan-only`), `idea filed`, `idea already filed`, `review failed` (also for a plan that fails a check) or `interrupted`. For a skipped run, it is `skipped`. The repository is left out if `origin` doesn't name one on GitHub.
-- **Body**, plain text: a `Review:` line saying how the Architecture review ended, with the URL of the plan or idea issue it named (`plan published: <url>`, `idea filed: <url>`, `idea already filed: <url>`, `failed` or `interrupted`); when the plan was dispatched, a `Dispatched:` line with that run's outcome; then what a Run's notification holds, for the dispatched run or else the failed review: the pull request URL (if any), the failure cause (if failed), with the [lines after it](#an-inherited-failure-links-the-base-branchs-checks) of a dispatched run that failed on an Inherited failure, a `Base fix:` line for a dispatched run that started or waited on a [Base fix](#base-fix), the session log path (if any), the hostname and how long the Architect run took. After a dispatched Spec run, it ends with a line per Ticket, as a Spec run's notification does. A skipped run's body has a `Skipped:` line giving the reason in place of the `Review:` line, then the hostname and how long it took. The reason is `an Architect run or a Pickup run is already running on <owner>/<repo>`, or each open Architect plan with the command that picks it up: `Architect plan #<n> "<title>" is still open: pick it up with thirdshift <plan URL>`.
+- **Body**, plain text: a `Review:` line saying how the Architecture review ended, with the URL of the plan or idea issue it named (`plan published: <url>`, `idea filed: <url>`, `idea already filed: <url>`, `failed` or `interrupted`); when the plan was dispatched, a `Dispatched:` line with that run's outcome; then what a Run's notification holds, for the dispatched run or else the failed review: the pull request URL (if any), the failure cause (if failed), with the [lines after it](#an-inherited-failure-links-the-base-branchs-checks) of a dispatched run that failed on an Inherited failure, a `Base fix:` line for a dispatched run that started or waited on a [Base fix](#base-fix), the session log path (if any), the `Command log:` path (if any), the hostname and how long the Architect run took. After a dispatched Spec run, it ends with a line per Ticket, as a Spec run's notification does. A skipped run's body has a `Skipped:` line giving the reason in place of the `Review:` line, then the hostname and how long it took. The reason is `an Architect run or a Pickup run is already running on <owner>/<repo>`, or each open Architect plan with the command that picks it up: `Architect plan #<n> "<title>" is still open: pick it up with thirdshift <plan URL>`.
 
 ### No Strong candidate
 
@@ -622,6 +636,7 @@ In the **Sweep**, each Pickup run, once it holds the lock and before it counts, 
 Each open issue labelled `ready-for-agent` that a pass looks at and does not take gets one line on stderr, naming the issue and the first reason that applies, in the order of the Ready issue rule above. The lines come before the line that says what the pass did, so the cron log explains why nothing started:
 
 ```
+thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400
 thirdshift: 03:00:02 #18 labelled needs-info
 thirdshift: 03:00:02 #19 labelled in-progress
 thirdshift: 03:00:03 #21 is a Ticket of #20, which is not ready
@@ -639,9 +654,11 @@ thirdshift: 03:00:08 no Ready issue on acme/widgets
 A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A Spec with every Ticket closed that was started, with its Spec branch on `origin` or a pull request from it, gets the `already started` line, so `every Ticket is closed` is only ever said of one with nothing on `origin`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
 
 ```
+thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400
 thirdshift: 03:00:02 #18 labelled needs-info
 thirdshift: 03:00:03 #20 blocked by #17
 thirdshift: 03:00:04 taking Ready issue #22 "Sharpen the widgets", as thirdshift https://github.com/acme/widgets/issues/22 would
+thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/commands/pickup/acme-widgets-issue-22-20261003T030001-0400.log
 ```
 
 ### One Run notification for the issue taken

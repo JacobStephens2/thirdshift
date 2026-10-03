@@ -122,7 +122,7 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
             "Initial commit".to_string(),
         ])
     );
-    let logs = scenario.entries("home/.thirdshift/logs");
+    let logs = scenario.entries("home/.thirdshift/logs/sessions");
     assert!(
         logs.iter().any(|name| name.ends_with("-repair-1.jsonl")),
         "logs: {logs:?}"
@@ -175,9 +175,12 @@ fn declined_ci_fix(head: &str) -> String {
     )
 }
 
-/// Assert that a Failed run's stderr ends by naming the `kind` session's log.
+/// Assert that a Failed run's stderr ends by naming the `kind` session's log,
+/// then the Command log.
 fn assert_session_log_is(result: &support::RunResult, kind: &str) {
-    let last = result.stderr.lines().last().unwrap_or_default();
+    let last = *support::before_command_log(&result.stderr)
+        .last()
+        .unwrap_or(&"");
     assert!(
         last.starts_with("thirdshift: session log: ") && last.ends_with(&format!("-{kind}.jsonl")),
         "stderr: {}",

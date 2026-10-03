@@ -183,9 +183,13 @@ fn still_logs_the_whole_stream() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    let logs = scenario.entries("home/.thirdshift/logs");
-    let log =
-        std::fs::read_to_string(scenario.path("home/.thirdshift/logs").join(&logs[0])).unwrap();
+    let logs = scenario.entries("home/.thirdshift/logs/sessions");
+    let log = std::fs::read_to_string(
+        scenario
+            .path("home/.thirdshift/logs/sessions")
+            .join(&logs[0]),
+    )
+    .unwrap();
     assert!(log.contains("not json at all\n"), "log: {log}");
     assert!(log.contains(r#""type": "result""#), "log: {log}");
 }

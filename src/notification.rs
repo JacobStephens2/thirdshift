@@ -9,6 +9,7 @@ use anyhow::Result;
 
 use crate::architect::Outcome;
 use crate::base_fix::Advice;
+use crate::command_log;
 use crate::config::EmailSettings;
 use crate::email::Resend;
 use crate::failed_run::FailedRun;
@@ -235,6 +236,7 @@ fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
 /// first. A failed send is only a warning.
 fn send(checked: &Checked, subject: &str, architect: Option<ArchitectLines>, ending: &Ending) {
     let host = host::name();
+    let command_log = command_log::path();
     let body = Body {
         architect,
         pr_url: ending.pr_url,
@@ -242,6 +244,7 @@ fn send(checked: &Checked, subject: &str, architect: Option<ArchitectLines>, end
         advice: ending.advice,
         base_fix: ending.base_fix,
         log: ending.log,
+        command_log: command_log.as_deref(),
         host: host.as_deref().unwrap_or("unknown host"),
         took: checked.started.elapsed(),
         tickets: ending.tickets,
@@ -298,6 +301,8 @@ struct Body<'a> {
     /// What became of the Base fix the Run started or waited on, if any.
     base_fix: Option<&'a str>,
     log: Option<&'a Path>,
+    /// The command's Command log, if it keeps one.
+    command_log: Option<&'a Path>,
     host: &'a str,
     took: Duration,
     /// In a Spec run, a line on each Ticket, as in its summary on stderr.
@@ -333,6 +338,9 @@ impl Body<'_> {
         }
         if let Some(log) = self.log {
             text += &format!("Session log:  {}\n", log.display());
+        }
+        if let Some(log) = self.command_log {
+            text += &format!("Command log:  {}\n", log.display());
         }
         text += &format!("Host:         {}\n", self.host);
         text += &format!("Took:         {}\n", took(self.took));
@@ -388,6 +396,7 @@ mod tests {
             advice: &[],
             base_fix: None,
             log: None,
+            command_log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
             tickets: &[],
@@ -401,13 +410,15 @@ mod tests {
         let body = Body {
             pr_url: Some("https://github.com/acme/widgets/pull/1"),
             cause: None,
-            log: Some(Path::new("/home/me/.thirdshift/logs/x.jsonl")),
+            log: Some(Path::new("/home/me/.thirdshift/logs/sessions/x.jsonl")),
+            command_log: Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
             ..body
         };
         assert_eq!(
             body.text(),
             "Pull request: https://github.com/acme/widgets/pull/1\n\
-             Session log:  /home/me/.thirdshift/logs/x.jsonl\n\
+             Session log:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
+             Command log:  /home/me/.thirdshift/logs/commands/issue/x.log\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -422,6 +433,7 @@ mod tests {
             advice: &[],
             base_fix: Some("https://github.com/acme/widgets/issues/8 merged"),
             log: None,
+            command_log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
             tickets: &[],
@@ -455,6 +467,7 @@ mod tests {
             advice: &advice,
             base_fix: None,
             log: Some(Path::new("/home/me/.thirdshift/logs/x.jsonl")),
+            command_log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
             tickets: &[],
@@ -484,6 +497,7 @@ mod tests {
             advice: &[],
             base_fix: None,
             log: None,
+            command_log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
             tickets: &tickets,
@@ -525,6 +539,7 @@ mod tests {
             advice: &[],
             base_fix: None,
             log: None,
+            command_log: None,
             host: "droplet-1",
             took: Duration::from_secs(4),
             tickets: &[],
@@ -564,6 +579,7 @@ mod tests {
             advice: &[],
             base_fix: None,
             log: None,
+            command_log: None,
             host: "droplet-1",
             took: Duration::from_secs(0),
             tickets: &[],

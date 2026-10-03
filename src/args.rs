@@ -78,6 +78,11 @@ pub const SPEC_BRANCH: &str = "--spec-branch";
 /// Base branch: it makes the Run a [`Kind::BaseFix`]. Not in help.
 pub const BASE_FIX_INTO: &str = "--base-fix-into";
 
+/// The hidden argument a Run starts a child Run with, followed by its
+/// command's start stamp, which the child Run's Session logs take. Not in
+/// help.
+pub const STAMP: &str = "--stamp";
+
 /// A Run's arguments.
 pub struct RunArgs {
     pub issue: IssueUrl,
@@ -87,6 +92,9 @@ pub struct RunArgs {
     /// What the Run is, if another thirdshift started it, given with
     /// [`SPEC_BRANCH`] or [`BASE_FIX_INTO`].
     pub child: Option<Kind>,
+    /// The start stamp of the command that started it, if another
+    /// thirdshift did, given with [`STAMP`].
+    pub stamp: Option<String>,
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
@@ -122,6 +130,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let mut issue = None;
     let mut flags = Flags::default();
     let mut child = None;
+    let mut stamp = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
         if take_flag(&mut flags, arg, &mut args)? {
@@ -138,6 +147,12 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 } else {
                     Kind::BaseFix { base }
                 });
+            }
+            STAMP => {
+                if stamp.is_some() {
+                    bail!("repeated argument: {arg}");
+                }
+                stamp = Some(args.next().context("missing stamp")?.clone());
             }
             OFFER_BASE_FIX => {
                 let retry = args.next().context("missing command to offer")?.clone();
@@ -159,6 +174,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         issue,
         flags,
         child,
+        stamp,
     }))
 }
 

@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
+use crate::command_log;
 use crate::failed_run::FailedRun;
 use crate::github;
 use crate::interrupt;
@@ -188,7 +189,8 @@ impl fmt::Display for Reviewed {
 /// Pickup run, is still running on this machine: see [`launch::start`]. It is
 /// then skipped, likewise, if the repository has an open Architect plan: only
 /// then, so that the plan of an Architect run still running is never taken
-/// for an unfinished one.
+/// for an unfinished one. Past both, it keeps its Command log under
+/// `logs_dir`, where its Session logs go too.
 pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
@@ -196,7 +198,6 @@ pub fn run(
     launch_pull: bool,
 ) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
-    let timestamp = started.format("%Y%m%dT%H%M%SZ").to_string();
     let Launch {
         git: launch,
         origin,
@@ -214,6 +215,7 @@ pub fn run(
         let open_plans = open_plans.into_iter().map(|plan| (plan.issue, plan.title));
         return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans.collect())));
     }
+    command_log::keep(command_log::of_architect_run(logs_dir, &repo));
     if launch_pull {
         run::pull_base_branch(&launch, checked_out.as_deref(), &base);
     }
@@ -222,7 +224,7 @@ pub fn run(
         return Err(anyhow!("interrupted").into());
     }
     let worktree = ReviewWorktree::create(&launch, &repo.name, &base)?;
-    let logs = Logs::of_architect_run(&repo, logs_dir, &timestamp);
+    let logs = Logs::of_architect_run(&repo, logs_dir);
     let mut log = logs.path(REVIEW);
     review(worktree, &base, focus, &origin, started, &logs, &mut log)
         .map(Outcome::Reviewed)

@@ -67,7 +67,7 @@ fn a_session_whose_background_work_was_killed_is_resumed_once_and_the_run_goes_o
             result.stderr
         );
     }
-    let logs = scenario.entries("home/.thirdshift/logs");
+    let logs = scenario.entries("home/.thirdshift/logs/sessions");
     assert_eq!(logs.len(), 2, "logs: {logs:?}");
     assert!(logs.iter().any(|log| log.ends_with("-implement.jsonl")));
     assert!(

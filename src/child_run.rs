@@ -14,6 +14,7 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::args;
 use crate::base_fix::BaseFixAsk;
+use crate::command_log;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
@@ -67,9 +68,9 @@ pub enum Ended {
 }
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
-/// Launch directory. If `base_fix` allows one, it is given `base-fix`, so it
-/// may start a Base fix; if nobody decided, it is given the command to offer
-/// one with.
+/// Launch directory, given this command's start stamp for its Session logs.
+/// If `base_fix` allows one, it is given `base-fix`, so it may start a Base
+/// fix; if nobody decided, it is given the command to offer one with.
 pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: &BaseFixAsk) -> Result<Child> {
     start_from(&own_executable()?, issue, kind, base_fix)
 }
@@ -113,6 +114,7 @@ fn start_from(
     }
     command
         .args([kind.hidden_argument(), kind.base()])
+        .args([args::STAMP, command_log::stamp()])
         .args(base_fix)
         .arg(&issue.url)
         .stdin(Stdio::null())

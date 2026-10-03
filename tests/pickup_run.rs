@@ -17,7 +17,7 @@ mod support;
 use std::fs;
 
 use support::resend::ResendStandIn;
-use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent};
+use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log};
 
 /// The label of an issue a Pickup run may take.
 const READY_FOR_AGENT: &str = "ready-for-agent";
@@ -57,6 +57,11 @@ fn pr_from(scenario: &Scenario, head: &str) -> serde_json::Value {
     from_head
         .unwrap_or_else(|| panic!("no PR from {head}: {prs}"))
         .clone()
+}
+
+/// `stderr` after the line saying the Pickup run is starting.
+fn after_start(stderr: &str) -> &str {
+    support::after_start(stderr, "Pickup run starting")
 }
 
 /// Assert the Pickup run ended with `pr` in `outcome`, as a Run or a Spec
@@ -118,10 +123,10 @@ fn no_ready_issue_after(lines: &[&str]) -> String {
 }
 
 /// Assert the Pickup run was skipped with `reason` as its one line: exit 0,
-/// that line alone on stderr, nothing on stdout, and no session started.
+/// that line alone on stderr after the one saying it is starting, nothing on stdout, and no session started.
 fn assert_skipped(scenario: &Scenario, result: &RunResult, reason: &str) {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stderr, reason);
+    assert_eq!(after_start(&result.stderr), reason);
     assert_eq!(result.stdout, "");
     assert!(scenario.claude_calls().is_empty(), "a session was started");
 }
@@ -141,7 +146,7 @@ fn a_progress_line_names_the_issue_taken_before_it_is_dispatched() {
         "thirdshift: taking Ready issue #7 \"Sharpen the widgets\", as thirdshift {url} would\n"
     );
     assert!(
-        result.stderr.starts_with(&taking),
+        after_start(&result.stderr).starts_with(&taking),
         "stderr: {}",
         result.stderr
     );
@@ -259,7 +264,7 @@ fn when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_take
          thirdshift: taking Ready issue #70 \"Issue 70\", as thirdshift {url} would\n"
     );
     assert!(
-        result.stderr.starts_with(&lines),
+        after_start(&result.stderr).starts_with(&lines),
         "stderr: {}",
         result.stderr
     );
@@ -330,7 +335,7 @@ fn a_spec_that_is_a_ready_issue_is_taken_and_its_tickets_get_no_lines() {
         scenario.issue_url(20)
     );
     assert!(
-        result.stderr.starts_with(&taking),
+        after_start(&result.stderr).starts_with(&taking),
         "stderr: {}",
         result.stderr
     );
@@ -541,7 +546,7 @@ fn a_spec_whose_tickets_are_all_closed_is_passed_over_and_the_next_ready_issue_i
         scenario.issue_url(9)
     );
     assert!(
-        result.stderr.starts_with(&lines),
+        after_start(&result.stderr).starts_with(&lines),
         "stderr: {}",
         result.stderr
     );
@@ -682,7 +687,7 @@ fn a_dispatched_run_that_fails_fails_the_pickup_run_as_a_failed_run_does() {
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");
-    let last = result.stderr.lines().last().unwrap();
+    let last = *before_command_log(&result.stderr).last().unwrap();
     assert!(
         last.starts_with("thirdshift: session log: ") && last.ends_with("-implement.jsonl"),
         "stderr: {}",
@@ -942,7 +947,7 @@ fn a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_run
     let result = scenario.run(&["pickup"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stderr, ALREADY_RUNNING);
+    assert_eq!(after_start(&result.stderr), ALREADY_RUNNING);
     assert_eq!(result.stdout, "");
     assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
     assert_eq!(scenario.gh_state(), github);
@@ -954,7 +959,10 @@ fn a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_run
 
 #[test]
 fn a_pickup_run_or_an_architect_run_is_skipped_while_a_pickup_runs_dispatched_run_is_still_going() {
-    for second in ["pickup", "architect"] {
+    for (second, starting) in [
+        ("pickup", "Pickup run starting"),
+        ("architect", "Architect run starting"),
+    ] {
         let scenario = Scenario::new();
         ready_issue(&scenario, 7, &[]);
         ready_issue(&scenario, 9, &[]);
@@ -968,7 +976,11 @@ fn a_pickup_run_or_an_architect_run_is_skipped_while_a_pickup_runs_dispatched_ru
         let skipped = scenario.run(&[second]);
 
         assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
-        assert_eq!(skipped.stderr, ALREADY_RUNNING, "{second}");
+        assert_eq!(
+            support::after_start(&skipped.stderr, starting),
+            ALREADY_RUNNING,
+            "{second}"
+        );
         assert_eq!(skipped.stdout, "");
         assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
         assert_eq!(scenario.gh_state(), github);
@@ -995,7 +1007,7 @@ fn once_a_pickup_run_has_ended_the_next_takes_the_next_ready_issue() {
     assert_ended_with_pr(&second, &pr_from(&scenario, "issue-9"), "ready for review");
     let third = scenario.run(&["pickup"]);
     assert_eq!(third.code, Some(0), "stderr: {}", third.stderr);
-    assert_eq!(third.stderr, NO_READY_ISSUE);
+    assert_eq!(after_start(&third.stderr), NO_READY_ISSUE);
     assert_eq!(third.stdout, "");
     assert_eq!(sessions(&scenario), ["7", "9"]);
 }
@@ -1068,16 +1080,25 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
         subject,
         "[thirdshift] acme/widgets#7 Sharpen the widgets: ready for review"
     );
-    let logs = scenario.entries("home/.thirdshift/logs");
+    let logs = scenario.entries("home/.thirdshift/logs/sessions");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
-    let log = scenario.path("home/.thirdshift/logs").join(&logs[0]);
+    let log = scenario
+        .path("home/.thirdshift/logs/sessions")
+        .join(&logs[0]);
+    let commands = scenario.entries("home/.thirdshift/logs/commands/pickup");
+    assert_eq!(commands.len(), 1, "Command logs: {commands:?}");
+    let command_log = scenario
+        .path("home/.thirdshift/logs/commands/pickup")
+        .join(&commands[0]);
     assert!(
         text.starts_with(&format!(
             "Pull request: {}\n\
              Session log:  {}\n\
+             Command log:  {}\n\
              Host:         ",
             pr["url"].as_str().unwrap(),
-            log.display()
+            log.display(),
+            command_log.display()
         )),
         "{text}"
     );
@@ -1231,7 +1252,7 @@ fn a_pass_skipped_for_the_lock_sends_no_notification() {
     let skipped = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
 
     assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
-    assert_eq!(skipped.stderr, ALREADY_RUNNING);
+    assert_eq!(after_start(&skipped.stderr), ALREADY_RUNNING);
     assert_eq!(skipped.stdout, "");
     release(&scenario);
     first.finish();
@@ -1553,7 +1574,7 @@ fn the_sweep_does_not_run_on_a_pass_skipped_for_the_lock() {
     let result = scenario.run(&["pickup"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stderr, ALREADY_RUNNING);
+    assert_eq!(after_start(&result.stderr), ALREADY_RUNNING);
     assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
     release(&scenario);
     architect.finish();

@@ -6,6 +6,7 @@ mod branch;
 mod child_run;
 mod ci;
 mod claim;
+mod command_log;
 mod config;
 mod email;
 mod failed_run;
@@ -256,7 +257,10 @@ With launch.pull set, every Run first fast-forwards the checked-out Base branch 
     [launch]
     pull = true
 
-logs.dir sets where session logs go instead of ~/.thirdshift/logs: an absolute path, or one under ~/.
+logs.dir sets the root of the logs instead of ~/.thirdshift/logs: an absolute path, or one under ~/.
+Session logs go in its sessions/ folder, and Command logs, everything a Run, a Spec run, an
+Architect run or a Pickup run printed, in commands/issue/, commands/pickup/ and
+commands/architect/.
 
     [logs]
     dir = \"~/elsewhere/logs\"
@@ -285,6 +289,7 @@ fn main() -> ExitCode {
         issue,
         flags,
         child,
+        stamp,
     } = match args::parse(&args) {
         Ok(Command::Help) => {
             print!("{HELP}");
@@ -306,10 +311,17 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
+    match child {
+        Some(_) => command_log::begin_child(stamp),
+        None => command_log::begin(format_args!("starting on {}", issue.url)),
+    }
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
     };
+    if child.is_none() {
+        command_log::keep(command_log::of_run(&config.logs_dir, &issue));
+    }
     let asks = Asks::of_run(&issue, &flags, child.as_ref(), &config);
     // First, so no interrupt can end the Run once its notification is checked.
     if let Err(error) = interrupt::install() {
@@ -345,8 +357,10 @@ fn main() -> ExitCode {
 /// repository, or a Pickup run, is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, the URL of each. If asked, by
 /// the command or the User config, it sends one Run notification, however it
-/// ended, skipped included; the run it dispatched sends none of its own.
+/// ended, skipped included; the run it dispatched sends none of its own. Its
+/// Command log, kept once it is past its skip checks, covers that run too.
 fn architect(args: ArchitectArgs) -> ExitCode {
+    command_log::begin("Architect run starting");
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
@@ -400,8 +414,10 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// an issue sends one Run notification, the one the dispatched run would send
 /// started by hand, and that run sends none of its own; one that is skipped
 /// sends none. The notification's checks are made before any other work all
-/// the same, so a pass that would be skipped fails on them too.
+/// the same, so a pass that would be skipped fails on them too. Its Command
+/// log is kept once it has taken an issue, and covers the dispatched run.
 fn pickup(args: PickupArgs) -> ExitCode {
+    command_log::begin("Pickup run starting");
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
@@ -421,6 +437,7 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
         Err(error) => return failure(&error),
     };
+    command_log::keep(command_log::of_pickup_run(&config.logs_dir, &taken.issue));
     let notification = notification.map(|checked| checked.of_taken(&taken.issue, taken.title));
     let asks = Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config);
     let started_by = StartedBy::Dispatch { base: &taken.base };

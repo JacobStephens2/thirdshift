@@ -1763,8 +1763,8 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
     assert_contains(&result.stderr, "thirdshift: #21 interrupted\n");
     assert!(!result.stderr.contains("#22"), "stderr: {}", result.stderr);
     assert_eq!(
-        result.stderr.lines().last(),
-        Some("thirdshift: interrupted"),
+        support::before_command_log(&result.stderr).last(),
+        Some(&"thirdshift: interrupted"),
         "stderr: {}",
         result.stderr
     );
