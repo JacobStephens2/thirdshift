@@ -59,8 +59,12 @@ One invocation of the factory on a **Spec**'s **Issue URL**: it works through th
 _Avoid_: batch run, spec implementation
 
 **Architect run**:
-One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another Architect run or a **Pickup run** on the same repository is still running on the machine, its Spec run or Run included, or when an earlier Architect plan is still open. Skipped is not a failure, and still sends the **Run notification** when one was asked for.
+One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another Architect run or a **Pickup run** on the same repository is still running on the machine, its Spec run or Run included, when an earlier Architect plan is still open, when an **Architect idea** is waiting for triage, or when the repository has a **Ready issue**, so that work a human shaped goes first. Skipped is not a failure, and sends no **Run notification**, so that it can be started every few minutes and so follow the last one as soon as its plan is merged.
 _Avoid_: improve run, architecture run
+
+**Weeding**:
+The factory clearing the detritus that features leave in a repository's codebase as they land, with no human starting it: **Architect runs** started often enough that each follows the last as soon as its **Architect plan** is merged. It yields to work a human shaped, and pauses for the **Day shift** whenever a plan fails or an **Architect idea** waits for triage.
+_Avoid_: upkeep, continuous architect, daemon, loop
 
 **Pickup run**:
 One invocation of the factory with no **Issue URL**: it takes the lowest-numbered **Ready issue** in the repository and starts a **Spec run** or a **Run** on it, as the command on that issue's URL would. One issue per invocation, and thirdshift never schedules itself: the operating system's scheduler starts each one. It is skipped, doing nothing, when another Pickup run or an **Architect run** on the same repository is still running on the machine, its Spec run or Run included, when there is no Ready issue, or when the repository is at its **Claim limit**. Skipped is not a failure, and sends no **Run notification**.
@@ -79,12 +83,16 @@ An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no lab
 _Avoid_: queued issue, backlog item
 
 **Architecture review**:
-The agent session that opens an **Architect run**: it scans the **Base branch** for deepening opportunities, skips any already covered by an open issue, and publishes the top recommendation as the **Architect plan**, but only when that recommendation is Strong. Otherwise it files the top recommendation as an issue labelled `needs-triage` for the **Day shift**, and nothing is implemented. It changes nothing in the repository.
+The agent session that opens an **Architect run**: it scans the **Base branch** for deepening opportunities, skips any already covered by an open issue, and publishes the top recommendation as the **Architect plan**, but only when that recommendation is Strong. Otherwise it files the top recommendation as an **Architect idea** for the **Day shift**, or names the open issue that already covers it, and nothing is implemented. It changes nothing in the repository.
 _Avoid_: planning session
 
 **Architect plan**:
 The **Spec**, or the standalone **Ticket** when one session is enough, that an **Architecture review** published: one or the other, never a third kind of issue. thirdshift labels it `architect-plan` once the review has ended cleanly, and it stays open until its work is merged or someone closes it. A failed **Run** or **Spec run** on it leaves it open for the **Day shift** to take over; no later **Architect run** or **Pickup run** retries it.
 _Avoid_: plan, plan doc
+
+**Architect idea**:
+The issue an **Architecture review** ends on when its top recommendation is not Strong: the one it filed, or the open issue that already covered it. thirdshift labels it `architect-idea` and `needs-triage`, the second put back on an issue that already covered the idea and had been triaged, since the factory again takes it for the best next move. While any Architect idea is open and still labelled `needs-triage`, every **Architect run** on the repository is skipped: the factory has run out of Strong ideas, and waits for the **Day shift** to triage one, whatever the decision.
+_Avoid_: weak plan, suggestion
 
 **Spec branch**:
 The **Issue branch** of the **Spec** in a **Spec run**, branched off the **Base branch**. Each **Ticket**'s **Run** is a **Merge run** into it, so the Spec's work gathers there before it reaches the Base branch.
@@ -110,7 +118,7 @@ A **Run** asked to end with its pull request merged rather than left for review,
 _Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
 
 **Run notification**:
-A message thirdshift sends when a **Run**, a **Spec run** or an **Architect run** ends, whatever its outcome (ready, merged, failed or interrupted; for an Architect run that dispatched nothing, plan published, idea filed, idea already filed, review failed or skipped), to the address given with the email flag or the default in the **User config**. Each sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. After an **Inherited failure** it carries, beside the cause, what the Run says on stderr: where the checks fail on the **Base branch**, and the offer of a **Base fix** if nobody decided against one. An Architect run's notification tells how its **Architecture review** ended, naming the plan or idea issue, and how the Spec run or Run it dispatched ended, which sends none of its own; a skipped one's tells why it was skipped. A **Pickup run** that took a **Ready issue** sends the one the Spec run or Run it dispatched would have sent, which sends none of its own; a skipped one sends none. Failing to send one never changes the outcome.
+A message thirdshift sends when a **Run**, a **Spec run** or an **Architect run** ends, whatever its outcome (ready, merged, failed or interrupted; for an Architect run that dispatched nothing, plan published, idea filed, idea already filed or review failed), to the address given with the email flag or the default in the **User config**. Each sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. After an **Inherited failure** it carries, beside the cause, what the Run says on stderr: where the checks fail on the **Base branch**, and the offer of a **Base fix** if nobody decided against one. An Architect run's notification tells how its **Architecture review** ended, naming the plan or idea issue, and how the Spec run or Run it dispatched ended, which sends none of its own; a skipped one sends none. A **Pickup run** that took a **Ready issue** sends the one the Spec run or Run it dispatched would have sent, which sends none of its own; a skipped one sends none. Failing to send one never changes the outcome.
 _Avoid_: completion email, alert
 
 **User config**:
