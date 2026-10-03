@@ -263,6 +263,7 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
 }
 
 /// An issue as a listing of its repository's issues gives it.
+#[derive(Debug)]
 pub struct ListedIssue {
     pub issue: IssueUrl,
     pub title: String,

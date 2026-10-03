@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 
 use crate::command_log;
 use crate::failed_run::FailedRun;
-use crate::github;
+use crate::github::{self, ListedIssue};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::labels::{Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
@@ -66,6 +66,17 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// The Architecture review the Architect run ended with, which its Run
+    /// notification reports. None when it was skipped: a skipped Architect
+    /// run sends no notification, so one started every few minutes for
+    /// Weeding doesn't flood the inbox.
+    pub fn reviewed(&self) -> Option<&Reviewed> {
+        match self {
+            Self::Skipped(_) => None,
+            Self::Reviewed(reviewed) => Some(reviewed),
+        }
+    }
+
     /// The URLs of the issues the Architect run ended on, as its stdout
     /// carries them when nothing was dispatched: the issue its Architecture
     /// review ended on, or each open Architect plan, or each Architect idea
@@ -74,10 +85,11 @@ impl Outcome {
     pub fn urls(&self) -> Vec<&str> {
         match self {
             Self::Skipped(Skipped::AlreadyRunning(_)) => Vec::new(),
-            Self::Skipped(Skipped::OpenPlans(issues) | Skipped::IdeasWaiting(issues)) => {
-                issues.iter().map(|(issue, _)| issue.url.as_str()).collect()
-            }
-            Self::Skipped(Skipped::ReadyIssue(issue, _)) => vec![issue.url.as_str()],
+            Self::Skipped(Skipped::OpenPlans(issues) | Skipped::IdeasWaiting(issues)) => issues
+                .iter()
+                .map(|listed| listed.issue.url.as_str())
+                .collect(),
+            Self::Skipped(Skipped::ReadyIssue(listed)) => vec![listed.issue.url.as_str()],
             Self::Reviewed(reviewed) => vec![reviewed.url()],
         }
     }
@@ -99,34 +111,33 @@ pub enum Skipped {
     /// Another Architect run on this repository, or a Pickup run, is still
     /// running on this machine, the Spec run or Run it dispatched included.
     AlreadyRunning(AlreadyRunning),
-    /// These Architect plans, each with its title, are still open on this
-    /// repository: at least one.
-    OpenPlans(Vec<(IssueUrl, String)>),
-    /// These Architect ideas, each with its title, are open on this
-    /// repository and still labelled `needs-triage`: at least one.
-    IdeasWaiting(Vec<(IssueUrl, String)>),
-    /// This Ready issue, with its title, the lowest-numbered on this
-    /// repository, goes first.
-    ReadyIssue(IssueUrl, String),
+    /// These Architect plans are still open on this repository: at least
+    /// one.
+    OpenPlans(Vec<ListedIssue>),
+    /// These Architect ideas are open on this repository and still labelled
+    /// `needs-triage`: at least one.
+    IdeasWaiting(Vec<ListedIssue>),
+    /// This Ready issue, the lowest-numbered on this repository, goes first.
+    ReadyIssue(ListedIssue),
 }
 
 impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::AlreadyRunning(running) => running.fmt(f),
-            Self::OpenPlans(plans) => each(f, plans, |plan, title| {
+            Self::OpenPlans(plans) => write_joined(f, plans, |plan, title| {
                 format!(
                     "Architect plan #{} \"{title}\" is still open: pick it up with thirdshift {}",
                     plan.number, plan.url
                 )
             }),
-            Self::IdeasWaiting(ideas) => each(f, ideas, |idea, title| {
+            Self::IdeasWaiting(ideas) => write_joined(f, ideas, |idea, title| {
                 format!(
                     "Architect idea #{} \"{title}\" is waiting for triage: {}",
                     idea.number, idea.url
                 )
             }),
-            Self::ReadyIssue(issue, title) => write!(
+            Self::ReadyIssue(ListedIssue { issue, title, .. }) => write!(
                 f,
                 "Ready issue #{} \"{title}\" goes first: {}",
                 issue.number, issue.url
@@ -136,14 +147,14 @@ impl fmt::Display for Skipped {
 }
 
 /// Write what `says` of each of `issues`, with its title, joined by `; `.
-fn each(
+fn write_joined(
     f: &mut fmt::Formatter,
-    issues: &[(IssueUrl, String)],
+    issues: &[ListedIssue],
     says: impl Fn(&IssueUrl, &str) -> String,
 ) -> fmt::Result {
     let said: Vec<String> = issues
         .iter()
-        .map(|(issue, title)| says(issue, title))
+        .map(|listed| says(&listed.issue, &listed.title))
         .collect();
     f.write_str(&said.join("; "))
 }
@@ -246,21 +257,18 @@ pub fn run(
     };
     let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
-        let open_plans = open_plans.into_iter().map(|plan| (plan.issue, plan.title));
-        return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans.collect())));
+        return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans)));
     }
     let ideas = github::open_issues_labelled(&repo.slug(), ARCHITECT_IDEA)?;
     let waiting: Vec<_> = ideas
         .into_iter()
         .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
-        .map(|idea| (idea.issue, idea.title))
         .collect();
     if !waiting.is_empty() {
         return Ok(Outcome::Skipped(Skipped::IdeasWaiting(waiting)));
     }
     if let Some(ReadyIssue { listed, .. }) = ready::first(&launch, &repo)? {
-        let skipped = Skipped::ReadyIssue(listed.issue, listed.title);
-        return Ok(Outcome::Skipped(skipped));
+        return Ok(Outcome::Skipped(Skipped::ReadyIssue(listed)));
     }
     command_log::keep(command_log::of_architect_run(logs_dir, &repo));
     if launch_pull {
