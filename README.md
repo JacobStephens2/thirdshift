@@ -593,9 +593,31 @@ The command's flags and the User config decide what a scheduled Architect run do
 
 The first leaves the pull request for you to review, and the second stops at the Architect plan, for you to read and run with `thirdshift <Issue URL>`.
 
-A scheduled Architect run is skipped when another on the repository, or a Pickup run, is [still running](#one-at-a-time), the Spec run or Run it dispatched included, when an [Architect plan is still open](#one-architect-plan-at-a-time), when an [Architect idea waits for triage](#an-architect-idea-waits-for-triage), or when the repository has a [Ready issue](#a-ready-issue-goes-first), so a `ready-for-agent` issue with no Pickup line to take it holds off every night until you run it: no new refactor is planned until last night's Architect plan is closed or loses its `architect-plan` label. Merging its pull request closes it; if its run failed, pick it up with `thirdshift <plan URL>` first. Closing the pull request alone leaves the Architect plan open. A skip exits `0`, so the scheduler sees no failure, and the log file has the line that says why. With Run notifications on, by `email.always = true` in the User config or `email` on the line, an Architect run that did work sends one email, and a skipped one sends none, so a crontab line can fire every few minutes without flooding your inbox. A night without an email means it was skipped, or failed before the notification's checks passed: look in the log file.
+A scheduled Architect run is skipped when another on the repository, or a Pickup run, is [still running](#one-at-a-time), the Spec run or Run it dispatched included, when an [Architect plan is still open](#one-architect-plan-at-a-time), when an [Architect idea waits for triage](#an-architect-idea-waits-for-triage), or when the repository has a [Ready issue](#a-ready-issue-goes-first), so a `ready-for-agent` issue with no Pickup line to take it holds off every night until you run it: no new refactor is planned until last night's Architect plan is closed or loses its `architect-plan` label. Merging its pull request closes it; if its run failed, pick it up with `thirdshift <plan URL>` first. Closing the pull request alone leaves the Architect plan open. A skip exits `0`, so the scheduler sees no failure, and the log file has the line that says why. With Run notifications on, by `email.always = true` in the User config or `email` on the line, an Architect run that did work sends one email, and a skipped one sends none, so a crontab line can fire every few minutes, as for [Weeding](#weeding), without flooding your inbox. A night without an email means it was skipped, or failed before the notification's checks passed: look in the log file.
 
 Any scheduler that runs the command works; a systemd user timer needs lingering on (`loginctl enable-linger`) to fire while you are logged out.
+
+### Weeding
+
+**Weeding** is the factory clearing what features leave behind in a codebase as they land, with nobody starting it: Architect runs started often enough that each one begins as soon as the last one's Architect plan is merged. thirdshift still never schedules itself ([ADR-0009](docs/adr/0009-the-operating-system-schedules-thirdshift.md)): it is the line from [On a schedule](#on-a-schedule), fired every five minutes instead of nightly, with `merge.always = true` in the [User config](#user-config) so each Architect plan's pull request is merged without waiting for you:
+
+```
+PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+*/5 * * * * cd ~/repos/thirdshift && thirdshift architect base main >> ~/.thirdshift/logs/commands/weeding/cron.log 2>&1
+```
+
+The `PATH` line, the `cd` and `base main` and the logins are as in [On a schedule](#on-a-schedule). The log file has a directory of its own, so the skips don't bury a nightly Architect run's lines: make it first, with `mkdir -p ~/.thirdshift/logs/commands/weeding`.
+
+Most passes are skipped, and that is what paces Weeding. A pass is skipped while:
+
+- **a run is still going**: an Architect run or a Pickup run on the repository, the Spec run or Run it dispatched included ([One at a time](#one-at-a-time));
+- **an Architect plan is open**: one whose pull request waits for review, one whose run failed, or one published with `--plan-only` and not yet built ([One Architect plan at a time](#one-architect-plan-at-a-time));
+- **an Architect idea waits for triage**, since the factory has run out of Strong ideas ([An Architect idea waits for triage](#an-architect-idea-waits-for-triage));
+- **the repository has a Ready issue**, so work a human shaped goes first ([A Ready issue goes first](#a-ready-issue-goes-first)).
+
+A skip exits `0` and sends no email, even with Run notifications on, so the scheduler sees no failure and your inbox only hears of passes that did work. The log file has the line that says why each pass was skipped. An Architect plan whose run failed stays open, so Weeding pauses for the **Day shift** until you pick it up with `thirdshift <plan URL>`, close it, or take its `architect-plan` label off; an Architect idea pauses it until you triage the idea.
+
+On a repository that also has a [Pickup line](#a-pickup-run-on-a-schedule), put `--plan-only` on the Weeding line instead: the Architect run publishes the Architect plan and marks it ready, and a Pickup run builds it as an ordinary Ready issue, under the [Claim limit](#the-claim-limit), and merges it with `merge.always`, as in the [whole crontab](#a-pickup-run-on-a-schedule) below.
 
 ## Pickup runs
 
@@ -714,20 +736,20 @@ The `PATH` line, the `cd` and `base main`, the log file's directory, the logins 
 - **A pass is skipped** when the [lock is held](#one-at-a-time), when the repository has no Ready issue, and when it is at its Claim limit. A skip exits `0`, so the scheduler sees no failure, and sends no email, even with Run notifications on. The log file holds each skip's line, and before the line of a pass that found no Ready issue, as before the line of one that took an issue, [why each issue was passed over](#why-an-issue-was-passed-over). A pass skipped for the lock or the Claim limit looks at no issue, so it has no such lines.
 - **A Run notification**, by `email.always = true` in the [User config](#user-config) or `email` on the line, is sent [only for an issue taken](#one-run-notification-for-the-issue-taken). So a day without email doesn't say the passes are running: a pass that fails before it takes an issue, on a broken User config, a missing Resend key or a failed check, shows up only in the log file.
 
-A whole crontab with both an Architect run and a Pickup run on one repository looks like this, each line with a log file of its own, so `tail ~/.thirdshift/logs/commands/pickup/cron.log` shows what the Pickup runs have been doing lately:
+A whole crontab with both Weeding and a Pickup run on one repository looks like this, each line with a log file of its own, so `tail ~/.thirdshift/logs/commands/pickup/cron.log` shows what the Pickup runs have been doing lately:
 
 ```
 # cron reads no shell profile: list every directory that holds thirdshift, claude, gh, git and the build tools
 PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 
-# Architect runs, nightly
-0 2 * * * cd ~/repos/widgets && thirdshift architect base main >> ~/.thirdshift/logs/commands/architect/cron.log 2>&1
+# Weeding, every five minutes: an Architect run publishes each Architect plan, and a Pickup run builds it
+*/5 * * * * cd ~/repos/widgets && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/commands/weeding/cron.log 2>&1
 
 # Pickup runs, every half hour
 */30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/commands/pickup/cron.log 2>&1
 ```
 
-Make both log directories first, with `mkdir -p ~/.thirdshift/logs/commands/architect ~/.thirdshift/logs/commands/pickup`. Add the lines with `crontab -e` rather than by joining files, and end each with a newline: a line run together with the comment after it, such as `... 2>&1# Edit this file`, is a shell syntax error, so cron fires it but the pass never starts and nothing reaches its log.
+For one Architect run a night instead of Weeding, put the nightly line from [On a schedule](#on-a-schedule) in place of the Weeding line: a repository needs one or the other, since Weeding is Architect runs started more often. Make the log directories first, with `mkdir -p ~/.thirdshift/logs/commands/weeding ~/.thirdshift/logs/commands/pickup`. Add the lines with `crontab -e` rather than by joining files, and end each with a newline: a line run together with the comment after it, such as `... 2>&1# Edit this file`, is a shell syntax error, so cron fires it but the pass never starts and nothing reaches its log.
 
 The command's flags and the User config decide what a pass does with the issue it takes, as for a hand-typed `thirdshift <Issue URL>`: with `merge.always` it merges the pull request, and without it the pull request is left for review. This is the cautious variant, whatever the User config says:
 
