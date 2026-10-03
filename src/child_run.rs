@@ -68,9 +68,9 @@ pub enum Ended {
 }
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
-/// Launch directory, given this command's start stamp for its Session logs. If `base_fix` allows one, it is given `base-fix`, so it
-/// may start a Base fix; if nobody decided, it is given the command to offer
-/// one with.
+/// Launch directory, given this command's start stamp for its Session logs.
+/// If `base_fix` allows one, it is given `base-fix`, so it may start a Base
+/// fix; if nobody decided, it is given the command to offer one with.
 pub fn start(issue: &IssueUrl, kind: &Kind, base_fix: &BaseFixAsk) -> Result<Child> {
     start_from(&own_executable()?, issue, kind, base_fix)
 }

@@ -4,10 +4,11 @@
 //! be told from a busy one. Each is kept in the Command log too, if the
 //! command keeps one.
 
-use chrono::Local;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
+
+use chrono::Local;
+use serde_json::Value;
 
 use crate::command_log;
 
@@ -22,7 +23,7 @@ const STAMP: &str = "%H:%M:%S";
 
 /// Print one of thirdshift's own steps, stamped with the time now.
 pub fn step(message: impl Display) {
-    write_line(&stamped(message));
+    command_log::eprint(&stamped(message));
 }
 
 /// Report `error`, then a warning saying what to do about it by hand.
@@ -74,7 +75,7 @@ impl<'a> ChildLine<'a> {
 /// Print `line`, from the stderr of the child thirdshift running issue
 /// `number`, as [`relayed`] gives it, and return what the line is.
 pub fn relay(number: u64, line: &str) -> ChildLine<'_> {
-    write_line(&relayed(number, line));
+    command_log::eprint(&relayed(number, line));
     ChildLine::of(line)
 }
 
@@ -93,10 +94,6 @@ pub fn relayed(number: u64, line: &str) -> String {
 /// The progress line for `message`, stamped with `time`.
 fn progress_line(time: impl Display, message: impl Display) -> String {
     format!("{PREFIX}{time} {message}")
-}
-
-fn write_line(line: &str) {
-    command_log::eprint(line);
 }
 
 /// A line without its prefix split into its `HH:MM:SS` stamp and message,

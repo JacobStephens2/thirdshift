@@ -26,7 +26,7 @@ use crate::progress;
 
 /// How a stamp is written: local time with its UTC offset, as in
 /// `20261003T120000-0400`.
-const STAMP: &str = "%Y%m%dT%H%M%S%z";
+const STAMP_FORMAT: &str = "%Y%m%dT%H%M%S%z";
 
 /// The command's start stamp, made once.
 static STARTED: OnceLock<String> = OnceLock::new();
@@ -53,7 +53,7 @@ enum Log {
 /// 2026-10-03 -0400`.
 pub fn begin(starting: impl Display) {
     let now = Local::now();
-    let _ = STARTED.set(now.format(STAMP).to_string());
+    let _ = STARTED.set(now.format(STAMP_FORMAT).to_string());
     *log() = Log::Held(Vec::new());
     progress::step(format_args!("{starting}, {}", now.format("%Y-%m-%d %z")));
 }
@@ -69,7 +69,7 @@ pub fn begin_child(stamp: Option<String>) {
 /// The command's start stamp, as in `20261003T120000-0400`: made by
 /// [`begin`], given by [`begin_child`], or else made now.
 pub fn stamp() -> &'static str {
-    STARTED.get_or_init(|| Local::now().format(STAMP).to_string())
+    STARTED.get_or_init(|| Local::now().format(STAMP_FORMAT).to_string())
 }
 
 /// Where the Command log of `thirdshift <Issue URL>` on `issue` goes, under
@@ -125,7 +125,10 @@ pub fn keep(path: PathBuf) {
                 path: path.clone(),
                 file: file.try_clone().expect("a created file can be cloned"),
             },
-            Err(_) => Log::Failed { path: None },
+            // A file created but not written is still where to look.
+            Err(_) => Log::Failed {
+                path: path.exists().then(|| path.clone()),
+            },
         };
         created
     };
@@ -207,6 +210,7 @@ fn warn(error: &anyhow::Error) {
     ));
 }
 
+/// The Command log, locked, even if a thread panicked holding it.
 fn log() -> MutexGuard<'static, Log> {
     LOG.lock().unwrap_or_else(PoisonError::into_inner)
 }

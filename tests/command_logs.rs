@@ -350,3 +350,42 @@ fn a_command_that_does_no_work_keeps_no_command_log() {
         logs_in(&scenario, "")
     );
 }
+
+#[test]
+fn a_base_fixs_lines_are_in_the_command_log_of_the_run_that_started_it() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+echo "feature" > feature.txt
+git add feature.txt
+git commit -q -m "Add feature"
+gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
+gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "failure", "url": "https://ci.example/test"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "failure", "url": "https://ci.example/main/test"}]'
+"#,
+    );
+    scenario.agent_does_for(
+        8,
+        &format!(
+            "{}gh fake checks \"$(git rev-parse HEAD)\" '[{{\"name\": \"test\", \"conclusion\": \"success\"}}]'\n",
+            agent_opens_pr(8, "main")
+        ),
+    );
+
+    let result = run_in_zone(&scenario, &[&scenario.issue_url(7), "base-fix"], &[]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (path, stamp) = the_one_command_log(&scenario, "issue", "acme-widgets-issue-7");
+    assert_holds_what_was_printed(&path, &result);
+    let log = fs::read_to_string(&path).unwrap();
+    assert!(
+        log.contains("#8: implement: session started\n"),
+        "log: {log}"
+    );
+    assert!(
+        logs_in(&scenario, "sessions")
+            .contains(&format!("acme-widgets-issue-8-{stamp}-implement.jsonl")),
+        "{:?}",
+        logs_in(&scenario, "sessions")
+    );
+}
