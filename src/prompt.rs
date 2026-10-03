@@ -2,7 +2,7 @@
 
 use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
-use crate::spec_run::{NEEDS_TRIAGE, READY_FOR_AGENT};
+use crate::labels::{NEEDS_TRIAGE, READY_FOR_AGENT};
 
 /// Every prompt ends with this. Sessions run with `claude -p`, which exits
 /// once the agent ends its turn, killing any background task still running.

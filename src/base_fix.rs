@@ -18,25 +18,21 @@ use crate::ci;
 use crate::git::Git;
 use crate::github::{self, Check, CheckState};
 use crate::issue::IssueUrl;
+use crate::labels::{Label, Labels, READY_FOR_AGENT};
 use crate::poll;
 use crate::progress;
-use crate::spec_run::READY_FOR_AGENT;
 
 /// The label that marks a Base fix issue, which a Run finds an open one by.
-pub const BASE_FIX_LABEL: &str = "base-fix";
+pub const BASE_FIX_LABEL: Label = Label::new("base-fix", "A Base fix: CI is red on a Base branch");
 
 /// Whether an issue with `labels` is a Base fix issue, whatever else it is
 /// labelled.
-pub fn is_issue(labels: &[String]) -> bool {
-    github::has_label(labels, BASE_FIX_LABEL)
+pub fn is_issue(labels: &Labels) -> bool {
+    labels.has(BASE_FIX_LABEL)
 }
 
-/// The labels of a Base fix issue, each with the description it is added to
-/// the repository with if the repository lacks it.
-const LABELS: [(&str, &str); 2] = [
-    (BASE_FIX_LABEL, "A Base fix: CI is red on a Base branch"),
-    (READY_FOR_AGENT, "Ready for an agent to take on"),
-];
+/// The labels of a Base fix issue.
+const LABELS: [Label; 2] = [BASE_FIX_LABEL, READY_FOR_AGENT];
 
 /// What a Run asks about a Base fix, by its command or, without `base-fix`
 /// or `no-base-fix`, by the User config.

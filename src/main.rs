@@ -14,6 +14,7 @@ mod github;
 mod host;
 mod interrupt;
 mod issue;
+mod labels;
 mod launch;
 mod notification;
 mod pickup;

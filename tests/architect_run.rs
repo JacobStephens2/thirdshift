@@ -760,6 +760,28 @@ fn a_single_ticket_plan_starts_a_run_on_it_and_ends_as_that_run_does() {
 }
 
 #[test]
+fn a_plan_labelled_needs_triage_in_another_case_is_marked_ready_and_dispatched() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["Needs-Triage", "ready-for-agent"]);
+    scenario.agent_does_in_session(
+        1,
+        r#"
+url=$(gh issue create --title "Deepen the session module" --body "The plan" --label Needs-Triage)
+printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(8, &agent_opens_pr(8, "main"));
+
+    let result = scenario.run(&["architect"]);
+
+    let pr = pr_from(&scenario, "issue-8");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    scenario.assert_cleaned_up("issue-8");
+}
+
+#[test]
 fn a_plan_with_tickets_starts_a_spec_run_on_it_and_ends_as_that_spec_run_does() {
     let scenario = spec_plan("");
 

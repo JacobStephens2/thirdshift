@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::issue::IssueUrl;
+use crate::labels::{Label, Labels};
 
 /// The `fields` of `issue`, as JSON.
 fn issue_view(issue: &IssueUrl, fields: &str) -> Result<Value> {
@@ -46,7 +47,7 @@ pub fn issue_title(issue: &IssueUrl) -> Result<String> {
 /// published, and as a Claim reads its issue after a Self-merge.
 pub struct Issue {
     pub is_open: bool,
-    pub labels: Vec<String>,
+    pub labels: Labels,
     pub created: DateTime<Utc>,
 }
 
@@ -65,34 +66,18 @@ pub fn issue(issue: &IssueUrl) -> Result<Issue> {
     })
 }
 
-/// The names of the labels of the issue `json` describes, with its `labels`.
-fn label_names(json: &Value) -> Result<Vec<String>> {
+/// The labels of the issue `json` describes, with its `labels`.
+fn label_names(json: &Value) -> Result<Labels> {
     Ok(json["labels"]
         .as_array()
         .context("gh output has no labels")?
         .iter()
-        .filter_map(|label| label["name"].as_str().map(String::from))
+        .filter_map(|label| label["name"].as_str())
         .collect())
 }
 
-/// Whether `label` is one of `labels`, whatever its case: GitHub's label
-/// names are case-insensitive.
-pub fn has_label(labels: &[String], label: &str) -> bool {
-    label_as_spelled(labels, label).is_some()
-}
-
-/// `label` as `labels` spells it, whatever its case, if it is one of them.
-pub fn label_as_spelled<'a>(labels: &'a [String], label: &str) -> Option<&'a String> {
-    labels.iter().find(|name| name.eq_ignore_ascii_case(label))
-}
-
-/// Take `label` out of `labels`, whatever its case there.
-pub fn drop_label(labels: &mut Vec<String>, label: &str) {
-    labels.retain(|name| !name.eq_ignore_ascii_case(label));
-}
-
 /// The labels of `issue`.
-pub fn issue_labels(issue: &IssueUrl) -> Result<Vec<String>> {
+pub fn issue_labels(issue: &IssueUrl) -> Result<Labels> {
     label_names(&issue_view(issue, "labels")?)
 }
 
@@ -104,10 +89,10 @@ fn labels_path(issue: &IssueUrl) -> String {
 /// Set `issue`'s labels to exactly `labels`, in one request, so a swap of
 /// one label for another can't stop halfway. Through the REST API: `gh issue
 /// edit` fails on the GitHub Projects (classic) sunset in older `gh`.
-fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
+pub fn set_labels(issue: &IssueUrl, labels: &Labels) -> Result<()> {
     let path = labels_path(issue);
     let fields: Vec<String> = labels
-        .iter()
+        .names()
         .map(|label| format!("labels[]={label}"))
         .collect();
     let mut args = vec!["api", "--method", "PUT", &path, "--silent"];
@@ -115,20 +100,6 @@ fn set_labels(issue: &IssueUrl, labels: &[&str]) -> Result<()> {
         args.extend(["-f", field]);
     }
     gh(&args)
-}
-
-/// Set `issue`'s labels to `kept` and then each of `added`, in one request,
-/// as [`set_labels`] does. One of `kept` that is also one of `added`,
-/// whatever its case, as GitHub's label names are case-insensitive, is there
-/// once, as `added` spells it.
-pub fn set_labels_adding(issue: &IssueUrl, kept: &[String], added: &[&str]) -> Result<()> {
-    let mut labels: Vec<&str> = kept
-        .iter()
-        .map(String::as_str)
-        .filter(|kept| !added.iter().any(|added| added.eq_ignore_ascii_case(kept)))
-        .collect();
-    labels.extend(added);
-    set_labels(issue, &labels)
 }
 
 /// The REST API's path for `label` on `issue`.
@@ -150,13 +121,13 @@ pub fn remove_label(issue: &IssueUrl, label: &str) -> Result<()> {
 }
 
 /// The command that does what [`remove_label`] does, to run by hand.
-pub fn remove_label_command(issue: &IssueUrl, label: &str) -> String {
-    format!("gh api --method DELETE {}", label_path(issue, label))
+pub fn remove_label_command(issue: &IssueUrl, label: Label) -> String {
+    format!("gh api --method DELETE {}", label_path(issue, label.name()))
 }
 
 /// The command that adds `label` to `issue`, keeping its other labels, to
 /// run by hand: unlike [`set_labels`], it needs none of the others named.
-pub fn add_label_command(issue: &IssueUrl, label: &str) -> String {
+pub fn add_label_command(issue: &IssueUrl, label: Label) -> String {
     format!(
         "gh api --method POST {} -f 'labels[]={label}'",
         labels_path(issue)
@@ -167,7 +138,7 @@ pub fn add_label_command(issue: &IssueUrl, label: &str) -> String {
 pub struct Ticket {
     pub number: u64,
     pub is_open: bool,
-    pub labels: Vec<String>,
+    pub labels: Labels,
     /// It has sub-issues of its own.
     pub has_sub_issues: bool,
     /// The numbers of the issues it is blocked by, in the Spec or not.
@@ -218,7 +189,7 @@ pub fn tickets(issue: &IssueUrl) -> Result<Vec<Ticket>> {
             is_open: node_is_open(node)?,
             labels: nodes(&node["labels"], "labels")?
                 .iter()
-                .filter_map(|label| label["name"].as_str().map(String::from))
+                .filter_map(|label| label["name"].as_str())
                 .collect(),
             has_sub_issues: sub_issue_count(node)? > 0,
             blockers,
@@ -291,25 +262,25 @@ pub fn close_issue(issue: &IssueUrl, comment: &str) -> Result<()> {
 pub struct ListedIssue {
     pub issue: IssueUrl,
     pub title: String,
-    pub labels: Vec<String>,
+    pub labels: Labels,
 }
 
 /// Every open issue labelled `label` in the repository `repo`, an
 /// `owner/repo`, newest first. They come from GitHub's issue list, not its
 /// search, whose index can be a while behind an issue just opened.
-pub fn open_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
+pub fn open_issues_labelled(repo: &str, label: Label) -> Result<Vec<ListedIssue>> {
     issues_labelled(repo, label, "open")
 }
 
 /// Every closed issue labelled `label` in the repository `repo`, an
 /// `owner/repo`, newest first.
-pub fn closed_issues_labelled(repo: &str, label: &str) -> Result<Vec<ListedIssue>> {
+pub fn closed_issues_labelled(repo: &str, label: Label) -> Result<Vec<ListedIssue>> {
     issues_labelled(repo, label, "closed")
 }
 
 /// Every issue labelled `label` in the repository `repo` whose state is
 /// `state`, `open` or `closed`, newest first.
-fn issues_labelled(repo: &str, label: &str, state: &str) -> Result<Vec<ListedIssue>> {
+fn issues_labelled(repo: &str, label: Label, state: &str) -> Result<Vec<ListedIssue>> {
     let json = gh_json(&[
         "issue",
         "list",
@@ -318,7 +289,7 @@ fn issues_labelled(repo: &str, label: &str, state: &str) -> Result<Vec<ListedIss
         "--repo",
         repo,
         "--label",
-        label,
+        label.name(),
         "--json",
         "url,title,labels",
         "--limit",
@@ -421,7 +392,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 
 /// `issue` as a Pickup run that lists issues by `label` reads it, in one
 /// query.
-pub fn candidate(issue: &IssueUrl, label: &str) -> Result<Candidate> {
+pub fn candidate(issue: &IssueUrl, label: Label) -> Result<Candidate> {
     let json = issue_query(issue, CANDIDATE_QUERY)?;
     let issue = &json["data"]["repository"]["issue"];
     let parent = issue["parent"]["url"]
@@ -444,9 +415,8 @@ pub fn candidate(issue: &IssueUrl, label: &str) -> Result<Candidate> {
     };
     let mut shaped = Vec::new();
     for event in nodes(&issue["labelled"], "labelled")? {
-        // GitHub's label names are case-insensitive.
         let name = event["label"]["name"].as_str();
-        if name.is_some_and(|name| name.eq_ignore_ascii_case(label)) {
+        if name.is_some_and(|name| label.is_named(name)) {
             shaped.push(Shaped {
                 by: Shaping::Labelled,
                 at: at(event)?,
@@ -474,27 +444,26 @@ pub fn candidate(issue: &IssueUrl, label: &str) -> Result<Candidate> {
 
 /// Add each of `labels` to the repository `repo`, an `owner/repo`, with its
 /// description, unless the repository has it already.
-pub fn ensure_labels(repo: &str, labels: &[(&str, &str)]) -> Result<()> {
+pub fn ensure_labels(repo: &str, labels: &[Label]) -> Result<()> {
     let known = gh_json(&[
         "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
     ])?;
-    let known: Vec<&str> = known
+    let known: Labels = known
         .as_array()
         .context("gh label list did not return a list")?
         .iter()
         .filter_map(|label| label["name"].as_str())
         .collect();
-    for (name, description) in labels {
-        // GitHub's label names are case-insensitive.
-        if !known.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+    for label in labels {
+        if !known.has(*label) {
             gh(&[
                 "label",
                 "create",
-                name,
+                label.name(),
                 "--repo",
                 repo,
                 "--description",
-                description,
+                label.description(),
             ])?;
         }
     }
@@ -509,11 +478,11 @@ pub fn create_issue(
     issue: &IssueUrl,
     title: &str,
     body: &str,
-    labels: &[(&str, &str)],
+    labels: &[Label],
 ) -> Result<IssueUrl> {
     let repo = issue.repo_slug();
     ensure_labels(&repo, labels)?;
-    let names: Vec<&str> = labels.iter().map(|(name, _)| *name).collect();
+    let names: Vec<&str> = labels.iter().map(|label| label.name()).collect();
     let url = gh_stdout(&[
         "issue",
         "create",
