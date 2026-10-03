@@ -2495,23 +2495,28 @@ fn the_skip_names_the_lowest_numbered_ready_issue_after_the_lines_on_those_passe
 }
 
 #[test]
-fn a_ready_for_agent_issue_that_is_claimed_unsettled_or_blocked_does_not_skip_the_architect_run() {
+fn a_ready_for_agent_issue_that_is_claimed_unsettled_blocked_or_a_base_fixs_does_not_skip_the_architect_run()
+ {
     for (not_ready, passed_over) in [
         (
             (|scenario| scenario.issue_labelled(7, &["ready-for-agent", IN_PROGRESS]))
                 as fn(&Scenario),
-            "#7 labelled in-progress",
+            format!("#7 labelled {IN_PROGRESS}"),
         ),
         (
             |scenario| {
                 let labelled = (TimelineEvent::Labelled("ready-for-agent"), 9);
                 scenario.issue_timeline(7, &[labelled]);
             },
-            "#7 not settled: labelled ready-for-agent less than 10 minutes ago",
+            "#7 not settled: labelled ready-for-agent less than 10 minutes ago".to_string(),
         ),
         (
             |scenario| scenario.issue_blocked_by(7, &[5]),
-            "#7 blocked by #5",
+            "#7 blocked by #5".to_string(),
+        ),
+        (
+            |scenario| scenario.issue_labelled(7, &["ready-for-agent", "base-fix"]),
+            "#7 labelled base-fix".to_string(),
         ),
     ] {
         let scenario = scenario();
@@ -2594,9 +2599,7 @@ fn with_an_open_architect_plan_and_a_ready_issue_the_skip_reports_the_plan() {
 #[test]
 fn an_architect_idea_triaged_ready_for_agent_goes_first_as_a_ready_issue() {
     let scenario = scenario();
-    scenario.issue_is(7, "OPEN");
-    scenario.issue_titled(7, "Deepen the session module");
-    scenario.issue_labelled(7, &["ready-for-agent", ARCHITECT_IDEA]);
+    ready_issue(&scenario, 7, "Deepen the session module", &[ARCHITECT_IDEA]);
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
     let result = scenario.run(&["architect", "--plan-only"]);
