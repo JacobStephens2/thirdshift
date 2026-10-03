@@ -1,8 +1,8 @@
 //! Command logs: each Run, Spec run, Architect run and Pickup run keeps a file
 //! of everything it printed, stderr and stdout in order, under
-//! `<logs.dir>/commands/<command>/`, with its Session logs under
-//! `<logs.dir>/sessions/`, all stamped with the command's start in local
-//! time and its UTC offset. A child Run keeps none: its lines are in the
+//! `<logs.dir>/<owner>/<repo>/commands/<command>/`, with its Session logs
+//! under `<logs.dir>/<owner>/<repo>/sessions/`, all stamped with the
+//! command's start in local time and its UTC offset. A child Run keeps none: its lines are in the
 //! Command log of what started it. A Pickup run or Architect run skipped
 //! before doing any work keeps none.
 
@@ -22,7 +22,10 @@ const ZONE: (&str, &str) = ("TZ", "XYZ+4");
 const OFFSET: &str = "-0400";
 
 /// Where the logs are, the default `logs.dir`, relative to the scenario.
-const LOGS: &str = "home/.thirdshift/logs";
+const LOGS_DIR: &str = "home/.thirdshift/logs";
+
+/// Where the scenario's repository's logs are, under [`LOGS_DIR`].
+const LOGS: &str = "home/.thirdshift/logs/acme/widgets";
 
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
@@ -58,14 +61,14 @@ fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
 }
 
 /// The one Command log in `commands/<folder>`, which must be named
-/// `<name>-<stamp>.log`, and its stamp.
-fn the_one_command_log(scenario: &Scenario, folder: &str, name: &str) -> (PathBuf, String) {
+/// `<prefix><stamp>.log`, and its stamp.
+fn the_one_command_log(scenario: &Scenario, folder: &str, prefix: &str) -> (PathBuf, String) {
     let logs = logs_in(scenario, &format!("commands/{folder}"));
     assert_eq!(logs.len(), 1, "Command logs: {logs:?}");
     let stamp = logs[0]
-        .strip_prefix(&format!("{name}-"))
+        .strip_prefix(prefix)
         .and_then(|rest| rest.strip_suffix(".log"))
-        .unwrap_or_else(|| panic!("not {name}-<stamp>.log: {}", logs[0]));
+        .unwrap_or_else(|| panic!("not {prefix}<stamp>.log: {}", logs[0]));
     assert_local_stamp(stamp);
     let path = scenario
         .path(LOGS)
@@ -114,7 +117,7 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
     let result = run_in_zone(&scenario, &[&scenario.issue_url(7)], &[]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let (path, stamp) = the_one_command_log(&scenario, "issue", "acme-widgets-issue-7");
+    let (path, stamp) = the_one_command_log(&scenario, "issue", "7-");
     assert_holds_what_was_printed(&path, &result);
     assert_dated_first_line(&result, &format!("starting on {}", scenario.issue_url(7)));
     assert!(
@@ -127,9 +130,19 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
     );
     assert_eq!(
         logs_in(&scenario, "sessions"),
-        [format!("acme-widgets-issue-7-{stamp}-implement.jsonl")]
+        [format!("7-{stamp}-implement.jsonl")]
     );
-    assert_eq!(logs_in(&scenario, ""), ["commands", "sessions"]);
+    assert_eq!(
+        logs_in(&scenario, ""),
+        ["activity.log", "commands", "sessions"]
+    );
+    assert_eq!(
+        fs::read_dir(scenario.path(LOGS_DIR))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        ["acme"]
+    );
 }
 
 #[test]
@@ -142,7 +155,7 @@ fn a_spec_runs_command_log_has_its_tickets_lines_and_its_tickets_keep_none() {
     let result = run_in_zone(&scenario, &[&scenario.issue_url(20)], &[]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let (path, stamp) = the_one_command_log(&scenario, "issue", "acme-widgets-issue-20");
+    let (path, stamp) = the_one_command_log(&scenario, "issue", "20-");
     assert_holds_what_was_printed(&path, &result);
     let log = fs::read_to_string(&path).unwrap();
     for ticket in [21, 22] {
@@ -154,9 +167,9 @@ fn a_spec_runs_command_log_has_its_tickets_lines_and_its_tickets_keep_none() {
     assert_eq!(
         logs_in(&scenario, "sessions"),
         [
-            format!("acme-widgets-issue-20-{stamp}-spec-review.jsonl"),
-            format!("acme-widgets-issue-21-{stamp}-implement.jsonl"),
-            format!("acme-widgets-issue-22-{stamp}-implement.jsonl"),
+            format!("20-{stamp}-spec-review.jsonl"),
+            format!("21-{stamp}-implement.jsonl"),
+            format!("22-{stamp}-implement.jsonl"),
         ]
     );
 }
@@ -173,7 +186,7 @@ fn a_pickup_run_that_takes_an_issue_keeps_a_command_log_from_its_first_line() {
     let result = run_in_zone(&scenario, &["pickup"], &[]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let (path, stamp) = the_one_command_log(&scenario, "pickup", "acme-widgets-issue-7");
+    let (path, stamp) = the_one_command_log(&scenario, "pickup", "7-");
     assert_holds_what_was_printed(&path, &result);
     assert_dated_first_line(&result, "Pickup run starting");
     let log = fs::read_to_string(&path).unwrap();
@@ -182,7 +195,7 @@ fn a_pickup_run_that_takes_an_issue_keeps_a_command_log_from_its_first_line() {
     assert!(passed_over < logging, "log: {log}");
     assert_eq!(
         logs_in(&scenario, "sessions"),
-        [format!("acme-widgets-issue-7-{stamp}-implement.jsonl")]
+        [format!("7-{stamp}-implement.jsonl")]
     );
 }
 
@@ -194,11 +207,7 @@ fn a_skipped_pickup_run_keeps_no_command_log() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_dated_first_line(&result, "Pickup run starting");
-    assert!(
-        !scenario.path(LOGS).exists(),
-        "{:?}",
-        logs_in(&scenario, "")
-    );
+    assert_eq!(logs_in(&scenario, ""), ["activity.log"]);
 }
 
 #[test]
@@ -216,11 +225,7 @@ fn a_skipped_architect_run_keeps_no_command_log() {
         result.stderr
     );
     assert_dated_first_line(&result, "Architect run starting");
-    assert!(
-        !scenario.path(LOGS).exists(),
-        "{:?}",
-        logs_in(&scenario, "")
-    );
+    assert_eq!(logs_in(&scenario, ""), ["activity.log"]);
 }
 
 #[test]
@@ -239,7 +244,7 @@ printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     let result = run_in_zone(&scenario, &["architect"], &[]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let (path, stamp) = the_one_command_log(&scenario, "architect", "acme-widgets");
+    let (path, stamp) = the_one_command_log(&scenario, "architect", "");
     assert_holds_what_was_printed(&path, &result);
     assert_dated_first_line(&result, "Architect run starting");
     let log = fs::read_to_string(&path).unwrap();
@@ -250,8 +255,8 @@ printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(
         logs_in(&scenario, "sessions"),
         [
-            format!("acme-widgets-architect-{stamp}-architecture-review.jsonl"),
-            format!("acme-widgets-issue-8-{stamp}-implement.jsonl"),
+            format!("8-{stamp}-implement.jsonl"),
+            format!("architect-{stamp}-architecture-review.jsonl"),
         ]
     );
 }
@@ -264,10 +269,10 @@ fn a_failed_run_ends_by_naming_its_session_log_then_its_command_log() {
     let result = run_in_zone(&scenario, &[&scenario.issue_url(7)], &[]);
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    let (path, stamp) = the_one_command_log(&scenario, "issue", "acme-widgets-issue-7");
-    let session = scenario.path(LOGS).join(format!(
-        "sessions/acme-widgets-issue-7-{stamp}-implement.jsonl"
-    ));
+    let (path, stamp) = the_one_command_log(&scenario, "issue", "7-");
+    let session = scenario
+        .path(LOGS)
+        .join(format!("sessions/7-{stamp}-implement.jsonl"));
     let ending: Vec<_> = result.stderr.lines().rev().take(2).collect();
     assert_eq!(
         ending,
@@ -295,7 +300,7 @@ fn a_run_notification_names_the_command_log() {
     );
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let (path, _) = the_one_command_log(&scenario, "issue", "acme-widgets-issue-7");
+    let (path, _) = the_one_command_log(&scenario, "issue", "7-");
     let requests = resend.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
     let text = requests[0].body["text"].as_str().unwrap();
@@ -344,11 +349,7 @@ fn a_command_that_does_no_work_keeps_no_command_log() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stderr, "");
-    assert!(
-        !scenario.path(LOGS).exists(),
-        "{:?}",
-        logs_in(&scenario, "")
-    );
+    assert!(!scenario.path(LOGS_DIR).exists());
 }
 
 #[test]
@@ -375,7 +376,7 @@ gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "
     let result = run_in_zone(&scenario, &[&scenario.issue_url(7), "base-fix"], &[]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let (path, stamp) = the_one_command_log(&scenario, "issue", "acme-widgets-issue-7");
+    let (path, stamp) = the_one_command_log(&scenario, "issue", "7-");
     assert_holds_what_was_printed(&path, &result);
     let log = fs::read_to_string(&path).unwrap();
     assert!(
@@ -383,8 +384,7 @@ gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "
         "log: {log}"
     );
     assert!(
-        logs_in(&scenario, "sessions")
-            .contains(&format!("acme-widgets-issue-8-{stamp}-implement.jsonl")),
+        logs_in(&scenario, "sessions").contains(&format!("8-{stamp}-implement.jsonl")),
         "{:?}",
         logs_in(&scenario, "sessions")
     );

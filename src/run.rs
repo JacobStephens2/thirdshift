@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::activity;
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
@@ -165,6 +166,13 @@ fn run(
         Some(_) => Vec::new(),
         None => github::tickets(issue)?,
     };
+    if matches!(started_by, StartedBy::Command) {
+        let kind = match tickets.is_empty() {
+            true => activity::Kind::Run,
+            false => activity::Kind::SpecRun,
+        };
+        activity::start(logs_dir, &issue.repo(), kind, Some(issue.number));
+    }
     if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(
             "parallel is only for a Spec, and #{} has no sub-issues",

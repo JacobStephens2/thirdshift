@@ -1250,7 +1250,7 @@ fn the_spec_review_is_logged_under_the_specs_name() {
         .lines()
         .find(|line| line.ends_with("-spec-review.jsonl"))
         .unwrap_or_else(|| panic!("no Spec review log in: {}", result.stderr));
-    assert_contains(logged, "/acme-widgets-issue-20-");
+    assert_contains(logged, "/20-");
 }
 
 #[test]

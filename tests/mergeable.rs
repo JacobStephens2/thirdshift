@@ -143,17 +143,14 @@ fn logs_the_conflict_repair_with_the_runs_shared_timestamp() {
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let logs = scenario.entries("home/.thirdshift/logs/sessions");
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
     assert_eq!(logs.len(), 2, "logs: {logs:?}");
     let implement = logs
         .iter()
         .find(|name| name.ends_with("-implement.jsonl"))
         .expect("no implement log");
     let prefix = implement.strip_suffix("implement.jsonl").unwrap();
-    assert!(
-        prefix.starts_with("acme-widgets-issue-7-"),
-        "log: {implement}"
-    );
+    assert!(prefix.starts_with("7-"), "log: {implement}");
     assert!(
         logs.contains(&format!("{prefix}repair-1.jsonl")),
         "logs: {logs:?}"

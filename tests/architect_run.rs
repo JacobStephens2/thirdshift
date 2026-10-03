@@ -193,15 +193,14 @@ fn assert_failed(scenario: &Scenario, result: &RunResult, cause: &str) {
         "expected {cause:?} in stderr: {}",
         result.stderr
     );
-    let logs = scenario.entries("home/.thirdshift/logs/sessions");
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     assert!(
-        logs[0].starts_with("acme-widgets-architect-")
-            && logs[0].ends_with("-architecture-review.jsonl"),
+        logs[0].starts_with("architect-") && logs[0].ends_with("-architecture-review.jsonl"),
         "logs: {logs:?}"
     );
     let log = scenario
-        .path("home/.thirdshift/logs/sessions")
+        .path("home/.thirdshift/logs/acme/widgets/sessions")
         .join(&logs[0]);
     assert_eq!(
         before_command_log(&result.stderr).last(),

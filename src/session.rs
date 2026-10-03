@@ -19,12 +19,12 @@ use crate::progress::{self, Progress};
 use crate::prompt;
 
 /// Where a Run's or an Architect run's Session logs go: in `sessions/` under
-/// `logs_dir`, the User config's `logs.dir` or `~/.thirdshift/logs`, each
-/// named for what is run and stamped with the command's start stamp, which
-/// its Command log shares.
+/// the root of its repository's logs, under `logs_dir`, the User config's
+/// `logs.dir` or `~/.thirdshift/logs`, each named for what is run and stamped
+/// with the command's start stamp, which its Command log shares.
 pub struct Logs {
-    /// What every log's name starts with: `<owner>-<repo>-issue-<n>` for a
-    /// Run, `<owner>-<repo>-architect` for an Architect run.
+    /// What every log's name starts with: the issue's number for a Run,
+    /// `architect` for an Architect run.
     name: String,
     dir: PathBuf,
 }
@@ -33,21 +33,21 @@ impl Logs {
     /// The logs of the Run on `issue`.
     pub fn of_run(issue: &IssueUrl, logs_dir: &Path) -> Self {
         Logs {
-            name: format!("{}-{}-issue-{}", issue.owner, issue.repo, issue.number),
-            dir: logs_dir.join("sessions"),
+            name: issue.number.to_string(),
+            dir: command_log::root(logs_dir, &issue.repo()).join("sessions"),
         }
     }
 
     /// The logs of the Architect run on `repo`.
     pub fn of_architect_run(repo: &Repo, logs_dir: &Path) -> Self {
         Logs {
-            name: format!("{}-{}-architect", repo.owner, repo.name),
-            dir: logs_dir.join("sessions"),
+            name: "architect".to_string(),
+            dir: command_log::root(logs_dir, repo).join("sessions"),
         }
     }
 
     /// Where a session's stream is logged:
-    /// `<logs_dir>/sessions/<name>-<stamp>-<kind>.jsonl`.
+    /// `<root>/sessions/<name>-<stamp>-<kind>.jsonl`.
     pub fn path(&self, kind: &str) -> PathBuf {
         self.dir.join(format!(
             "{}-{}-{kind}.jsonl",

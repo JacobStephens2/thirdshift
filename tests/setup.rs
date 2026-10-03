@@ -66,7 +66,14 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(
         sections,
         [
-            "[merge]", "[base]", "[launch]", "[email]", "[logs]", "[spec]", "[pickup]"
+            "[merge]",
+            "[base]",
+            "[launch]",
+            "[email]",
+            "[logs]",
+            "[activity]",
+            "[spec]",
+            "[pickup]"
         ],
         "{text}"
     );
@@ -80,6 +87,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     );
     assert!(config["email"].get("to").is_none(), "{text}");
     assert_eq!(config["logs"]["dir"].as_str(), Some("~/.thirdshift/logs"));
+    assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
     assert!(
@@ -115,6 +123,7 @@ fn every_key_is_written_with_a_comment_giving_what_it_does_and_its_default() {
             "email.to",
             "email.from",
             "logs.dir",
+            "activity.quiet_skips",
             "spec.parallel",
             "pickup.limit"
         ],
@@ -155,7 +164,12 @@ fn a_run_with_the_written_user_config_behaves_as_with_none() {
         result.stderr
     );
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
-    assert_eq!(scenario.entries("home/.thirdshift/logs/sessions").len(), 1);
+    assert_eq!(
+        scenario
+            .entries("home/.thirdshift/logs/acme/widgets/sessions")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -210,7 +224,8 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
 }
 
 /// Every key this version knows, as `section.key`, sorted.
-const EVERY_KEY: [&str; 9] = [
+const EVERY_KEY: [&str; 10] = [
+    "activity.quiet_skips",
     "base.fix",
     "email.always",
     "email.from",
@@ -404,7 +419,12 @@ fn a_run_reads_the_completed_user_config_with_the_settings_it_had_before() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.entries("home/elsewhere/logs/sessions").len(), 1);
+    assert_eq!(
+        scenario
+            .entries("home/elsewhere/logs/acme/widgets/sessions")
+            .len(),
+        1
+    );
     assert!(!scenario.path("home/.thirdshift/logs").exists());
 }
 
@@ -603,6 +623,7 @@ fn on_a_terminal_the_answers_are_written_with_the_comments_on_each_key() {
             "email.to",
             "email.from",
             "logs.dir",
+            "activity.quiet_skips",
             "spec.parallel",
             "pickup.limit"
         ],
@@ -763,6 +784,9 @@ from = \"ts@acme.dev\"
 
 [logs]
 dir = \"/var/log/thirdshift\"
+
+[activity]
+quiet_skips = true
 
 [spec]
 parallel = 5

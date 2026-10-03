@@ -56,6 +56,17 @@ pub enum Skipped {
     NoReadyIssue(Repo),
 }
 
+impl Skipped {
+    /// The repository the Pickup run was skipped on.
+    pub fn repo(&self) -> &Repo {
+        match self {
+            Self::AlreadyRunning(AlreadyRunning(repo))
+            | Self::AtClaimLimit { repo, .. }
+            | Self::NoReadyIssue(repo) => repo,
+        }
+    }
+}
+
 impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

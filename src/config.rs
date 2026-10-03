@@ -28,9 +28,12 @@ pub struct UserConfig {
     /// checkout of the Base branch to `origin`.
     pub launch_pull: bool,
     /// `logs.dir`, with a leading `~` expanded: the root of the logs, with
-    /// Session logs in `sessions/` and Command logs in `commands/`, by
-    /// default `~/.thirdshift/logs`.
+    /// each repository's in `<owner>/<repo>/`, by default
+    /// `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
+    /// `activity.quiet_skips`: a skipped Architect run or Pickup run prints
+    /// nothing, its Activity log line its only trace.
+    pub quiet_skips: bool,
     /// The `[email]` section.
     pub email: EmailSettings,
     /// `spec.parallel`: how many Tickets a Spec run runs at once, by
@@ -75,6 +78,7 @@ impl UserConfig {
             base_fix: false,
             launch_pull: false,
             logs_dir: home.join(".thirdshift/logs"),
+            quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
@@ -94,7 +98,7 @@ impl UserConfig {
         for (section, value) in &table {
             let known = matches!(
                 section.as_str(),
-                "merge" | "base" | "launch" | "logs" | "email" | "spec" | "pickup"
+                "merge" | "base" | "launch" | "logs" | "activity" | "email" | "spec" | "pickup"
             );
             let settings = match value {
                 Value::Table(settings) if known => settings,
@@ -117,6 +121,12 @@ impl UserConfig {
                         ),
                     },
                     ("logs", "dir", _) => bail!("logs.dir must be a string in {file}"),
+                    ("activity", "quiet_skips", Value::Boolean(quiet)) => {
+                        config.quiet_skips = *quiet
+                    }
+                    ("activity", "quiet_skips", _) => {
+                        bail!("activity.quiet_skips must be true or false in {file}")
+                    }
                     ("email", "always", Value::Boolean(always)) => config.email.always = *always,
                     ("email", "always", _) => bail!("email.always must be true or false in {file}"),
                     ("email", "to", Value::String(to)) => config.email.to = Some(to.clone()),
@@ -570,7 +580,10 @@ always = false                  # every Run sends a Run notification, without th
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
 [logs]
-dir = "~/.thirdshift/logs"   # the root of the logs, sessions/ and commands/; default ~/.thirdshift/logs
+dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
+
+[activity]
+quiet_skips = false   # a skipped Architect run or Pickup run prints nothing, leaving only its Activity log line; default false
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
@@ -735,6 +748,18 @@ mod tests {
         assert_eq!(parse("[email]\n").unwrap().email, EmailSettings::default());
         assert!(parse("[email]\nalways = true\n").unwrap().email.always);
         assert!(!parse("[email]\nalways = false\n").unwrap().email.always);
+    }
+
+    #[test]
+    fn activity_quiet_skips_is_read_and_defaults_to_false() {
+        assert!(
+            parse("[activity]\nquiet_skips = true\n")
+                .unwrap()
+                .quiet_skips
+        );
+        for text in ["", "[activity]\n", "[activity]\nquiet_skips = false\n"] {
+            assert!(!parse(text).unwrap().quiet_skips, "{text:?}");
+        }
     }
 
     #[test]
