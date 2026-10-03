@@ -12,7 +12,9 @@
 //! one that finds an Architect plan still open on the repository: it never
 //! retries or dispatches an Architect plan that is already there. And so is
 //! one that finds an Architect idea there waiting for triage: the factory has
-//! run out of Strong ideas until the Day shift decides on it.
+//! run out of Strong ideas until the Day shift decides on it. And so, last,
+//! is one that finds a Ready issue there, by the Pickup run's own search:
+//! work a human shaped goes first.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -30,6 +32,7 @@ use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::plugin::Plugin;
 use crate::progress;
 use crate::prompt;
+use crate::ready::{self, ReadyIssue};
 use crate::run;
 use crate::session::{Logs, Sessions};
 use crate::worktree::ReviewWorktree;
@@ -66,14 +69,15 @@ impl Outcome {
     /// The URLs of the issues the Architect run ended on, as its stdout
     /// carries them when nothing was dispatched: the issue its Architecture
     /// review ended on, or each open Architect plan, or each Architect idea
-    /// waiting for triage, it was skipped for. None when it was skipped as
-    /// another, or a Pickup run, is still running.
+    /// waiting for triage, or the Ready issue, it was skipped for. None when
+    /// it was skipped as another, or a Pickup run, is still running.
     pub fn urls(&self) -> Vec<&str> {
         match self {
             Self::Skipped(Skipped::AlreadyRunning(_)) => Vec::new(),
             Self::Skipped(Skipped::OpenPlans(issues) | Skipped::IdeasWaiting(issues)) => {
                 issues.iter().map(|(issue, _)| issue.url.as_str()).collect()
             }
+            Self::Skipped(Skipped::ReadyIssue(issue, _)) => vec![issue.url.as_str()],
             Self::Reviewed(reviewed) => vec![reviewed.url()],
         }
     }
@@ -101,6 +105,9 @@ pub enum Skipped {
     /// These Architect ideas, each with its title, are open on this
     /// repository and still labelled `needs-triage`: at least one.
     IdeasWaiting(Vec<(IssueUrl, String)>),
+    /// This Ready issue, with its title, the lowest-numbered on this
+    /// repository, goes first.
+    ReadyIssue(IssueUrl, String),
 }
 
 impl fmt::Display for Skipped {
@@ -119,6 +126,11 @@ impl fmt::Display for Skipped {
                     idea.number, idea.url
                 )
             }),
+            Self::ReadyIssue(issue, title) => write!(
+                f,
+                "Ready issue #{} \"{title}\" goes first: {}",
+                issue.number, issue.url
+            ),
         }
     }
 }
@@ -208,8 +220,11 @@ impl fmt::Display for Reviewed {
 /// then skipped, likewise, if the repository has an open Architect plan: only
 /// then, so that the plan of an Architect run still running is never taken
 /// for an unfinished one. It is then skipped if the repository has an open
-/// Architect idea still labelled `needs-triage`. Past all three, it keeps its
-/// Command log under `logs_dir`, where its Session logs go too.
+/// Architect idea still labelled `needs-triage`. It is then skipped if the
+/// repository has a Ready issue, by the very search a Pickup run makes, with
+/// its lines on the issues passed over, but with no Sweep and no Claim limit,
+/// which are the Pickup run's. Past all four, it keeps its Command log under
+/// `logs_dir`, where its Session logs go too.
 pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
@@ -242,6 +257,10 @@ pub fn run(
         .collect();
     if !waiting.is_empty() {
         return Ok(Outcome::Skipped(Skipped::IdeasWaiting(waiting)));
+    }
+    if let Some(ReadyIssue { listed, .. }) = ready::first(&launch, &repo)? {
+        let skipped = Skipped::ReadyIssue(listed.issue, listed.title);
+        return Ok(Outcome::Skipped(skipped));
     }
     command_log::keep(command_log::of_architect_run(logs_dir, &repo));
     if launch_pull {

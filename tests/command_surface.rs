@@ -97,6 +97,8 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_when_an_archite
         "Either way thirdshift labels that issue an Architect idea: architect-idea and needs-triage",
         "an Architect run that finds an Architect idea open and still labelled needs-triage is skipped as well",
         "Any triage decision lets the next Architect run go ahead",
+        "Last, an Architect run is skipped while the repository has a Ready issue, by the search a Pickup run makes",
+        "one with no Pickup run to take it keeps Architect runs from starting",
         "Only one Architect run or Pickup run per repository runs at a time on a machine",
         "is skipped: it prints an Architect run or a Pickup run is already running on <owner>/<repo>, does nothing else and exits 0",
         "A skipped run sends none, even when asked",

@@ -182,6 +182,11 @@ is skipped as well: the factory has run out of Strong ideas. It prints each such
 stdout, names it on stderr as waiting for triage, and exits 0. Any triage decision lets the
 next Architect run go ahead: take needs-triage off, whatever replaces it, or close the issue.
 
+Last, an Architect run is skipped while the repository has a Ready issue, by the search a
+Pickup run makes, so that work a human shaped goes first. It prints that issue's URL on stdout,
+names it on stderr as going first, and exits 0. A ready-for-agent issue that is not a Ready
+issue doesn't skip it, but one with no Pickup run to take it keeps Architect runs from starting.
+
 To run an Architect run on a schedule, have the operating system's scheduler, such as cron, run
 thirdshift architect base main from the clone: the README's \"On a schedule\" has a crontab entry.
 
@@ -366,12 +371,14 @@ fn main() -> ExitCode {
 /// plan fails puts the cause and the session log on stderr. One that is
 /// skipped says why on stderr, and is no failure: as another on its
 /// repository, or a Pickup run, is still running, it puts nothing on stdout,
-/// and as Architect plans are still open there, the URL of each. If asked, by
-/// the command or the User config, it sends one Run notification, however it
-/// ended, short of being skipped; the run it dispatched sends none of its
-/// own. The notification's checks are made before any other work all the
-/// same, so a run that would be skipped fails on them too. Its
-/// Command log, kept once it is past its skip checks, covers that run too.
+/// and as Architect plans are still open there, or Architect ideas wait for
+/// triage there, the URL of each, or as it has a Ready issue, that issue's
+/// URL. If asked, by the command or the User config, it sends one Run
+/// notification, however it ended, short of being skipped; the run it
+/// dispatched sends none of its own. The notification's checks are made
+/// before any other work all the same, so a run that would be skipped fails
+/// on them too. Its Command log, kept once it is past its skip checks, covers
+/// that run too.
 fn architect(args: ArchitectArgs) -> ExitCode {
     command_log::begin("Architect run starting");
     let config = match user_config() {
