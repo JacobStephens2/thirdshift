@@ -172,9 +172,13 @@ A commit that appears on the **Issue branch** during a **Run** and was made neit
 A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. A Resume that ends the same way gets no second Resume and does not fail the **Run**: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the steps that follow decide the outcome. If the Run is then a **Failed run**, its cause names the killed work ahead of the step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
 
 **Session log**:
-The full transcript of one agent session, one per session, a **Resume** and each **Repair** included. Named for the session's kind and stamped with the local time its command started, so all of a command's Session logs sort together.
+The full transcript of one agent session, one per session, a **Resume** and each **Repair** included. Kept with its repository's other logs, named for the session's kind and stamped with the local time its command started, so all of a command's Session logs sort together.
 _Avoid_: transcript, session file
 
 **Command log**:
-Everything one **Run**, **Spec run**, **Architect run** or **Pickup run** printed, kept in a file of its own, stamped like its **Session logs**. An Architect run's or Pickup run's covers the Spec run or Run it dispatched, and a Spec run's covers its **Tickets**' Runs, as a Run's covers its **Base fix**: none of those keeps one of its own. A Pickup run or Architect run skipped before doing any work keeps none.
+Everything one **Run**, **Spec run**, **Architect run** or **Pickup run** printed, kept in a file of its own with its repository's other logs, stamped like its **Session logs**. An Architect run's or Pickup run's covers the Spec run or Run it dispatched, and a Spec run's covers its **Tickets**' Runs, as a Run's covers its **Base fix**: none of those keeps one of its own. A Pickup run or Architect run skipped before doing any work keeps none.
 _Avoid_: cron log, output log, run log (a **Run** is one kind of command)
+
+**Activity log**:
+One running record per repository of what the factory did there: a line when a **Run**, **Spec run**, **Architect run** or **Pickup run** starts work, naming its **Command log**, and a line when it ends, with its outcome. A skipped Architect run or Pickup run writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
+_Avoid_: cron log, pass log, history
