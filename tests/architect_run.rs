@@ -16,15 +16,16 @@
 //! thirdshift labels the issue such a review ends on an Architect idea, with
 //! `architect-idea` and `needs-triage`.
 //! An Architect run started while another on the repository, or a Pickup run,
-//! is still running, while an Architect plan is still open there, or while an
-//! Architect idea there waits for triage, is skipped.
+//! is still running, while an Architect plan is still open there, while an
+//! Architect idea there waits for triage, or while it has a Ready issue, is
+//! skipped.
 
 mod support;
 
 use std::fs;
 
 use support::resend::ResendStandIn;
-use support::{REPO, RunResult, Scenario, before_command_log, leaves_running};
+use support::{REPO, RunResult, Scenario, TimelineEvent, before_command_log, leaves_running};
 
 /// The first issue the fake agent creates: the scenario starts with issue #7.
 const PLAN_URL: &str = "https://github.com/acme/widgets/issues/8";
@@ -2125,7 +2126,9 @@ fn base_skips_an_architect_run_from_a_clone_on_another_branch_or_a_detached_head
 fn an_architect_plan_that_is_closed_or_no_longer_labelled_lets_the_architect_run_go_ahead() {
     for lift_the_rule in [
         (|scenario| scenario.issue_is(7, "CLOSED")) as fn(&Scenario),
-        |scenario| scenario.issue_labelled(7, &["ready-for-agent"]),
+        // Still `ready-for-agent`, it would be a Ready issue, but for its
+        // Claim.
+        |scenario| scenario.issue_labelled(7, &["ready-for-agent", IN_PROGRESS]),
     ] {
         let scenario = scenario();
         open_architect_plan(&scenario, 7, "Deepen the session module");
@@ -2313,10 +2316,10 @@ fn an_architect_idea_labelled_in_another_case_skips_the_architect_run_too() {
 
 #[test]
 fn an_architect_idea_triaged_whatever_the_decision_or_closed_lets_the_architect_run_go_ahead() {
+    // Triaged `ready-for-agent`, it is a Ready issue, which goes first.
     for triage in [
-        (|scenario| scenario.issue_labelled(7, &["ready-for-agent", ARCHITECT_IDEA]))
+        (|scenario| scenario.issue_labelled(7, &["ready-for-human", ARCHITECT_IDEA]))
             as fn(&Scenario),
-        |scenario| scenario.issue_labelled(7, &["ready-for-human", ARCHITECT_IDEA]),
         |scenario| scenario.issue_labelled(7, &["Needs-Info", "Architect-Idea"]),
         |scenario| scenario.issue_labelled(7, &["wontfix", ARCHITECT_IDEA]),
         |scenario| scenario.issue_labelled(7, &["architecture", ARCHITECT_IDEA]),
@@ -2421,4 +2424,191 @@ fn an_idea_that_cannot_be_labelled_sends_one_notification_with_the_cause() {
         ),
         "{text}"
     );
+}
+
+/// Make issue `number` an open issue titled `title`, labelled
+/// `ready-for-agent` with `more` labels after it: a Ready issue unless one
+/// of them, or something else about it, says otherwise.
+fn ready_issue(scenario: &Scenario, number: u32, title: &str, more: &[&str]) {
+    scenario.issue_is(number, "OPEN");
+    scenario.issue_titled(number, title);
+    scenario.issue_labelled(number, &[&["ready-for-agent"], more].concat());
+}
+
+/// What a skipped Architect run says of the Ready issue `number`, titled
+/// `title`, on the scenario's repository.
+fn goes_first(scenario: &Scenario, number: u32, title: &str) -> String {
+    format!(
+        "Ready issue #{number} \"{title}\" goes first: {}",
+        scenario.issue_url(number)
+    )
+}
+
+#[test]
+fn a_ready_issue_skips_the_architect_run_before_any_review() {
+    for args in [
+        vec!["architect"],
+        vec!["architect", "--plan-only"],
+        vec!["architect", "the Spec run", "merge", "base", "main"],
+    ] {
+        let scenario = scenario();
+        ready_issue(&scenario, 7, "Fix the login page", &["bug"]);
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+        let github = scenario.gh_state();
+
+        let result = scenario.run(&args);
+
+        assert_eq!(result.code, Some(0), "{args:?}: stderr: {}", result.stderr);
+        assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+        assert_eq!(
+            after_start(&result.stderr),
+            format!(
+                "thirdshift: {}\n",
+                goes_first(&scenario, 7, "Fix the login page")
+            )
+        );
+        assert!(scenario.claude_calls().is_empty(), "claude was started");
+        assert_eq!(scenario.gh_state(), github);
+        assert_nothing_left_behind(&scenario);
+    }
+}
+
+#[test]
+fn the_skip_names_the_lowest_numbered_ready_issue_after_the_lines_on_those_passed_over() {
+    let scenario = scenario();
+    ready_issue(&scenario, 5, "Fix the logout page", &[IN_PROGRESS]);
+    ready_issue(&scenario, 6, "Fix the login page", &[]);
+    ready_issue(&scenario, 9, "Fix the signup page", &[]);
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(6)));
+    assert_eq!(
+        after_start(&result.stderr),
+        format!(
+            "thirdshift: #5 labelled {IN_PROGRESS}\nthirdshift: {}\n",
+            goes_first(&scenario, 6, "Fix the login page")
+        )
+    );
+    assert!(scenario.claude_calls().is_empty(), "claude was started");
+}
+
+#[test]
+fn a_ready_for_agent_issue_that_is_claimed_unsettled_or_blocked_does_not_skip_the_architect_run() {
+    for (not_ready, passed_over) in [
+        (
+            (|scenario| scenario.issue_labelled(7, &["ready-for-agent", IN_PROGRESS]))
+                as fn(&Scenario),
+            "#7 labelled in-progress",
+        ),
+        (
+            |scenario| {
+                let labelled = (TimelineEvent::Labelled("ready-for-agent"), 9);
+                scenario.issue_timeline(7, &[labelled]);
+            },
+            "#7 not settled: labelled ready-for-agent less than 10 minutes ago",
+        ),
+        (
+            |scenario| scenario.issue_blocked_by(7, &[5]),
+            "#7 blocked by #5",
+        ),
+    ] {
+        let scenario = scenario();
+        ready_issue(&scenario, 7, "Fix the login page", &[]);
+        not_ready(&scenario);
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+        assert!(
+            after_start(&result.stderr).starts_with(&format!("thirdshift: {passed_over}\n")),
+            "stderr: {}",
+            result.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), 1);
+    }
+}
+
+#[test]
+fn a_ready_for_agent_ticket_inside_a_spec_does_not_skip_the_architect_run() {
+    let scenario = scenario();
+    // #20 is a Spec that is not ready, so its Ticket #21 is not reached.
+    scenario.spec_has_tickets(20, &[(21, &[])]);
+    scenario.issue_labelled(20, &["needs-triage"]);
+    ready_issue(&scenario, 21, "Deepen the session module", &[]);
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        after_start(&result.stderr)
+            .starts_with("thirdshift: #21 is a Ticket of #20, which is not ready\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn with_an_architect_idea_waiting_and_a_ready_issue_the_skip_reports_the_idea() {
+    let scenario = scenario();
+    waiting_architect_idea(&scenario, 7, "Deepen the session module");
+    ready_issue(&scenario, 5, "Fix the login page", &[]);
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+    assert_eq!(
+        after_start(&result.stderr),
+        format!(
+            "thirdshift: {}\n",
+            waiting_for_triage(&scenario, 7, "Deepen the session module")
+        )
+    );
+}
+
+#[test]
+fn with_an_open_architect_plan_and_a_ready_issue_the_skip_reports_the_plan() {
+    let scenario = scenario();
+    open_architect_plan(&scenario, 7, "Deepen the session module");
+    ready_issue(&scenario, 5, "Fix the login page", &[]);
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+    assert_eq!(
+        after_start(&result.stderr),
+        format!(
+            "thirdshift: {}\n",
+            still_open(&scenario, 7, "Deepen the session module")
+        )
+    );
+}
+
+#[test]
+fn an_architect_idea_triaged_ready_for_agent_goes_first_as_a_ready_issue() {
+    let scenario = scenario();
+    scenario.issue_is(7, "OPEN");
+    scenario.issue_titled(7, "Deepen the session module");
+    scenario.issue_labelled(7, &["ready-for-agent", ARCHITECT_IDEA]);
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+    assert_eq!(
+        after_start(&result.stderr),
+        format!(
+            "thirdshift: {}\n",
+            goes_first(&scenario, 7, "Deepen the session module")
+        )
+    );
+    assert!(scenario.claude_calls().is_empty(), "claude was started");
 }

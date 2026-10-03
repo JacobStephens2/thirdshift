@@ -939,9 +939,11 @@ fn release(scenario: &Scenario) {
 #[test]
 fn a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_running() {
     let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &[]);
     scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
     let architect = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    // Labelled only now, as a Ready issue would have skipped the Architect
+    // run.
+    ready_issue(&scenario, 7, &[]);
     let (github, gh_calls) = (scenario.gh_state(), scenario.gh_calls());
 
     let result = scenario.run(&["pickup"]);
@@ -1566,10 +1568,12 @@ fn the_sweep_runs_on_a_pass_that_is_then_skipped_for_having_no_ready_issue() {
 #[test]
 fn the_sweep_does_not_run_on_a_pass_skipped_for_the_lock() {
     let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &[]);
     closed_issue_in_progress(&scenario, 3, &["bug"]);
     scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
     let architect = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    // Labelled only now, as a Ready issue would have skipped the Architect
+    // run.
+    ready_issue(&scenario, 7, &[]);
 
     let result = scenario.run(&["pickup"]);
 
