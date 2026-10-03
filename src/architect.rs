@@ -63,15 +63,6 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// How the Architect run ended, as its Run notification's subject says
-    /// it when nothing was dispatched.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Skipped(_) => "skipped",
-            Self::Reviewed(reviewed) => reviewed.review(),
-        }
-    }
-
     /// The URLs of the issues the Architect run ended on, as its stdout
     /// carries them when nothing was dispatched: the issue its Architecture
     /// review ended on, or each open Architect plan, or each Architect idea
@@ -98,7 +89,7 @@ impl fmt::Display for Outcome {
 }
 
 /// Why an Architect run was skipped. Its `Display` is the reason, as the
-/// skipped run's progress line and its Run notification give it.
+/// skipped run's progress line gives it.
 #[derive(Debug)]
 pub enum Skipped {
     /// Another Architect run on this repository, or a Pickup run, is still

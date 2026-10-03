@@ -99,7 +99,7 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_when_an_archite
         "Any triage decision lets the next Architect run go ahead",
         "Only one Architect run or Pickup run per repository runs at a time on a machine",
         "is skipped: it prints an Architect run or a Pickup run is already running on <owner>/<repo>, does nothing else and exits 0",
-        "A skipped run still sends its Run notification, with the outcome skipped",
+        "A skipped run sends none, even when asked",
         "swaps its needs-triage label for ready-for-agent, labels it architect-plan",
         "creating the label if the repository lacks it",
         "An Architect run that finds an open issue labelled architect-plan is skipped too, before any review, with or without --plan-only",
