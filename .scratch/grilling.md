@@ -1151,3 +1151,53 @@ PR the docs changes, then /to-spec
 
 ## 6
 agreed on the seam
+
+# Oct 3 2026, logs by repo, issue 339
+/grill-with-docs I'm having an issue lately where it's I'm I'm expanding the use of third shifts to cover multiple projects and repositories. You can check them in my home folder slash repos. And I tried to expand my cron tab to run the various like to have architect runs autonomously run for the different repositories because I want them to just continually be continuo approving, but but but I'm having a tough time breaking the log the the log structure out.
+
+Like I want a different folder for each repository so that I can easily see the activity that's happening for each repository. so you can check like in my dot third shift folder in my home folder how I started to try to scaffold this out, but it's not working yet.
+
+So this is what I want to work on. 
+
+## 2
+I want thirdshift to be able to create the directories if they're not already there.
+
+1. b
+2. agree
+3. remove the redundancy. I don't plan to paste the file into an issue or email. I want the file system more readable in VS Code by having shorter filenames.
+4. agree
+5. agree, though you don't need to show me before running it.
+6. Include noise in scope here.
+
+## 3
+1. agree
+2. agree
+3. agree
+4. agree
+
+## 4
+1. agree
+2. agree
+3. agree
+4. agree
+5. agree
+
+## 5
+1. agree
+2. agree
+
+The summary matches my understanding.
+
+PR the docs and /to-spec
+
+## 6
+I agree with the test seam proposal. File in a single issue.
+
+## 7
+though I'm thinking about a second issue for the one-off migration of existing
+  logs, with depedency on this issue's completion, perhaps make that one
+  ready-for-agent but blocked by this issue, and so the Pickup schedule gets it after
+  it becomes unblocked.
+
+## 8
+I merged https://github.com/JacobStephens2/thirdshift/pull/340.
