@@ -2093,21 +2093,28 @@ fn a_plan_whose_dispatched_run_failed_stays_open_and_the_next_architect_run_neve
 
 #[test]
 fn an_architect_run_skipped_for_open_plans_sends_no_notification_and_still_prints_each_url() {
-    let scenario = scenario();
-    open_architect_plan(&scenario, 5, "Deepen the worktree module");
-    open_architect_plan(&scenario, 7, "Deepen the session module");
-    let resend = ResendStandIn::replying(200, ACCEPTED);
+    for (config, args) in [
+        (
+            None,
+            vec!["architect", "--plan-only", "--email", "me@example.com"],
+        ),
+        (Some(EMAIL_ALWAYS), vec!["architect"]),
+    ] {
+        let scenario = scenario();
+        if let Some(config) = config {
+            scenario.user_config_is(config);
+        }
+        open_architect_plan(&scenario, 5, "Deepen the worktree module");
+        open_architect_plan(&scenario, 7, "Deepen the session module");
+        let resend = ResendStandIn::replying(200, ACCEPTED);
 
-    let result = run_with_resend(
-        &scenario,
-        &resend,
-        &["architect", "--plan-only", "--email", "me@example.com"],
-    );
+        let result = run_with_resend(&scenario, &resend, &args);
 
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(
-        result.stdout,
-        format!("{}\n{}\n", scenario.issue_url(7), scenario.issue_url(5))
-    );
-    assert!(resend.requests().is_empty());
+        assert_eq!(result.code, Some(0), "{args:?}: stderr: {}", result.stderr);
+        assert_eq!(
+            result.stdout,
+            format!("{}\n{}\n", scenario.issue_url(7), scenario.issue_url(5))
+        );
+        assert!(resend.requests().is_empty(), "{args:?}");
+    }
 }

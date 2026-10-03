@@ -543,7 +543,7 @@ It applies to every Architect run, with or without `--plan-only`, and no flag ov
 
 An Architect run never retries or dispatches an existing Architect plan. One whose dispatched run failed stays open, and picking it up is yours to do, with `thirdshift <plan URL>`, which continues whatever branch and pull request the failed run left. What isn't labelled `architect-plan` never counts: an idea issue a review filed with [no Strong candidate](#no-strong-candidate), or a plan that a failed or interrupted review left `needs-triage`.
 
-The check comes after the lock so that the plan of an Architect run that is still running, labelled already while its Spec run or Run goes on, is reported as [already running](#one-at-a-time), not as an unfinished plan. A skipped run sends no [Run notification](#one-run-notification), even when asked: its stdout and stderr lines name the open Architect plans and their commands.
+The check comes after the lock so that the plan of an Architect run that is still running, labelled already while its Spec run or Run goes on, is reported as [already running](#one-at-a-time), not as an unfinished plan. A skipped run sends no [Run notification](#one-run-notification), even when asked: its stdout carries the open Architect plans' URLs, and its stderr line their commands.
 
 ### On a schedule
 

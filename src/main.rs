@@ -404,12 +404,13 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     };
     // A skipped Architect run sends none, so one started every few minutes
     // for Weeding doesn't flood the inbox.
-    if let Some(notification) = notification {
-        match &ended {
-            Ok(Outcome::Skipped(_)) => {}
-            Ok(Outcome::Reviewed(reviewed)) => notification.send(Ok(reviewed), dispatched.as_ref()),
-            Err(failed) => notification.send(Err(failed), dispatched.as_ref()),
-        }
+    let reviewed = match &ended {
+        Ok(Outcome::Skipped(_)) => None,
+        Ok(Outcome::Reviewed(reviewed)) => Some(Ok(reviewed)),
+        Err(failed) => Some(Err(failed)),
+    };
+    if let (Some(notification), Some(reviewed)) = (notification, reviewed) {
+        notification.send(reviewed, dispatched.as_ref());
     }
     code
 }
