@@ -4,23 +4,27 @@
 //! checks on the Architect plan it published and the label change that marks
 //! it ready and labels it `architect-plan`, for the command to stop at or to
 //! dispatch. A review that found no Strong candidate published no plan, and
-//! the Architect run ends on the issue it named instead: the idea issue it
-//! filed for its top recommendation, or the open issue that already covers
-//! it. Only one Architect run or Pickup run per repository runs at a time on
-//! a machine: an Architect run started while another of either is still
-//! running is skipped, before any review. So is one that finds an Architect
-//! plan still open on the repository: it never retries or dispatches an
-//! Architect plan that is already there.
+//! the Architect run ends on the issue it named instead, labelled an
+//! Architect idea: the idea issue it filed for its top recommendation, or the
+//! open issue that already covers it. Only one Architect run or Pickup run
+//! per repository runs at a time on a machine: an Architect run started while
+//! another of either is still running is skipped, before any review. So is
+//! one that finds an Architect plan still open on the repository: it never
+//! retries or dispatches an Architect plan that is already there. And so is
+//! one that finds an Architect idea there waiting for triage: the factory has
+//! run out of Strong ideas until the Day shift decides on it. And so, last,
+//! is one that finds a Ready issue there, by the Pickup run's own search:
+//! work a human shaped goes first.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
 use crate::command_log;
 use crate::failed_run::FailedRun;
-use crate::github;
+use crate::github::{self, ListedIssue};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::labels::{Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
@@ -28,6 +32,7 @@ use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::plugin::Plugin;
 use crate::progress;
 use crate::prompt;
+use crate::ready::{self, ReadyIssue};
 use crate::run;
 use crate::session::{Logs, Sessions};
 use crate::worktree::ReviewWorktree;
@@ -43,6 +48,13 @@ const ARCHITECT_PLAN: Label = Label::new(
     "An Architect plan: the Spec or Ticket an Architecture review published",
 );
 
+/// The label thirdshift marks an Architect idea with, which, with
+/// `needs-triage`, a later Architect run finds one waiting for triage by.
+const ARCHITECT_IDEA: Label = Label::new(
+    "architect-idea",
+    "An Architect idea: the issue an Architecture review with no Strong candidate ended on",
+);
+
 /// How an Architect run ended, short of a failure and before any dispatch.
 /// Its `Display` is the line that says how it ended.
 #[derive(Debug)]
@@ -54,25 +66,30 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// How the Architect run ended, as its Run notification's subject says
-    /// it when nothing was dispatched.
-    pub fn name(&self) -> &'static str {
+    /// The Architecture review the Architect run ended with, which its Run
+    /// notification reports. None when it was skipped: a skipped Architect
+    /// run sends no notification, so one started every few minutes for
+    /// Weeding doesn't flood the inbox.
+    pub fn reviewed(&self) -> Option<&Reviewed> {
         match self {
-            Self::Skipped(_) => "skipped",
-            Self::Reviewed(reviewed) => reviewed.review(),
+            Self::Skipped(_) => None,
+            Self::Reviewed(reviewed) => Some(reviewed),
         }
     }
 
     /// The URLs of the issues the Architect run ended on, as its stdout
     /// carries them when nothing was dispatched: the issue its Architecture
-    /// review ended on, or each open Architect plan it was skipped for. None
-    /// when it was skipped as another, or a Pickup run, is still running.
+    /// review ended on, or each open Architect plan, or each Architect idea
+    /// waiting for triage, or the Ready issue, it was skipped for. None when
+    /// it was skipped as another, or a Pickup run, is still running.
     pub fn urls(&self) -> Vec<&str> {
         match self {
             Self::Skipped(Skipped::AlreadyRunning(_)) => Vec::new(),
-            Self::Skipped(Skipped::OpenPlans(plans)) => {
-                plans.iter().map(|(plan, _)| plan.url.as_str()).collect()
-            }
+            Self::Skipped(Skipped::OpenPlans(issues) | Skipped::IdeasWaiting(issues)) => issues
+                .iter()
+                .map(|listed| listed.issue.url.as_str())
+                .collect(),
+            Self::Skipped(Skipped::ReadyIssue(listed)) => vec![listed.issue.url.as_str()],
             Self::Reviewed(reviewed) => vec![reviewed.url()],
         }
     }
@@ -88,35 +105,58 @@ impl fmt::Display for Outcome {
 }
 
 /// Why an Architect run was skipped. Its `Display` is the reason, as the
-/// skipped run's progress line and its Run notification give it.
+/// skipped run's progress line gives it.
 #[derive(Debug)]
 pub enum Skipped {
     /// Another Architect run on this repository, or a Pickup run, is still
     /// running on this machine, the Spec run or Run it dispatched included.
     AlreadyRunning(AlreadyRunning),
-    /// These Architect plans, each with its title, are still open on this
-    /// repository: at least one.
-    OpenPlans(Vec<(IssueUrl, String)>),
+    /// These Architect plans are still open on this repository: at least
+    /// one.
+    OpenPlans(Vec<ListedIssue>),
+    /// These Architect ideas are open on this repository and still labelled
+    /// `needs-triage`: at least one.
+    IdeasWaiting(Vec<ListedIssue>),
+    /// This Ready issue, the lowest-numbered on this repository, goes first.
+    ReadyIssue(ListedIssue),
 }
 
 impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::AlreadyRunning(running) => running.fmt(f),
-            Self::OpenPlans(plans) => {
-                let still_open: Vec<String> = plans
-                    .iter()
-                    .map(|(plan, title)| {
-                        format!(
-                            "Architect plan #{} \"{title}\" is still open: pick it up with thirdshift {}",
-                            plan.number, plan.url
-                        )
-                    })
-                    .collect();
-                f.write_str(&still_open.join("; "))
-            }
+            Self::OpenPlans(plans) => write_joined(f, plans, |plan, title| {
+                format!(
+                    "Architect plan #{} \"{title}\" is still open: pick it up with thirdshift {}",
+                    plan.number, plan.url
+                )
+            }),
+            Self::IdeasWaiting(ideas) => write_joined(f, ideas, |idea, title| {
+                format!(
+                    "Architect idea #{} \"{title}\" is waiting for triage: {}",
+                    idea.number, idea.url
+                )
+            }),
+            Self::ReadyIssue(ListedIssue { issue, title, .. }) => write!(
+                f,
+                "Ready issue #{} \"{title}\" goes first: {}",
+                issue.number, issue.url
+            ),
         }
     }
+}
+
+/// Write what `says` of each of `issues`, with its title, joined by `; `.
+fn write_joined(
+    f: &mut fmt::Formatter,
+    issues: &[ListedIssue],
+    says: impl Fn(&IssueUrl, &str) -> String,
+) -> fmt::Result {
+    let said: Vec<String> = issues
+        .iter()
+        .map(|listed| says(&listed.issue, &listed.title))
+        .collect();
+    f.write_str(&said.join("; "))
 }
 
 /// How an Architecture review ended, short of a failure, with the issue it
@@ -178,9 +218,10 @@ impl fmt::Display for Reviewed {
 /// the branch the command named, whatever the Launch directory has checked
 /// out, or without one the branch checked out there. A review that reports
 /// an idea issue it filed, or the open issue that already covers its top
-/// recommendation, instead of a plan, changes no label. With `launch_pull`,
-/// the Launch directory's checkout of the Base branch, if that is the branch
-/// checked out, is first brought up to date with origin. The review's
+/// recommendation, instead of a plan, has that issue labelled an Architect
+/// idea. With `launch_pull`, the Launch directory's checkout of the Base
+/// branch, if that is the branch checked out, is first brought up to date
+/// with origin. The review's
 /// worktree and the plugin directory are gone when this returns. A failure
 /// after the plan is published leaves its labels as the review left them.
 ///
@@ -189,7 +230,11 @@ impl fmt::Display for Reviewed {
 /// Pickup run, is still running on this machine: see [`launch::start`]. It is
 /// then skipped, likewise, if the repository has an open Architect plan: only
 /// then, so that the plan of an Architect run still running is never taken
-/// for an unfinished one. Past both, it keeps its Command log under
+/// for an unfinished one. It is then skipped if the repository has an open
+/// Architect idea still labelled `needs-triage`. It is then skipped if the
+/// repository has a Ready issue, by the very search a Pickup run makes, with
+/// its lines on the issues passed over, but with no Sweep and no Claim limit,
+/// which are the Pickup run's. Past all four, it keeps its Command log under
 /// `logs_dir`, where its Session logs go too.
 pub fn run(
     focus: Option<&str>,
@@ -212,8 +257,18 @@ pub fn run(
     };
     let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
-        let open_plans = open_plans.into_iter().map(|plan| (plan.issue, plan.title));
-        return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans.collect())));
+        return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans)));
+    }
+    let ideas = github::open_issues_labelled(&repo.slug(), ARCHITECT_IDEA)?;
+    let waiting: Vec<_> = ideas
+        .into_iter()
+        .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
+        .collect();
+    if !waiting.is_empty() {
+        return Ok(Outcome::Skipped(Skipped::IdeasWaiting(waiting)));
+    }
+    if let Some(ReadyIssue { listed, .. }) = ready::first(&launch, &repo)? {
+        return Ok(Outcome::Skipped(Skipped::ReadyIssue(listed)));
     }
     command_log::keep(command_log::of_architect_run(logs_dir, &repo));
     if launch_pull {
@@ -294,8 +349,9 @@ impl Report {
 /// End the Architecture review, of the Base branch `base`, on the issue the
 /// last line of its `final_message` names: a plan is marked ready, and an
 /// idea issue, or the issue that already covers the top recommendation, is
-/// left as it is. Fails if the session had no final message, if its last line
-/// is not one the prompt asks for, or if the plan can't be marked ready.
+/// labelled an Architect idea. Fails if the session had no final message, if
+/// its last line is not one the prompt asks for, or if the plan can't be
+/// marked ready or the idea labelled.
 fn conclude(
     final_message: Option<&str>,
     origin: &str,
@@ -308,8 +364,14 @@ fn conclude(
             let base = base.to_string();
             Ok(Reviewed::PlanReady { plan, base })
         }
-        Some(Report::Idea(idea)) => Ok(Reviewed::IdeaFiled(idea)),
-        Some(Report::AlreadyFiled(issue)) => Ok(Reviewed::AlreadyFiled(issue)),
+        Some(Report::Idea(idea)) => {
+            label_idea(&idea)?;
+            Ok(Reviewed::IdeaFiled(idea))
+        }
+        Some(Report::AlreadyFiled(issue)) => {
+            label_idea(&issue)?;
+            Ok(Reviewed::AlreadyFiled(issue))
+        }
         None => bail!("the Architecture review ended without the final line its prompt asks for"),
     }
 }
@@ -333,6 +395,27 @@ fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Res
     ));
     github::ensure_labels(&plan.repo_slug(), &[ARCHITECT_PLAN])?;
     github::set_labels(plan, &kept.swapped(&[], &[READY_FOR_AGENT, ARCHITECT_PLAN]))
+}
+
+/// Label `idea` an Architect idea: put `needs-triage` and `architect-idea`
+/// on it, in one request that keeps its other labels, having added
+/// `architect-idea` to the repository if it lacks it. `needs-triage` goes
+/// back on an issue that had been triaged: the factory again takes it for the
+/// best next move.
+fn label_idea(idea: &IssueUrl) -> Result<()> {
+    if interrupt::requested() {
+        bail!("interrupted");
+    }
+    progress::step(format_args!(
+        "labelling #{} an Architect idea: adding {NEEDS_TRIAGE} and {ARCHITECT_IDEA}",
+        idea.number
+    ));
+    let label = || -> Result<()> {
+        github::ensure_labels(&idea.repo_slug(), &[ARCHITECT_IDEA])?;
+        let labels = github::issue_labels(idea)?;
+        github::set_labels(idea, &labels.swapped(&[], &[NEEDS_TRIAGE, ARCHITECT_IDEA]))
+    };
+    label().with_context(|| format!("could not label the Architect idea #{}", idea.number))
 }
 
 /// The labels `plan` keeps once it is marked ready: all it has but

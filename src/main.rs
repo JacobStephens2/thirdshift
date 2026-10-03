@@ -27,6 +27,7 @@ mod prompt;
 #[cfg(test)]
 mod prompts_page;
 mod questions;
+mod ready;
 mod resend_key;
 mod run;
 mod run_ending;
@@ -152,8 +153,11 @@ branch is the branch checked out.
 
 A review that finds no Strong candidate publishes no plan. It files its top recommendation as
 one idea issue labelled needs-triage, or names the open issue that already covers it, and
-thirdshift prints that issue's URL instead, changing no label. Its last line says which: the
-review filed the idea, or it filed nothing.
+thirdshift prints that issue's URL instead. Its last line says which: the review filed the
+idea, or it filed nothing. Either way thirdshift labels that issue an Architect idea:
+architect-idea and needs-triage, in one request that keeps its other labels, creating
+architect-idea if the repository lacks it. needs-triage goes back on an issue that had been
+triaged. If the issue can't be labelled, the Architect run fails.
 
 A review that fails, is interrupted, or ends without naming one of these issues fails the
 Architect run and leaves any plan it published labelled needs-triage. One that finds no
@@ -172,6 +176,16 @@ each open Architect plan, prints its URL on stdout, gives the command that picks
 thirdshift <plan URL>, and exits 0. No flag overrides this: finish or close the Architect
 plan, or remove its label. An Architect run never retries or dispatches an existing
 Architect plan, so one whose run failed stays open until you pick it up.
+
+Past that, an Architect run that finds an Architect idea open and still labelled needs-triage
+is skipped as well: the factory has run out of Strong ideas. It prints each such idea's URL on
+stdout, names it on stderr as waiting for triage, and exits 0. Any triage decision lets the
+next Architect run go ahead: take needs-triage off, whatever replaces it, or close the issue.
+
+Last, an Architect run is skipped while the repository has a Ready issue, by the search a
+Pickup run makes, so that work a human shaped goes first. It prints that issue's URL on stdout,
+names it on stderr as going first, and exits 0. A ready-for-agent issue that is not a Ready
+issue doesn't skip it, but one with no Pickup run to take it keeps Architect runs from starting.
 
 To run an Architect run on a schedule, have the operating system's scheduler, such as cron, run
 thirdshift architect base main from the clone: the README's \"On a schedule\" has a crontab entry.
@@ -236,8 +250,10 @@ from the clone: the README's \"A Pickup run on a schedule\" has a crontab entry.
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
 for the whole Architect run, however it ends: how the review ended, with the plan or idea
 issue it named, and how the run the plan was dispatched as ended, with a line on each Ticket
-of a Spec run. The run the plan is dispatched as sends none of its own. A skipped run still
-sends its Run notification, with the outcome skipped and the reason.
+of a Spec run. The run the plan is dispatched as sends none of its own. A skipped run sends
+none, even when asked, so a scheduler can start one every few minutes. The notification's
+checks, an address and a Resend API key, are made before any other work on every run, so
+one that would be skipped fails on them too, with exit 1.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
@@ -355,10 +371,14 @@ fn main() -> ExitCode {
 /// plan fails puts the cause and the session log on stderr. One that is
 /// skipped says why on stderr, and is no failure: as another on its
 /// repository, or a Pickup run, is still running, it puts nothing on stdout,
-/// and as Architect plans are still open there, the URL of each. If asked, by
-/// the command or the User config, it sends one Run notification, however it
-/// ended, skipped included; the run it dispatched sends none of its own. Its
-/// Command log, kept once it is past its skip checks, covers that run too.
+/// and as Architect plans are still open there, or Architect ideas wait for
+/// triage there, the URL of each, or as it has a Ready issue, that issue's
+/// URL. If asked, by the command or the User config, it sends one Run
+/// notification, however it ended, short of being skipped; the run it
+/// dispatched sends none of its own. The notification's checks are made
+/// before any other work all the same, so a run that would be skipped fails
+/// on them too. Its Command log, kept once it is past its skip checks, covers
+/// that run too.
 fn architect(args: ArchitectArgs) -> ExitCode {
     command_log::begin("Architect run starting");
     let config = match user_config() {
@@ -398,8 +418,12 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         (Ok(outcome), None) => run_ending::show_architect(outcome),
         (Err(failed), None) => run_ending::show_failure(failed),
     };
-    if let Some(notification) = notification {
-        notification.send(&ended, dispatched.as_ref());
+    let reviewed = match &ended {
+        Ok(outcome) => outcome.reviewed().map(Ok),
+        Err(failed) => Some(Err(failed)),
+    };
+    if let (Some(notification), Some(reviewed)) = (notification, reviewed) {
+        notification.send(reviewed, dispatched.as_ref());
     }
     code
 }
