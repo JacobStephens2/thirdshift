@@ -8,8 +8,8 @@
 //! has no plan: the Architect run prints the URL of the idea issue it filed,
 //! or of the open issue that already covers it, and dispatches nothing.
 //! Asked to, by `email` or the User config, it sends one Run notification,
-//! through Resend, here a local stand-in, however it ended, and the run it
-//! dispatched sends none.
+//! through Resend, here a local stand-in, however it ended, short of being
+//! skipped, and the run it dispatched sends none.
 //! The Base branch is the branch checked out in the Launch directory, or the
 //! one `base <branch>` names, whatever is checked out there, which the run
 //! the plan is dispatched as takes as its Base branch too.
@@ -1847,35 +1847,31 @@ fn an_architect_run_on_a_different_repository_at_the_same_time_is_not_skipped() 
 }
 
 #[test]
-fn a_skipped_architect_run_sends_one_notification_with_skipped_in_its_subject_and_why_in_its_body()
-{
-    let scenario = scenario();
-    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
-    let first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
-    let resend = ResendStandIn::replying(200, ACCEPTED);
+fn a_skipped_architect_run_sends_no_notification_asked_for_by_email_or_by_email_always() {
+    for (config, args) in [
+        (None, vec!["architect", "--email", "me@example.com"]),
+        (Some(EMAIL_ALWAYS), vec!["architect"]),
+    ] {
+        let scenario = scenario();
+        scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+        let first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+        if let Some(config) = config {
+            scenario.user_config_is(config);
+        }
+        let resend = ResendStandIn::replying(200, ACCEPTED);
 
-    let second = run_with_resend(
-        &scenario,
-        &resend,
-        &["architect", "--email", "me@example.com"],
-    );
+        let second = run_with_resend(&scenario, &resend, &args);
 
-    assert_skipped_as_already_running(&second);
-    let (subject, text) = the_one_notification(&resend);
-    assert_eq!(subject, "[thirdshift] acme/widgets Architect run: skipped");
-    assert!(
-        text.starts_with(
-            "Skipped:      an Architect run or a Pickup run is already running on acme/widgets\n\
-             Host:         "
-        ),
-        "{text}"
-    );
-    release(&scenario);
-    first.finish();
+        assert_skipped_as_already_running(&second);
+        assert!(resend.requests().is_empty(), "{args:?}");
+        release(&scenario);
+        first.finish();
+    }
 }
 
 #[test]
-fn the_notifications_checks_come_before_the_skip_so_a_skip_never_goes_unnotified() {
+fn the_notifications_checks_come_before_the_skip_so_a_broken_setup_fails_a_pass_that_would_be_skipped()
+ {
     let scenario = scenario();
     scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
     let first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
@@ -2096,7 +2092,7 @@ fn a_plan_whose_dispatched_run_failed_stays_open_and_the_next_architect_run_neve
 }
 
 #[test]
-fn an_architect_run_skipped_for_open_plans_sends_one_notification_naming_each_and_its_command() {
+fn an_architect_run_skipped_for_open_plans_sends_no_notification_and_still_prints_each_url() {
     let scenario = scenario();
     open_architect_plan(&scenario, 5, "Deepen the worktree module");
     open_architect_plan(&scenario, 7, "Deepen the session module");
@@ -2109,14 +2105,9 @@ fn an_architect_run_skipped_for_open_plans_sends_one_notification_naming_each_an
     );
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let (subject, text) = the_one_notification(&resend);
-    assert_eq!(subject, "[thirdshift] acme/widgets Architect run: skipped");
-    assert!(
-        text.starts_with(&format!(
-            "Skipped:      {}; {}\nHost:         ",
-            still_open(&scenario, 7, "Deepen the session module"),
-            still_open(&scenario, 5, "Deepen the worktree module")
-        )),
-        "{text}"
+    assert_eq!(
+        result.stdout,
+        format!("{}\n{}\n", scenario.issue_url(7), scenario.issue_url(5))
     );
+    assert!(resend.requests().is_empty());
 }

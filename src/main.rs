@@ -236,8 +236,10 @@ from the clone: the README's \"A Pickup run on a schedule\" has a crontab entry.
 they do a Run, with or without --plan-only, and email.always sets the default. It sends one
 for the whole Architect run, however it ends: how the review ended, with the plan or idea
 issue it named, and how the run the plan was dispatched as ended, with a line on each Ticket
-of a Spec run. The run the plan is dispatched as sends none of its own. A skipped run still
-sends its Run notification, with the outcome skipped and the reason.
+of a Spec run. The run the plan is dispatched as sends none of its own. A skipped run sends
+none, even when asked, so a scheduler can start one every few minutes. The notification's
+checks, an address and a Resend API key, are made before any other work on every run, so
+one that would be skipped fails on them too, with exit 1.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
@@ -357,7 +359,9 @@ fn main() -> ExitCode {
 /// repository, or a Pickup run, is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, the URL of each. If asked, by
 /// the command or the User config, it sends one Run notification, however it
-/// ended, skipped included; the run it dispatched sends none of its own. Its
+/// ended, short of being skipped; the run it dispatched sends none of its
+/// own. The notification's checks are made before any other work all the
+/// same, so a run that would be skipped fails on them too. Its
 /// Command log, kept once it is past its skip checks, covers that run too.
 fn architect(args: ArchitectArgs) -> ExitCode {
     command_log::begin("Architect run starting");
@@ -398,8 +402,14 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         (Ok(outcome), None) => run_ending::show_architect(outcome),
         (Err(failed), None) => run_ending::show_failure(failed),
     };
+    // A skipped Architect run sends none, so one started every few minutes
+    // for Weeding doesn't flood the inbox.
     if let Some(notification) = notification {
-        notification.send(&ended, dispatched.as_ref());
+        match &ended {
+            Ok(Outcome::Skipped(_)) => {}
+            Ok(Outcome::Reviewed(reviewed)) => notification.send(Ok(reviewed), dispatched.as_ref()),
+            Err(failed) => notification.send(Err(failed), dispatched.as_ref()),
+        }
     }
     code
 }
