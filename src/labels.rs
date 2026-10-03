@@ -61,9 +61,10 @@ pub const UNREADY: [Label; 4] = [
     NEEDS_TRIAGE,
 ];
 
-/// An issue's labels, each spelled as GitHub spells it. Every question it
+/// An issue's labels, or a repository's, each spelled as GitHub spells it.
+/// It has no `==`, which would compare names with case. Every question it
 /// answers ignores case, as GitHub does.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Labels(Vec<String>);
 
 impl<S: Into<String>> FromIterator<S> for Labels {
@@ -107,6 +108,8 @@ impl Labels {
     }
 
     /// Their names, as spelled, in order: what the GitHub adapter writes.
+    /// Only for writing them: a question about them is one of the methods
+    /// above, which ignore case.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(String::as_str)
     }

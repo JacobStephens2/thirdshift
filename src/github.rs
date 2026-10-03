@@ -59,7 +59,7 @@ pub fn issue(issue: &IssueUrl) -> Result<Issue> {
         .context("gh output has no createdAt")?;
     Ok(Issue {
         is_open: state_is_open(&json)?,
-        labels: label_names(&json)?,
+        labels: labels_of(&json)?,
         created: DateTime::parse_from_rfc3339(created)
             .with_context(|| format!("gh output has an unreadable createdAt {created}"))?
             .to_utc(),
@@ -67,18 +67,25 @@ pub fn issue(issue: &IssueUrl) -> Result<Issue> {
 }
 
 /// The labels of the issue `json` describes, with its `labels`.
-fn label_names(json: &Value) -> Result<Labels> {
-    Ok(json["labels"]
-        .as_array()
-        .context("gh output has no labels")?
+fn labels_of(json: &Value) -> Result<Labels> {
+    Ok(named(
+        json["labels"]
+            .as_array()
+            .context("gh output has no labels")?,
+    ))
+}
+
+/// The labels `labels` describe, each with its `name`.
+fn named(labels: &[Value]) -> Labels {
+    labels
         .iter()
         .filter_map(|label| label["name"].as_str())
-        .collect())
+        .collect()
 }
 
 /// The labels of `issue`.
 pub fn issue_labels(issue: &IssueUrl) -> Result<Labels> {
-    label_names(&issue_view(issue, "labels")?)
+    labels_of(&issue_view(issue, "labels")?)
 }
 
 /// The REST API's path for the labels of `issue`.
@@ -187,10 +194,7 @@ pub fn tickets(issue: &IssueUrl) -> Result<Vec<Ticket>> {
         Ok(Ticket {
             number: node_number(node)?,
             is_open: node_is_open(node)?,
-            labels: nodes(&node["labels"], "labels")?
-                .iter()
-                .filter_map(|label| label["name"].as_str())
-                .collect(),
+            labels: named(nodes(&node["labels"], "labels")?),
             has_sub_issues: sub_issue_count(node)? > 0,
             blockers,
             open_blockers,
@@ -307,7 +311,7 @@ fn issues_labelled(repo: &str, label: Label, state: &str) -> Result<Vec<ListedIs
             Ok(ListedIssue {
                 issue: IssueUrl::parse(field("url")?)?,
                 title: field("title")?.to_string(),
-                labels: label_names(listed)?,
+                labels: labels_of(listed)?,
             })
         })
         .collect()
@@ -448,12 +452,11 @@ pub fn ensure_labels(repo: &str, labels: &[Label]) -> Result<()> {
     let known = gh_json(&[
         "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
     ])?;
-    let known: Labels = known
-        .as_array()
-        .context("gh label list did not return a list")?
-        .iter()
-        .filter_map(|label| label["name"].as_str())
-        .collect();
+    let known = named(
+        known
+            .as_array()
+            .context("gh label list did not return a list")?,
+    );
     for label in labels {
         if !known.has(*label) {
             gh(&[

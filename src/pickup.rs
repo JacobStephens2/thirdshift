@@ -247,7 +247,7 @@ impl<'a> Search<'a> {
                 };
                 format!("is a Ticket of {spec}, which is not ready")
             }
-            Reason::BaseFix => format!("labelled {}", base_fix::BASE_FIX_LABEL),
+            Reason::BaseFix => format!("labelled {}", base_fix::BASE_FIX),
             Reason::Blocked(blockers) => {
                 let blockers: Vec<String> = blockers
                     .iter()
