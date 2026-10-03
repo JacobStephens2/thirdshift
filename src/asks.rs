@@ -219,6 +219,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             logs_dir: PathBuf::from("/home/me/.thirdshift/logs"),
+            quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: n(3),
             pickup_limit: n(3),

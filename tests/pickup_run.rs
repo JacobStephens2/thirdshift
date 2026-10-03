@@ -1082,15 +1082,15 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
         subject,
         "[thirdshift] acme/widgets#7 Sharpen the widgets: ready for review"
     );
-    let logs = scenario.entries("home/.thirdshift/logs/sessions");
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let log = scenario
-        .path("home/.thirdshift/logs/sessions")
+        .path("home/.thirdshift/logs/acme/widgets/sessions")
         .join(&logs[0]);
-    let commands = scenario.entries("home/.thirdshift/logs/commands/pickup");
+    let commands = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/pickup");
     assert_eq!(commands.len(), 1, "Command logs: {commands:?}");
     let command_log = scenario
-        .path("home/.thirdshift/logs/commands/pickup")
+        .path("home/.thirdshift/logs/acme/widgets/commands/pickup")
         .join(&commands[0]);
     assert!(
         text.starts_with(&format!(

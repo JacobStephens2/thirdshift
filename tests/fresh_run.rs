@@ -164,15 +164,19 @@ fn logs_the_session_stream_under_the_home_directory() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    let logs = scenario.entries("home/.thirdshift/logs/sessions");
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let name = &logs[0];
     assert!(
-        name.starts_with("acme-widgets-issue-7-") && name.ends_with("-implement.jsonl"),
+        name.starts_with("7-") && name.ends_with("-implement.jsonl"),
         "log: {name}"
     );
-    let log = std::fs::read_to_string(scenario.path("home/.thirdshift/logs/sessions").join(name))
-        .unwrap();
+    let log = std::fs::read_to_string(
+        scenario
+            .path("home/.thirdshift/logs/acme/widgets/sessions")
+            .join(name),
+    )
+    .unwrap();
     assert!(
         log.contains(r#""type": "system""#) && log.contains(r#""type": "result""#),
         "log: {log}"

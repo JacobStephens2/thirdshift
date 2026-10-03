@@ -149,11 +149,11 @@ fn help_and_version_succeed_with_a_broken_config() {
 const AGENT_EXITS_3: &str = "exit 3\n";
 
 /// Assert the Run failed after logging its one session in `sessions/` under
-/// `dir`, a directory under the scenario, and that the "session log:" line
+/// `acme/widgets/` under `dir`, a directory under the scenario, and that the "session log:" line
 /// names that log.
 fn assert_logged_in(scenario: &Scenario, result: &RunResult, dir: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    let dir = &format!("{dir}/sessions");
+    let dir = &format!("{dir}/acme/widgets/sessions");
     let logs = scenario.entries(dir);
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let log = scenario.path(dir).join(&logs[0]);
@@ -286,4 +286,36 @@ fn base_fix_and_no_base_fix_together_are_an_argument_error_before_the_config_is_
 
     assert_eq!(result.code, Some(2), "stderr: {}", result.stderr);
     assert!(scenario.claude_calls().is_empty(), "the Run started");
+}
+
+#[test]
+fn an_activity_quiet_skips_that_is_not_true_or_false_stops_the_pass_naming_it_and_the_file() {
+    for (config, named) in [
+        (
+            "[activity]\nquiet_skips = \"yes\"\n",
+            "activity.quiet_skips must be true or false",
+        ),
+        (
+            "[activity]\nquiet_skips = 1\n",
+            "activity.quiet_skips must be true or false",
+        ),
+        (
+            "activity = true\n",
+            "activity must be the section [activity]",
+        ),
+        ("[activity]\nquiet = true\n", "unknown key activity.quiet"),
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(config);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
+        assert!(
+            result.stderr.contains(named) && result.stderr.contains(&path.display().to_string()),
+            "expected {named:?} and the file in stderr for {config:?}: {}",
+            result.stderr
+        );
+        assert!(scenario.gh_calls().is_empty(), "thirdshift called gh");
+    }
 }

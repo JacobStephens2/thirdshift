@@ -1,3 +1,4 @@
+mod activity;
 mod architect;
 mod args;
 mod asks;
@@ -38,6 +39,7 @@ mod worktree;
 
 use std::process::ExitCode;
 
+use activity::Kind;
 use architect::{Outcome, Reviewed};
 use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
 use asks::Asks;
@@ -274,12 +276,30 @@ With launch.pull set, every Run first fast-forwards the checked-out Base branch 
     pull = true
 
 logs.dir sets the root of the logs instead of ~/.thirdshift/logs: an absolute path, or one under ~/.
-Session logs go in its sessions/ folder, and Command logs, everything a Run, a Spec run, an
-Architect run or a Pickup run printed, in commands/issue/, commands/pickup/ and
-commands/architect/.
+Each repository's logs go in <owner>/<repo>/ under it, named for the GitHub repository, in
+folders thirdshift creates as it needs them. Session logs go in sessions/, as
+<n>-<stamp>-<kind>.jsonl for a Run and architect-<stamp>-<kind>.jsonl for an Architect run.
+Command logs, everything a Run, a Spec run, an Architect run or a Pickup run printed, go in
+commands/issue/<n>-<stamp>.log, commands/pickup/<n>-<stamp>.log, named for the issue taken,
+and commands/architect/<stamp>.log. A Pickup run or Architect run skipped before any work
+keeps no Command log.
 
     [logs]
     dir = \"~/elsewhere/logs\"
+
+Each repository's Activity log, activity.log, is a short record of what the factory did there:
+a line when a Run, a Spec run, an Architect run or a Pickup run starts work, naming its Command
+log, and one when it ends, with its outcome, each starting with the local date and time. A
+skipped Pickup run or Architect run writes a line only when its reason differs from the last
+line of its own kind, so a repository that sits idle shows one line, not one per pass.
+
+With activity.quiet_skips set, a skipped Pickup run or Architect run prints nothing on stdout
+or stderr, its starting line included, leaving only its Activity log line; a pass that does
+work prints as ever. A crontab line can then send its output to one file, which catches only
+what failed:
+
+    [activity]
+    quiet_skips = true
 
 --email and email-test send to their <address>, else to email.to, from email.from, else
 from onboarding@resend.dev, which only delivers to your own Resend account's address.
@@ -353,6 +373,7 @@ fn main() -> ExitCode {
     let started_by = child.as_ref().map_or(StartedBy::Command, StartedBy::Child);
     let ended = run::run_to_end(&issue, &asks, started_by, &config.logs_dir);
     let code = run_ending::show(&ended);
+    activity::end(run_ending::summary(&ended));
     if let Some(notification) = notification {
         notification.send(&ended);
     }
@@ -378,13 +399,18 @@ fn main() -> ExitCode {
 /// dispatched sends none of its own. The notification's checks are made
 /// before any other work all the same, so a run that would be skipped fails
 /// on them too. Its Command log, kept once it is past its skip checks, covers
-/// that run too.
+/// that run too. The repository's Activity log records the skip, if it
+/// differs from the last, or the start and end of its work. With
+/// `activity.quiet_skips` set, a skipped run prints nothing at all.
 fn architect(args: ArchitectArgs) -> ExitCode {
-    command_log::begin("Architect run starting");
+    command_log::begin_pass("Architect run starting");
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
     };
+    if !config.quiet_skips {
+        command_log::show_held();
+    }
     // First, so no interrupt can end the Architect run once its notification
     // is checked.
     if let Err(error) = interrupt::install() {
@@ -413,6 +439,11 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         }
         _ => None,
     };
+    if config.quiet_skips && matches!(ended, Ok(Outcome::Skipped(_))) {
+        return ExitCode::SUCCESS;
+    }
+    command_log::show_held();
+    activity::end(run_ending::architect_summary(&ended, dispatched.as_ref()));
     let code = match (&ended, &dispatched) {
         (_, Some(dispatched)) => run_ending::show(dispatched),
         (Ok(outcome), None) => run_ending::show_architect(outcome),
@@ -440,12 +471,18 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// sends none. The notification's checks are made before any other work all
 /// the same, so a pass that would be skipped fails on them too. Its Command
 /// log is kept once it has taken an issue, and covers the dispatched run.
+/// The repository's Activity log records the skip, if it differs from the
+/// last, or the start and end of its work. With `activity.quiet_skips` set, a
+/// skipped pass prints nothing at all.
 fn pickup(args: PickupArgs) -> ExitCode {
-    command_log::begin("Pickup run starting");
+    command_log::begin_pass("Pickup run starting");
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
     };
+    if !config.quiet_skips {
+        command_log::show_held();
+    }
     // First, so no interrupt can end the Pickup run once its notification is
     // checked.
     if let Err(error) = interrupt::install() {
@@ -458,15 +495,25 @@ fn pickup(args: PickupArgs) -> ExitCode {
     };
     let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
-        Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
+        Ok(pickup::Outcome::Skipped(skipped)) => {
+            let root = command_log::root(&config.logs_dir, skipped.repo());
+            activity::skip(&root, Kind::PickupRun, &skipped);
+            return match config.quiet_skips {
+                true => ExitCode::SUCCESS,
+                false => outcome(Ok(skipped)),
+            };
+        }
         Err(error) => return failure(&error),
     };
     command_log::keep(command_log::of_pickup_run(&config.logs_dir, &taken.issue));
+    let root = command_log::root(&config.logs_dir, &taken.issue.repo());
+    activity::start(&root, Kind::PickupRun, Some(taken.issue.number));
     let notification = notification.map(|checked| checked.of_taken(&taken.issue, taken.title));
     let asks = Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config);
     let started_by = StartedBy::Dispatch { base: &taken.base };
     let ended = run::run_to_end(&taken.issue, &asks, started_by, &config.logs_dir);
     let code = run_ending::show(&ended);
+    activity::end(run_ending::summary(&ended));
     if let Some(notification) = notification {
         notification.send(&ended);
     }
@@ -493,8 +540,10 @@ fn user_config() -> Result<UserConfig, ExitCode> {
         .map_err(|error| failure(&error))
 }
 
-/// `error` on stderr, and the exit code of a failure.
+/// `error` on stderr, after any lines a pass held from the terminal, and the
+/// exit code of a failure.
 fn failure(error: &anyhow::Error) -> ExitCode {
+    command_log::show_held();
     progress::step(format_args!("{error:#}"));
     ExitCode::FAILURE
 }

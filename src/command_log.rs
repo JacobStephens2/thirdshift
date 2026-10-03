@@ -11,6 +11,10 @@
 //! known, then written first, so a command that ends before then, as a
 //! skipped Pickup run does, never creates the file. A Command log that can't
 //! be written is one `warning:` line, and changes nothing else.
+//!
+//! An Architect run or a Pickup run, which may yet be skipped, holds its
+//! lines from the terminal too, until it knows it will print them: a
+//! skipped pass with `activity.quiet_skips` set prints nothing at all.
 
 use std::fmt::Display;
 use std::fs::{self, File};
@@ -38,8 +42,12 @@ static LOG: Mutex<Log> = Mutex::new(Log::NotKept);
 enum Log {
     /// The command keeps none: a child Run, or a command such as `setup`.
     NotKept,
-    /// Its lines so far, held until its name is known.
-    Held(Vec<String>),
+    /// Its lines so far, held until its name is known, each with the
+    /// stream it is for, and whether they have been printed there yet.
+    Held {
+        lines: Vec<(Stream, String)>,
+        shown: bool,
+    },
     /// Being written to `file`, at `path`.
     Kept { path: PathBuf, file: File },
     /// It could not be written, and the warning has been given. `path` is
@@ -52,10 +60,38 @@ enum Log {
 /// followed by the date and UTC offset, as in `Pickup run starting,
 /// 2026-10-03 -0400`.
 pub fn begin(starting: impl Display) {
+    begin_held(starting, true);
+}
+
+/// Begin a pass, an Architect run or a Pickup run, as [`begin`] does, but
+/// hold its lines from the terminal too, until [`show_held`] or [`keep`]
+/// prints them: one that is skipped may print nothing.
+pub fn begin_pass(starting: impl Display) {
+    begin_held(starting, false);
+}
+
+/// [`begin`], its lines already `shown` on the terminal or held from it.
+fn begin_held(starting: impl Display, shown: bool) {
     let now = Local::now();
     let _ = STARTED.set(now.format(STAMP_FORMAT).to_string());
-    *log() = Log::Held(Vec::new());
+    *log() = Log::Held {
+        lines: Vec::new(),
+        shown,
+    };
     progress::step(format_args!("{starting}, {}", now.format("%Y-%m-%d %z")));
+}
+
+/// Print the lines a pass [`begin_pass`] began has held from the terminal,
+/// and print its lines as they come from here on.
+pub fn show_held() {
+    if let Log::Held { lines, shown } = &mut *log()
+        && !*shown
+    {
+        for (stream, line) in lines.iter() {
+            stream.print(line);
+        }
+        *shown = true;
+    }
 }
 
 /// Begin a child Run, which keeps no Command log, with the `stamp` the
@@ -72,41 +108,50 @@ pub fn stamp() -> &'static str {
     STARTED.get_or_init(|| Local::now().format(STAMP_FORMAT).to_string())
 }
 
+/// The root of `repo`'s logs under `logs_dir`, the User config's
+/// `logs.dir`: `<logs_dir>/<owner>/<repo>/`, named for the GitHub repository,
+/// not the checkout, so every checkout of it logs to the same place. Its
+/// Command logs, Session logs and Activity log are all under it.
+pub fn root(logs_dir: &Path, repo: &Repo) -> PathBuf {
+    logs_dir.join(&repo.owner).join(&repo.name)
+}
+
 /// Where the Command log of `thirdshift <Issue URL>` on `issue` goes, under
 /// `logs_dir`.
 pub fn of_run(logs_dir: &Path, issue: &IssueUrl) -> PathBuf {
-    of(logs_dir, "issue", &issue_name(issue))
+    of(
+        logs_dir,
+        &issue.repo(),
+        "issue",
+        &format!("{}-", issue.number),
+    )
 }
 
 /// Where the Command log of a Pickup run that took `issue` goes, under
 /// `logs_dir`.
 pub fn of_pickup_run(logs_dir: &Path, issue: &IssueUrl) -> PathBuf {
-    of(logs_dir, "pickup", &issue_name(issue))
+    of(
+        logs_dir,
+        &issue.repo(),
+        "pickup",
+        &format!("{}-", issue.number),
+    )
 }
 
 /// Where the Command log of an Architect run on `repo` goes, under
 /// `logs_dir`.
 pub fn of_architect_run(logs_dir: &Path, repo: &Repo) -> PathBuf {
-    of(
-        logs_dir,
-        "architect",
-        &format!("{}-{}", repo.owner, repo.name),
-    )
+    of(logs_dir, repo, "architect", "")
 }
 
-/// `<owner>-<repo>-issue-<n>`.
-fn issue_name(issue: &IssueUrl) -> String {
-    format!("{}-{}-issue-{}", issue.owner, issue.repo, issue.number)
-}
-
-/// `<logs_dir>/commands/<folder>/<name>-<stamp>.log`: one folder per command
-/// typed, and the repository in the name, as one `logs.dir` serves every
-/// repository on the machine.
-fn of(logs_dir: &Path, folder: &str, name: &str) -> PathBuf {
-    logs_dir
+/// `<root>/commands/<folder>/<prefix><stamp>.log`, under `repo`'s [`root`]:
+/// one folder per command typed, so the repository, already in the path,
+/// is not in the name.
+fn of(logs_dir: &Path, repo: &Repo, folder: &str, prefix: &str) -> PathBuf {
+    root(logs_dir, repo)
         .join("commands")
         .join(folder)
-        .join(format!("{name}-{}.log", stamp()))
+        .join(format!("{prefix}{}.log", stamp()))
 }
 
 /// Create the Command log at `path`, its folder too if missing, with the
@@ -114,12 +159,13 @@ fn of(logs_dir: &Path, folder: &str, name: &str) -> PathBuf {
 /// and only once. One that can't be created is a warning, and the command
 /// carries on without it.
 pub fn keep(path: PathBuf) {
+    show_held();
     let created = {
         let mut log = log();
-        let Log::Held(held) = &*log else {
+        let Log::Held { lines, .. } = &*log else {
             return;
         };
-        let created = create(&path, held);
+        let created = create(&path, lines.iter().map(|(_, line)| line));
         *log = match &created {
             Ok(file) => Log::Kept {
                 path: path.clone(),
@@ -139,7 +185,7 @@ pub fn keep(path: PathBuf) {
 }
 
 /// The file at `path`, created with its folder, and the `held` lines written.
-fn create(path: &Path, held: &[String]) -> Result<File> {
+fn create<'a>(path: &Path, held: impl Iterator<Item = &'a String>) -> Result<File> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
@@ -156,33 +202,56 @@ pub fn path() -> Option<PathBuf> {
     match &*log() {
         Log::Kept { path, .. } => Some(path.clone()),
         Log::Failed { path } => path.clone(),
-        Log::NotKept | Log::Held(_) => None,
+        Log::NotKept | Log::Held { .. } => None,
     }
 }
 
 /// Print `line` on stderr, and keep it in the Command log.
 pub fn eprint(line: &str) {
-    print_to(std::io::stderr(), line);
+    print_to(Stream::Stderr, line);
 }
 
 /// Print `line` on stdout, and keep it in the Command log.
 pub fn print(line: &str) {
-    print_to(std::io::stdout(), line);
+    print_to(Stream::Stdout, line);
 }
 
-/// Print `line` to `terminal`, and keep it in the Command log, both under
-/// the one lock, so the file has the lines in the order they were printed.
-fn print_to(mut terminal: impl Write, line: &str) {
+/// Where on the terminal a line goes.
+#[derive(Clone, Copy)]
+enum Stream {
+    Stdout,
+    Stderr,
+}
+
+impl Stream {
+    /// Print `line` here. Ignored if it fails, as it does once the terminal
+    /// has closed: the Run still has to clean up and send its Run
+    /// notification.
+    fn print(self, line: &str) {
+        fn to(mut terminal: impl Write, line: &str) {
+            let _ = writeln!(terminal, "{line}");
+            let _ = terminal.flush();
+        }
+        match self {
+            Stream::Stdout => to(std::io::stdout(), line),
+            Stream::Stderr => to(std::io::stderr(), line),
+        }
+    }
+}
+
+/// Print `line` to `stream`, unless it is held from the terminal, and keep it
+/// in the Command log, both under the one lock, so the file has the lines in
+/// the order they were printed.
+fn print_to(stream: Stream, line: &str) {
     let failed = {
         let mut log = log();
-        // Ignored if it fails, as it does once the terminal has closed: the
-        // Run still has to clean up and send its Run notification.
-        let _ = writeln!(terminal, "{line}");
-        let _ = terminal.flush();
+        if !matches!(&*log, Log::Held { shown: false, .. }) {
+            stream.print(line);
+        }
         match &mut *log {
             Log::NotKept | Log::Failed { .. } => None,
-            Log::Held(held) => {
-                held.push(line.to_string());
+            Log::Held { lines, .. } => {
+                lines.push((stream, line.to_string()));
                 None
             }
             Log::Kept { path, file } => match writeln!(file, "{line}") {

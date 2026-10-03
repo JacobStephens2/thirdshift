@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
+use crate::activity::{self, Kind};
 use crate::command_log;
 use crate::failed_run::FailedRun;
 use crate::github::{self, ListedIssue};
@@ -234,8 +235,10 @@ impl fmt::Display for Reviewed {
 /// Architect idea still labelled `needs-triage`. It is then skipped if the
 /// repository has a Ready issue, by the very search a Pickup run makes, with
 /// its lines on the issues passed over, but with no Sweep and no Claim limit,
-/// which are the Pickup run's. Past all four, it keeps its Command log under
-/// `logs_dir`, where its Session logs go too.
+/// which are the Pickup run's. A skip is recorded in the repository's
+/// Activity log under `logs_dir`. Past all four, it keeps its Command log
+/// there, where its Session logs go too, and records in the Activity log that
+/// it started work.
 pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
@@ -252,12 +255,14 @@ pub fn run(
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
-            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
+            let root = command_log::root(logs_dir, &running.0);
+            return Ok(skipped(&root, Skipped::AlreadyRunning(running)));
         }
     };
+    let root = command_log::root(logs_dir, &repo);
     let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
-        return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans)));
+        return Ok(skipped(&root, Skipped::OpenPlans(open_plans)));
     }
     let ideas = github::open_issues_labelled(&repo.slug(), ARCHITECT_IDEA)?;
     let waiting: Vec<_> = ideas
@@ -265,12 +270,13 @@ pub fn run(
         .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
         .collect();
     if !waiting.is_empty() {
-        return Ok(Outcome::Skipped(Skipped::IdeasWaiting(waiting)));
+        return Ok(skipped(&root, Skipped::IdeasWaiting(waiting)));
     }
     if let Some(ReadyIssue { listed, .. }) = ready::first(&launch, &repo)? {
-        return Ok(Outcome::Skipped(Skipped::ReadyIssue(listed)));
+        return Ok(skipped(&root, Skipped::ReadyIssue(listed)));
     }
     command_log::keep(command_log::of_architect_run(logs_dir, &repo));
+    activity::start(&root, Kind::ArchitectRun, None);
     if launch_pull {
         run::pull_base_branch(&launch, checked_out.as_deref(), &base);
     }
@@ -287,6 +293,13 @@ pub fn run(
             log: log.exists().then_some(log),
             ..FailedRun::from(error)
         })
+}
+
+/// The Architect run skipped as `skipped` says, recorded in the Activity log
+/// of the repository whose logs are at `root`.
+fn skipped(root: &Path, skipped: Skipped) -> Outcome {
+    activity::skip(root, Kind::ArchitectRun, &skipped);
+    Outcome::Skipped(skipped)
 }
 
 /// The Architecture review session in `worktree`, of the Base branch `base`,

@@ -193,6 +193,9 @@ from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.de
 [logs]
 dir = "~/elsewhere/logs"   # the root of the logs, instead of ~/.thirdshift/logs
 
+[activity]
+quiet_skips = true   # a skipped Architect run or Pickup run prints nothing
+
 [spec]
 parallel = 2   # how many Tickets a Spec run runs at once, instead of 3
 
@@ -218,7 +221,10 @@ always = false                  # every Run sends a Run notification, without th
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
 [logs]
-dir = "~/.thirdshift/logs"   # the root of the logs, sessions/ and commands/; default ~/.thirdshift/logs
+dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
+
+[activity]
+quiet_skips = false   # a skipped Architect run or Pickup run prints nothing, leaving only its Activity log line; default false
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
@@ -235,7 +241,7 @@ Every key holds its real value, so a Run reading it does exactly what it does wi
 4. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
 5. With notifications on, the Resend API key, with input hidden. With none saved it asks `Resend API key (input hidden, Enter to skip):`; with one in the [Credentials](#email), `Resend API key (input hidden, Enter keeps the saved one):`, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn't start with `re_` is asked again. A key you give is saved in the Credentials, `~/.thirdshift/credentials.toml`, created with mode 600 (and `~/.thirdshift` with it) or edited in place, keeping its comments and anything else in it and changing only `resend.key`; `setup` then prints `wrote the Credentials <path>`. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun `thirdshift setup`, or set `RESEND_API_KEY`. With `RESEND_API_KEY` set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from `RESEND_API_KEY`. With a key found or given, it offers to send a test email (default No), as `thirdshift email-test` does, once the files are written.
 
-Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `spec.parallel` and `pickup.limit` are not asked about. The answers are written like everything else below: in place, keeping your comments. Ctrl-C during the questions, the key included, writes nothing: neither the User config nor the Credentials. With notifications off, nothing about a key is asked, and saved Credentials stay as they were, so `--email` on a single Run still works. Credentials a Run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
+Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `activity.quiet_skips`, `spec.parallel` and `pickup.limit` are not asked about. The answers are written like everything else below: in place, keeping your comments. Ctrl-C during the questions, the key included, writes nothing: neither the User config nor the Credentials. With notifications off, nothing about a key is asked, and saved Credentials stay as they were, so `--email` on a single Run still works. Credentials a Run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. One that already does, down to the commented-out `email.to` line, is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
 The first Run on a machine with no User config, started from a terminal, offers Setup before any work, on stderr: `No User config at <path>. Set your defaults now? [Y/n]`. Yes (or Enter) asks the questions above, writes the file, and the Run carries on using your answers; a flag in the command, such as `--no-merge`, `--email` or `--no-email`, still wins over them. No writes every setting at its default, as `setup` with no terminal does, asks nothing about a key, writes no Credentials, says that `thirdshift setup` changes it, and the Run carries on; later Runs find the file and don't offer again. If the file can't be written, stderr gets a `warning:` line and the Run carries on with the defaults. Ctrl-C during the offer or the questions writes nothing and ends the command before any work, with no Run notification. A command thirdshift can't parse exits `2` before any offer. A Run with no terminal, as from cron, CI, `nohup` or an agent's shell, offers nothing, writes nothing, and runs on the defaults, so a later Run from a terminal still gets the offer.
 
@@ -251,7 +257,7 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 
 `pickup.limit` sets the [Claim limit](#the-claim-limit): how many open issues labelled `in-progress` stop a [Pickup run](#pickup-runs) from taking another, by default 3. It must be a whole number from 1 up. There is no command-line flag for it.
 
-`logs.dir` sets the root of the [logs](#logs), with Session logs in its `sessions/` folder and Command logs in its `commands/` folder, each created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
+`logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
 A Run reads the file before any work. One that isn't valid TOML, or that has a key or section thirdshift doesn't know, such as `alway` for `always`, or a value of the wrong type, such as anything but `true` or `false` for `always`, or `0` for `spec.parallel` or `pickup.limit`, stops the Run with an error naming the file and the offending key, so a typo can't silently leave a setting off. `email-test` and `setup` read it the same way. `update`, `version` and `help` never read it, so a broken User config can't block them, and they never offer Setup; nor does `email-test`.
 
@@ -309,30 +315,44 @@ A notification that can't be sent is a `warning:` line on stderr with Resend's e
 
 ### Logs
 
-Everything thirdshift logs goes under `~/.thirdshift/logs/`, or the `logs.dir` set in the [User config](#user-config), in two folders, each created if missing:
+Everything thirdshift logs goes under `~/.thirdshift/logs/`, or the `logs.dir` set in the [User config](#user-config), in a folder per repository, `<owner>/<repo>/`, named for the GitHub repository rather than your checkout, so a fork and its upstream never share one and every checkout or worktree of a repository logs to the same place. thirdshift creates each folder as it needs it, so a repository's first pass needs nothing made by hand:
 
 ```
-~/.thirdshift/logs/
+~/.thirdshift/logs/<owner>/<repo>/
+├── activity.log              the Activity log
 ├── sessions/                 Session logs
 └── commands/
-    ├── architect/            <owner>-<repo>-<stamp>.log
-    ├── pickup/               <owner>-<repo>-issue-<n>-<stamp>.log
-    └── issue/                <owner>-<repo>-issue-<n>-<stamp>.log
+    ├── architect/            <stamp>.log
+    ├── pickup/               <n>-<stamp>.log
+    └── issue/                <n>-<stamp>.log
 ```
 
-A **Session log** is one session's full transcript, as Claude Code's `stream-json` output:
+The folder already names the repository, so no file name repeats it. A **Session log** is one session's full transcript, as Claude Code's `stream-json` output:
 
 ```
-~/.thirdshift/logs/sessions/<owner>-<repo>-issue-<n>-<stamp>-implement.jsonl
-~/.thirdshift/logs/sessions/<owner>-<repo>-issue-<n>-<stamp>-repair-<i>.jsonl
-~/.thirdshift/logs/sessions/<owner>-<repo>-architect-<stamp>-architecture-review.jsonl
+~/.thirdshift/logs/<owner>/<repo>/sessions/<n>-<stamp>-implement.jsonl
+~/.thirdshift/logs/<owner>/<repo>/sessions/<n>-<stamp>-repair-<i>.jsonl
+~/.thirdshift/logs/<owner>/<repo>/sessions/architect-<stamp>-architecture-review.jsonl
 ```
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.jsonl`.
 
-A **Command log** is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: `thirdshift <Issue URL>`, a Run or a Spec run, in `issue/`, `thirdshift pickup` in `pickup/`, named for the issue it took, and `thirdshift architect` in `architect/`. A Spec run's covers its Tickets' Runs, a Run's covers its [Base fix](#base-fix), and a Pickup run's or an Architect run's covers the Spec run or Run it dispatched: none of those keeps one of its own. So `ls -t ~/.thirdshift/logs/commands/pickup | head` lists the recent passes that took an issue. A Pickup run or an Architect run skipped before doing any work keeps none, and `setup`, `email-test`, `update`, `version` and `help` never keep one. Lines printed before the Command log's name is known, such as a Pickup run's lines on the issues it [passed over](#why-an-issue-was-passed-over) before it took one, are written first, and once it is created a progress line says `logging this command to <path>`. A Command log that can't be written, as when its folder can't be created or the disk is full, is one `warning:` line on stderr, and the command carries on with the same outcome, stdout and exit code.
+A **Command log** is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: `thirdshift <Issue URL>`, a Run or a Spec run, in `issue/`, `thirdshift pickup` in `pickup/`, named for the issue it took, and `thirdshift architect` in `architect/`. A Spec run's covers its Tickets' Runs, a Run's covers its [Base fix](#base-fix), and a Pickup run's or an Architect run's covers the Spec run or Run it dispatched: none of those keeps one of its own. So `ls -t ~/.thirdshift/logs/acme/widgets/commands/pickup | head` lists the recent passes on acme/widgets that took an issue. A Pickup run or an Architect run skipped before doing any work keeps none, and `setup`, `email-test`, `update`, `version` and `help` never keep one. Lines printed before the Command log's name is known, such as a Pickup run's lines on the issues it [passed over](#why-an-issue-was-passed-over) before it took one, are written first, and once it is created a progress line says `logging this command to <path>`. A Command log that can't be written, as when its folder can't be created or the disk is full, is one `warning:` line on stderr, and the command carries on with the same outcome, stdout and exit code.
 
 The stamp is the local time the command started, with its UTC offset, as in `20261003T120000-0400`, in the machine's time zone, or `TZ`'s if set, so it agrees with `date` and `ls -l`. A command's Command log and all of its Session logs, its Tickets' Runs' and its Base fix's included, share that one stamp, so they sort together and each can be found from the other. When a Run fails, stderr ends with the path of its most recent Session log, the place to start looking, then that of its Command log.
+
+The **Activity log**, `activity.log`, is a short running record of what the factory did on the repository ([ADR-0011](docs/adr/0011-thirdshift-keeps-a-per-repository-activity-log.md)). A Run, a Spec run, an Architect run or a Pickup run writes a line when it starts work, naming its Command log, and one when it ends, with its outcome; a Run you type by hand writes them too, and the run an Architect run or a Pickup run dispatched, a Spec run's Tickets and a Base fix write none of their own. A skipped Architect run or Pickup run writes a line only when its reason differs from the last line of its own kind, so a repository that sits idle shows one line, not one per pass, and the first skip after a pass that did work always shows: that is when the repository went idle. Every line starts with the local date and time:
+
+```
+2026-10-03 02:00:01 Pickup run skipped: no Ready issue on acme/widgets
+2026-10-03 09:30:01 Pickup run #41 started: commands/pickup/41-20261003T093001-0400.log
+2026-10-03 09:52:17 Pickup run #41 ended: PR https://github.com/acme/widgets/pull/42 is merged
+2026-10-03 10:00:01 Pickup run skipped: no Ready issue on acme/widgets
+```
+
+Each line is appended whole, so passes that run at once on one repository never garble it. One that can't be written is one `warning:` line on stderr, and the command carries on as for a Command log. thirdshift never rotates it: collapsed skips keep it small. Logs written before this layout, under `sessions/` and `commands/` at the root of the logs, are not moved.
+
+With `quiet_skips = true` in the `[activity]` section of the [User config](#user-config), a skipped Architect run or Pickup run prints nothing on stdout or stderr, its dated first line included, and leaves only its Activity log line. A pass that does work, or fails, prints as ever, so a scheduler's log file catches only what went wrong. Without it, a skipped pass prints as it always has, for a pass you type by hand.
 
 ## Foreign commits in a Merge run
 
@@ -416,8 +436,8 @@ thirdshift: 03:12:40 CI red on test, which also fails on main at 362b9ca; fix ma
 thirdshift: 03:12:40 Base check: test: https://github.com/acme/widgets/actions/runs/1/job/2
 thirdshift: 03:12:40 Retry with: thirdshift https://github.com/acme/widgets/issues/7 base-fix
 thirdshift: 03:12:40 Or set: base.fix = true in ~/.thirdshift/config.toml, to allow a Base fix for every Run on this machine
-thirdshift: 03:12:40 session log: ~/.thirdshift/logs/sessions/acme-widgets-issue-7-….jsonl
-thirdshift: 03:12:40 command log: ~/.thirdshift/logs/commands/issue/acme-widgets-issue-7-….log
+thirdshift: 03:12:40 session log: ~/.thirdshift/logs/acme/widgets/sessions/7-….jsonl
+thirdshift: 03:12:40 command log: ~/.thirdshift/logs/acme/widgets/commands/issue/7-….log
 ```
 
 A Run given `no-base-fix` gets the `Base check:` lines and no offer. A Run that had its one Base fix gets neither: its `Base fix:` line already says what happened. The cause itself, and so the failure commit's message, is the same in every case, and no other cause adds a line.
@@ -452,7 +472,7 @@ thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a tim
 When nothing is left to run and any Ticket is not done, the Spec run is a **Failed spec run**: it leaves the Spec PR a draft, its checklist showing what's missing, prints its URL on stdout (if any Ticket has landed, so there is one), exits `1`, and lists on stderr each Ticket that landed, with its pull request, and each one not done, with why:
 
 ```
-thirdshift: 03:12:40 #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/sessions/acme-widgets-issue-21-….jsonl)
+thirdshift: 03:12:40 #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme/widgets/sessions/21-….jsonl)
 thirdshift: 03:12:40 #22 blocked by #21
 thirdshift: 03:12:40 #23 landed with https://github.com/acme/widgets/pull/1
 thirdshift: 03:12:40 #24 unready: labelled needs-info
@@ -575,25 +595,25 @@ thirdshift has no scheduler of its own: the operating system's scheduler runs th
 
 ```
 PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
-0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main >> ~/.thirdshift/logs/commands/architect/cron.log 2>&1
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
 - **`PATH`** is set because cron doesn't read your shell profile, and `thirdshift`, `claude`, `gh`, `git` and the repository's build tools must all be found. List every directory that holds one, written out in full: cron expands neither `~` nor `$HOME` on that line. `type thirdshift claude gh git` in your own shell shows where they are.
 - **`cd`** makes a clone of the repository the **Launch directory**, as for a hand-typed Architect run, and **`base main`** names the [Base branch](#architect-runs), so the branch checked out in the clone doesn't matter: it runs from the clone you work in, whatever you left it on.
 - **One line per repository, at different hours**, so the Architect runs don't compete for the machine. thirdshift keeps no list of repositories.
-- **The log file** takes everything the command prints. A failure before the [Run notification](#one-run-notification)'s checks have passed, such as a broken [User config](#user-config), a missing Resend key or a bad argument, shows up only there: no email is sent for it. Make its directory first, with `mkdir -p ~/.thirdshift/logs/commands/architect`, or the shell can't open the log and never starts the command.
+- **The log file** takes everything the command prints. A failure before the [Run notification](#one-run-notification)'s checks have passed, such as a broken [User config](#user-config), a missing Resend key or a bad argument, shows up only there: no email is sent for it. Use one fixed file for every line, in a folder that already exists, such as `~/.thirdshift/logs/`: the shell opens it before thirdshift starts, so a line whose folder is missing never starts the command, and nothing reports it. What each pass did on its repository is in that repository's [Activity log](#logs), in folders thirdshift creates itself, and with `activity.quiet_skips = true` the log file holds no skips at all.
 - **`claude` and `gh` must already be logged in** for the user the schedule runs as, with git able to push, as the [Prerequisites](#prerequisites) say. Without a terminal an Architect run behaves as it does from one, except that it never offers Setup.
 
 The command's flags and the User config decide what a scheduled Architect run does, as for a hand-typed one: with `merge.always` it merges the Architect plan's pull request, and without it the pull request is left for review. These are the cautious variants, whatever the User config says:
 
 ```
-0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main no-merge >> ~/.thirdshift/logs/commands/architect/cron.log 2>&1
-0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/commands/architect/cron.log 2>&1
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main no-merge >> ~/.thirdshift/logs/cron.log 2>&1
+0 2 * * * cd ~/repos/thirdshift && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
 The first leaves the pull request for you to review, and the second stops at the Architect plan, for you to read and run with `thirdshift <Issue URL>`.
 
-A scheduled Architect run is skipped when another on the repository, or a Pickup run, is [still running](#one-at-a-time), the Spec run or Run it dispatched included, when an [Architect plan is still open](#one-architect-plan-at-a-time), when an [Architect idea waits for triage](#an-architect-idea-waits-for-triage), or when the repository has a [Ready issue](#a-ready-issue-goes-first), so a `ready-for-agent` issue with no Pickup line to take it holds off every night until you run it: no new refactor is planned until last night's Architect plan is closed or loses its `architect-plan` label. Merging its pull request closes it; if its run failed, pick it up with `thirdshift <plan URL>` first. Closing the pull request alone leaves the Architect plan open. A skip exits `0`, so the scheduler sees no failure, and the log file has the line that says why. With Run notifications on, by `email.always = true` in the User config or `email` on the line, an Architect run that did work sends one email, and a skipped one sends none, so a crontab line can fire every few minutes, as for [Weeding](#weeding), without flooding your inbox. A night without an email means it was skipped, or failed before the notification's checks passed: look in the log file.
+A scheduled Architect run is skipped when another on the repository, or a Pickup run, is [still running](#one-at-a-time), the Spec run or Run it dispatched included, when an [Architect plan is still open](#one-architect-plan-at-a-time), when an [Architect idea waits for triage](#an-architect-idea-waits-for-triage), or when the repository has a [Ready issue](#a-ready-issue-goes-first), so a `ready-for-agent` issue with no Pickup line to take it holds off every night until you run it: no new refactor is planned until last night's Architect plan is closed or loses its `architect-plan` label. Merging its pull request closes it; if its run failed, pick it up with `thirdshift <plan URL>` first. Closing the pull request alone leaves the Architect plan open. A skip exits `0`, so the scheduler sees no failure, and the repository's [Activity log](#logs) has the line that says why, as does the log file unless `activity.quiet_skips` is set. With Run notifications on, by `email.always = true` in the User config or `email` on the line, an Architect run that did work sends one email, and a skipped one sends none, so a crontab line can fire every few minutes, as for [Weeding](#weeding), without flooding your inbox. A night without an email means it was skipped, or failed before the notification's checks passed: look in the log file.
 
 Any scheduler that runs the command works; a systemd user timer needs lingering on (`loginctl enable-linger`) to fire while you are logged out.
 
@@ -603,10 +623,10 @@ Any scheduler that runs the command works; a systemd user timer needs lingering 
 
 ```
 PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
-*/5 * * * * cd ~/repos/thirdshift && thirdshift architect base main >> ~/.thirdshift/logs/commands/weeding/cron.log 2>&1
+*/5 * * * * cd ~/repos/thirdshift && thirdshift architect base main >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
-The `PATH` line, the `cd` and `base main` and the logins are as in [On a schedule](#on-a-schedule). The log file has a directory of its own, so the skips don't bury a nightly Architect run's lines: make it first, with `mkdir -p ~/.thirdshift/logs/commands/weeding`.
+The `PATH` line, the `cd` and `base main` and the logins are as in [On a schedule](#on-a-schedule). Set `activity.quiet_skips = true` in the User config too, so the skips leave the log file alone: each is in the repository's [Activity log](#logs), once per change of reason.
 
 Most passes are skipped, and that is what paces Weeding. A pass is skipped while:
 
@@ -615,7 +635,7 @@ Most passes are skipped, and that is what paces Weeding. A pass is skipped while
 - **an Architect idea waits for triage**, since the factory has run out of Strong ideas ([An Architect idea waits for triage](#an-architect-idea-waits-for-triage));
 - **the repository has a Ready issue**, so work a human shaped goes first ([A Ready issue goes first](#a-ready-issue-goes-first)).
 
-A skip exits `0` and sends no email, even with Run notifications on, so the scheduler sees no failure and your inbox only hears of passes that did work. The log file has the line that says why each pass was skipped. An Architect plan whose run failed stays open, so Weeding pauses for the **Day shift** until you pick it up with `thirdshift <plan URL>`, close it, or take its `architect-plan` label off; an Architect idea pauses it until you triage the idea.
+A skip exits `0` and sends no email, even with Run notifications on, so the scheduler sees no failure and your inbox only hears of passes that did work. The repository's [Activity log](#logs) has the line that says why, once for each change of reason. An Architect plan whose run failed stays open, so Weeding pauses for the **Day shift** until you pick it up with `thirdshift <plan URL>`, close it, or take its `architect-plan` label off; an Architect idea pauses it until you triage the idea.
 
 On a repository that also has a [Pickup line](#a-pickup-run-on-a-schedule), put `--plan-only` on the Weeding line instead: the Architect run publishes the Architect plan and marks it ready, and a Pickup run builds it as an ordinary Ready issue, under the [Claim limit](#the-claim-limit), and merges it with `merge.always`, as in the [whole crontab](#a-pickup-run-on-a-schedule) below.
 
@@ -704,7 +724,7 @@ thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400
 thirdshift: 03:00:02 #18 labelled needs-info
 thirdshift: 03:00:03 #20 blocked by #17
 thirdshift: 03:00:04 taking Ready issue #22 "Sharpen the widgets", as thirdshift https://github.com/acme/widgets/issues/22 would
-thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/commands/pickup/acme-widgets-issue-22-20261003T030001-0400.log
+thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/commands/pickup/22-20261003T030001-0400.log
 ```
 
 ### One Run notification for the issue taken
@@ -726,35 +746,35 @@ thirdshift has no scheduler of its own ([ADR-0009](docs/adr/0009-the-operating-s
 
 ```
 PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
-*/30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/commands/pickup/cron.log 2>&1
+*/30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
 The `PATH` line, the `cd` and `base main`, the log file's directory, the logins `claude` and `gh` need, and schedulers other than cron are as for an Architect run: see its [On a schedule](#on-a-schedule). What differs for a Pickup run:
 
 - **The interval** sets how soon a Ready issue is taken and how much work is started: a pass takes one issue, so `*/30` starts at most one every half hour. A pass lasts as long as the run it dispatched, and the passes that fire meanwhile are skipped, so the schedule builds one issue of a repository at a time on a machine, and the first pass after it ends takes the next, unless the repository is by then at its [Claim limit](#the-claim-limit): each pull request left for review, and each failure left for you, holds a Claim, and at 3 of them, or the `pickup.limit` you set, the passes take nothing until you have dealt with one. An issue you have just labelled also waits ten minutes, until it is settled. A Run you start by hand on an Issue URL is outside all this: it neither waits for a pass nor makes one skip.
 - **One line per repository.** thirdshift keeps no list of repositories. A Pickup run and an Architect run on one repository each skip while the other is still running, the Spec run or Run it dispatched included, so both lines can go in one crontab and the two never build that repository at once. Passes on different repositories do run at the same time: give their lines different minutes, such as `15,45`, if they would compete for the machine.
-- **A pass is skipped** when the [lock is held](#one-at-a-time), when the repository has no Ready issue, and when it is at its Claim limit. A skip exits `0`, so the scheduler sees no failure, and sends no email, even with Run notifications on. The log file holds each skip's line, and before the line of a pass that found no Ready issue, as before the line of one that took an issue, [why each issue was passed over](#why-an-issue-was-passed-over). A pass skipped for the lock or the Claim limit looks at no issue, so it has no such lines.
+- **A pass is skipped** when the [lock is held](#one-at-a-time), when the repository has no Ready issue, and when it is at its Claim limit. A skip exits `0`, so the scheduler sees no failure, and sends no email, even with Run notifications on. The repository's [Activity log](#logs) records a skip when its reason changes. Unless `activity.quiet_skips` is set, the log file holds each skip's line too, and before the line of a pass that found no Ready issue, as before the line of one that took an issue, [why each issue was passed over](#why-an-issue-was-passed-over). A pass skipped for the lock or the Claim limit looks at no issue, so it has no such lines.
 - **A Run notification**, by `email.always = true` in the [User config](#user-config) or `email` on the line, is sent [only for an issue taken](#one-run-notification-for-the-issue-taken). So a day without email doesn't say the passes are running: a pass that fails before it takes an issue, on a broken User config, a missing Resend key or a failed check, shows up only in the log file.
 
-A whole crontab with both Weeding and a Pickup run on one repository looks like this, each line with a log file of its own, so `tail ~/.thirdshift/logs/commands/pickup/cron.log` shows what the Pickup runs have been doing lately:
+A whole crontab with both Weeding and a Pickup run on one repository looks like this, with `activity.quiet_skips = true` in the User config, every line sending its output to the one log file, which catches only what went wrong, so `tail ~/.thirdshift/logs/acme/widgets/activity.log` shows what the factory has been doing on the repository lately:
 
 ```
 # cron reads no shell profile: list every directory that holds thirdshift, claude, gh, git and the build tools
 PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 
 # Weeding, every five minutes: an Architect run publishes each Architect plan, and a Pickup run builds it
-*/5 * * * * cd ~/repos/widgets && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/commands/weeding/cron.log 2>&1
+*/5 * * * * cd ~/repos/widgets && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/cron.log 2>&1
 
 # Pickup runs, every half hour
-*/30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/commands/pickup/cron.log 2>&1
+*/30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
-For one Architect run a night instead of Weeding, put the nightly line from [On a schedule](#on-a-schedule) in place of the Weeding line: a repository needs one or the other, since Weeding is Architect runs started more often. Make the log directories first, with `mkdir -p ~/.thirdshift/logs/commands/weeding ~/.thirdshift/logs/commands/pickup`. Add the lines with `crontab -e` rather than by joining files, and end each with a newline: a line run together with the comment after it, such as `... 2>&1# Edit this file`, is a shell syntax error, so cron fires it but the pass never starts and nothing reaches its log.
+For one Architect run a night instead of Weeding, put the nightly line from [On a schedule](#on-a-schedule) in place of the Weeding line: a repository needs one or the other, since Weeding is Architect runs started more often. Adding a repository is adding its lines. Add the lines with `crontab -e` rather than by joining files, and end each with a newline: a line run together with the comment after it, such as `... 2>&1# Edit this file`, is a shell syntax error, so cron fires it but the pass never starts and nothing reaches its log.
 
 The command's flags and the User config decide what a pass does with the issue it takes, as for a hand-typed `thirdshift <Issue URL>`: with `merge.always` it merges the pull request, and without it the pull request is left for review. This is the cautious variant, whatever the User config says:
 
 ```
-*/30 * * * * cd ~/repos/widgets && thirdshift pickup base main no-merge >> ~/.thirdshift/logs/commands/pickup/cron.log 2>&1
+*/30 * * * * cd ~/repos/widgets && thirdshift pickup base main no-merge >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
 An issue whose run failed [keeps its Claim](#when-the-claim-ends) and waits for the **Day shift**: it stays `in-progress`, with the Issue branch and any draft pull request the run left, no later pass takes it, and it counts towards the Claim limit until it is closed or you take the label off. To send it round again by hand, run `thirdshift <Issue URL>` from the clone, with the Base branch checked out, since that command takes no `base <branch>`: it picks up where the failed run stopped, as a [Continuation](#continuation) does. Labelling it `ready-for-agent` again doesn't do it: a Pickup run never takes an issue that was started. The one failure a later pass does retry is one that left nothing on `origin`, such as a usage limit or an expired login: its Claim is released, so the issue is a Ready issue again once it has settled.

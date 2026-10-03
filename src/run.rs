@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::activity;
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::claim;
+use crate::command_log;
 use crate::failed_run::{self, FailedRun, PolicyRefusal};
 use crate::git::Git;
 use crate::github::{self, Mergeable, PullRequest, Ticket};
@@ -165,6 +167,14 @@ fn run(
         Some(_) => Vec::new(),
         None => github::tickets(issue)?,
     };
+    if matches!(started_by, StartedBy::Command) {
+        let kind = match tickets.is_empty() {
+            true => activity::Kind::Run,
+            false => activity::Kind::SpecRun,
+        };
+        let root = command_log::root(logs_dir, &issue.repo());
+        activity::start(&root, kind, Some(issue.number));
+    }
     if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(
             "parallel is only for a Spec, and #{} has no sub-issues",

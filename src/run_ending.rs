@@ -51,6 +51,42 @@ pub fn show_architect(outcome: &architect::Outcome) -> ExitCode {
     .print()
 }
 
+/// How a Run or a Spec run `ended`, in short, as its Activity log line
+/// gives it: its pull request's outcome, or how it failed.
+pub fn summary(ended: &Ended) -> String {
+    match &ended.outcome {
+        Ok(reached) => format!("PR {} is {}", reached.pr_url, reached.goal.outcome()),
+        Err(failed) => failure_summary(failed),
+    }
+}
+
+/// How an Architect run that got past its skip checks ended, in short, as
+/// its Activity log line gives it: the run it `dispatched` its plan as, if
+/// it dispatched it, else the issue it ended on, or how it failed.
+pub fn architect_summary(
+    ended: &Result<architect::Outcome, FailedRun>,
+    dispatched: Option<&Ended>,
+) -> String {
+    match (ended, dispatched) {
+        (Err(failed), _) => failure_summary(failed),
+        (Ok(outcome), Some(dispatched)) => match outcome.reviewed() {
+            Some(reviewed) => format!(
+                "plan {} dispatched: {}",
+                reviewed.url(),
+                summary(dispatched)
+            ),
+            None => summary(dispatched),
+        },
+        (Ok(outcome), None) => outcome.to_string(),
+    }
+}
+
+/// `failed: ` and the first line of a failure's cause.
+fn failure_summary(failed: &FailedRun) -> String {
+    let cause = format!("{:#}", failed.error);
+    format!("failed: {}", cause.lines().next().unwrap_or_default())
+}
+
 /// An ending as it shows.
 struct Shown {
     /// The messages of its progress lines on stderr, in order.

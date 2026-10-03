@@ -687,7 +687,7 @@ fn a_review_repair_whose_background_work_was_killed_gets_a_resume() {
         "prompt: {}",
         calls[2]["prompt"]
     );
-    let logs = scenario.entries("home/.thirdshift/logs/sessions");
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
     assert!(
         logs.iter()
             .any(|log| log.ends_with("-repair-1-resume.jsonl")),

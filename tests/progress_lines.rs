@@ -183,10 +183,10 @@ fn still_logs_the_whole_stream() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    let logs = scenario.entries("home/.thirdshift/logs/sessions");
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
     let log = std::fs::read_to_string(
         scenario
-            .path("home/.thirdshift/logs/sessions")
+            .path("home/.thirdshift/logs/acme/widgets/sessions")
             .join(&logs[0]),
     )
     .unwrap();

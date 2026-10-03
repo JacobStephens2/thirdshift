@@ -49,6 +49,14 @@ impl IssueUrl {
         self.owner.eq_ignore_ascii_case(&other.owner) && self.repo.eq_ignore_ascii_case(&other.repo)
     }
 
+    /// Its repository, spelled as its URL spells it.
+    pub fn repo(&self) -> Repo {
+        Repo {
+            owner: self.owner.clone(),
+            name: self.repo.clone(),
+        }
+    }
+
     /// `owner/repo`, as `gh --repo` takes it.
     pub fn repo_slug(&self) -> String {
         format!("{}/{}", self.owner, self.repo)
