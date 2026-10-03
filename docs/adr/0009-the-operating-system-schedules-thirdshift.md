@@ -16,4 +16,4 @@ An **Architect run** and a **Pickup run** find their own work, so they are meant
 - A **Ready issue** waits up to the scheduler's interval before it is taken, and throughput is set by how often the crontab line fires.
 - An issue is taken at most once across passes by state on GitHub, the **Claim**, since no process outlives a pass to remember it. The lock only covers one machine.
 - Several repositories means several crontab lines, at hours the user staggers. thirdshift keeps no list of repositories.
-- A frequent pass must be quiet when it does nothing: a skipped Pickup run or Architect run sends no **Run notification**, so either can be started every few minutes. A skip leaves only its line in the scheduler's log.
+- A frequent pass must be quiet when it does nothing: a skipped Pickup run or Architect run sends no **Run notification**, so either can be started every few minutes. A skip left only its line in the scheduler's log; since ADR 0011 it leaves one in the repository's **Activity log** instead, and only when its reason changes.
