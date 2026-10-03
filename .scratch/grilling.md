@@ -1056,7 +1056,7 @@ PR the adr and context updates, then /to-spec
 File these as ticket sub-issues of the spec issue.
 
 
-# Oct 2 2026, logs
+# Oct 2 2026, logs, spec 259
  I'm actually thinking of updating the suggested .thirdshift/logs folder default
   structure to be logs/session, logs/architect, and logs/pickup and I want the samplecron to I think write a new log file to the log folder with a
   a date or time or something to have one file, I think, per separate cron run.
@@ -1113,3 +1113,41 @@ I confirm the design. /to-spec and PR the docs changes
 
 ## 9
 I agree on the seam. Publish without tickets
+
+
+# Oct 3, 2026, continuous thirdshift architect, issue 311
+/grill-with-docs I want a way to run `thirdshift architect` continuously - as in
+  for example on this server, where I run the thirdshift architect cron with
+  self-merge on, I want as soon as that run finishes and the PR is merged into
+  default, I want a new Architect run to start, so thirdshift can continuously be
+  improving itself.  https://github.com/JacobStephens2/thirdshift/issues/311
+
+## 2
+The relevant https://github.com/JacobStephens2/thirdshift/pull/318/changes#top just landed as a result of a crontab initiated Architect run.
+1 - agree
+2 - agree
+3 - agree
+4 - agree
+5 - agree
+
+## 3
+I'm thinking about this continuous process of improving codebase architecture as upkeep, as framed on https://www.aihero.dev/skills
+
+6 - agree
+7 - agree
+8 - agree
+9 - agree
+10 - agree
+11 - we'll use the to-spec then to-tickets skills
+
+Again I'm thinking in terms of the agricultural or garden metaphor - weeding / cleaning up as other features are added and potential bring detritus into the codebase.
+
+## 4
+12 - agree
+13 - agree
+
+## 5
+PR the docs changes, then /to-spec
+
+## 6
+agreed on the seam
