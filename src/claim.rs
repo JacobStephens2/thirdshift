@@ -11,15 +11,12 @@ use crate::git::Git;
 use crate::github::{self, ListedIssue};
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
+use crate::labels::{Label, Labels, READY_FOR_AGENT};
 use crate::progress;
-use crate::spec_run::READY_FOR_AGENT;
 
 /// The label of a Claimed issue.
-pub const IN_PROGRESS: &str = "in-progress";
-
-/// The description the `in-progress` label is added to the repository with
-/// if the repository lacks it.
-const IN_PROGRESS_DESCRIPTION: &str = "A Claim: thirdshift has taken this issue";
+pub const IN_PROGRESS: Label =
+    Label::new("in-progress", "A Claim: thirdshift has taken this issue");
 
 /// The Claim a Run or a Spec run made on its issue, with what making it
 /// changed, which is what releasing it puts back.
@@ -34,14 +31,8 @@ pub struct Claim<'a> {
 
 /// Whether an issue with `labels` carries a Claim, whatever else it is
 /// labelled.
-pub fn is_on(labels: &[String]) -> bool {
-    github::has_label(labels, IN_PROGRESS)
-}
-
-/// `in-progress` as an issue with `labels` spells it, if it carries a Claim:
-/// what to take off it, since GitHub's label names are case-insensitive.
-fn as_spelled(labels: &[String]) -> Option<&String> {
-    github::label_as_spelled(labels, IN_PROGRESS)
+pub fn is_on(labels: &Labels) -> bool {
+    labels.has(IN_PROGRESS)
 }
 
 /// Make the Claim on `issue`: label it `in-progress`, in place of
@@ -57,8 +48,8 @@ pub fn make(issue: &IssueUrl) -> Result<Claim<'_>> {
 
 /// [`make`], its failure as `gh` gave it.
 fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
-    let mut labels = github::issue_labels(issue)?;
-    let (claimed, ready) = (is_on(&labels), github::has_label(&labels, READY_FOR_AGENT));
+    let labels = github::issue_labels(issue)?;
+    let (claimed, ready) = (is_on(&labels), labels.has(READY_FOR_AGENT));
     let claim = Claim {
         issue,
         added_in_progress: !claimed,
@@ -76,13 +67,9 @@ fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
         progress::step(format_args!("labelling #{} {IN_PROGRESS}", issue.number));
     }
     if !claimed {
-        github::ensure_labels(
-            &issue.repo_slug(),
-            &[(IN_PROGRESS, IN_PROGRESS_DESCRIPTION)],
-        )?;
+        github::ensure_labels(&issue.repo_slug(), &[IN_PROGRESS])?;
     }
-    github::drop_label(&mut labels, READY_FOR_AGENT);
-    github::set_labels_adding(issue, &labels, &[IN_PROGRESS])?;
+    github::set_labels(issue, &labels.swapped(&[READY_FOR_AGENT], &[IN_PROGRESS]))?;
     Ok(claim)
 }
 
@@ -128,8 +115,8 @@ impl Claim<'_> {
         if branch::started(launch, issue)?.is_some() {
             return Ok(());
         }
-        let mut labels = github::issue_labels(issue)?;
-        let Some(in_progress) = as_spelled(&labels).cloned() else {
+        let labels = github::issue_labels(issue)?;
+        let Some(in_progress) = labels.spelled(IN_PROGRESS) else {
             return Ok(());
         };
         let number = issue.number;
@@ -137,20 +124,21 @@ impl Claim<'_> {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: removing {IN_PROGRESS}"
             ));
-            return github::remove_label(issue, &in_progress);
+            return github::remove_label(issue, in_progress);
         }
-        if self.added_in_progress {
+        let off: &[Label] = if self.added_in_progress {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: labelling it {READY_FOR_AGENT}, \
                  in place of {IN_PROGRESS}"
             ));
-            github::drop_label(&mut labels, IN_PROGRESS);
+            &[IN_PROGRESS]
         } else {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: labelling it {READY_FOR_AGENT} again"
             ));
-        }
-        github::set_labels_adding(issue, &labels, &[READY_FOR_AGENT])
+            &[]
+        };
+        github::set_labels(issue, &labels.swapped(off, &[READY_FOR_AGENT]))
     }
 
     /// Remove the Claim once the Self-merge of the Run or the Spec run that
@@ -181,7 +169,7 @@ impl Claim<'_> {
         if issue.is_open {
             return Ok(());
         }
-        let Some(in_progress) = as_spelled(&issue.labels) else {
+        let Some(in_progress) = issue.labels.spelled(IN_PROGRESS) else {
             return Ok(());
         };
         progress::step(format_args!(
@@ -224,7 +212,7 @@ pub fn sweep(repo: &Repo) {
         }
     };
     for ListedIssue { issue, labels, .. } in closed {
-        let Some(label) = as_spelled(&labels) else {
+        let Some(label) = labels.spelled(IN_PROGRESS) else {
             continue;
         };
         progress::step(format_args!(

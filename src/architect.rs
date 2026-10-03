@@ -23,13 +23,13 @@ use crate::failed_run::FailedRun;
 use crate::github;
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::labels::{Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::plugin::Plugin;
 use crate::progress;
 use crate::prompt;
 use crate::run;
 use crate::session::{Logs, Sessions};
-use crate::spec_run::{self, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::worktree::ReviewWorktree;
 
 /// The Architecture review session's kind, in its progress lines and log
@@ -38,12 +38,10 @@ const REVIEW: &str = "architecture-review";
 
 /// The label thirdshift marks an Architect plan with, which a later Architect
 /// run finds an open one by.
-const ARCHITECT_PLAN_LABEL: &str = "architect-plan";
-
-/// The description the `architect-plan` label is added to the repository
-/// with if the repository lacks it.
-const ARCHITECT_PLAN_DESCRIPTION: &str =
-    "An Architect plan: the Spec or Ticket an Architecture review published";
+const ARCHITECT_PLAN: Label = Label::new(
+    "architect-plan",
+    "An Architect plan: the Spec or Ticket an Architecture review published",
+);
 
 /// How an Architect run ended, short of a failure and before any dispatch.
 /// Its `Display` is the line that says how it ended.
@@ -212,7 +210,7 @@ pub fn run(
             return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
-    let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN_LABEL)?;
+    let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
         let open_plans = open_plans.into_iter().map(|plan| (plan.issue, plan.title));
         return Ok(Outcome::Skipped(Skipped::OpenPlans(open_plans.collect())));
@@ -330,21 +328,18 @@ fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Res
         bail!("interrupted");
     }
     progress::step(format_args!(
-        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} and adding {ARCHITECT_PLAN_LABEL} on #{}",
+        "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} and adding {ARCHITECT_PLAN} on #{}",
         plan.number
     ));
-    github::ensure_labels(
-        &plan.repo_slug(),
-        &[(ARCHITECT_PLAN_LABEL, ARCHITECT_PLAN_DESCRIPTION)],
-    )?;
-    github::set_labels_adding(plan, &kept, &[READY_FOR_AGENT, ARCHITECT_PLAN_LABEL])
+    github::ensure_labels(&plan.repo_slug(), &[ARCHITECT_PLAN])?;
+    github::set_labels(plan, &kept.swapped(&[], &[READY_FOR_AGENT, ARCHITECT_PLAN]))
 }
 
 /// The labels `plan` keeps once it is marked ready: all it has but
 /// `needs-triage`. Fails unless the plan passes its checks: it is in the
 /// repository at `origin`, open, created since the Architect run `started`,
 /// and has no other label that makes an Unready Ticket.
-fn labels_to_keep(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<Vec<String>> {
+fn labels_to_keep(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<Labels> {
     if !plan.matches_origin(origin) {
         bail!(
             "the plan {} is not in the repository at origin {origin}",
@@ -362,9 +357,8 @@ fn labels_to_keep(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Resu
             plan.url
         );
     }
-    let mut kept = issue.labels;
-    kept.retain(|label| label != NEEDS_TRIAGE);
-    if let Some(unready) = spec_run::unready_label(&kept) {
+    let kept = issue.labels.swapped(&[NEEDS_TRIAGE], &[]);
+    if let Some(unready) = kept.unready() {
         bail!("the plan {} is labelled {unready}", plan.url);
     }
     Ok(kept)

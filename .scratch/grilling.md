@@ -1054,3 +1054,62 @@ PR the adr and context updates, then /to-spec
 
 ## 10
 File these as ticket sub-issues of the spec issue.
+
+
+# Oct 2 2026, logs
+ I'm actually thinking of updating the suggested .thirdshift/logs folder default
+  structure to be logs/session, logs/architect, and logs/pickup and I want the samplecron to I think write a new log file to the log folder with a
+  a date or time or something to have one file, I think, per separate cron run.
+  /grill-with-docs for this
+
+## 2
+1. agree, so then the log location could be configured in User config?
+2. agree
+3. I want timezone configurable, and I want b, so I can map when a run ran to what thirdshift is in my timezone, and not be surprised at all about when something ran, and not have a difficult time knowing when it ran - as I don't have the time difference on UTC memorized for example.
+4. agree - I'm wondering though whether to call the transcripts folder transcripts instead of sessions, but in the thirdshift command output it says session starting, so session does fit with some existing thirdshift language.
+
+## 3
+5. agree
+6. agree. 
+7. agree
+8. agree
+9. agree
+10. agree
+11. agree, though don't add anything to the README about this change, as I'm the only one using thirdshift, so no one else will be using the old version and need to make this change.
+
+## 4
+12. agree
+13. agree
+14. agree
+15. agree
+16. agree
+17. agree
+
+## 5
+18. agree
+
+I want logs from different commands to get their own folders in teh commands folder I think.
+
+## 6
+19. agree, I'm thinking even of breaking the commands/issue dir into:
+- logs/commands/pickup
+- logs/commands/architect
+- logs/commands/issue
+
+I want it to be easy to show another engineer logs from the various kinds of runs, partly to help them understand how thirdshift works.
+
+20. agree
+21. agree
+
+## 7
+22. I also want a way to easily check "What has the thirdshift pickup command I have running by the crontab been doing labely?", or the same for the thirdshift architect command I might have there.
+
+23. agree
+24. agree
+25. agree
+
+## 8
+I confirm the design. /to-spec and PR the docs changes
+
+## 9
+I agree on the seam. Publish without tickets

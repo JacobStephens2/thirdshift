@@ -19,9 +19,10 @@ use crate::claim;
 use crate::git::Git;
 use crate::github::{self, ListedIssue, Shaping};
 use crate::issue::{IssueUrl, Repo};
+use crate::labels::{Label, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::progress;
-use crate::spec_run::{self, READY_FOR_AGENT};
+use crate::spec_run;
 
 /// How a Pickup run ended, short of a failure and before any dispatch.
 pub enum Outcome {
@@ -151,7 +152,7 @@ enum Standing {
 #[derive(Clone)]
 enum Reason {
     /// It has this label, which makes an Unready Ticket.
-    Unready(&'static str),
+    Unready(Label),
     /// It carries a Claim.
     Claimed,
     /// It is a Ticket of this Spec, which it is reached through.
@@ -246,7 +247,7 @@ impl<'a> Search<'a> {
                 };
                 format!("is a Ticket of {spec}, which is not ready")
             }
-            Reason::BaseFix => format!("labelled {}", base_fix::BASE_FIX_LABEL),
+            Reason::BaseFix => format!("labelled {}", base_fix::BASE_FIX),
             Reason::Blocked(blockers) => {
                 let blockers: Vec<String> = blockers
                     .iter()
@@ -282,7 +283,7 @@ impl<'a> Search<'a> {
 /// or a "blocked by" link of its was last added or removed.
 fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
     let passed_over = |reason| Ok(Standing::PassedOver(reason));
-    if let Some(label) = spec_run::unready_label(&candidate.labels) {
+    if let Some(label) = candidate.labels.unready() {
         return passed_over(Reason::Unready(label));
     }
     if claim::is_on(&candidate.labels) {
