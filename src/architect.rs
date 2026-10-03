@@ -116,32 +116,33 @@ impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::AlreadyRunning(running) => running.fmt(f),
-            Self::OpenPlans(plans) => {
-                let still_open: Vec<String> = plans
-                    .iter()
-                    .map(|(plan, title)| {
-                        format!(
-                            "Architect plan #{} \"{title}\" is still open: pick it up with thirdshift {}",
-                            plan.number, plan.url
-                        )
-                    })
-                    .collect();
-                f.write_str(&still_open.join("; "))
-            }
-            Self::IdeasWaiting(ideas) => {
-                let waiting: Vec<String> = ideas
-                    .iter()
-                    .map(|(idea, title)| {
-                        format!(
-                            "Architect idea #{} \"{title}\" is waiting for triage: {}",
-                            idea.number, idea.url
-                        )
-                    })
-                    .collect();
-                f.write_str(&waiting.join("; "))
-            }
+            Self::OpenPlans(plans) => each(f, plans, |plan, title| {
+                format!(
+                    "Architect plan #{} \"{title}\" is still open: pick it up with thirdshift {}",
+                    plan.number, plan.url
+                )
+            }),
+            Self::IdeasWaiting(ideas) => each(f, ideas, |idea, title| {
+                format!(
+                    "Architect idea #{} \"{title}\" is waiting for triage: {}",
+                    idea.number, idea.url
+                )
+            }),
         }
     }
+}
+
+/// Write what `says` of each of `issues`, with its title, joined by `; `.
+fn each(
+    f: &mut fmt::Formatter,
+    issues: &[(IssueUrl, String)],
+    says: impl Fn(&IssueUrl, &str) -> String,
+) -> fmt::Result {
+    let said: Vec<String> = issues
+        .iter()
+        .map(|(issue, title)| says(issue, title))
+        .collect();
+    f.write_str(&said.join("; "))
 }
 
 /// How an Architecture review ended, short of a failure, with the issue it
@@ -204,9 +205,9 @@ impl fmt::Display for Reviewed {
 /// out, or without one the branch checked out there. A review that reports
 /// an idea issue it filed, or the open issue that already covers its top
 /// recommendation, instead of a plan, has that issue labelled an Architect
-/// idea. With `launch_pull`,
-/// the Launch directory's checkout of the Base branch, if that is the branch
-/// checked out, is first brought up to date with origin. The review's
+/// idea. With `launch_pull`, the Launch directory's checkout of the Base
+/// branch, if that is the branch checked out, is first brought up to date
+/// with origin. The review's
 /// worktree and the plugin directory are gone when this returns. A failure
 /// after the plan is published leaves its labels as the review left them.
 ///

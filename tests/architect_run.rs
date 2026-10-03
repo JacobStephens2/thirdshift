@@ -13,7 +13,7 @@
 //! The Base branch is the branch checked out in the Launch directory, or the
 //! one `base <branch>` names, whatever is checked out there, which the run
 //! the plan is dispatched as takes as its Base branch too.
-//! Thirdshift labels the issue such a review ends on an Architect idea, with
+//! thirdshift labels the issue such a review ends on an Architect idea, with
 //! `architect-idea` and `needs-triage`.
 //! An Architect run started while another on the repository, or a Pickup run,
 //! is still running, while an Architect plan is still open there, or while an
