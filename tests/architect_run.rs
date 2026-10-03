@@ -13,9 +13,11 @@
 //! The Base branch is the branch checked out in the Launch directory, or the
 //! one `base <branch>` names, whatever is checked out there, which the run
 //! the plan is dispatched as takes as its Base branch too.
+//! Thirdshift labels the issue such a review ends on an Architect idea, with
+//! `architect-idea` and `needs-triage`.
 //! An Architect run started while another on the repository, or a Pickup run,
-//! is still running, or while an Architect plan is still open there, is
-//! skipped.
+//! is still running, while an Architect plan is still open there, or while an
+//! Architect idea there waits for triage, is skipped.
 
 mod support;
 
@@ -32,6 +34,9 @@ const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
 /// The label thirdshift marks an Architect plan with.
 const ARCHITECT_PLAN: &str = "architect-plan";
+
+/// The label thirdshift marks an Architect idea with.
+const ARCHITECT_IDEA: &str = "architect-idea";
 
 /// The label of a Claimed issue, which the run a plan is dispatched as
 /// swaps the plan's `ready-for-agent` for.
@@ -522,7 +527,7 @@ fn a_session_that_ends_without_a_valid_final_line_fails_the_architect_run() {
 }
 
 #[test]
-fn a_review_that_files_an_idea_prints_its_url_and_changes_no_label() {
+fn a_review_that_files_an_idea_prints_its_url_and_labels_it_an_architect_idea() {
     let scenario = scenario();
     let idea = scenario.issue_url(8);
     scenario.agent_does(
@@ -540,18 +545,19 @@ printf 'No Strong candidate.\n\nArchitecture review idea: %s\n' "$url" > "$FAKE_
         &idea,
         &format!("no Strong candidate: the Architecture review filed the idea {idea}"),
     );
-    assert_eq!(scenario.issue_labels(8), ["needs-triage"]);
+    assert_eq!(scenario.issue_labels(8), ["needs-triage", ARCHITECT_IDEA]);
 }
 
 #[test]
-fn a_review_whose_idea_is_already_filed_prints_that_issues_url_and_files_and_changes_nothing() {
+fn a_review_whose_idea_is_already_filed_prints_that_issues_url_files_nothing_and_labels_it_an_architect_idea()
+ {
     let scenario = scenario();
     scenario.issue_labelled(7, &["needs-triage"]);
     let url = scenario.issue_url(7);
     scenario.agent_does(&ends_with(&format!(
         "Architecture review already filed: {url}"
     )));
-    let github = scenario.gh_state();
+    let mut github = scenario.gh_state();
 
     let result = scenario.run(&["architect", "--plan-only"]);
 
@@ -563,7 +569,103 @@ fn a_review_whose_idea_is_already_filed_prints_that_issues_url_and_files_and_cha
             "no Strong candidate: {url} already covers the Architecture review's top recommendation, so it filed nothing"
         ),
     );
+    github["labels"]["7"] = serde_json::json!(["needs-triage", ARCHITECT_IDEA]);
+    github["repo_labels"]
+        .as_array_mut()
+        .unwrap()
+        .push(ARCHITECT_IDEA.into());
     assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn an_idea_already_filed_and_triaged_goes_back_to_needs_triage_keeping_its_other_labels() {
+    for triaged in [
+        &["ready-for-human", "architecture"][..],
+        &["Architecture", "WONTFIX", "Architect-Idea"],
+        &["needs-info"],
+        &[],
+    ] {
+        let scenario = scenario();
+        scenario.issue_labelled(7, triaged);
+        let url = scenario.issue_url(7);
+        scenario.agent_does(&ends_with(&format!(
+            "Architecture review already filed: {url}"
+        )));
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(
+            result.stdout,
+            format!("{url}\n"),
+            "stderr: {}",
+            result.stderr
+        );
+        let kept = triaged
+            .iter()
+            .filter(|label| !label.eq_ignore_ascii_case(ARCHITECT_IDEA))
+            .copied();
+        let expected: Vec<&str> = kept.chain(["needs-triage", ARCHITECT_IDEA]).collect();
+        assert_eq!(scenario.issue_labels(7), expected, "{triaged:?}");
+    }
+}
+
+#[test]
+fn the_architect_idea_label_is_created_when_the_repository_lacks_it_and_kept_when_it_has_it() {
+    for (repo_labels, created) in [
+        (&["needs-triage"][..], true),
+        (&["needs-triage", "Architect-Idea"], false),
+    ] {
+        let scenario = scenario();
+        scenario.repo_has_labels(repo_labels);
+        let url = scenario.issue_url(7);
+        scenario.agent_does(&ends_with(&format!("Architecture review idea: {url}")));
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        let creates = scenario.gh_calls_of("label", "create");
+        if created {
+            assert_eq!(scenario.repo_labels(), ["needs-triage", ARCHITECT_IDEA]);
+            assert_eq!(creates.len(), 1, "{creates:?}");
+            assert_eq!(creates[0][2], ARCHITECT_IDEA);
+        } else {
+            assert_eq!(scenario.repo_labels(), repo_labels);
+            assert!(creates.is_empty(), "{creates:?}");
+        }
+        assert_eq!(scenario.issue_labels(7), ["needs-triage", ARCHITECT_IDEA]);
+    }
+}
+
+#[test]
+fn an_idea_that_cannot_be_labelled_fails_the_architect_run_naming_the_cause() {
+    for (failing, cause) in [
+        ("label list", "gh label list failed: HTTP 502"),
+        (
+            "api --method",
+            "gh api --method PUT repos/acme/widgets/issues/7/labels --silent \
+             -f labels[]=needs-triage -f labels[]=architect-idea failed: HTTP 502",
+        ),
+    ] {
+        let scenario = scenario();
+        let url = scenario.issue_url(7);
+        scenario.agent_does(&ends_with(&format!(
+            "Architecture review already filed: {url}"
+        )));
+        scenario.gh_fails(failing);
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+        assert_eq!(result.stdout, "");
+        let cause = format!("thirdshift: could not label the Architect idea #7: {cause}");
+        assert!(
+            result.stderr.contains(&cause),
+            "expected {cause:?} in stderr: {}",
+            result.stderr
+        );
+        assert!(scenario.issue_labels(7).is_empty(), "{failing}");
+        assert_nothing_left_behind(&scenario);
+    }
 }
 
 #[test]
@@ -572,7 +674,6 @@ fn a_review_with_no_strong_candidate_dispatches_nothing_without_plan_only() {
     scenario.issue_labelled(7, &["needs-triage"]);
     let url = scenario.issue_url(7);
     scenario.agent_does(&ends_with(&format!("Architecture review idea: {url}")));
-    let github = scenario.gh_state();
 
     let result = scenario.run(&["architect", "merge"]);
 
@@ -582,7 +683,8 @@ fn a_review_with_no_strong_candidate_dispatches_nothing_without_plan_only() {
         &url,
         &format!("no Strong candidate: the Architecture review filed the idea {url}"),
     );
-    assert_eq!(scenario.gh_state(), github);
+    assert_eq!(scenario.issue_labels(7), ["needs-triage", ARCHITECT_IDEA]);
+    assert!(scenario.gh_calls_of("pr", "create").is_empty());
 }
 
 #[test]
@@ -1825,7 +1927,7 @@ fn an_architect_run_on_a_different_repository_at_the_same_time_is_not_skipped() 
     let gadgets = scenario.path("gh-state-gadgets.json");
     fs::write(
         &gadgets,
-        r#"{"repo": "acme/gadgets", "issues": {}, "prs": []}"#,
+        r#"{"repo": "acme/gadgets", "issues": {"3": "OPEN"}, "prs": []}"#,
     )
     .unwrap();
 
@@ -2039,9 +2141,9 @@ fn an_architect_plan_that_is_closed_or_no_longer_labelled_lets_the_architect_run
 }
 
 #[test]
-fn an_open_idea_issue_or_a_plan_left_needing_triage_does_not_skip_the_architect_run() {
-    // #7 is the idea issue an earlier review filed, or the plan one that
-    // failed left half-published: neither was ever labelled an Architect plan.
+fn a_plan_left_needing_triage_does_not_skip_the_architect_run() {
+    // #7 is the plan a review that failed left half-published: it was never
+    // labelled an Architect plan, nor an Architect idea.
     let scenario = scenario();
     scenario.issue_labelled(7, &["needs-triage", "architecture"]);
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
@@ -2117,6 +2219,206 @@ fn an_architect_run_skipped_for_open_plans_sends_one_notification_naming_each_an
             still_open(&scenario, 7, "Deepen the session module"),
             still_open(&scenario, 5, "Deepen the worktree module")
         )),
+        "{text}"
+    );
+}
+
+/// Make issue `number` an open Architect idea titled `title`, waiting for
+/// triage, as thirdshift left the idea of an earlier Architect run.
+fn waiting_architect_idea(scenario: &Scenario, number: u32, title: &str) {
+    scenario.issue_is(number, "OPEN");
+    scenario.issue_titled(number, title);
+    scenario.issue_labelled(number, &["architecture", "needs-triage", ARCHITECT_IDEA]);
+}
+
+/// What a skipped Architect run says of the Architect idea `number`, titled
+/// `title`, waiting for triage on the scenario's repository.
+fn waiting_for_triage(scenario: &Scenario, number: u32, title: &str) -> String {
+    format!(
+        "Architect idea #{number} \"{title}\" is waiting for triage: {}",
+        scenario.issue_url(number)
+    )
+}
+
+#[test]
+fn an_architect_idea_waiting_for_triage_skips_the_architect_run_before_any_review() {
+    for args in [
+        vec!["architect"],
+        vec!["architect", "--plan-only"],
+        vec!["architect", "the Spec run", "merge", "base", "main"],
+    ] {
+        let scenario = scenario();
+        waiting_architect_idea(&scenario, 7, "Deepen the session module");
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+        let github = scenario.gh_state();
+
+        let result = scenario.run(&args);
+
+        assert_eq!(result.code, Some(0), "{args:?}: stderr: {}", result.stderr);
+        assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+        assert_eq!(
+            after_start(&result.stderr),
+            format!(
+                "thirdshift: {}\n",
+                waiting_for_triage(&scenario, 7, "Deepen the session module")
+            )
+        );
+        assert!(scenario.claude_calls().is_empty(), "claude was started");
+        assert_eq!(scenario.gh_state(), github);
+        assert_nothing_left_behind(&scenario);
+    }
+}
+
+#[test]
+fn a_skipped_architect_run_names_each_architect_idea_waiting_for_triage_and_prints_its_url() {
+    let scenario = scenario();
+    waiting_architect_idea(&scenario, 5, "Deepen the worktree module");
+    waiting_architect_idea(&scenario, 7, "Deepen the session module");
+    // Triaged: not waiting.
+    scenario.issue_is(6, "OPEN");
+    scenario.issue_labelled(6, &["ready-for-human", ARCHITECT_IDEA]);
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        result.stdout,
+        format!("{}\n{}\n", scenario.issue_url(7), scenario.issue_url(5))
+    );
+    assert_eq!(
+        after_start(&result.stderr),
+        format!(
+            "thirdshift: {}; {}\n",
+            waiting_for_triage(&scenario, 7, "Deepen the session module"),
+            waiting_for_triage(&scenario, 5, "Deepen the worktree module")
+        )
+    );
+    assert!(scenario.claude_calls().is_empty(), "claude was started");
+}
+
+#[test]
+fn an_architect_idea_labelled_in_another_case_skips_the_architect_run_too() {
+    let scenario = scenario();
+    scenario.issue_is(7, "OPEN");
+    scenario.issue_titled(7, "Deepen the session module");
+    scenario.issue_labelled(7, &["Needs-Triage", "Architect-Idea"]);
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+    assert!(scenario.claude_calls().is_empty(), "claude was started");
+}
+
+#[test]
+fn an_architect_idea_triaged_whatever_the_decision_or_closed_lets_the_architect_run_go_ahead() {
+    for triage in [
+        (|scenario| scenario.issue_labelled(7, &["ready-for-agent", ARCHITECT_IDEA]))
+            as fn(&Scenario),
+        |scenario| scenario.issue_labelled(7, &["ready-for-human", ARCHITECT_IDEA]),
+        |scenario| scenario.issue_labelled(7, &["Needs-Info", "Architect-Idea"]),
+        |scenario| scenario.issue_labelled(7, &["wontfix", ARCHITECT_IDEA]),
+        |scenario| scenario.issue_labelled(7, &["architecture", ARCHITECT_IDEA]),
+        |scenario| scenario.issue_is(7, "CLOSED"),
+    ] {
+        let scenario = scenario();
+        waiting_architect_idea(&scenario, 7, "Deepen the session module");
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+        triage(&scenario);
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+        assert_eq!(scenario.claude_calls().len(), 1);
+    }
+}
+
+#[test]
+fn with_an_open_architect_plan_and_an_architect_idea_waiting_the_skip_reports_the_plan() {
+    let scenario = scenario();
+    open_architect_plan(&scenario, 5, "Deepen the worktree module");
+    waiting_architect_idea(&scenario, 7, "Deepen the session module");
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(5)));
+    assert_eq!(
+        after_start(&result.stderr),
+        format!(
+            "thirdshift: {}\n",
+            still_open(&scenario, 5, "Deepen the worktree module")
+        )
+    );
+}
+
+#[test]
+fn the_next_architect_run_after_a_review_that_filed_an_idea_is_skipped_until_the_idea_is_triaged() {
+    let scenario = scenario();
+    scenario.agent_does_in_session(
+        1,
+        r#"
+url=$(gh issue create --title "Deepen the session module" --body "The idea" --label needs-triage)
+printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(2, AGENT_PUBLISHES_A_TICKET);
+    let first = scenario.run(&["architect", "--plan-only"]);
+    assert_eq!(
+        first.stdout,
+        format!("{PLAN_URL}\n"),
+        "stderr: {}",
+        first.stderr
+    );
+
+    let second = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stdout, format!("{PLAN_URL}\n"));
+    assert!(
+        second.stderr.contains("is waiting for triage"),
+        "stderr: {}",
+        second.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
+
+    scenario.issue_labelled(8, &["ready-for-human", ARCHITECT_IDEA]);
+    let third = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(third.code, Some(0), "stderr: {}", third.stderr);
+    assert_eq!(third.stdout, format!("{}\n", scenario.issue_url(9)));
+    assert_eq!(scenario.claude_calls().len(), 2);
+}
+
+#[test]
+fn an_idea_that_cannot_be_labelled_sends_one_notification_with_the_cause() {
+    let scenario = scenario();
+    let url = scenario.issue_url(7);
+    scenario.agent_does(&ends_with(&format!(
+        "Architecture review already filed: {url}"
+    )));
+    scenario.gh_fails("api --method");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: review failed"
+    );
+    assert!(
+        text.starts_with(
+            "Review:       failed\n\
+             Cause:        could not label the Architect idea #7: gh api --method PUT"
+        ),
         "{text}"
     );
 }

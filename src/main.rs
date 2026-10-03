@@ -152,8 +152,11 @@ branch is the branch checked out.
 
 A review that finds no Strong candidate publishes no plan. It files its top recommendation as
 one idea issue labelled needs-triage, or names the open issue that already covers it, and
-thirdshift prints that issue's URL instead, changing no label. Its last line says which: the
-review filed the idea, or it filed nothing.
+thirdshift prints that issue's URL instead. Its last line says which: the review filed the
+idea, or it filed nothing. Either way thirdshift labels that issue an Architect idea:
+architect-idea and needs-triage, in one request that keeps its other labels, creating
+architect-idea if the repository lacks it. needs-triage goes back on an issue that had been
+triaged. If the issue can't be labelled, the Architect run fails.
 
 A review that fails, is interrupted, or ends without naming one of these issues fails the
 Architect run and leaves any plan it published labelled needs-triage. One that finds no
@@ -172,6 +175,11 @@ each open Architect plan, prints its URL on stdout, gives the command that picks
 thirdshift <plan URL>, and exits 0. No flag overrides this: finish or close the Architect
 plan, or remove its label. An Architect run never retries or dispatches an existing
 Architect plan, so one whose run failed stays open until you pick it up.
+
+Past that, an Architect run that finds an Architect idea open and still labelled needs-triage
+is skipped as well: the factory has run out of Strong ideas. It prints each such idea's URL on
+stdout, names it on stderr as waiting for triage, and exits 0. Any triage decision lets the
+next Architect run go ahead: take needs-triage off, whatever replaces it, or close the issue.
 
 To run an Architect run on a schedule, have the operating system's scheduler, such as cron, run
 thirdshift architect base main from the clone: the README's \"On a schedule\" has a crontab entry.
