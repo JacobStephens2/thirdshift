@@ -27,6 +27,7 @@ mod prompt;
 #[cfg(test)]
 mod prompts_page;
 mod questions;
+mod ready;
 mod resend_key;
 mod run;
 mod run_ending;
