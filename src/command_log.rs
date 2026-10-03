@@ -60,23 +60,23 @@ enum Log {
 /// followed by the date and UTC offset, as in `Pickup run starting,
 /// 2026-10-03 -0400`.
 pub fn begin(starting: impl Display) {
-    begin_held(starting, true);
+    begin_held(starting, false);
 }
 
 /// Begin a pass, an Architect run or a Pickup run, as [`begin`] does, but
 /// hold its lines from the terminal too, until [`show_held`] or [`keep`]
 /// prints them: one that is skipped may print nothing.
 pub fn begin_pass(starting: impl Display) {
-    begin_held(starting, false);
+    begin_held(starting, true);
 }
 
-/// [`begin`], its lines already `shown` on the terminal or held from it.
-fn begin_held(starting: impl Display, shown: bool) {
+/// [`begin`], its lines held from the terminal too if `from_terminal`.
+fn begin_held(starting: impl Display, from_terminal: bool) {
     let now = Local::now();
     let _ = STARTED.set(now.format(STAMP_FORMAT).to_string());
     *log() = Log::Held {
         lines: Vec::new(),
-        shown,
+        shown: !from_terminal,
     };
     progress::step(format_args!("{starting}, {}", now.format("%Y-%m-%d %z")));
 }

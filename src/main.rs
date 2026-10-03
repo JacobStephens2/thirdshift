@@ -496,8 +496,7 @@ fn pickup(args: PickupArgs) -> ExitCode {
     let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
         Ok(pickup::Outcome::Skipped(skipped)) => {
-            let root = command_log::root(&config.logs_dir, skipped.repo());
-            activity::skip(&root, Kind::PickupRun, &skipped);
+            activity::skip(&config.logs_dir, skipped.repo(), Kind::PickupRun, &skipped);
             return match config.quiet_skips {
                 true => ExitCode::SUCCESS,
                 false => outcome(Ok(skipped)),
@@ -506,8 +505,8 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Err(error) => return failure(&error),
     };
     command_log::keep(command_log::of_pickup_run(&config.logs_dir, &taken.issue));
-    let root = command_log::root(&config.logs_dir, &taken.issue.repo());
-    activity::start(&root, Kind::PickupRun, Some(taken.issue.number));
+    let (repo, number) = (taken.issue.repo(), Some(taken.issue.number));
+    activity::start(&config.logs_dir, &repo, Kind::PickupRun, number);
     let notification = notification.map(|checked| checked.of_taken(&taken.issue, taken.title));
     let asks = Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config);
     let started_by = StartedBy::Dispatch { base: &taken.base };

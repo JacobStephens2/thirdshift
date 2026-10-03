@@ -23,6 +23,7 @@ use anyhow::{Context, Result};
 use chrono::Local;
 
 use crate::command_log;
+use crate::issue::Repo;
 use crate::progress;
 
 /// The file's name, at the root of a repository's logs.
@@ -65,15 +66,17 @@ struct Started {
     issue: Option<u64>,
 }
 
+/// The work this command started, once [`start`] has recorded it.
 static STARTED: OnceLock<Started> = OnceLock::new();
 
 /// Whether the warning that the Activity log can't be written was given.
 static WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Record that this command, a `kind` on `issue`, if it has one, starts work
-/// on the repository whose logs are at `root`, naming its Command log, if it
+/// on `repo`, whose logs are under `logs_dir`, naming its Command log, if it
 /// keeps one. Only once: [`end`] then writes its end line.
-pub fn start(root: &Path, kind: Kind, issue: Option<u64>) {
+pub fn start(logs_dir: &Path, repo: &Repo, kind: Kind, issue: Option<u64>) {
+    let root = &command_log::root(logs_dir, repo);
     let command_log = match command_log::path() {
         Some(path) => path
             .strip_prefix(root)
@@ -102,11 +105,12 @@ pub fn end(outcome: impl Display) {
     }
 }
 
-/// Record that this command, a `kind`, was skipped on the repository whose
-/// logs are at `root`, for `reason`, unless the last line of its kind there
+/// Record that this command, a `kind`, was skipped on `repo`, whose logs are
+/// under `logs_dir`, for `reason`, unless the last line of its kind there
 /// already says so.
-pub fn skip(root: &Path, kind: Kind, reason: impl Display) {
-    write(root, &format!("{kind} skipped: {reason}"), Some(kind));
+pub fn skip(logs_dir: &Path, repo: &Repo, kind: Kind, reason: impl Display) {
+    let root = command_log::root(logs_dir, repo);
+    write(&root, &format!("{kind} skipped: {reason}"), Some(kind));
 }
 
 impl Started {

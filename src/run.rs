@@ -13,7 +13,6 @@ use crate::branch::{self, Selection};
 use crate::child_run::Kind;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::claim;
-use crate::command_log;
 use crate::failed_run::{self, FailedRun, PolicyRefusal};
 use crate::git::Git;
 use crate::github::{self, Mergeable, PullRequest, Ticket};
@@ -172,8 +171,7 @@ fn run(
             true => activity::Kind::Run,
             false => activity::Kind::SpecRun,
         };
-        let root = command_log::root(logs_dir, &issue.repo());
-        activity::start(&root, kind, Some(issue.number));
+        activity::start(logs_dir, &issue.repo(), kind, Some(issue.number));
     }
     if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(

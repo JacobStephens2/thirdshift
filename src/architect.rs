@@ -27,7 +27,7 @@ use crate::command_log;
 use crate::failed_run::FailedRun;
 use crate::github::{self, ListedIssue};
 use crate::interrupt;
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::plugin::Plugin;
@@ -255,14 +255,14 @@ pub fn run(
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
-            let root = command_log::root(logs_dir, &running.0);
-            return Ok(skipped(&root, Skipped::AlreadyRunning(running)));
+            let repo = &running.0;
+            activity::skip(logs_dir, repo, Kind::ArchitectRun, &running);
+            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
-    let root = command_log::root(logs_dir, &repo);
     let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
-        return Ok(skipped(&root, Skipped::OpenPlans(open_plans)));
+        return Ok(skip(logs_dir, &repo, Skipped::OpenPlans(open_plans)));
     }
     let ideas = github::open_issues_labelled(&repo.slug(), ARCHITECT_IDEA)?;
     let waiting: Vec<_> = ideas
@@ -270,13 +270,13 @@ pub fn run(
         .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
         .collect();
     if !waiting.is_empty() {
-        return Ok(skipped(&root, Skipped::IdeasWaiting(waiting)));
+        return Ok(skip(logs_dir, &repo, Skipped::IdeasWaiting(waiting)));
     }
     if let Some(ReadyIssue { listed, .. }) = ready::first(&launch, &repo)? {
-        return Ok(skipped(&root, Skipped::ReadyIssue(listed)));
+        return Ok(skip(logs_dir, &repo, Skipped::ReadyIssue(listed)));
     }
     command_log::keep(command_log::of_architect_run(logs_dir, &repo));
-    activity::start(&root, Kind::ArchitectRun, None);
+    activity::start(logs_dir, &repo, Kind::ArchitectRun, None);
     if launch_pull {
         run::pull_base_branch(&launch, checked_out.as_deref(), &base);
     }
@@ -296,9 +296,9 @@ pub fn run(
 }
 
 /// The Architect run skipped as `skipped` says, recorded in the Activity log
-/// of the repository whose logs are at `root`.
-fn skipped(root: &Path, skipped: Skipped) -> Outcome {
-    activity::skip(root, Kind::ArchitectRun, &skipped);
+/// of `repo`, whose logs are under `logs_dir`.
+fn skip(logs_dir: &Path, repo: &Repo, skipped: Skipped) -> Outcome {
+    activity::skip(logs_dir, repo, Kind::ArchitectRun, &skipped);
     Outcome::Skipped(skipped)
 }
 
