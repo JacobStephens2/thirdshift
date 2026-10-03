@@ -109,20 +109,16 @@ pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
             limit,
         }));
     }
-    let Some(ReadyIssue {
-        listed: ready,
-        is_spec,
-    }) = ready::first(&git, &repo)?
-    else {
+    let Some(ReadyIssue { listed, is_spec }) = ready::first(&git, &repo)? else {
         return Ok(Outcome::Skipped(Skipped::NoReadyIssue(repo)));
     };
     progress::step(format_args!(
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
-        ready.issue.number, ready.title, ready.issue.url
+        listed.issue.number, listed.title, listed.issue.url
     ));
     Ok(Outcome::Taken(Taken {
-        issue: ready.issue,
-        title: ready.title,
+        issue: listed.issue,
+        title: listed.title,
         base,
         is_spec,
     }))

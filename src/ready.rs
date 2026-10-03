@@ -24,17 +24,17 @@ pub struct ReadyIssue {
     pub is_spec: bool,
 }
 
-/// The lowest-numbered Ready issue in `repo`, whose clone is `launch`, if
-/// there is one, with a line on stderr for each issue labelled
-/// `ready-for-agent` passed over before it, with why. Nothing is changed,
-/// on GitHub or in `launch`.
+/// The lowest-numbered Ready issue in `repo`, the Launch directory
+/// `launch`'s repository, if there is one, with a line on stderr for each
+/// issue labelled `ready-for-agent` passed over before it, with why.
+/// Nothing is changed, on GitHub or in `launch`.
 pub fn first(launch: &Git, repo: &Repo) -> Result<Option<ReadyIssue>> {
     let candidates = github::open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
     Search::new(launch, candidates).first_ready()
 }
 
-/// How long an issue is left after it was last shaped before a Pickup run
-/// takes it, so a Spec is not taken while its Tickets are still being
+/// How long an issue is left after it was last shaped before it is a Ready
+/// issue, so a Spec is not taken while its Tickets are still being
 /// attached. Fixed, with no setting.
 const SETTLE: TimeDelta = TimeDelta::minutes(10);
 
