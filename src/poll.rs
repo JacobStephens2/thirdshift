@@ -20,8 +20,14 @@ pub fn until<T>(mut probe: impl FnMut() -> Result<Option<T>>) -> Result<T> {
         if let Some(answer) = probe()? {
             return Ok(answer);
         }
-        sleep(poll_interval())?;
+        pause()?;
     }
+}
+
+/// Wait one poll interval. Fails with `interrupted` as soon as the Run is
+/// interrupted.
+pub fn pause() -> Result<()> {
+    sleep(poll_interval())
 }
 
 /// Like [`until`], but give up with `None` once `limit` has passed.
