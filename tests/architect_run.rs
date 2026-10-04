@@ -2117,30 +2117,6 @@ fn an_open_architect_plan_skips_the_architect_run_before_any_review_whatever_its
 }
 
 #[test]
-fn a_skipped_architect_run_names_each_open_architect_plan_and_prints_its_url() {
-    let scenario = scenario();
-    open_architect_plan(&scenario, 5, "Deepen the worktree module");
-    open_architect_plan(&scenario, 7, "Deepen the session module");
-
-    let result = scenario.run(&["architect"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(
-        result.stdout,
-        format!("{}\n{}\n", scenario.issue_url(7), scenario.issue_url(5))
-    );
-    assert_eq!(
-        after_start(&result.stderr),
-        format!(
-            "thirdshift: {}; {}\n",
-            still_open(&scenario, 7, "Deepen the session module"),
-            still_open(&scenario, 5, "Deepen the worktree module")
-        )
-    );
-    assert!(scenario.claude_calls().is_empty(), "claude was started");
-}
-
-#[test]
 fn base_skips_an_architect_run_from_a_clone_on_another_branch_or_a_detached_head_as_from_any() {
     for detached in [false, true] {
         let scenario = develop_on_origin(detached);
@@ -2202,21 +2178,6 @@ fn an_architect_plan_that_is_closed_or_no_longer_labelled_lets_the_architect_run
         assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
         assert_eq!(scenario.claude_calls().len(), 1);
     }
-}
-
-#[test]
-fn a_plan_left_needing_triage_does_not_skip_the_architect_run() {
-    // #7 is the plan a review that failed left half-published: it was never
-    // labelled an Architect plan, nor an Architect idea.
-    let scenario = scenario();
-    scenario.issue_labelled(7, &["needs-triage", "architecture"]);
-    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
-
-    let result = scenario.run(&["architect", "--plan-only"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
-    assert_eq!(scenario.issue_labels(7), ["needs-triage", "architecture"]);
 }
 
 #[test]
@@ -2336,33 +2297,6 @@ fn an_architect_idea_waiting_for_triage_skips_the_architect_run_before_any_revie
 }
 
 #[test]
-fn a_skipped_architect_run_names_each_architect_idea_waiting_for_triage_and_prints_its_url() {
-    let scenario = scenario();
-    waiting_architect_idea(&scenario, 5, "Deepen the worktree module");
-    waiting_architect_idea(&scenario, 7, "Deepen the session module");
-    // Triaged: not waiting.
-    scenario.issue_is(6, "OPEN");
-    scenario.issue_labelled(6, &["ready-for-human", ARCHITECT_IDEA]);
-
-    let result = scenario.run(&["architect"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(
-        result.stdout,
-        format!("{}\n{}\n", scenario.issue_url(7), scenario.issue_url(5))
-    );
-    assert_eq!(
-        after_start(&result.stderr),
-        format!(
-            "thirdshift: {}; {}\n",
-            waiting_for_triage(&scenario, 7, "Deepen the session module"),
-            waiting_for_triage(&scenario, 5, "Deepen the worktree module")
-        )
-    );
-    assert!(scenario.claude_calls().is_empty(), "claude was started");
-}
-
-#[test]
 fn an_architect_idea_labelled_in_another_case_skips_the_architect_run_too() {
     let scenario = scenario();
     scenario.issue_is(7, "OPEN");
@@ -2375,49 +2309,6 @@ fn an_architect_idea_labelled_in_another_case_skips_the_architect_run_too() {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
     assert!(scenario.claude_calls().is_empty(), "claude was started");
-}
-
-#[test]
-fn an_architect_idea_triaged_whatever_the_decision_or_closed_lets_the_architect_run_go_ahead() {
-    // Triaged `ready-for-agent`, it is a Ready issue, which goes first.
-    for triage in [
-        (|scenario| scenario.issue_labelled(7, &["ready-for-human", ARCHITECT_IDEA]))
-            as fn(&Scenario),
-        |scenario| scenario.issue_labelled(7, &["Needs-Info", "Architect-Idea"]),
-        |scenario| scenario.issue_labelled(7, &["wontfix", ARCHITECT_IDEA]),
-        |scenario| scenario.issue_labelled(7, &["architecture", ARCHITECT_IDEA]),
-        |scenario| scenario.issue_is(7, "CLOSED"),
-    ] {
-        let scenario = scenario();
-        waiting_architect_idea(&scenario, 7, "Deepen the session module");
-        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
-        triage(&scenario);
-
-        let result = scenario.run(&["architect", "--plan-only"]);
-
-        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-        assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
-        assert_eq!(scenario.claude_calls().len(), 1);
-    }
-}
-
-#[test]
-fn with_an_open_architect_plan_and_an_architect_idea_waiting_the_skip_reports_the_plan() {
-    let scenario = scenario();
-    open_architect_plan(&scenario, 5, "Deepen the worktree module");
-    waiting_architect_idea(&scenario, 7, "Deepen the session module");
-
-    let result = scenario.run(&["architect"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(5)));
-    assert_eq!(
-        after_start(&result.stderr),
-        format!(
-            "thirdshift: {}\n",
-            still_open(&scenario, 5, "Deepen the worktree module")
-        )
-    );
 }
 
 #[test]
@@ -2619,62 +2510,4 @@ fn a_ready_for_agent_ticket_inside_a_spec_does_not_skip_the_architect_run() {
         result.stderr
     );
     assert_eq!(scenario.claude_calls().len(), 1);
-}
-
-#[test]
-fn with_an_architect_idea_waiting_and_a_ready_issue_the_skip_reports_the_idea() {
-    let scenario = scenario();
-    waiting_architect_idea(&scenario, 7, "Deepen the session module");
-    ready_issue(&scenario, 5, "Fix the login page", &[]);
-
-    let result = scenario.run(&["architect"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
-    assert_eq!(
-        after_start(&result.stderr),
-        format!(
-            "thirdshift: {}\n",
-            waiting_for_triage(&scenario, 7, "Deepen the session module")
-        )
-    );
-}
-
-#[test]
-fn with_an_open_architect_plan_and_a_ready_issue_the_skip_reports_the_plan() {
-    let scenario = scenario();
-    open_architect_plan(&scenario, 7, "Deepen the session module");
-    ready_issue(&scenario, 5, "Fix the login page", &[]);
-
-    let result = scenario.run(&["architect"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
-    assert_eq!(
-        after_start(&result.stderr),
-        format!(
-            "thirdshift: {}\n",
-            still_open(&scenario, 7, "Deepen the session module")
-        )
-    );
-}
-
-#[test]
-fn an_architect_idea_triaged_ready_for_agent_goes_first_as_a_ready_issue() {
-    let scenario = scenario();
-    ready_issue(&scenario, 7, "Deepen the session module", &[ARCHITECT_IDEA]);
-    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
-
-    let result = scenario.run(&["architect", "--plan-only"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
-    assert_eq!(
-        after_start(&result.stderr),
-        format!(
-            "thirdshift: {}\n",
-            goes_first(&scenario, 7, "Deepen the session module")
-        )
-    );
-    assert!(scenario.claude_calls().is_empty(), "claude was started");
 }

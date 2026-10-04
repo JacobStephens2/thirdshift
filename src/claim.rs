@@ -8,9 +8,9 @@ use anyhow::{Context, Result};
 
 use crate::branch;
 use crate::git::Git;
-use crate::github::{self, ListedIssue};
+use crate::github;
 use crate::interrupt;
-use crate::issue::{IssueUrl, Repo};
+use crate::issue::IssueUrl;
 use crate::labels::{self, Edit, Label, Labels, READY_FOR_AGENT};
 use crate::progress;
 
@@ -196,42 +196,5 @@ impl Claim<'_> {
     fn release_by_hand(&self) -> String {
         let (off, on) = self.release_labels();
         labels::by_hand(self.issue, off, on)
-    }
-}
-
-/// How many open issues in `repo` carry a Claim, whoever started the Run or
-/// Spec run that made it: what a Pickup run holds against the Claim limit.
-pub fn open_count(repo: &Repo) -> Result<usize> {
-    Ok(github::open_issues_labelled(&repo.slug(), IN_PROGRESS)?.len())
-}
-
-/// The Sweep: take `in-progress` off every closed issue in `repo` that still
-/// carries it, as an issue merged by hand does, leaving its other labels. A
-/// failure, to list them or to take the label off one, is only a warning.
-pub fn sweep(repo: &Repo) {
-    let closed = match github::closed_issues_labelled(&repo.slug(), IN_PROGRESS) {
-        Ok(closed) => closed,
-        Err(error) => {
-            progress::step(format_args!(
-                "warning: could not list the closed issues labelled {IN_PROGRESS}: {error:#}"
-            ));
-            return;
-        }
-    };
-    for ListedIssue { issue, labels, .. } in closed {
-        let edit = Edit::of(&issue, labels, &[IN_PROGRESS], &[]);
-        if !edit.takes_off(IN_PROGRESS) {
-            continue;
-        }
-        progress::step(format_args!(
-            "taking {IN_PROGRESS} off #{}, which is closed",
-            issue.number
-        ));
-        if let Err(error) = edit.apply() {
-            progress::step(format_args!(
-                "warning: could not take {IN_PROGRESS} off #{}: {error:#}",
-                issue.number
-            ));
-        }
     }
 }

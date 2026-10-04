@@ -74,7 +74,7 @@ impl IssueUrl {
 
 /// The GitHub repository an `origin` remote names, spelled as its URL spells
 /// it.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repo {
     pub owner: String,
     pub name: String,

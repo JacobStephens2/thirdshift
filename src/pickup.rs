@@ -13,11 +13,14 @@ use std::num::NonZeroUsize;
 use anyhow::Result;
 
 use crate::claim;
+use crate::github::ListedIssue;
 use crate::issue::{IssueUrl, Repo};
+use crate::labels::Edit;
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
+use crate::pass::{OnGitHub, Outside};
 use crate::progress;
-use crate::ready::{self, ReadyIssue};
+use crate::ready::ReadyIssue;
 
 /// How a Pickup run ended, short of a failure and before any dispatch.
 pub enum Outcome {
@@ -117,17 +120,13 @@ pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
             return Ok(skip(Skipped::AlreadyRunning(running)));
         }
     };
-    claim::sweep(&repo);
-    let claimed = claim::open_count(&repo)?;
-    if claimed >= limit.get() {
-        return Ok(skip(Skipped::AtClaimLimit {
-            repo,
-            claimed,
-            limit,
-        }));
-    }
-    let Some(ReadyIssue { listed, is_spec }) = ready::first(directory.git(), &repo)? else {
-        return Ok(skip(Skipped::NoReadyIssue(repo)));
+    let mut on_github = OnGitHub {
+        launch: directory.git(),
+        repo: &repo,
+    };
+    let ReadyIssue { listed, is_spec } = match gates(&mut on_github, &repo, limit)? {
+        Decision::Take(ready) => ready,
+        Decision::Skip(skipped) => return Ok(skip(skipped)),
     };
     progress::step(format_args!(
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
@@ -142,9 +141,275 @@ pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
     }))
 }
 
+/// What a Pickup run's gates decided.
+enum Decision {
+    /// It is skipped, for this reason.
+    Skip(Skipped),
+    /// It takes this Ready issue.
+    Take(ReadyIssue),
+}
+
+/// The gates of a Pickup run on `repo`, reaching it through `pass`: the
+/// Sweep, then, if `limit` or more of its open issues carry a Claim, a skip
+/// for the Claim limit, then the Ready issue search, a skip if it finds
+/// none. No gate is passed through once one skips.
+fn gates(pass: &mut impl Outside, repo: &Repo, limit: NonZeroUsize) -> Result<Decision> {
+    sweep(pass);
+    let claimed = pass.open_issues(claim::IN_PROGRESS)?.len();
+    if claimed >= limit.get() {
+        return Ok(Decision::Skip(Skipped::AtClaimLimit {
+            repo: repo.clone(),
+            claimed,
+            limit,
+        }));
+    }
+    Ok(match pass.ready_issue()? {
+        Some(ready) => Decision::Take(ready),
+        None => Decision::Skip(Skipped::NoReadyIssue(repo.clone())),
+    })
+}
+
+/// The Sweep: take `in-progress` off every closed issue that still carries
+/// it, as an issue merged by hand does, leaving its other labels. A
+/// failure, to list them or to take the label off one, is only a warning.
+fn sweep(pass: &mut impl Outside) {
+    let closed = match pass.closed_issues(claim::IN_PROGRESS) {
+        Ok(closed) => closed,
+        Err(error) => {
+            pass.step(format!(
+                "warning: could not list the closed issues labelled {}: {error:#}",
+                claim::IN_PROGRESS
+            ));
+            return;
+        }
+    };
+    for ListedIssue { issue, labels, .. } in closed {
+        let edit = Edit::of(&issue, labels, &[claim::IN_PROGRESS], &[]);
+        if !edit.takes_off(claim::IN_PROGRESS) {
+            continue;
+        }
+        pass.step(format!(
+            "taking {} off #{}, which is closed",
+            claim::IN_PROGRESS,
+            issue.number
+        ));
+        if let Err(error) = pass.apply(&edit) {
+            pass.step(format!(
+                "warning: could not take {} off #{}: {error:#}",
+                claim::IN_PROGRESS,
+                issue.number
+            ));
+        }
+    }
+}
+
 /// The Pickup run skipped as `skipped` says, recorded in its repository's
 /// Activity log.
 fn skip(skipped: Skipped) -> Outcome {
     logs::skipped(Pass::PickupRun, skipped.repo(), &skipped);
     Outcome::Skipped(skipped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pass::{Call, InMemory};
+
+    /// The repository every pass is on.
+    fn widgets() -> Repo {
+        Repo {
+            owner: "acme".to_string(),
+            name: "widgets".to_string(),
+        }
+    }
+
+    /// The gates of a Pickup run on `repo` with the Claim limit `limit`:
+    /// the line of the reason it is skipped, or the number of the Ready
+    /// issue it takes and whether it is a Spec, and what the gates did.
+    fn decide(mut repo: InMemory, limit: usize) -> (Result<(u64, bool), String>, Vec<Call>) {
+        let limit = NonZeroUsize::new(limit).unwrap();
+        let decided = match gates(&mut repo, &widgets(), limit).unwrap() {
+            Decision::Take(ready) => Ok((ready.listed.issue.number, ready.is_spec)),
+            Decision::Skip(skipped) => Err(skipped.to_string()),
+        };
+        (decided, repo.calls)
+    }
+
+    const CLOSED: Call = Call::Closed("in-progress");
+    const CLAIMED: Call = Call::Open("in-progress");
+
+    /// The Sweep taking `in-progress` off issue `number`, leaving `labels`.
+    fn swept(number: u64, labels: &[&str]) -> [Call; 2] {
+        [
+            Call::Step(format!("taking in-progress off #{number}, which is closed")),
+            Call::Edit {
+                issue: number,
+                off: vec!["in-progress"],
+                on: vec![],
+                labels: labels.iter().map(|label| label.to_string()).collect(),
+            },
+        ]
+    }
+
+    const NO_READY_ISSUE: &str = "no Ready issue on acme/widgets";
+
+    #[test]
+    fn the_ready_issue_is_taken_with_its_spec_or_not_answer() {
+        for is_spec in [false, true] {
+            let repo = InMemory::default().ready(9, is_spec);
+
+            let (decided, calls) = decide(repo, 3);
+
+            assert_eq!(decided, Ok((9, is_spec)));
+            assert_eq!(calls, [CLOSED, CLAIMED, Call::ReadySearch]);
+        }
+    }
+
+    #[test]
+    fn with_no_ready_issue_the_pass_is_skipped() {
+        let (decided, _) = decide(InMemory::default(), 3);
+
+        assert_eq!(decided, Err(NO_READY_ISSUE.to_string()));
+    }
+
+    #[test]
+    fn the_sweep_takes_in_progress_off_each_closed_issue_leaving_its_other_labels() {
+        let repo = InMemory::default()
+            .issue(4, false, &["bug", "in-progress", "p1"])
+            .issue(5, false, &["In-Progress"])
+            .issue(6, true, &["in-progress"])
+            .ready(9, false);
+
+        let (decided, calls) = decide(repo, 3);
+
+        assert_eq!(decided, Ok((9, false)));
+        let mut expected = vec![CLOSED];
+        expected.extend(swept(4, &["bug", "p1"]));
+        expected.extend(swept(5, &[]));
+        expected.extend([CLAIMED, Call::ReadySearch]);
+        assert_eq!(calls, expected);
+    }
+
+    #[test]
+    fn the_sweep_skips_a_closed_issue_its_edit_would_take_nothing_off() {
+        let repo = InMemory::default()
+            .filed("in-progress", 4, false, &["bug"])
+            .issue(5, false, &["in-progress"])
+            .ready(9, false);
+
+        let (_, calls) = decide(repo, 3);
+
+        let mut expected = vec![CLOSED];
+        expected.extend(swept(5, &[]));
+        expected.extend([CLAIMED, Call::ReadySearch]);
+        assert_eq!(calls, expected);
+    }
+
+    #[test]
+    fn a_sweep_that_cannot_list_the_closed_issues_warns_and_the_pass_carries_on() {
+        let mut repo = InMemory::default()
+            .issue(4, false, &["in-progress"])
+            .ready(9, false);
+        repo.closed_listing_fails = true;
+
+        let (decided, calls) = decide(repo, 3);
+
+        assert_eq!(decided, Ok((9, false)));
+        assert_eq!(
+            calls,
+            [
+                CLOSED,
+                Call::Step(
+                    "warning: could not list the closed issues labelled in-progress: \
+                     gh: could not list the closed issues"
+                        .to_string()
+                ),
+                CLAIMED,
+                Call::ReadySearch,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sweep_that_cannot_take_in_progress_off_one_issue_warns_and_carries_on() {
+        let mut repo = InMemory::default()
+            .issue(4, false, &["in-progress"])
+            .issue(5, false, &["in-progress"])
+            .ready(9, false);
+        repo.failing_edits = vec![4];
+
+        let (decided, calls) = decide(repo, 3);
+
+        assert_eq!(decided, Ok((9, false)));
+        let mut expected = vec![CLOSED];
+        expected.extend(swept(4, &[]));
+        expected.push(Call::Step(
+            "warning: could not take in-progress off #4: gh: could not edit #4".to_string(),
+        ));
+        expected.extend(swept(5, &[]));
+        expected.extend([CLAIMED, Call::ReadySearch]);
+        assert_eq!(calls, expected);
+    }
+
+    #[test]
+    fn the_sweep_comes_before_the_count_on_a_pass_skipped_for_the_claim_limit() {
+        let repo = InMemory::default()
+            .issue(4, false, &["in-progress"])
+            .issue(5, true, &["in-progress"])
+            .ready(9, false);
+
+        let (decided, calls) = decide(repo, 1);
+
+        assert!(decided.is_err());
+        let mut expected = vec![CLOSED];
+        expected.extend(swept(4, &[]));
+        expected.push(CLAIMED);
+        assert_eq!(calls, expected);
+    }
+
+    #[test]
+    fn the_sweep_comes_before_the_count_on_a_pass_skipped_for_no_ready_issue() {
+        let repo = InMemory::default().issue(4, false, &["in-progress"]);
+
+        let (decided, calls) = decide(repo, 3);
+
+        assert_eq!(decided, Err(NO_READY_ISSUE.to_string()));
+        let mut expected = vec![CLOSED];
+        expected.extend(swept(4, &[]));
+        expected.extend([CLAIMED, Call::ReadySearch]);
+        assert_eq!(calls, expected);
+    }
+
+    #[test]
+    fn at_exactly_the_claim_limit_the_pass_is_skipped_with_no_ready_issue_search() {
+        let repo = InMemory::default()
+            .issue(4, true, &["in-progress"])
+            .issue(5, true, &["In-Progress", "bug"])
+            .ready(9, false);
+
+        let (decided, calls) = decide(repo, 2);
+
+        assert_eq!(
+            decided,
+            Err(
+                "at the Claim limit on acme/widgets: 2 open issue(s) labelled in-progress, \
+                 pickup.limit is 2"
+                    .to_string()
+            )
+        );
+        assert_eq!(calls, [CLOSED, CLAIMED]);
+    }
+
+    #[test]
+    fn one_below_the_claim_limit_the_pass_takes_the_ready_issue() {
+        let repo = InMemory::default()
+            .issue(4, true, &["in-progress"])
+            .issue(5, true, &["in-progress"])
+            .ready(9, false);
+
+        let (decided, calls) = decide(repo, 3);
+
+        assert_eq!(decided, Ok((9, false)));
+        assert_eq!(calls, [CLOSED, CLAIMED, Call::ReadySearch]);
+    }
 }
