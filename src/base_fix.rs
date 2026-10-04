@@ -238,8 +238,7 @@ impl BaseFix {
         // Held from the look for an open Base fix issue until the one this
         // Run starts is written and marked as running.
         let looking = outside.look()?;
-        let covering = covering(outside.open_fixes()?, issue, base, inherited);
-        let fix = match covering {
+        let fix = match open_fix_covering(outside.open_fixes()?, issue, base, inherited) {
             Some(open) => match outside.mark(open.number)? {
                 Mark::Left => {
                     outside.step(format!(
@@ -249,13 +248,9 @@ impl BaseFix {
                     ));
                     open
                 }
-                Mark::Running(watch) => {
+                mark => {
                     drop(looking);
-                    return self.wait_on(outside, open, Some(watch), base);
-                }
-                Mark::None => {
-                    drop(looking);
-                    return self.wait_on(outside, open, None, base);
+                    return self.wait_on(outside, open, mark.into_watch(), base);
                 }
             },
             None => {
@@ -441,6 +436,16 @@ enum Mark<W> {
     None,
 }
 
+impl<W> Mark<W> {
+    /// The opened mark to watch, if a Run from here is running the Base fix.
+    fn into_watch(self) -> Option<W> {
+        match self {
+            Mark::Running(watch) => Some(watch),
+            Mark::Left | Mark::None => None,
+        }
+    }
+}
+
 /// The outside world of a Run on `issue` started from `launch`: its git
 /// directory's locks and marks, GitHub, the child Run and the poll interval.
 struct LaunchAndGitHub<'a> {
@@ -556,7 +561,7 @@ fn issue_title(base: &str, checks: &str) -> String {
 /// Of the open Base fix issues `open`, the oldest, other than `issue`
 /// itself, whose title names the Base branch `base` and every one of the
 /// checks `inherited`.
-fn covering(
+fn open_fix_covering(
     open: Vec<ListedIssue>,
     issue: &IssueUrl,
     base: &str,
@@ -665,11 +670,10 @@ mod tests {
         }
     }
 
-    /// What a found Base fix's mark says, as a script gives it.
-    #[derive(Clone, Copy)]
-    enum Marked {
-        Running,
-        Left,
+    /// This Run's mark that it runs the Base fix on issue `number`.
+    struct RunningMark {
+        number: u64,
+        _held: Guard,
     }
 
     /// What the outside world answers, call by call. No mark means none,
@@ -680,7 +684,7 @@ mod tests {
         /// The open Base fix issues, by number and title.
         open_fixes: Vec<(u64, &'static str)>,
         /// The mark of each Base fix issue that has one.
-        marks: Vec<(u64, Marked)>,
+        marks: Vec<(u64, Mark<()>)>,
         /// For each ask, whether the Run running the Base fix ended.
         ended: VecDeque<bool>,
         /// For each ask, whether the issue is open.
@@ -724,7 +728,7 @@ mod tests {
 
     impl Outside for Scripted {
         type Look = Guard;
-        type Running = Guard;
+        type Running = RunningMark;
         /// The number of the issue whose mark it is.
         type Watch = u64;
 
@@ -747,9 +751,9 @@ mod tests {
             self.push(Did::ReadMark(number));
             let marked = self.script.marks.iter().find(|(of, _)| *of == number);
             Ok(match marked {
-                Some((_, Marked::Running)) => Mark::Running(number),
-                Some((_, Marked::Left)) => Mark::Left,
-                None => Mark::None,
+                Some((_, Mark::Running(()))) => Mark::Running(number),
+                Some((_, Mark::Left)) => Mark::Left,
+                Some((_, Mark::None)) | None => Mark::None,
             })
         }
 
@@ -776,16 +780,16 @@ mod tests {
             Ok(url(8))
         }
 
-        fn mark_running(&mut self, number: u64) -> Result<Guard> {
+        fn mark_running(&mut self, number: u64) -> Result<RunningMark> {
             self.push(Did::MarkRunning(number));
-            Ok(self.guard(Did::RunningReleased(number)))
+            Ok(RunningMark {
+                number,
+                _held: self.guard(Did::RunningReleased(number)),
+            })
         }
 
-        fn merged(&mut self, running: Guard) {
-            let Did::RunningReleased(number) = running.on_drop else {
-                unreachable!("not a running mark");
-            };
-            self.push(Did::Merged(number));
+        fn merged(&mut self, running: RunningMark) {
+            self.push(Did::Merged(running.number));
         }
 
         fn run_base_fix(&mut self, fix: &IssueUrl, base: &str) -> Result<Ended> {
@@ -1102,7 +1106,7 @@ mod tests {
         let mut base_fix = asked(BaseFixAsk::Allow);
         let mut outside = Scripted::new(Script {
             open_fixes: vec![(8, "CI red on main: lint, test")],
-            marks: vec![(8, Marked::Running)],
+            marks: vec![(8, Mark::Running(()))],
             open: VecDeque::from([true, false]),
             ..Script::default()
         });
@@ -1127,7 +1131,7 @@ mod tests {
         let mut base_fix = asked(BaseFixAsk::Allow);
         let mut outside = Scripted::new(Script {
             open_fixes: vec![(8, "CI red on main: test")],
-            marks: vec![(8, Marked::Running)],
+            marks: vec![(8, Mark::Running(()))],
             ended: VecDeque::from([false, true]),
             open: VecDeque::from([true, true]),
             ..Script::default()
@@ -1180,7 +1184,7 @@ mod tests {
         let mut base_fix = asked(BaseFixAsk::Allow);
         let mut outside = Scripted::new(Script {
             open_fixes: vec![(8, "CI red on main: test")],
-            marks: vec![(8, Marked::Left)],
+            marks: vec![(8, Mark::Left)],
             ..Script::default()
         });
 
@@ -1227,14 +1231,15 @@ mod tests {
         assert_eq!(base_fix.report(), Some(format!("{FIX_URL} not closed")));
     }
 
-    /// The number of the issue `covering` finds among `open` for the Run on
-    /// #7 into main, with Inherited failures `checks`.
+    /// The number of the issue [`open_fix_covering`] finds among `open` for
+    /// the Run on #7 into main, with Inherited failures `checks`.
     fn covering_number(open: &[(u64, &str)], checks: &[&str]) -> Option<u64> {
         let open = open
             .iter()
             .map(|&(number, title)| listed(number, title))
             .collect();
-        covering(open, &url(7), "main", &inherited(checks).inherited).map(|issue| issue.number)
+        open_fix_covering(open, &url(7), "main", &inherited(checks).inherited)
+            .map(|issue| issue.number)
     }
 
     #[test]
