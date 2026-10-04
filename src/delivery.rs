@@ -62,9 +62,10 @@ impl Delivery<'_> {
         opening: Opening,
         before_ready: impl FnOnce() -> Result<()>,
     ) -> Result<Reached, FailedRun> {
-        let caught_up = match opening.catch_up_from_origin {
-            true => worktree.fast_forward_to_origin(),
-            false => Ok(()),
+        let caught_up = if opening.catch_up_from_origin {
+            worktree.fast_forward_to_origin()
+        } else {
+            Ok(())
         };
         let (delivered, log) = match caught_up {
             Ok(()) => Sessions::within(self.logs, worktree.path(), |sessions| {
@@ -182,19 +183,20 @@ fn close_unless_closed(issue: &IssueUrl, comment: &str) -> Result<()> {
     github::close_issue(issue, comment)
 }
 
-/// The most Repair sessions a Run starts, conflict, CI-fix and review
+/// The most Repair sessions a Delivery starts, conflict, CI-fix and review
 /// combined.
 const MAX_REPAIRS: usize = 5;
 
-/// The most times a Run goes round again because the Base branch moved while
+/// The most times a Delivery goes round again because the Base branch moved while
 /// CI ran or since a merge was tried, or, in a Merge run, because Foreign
 /// commits arrived, whether or not the merge that follows needs a Repair. A
 /// clean merge of the Base branch uses no Repair, so without this a busy Base
-/// branch could keep a Run going forever.
+/// branch could keep a Delivery going forever.
 const MAX_UPSTREAM_MOVES: usize = 5;
 
-/// What a Run has spent of its Repair and upstream-move budgets, across every round
-/// of the Repair loop, those after a failed merge included.
+/// What a Delivery has spent of its Repair and upstream-move budgets,
+/// across every round of the Repair loop, those after a failed merge
+/// included.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Budgets {
     repairs: usize,
@@ -244,7 +246,7 @@ enum Round {
     NothingToFix,
 }
 
-/// Keeps the PR mergeable and its CI green, within the Run's budgets.
+/// Keeps the PR mergeable and its CI green, within the Delivery's budgets.
 struct RepairLoop<'a> {
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
@@ -252,7 +254,7 @@ struct RepairLoop<'a> {
     pr_url: &'a str,
     goal: Goal,
     budgets: Budgets,
-    /// The Run's one Base fix, kept apart from its budgets.
+    /// The Delivery's one Base fix, kept apart from its budgets.
     base_fix: &'a mut BaseFix,
     /// Where each Repair session runs.
     sessions: &'a Sessions<'a>,

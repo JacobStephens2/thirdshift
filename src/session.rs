@@ -108,12 +108,12 @@ impl<'a> Sessions<'a> {
         (taken, log)
     }
 
-    /// Run a session given `prompt`, logged and labelled as `kind`. A session that ends with
-    /// background work still running, which is killed with it, gets one
-    /// Resume, as `<kind>-resume`. If the Resume ends the same way, or the
-    /// session has no id to resume, the work may have been abandoned rather
-    /// than awaited: a progress line names it and this succeeds, leaving the
-    /// steps that follow to decide the outcome.
+    /// Run a session given `prompt`, logged and labelled as `kind`. A
+    /// session that ends with background work still running, which is killed
+    /// with it, gets one Resume, as `<kind>-resume`. If the Resume ends the
+    /// same way, or the session has no id to resume, the work may have been
+    /// abandoned rather than awaited: a progress line names it and this
+    /// succeeds, leaving the steps that follow to decide the outcome.
     pub fn run(&self, kind: &str, prompt: &str) -> Result<()> {
         self.run_to_final_message(kind, prompt).map(drop)
     }

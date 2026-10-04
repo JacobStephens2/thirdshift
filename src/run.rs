@@ -25,6 +25,9 @@ use crate::session::Logs;
 use crate::spec_run;
 use crate::worktree::Worktree;
 
+/// The implement session's kind, in its progress lines and log name.
+const IMPLEMENT: &str = "implement";
+
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Goal {
@@ -246,7 +249,7 @@ fn run_in_worktree(
         }
     };
     let opening = Opening {
-        kind: "implement",
+        kind: IMPLEMENT,
         prompt,
         catch_up_from_origin: false,
     };

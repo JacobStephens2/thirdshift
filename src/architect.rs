@@ -284,13 +284,13 @@ fn review(
     started: DateTime<Utc>,
     logs: &Logs,
 ) -> (Result<Reviewed>, Option<PathBuf>) {
-    match focus {
-        Some(focus) => progress::step(format_args!(
-            "starting the Architecture review of {base}, focused on: {focus}"
-        )),
-        None => progress::step(format_args!("starting the Architecture review of {base}")),
-    }
     Sessions::within(logs, worktree.path(), |sessions| {
+        match focus {
+            Some(focus) => progress::step(format_args!(
+                "starting the Architecture review of {base}, focused on: {focus}"
+            )),
+            None => progress::step(format_args!("starting the Architecture review of {base}")),
+        }
         let prompt = prompt::architecture_review(base, focus);
         let final_message = sessions.run_to_final_message(REVIEW, &prompt)?;
         conclude(final_message.as_deref(), origin, started, base)
