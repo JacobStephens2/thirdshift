@@ -74,7 +74,7 @@ impl Selection {
 /// if a local copy of the chosen branch in the Launch directory differs from
 /// origin's: the Run replaces it and deletes it at cleanup.
 pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
-    select_through(&OriginAndGitHub { launch, issue }, issue)
+    select_through(&GitHubAndOrigin { launch }, issue)
 }
 
 /// What shows an issue was started.
@@ -90,7 +90,7 @@ pub enum Started {
 /// it on origin, or else the newest pull request from one, open, merged or
 /// closed.
 pub fn started(launch: &Git, issue: &IssueUrl) -> Result<Option<Started>> {
-    started_through(&OriginAndGitHub { launch, issue }, issue)
+    started_through(&GitHubAndOrigin { launch }, issue)
 }
 
 /// What selection reads of origin, GitHub and the Launch directory. Each
@@ -101,8 +101,8 @@ trait Reads {
     /// `first_branch-branch-*`, each with its head.
     fn on_origin(&self, first_branch: &str) -> Result<Vec<OnOrigin>>;
     /// The pull requests, in any state, whose head starts with
-    /// `first_branch`, from this repository only.
-    fn pull_requests(&self, first_branch: &str) -> Result<Vec<PullRequest>>;
+    /// `first_branch`, from `issue`'s repository only.
+    fn pull_requests(&self, issue: &IssueUrl, first_branch: &str) -> Result<Vec<PullRequest>>;
     /// The head of the local `branch` in the Launch directory, if it has one.
     fn local_head(&self, branch: &str) -> Option<String>;
 }
@@ -113,14 +113,12 @@ struct OnOrigin {
     head: String,
 }
 
-/// The reads of the Launch directory `launch`, its origin and GitHub, for
-/// `issue`.
-struct OriginAndGitHub<'a> {
+/// The reads of GitHub, of the Launch directory `launch` and of its origin.
+struct GitHubAndOrigin<'a> {
     launch: &'a Git,
-    issue: &'a IssueUrl,
 }
 
-impl Reads for OriginAndGitHub<'_> {
+impl Reads for GitHubAndOrigin<'_> {
     /// One `git ls-remote`.
     fn on_origin(&self, first_branch: &str) -> Result<Vec<OnOrigin>> {
         let remote = self.launch.run(&[
@@ -143,8 +141,8 @@ impl Reads for OriginAndGitHub<'_> {
     }
 
     /// One `gh pr list`.
-    fn pull_requests(&self, first_branch: &str) -> Result<Vec<PullRequest>> {
-        github::pull_requests_with_head_prefix(self.issue, first_branch)
+    fn pull_requests(&self, issue: &IssueUrl, first_branch: &str) -> Result<Vec<PullRequest>> {
+        github::pull_requests_with_head_prefix(issue, first_branch)
     }
 
     fn local_head(&self, branch: &str) -> Option<String> {
@@ -229,7 +227,7 @@ fn used(reads: &impl Reads, issue: &IssueUrl) -> Result<Used> {
         .filter_map(|branch| Some((branch_number(issue, &branch.name)?, branch.head)))
         .collect();
     let prs = reads
-        .pull_requests(&first_branch)?
+        .pull_requests(issue, &first_branch)?
         .into_iter()
         .filter_map(|pr| Some((branch_number(issue, &pr.head)?, pr)))
         .collect();
@@ -325,7 +323,7 @@ mod tests {
                 .collect())
         }
 
-        fn pull_requests(&self, first_branch: &str) -> Result<Vec<PullRequest>> {
+        fn pull_requests(&self, _issue: &IssueUrl, first_branch: &str) -> Result<Vec<PullRequest>> {
             self.seen
                 .borrow_mut()
                 .push(Read::PullRequests(first_branch.to_string()));
@@ -392,7 +390,7 @@ mod tests {
     }
 
     /// What selection for #5 picks from `reads`.
-    fn select(reads: &InMemory) -> Picked {
+    fn picked(reads: &InMemory) -> Picked {
         match select_through(reads, &issue()).unwrap() {
             Selection::Fresh { branch } => Picked::Fresh(branch),
             Selection::Continuation { branch, pr } => {
@@ -410,13 +408,13 @@ mod tests {
     }
 
     /// What shows #5 was started, from `reads`.
-    fn started(reads: &InMemory) -> Option<Started> {
+    fn started_from(reads: &InMemory) -> Option<Started> {
         started_through(reads, &issue()).unwrap()
     }
 
     #[test]
     fn issue_branch_numbers_follow_the_names() {
-        for (name, picked) in [
+        for (name, expected) in [
             ("issue-5", continued("issue-5", None)),
             ("issue-5-branch-2", continued("issue-5-branch-2", None)),
             ("issue-5-branch-12", continued("issue-5-branch-12", None)),
@@ -426,7 +424,7 @@ mod tests {
                 ..InMemory::default()
             };
 
-            assert_eq!(select(&reads), picked, "{name}");
+            assert_eq!(picked(&reads), expected, "{name}");
         }
     }
 
@@ -445,14 +443,14 @@ mod tests {
                 ..InMemory::default()
             };
 
-            assert_eq!(select(&reads), fresh("issue-5"), "{name}");
-            assert_eq!(started(&reads), None, "{name}");
+            assert_eq!(picked(&reads), fresh("issue-5"), "{name}");
+            assert_eq!(started_from(&reads), None, "{name}");
         }
     }
 
     #[test]
     fn nothing_used_gives_branch_1() {
-        assert_eq!(select(&InMemory::default()), fresh("issue-5"));
+        assert_eq!(picked(&InMemory::default()), fresh("issue-5"));
     }
 
     #[test]
@@ -465,7 +463,7 @@ mod tests {
                     ..InMemory::default()
                 };
 
-                assert_eq!(select(&reads), fresh("issue-5-branch-2"), "{state}");
+                assert_eq!(picked(&reads), fresh("issue-5-branch-2"), "{state}");
             }
         }
     }
@@ -482,7 +480,7 @@ mod tests {
                 ..InMemory::default()
             };
 
-            assert_eq!(select(&reads), fresh("issue-5-branch-3"));
+            assert_eq!(picked(&reads), fresh("issue-5-branch-3"));
         }
     }
 
@@ -494,7 +492,7 @@ mod tests {
             ..InMemory::default()
         };
 
-        assert_eq!(select(&reads), continued("issue-5", Some(1)));
+        assert_eq!(picked(&reads), continued("issue-5", Some(1)));
     }
 
     #[test]
@@ -507,7 +505,7 @@ mod tests {
             ],
             ..InMemory::default()
         };
-        assert_eq!(select(&reads), continued("issue-5", Some(3)));
+        assert_eq!(picked(&reads), continued("issue-5", Some(3)));
 
         let reads = InMemory {
             origin: vec![("issue-5", "abc")],
@@ -517,7 +515,7 @@ mod tests {
             ],
             ..InMemory::default()
         };
-        assert_eq!(select(&reads), fresh("issue-5-branch-2"));
+        assert_eq!(picked(&reads), fresh("issue-5-branch-2"));
     }
 
     #[test]
@@ -528,7 +526,7 @@ mod tests {
             ..InMemory::default()
         };
 
-        assert_eq!(select(&reads), continued("issue-5-branch-2", None));
+        assert_eq!(picked(&reads), continued("issue-5-branch-2", None));
     }
 
     #[test]
@@ -596,7 +594,7 @@ mod tests {
             ..InMemory::default()
         };
 
-        assert_eq!(select(&reads), continued("issue-5", None));
+        assert_eq!(picked(&reads), continued("issue-5", None));
     }
 
     #[test]
@@ -612,7 +610,7 @@ mod tests {
             ..InMemory::default()
         };
 
-        assert_eq!(select(&reads), continued("issue-5-branch-3", Some(4)));
+        assert_eq!(picked(&reads), continued("issue-5-branch-3", Some(4)));
         assert_eq!(
             reads.seen.into_inner(),
             [
@@ -632,7 +630,7 @@ mod tests {
         };
 
         assert_eq!(
-            started(&reads),
+            started_from(&reads),
             Some(Started::Branch("issue-5-branch-2".to_string()))
         );
     }
@@ -648,7 +646,7 @@ mod tests {
             ..InMemory::default()
         };
 
-        assert_eq!(started(&reads), Some(Started::PullRequest(url_of(4))));
+        assert_eq!(started_from(&reads), Some(Started::PullRequest(url_of(4))));
     }
 
     #[test]
@@ -659,12 +657,12 @@ mod tests {
             ..InMemory::default()
         };
 
-        assert_eq!(started(&reads), None);
+        assert_eq!(started_from(&reads), None);
     }
 
     /// The PR's base `selection` gives for `given` and `checked_out`, with
     /// the lines it said.
-    fn pr_base(
+    fn base_and_lines(
         selection: &Selection,
         given: Option<&str>,
         checked_out: Option<&str>,
@@ -701,7 +699,7 @@ mod tests {
 
         for selection in [fresh, without_pr] {
             assert_eq!(
-                pr_base(&selection, Some("main"), Some("main")),
+                base_and_lines(&selection, Some("main"), Some("main")),
                 (None, vec![])
             );
         }
@@ -710,7 +708,7 @@ mod tests {
     #[test]
     fn the_pr_base_replaces_the_given_branch_over_the_checked_out_one() {
         assert_eq!(
-            pr_base(&continued_with_open_pr(), Some("main"), Some("trunk")),
+            base_and_lines(&continued_with_open_pr(), Some("main"), Some("trunk")),
             (
                 Some("develop".to_string()),
                 vec![format!(
@@ -724,7 +722,7 @@ mod tests {
     #[test]
     fn the_pr_base_replaces_the_checked_out_branch_with_none_given() {
         assert_eq!(
-            pr_base(&continued_with_open_pr(), None, Some("trunk")),
+            base_and_lines(&continued_with_open_pr(), None, Some("trunk")),
             (
                 Some("develop".to_string()),
                 vec![format!(
@@ -743,7 +741,7 @@ mod tests {
             (None, None),
         ] {
             assert_eq!(
-                pr_base(&continued_with_open_pr(), given, checked_out),
+                base_and_lines(&continued_with_open_pr(), given, checked_out),
                 (Some("develop".to_string()), vec![]),
                 "{given:?} {checked_out:?}"
             );
