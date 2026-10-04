@@ -119,10 +119,11 @@ fn review_and_deliver(
 /// Push the Spec branch, then keep up to `parallel` Tickets running, each
 /// time one ends starting ready ones, lowest number first, until none is
 /// ready and none is running, telling `spec_pr` the Tickets checklist as
-/// Tickets start and end, and when a Ticket lands. Returns a line on each Ticket that landed or is
-/// not done, none if the Spec branch could not be pushed, and the last
-/// Tickets checklist if every Ticket is done: if not, it fails, after putting
-/// those lines on stderr unless an interrupt or another error ended it first.
+/// Tickets start and end, and when a Ticket lands. Returns a line on each
+/// Ticket that landed or is not done, none if the Spec branch could not be
+/// pushed, and the last Tickets checklist if every Ticket is done: if not, it
+/// fails, after putting those lines on stderr unless an interrupt or another
+/// error ended it first.
 /// Each Ticket's Run may start a Base fix if `base_fix` allows one.
 fn land_tickets(
     spec: &IssueUrl,
@@ -158,10 +159,10 @@ fn land_tickets(
 /// Keep the Tickets on `board` running as it offers them, until it offers
 /// none and none is running, telling it as each starts and ends and as the
 /// graph is read again, and telling `spec_pr` the Tickets checklist as they
-/// start and end, and when one lands. An interrupt, or an
-/// error other than a Ticket failing, stops any more from starting, and
-/// fails this once those running have ended. Each Ticket's Run may start a
-/// Base fix if `base_fix` allows one.
+/// start and end, and when one lands. An interrupt, or an error other than a
+/// Ticket failing, stops any more from starting, and fails this once those
+/// running have ended. Each Ticket's Run may start a Base fix if `base_fix`
+/// allows one.
 fn run_ready_tickets(
     spec: &IssueUrl,
     board: &mut TicketBoard,

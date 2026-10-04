@@ -19,6 +19,8 @@ const CHECKLIST_END: &str = "<!-- /thirdshift:tickets -->";
 /// open.
 pub(super) struct SpecPr<'a> {
     spec: &'a IssueUrl,
+    /// Owned: the worktree it is borrowed from moves into the Delivery,
+    /// while the Spec PR is still needed after it.
     branch: String,
     base: &'a str,
     pr: Option<PullRequest>,
@@ -100,7 +102,7 @@ impl<'a> SpecPr<'a> {
     /// Tickets checklist, leaving the rest of the body as it is.
     fn write(&self, pr: &PullRequest, checklist: &str) -> Result<()> {
         let body = github::pr_body(self.spec, pr.number)?;
-        let updated = with_checklist(&body, &between_markers(checklist));
+        let updated = with_checklist(&body, checklist);
         if updated != body {
             progress::step("updating the Spec PR's Tickets checklist");
             github::set_pr_body(self.spec, pr.number, &updated)?;
@@ -115,9 +117,10 @@ fn between_markers(checklist: &str) -> String {
 }
 
 /// `body` with its Tickets checklist, the text from its first start marker
-/// to the next end marker, replaced by `checklist`, or with `checklist`
-/// appended if it has no such pair of markers.
+/// to the next end marker, replaced by `checklist` between the markers, or
+/// with that appended if it has no such pair of markers.
 fn with_checklist(body: &str, checklist: &str) -> String {
+    let checklist = between_markers(checklist);
     if let Some(start) = body.find(CHECKLIST_START)
         && let Some(end) = body[start..].find(CHECKLIST_END)
     {
@@ -130,7 +133,7 @@ fn with_checklist(body: &str, checklist: &str) -> String {
         return format!("{}{checklist}{}", &body[..start], &body[end..]);
     }
     if body.is_empty() {
-        return checklist.to_string();
+        return checklist;
     }
     format!("{}\n\n{checklist}", body.trim_end())
 }
@@ -142,16 +145,11 @@ mod tests {
     const LIST: &str = "<!-- thirdshift:tickets -->\nnew\n<!-- /thirdshift:tickets -->\n";
 
     #[test]
-    fn the_checklist_is_wrapped_in_the_markers() {
-        assert_eq!(between_markers("new\n"), LIST);
-    }
-
-    #[test]
     fn the_checklist_replaces_the_one_between_the_markers_and_leaves_the_rest() {
         let body = "Intro.\n\n<!-- thirdshift:tickets -->\nold\n<!-- /thirdshift:tickets -->\n\nCloses #20\n";
 
         assert_eq!(
-            with_checklist(body, LIST),
+            with_checklist(body, "new\n"),
             format!("Intro.\n\n{LIST}\nCloses #20\n")
         );
     }
@@ -159,16 +157,16 @@ mod tests {
     #[test]
     fn the_checklist_is_appended_when_the_markers_are_gone() {
         assert_eq!(
-            with_checklist("A rewritten body.\n\nCloses #20\n", LIST),
+            with_checklist("A rewritten body.\n\nCloses #20\n", "new\n"),
             format!("A rewritten body.\n\nCloses #20\n\n{LIST}")
         );
-        assert_eq!(with_checklist("", LIST), LIST);
+        assert_eq!(with_checklist("", "new\n"), LIST);
     }
 
     #[test]
     fn the_checklist_is_appended_when_only_one_marker_is_left() {
         let body = "Text\n<!-- /thirdshift:tickets -->\n<!-- thirdshift:tickets -->\nmore";
 
-        assert_eq!(with_checklist(body, LIST), format!("{body}\n\n{LIST}"));
+        assert_eq!(with_checklist(body, "new\n"), format!("{body}\n\n{LIST}"));
     }
 }
