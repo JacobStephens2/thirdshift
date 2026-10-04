@@ -70,6 +70,10 @@ _Avoid_: upkeep, continuous architect, daemon, loop
 One invocation of the factory with no **Issue URL**: it takes the lowest-numbered **Ready issue** in the repository and starts a **Spec run** or a **Run** on it, as the command on that issue's URL would. One issue per invocation, and thirdshift never schedules itself: the operating system's scheduler starts each one. It is skipped, doing nothing, when another Pickup run or an **Architect run** on the same repository is still running on the machine, its Spec run or Run included, when there is no Ready issue, or when the repository is at its **Claim limit**. Skipped is not a failure, and sends no **Run notification**.
 _Avoid_: watch, daemon, queue run, poll
 
+**Pass**:
+An **Architect run** or a **Pickup run**: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped.
+_Avoid_: tick, cycle
+
 **Claim limit**:
 The number of open issues carrying a **Claim** at which a **Pickup run** takes no more, set in the **User config**. It keeps a broken **Base branch** from failing every **Ready issue** in turn, and pull requests from piling up unreviewed.
 _Avoid_: WIP limit, concurrency (it counts issues waiting on the **Day shift**, not Runs in flight)

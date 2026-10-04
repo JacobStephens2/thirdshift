@@ -20,6 +20,7 @@ mod labels;
 mod launch;
 mod logs;
 mod notification;
+mod pass;
 mod pickup;
 mod plugin;
 mod poll;

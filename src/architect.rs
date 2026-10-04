@@ -29,9 +29,10 @@ use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
+use crate::pass::{OnGitHub, Outside};
 use crate::progress;
 use crate::prompt;
-use crate::ready::{self, ReadyIssue};
+use crate::ready::ReadyIssue;
 use crate::session::{Logs, Sessions};
 use crate::worktree::ReviewWorktree;
 
@@ -225,25 +226,16 @@ pub fn run(
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
-            let repo = &running.0;
-            logs::skipped(Pass::ArchitectRun, repo, &running);
-            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
+            let repo = running.0.clone();
+            return Ok(skip(&repo, Skipped::AlreadyRunning(running)));
         }
     };
-    let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
-    if !open_plans.is_empty() {
-        return Ok(skip(&repo, Skipped::OpenPlans(open_plans)));
-    }
-    let ideas = github::open_issues_labelled(&repo.slug(), ARCHITECT_IDEA)?;
-    let waiting: Vec<_> = ideas
-        .into_iter()
-        .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
-        .collect();
-    if !waiting.is_empty() {
-        return Ok(skip(&repo, Skipped::IdeasWaiting(waiting)));
-    }
-    if let Some(ReadyIssue { listed, .. }) = ready::first(directory.git(), &repo)? {
-        return Ok(skip(&repo, Skipped::ReadyIssue(listed)));
+    let mut on_github = OnGitHub {
+        launch: directory.git(),
+        repo: &repo,
+    };
+    if let Decision::Skip(skipped) = gates(&mut on_github)? {
+        return Ok(skip(&repo, skipped));
     }
     logs::started(Work::ArchitectRun(&repo));
     if launch_pull {
@@ -259,6 +251,37 @@ pub fn run(
     reviewed.map(Outcome::Reviewed).map_err(|error| FailedRun {
         log,
         ..FailedRun::from(error)
+    })
+}
+
+/// What an Architect run's gates decided.
+enum Decision {
+    /// It is skipped, for this reason.
+    Skip(Skipped),
+    /// It goes ahead to its review.
+    GoAhead,
+}
+
+/// The gates of an Architect run, reaching its repository through `outside`: a
+/// skip for the open Architect plans, if it has any, then for the
+/// Architect ideas still labelled `needs-triage`, then for its Ready issue,
+/// by the Pickup run's own search. No gate is read once one skips.
+fn gates(outside: &mut impl Outside) -> Result<Decision> {
+    let open_plans = outside.open_issues(ARCHITECT_PLAN)?;
+    if !open_plans.is_empty() {
+        return Ok(Decision::Skip(Skipped::OpenPlans(open_plans)));
+    }
+    let waiting: Vec<_> = outside
+        .open_issues(ARCHITECT_IDEA)?
+        .into_iter()
+        .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
+        .collect();
+    if !waiting.is_empty() {
+        return Ok(Decision::Skip(Skipped::IdeasWaiting(waiting)));
+    }
+    Ok(match outside.ready_issue()? {
+        Some(ReadyIssue { listed, .. }) => Decision::Skip(Skipped::ReadyIssue(listed)),
+        None => Decision::GoAhead,
     })
 }
 
@@ -423,6 +446,7 @@ fn check_plan(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pass::{Call, InMemory};
 
     const URL: &str = "https://github.com/acme/widgets/issues/8";
 
@@ -458,5 +482,156 @@ mod tests {
         ] {
             assert_eq!(Report::read(message), None, "{message:?}");
         }
+    }
+
+    /// The gates of an Architect run on `repo`: the reason it is skipped,
+    /// as its line, or `None` for the go-ahead, the URLs the skip names,
+    /// and what the gates did.
+    fn decide(mut repo: InMemory) -> (Option<String>, Vec<String>, Vec<Call>) {
+        let decision = gates(&mut repo).unwrap();
+        let (line, urls) = match decision {
+            Decision::Skip(skipped) => (
+                Some(skipped.to_string()),
+                skipped.urls().into_iter().map(String::from).collect(),
+            ),
+            Decision::GoAhead => (None, Vec::new()),
+        };
+        (line, urls, repo.calls)
+    }
+
+    /// The URL of issue `number` in `acme/widgets`.
+    fn url(number: u64) -> String {
+        format!("https://github.com/acme/widgets/issues/{number}")
+    }
+
+    const PLANS: Call = Call::Open("architect-plan");
+    const IDEAS: Call = Call::Open("architect-idea");
+
+    #[test]
+    fn with_no_plan_idea_or_ready_issue_the_architect_run_goes_ahead_having_read_each_gate() {
+        // #7 is a plan a review that failed left half-published, never
+        // labelled an Architect plan nor an Architect idea.
+        let repo = InMemory::default()
+            .issue(3, false, &["architect-plan"])
+            .issue(4, false, &["architect-idea", "needs-triage"])
+            .issue(7, true, &["needs-triage", "architecture"]);
+
+        let (line, _, calls) = decide(repo);
+
+        assert_eq!(line, None);
+        assert_eq!(calls, [PLANS, IDEAS, Call::ReadySearch]);
+    }
+
+    #[test]
+    fn an_open_plan_skips_naming_each_plan_with_no_read_after() {
+        let repo = InMemory::default()
+            .issue(5, true, &["architect-plan"])
+            .issue(6, true, &["architect-plan", "ready-for-agent"])
+            .issue(7, true, &["architect-idea", "needs-triage"])
+            .ready(8, false);
+
+        let (line, urls, calls) = decide(repo);
+
+        assert_eq!(
+            line.unwrap(),
+            format!(
+                "Architect plan #5 \"Issue 5\" is still open: pick it up with thirdshift {}; \
+                 Architect plan #6 \"Issue 6\" is still open: pick it up with thirdshift {}",
+                url(5),
+                url(6)
+            )
+        );
+        assert_eq!(urls, [url(5), url(6)]);
+        assert_eq!(calls, [PLANS]);
+    }
+
+    #[test]
+    fn a_waiting_idea_skips_naming_each_waiting_idea_with_no_ready_issue_search() {
+        let repo = InMemory::default()
+            .issue(5, true, &["architect-idea", "needs-triage"])
+            .issue(6, true, &["architect-idea", "ready-for-agent"])
+            .issue(7, true, &["Architect-Idea", "Needs-Triage"])
+            .ready(8, false);
+
+        let (line, urls, calls) = decide(repo);
+
+        assert_eq!(
+            line.unwrap(),
+            format!(
+                "Architect idea #5 \"Issue 5\" is waiting for triage: {}; \
+                 Architect idea #7 \"Issue 7\" is waiting for triage: {}",
+                url(5),
+                url(7)
+            )
+        );
+        assert_eq!(urls, [url(5), url(7)]);
+        assert_eq!(calls, [PLANS, IDEAS]);
+    }
+
+    #[test]
+    fn an_idea_no_longer_labelled_needs_triage_does_not_skip() {
+        for decided in ["ready-for-agent", "wontfix", "ready-for-human"] {
+            let repo = InMemory::default().issue(5, true, &["architect-idea", decided]);
+
+            let (line, _, calls) = decide(repo);
+
+            assert_eq!(line, None, "{decided}");
+            assert_eq!(calls, [PLANS, IDEAS, Call::ReadySearch], "{decided}");
+        }
+    }
+
+    #[test]
+    fn a_ready_issue_skips_naming_it() {
+        let repo = InMemory::default().ready(9, true);
+
+        let (line, urls, calls) = decide(repo);
+
+        assert_eq!(
+            line.unwrap(),
+            format!("Ready issue #9 \"Issue 9\" goes first: {}", url(9))
+        );
+        assert_eq!(urls, [url(9)]);
+        assert_eq!(calls, [PLANS, IDEAS, Call::ReadySearch]);
+    }
+
+    #[test]
+    fn an_open_plan_wins_over_a_waiting_idea_and_a_ready_issue() {
+        for idea in [true, false] {
+            let mut repo = InMemory::default()
+                .issue(5, true, &["architect-plan"])
+                .ready(8, false);
+            if idea {
+                repo = repo.issue(6, true, &["architect-idea", "needs-triage"]);
+            }
+
+            let (_, urls, _) = decide(repo);
+
+            assert_eq!(urls, [url(5)], "with an idea waiting: {idea}");
+        }
+    }
+
+    #[test]
+    fn an_idea_triaged_ready_for_agent_skips_as_the_ready_issue_it_is() {
+        let repo = InMemory::default()
+            .issue(7, true, &["architect-idea", "ready-for-agent"])
+            .ready(7, false);
+
+        let (line, urls, calls) = decide(repo);
+
+        assert!(line.unwrap().starts_with("Ready issue #7"));
+        assert_eq!(urls, [url(7)]);
+        assert_eq!(calls, [PLANS, IDEAS, Call::ReadySearch]);
+    }
+
+    #[test]
+    fn a_waiting_idea_wins_over_a_ready_issue() {
+        let repo = InMemory::default()
+            .issue(6, true, &["architect-idea", "needs-triage"])
+            .ready(8, false);
+
+        let (line, urls, _) = decide(repo);
+
+        assert!(line.unwrap().starts_with("Architect idea #6"));
+        assert_eq!(urls, [url(6)]);
     }
 }

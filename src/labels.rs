@@ -179,6 +179,31 @@ impl<'a> Edit<'a> {
         &self.labels
     }
 
+    /// The issue it changes.
+    #[cfg(test)]
+    pub fn issue(&self) -> &IssueUrl {
+        self.issue
+    }
+
+    /// The labels it takes off and puts on, in that order: only those it
+    /// changes.
+    #[cfg(test)]
+    pub fn changes(&self) -> (Vec<Label>, Vec<Label>) {
+        let off = self
+            .off
+            .iter()
+            .copied()
+            .filter(|label| self.takes_off(*label));
+        let on = self.on.iter().copied().filter(|label| self.puts_on(*label));
+        (off.collect(), on.collect())
+    }
+
+    /// The issue's labels once it is made, against its labels as read.
+    #[cfg(test)]
+    pub fn labels_after(&self) -> Labels {
+        self.labels.swapped(&self.off, &self.on)
+    }
+
     /// Make the change, in one request, having first added each label it
     /// puts on to the repository, with its description, if the repository
     /// lacks it. A change of no label makes no request, and taking a single
