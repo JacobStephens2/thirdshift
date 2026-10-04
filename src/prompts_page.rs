@@ -115,10 +115,12 @@ fn prompts() -> Vec<Prompt> {
     let failed = FailedChecks {
         own: vec![check(CHECK)],
         inherited: Vec::new(),
+        on_base: Vec::new(),
     };
     let failed_with_inherited = FailedChecks {
         own: vec![check(CHECK)],
         inherited: vec![check(INHERITED_CHECK)],
+        on_base: vec![check(INHERITED_CHECK)],
     };
     let with_sentinel = vec![
         Prompt {
