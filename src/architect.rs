@@ -32,7 +32,6 @@ use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::prompt;
 use crate::ready::{self, ReadyIssue};
-use crate::run;
 use crate::session::{Logs, Sessions};
 use crate::worktree::ReviewWorktree;
 
@@ -220,10 +219,8 @@ pub fn run(
 ) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
     let Launch {
-        git: launch,
-        origin,
+        directory,
         repo,
-        checked_out,
         base,
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
@@ -245,20 +242,20 @@ pub fn run(
     if !waiting.is_empty() {
         return Ok(skip(&repo, Skipped::IdeasWaiting(waiting)));
     }
-    if let Some(ReadyIssue { listed, .. }) = ready::first(&launch, &repo)? {
+    if let Some(ReadyIssue { listed, .. }) = ready::first(directory.git(), &repo)? {
         return Ok(skip(&repo, Skipped::ReadyIssue(listed)));
     }
     logs::started(Work::ArchitectRun(&repo));
     if launch_pull {
-        run::pull_base_branch(&launch, checked_out.as_deref(), &base);
+        directory.pull(&base);
     }
 
     if interrupt::requested() {
         return Err(anyhow!("interrupted").into());
     }
-    let worktree = ReviewWorktree::create(&launch, &repo.name, &base)?;
+    let worktree = ReviewWorktree::create(directory.git(), &repo.name, &base)?;
     let logs = Logs::of_architect_run(&repo);
-    let (reviewed, log) = review(worktree, &base, focus, &origin, started, &logs);
+    let (reviewed, log) = review(worktree, &base, focus, directory.origin(), started, &logs);
     reviewed.map(Outcome::Reviewed).map_err(|error| FailedRun {
         log,
         ..FailedRun::from(error)

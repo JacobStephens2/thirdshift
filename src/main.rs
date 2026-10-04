@@ -23,7 +23,6 @@ mod notification;
 mod pickup;
 mod plugin;
 mod poll;
-mod preflight;
 mod progress;
 mod prompt;
 #[cfg(test)]

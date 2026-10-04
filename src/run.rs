@@ -4,7 +4,7 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
@@ -17,9 +17,8 @@ use crate::git::Git;
 use crate::github::{self, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::launch::LaunchDirectory;
 use crate::logs::{self, Work};
-use crate::preflight;
-use crate::progress;
 use crate::prompt;
 use crate::session::Logs;
 use crate::spec_run;
@@ -158,9 +157,8 @@ fn run(
     started_by: StartedBy,
     base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
-    let launch = Git::new(std::env::current_dir().context("no current directory")?);
-
-    preflight::check(&launch, issue)?;
+    let directory = LaunchDirectory::open_for_run(issue)?;
+    let launch = directory.git();
     let tickets = match started_by.child() {
         Some(_) => Vec::new(),
         None => github::tickets(issue)?,
@@ -176,10 +174,7 @@ fn run(
         )
         .into());
     }
-    let checked_out = launch
-        .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .ok();
-    let selection = branch::select(&launch, issue)?;
+    let selection = branch::select(launch, issue)?;
     // A Spec implemented some other way: the Spec run leaves it be.
     if matches!(selection, Selection::Fresh { .. })
         && spec_run::all_closed(tickets.iter().map(|ticket| ticket.is_open))
@@ -188,10 +183,11 @@ fn run(
             anyhow!("every Ticket is closed and there is no Spec branch; nothing to do").into(),
         );
     }
-    let base = selection.base_branch(started_by.given_base(), checked_out.as_deref())?;
-    preflight::check_base_branch(&launch, &base)?;
+    let given = started_by.given_base();
+    let named = selection.pr_base(given, directory.checked_out()).or(given);
+    let base = directory.base_branch(named)?;
     if asks.launch_pull {
-        pull_base_branch(&launch, checked_out.as_deref(), &base);
+        directory.pull(&base);
     }
 
     if interrupt::requested() {
@@ -209,13 +205,13 @@ fn run(
         base_fix,
         logs: &logs,
     };
-    let outcome = run_in_worktree(tickets, &launch, &selection, delivery, asks.tickets_at_once);
+    let outcome = run_in_worktree(tickets, launch, &selection, delivery, asks.tickets_at_once);
     if let Some(claim) = claim {
         match &outcome {
             Ok(reached) if reached.goal == Goal::Merged => claim.remove_if_closed(),
             // Ready for review: the Claim stays while the pull request waits.
             Ok(_) => {}
-            Err(_) => claim.release_if_nothing_on_origin(&launch),
+            Err(_) => claim.release_if_nothing_on_origin(launch),
         }
     }
     outcome
@@ -254,33 +250,4 @@ fn run_in_worktree(
         catch_up_from_origin: false,
     };
     delivery.deliver(worktree, opening, || Ok(()))
-}
-
-/// Fast-forward the Launch directory's Base branch `base` to
-/// `origin/<base>`, if `base` is the branch `checked_out` there. Call it after
-/// [`preflight::check_base_branch`], which fetches `origin/<base>` and fails
-/// if `base` is ahead of it. The Run doesn't depend on this, so a failure,
-/// such as uncommitted changes in the way, is only a warning, and those
-/// changes are left as they were.
-pub fn pull_base_branch(launch: &Git, checked_out: Option<&str>, base: &str) {
-    if checked_out != Some(base) {
-        return;
-    }
-    let origin_base = format!("origin/{base}");
-    let up_to_date = launch.succeeds(&["merge-base", "--is-ancestor", &origin_base, "HEAD"]);
-    if up_to_date.unwrap_or(false) {
-        return;
-    }
-    progress::step(format_args!(
-        "updating {base} in the Launch directory from {origin_base}"
-    ));
-    if let Err(error) = launch.run(&["merge", "--ff-only", "--quiet", &origin_base]) {
-        progress::warn(
-            &error,
-            format_args!(
-                "could not update {base} in the Launch directory, \
-                 so update it by hand: git pull --ff-only origin {base}"
-            ),
-        );
-    }
 }

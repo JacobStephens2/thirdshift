@@ -1,7 +1,7 @@
 //! Issue branch selection: start a fresh Issue branch, or continue the one
 //! already on origin (ADR-0002).
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::git::Git;
 use crate::github::{self, PrState, PullRequest};
@@ -26,34 +26,35 @@ impl Selection {
         }
     }
 
-    /// The Base branch: the open PR's base in a Continuation that has one,
-    /// otherwise `given`, the Base branch the Run was given by what started
-    /// it, or without one `checked_out`, the branch checked out in the launch
-    /// directory (`None` on a detached HEAD). Says so on stderr when the PR's
-    /// base replaces a different given or checked-out branch.
-    pub fn base_branch(&self, given: Option<&str>, checked_out: Option<&str>) -> Result<String> {
-        let otherwise = given.or(checked_out);
-        if let Selection::Continuation {
+    /// The open PR's base in a Continuation that has one, which names the
+    /// Base branch whatever else would. `given` is the Base branch the Run was
+    /// given by what started it, if any, and `checked_out` the branch
+    /// checked out in the Launch directory (`None` on a detached HEAD). Says
+    /// so on stderr when the PR's base replaces a different given or
+    /// checked-out branch.
+    pub fn pr_base(&self, given: Option<&str>, checked_out: Option<&str>) -> Option<&str> {
+        let Selection::Continuation {
             branch,
             pr: Some(pr),
         } = self
+        else {
+            return None;
+        };
+        if let Some(replaced) = given
+            .or(checked_out)
+            .filter(|&replaced| replaced != pr.base)
         {
-            if let Some(replaced) = otherwise.filter(|&replaced| replaced != pr.base) {
-                let which = if given.is_some() {
-                    "given"
-                } else {
-                    "checked-out"
-                };
-                progress::step(format_args!(
-                    "continuing {branch} and its PR {}, so the Base branch is {}, not the {which} {replaced}",
-                    pr.url, pr.base
-                ));
-            }
-            return Ok(pr.base.clone());
+            let which = if given.is_some() {
+                "given"
+            } else {
+                "checked-out"
+            };
+            progress::step(format_args!(
+                "continuing {branch} and its PR {}, so the Base branch is {}, not the {which} {replaced}",
+                pr.url, pr.base
+            ));
         }
-        otherwise
-            .map(String::from)
-            .context("HEAD is detached; check out the branch the work should be based on")
+        Some(&pr.base)
     }
 }
 
