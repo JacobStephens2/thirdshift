@@ -56,52 +56,12 @@ const ARCHITECT_IDEA: Label = Label::new(
 );
 
 /// How an Architect run ended, short of a failure and before any dispatch.
-/// Its `Display` is the line that says how it ended.
 #[derive(Debug)]
 pub enum Outcome {
     /// Skipped, before any review, having done nothing.
     Skipped(Skipped),
     /// Its Architecture review ended on an issue.
     Reviewed(Reviewed),
-}
-
-impl Outcome {
-    /// The Architecture review the Architect run ended with, which its Run
-    /// notification reports. None when it was skipped: a skipped Architect
-    /// run sends no notification, so one started every few minutes for
-    /// Weeding doesn't flood the inbox.
-    pub fn reviewed(&self) -> Option<&Reviewed> {
-        match self {
-            Self::Skipped(_) => None,
-            Self::Reviewed(reviewed) => Some(reviewed),
-        }
-    }
-
-    /// The URLs of the issues the Architect run ended on, as its stdout
-    /// carries them when nothing was dispatched: the issue its Architecture
-    /// review ended on, or each open Architect plan, or each Architect idea
-    /// waiting for triage, or the Ready issue, it was skipped for. None when
-    /// it was skipped as another, or a Pickup run, is still running.
-    pub fn urls(&self) -> Vec<&str> {
-        match self {
-            Self::Skipped(Skipped::AlreadyRunning(_)) => Vec::new(),
-            Self::Skipped(Skipped::OpenPlans(issues) | Skipped::IdeasWaiting(issues)) => issues
-                .iter()
-                .map(|listed| listed.issue.url.as_str())
-                .collect(),
-            Self::Skipped(Skipped::ReadyIssue(listed)) => vec![listed.issue.url.as_str()],
-            Self::Reviewed(reviewed) => vec![reviewed.url()],
-        }
-    }
-}
-
-impl fmt::Display for Outcome {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Skipped(skipped) => skipped.fmt(f),
-            Self::Reviewed(reviewed) => reviewed.fmt(f),
-        }
-    }
 }
 
 /// Why an Architect run was skipped. Its `Display` is the reason, as the
@@ -119,6 +79,23 @@ pub enum Skipped {
     IdeasWaiting(Vec<ListedIssue>),
     /// This Ready issue, the lowest-numbered on this repository, goes first.
     ReadyIssue(ListedIssue),
+}
+
+impl Skipped {
+    /// The URLs of the issues the Architect run was skipped for, as its
+    /// stdout carries them: each open Architect plan, or each Architect idea
+    /// waiting for triage, or the Ready issue. None when it was skipped as
+    /// another, or a Pickup run, is still running.
+    pub fn urls(&self) -> Vec<&str> {
+        match self {
+            Self::AlreadyRunning(_) => Vec::new(),
+            Self::OpenPlans(issues) | Self::IdeasWaiting(issues) => issues
+                .iter()
+                .map(|listed| listed.issue.url.as_str())
+                .collect(),
+            Self::ReadyIssue(listed) => vec![listed.issue.url.as_str()],
+        }
+    }
 }
 
 impl fmt::Display for Skipped {

@@ -1,14 +1,14 @@
-//! A Run's ending, both ways: how a Run, a Spec run or an Architect run
-//! shows how it ended, and how a Run reads back the ending of a child Run it
-//! started. The lines a Run prints are all a child Run tells what started
-//! it (ADR-0006, ADR-0008), so which line carries what, and in what order,
-//! is known only here. What a line of advice looks like is the Base fix
-//! module's to say, and which lines are a child's own the progress module's.
+//! A Run's ending, both ways: how a command shows how it ended, and how a
+//! Run reads back the ending of a child Run it started. The lines a Run
+//! prints are all a child Run tells what started it (ADR-0006, ADR-0008),
+//! so which line carries what, and in what order, is known only here. What a
+//! line of advice looks like is the Base fix module's to say, and which
+//! lines are a child's own the progress module's.
 
 use std::process::ExitCode;
 
-use crate::architect;
 use crate::base_fix::Advice;
+use crate::command::{Ending, Skip};
 use crate::failed_run::FailedRun;
 use crate::logs;
 use crate::progress::{self, ChildLine};
@@ -23,61 +23,50 @@ const COMMAND_LOG: &str = "command log: ";
 /// What starts the line saying what became of the Base fix a Run took.
 const BASE_FIX: &str = "Base fix: ";
 
-/// Show how a Run or a Spec run `ended`: on stderr, what became of its Base
-/// fix, if it took one, then its pull request's outcome once it reached its
-/// goal, or as a Failed run does (see [`show_failure`]); its pull request's
-/// URL on stdout. Returns its exit code.
-pub fn show(ended: &Ended) -> ExitCode {
-    Shown::of(ended).print()
+/// Show how a command ended as `ending`: a Run or a Spec run as
+/// [`Shown::of`] does; an Architect run as the run it dispatched does, else
+/// the line that says how its review ended on stderr and the issue it ended
+/// on on stdout, or as a Failed run does; a skipped pass, the line that says
+/// why on stderr and the URLs it was skipped for on stdout. Returns its exit
+/// code.
+pub fn show(ending: &Ending) -> ExitCode {
+    Shown::of_ending(ending).print()
 }
 
-/// Show a Failed run, or a failed Architect run: its cause, its session log
-/// and the Command log on stderr, and its pull request's URL, if it left
-/// one, on stdout. Returns its exit code.
-pub fn show_failure(failed: &FailedRun) -> ExitCode {
-    Shown::of_failure(failed, &[]).print()
-}
-
-/// Show an Architect run that dispatched no run, skipped or ended on an
-/// issue: the line that says how it ended on stderr, and its URLs, if it has
-/// any, on stdout. Returns its exit code.
-pub fn show_architect(outcome: &architect::Outcome) -> ExitCode {
-    Shown {
-        // Also on stderr, so the outcome shows even when stdout is captured.
-        steps: vec![outcome.to_string()],
-        urls: outcome.urls().into_iter().map(String::from).collect(),
-        success: true,
+/// How a command ended as `ending`, in short, as its Activity log end line
+/// gives it: a Run's or a Spec run's pull request's outcome, or how it
+/// failed; an Architect run's plan and the run it dispatched it as, if it
+/// dispatched it, else the issue its review ended on, or how it failed; a
+/// skipped pass's reason, though no end line gives that.
+pub fn summary(ending: &Ending) -> String {
+    match ending {
+        Ending::Run(ended) => run_summary(ended),
+        Ending::Architect {
+            review: Err(failed),
+            ..
+        } => failure_summary(failed),
+        Ending::Architect {
+            review: Ok(reviewed),
+            dispatched: Some(dispatched),
+        } => format!(
+            "plan {} dispatched: {}",
+            reviewed.url(),
+            run_summary(dispatched)
+        ),
+        Ending::Architect {
+            review: Ok(reviewed),
+            dispatched: None,
+        } => reviewed.to_string(),
+        Ending::Skipped(skip) => skip.reason.clone(),
     }
-    .print()
 }
 
-/// How a Run or a Spec run `ended`, in short, as its Activity log line
-/// gives it: its pull request's outcome, or how it failed.
-pub fn summary(ended: &Ended) -> String {
+/// How a Run or a Spec run `ended`, in short: its pull request's outcome, or
+/// how it failed.
+fn run_summary(ended: &Ended) -> String {
     match &ended.outcome {
         Ok(reached) => format!("PR {} is {}", reached.pr_url, reached.goal.outcome()),
         Err(failed) => failure_summary(failed),
-    }
-}
-
-/// How an Architect run that got past its skip checks ended, in short, as
-/// its Activity log line gives it: the run it `dispatched` its plan as, if
-/// it dispatched it, else the issue it ended on, or how it failed.
-pub fn architect_summary(
-    ended: &Result<architect::Outcome, FailedRun>,
-    dispatched: Option<&Ended>,
-) -> String {
-    match (ended, dispatched) {
-        (Err(failed), _) => failure_summary(failed),
-        (Ok(outcome), Some(dispatched)) => match outcome.reviewed() {
-            Some(reviewed) => format!(
-                "plan {} dispatched: {}",
-                reviewed.url(),
-                summary(dispatched)
-            ),
-            None => summary(dispatched),
-        },
-        (Ok(outcome), None) => outcome.to_string(),
     }
 }
 
@@ -99,6 +88,40 @@ struct Shown {
 }
 
 impl Shown {
+    /// How a command that ended as `ending` shows: see [`show`].
+    fn of_ending(ending: &Ending) -> Self {
+        match ending {
+            Ending::Run(ended)
+            | Ending::Architect {
+                dispatched: Some(ended),
+                ..
+            } => Shown::of(ended),
+            Ending::Architect {
+                review: Ok(reviewed),
+                dispatched: None,
+            } => Shown {
+                // Also on stderr, so the outcome shows even when stdout is
+                // captured.
+                steps: vec![reviewed.to_string()],
+                urls: vec![reviewed.url().to_string()],
+                success: true,
+            },
+            Ending::Architect {
+                review: Err(failed),
+                dispatched: None,
+            } => Shown::of_failure(failed, &[]),
+            Ending::Skipped(Skip { reason, urls }) => Shown {
+                steps: vec![reason.clone()],
+                urls: urls.clone(),
+                success: true,
+            },
+        }
+    }
+
+    /// A Run or a Spec run that `ended`: on stderr, what became of its Base
+    /// fix, if it took one, then its pull request's outcome once it reached
+    /// its goal, or as a Failed run does (see [`Shown::of_failure`]); its
+    /// pull request's URL on stdout.
     fn of(ended: &Ended) -> Self {
         let mut shown = match &ended.outcome {
             Ok(reached) => Shown {
@@ -120,8 +143,9 @@ impl Shown {
         shown
     }
 
-    /// A Failed run's cause, its `advice`, if it has any, then its session
-    /// log and the command's Command log.
+    /// A Failed run, or a failed Architect run: on stderr, its cause, its
+    /// `advice`, if it has any, then its session log and the command's
+    /// Command log; on stdout, its pull request's URL, if it left one.
     fn of_failure(failed: &FailedRun, advice: &[Advice]) -> Self {
         let mut steps = vec![format!("{:#}", failed.error)];
         steps.extend(advice.iter().map(Advice::to_string));
@@ -228,11 +252,172 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
+    use crate::architect::Reviewed;
+    use crate::issue::IssueUrl;
     use crate::run::{Goal, Reached};
 
     const PR: &str = "https://github.com/acme/widgets/pull/31";
     const LOG: &str = "/home/me/.thirdshift/logs/widgets-21-implement.jsonl";
     const BASE_FIX_ISSUE: &str = "https://github.com/acme/widgets/issues/8";
+    const PLAN: &str = "https://github.com/acme/widgets/issues/40";
+
+    fn plan() -> Reviewed {
+        Reviewed::PlanReady {
+            plan: IssueUrl::parse(PLAN).unwrap(),
+            base: "main".to_string(),
+        }
+    }
+
+    fn idea() -> Reviewed {
+        Reviewed::IdeaFiled(IssueUrl::parse(PLAN).unwrap())
+    }
+
+    fn failed_run(cause: &str) -> FailedRun {
+        FailedRun {
+            error: anyhow!("{cause}"),
+            pr_url: None,
+            log: Some(PathBuf::from(LOG)),
+            interrupted: false,
+            ticket_lines: Vec::new(),
+        }
+    }
+
+    /// The lines `ending` shows on stderr and stdout, and whether it exits 0.
+    fn shown(ending: &Ending) -> (Vec<String>, Vec<String>, bool) {
+        let shown = Shown::of_ending(ending);
+        (shown.steps, shown.urls, shown.success)
+    }
+
+    fn strings(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|line| line.to_string()).collect()
+    }
+
+    #[test]
+    fn a_run_shows_and_sums_up_its_ending_as_it_ended() {
+        let ending = Ending::Run(with_base_fix(reached(Goal::Merged), "merged"));
+        assert_eq!(
+            shown(&ending),
+            (
+                vec![
+                    format!("Base fix: {BASE_FIX_ISSUE} merged"),
+                    format!("PR {PR} is merged"),
+                ],
+                strings(&[PR]),
+                true
+            )
+        );
+        assert_eq!(summary(&ending), format!("PR {PR} is merged"));
+        let ending = Ending::Run(failed(
+            "claude exited 1\nno such model",
+            Some(LOG),
+            Some(PR),
+        ));
+        assert_eq!(
+            shown(&ending),
+            (
+                vec![
+                    "claude exited 1\nno such model".to_string(),
+                    format!("session log: {LOG}"),
+                ],
+                strings(&[PR]),
+                false
+            )
+        );
+        assert_eq!(summary(&ending), "failed: claude exited 1");
+    }
+
+    #[test]
+    fn an_architect_run_that_dispatched_its_plan_shows_as_that_run_and_sums_up_both() {
+        let ending = Ending::Architect {
+            review: Ok(plan()),
+            dispatched: Some(reached(Goal::ReadyForReview)),
+        };
+        assert_eq!(
+            shown(&ending),
+            (
+                vec![format!("PR {PR} is ready for review")],
+                strings(&[PR]),
+                true
+            )
+        );
+        assert_eq!(
+            summary(&ending),
+            format!("plan {PLAN} dispatched: PR {PR} is ready for review")
+        );
+        let ending = Ending::Architect {
+            review: Ok(plan()),
+            dispatched: Some(failed("CI red on test", Some(LOG), None)),
+        };
+        assert!(!shown(&ending).2);
+        assert_eq!(
+            summary(&ending),
+            format!("plan {PLAN} dispatched: failed: CI red on test")
+        );
+    }
+
+    #[test]
+    fn an_architect_run_that_dispatched_nothing_shows_and_sums_up_its_review() {
+        let ending = Ending::Architect {
+            review: Ok(idea()),
+            dispatched: None,
+        };
+        let line = format!("no Strong candidate: the Architecture review filed the idea {PLAN}");
+        assert_eq!(shown(&ending), (vec![line.clone()], strings(&[PLAN]), true));
+        assert_eq!(summary(&ending), line);
+        let ending = Ending::Architect {
+            review: Ok(plan()),
+            dispatched: None,
+        };
+        let line = format!("plan {PLAN} is ready for an agent");
+        assert_eq!(shown(&ending), (vec![line.clone()], strings(&[PLAN]), true));
+        assert_eq!(summary(&ending), line);
+    }
+
+    #[test]
+    fn an_architect_run_whose_review_failed_shows_and_sums_up_the_failure() {
+        let ending = Ending::Architect {
+            review: Err(failed_run("claude exited 1\nno such model")),
+            dispatched: None,
+        };
+        assert_eq!(
+            shown(&ending),
+            (
+                vec![
+                    "claude exited 1\nno such model".to_string(),
+                    format!("session log: {LOG}"),
+                ],
+                Vec::new(),
+                false
+            )
+        );
+        assert_eq!(summary(&ending), "failed: claude exited 1");
+    }
+
+    #[test]
+    fn a_skipped_pass_shows_its_reason_and_its_urls_and_exits_0() {
+        let reason = format!("Ready issue #40 \"Export\" goes first: {PLAN}");
+        let ending = Ending::Skipped(Skip {
+            reason: reason.clone(),
+            urls: strings(&[PLAN]),
+        });
+        assert_eq!(
+            shown(&ending),
+            (vec![reason.clone()], strings(&[PLAN]), true)
+        );
+        assert_eq!(summary(&ending), reason);
+        let ending = Ending::Skipped(Skip {
+            reason: "no Ready issue on acme/widgets".to_string(),
+            urls: Vec::new(),
+        });
+        assert_eq!(
+            shown(&ending),
+            (
+                strings(&["no Ready issue on acme/widgets"]),
+                Vec::new(),
+                true
+            )
+        );
+    }
 
     fn reached(goal: Goal) -> Ended {
         Ended {
