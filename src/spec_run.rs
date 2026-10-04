@@ -189,7 +189,7 @@ fn run_ready_tickets(
             if error.is_some() || interrupt::requested() {
                 board.stop();
             }
-            let Some(ticket) = board.next() else {
+            let Some(ticket) = board.next_to_start() else {
                 break;
             };
             match start_ticket(spec, ticket, spec_branch, base_fix, ended.clone()) {

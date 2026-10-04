@@ -46,7 +46,7 @@ impl TicketBoard {
     /// none running, and was not started in this Spec run. A blocker's Run
     /// closes its issue before it ends, so a closed blocker may still be
     /// running.
-    pub(super) fn next(&self) -> Option<u64> {
+    pub(super) fn next_to_start(&self) -> Option<u64> {
         if self.stopped || self.running() >= self.parallel.get() {
             return None;
         }
@@ -93,10 +93,10 @@ impl TicketBoard {
         self.running() > 0
     }
 
-    /// The Tickets not done, the open ones, lowest number first.
+    /// The Tickets not done, the open ones, in the order they were read.
     pub(super) fn not_done(&self) -> Vec<u64> {
-        self.by_number()
-            .into_iter()
+        self.tickets
+            .iter()
             .filter(|ticket| ticket.is_open)
             .map(|ticket| ticket.number)
             .collect()
@@ -288,14 +288,14 @@ mod tests {
             2,
         );
 
-        assert_eq!(board.next(), Some(21));
+        assert_eq!(board.next_to_start(), Some(21));
         board.started(21);
-        assert_eq!(board.next(), Some(22));
+        assert_eq!(board.next_to_start(), Some(22));
         board.started(22);
-        assert_eq!(board.next(), None);
+        assert_eq!(board.next_to_start(), None);
 
         board.ended(21, failed("claude exited 1", None));
-        assert_eq!(board.next(), Some(23));
+        assert_eq!(board.next_to_start(), Some(23));
     }
 
     #[test]
@@ -308,11 +308,11 @@ mod tests {
 
         board.stop();
 
-        assert_eq!(board.next(), None);
+        assert_eq!(board.next_to_start(), None);
         assert!(board.any_running());
         board.ended(21, Ended::Interrupted);
         assert!(!board.any_running());
-        assert_eq!(board.next(), None);
+        assert_eq!(board.next_to_start(), None);
     }
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
         board.ended(21, failed("claude exited 1", None));
         board.ended(22, reached(None));
 
-        assert_eq!(board.next(), None);
+        assert_eq!(board.next_to_start(), None);
     }
 
     #[test]
@@ -344,9 +344,9 @@ mod tests {
         board.ended(21, reached(None));
         board.started(22);
 
-        assert_eq!(board.next(), None);
+        assert_eq!(board.next_to_start(), None);
         board.ended(22, reached(None));
-        assert_eq!(board.next(), Some(23));
+        assert_eq!(board.next_to_start(), Some(23));
     }
 
     #[test]
@@ -367,7 +367,7 @@ mod tests {
             board.lines(),
             ["#21 landed with https://x/pull/1", "#22 not started"]
         );
-        assert_eq!(board.next(), Some(22));
+        assert_eq!(board.next_to_start(), Some(22));
     }
 
     #[test]
@@ -381,7 +381,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(board.not_done(), [22, 23]);
+        assert_eq!(board.not_done(), [23, 22]);
     }
 
     #[test]
@@ -394,7 +394,7 @@ mod tests {
                 .collect();
             let board = board(vec![unready, ticket(22, true, &[], &[])], 1);
 
-            assert_eq!(board.next(), Some(22), "{label}");
+            assert_eq!(board.next_to_start(), Some(22), "{label}");
             assert_eq!(board.lines()[0], format!("#21 unready: labelled {label}"));
         }
     }
