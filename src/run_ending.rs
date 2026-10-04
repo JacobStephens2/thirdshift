@@ -9,8 +9,8 @@ use std::process::ExitCode;
 
 use crate::architect;
 use crate::base_fix::Advice;
-use crate::command_log;
 use crate::failed_run::FailedRun;
+use crate::logs;
 use crate::progress::{self, ChildLine};
 use crate::run::Ended;
 
@@ -128,7 +128,7 @@ impl Shown {
         if let Some(log) = &failed.log {
             steps.push(format!("{SESSION_LOG}{}", log.display()));
         }
-        if let Some(log) = command_log::path() {
+        if let Some(log) = logs::command_log_path() {
             steps.push(format!("{COMMAND_LOG}{}", log.display()));
         }
         Shown {
@@ -143,7 +143,7 @@ impl Shown {
             progress::step(step);
         }
         for url in self.urls {
-            command_log::print(&url);
+            logs::print(&url);
         }
         if self.success {
             ExitCode::SUCCESS

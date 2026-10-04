@@ -176,7 +176,7 @@ The full transcript of one agent session, one per session, a **Resume** and each
 _Avoid_: transcript, session file
 
 **Command log**:
-Everything one **Run**, **Spec run**, **Architect run** or **Pickup run** printed, kept in a file of its own with its repository's other logs, stamped like its **Session logs**. An Architect run's or Pickup run's covers the Spec run or Run it dispatched, and a Spec run's covers its **Tickets**' Runs, as a Run's covers its **Base fix**: none of those keeps one of its own. A Pickup run or Architect run skipped before doing any work keeps none.
+Everything one **Run**, **Spec run**, **Architect run** or **Pickup run** printed, kept in a file of its own with its repository's other logs, stamped like its **Session logs**. An Architect run's or Pickup run's covers the Spec run or Run it dispatched, and a Spec run's covers its **Tickets**' Runs, as a Run's covers its **Base fix**: none of those keeps one of its own. It is kept once the command starts work: a Pickup run or Architect run skipped before doing any work keeps none, and neither does a Run that fails before it starts work, such as on **Origin match**.
 _Avoid_: cron log, output log, run log (a **Run** is one kind of command)
 
 **Activity log**:

@@ -14,9 +14,9 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::args;
 use crate::base_fix::BaseFixAsk;
-use crate::command_log;
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::logs;
 use crate::progress;
 use crate::run_ending;
 
@@ -114,7 +114,7 @@ fn start_from(
     }
     command
         .args([kind.hidden_argument(), kind.base()])
-        .args([args::STAMP, command_log::stamp()])
+        .args([args::STAMP, logs::stamp()])
         .args(base_fix)
         .arg(&issue.url)
         .stdin(Stdio::null())

@@ -15,6 +15,7 @@ use anyhow::Result;
 use crate::claim;
 use crate::issue::{IssueUrl, Repo};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
+use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, ReadyIssue};
 
@@ -58,7 +59,7 @@ pub enum Skipped {
 
 impl Skipped {
     /// The repository the Pickup run was skipped on.
-    pub fn repo(&self) -> &Repo {
+    fn repo(&self) -> &Repo {
         match self {
             Self::AlreadyRunning(AlreadyRunning(repo))
             | Self::AtClaimLimit { repo, .. }
@@ -102,35 +103,46 @@ impl fmt::Display for Skipped {
 /// It first makes the Sweep, taking the Claim off the repository's closed
 /// issues, and is then skipped, still before any search, if the repository
 /// is at its Claim limit: `limit` or more of its open issues carry a Claim.
+/// A skip is recorded in the repository's Activity log. Once it takes an
+/// issue, it records that it started work on it, which keeps its Command
+/// log.
 pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
     let Launch {
         git, repo, base, ..
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
-            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
+            return Ok(skip(Skipped::AlreadyRunning(running)));
         }
     };
     claim::sweep(&repo);
     let claimed = claim::open_count(&repo)?;
     if claimed >= limit.get() {
-        return Ok(Outcome::Skipped(Skipped::AtClaimLimit {
+        return Ok(skip(Skipped::AtClaimLimit {
             repo,
             claimed,
             limit,
         }));
     }
     let Some(ReadyIssue { listed, is_spec }) = ready::first(&git, &repo)? else {
-        return Ok(Outcome::Skipped(Skipped::NoReadyIssue(repo)));
+        return Ok(skip(Skipped::NoReadyIssue(repo)));
     };
     progress::step(format_args!(
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
         listed.issue.number, listed.title, listed.issue.url
     ));
+    logs::started(Work::PickupRun(&listed.issue));
     Ok(Outcome::Taken(Taken {
         issue: listed.issue,
         title: listed.title,
         base,
         is_spec,
     }))
+}
+
+/// The Pickup run skipped as `skipped` says, recorded in its repository's
+/// Activity log.
+fn skip(skipped: Skipped) -> Outcome {
+    logs::skipped(Pass::PickupRun, skipped.repo(), &skipped);
+    Outcome::Skipped(skipped)
 }

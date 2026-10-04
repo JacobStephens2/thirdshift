@@ -4,7 +4,8 @@
 //! under `<logs.dir>/<owner>/<repo>/sessions/`, all stamped with the
 //! command's start in local time and its UTC offset. A child Run keeps none: its lines are in the
 //! Command log of what started it. A Pickup run or Architect run skipped
-//! before doing any work keeps none.
+//! before doing any work keeps none, nor does a Run that fails before it
+//! starts work.
 
 mod support;
 
@@ -339,6 +340,27 @@ fn a_command_log_that_cannot_be_written_is_one_warning_and_changes_nothing_else(
         Some(format!("thirdshift: PR {PR_URL} is ready for review").as_str())
     );
     assert_eq!(logs_in(&scenario, "sessions").len(), 1);
+}
+
+#[test]
+fn a_run_that_fails_on_origin_match_keeps_no_command_log_and_writes_no_activity_log_line() {
+    let scenario = Scenario::new();
+
+    let result = run_in_zone(
+        &scenario,
+        &["https://github.com/other/widgets/issues/7"],
+        &[],
+    );
+
+    scenario.assert_rejected_before_any_work(&result, "origin mismatch");
+    assert_dated_first_line(
+        &result,
+        "starting on https://github.com/other/widgets/issues/7",
+    );
+    assert!(!result.stderr.contains("logging this command to"));
+    assert!(!result.stderr.contains("Command log:"));
+    // Neither the issue's repository's logs nor the Launch directory's.
+    assert!(!scenario.path(LOGS_DIR).exists());
 }
 
 #[test]

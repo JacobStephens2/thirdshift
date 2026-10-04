@@ -7,9 +7,10 @@
 //! The process the user or cron started keeps the Command log. A child Run
 //! keeps none, but takes the stamp of the command that started it: its lines
 //! reach that command's stderr through the relay, and from there its Command
-//! log. A command's lines are held from its start until the file's name is
-//! known, then written first, so a command that ends before then, as a
-//! skipped Pickup run does, never creates the file. A Command log that can't
+//! log. A command's lines are held from its start until it starts work and
+//! the file's name is known, then written first, so a command that ends
+//! before then, as a skipped Pickup run or a Run that fails on Origin match
+//! does, never creates the file. A Command log that can't
 //! be written is one `warning:` line, and changes nothing else.
 //!
 //! An Architect run or a Pickup run, which may yet be skipped, holds its
@@ -25,7 +26,6 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use anyhow::{Context, Result};
 use chrono::Local;
 
-use crate::issue::{IssueUrl, Repo};
 use crate::progress;
 
 /// How a stamp is written: local time with its UTC offset, as in
@@ -56,22 +56,11 @@ enum Log {
 }
 
 /// Begin a command that keeps a Command log: make its stamp now, hold its
-/// lines from here on, and print its first progress line, `<starting>, `
-/// followed by the date and UTC offset, as in `Pickup run starting,
-/// 2026-10-03 -0400`.
-pub fn begin(starting: impl Display) {
-    begin_held(starting, false);
-}
-
-/// Begin a pass, an Architect run or a Pickup run, as [`begin`] does, but
-/// hold its lines from the terminal too, until [`show_held`] or [`keep`]
-/// prints them: one that is skipped may print nothing.
-pub fn begin_pass(starting: impl Display) {
-    begin_held(starting, true);
-}
-
-/// [`begin`], its lines held from the terminal too if `from_terminal`.
-fn begin_held(starting: impl Display, from_terminal: bool) {
+/// lines from here on, from the terminal too if `from_terminal`, until
+/// [`show_held`] or [`keep`] prints them, and print its first progress line,
+/// `<starting>, ` followed by the date and UTC offset, as in `Pickup run
+/// starting, 2026-10-03 -0400`.
+pub(super) fn begin(starting: impl Display, from_terminal: bool) {
     let now = Local::now();
     let _ = STARTED.set(now.format(STAMP_FORMAT).to_string());
     *log() = Log::Held {
@@ -81,9 +70,9 @@ fn begin_held(starting: impl Display, from_terminal: bool) {
     progress::step(format_args!("{starting}, {}", now.format("%Y-%m-%d %z")));
 }
 
-/// Print the lines a pass [`begin_pass`] began has held from the terminal,
-/// and print its lines as they come from here on.
-pub fn show_held() {
+/// Print the lines held from the terminal, if any, and print lines as they
+/// come from here on.
+pub(super) fn show_held() {
     if let Log::Held { lines, shown } = &mut *log()
         && !*shown
     {
@@ -96,7 +85,7 @@ pub fn show_held() {
 
 /// Begin a child Run, which keeps no Command log, with the `stamp` the
 /// command that started it gave it, if it gave one.
-pub fn begin_child(stamp: Option<String>) {
+pub(super) fn begin_child(stamp: Option<String>) {
     if let Some(stamp) = stamp {
         let _ = STARTED.set(stamp);
     }
@@ -104,61 +93,15 @@ pub fn begin_child(stamp: Option<String>) {
 
 /// The command's start stamp, as in `20261003T120000-0400`: made by
 /// [`begin`], given by [`begin_child`], or else made now.
-pub fn stamp() -> &'static str {
+pub(super) fn stamp() -> &'static str {
     STARTED.get_or_init(|| Local::now().format(STAMP_FORMAT).to_string())
-}
-
-/// The root of `repo`'s logs under `logs_dir`, the User config's
-/// `logs.dir`: `<logs_dir>/<owner>/<repo>/`, named for the GitHub repository,
-/// not the checkout, so every checkout of it logs to the same place. Its
-/// Command logs, Session logs and Activity log are all under it.
-pub fn root(logs_dir: &Path, repo: &Repo) -> PathBuf {
-    logs_dir.join(&repo.owner).join(&repo.name)
-}
-
-/// Where the Command log of `thirdshift <Issue URL>` on `issue` goes, under
-/// `logs_dir`.
-pub fn of_run(logs_dir: &Path, issue: &IssueUrl) -> PathBuf {
-    of(
-        logs_dir,
-        &issue.repo(),
-        "issue",
-        &format!("{}-", issue.number),
-    )
-}
-
-/// Where the Command log of a Pickup run that took `issue` goes, under
-/// `logs_dir`.
-pub fn of_pickup_run(logs_dir: &Path, issue: &IssueUrl) -> PathBuf {
-    of(
-        logs_dir,
-        &issue.repo(),
-        "pickup",
-        &format!("{}-", issue.number),
-    )
-}
-
-/// Where the Command log of an Architect run on `repo` goes, under
-/// `logs_dir`.
-pub fn of_architect_run(logs_dir: &Path, repo: &Repo) -> PathBuf {
-    of(logs_dir, repo, "architect", "")
-}
-
-/// `<root>/commands/<folder>/<prefix><stamp>.log`, under `repo`'s [`root`]:
-/// one folder per command typed, so the repository, already in the path,
-/// is not in the name.
-fn of(logs_dir: &Path, repo: &Repo, folder: &str, prefix: &str) -> PathBuf {
-    root(logs_dir, repo)
-        .join("commands")
-        .join(folder)
-        .join(format!("{prefix}{}.log", stamp()))
 }
 
 /// Create the Command log at `path`, its folder too if missing, with the
 /// lines held so far, and say where it is. Only a command [`begin`] began,
-/// and only once. One that can't be created is a warning, and the command
+/// and only once: any later call does nothing. One that can't be created is a warning, and the command
 /// carries on without it.
-pub fn keep(path: PathBuf) {
+pub(super) fn keep(path: PathBuf) {
     show_held();
     let created = {
         let mut log = log();
@@ -198,7 +141,7 @@ fn create<'a>(path: &Path, held: impl Iterator<Item = &'a String>) -> Result<Fil
 }
 
 /// Where the Command log is, if this command created one.
-pub fn path() -> Option<PathBuf> {
+pub(super) fn path() -> Option<PathBuf> {
     match &*log() {
         Log::Kept { path, .. } => Some(path.clone()),
         Log::Failed { path } => path.clone(),
@@ -207,12 +150,12 @@ pub fn path() -> Option<PathBuf> {
 }
 
 /// Print `line` on stderr, and keep it in the Command log.
-pub fn eprint(line: &str) {
+pub(super) fn eprint(line: &str) {
     print_to(Stream::Stderr, line);
 }
 
 /// Print `line` on stdout, and keep it in the Command log.
-pub fn print(line: &str) {
+pub(super) fn print(line: &str) {
     print_to(Stream::Stdout, line);
 }
 
