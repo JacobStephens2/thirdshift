@@ -7,24 +7,22 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
 use std::process::Child;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use anyhow::{Context, Result, bail};
 
-use crate::base_fix::{BaseFix, BaseFixAsk};
+use crate::base_fix::BaseFixAsk;
 use crate::child_run::{self, Ended, Kind};
-use crate::failed_run::{self, FailedRun};
+use crate::delivery::{Delivery, Opening};
+use crate::failed_run::FailedRun;
 use crate::github::{self, PullRequest, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
-use crate::plugin::Plugin;
 use crate::progress;
 use crate::prompt;
-use crate::run::{self, Goal, Reached};
-use crate::session::{Logs, Sessions};
+use crate::run::Reached;
 use crate::worktree::Worktree;
 
 /// The Spec review session's kind, in its progress lines and log name.
@@ -42,37 +40,32 @@ pub fn all_closed(open: impl IntoIterator<Item = bool>) -> bool {
     open.peek().is_some() && open.all(|is_open| !is_open)
 }
 
-/// Take the Spec `spec`, whose Tickets were last read as `tickets`, from
-/// its Spec branch, checked out in `worktree`, to a Spec PR into `base` that
-/// reaches `goal`. The Spec branch is pushed before any Ticket starts, and
-/// up to `parallel` Tickets run at once, the graph read again whenever one
-/// ends. The Spec PR is opened as a draft once the first Ticket lands, or
-/// turned back into a draft if it is already open, and its Tickets checklist rewritten
-/// as Tickets start and end. A Ticket that fails stops only the Tickets it
-/// blocks; with any Ticket not done, this is a Failed spec run, which leaves
-/// the Spec PR, if there is one, a draft. An interrupt ends it too, once the
-/// running Tickets' Runs have ended, starting nothing more. Once every Ticket
-/// has landed, the Spec review, logged in `logs`, reviews the Spec branch,
-/// then the Tickets checklist is put back in the Spec PR's body and the Spec
-/// PR is marked ready. The Spec PR then goes through the same Repair
-/// loop as a Run's PR, and for [`Goal::Merged`] the Self-merge. A failure
-/// from the Spec review on goes through the Failed run path. The worktree is
-/// cleaned up when this returns, or kept by the Failed run path if its work
-/// did not reach origin. However it ends, it carries a line on each Ticket
-/// it landed or did not get done, for the Run notification. `base_fix` is for
-/// the Spec PR's Repair loop, and if it may start a Base fix, so may each
+/// Take the Spec, `delivery`'s issue, whose Tickets were last read as
+/// `tickets`, from its Spec branch, checked out in `worktree`, to a Spec PR
+/// into `delivery`'s Base branch that reaches its goal. The Spec branch is
+/// pushed before any Ticket starts, and up to `parallel` Tickets run at once,
+/// the graph read again whenever one ends. The Spec PR is opened as a draft
+/// once the first Ticket lands, or turned back into a draft if it is already
+/// open, and its Tickets checklist rewritten as Tickets start and end. A
+/// Ticket that fails stops only the Tickets it blocks; with any Ticket not
+/// done, this is a Failed spec run, which leaves the Spec PR, if there is
+/// one, a draft. An interrupt ends it too, once the running Tickets' Runs
+/// have ended, starting nothing more. Once every Ticket has landed, the
+/// Spec PR is taken to its goal by `delivery`, opening with the Spec review
+/// on the Spec branch caught up from origin, and the Tickets checklist put
+/// back in the Spec PR's body before it is marked ready, and again if the
+/// Delivery fails. The worktree is cleaned up when this returns, or kept by
+/// the Failed run path if its work did not reach origin. However it ends, it
+/// carries a line on each Ticket it landed or did not get done, for the Run
+/// notification. If `delivery`'s Base fix may start one, so may each
 /// Ticket's Run, into the Spec branch.
-#[allow(clippy::too_many_arguments)]
 pub fn run(
-    spec: &IssueUrl,
     tickets: Vec<Ticket>,
     worktree: Worktree,
-    base: &str,
-    goal: Goal,
-    base_fix: &mut BaseFix,
-    logs: &Logs,
+    delivery: Delivery,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
+    let (spec, base) = (delivery.issue, delivery.base);
     let mut spec_pr = draft_spec_pr(spec, worktree.branch())?;
     let (ticket_lines, landed) = land_tickets(
         spec,
@@ -80,13 +73,11 @@ pub fn run(
         &worktree,
         base,
         parallel,
-        &base_fix.ask_of_tickets(),
+        &delivery.base_fix.ask_of_tickets(),
         &mut spec_pr,
     );
     let ended = match landed {
-        Ok(checklist) => open_and_review(
-            spec, worktree, base, spec_pr, &checklist, goal, base_fix, logs,
-        ),
+        Ok(checklist) => review_and_deliver(worktree, spec_pr, &checklist, delivery),
         Err(error) => Err(FailedRun {
             pr_url: spec_pr.map(|pr| pr.url),
             ..FailedRun::from(error)
@@ -105,40 +96,32 @@ pub fn run(
 }
 
 /// Once every Ticket has landed: open the Spec PR as a draft with
-/// `checklist` if `spec_pr` is none, run the Spec review, put `checklist`
-/// back, mark the Spec PR ready and take it to `goal`, as [`run`] does.
-#[allow(clippy::too_many_arguments)]
-fn open_and_review(
-    spec: &IssueUrl,
+/// `checklist` if `spec_pr` is none, then take it to its goal by `delivery`,
+/// opening with the Spec review, as [`run`] does.
+fn review_and_deliver(
     worktree: Worktree,
-    base: &str,
     spec_pr: Option<PullRequest>,
     checklist: &str,
-    goal: Goal,
-    base_fix: &mut BaseFix,
-    logs: &Logs,
+    delivery: Delivery,
 ) -> Result<Reached, FailedRun> {
+    let (spec, base) = (delivery.issue, delivery.base);
     let spec_pr = match spec_pr {
         Some(pr) => pr,
         None => open_spec_pr(spec, worktree.branch(), base, checklist)?,
     };
-    let mut log = logs.path(SPEC_REVIEW);
-    let delivered = review_and_deliver(
-        spec, &worktree, base, &spec_pr, checklist, goal, base_fix, logs, &mut log,
-    );
-    match delivered {
-        Ok(()) => Ok(Reached {
-            pr_url: spec_pr.url,
-            goal,
-            log: Some(log),
-            ticket_lines: Vec::new(),
-        }),
-        Err(error) => {
-            // The Spec review may have rewritten the body without it.
-            write_checklist_or_warn(spec, &spec_pr, checklist);
-            Err(failed_run::fail(spec, worktree, base, &log, error))
-        }
+    let opening = Opening {
+        kind: SPEC_REVIEW,
+        prompt: prompt::spec_review(spec, base, worktree.branch(), &spec_pr.url),
+        catch_up_from_origin: true,
+    };
+    // The Spec review may have rewritten the body without the checklist.
+    let delivered = delivery.deliver(worktree, opening, || {
+        write_checklist(spec, &spec_pr, checklist)
+    });
+    if delivered.is_err() {
+        write_checklist_or_warn(spec, &spec_pr, checklist);
     }
+    delivered
 }
 
 /// Where a Ticket's Run in this Spec run stands.
@@ -565,40 +548,6 @@ fn write_checklist_or_warn(spec: &IssueUrl, pr: &PullRequest, checklist: &str) {
             "could not update the Spec PR's Tickets checklist: {error:#}"
         ));
     }
-}
-
-/// Bring the Spec branch in `worktree` up to date with the Tickets landed on
-/// origin, and run the Spec review on it. Then push the Spec branch, for any
-/// commit the session left unpushed, put `checklist` back in the body the
-/// session wrote for the Spec PR `spec_pr` into `base`, mark it ready, and
-/// [`run::deliver`] it to `goal`, with the Spec as the issue and `base_fix`
-/// as its one Base fix. `log` is left at the most recent session's log.
-#[allow(clippy::too_many_arguments)]
-fn review_and_deliver(
-    spec: &IssueUrl,
-    worktree: &Worktree,
-    base: &str,
-    spec_pr: &PullRequest,
-    checklist: &str,
-    goal: Goal,
-    base_fix: &mut BaseFix,
-    logs: &Logs,
-    log: &mut PathBuf,
-) -> Result<()> {
-    let spec_branch = worktree.branch();
-    worktree.fast_forward_to_origin()?;
-    let plugin = Plugin::write()?;
-    Sessions::within(logs, worktree.path(), plugin.path(), |sessions| {
-        let mut run_session = |kind: &str, prompt: &str| sessions.run(kind, prompt, log);
-        run_session(
-            SPEC_REVIEW,
-            &prompt::spec_review(spec, base, spec_branch, &spec_pr.url),
-        )?;
-        worktree.push()?;
-        write_checklist(spec, spec_pr, checklist)?;
-        let pr = run::mark_pr_ready(spec, spec_branch, base)?;
-        run::deliver(spec, worktree, base, &pr, goal, base_fix, &mut run_session)
-    })
 }
 
 #[cfg(test)]

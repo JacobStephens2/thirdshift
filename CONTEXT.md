@@ -165,6 +165,12 @@ A **Run** that picks up an existing **Issue branch**, one with no pull request o
 **Repair**:
 A follow-up agent session a **Run** starts after the pull request exists, or a **Spec run** starts on its **Spec PR** after the **Spec review**: to resolve a merge conflict with the **Base branch** or the **Issue branch** on `origin`, to fix failing CI checks, or, in a **Merge run**, to review and fix **Foreign commits**.
 
+**Delivery**:
+What a **Run**, or a **Spec run** for its **Spec PR**, does from its worktree once its work begins. It runs the opening session (the implement session, or the **Spec review**), pushes, marks the pull request ready, keeps it mergeable and green through the **Repair loop**, and, in a **Merge run**, does the **Self-merge**. A Delivery that fails takes the **Failed run** path.
+
+**Repair loop**:
+The rounds a **Delivery** goes through until the pull request's head is mergeable with the **Base branch** and its CI is green or absent. Each round merges the Base branch in (and, in a **Merge run**, any **Foreign commits**), pushes, watches CI, and starts a **Repair** for a conflict or for the branch's own red checks. Repairs and upstream moves have fixed budgets.
+
 **Foreign commit**:
 A commit that appears on the **Issue branch** during a **Run** and was made neither by one of that Run's sessions nor by thirdshift itself. Commits already on the branch when a **Continuation** starts are not Foreign commits. A **Merge run** merges one only after a **Repair** has reviewed it.
 
