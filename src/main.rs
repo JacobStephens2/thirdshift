@@ -42,7 +42,7 @@ use std::process::ExitCode;
 use architect::{Outcome, Reviewed};
 use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
 use asks::Asks;
-use command::{Ending, Skip, failure};
+use command::{Ending, failure};
 use config::UserConfig;
 use logs::Begin;
 use notification::About;
@@ -397,10 +397,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         config.launch_pull,
     ) {
         Ok(Outcome::Skipped(skipped)) => {
-            return started.finish(Ending::Skipped(Skip {
-                reason: skipped.to_string(),
-                urls: skipped.urls().into_iter().map(String::from).collect(),
-            }));
+            return started.finish(Ending::Skipped(skipped.into()));
         }
         Ok(Outcome::Reviewed(reviewed)) => Ok(reviewed),
         Err(failed) => Err(failed),
@@ -444,10 +441,7 @@ fn pickup(args: PickupArgs) -> ExitCode {
     let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
         Ok(pickup::Outcome::Skipped(skipped)) => {
-            return started.finish(Ending::Skipped(Skip {
-                reason: skipped.to_string(),
-                urls: Vec::new(),
-            }));
+            return started.finish(Ending::Skipped(skipped.into()));
         }
         Err(error) => return failure(&error),
     };

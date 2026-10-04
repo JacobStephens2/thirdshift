@@ -12,13 +12,14 @@
 
 use std::process::ExitCode;
 
-use crate::architect::Reviewed;
+use crate::architect::{self, Reviewed};
 use crate::config::{self, UserConfig};
 use crate::failed_run::FailedRun;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::logs::{self, Begin};
 use crate::notification::{About, NotificationAsk, RunNotification};
+use crate::pickup;
 use crate::progress;
 use crate::run::Ended;
 use crate::run_ending;
@@ -47,6 +48,27 @@ pub struct Skip {
     /// The URLs it puts on stdout, a line each: those of the issues it was
     /// skipped for, if any.
     pub urls: Vec<String>,
+}
+
+impl From<architect::Skipped> for Skip {
+    /// An Architect run's skip: its reason, and the URLs of the issues it
+    /// was skipped for.
+    fn from(skipped: architect::Skipped) -> Self {
+        Skip {
+            reason: skipped.to_string(),
+            urls: skipped.urls().into_iter().map(String::from).collect(),
+        }
+    }
+}
+
+impl From<pickup::Skipped> for Skip {
+    /// A Pickup run's skip: its reason, with nothing on stdout.
+    fn from(skipped: pickup::Skipped) -> Self {
+        Skip {
+            reason: skipped.to_string(),
+            urls: Vec::new(),
+        }
+    }
 }
 
 /// A command started, with its Run notification checked if it asked for
