@@ -297,8 +297,48 @@ fn a_repository_that_has_the_architect_plan_label_keeps_it_as_it_is() {
     let result = scenario.run(&["architect", "--plan-only"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(scenario.repo_labels(), ["needs-triage", "Architect-Plan"]);
-    assert!(scenario.gh_calls_of("label", "create").is_empty());
+    // Only `ready-for-agent`, which it lacks, is added to the repository.
+    assert_eq!(
+        scenario.repo_labels(),
+        ["needs-triage", "Architect-Plan", "ready-for-agent"]
+    );
+    let created = scenario.gh_calls_of("label", "create");
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(created[0][2], "ready-for-agent");
+    assert_eq!(
+        scenario.issue_labels(8),
+        ["ready-for-agent", ARCHITECT_PLAN]
+    );
+}
+
+#[test]
+fn marking_a_plan_ready_adds_ready_for_agent_with_its_description_to_a_repository_that_lacks_it() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage"]);
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let created = scenario.gh_calls_of("label", "create");
+    let ready = created
+        .iter()
+        .find(|args| args[2] == "ready-for-agent")
+        .unwrap_or_else(|| panic!("{created:?}"));
+    assert_eq!(
+        ready[3..],
+        [
+            "--repo",
+            "acme/widgets",
+            "--description",
+            "Ready for an agent to take on"
+        ]
+    );
+    assert!(
+        scenario
+            .repo_labels()
+            .contains(&"ready-for-agent".to_string())
+    );
     assert_eq!(
         scenario.issue_labels(8),
         ["ready-for-agent", ARCHITECT_PLAN]
@@ -634,6 +674,32 @@ fn the_architect_idea_label_is_created_when_the_repository_lacks_it_and_kept_whe
         }
         assert_eq!(scenario.issue_labels(7), ["needs-triage", ARCHITECT_IDEA]);
     }
+}
+
+#[test]
+fn labelling_an_idea_adds_needs_triage_with_its_description_to_a_repository_that_lacks_it() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&[ARCHITECT_IDEA]);
+    let url = scenario.issue_url(7);
+    scenario.agent_does(&ends_with(&format!("Architecture review idea: {url}")));
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let created = scenario.gh_calls_of("label", "create");
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(
+        created[0][2..],
+        [
+            "needs-triage",
+            "--repo",
+            "acme/widgets",
+            "--description",
+            "Maintainer needs to evaluate this issue"
+        ]
+    );
+    assert_eq!(scenario.repo_labels(), [ARCHITECT_IDEA, "needs-triage"]);
+    assert_eq!(scenario.issue_labels(7), ["needs-triage", ARCHITECT_IDEA]);
 }
 
 #[test]

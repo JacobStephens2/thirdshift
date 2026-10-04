@@ -26,7 +26,7 @@ use crate::failed_run::FailedRun;
 use crate::github::{self, ListedIssue};
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
-use crate::labels::{Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
+use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::progress;
@@ -356,15 +356,16 @@ fn conclude(
 }
 
 /// Mark `plan` ready: check it, then swap its `needs-triage` for
-/// `ready-for-agent` and label it `architect-plan`, in one request, having
-/// added that label to the repository if it lacks it. Fails, changing no
-/// label, if the plan fails its checks.
+/// `ready-for-agent` and label it `architect-plan`, in one request that
+/// keeps its other labels, as read once the checks are done, having added
+/// each label it puts on to the repository if it lacks it. Fails, changing
+/// no label, if the plan fails its checks.
 fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<()> {
     progress::step(format_args!(
         "the Architecture review published the plan {}",
         plan.url
     ));
-    let kept = labels_to_keep(plan, origin, started)?;
+    check_plan(plan, origin, started)?;
     if interrupt::requested() {
         bail!("interrupted");
     }
@@ -372,13 +373,12 @@ fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Res
         "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} and adding {ARCHITECT_PLAN} on #{}",
         plan.number
     ));
-    github::ensure_labels(&plan.repo_slug(), &[ARCHITECT_PLAN])?;
-    github::set_labels(plan, &kept.swapped(&[], &[READY_FOR_AGENT, ARCHITECT_PLAN]))
+    Edit::read(plan, &[NEEDS_TRIAGE], &[READY_FOR_AGENT, ARCHITECT_PLAN])?.apply()
 }
 
 /// Label `idea` an Architect idea: put `needs-triage` and `architect-idea`
-/// on it, in one request that keeps its other labels, having added
-/// `architect-idea` to the repository if it lacks it. `needs-triage` goes
+/// on it, in one request that keeps its other labels, having added each to
+/// the repository if it lacks it. `needs-triage` goes
 /// back on an issue that had been triaged: the factory again takes it for the
 /// best next move.
 fn label_idea(idea: &IssueUrl) -> Result<()> {
@@ -389,19 +389,15 @@ fn label_idea(idea: &IssueUrl) -> Result<()> {
         "labelling #{} an Architect idea: adding {NEEDS_TRIAGE} and {ARCHITECT_IDEA}",
         idea.number
     ));
-    let label = || -> Result<()> {
-        github::ensure_labels(&idea.repo_slug(), &[ARCHITECT_IDEA])?;
-        let labels = github::issue_labels(idea)?;
-        github::set_labels(idea, &labels.swapped(&[], &[NEEDS_TRIAGE, ARCHITECT_IDEA]))
-    };
-    label().with_context(|| format!("could not label the Architect idea #{}", idea.number))
+    Edit::read(idea, &[], &[NEEDS_TRIAGE, ARCHITECT_IDEA])
+        .and_then(|edit| edit.apply())
+        .with_context(|| format!("could not label the Architect idea #{}", idea.number))
 }
 
-/// The labels `plan` keeps once it is marked ready: all it has but
-/// `needs-triage`. Fails unless the plan passes its checks: it is in the
-/// repository at `origin`, open, created since the Architect run `started`,
-/// and has no other label that makes an Unready Ticket.
-fn labels_to_keep(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<Labels> {
+/// Check `plan`: fails unless it is in the repository at `origin`, open,
+/// created since the Architect run `started`, and has no label but
+/// `needs-triage` that makes an Unready Ticket.
+fn check_plan(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<()> {
     if !plan.matches_origin(origin) {
         bail!(
             "the plan {} is not in the repository at origin {origin}",
@@ -419,11 +415,10 @@ fn labels_to_keep(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Resu
             plan.url
         );
     }
-    let kept = issue.labels.swapped(&[NEEDS_TRIAGE], &[]);
-    if let Some(unready) = kept.unready() {
+    if let Some(unready) = issue.labels.swapped(&[NEEDS_TRIAGE], &[]).unready() {
         bail!("the plan {} is labelled {unready}", plan.url);
     }
-    Ok(kept)
+    Ok(())
 }
 
 #[cfg(test)]
