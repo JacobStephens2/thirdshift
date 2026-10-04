@@ -149,13 +149,13 @@ enum Decision {
     Take(ReadyIssue),
 }
 
-/// The gates of a Pickup run on `repo`, reaching it through `pass`: the
+/// The gates of a Pickup run on `repo`, reaching it through `outside`: the
 /// Sweep, then, if `limit` or more of its open issues carry a Claim, a skip
 /// for the Claim limit, then the Ready issue search, a skip if it finds
-/// none. No gate is passed through once one skips.
-fn gates(pass: &mut impl Outside, repo: &Repo, limit: NonZeroUsize) -> Result<Decision> {
-    sweep(pass);
-    let claimed = pass.open_issues(claim::IN_PROGRESS)?.len();
+/// none. No gate is read once one skips.
+fn gates(outside: &mut impl Outside, repo: &Repo, limit: NonZeroUsize) -> Result<Decision> {
+    sweep(outside);
+    let claimed = outside.open_issues(claim::IN_PROGRESS)?.len();
     if claimed >= limit.get() {
         return Ok(Decision::Skip(Skipped::AtClaimLimit {
             repo: repo.clone(),
@@ -163,7 +163,7 @@ fn gates(pass: &mut impl Outside, repo: &Repo, limit: NonZeroUsize) -> Result<De
             limit,
         }));
     }
-    Ok(match pass.ready_issue()? {
+    Ok(match outside.ready_issue()? {
         Some(ready) => Decision::Take(ready),
         None => Decision::Skip(Skipped::NoReadyIssue(repo.clone())),
     })
@@ -172,11 +172,11 @@ fn gates(pass: &mut impl Outside, repo: &Repo, limit: NonZeroUsize) -> Result<De
 /// The Sweep: take `in-progress` off every closed issue that still carries
 /// it, as an issue merged by hand does, leaving its other labels. A
 /// failure, to list them or to take the label off one, is only a warning.
-fn sweep(pass: &mut impl Outside) {
-    let closed = match pass.closed_issues(claim::IN_PROGRESS) {
+fn sweep(outside: &mut impl Outside) {
+    let closed = match outside.closed_issues(claim::IN_PROGRESS) {
         Ok(closed) => closed,
         Err(error) => {
-            pass.step(format!(
+            outside.step(format!(
                 "warning: could not list the closed issues labelled {}: {error:#}",
                 claim::IN_PROGRESS
             ));
@@ -188,13 +188,13 @@ fn sweep(pass: &mut impl Outside) {
         if !edit.takes_off(claim::IN_PROGRESS) {
             continue;
         }
-        pass.step(format!(
+        outside.step(format!(
             "taking {} off #{}, which is closed",
             claim::IN_PROGRESS,
             issue.number
         ));
-        if let Err(error) = pass.apply(&edit) {
-            pass.step(format!(
+        if let Err(error) = outside.apply(&edit) {
+            outside.step(format!(
                 "warning: could not take {} off #{}: {error:#}",
                 claim::IN_PROGRESS,
                 issue.number
@@ -307,10 +307,10 @@ mod tests {
 
     #[test]
     fn a_sweep_that_cannot_list_the_closed_issues_warns_and_the_pass_carries_on() {
-        let mut repo = InMemory::default()
+        let repo = InMemory::default()
             .issue(4, false, &["in-progress"])
-            .ready(9, false);
-        repo.closed_listing_fails = true;
+            .ready(9, false)
+            .closed_listing_failing();
 
         let (decided, calls) = decide(repo, 3);
 
@@ -332,11 +332,11 @@ mod tests {
 
     #[test]
     fn a_sweep_that_cannot_take_in_progress_off_one_issue_warns_and_carries_on() {
-        let mut repo = InMemory::default()
+        let repo = InMemory::default()
             .issue(4, false, &["in-progress"])
             .issue(5, false, &["in-progress"])
-            .ready(9, false);
-        repo.failing_edits = vec![4];
+            .ready(9, false)
+            .edit_failing(4);
 
         let (decided, calls) = decide(repo, 3);
 
@@ -393,6 +393,27 @@ mod tests {
             decided,
             Err(
                 "at the Claim limit on acme/widgets: 2 open issue(s) labelled in-progress, \
+                 pickup.limit is 2"
+                    .to_string()
+            )
+        );
+        assert_eq!(calls, [CLOSED, CLAIMED]);
+    }
+
+    #[test]
+    fn over_the_claim_limit_the_pass_is_skipped_naming_the_count() {
+        let repo = InMemory::default()
+            .issue(4, true, &["in-progress"])
+            .issue(5, true, &["in-progress"])
+            .issue(6, true, &["in-progress"])
+            .ready(9, false);
+
+        let (decided, calls) = decide(repo, 2);
+
+        assert_eq!(
+            decided,
+            Err(
+                "at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, \
                  pickup.limit is 2"
                     .to_string()
             )

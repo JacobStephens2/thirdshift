@@ -262,16 +262,16 @@ enum Decision {
     GoAhead,
 }
 
-/// The gates of an Architect run, reaching its repository through `pass`: a
+/// The gates of an Architect run, reaching its repository through `outside`: a
 /// skip for the open Architect plans, if it has any, then for the
 /// Architect ideas still labelled `needs-triage`, then for its Ready issue,
 /// by the Pickup run's own search. No gate is read once one skips.
-fn gates(pass: &mut impl Outside) -> Result<Decision> {
-    let open_plans = pass.open_issues(ARCHITECT_PLAN)?;
+fn gates(outside: &mut impl Outside) -> Result<Decision> {
+    let open_plans = outside.open_issues(ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
         return Ok(Decision::Skip(Skipped::OpenPlans(open_plans)));
     }
-    let waiting: Vec<_> = pass
+    let waiting: Vec<_> = outside
         .open_issues(ARCHITECT_IDEA)?
         .into_iter()
         .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
@@ -279,7 +279,7 @@ fn gates(pass: &mut impl Outside) -> Result<Decision> {
     if !waiting.is_empty() {
         return Ok(Decision::Skip(Skipped::IdeasWaiting(waiting)));
     }
-    Ok(match pass.ready_issue()? {
+    Ok(match outside.ready_issue()? {
         Some(ReadyIssue { listed, .. }) => Decision::Skip(Skipped::ReadyIssue(listed)),
         None => Decision::GoAhead,
     })
@@ -608,6 +608,19 @@ mod tests {
 
             assert_eq!(urls, [url(5)], "with an idea waiting: {idea}");
         }
+    }
+
+    #[test]
+    fn an_idea_triaged_ready_for_agent_skips_as_the_ready_issue_it_is() {
+        let repo = InMemory::default()
+            .issue(7, true, &["architect-idea", "ready-for-agent"])
+            .ready(7, false);
+
+        let (line, urls, calls) = decide(repo);
+
+        assert!(line.unwrap().starts_with("Ready issue #7"));
+        assert_eq!(urls, [url(7)]);
+        assert_eq!(calls, [PLANS, IDEAS, Call::ReadySearch]);
     }
 
     #[test]

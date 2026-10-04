@@ -98,9 +98,9 @@ mod in_memory {
         /// Each issue, filed under the label a listing finds it by.
         filed: Vec<Filed>,
         /// Whether listing the closed issues fails.
-        pub closed_listing_fails: bool,
+        closed_listing_fails: bool,
         /// The number of each issue an Edit to fails.
-        pub failing_edits: Vec<u64>,
+        failing_edits: Vec<u64>,
         /// The Ready issue search's answer: the issue, and whether it is a
         /// Spec.
         ready: Option<(ListedIssue, bool)>,
@@ -135,6 +135,18 @@ mod in_memory {
                 open,
                 listed: listed(number, labels),
             });
+            self
+        }
+
+        /// Make listing the closed issues fail.
+        pub fn closed_listing_failing(mut self) -> Self {
+            self.closed_listing_fails = true;
+            self
+        }
+
+        /// Make an Edit to issue `number` fail.
+        pub fn edit_failing(mut self, number: u64) -> Self {
+            self.failing_edits.push(number);
             self
         }
 
