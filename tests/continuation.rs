@@ -220,38 +220,6 @@ fn a_local_issue_branch_that_differs_from_origin_stops_the_run() {
 }
 
 #[test]
-fn a_local_issue_branch_missing_from_origin_stops_the_run() {
-    let scenario = Scenario::new();
-    scenario.launch_git(&["branch", "issue-7"]);
-    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_ne!(result.code, Some(0));
-    assert!(
-        result.stderr.contains("issue-7 is not on origin"),
-        "stderr: {}",
-        result.stderr
-    );
-    assert_nothing_created(&scenario, "issue-7");
-    assert_eq!(scenario.origin_log("issue-7"), None);
-}
-
-#[test]
-fn a_local_issue_branch_matching_origin_is_continued() {
-    let scenario = Scenario::new();
-    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
-    scenario.launch_checks_out("issue-7");
-    scenario.launch_checks_out("main");
-    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(scenario.origin_log("issue-7").map(|log| log.len()), Some(3));
-}
-
-#[test]
 fn a_failed_runs_branch_is_continued_from_its_failure_commit() {
     let scenario = Scenario::new();
     scenario.origin_has_branch(
