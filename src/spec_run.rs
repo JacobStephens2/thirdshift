@@ -4,8 +4,8 @@
 //! the Base branch, kept mergeable and green like a Run's PR, and Self-merged
 //! when the Spec run was asked to merge.
 
-use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+mod ticket_board;
+
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
@@ -23,6 +23,8 @@ use crate::progress;
 use crate::prompt;
 use crate::run::Reached;
 use crate::worktree::Worktree;
+
+use ticket_board::TicketBoard;
 
 /// The Spec review session's kind, in its progress lines and log name.
 const SPEC_REVIEW: &str = "spec-review";
@@ -123,14 +125,6 @@ fn review_and_deliver(
     delivered
 }
 
-/// Where a Ticket's Run in this Spec run stands.
-enum TicketOutcome {
-    /// It has started and not yet ended.
-    Running,
-    /// It has ended, as its Run told: it landed if it reached its goal.
-    Ended(Ended),
-}
-
 /// Push the Spec branch, then keep up to `parallel` Tickets running, each
 /// time one ends starting ready ones, lowest number first, until none is
 /// ready and none is running, keeping the Tickets checklist of `spec_pr` up
@@ -142,7 +136,7 @@ enum TicketOutcome {
 /// Each Ticket's Run may start a Base fix if `base_fix` allows one.
 fn land_tickets(
     spec: &IssueUrl,
-    mut tickets: Vec<Ticket>,
+    tickets: Vec<Ticket>,
     worktree: &Worktree,
     base: &str,
     parallel: NonZeroUsize,
@@ -152,26 +146,17 @@ fn land_tickets(
     if let Err(error) = worktree.push() {
         return (Vec::new(), Err(error));
     }
-    let mut outcomes = BTreeMap::new();
-    let landing = run_ready_tickets(
-        spec,
-        &mut tickets,
-        &mut outcomes,
-        worktree.branch(),
-        base,
-        parallel,
-        base_fix,
-        spec_pr,
-    );
-    let lines = summarize(&tickets, &outcomes);
+    let mut board = TicketBoard::new(tickets, parallel);
+    let landing = run_ready_tickets(spec, &mut board, worktree.branch(), base, base_fix, spec_pr);
+    let lines = board.lines();
     let landed = landing.and_then(|()| {
-        let not_done: Vec<String> = tickets
+        let not_done: Vec<String> = board
+            .not_done()
             .iter()
-            .filter(|ticket| ticket.is_open)
-            .map(|ticket| format!("#{}", ticket.number))
+            .map(|number| format!("#{number}"))
             .collect();
         if not_done.is_empty() {
-            return Ok(checklist(&tickets, &outcomes));
+            return Ok(board.checklist());
         }
         for line in &lines {
             progress::step(line);
@@ -181,68 +166,65 @@ fn land_tickets(
     (lines, landed)
 }
 
-/// Keep up to `parallel` ready Tickets running, lowest number first, until
-/// none is ready and none is running, keeping `tickets` as last read, each
-/// Ticket's outcome in `outcomes`, and the Tickets checklist of `spec_pr`,
+/// Keep the Tickets on `board` running as it offers them, until it offers
+/// none and none is running, telling it as each starts and ends and as the
+/// graph is read again, and keeping the Tickets checklist of `spec_pr`,
 /// opened into `base` once a Ticket lands, up to date. An interrupt, or an
 /// error other than a Ticket failing, stops any more from starting, and
 /// fails this once those running have ended. Each Ticket's Run may start a
 /// Base fix if `base_fix` allows one.
-#[allow(clippy::too_many_arguments)]
 fn run_ready_tickets(
     spec: &IssueUrl,
-    tickets: &mut Vec<Ticket>,
-    outcomes: &mut BTreeMap<u64, TicketOutcome>,
+    board: &mut TicketBoard,
     spec_branch: &str,
     base: &str,
-    parallel: NonZeroUsize,
     base_fix: &BaseFixAsk,
     spec_pr: &mut Option<PullRequest>,
 ) -> Result<()> {
     let (ended, endings) = mpsc::channel();
-    let mut running = HashSet::new();
     let mut error = None;
     loop {
         let mut started = false;
-        while error.is_none() && !interrupt::requested() && running.len() < parallel.get() {
-            let Some(ticket) = next_ready(tickets, outcomes, &running) else {
+        loop {
+            if error.is_some() || interrupt::requested() {
+                board.stop();
+            }
+            let Some(ticket) = board.next() else {
                 break;
             };
             match start_ticket(spec, ticket, spec_branch, base_fix, ended.clone()) {
                 Ok(()) => {
-                    running.insert(ticket);
-                    outcomes.insert(ticket, TicketOutcome::Running);
+                    board.started(ticket);
                     started = true;
                 }
                 Err(start_error) => error = Some(start_error),
             }
         }
         if started && let Some(pr) = spec_pr {
-            write_checklist_or_warn(spec, pr, &checklist(tickets, outcomes));
+            write_checklist_or_warn(spec, pr, &board.checklist());
         }
-        if running.is_empty() {
+        if !board.any_running() {
             break;
         }
         let (ticket, result) = endings
             .recv()
             .expect("a running Ticket's thread holds a sender");
-        running.remove(&ticket);
         // Once there is an error, the rest are only waited for, but each
         // still has its line in the checklist, from the last graph read.
-        let outcome = result.unwrap_or_else(|finish_error| {
+        let ending = result.unwrap_or_else(|finish_error| {
             let cause = format!("{finish_error:#}");
             error.get_or_insert(finish_error);
-            TicketOutcome::Ended(Ended::Failed { cause, log: None })
+            Ended::Failed { cause, log: None }
         });
-        let landed = matches!(outcome, TicketOutcome::Ended(Ended::Reached { .. }));
-        outcomes.insert(ticket, outcome);
+        let landed = matches!(ending, Ended::Reached { .. });
+        board.ended(ticket, ending);
         match github::tickets(spec) {
-            Ok(reread) => *tickets = reread,
+            Ok(reread) => board.reread(reread),
             Err(reread_error) => {
                 error.get_or_insert(reread_error);
             }
         }
-        let list = checklist(tickets, outcomes);
+        let list = board.checklist();
         match spec_pr {
             Some(pr) => write_checklist_or_warn(spec, pr, &list),
             None if landed => match open_spec_pr(spec, spec_branch, base, &list) {
@@ -261,137 +243,6 @@ fn run_ready_tickets(
         bail!("interrupted");
     }
     Ok(())
-}
-
-/// The lowest-numbered Ticket that is open, not an Unready Ticket, has no
-/// sub-issues, has every blocker closed and none `running`, isn't `running`
-/// and has no outcome in `outcomes` yet. A blocker's Run closes its issue
-/// before it ends, so a closed blocker may still be running.
-fn next_ready(
-    tickets: &[Ticket],
-    outcomes: &BTreeMap<u64, TicketOutcome>,
-    running: &HashSet<u64>,
-) -> Option<u64> {
-    tickets
-        .iter()
-        .filter(|ticket| {
-            ticket.is_open
-                && !ticket.has_sub_issues
-                && ticket.open_blockers.is_empty()
-                && !ticket
-                    .blockers
-                    .iter()
-                    .any(|blocker| running.contains(blocker))
-                && !outcomes.contains_key(&ticket.number)
-                && !running.contains(&ticket.number)
-                && ticket.labels.unready().is_none()
-        })
-        .map(|ticket| ticket.number)
-        .min()
-}
-
-/// A line on each Ticket that landed in this Spec run, with its PR, and on
-/// each Ticket not done, with why, lowest number first.
-fn summarize(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) -> Vec<String> {
-    let mut lines = Vec::new();
-    for ticket in by_number(tickets) {
-        let number = ticket.number;
-        if !ticket.is_open && !outcomes.contains_key(&number) {
-            continue;
-        }
-        let standing = standing(ticket, tickets, outcomes);
-        lines.push(match outcomes.get(&number) {
-            Some(TicketOutcome::Ended(Ended::Failed { log: Some(log), .. })) if ticket.is_open => {
-                format!("#{number} {standing} (session log: {log})")
-            }
-            _ => format!("#{number} {standing}"),
-        });
-    }
-    lines
-}
-
-/// `tickets`, lowest number first.
-fn by_number(tickets: &[Ticket]) -> Vec<&Ticket> {
-    let mut sorted: Vec<&Ticket> = tickets.iter().collect();
-    sorted.sort_by_key(|ticket| ticket.number);
-    sorted
-}
-
-/// Where `ticket`, one of `tickets`, stands in this Spec run, as in
-/// "#21 <standing>": done, with its PR if it landed in this Spec run, or why
-/// it is not done.
-fn standing(
-    ticket: &Ticket,
-    tickets: &[Ticket],
-    outcomes: &BTreeMap<u64, TicketOutcome>,
-) -> String {
-    let number = ticket.number;
-    let landed = match outcomes.get(&number) {
-        Some(TicketOutcome::Ended(Ended::Reached { pr_url, base_fix })) => {
-            let mut landed = "landed".to_string();
-            if let Some(pr_url) = pr_url {
-                landed += &format!(" with {pr_url}");
-            }
-            if let Some(base_fix) = base_fix {
-                landed += &format!(", after Base fix {base_fix}");
-            }
-            Some(landed)
-        }
-        _ => None,
-    };
-    if !ticket.is_open {
-        return landed.unwrap_or_else(|| "done".to_string());
-    }
-    match outcomes.get(&number) {
-        Some(TicketOutcome::Running) => return "running".to_string(),
-        Some(TicketOutcome::Ended(Ended::Interrupted)) => return "interrupted".to_string(),
-        Some(TicketOutcome::Ended(Ended::Failed { cause, .. })) => {
-            return format!("failed: {cause}");
-        }
-        _ => {}
-    }
-    if let Some(landed) = landed {
-        format!("{landed}, but is still open")
-    } else if let Some(label) = ticket.labels.unready() {
-        format!("unready: labelled {label}")
-    } else if ticket.has_sub_issues {
-        "unready: has sub-issues".to_string()
-    } else if let Some(cycle) = cycle_through(number, tickets) {
-        let cycle: Vec<String> = cycle.iter().map(|number| format!("#{number}")).collect();
-        format!("in a cycle: {}", cycle.join(" blocked by "))
-    } else if ticket.open_blockers.is_empty() {
-        // Ready, but not started yet, or the Spec run ended before it could.
-        "not started".to_string()
-    } else {
-        let blockers: Vec<String> = ticket
-            .open_blockers
-            .iter()
-            .map(|blocker| {
-                if tickets.iter().any(|ticket| ticket.number == *blocker) {
-                    format!("#{blocker}")
-                } else {
-                    format!("#{blocker} (outside the Spec)")
-                }
-            })
-            .collect();
-        format!("blocked by {}", blockers.join(", "))
-    }
-}
-
-/// The Tickets checklist, between its markers: a line on each of
-/// `tickets`, lowest number first, ticked if it is done, with where it
-/// stands.
-fn checklist(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) -> String {
-    let mut list = format!("{CHECKLIST_START}\n## Tickets\n\n");
-    for ticket in by_number(tickets) {
-        let tick = if ticket.is_open { ' ' } else { 'x' };
-        list += &format!(
-            "- [{tick}] #{} {}\n",
-            ticket.number,
-            standing(ticket, tickets, outcomes)
-        );
-    }
-    list + CHECKLIST_END + "\n"
 }
 
 /// `body` with its Tickets checklist, the text from its first start marker
@@ -415,39 +266,6 @@ fn with_checklist(body: &str, checklist: &str) -> String {
     format!("{}\n\n{checklist}", body.trim_end())
 }
 
-/// The shortest cycle of "blocked by" links among `tickets` from Ticket
-/// `start` back to itself, `start` first and last, if there is one.
-fn cycle_through(start: u64, tickets: &[Ticket]) -> Option<Vec<u64>> {
-    let blockers = |number: u64| {
-        tickets
-            .iter()
-            .find(|ticket| ticket.number == number)
-            .map_or(&[][..], |ticket| &ticket.open_blockers[..])
-    };
-    let mut reached_from = HashMap::new();
-    let mut queue = VecDeque::from([start]);
-    while let Some(number) = queue.pop_front() {
-        for &blocker in blockers(number) {
-            if blocker == start {
-                let mut cycle = vec![start];
-                let mut at = number;
-                while at != start {
-                    cycle.push(at);
-                    at = reached_from[&at];
-                }
-                cycle.push(start);
-                cycle.reverse();
-                return Some(cycle);
-            }
-            if let Entry::Vacant(entry) = reached_from.entry(blocker) {
-                entry.insert(number);
-                queue.push_back(blocker);
-            }
-        }
-    }
-    None
-}
-
 /// Start Ticket `number` of `spec` as a child `thirdshift`, a Merge run into
 /// `spec_branch` from the same Launch directory that may start a Base fix if
 /// `base_fix` allows one, and a thread that sends `number` and how it ended
@@ -457,7 +275,7 @@ fn start_ticket(
     number: u64,
     spec_branch: &str,
     base_fix: &BaseFixAsk,
-    ended: Sender<(u64, Result<TicketOutcome>)>,
+    ended: Sender<(u64, Result<Ended>)>,
 ) -> Result<()> {
     progress::step(format_args!("starting #{number}"));
     let kind = Kind::Ticket {
@@ -472,14 +290,14 @@ fn start_ticket(
 
 /// Wait for Ticket `number`'s Run `child`, relaying its stderr, and say how
 /// it ended.
-fn finish_ticket(number: u64, child: Handle) -> Result<TicketOutcome> {
+fn finish_ticket(number: u64, child: Handle) -> Result<Ended> {
     let ended = child.wait()?;
     progress::step(match ended {
         Ended::Reached { .. } => format!("#{number} landed"),
         Ended::Interrupted => format!("#{number} interrupted"),
         Ended::Failed { .. } => format!("#{number} failed"),
     });
-    Ok(TicketOutcome::Ended(ended))
+    Ok(ended)
 }
 
 /// The open Spec PR from `spec_branch`, if there is one, converted back to a
@@ -539,128 +357,6 @@ fn write_checklist_or_warn(spec: &IssueUrl, pr: &PullRequest, checklist: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::labels::{Label, Labels, READY_FOR_AGENT, UNREADY};
-
-    fn ticket(number: u64, is_open: bool, blockers: &[u64], open_blockers: &[u64]) -> Ticket {
-        Ticket {
-            number,
-            is_open,
-            labels: Labels::default(),
-            has_sub_issues: false,
-            blockers: blockers.to_vec(),
-            open_blockers: open_blockers.to_vec(),
-        }
-    }
-
-    #[test]
-    fn a_ticket_waits_for_a_blocker_whose_run_closed_its_issue_but_has_not_ended() {
-        // #22's Run closed #22 but is still cleaning up; #21 has landed.
-        let tickets = [
-            ticket(21, false, &[], &[]),
-            ticket(22, false, &[], &[]),
-            ticket(23, true, &[21, 22], &[]),
-        ];
-        let outcomes = BTreeMap::from([(
-            21,
-            TicketOutcome::Ended(Ended::Reached {
-                pr_url: None,
-                base_fix: None,
-            }),
-        )]);
-
-        assert_eq!(next_ready(&tickets, &outcomes, &HashSet::from([22])), None);
-        assert_eq!(next_ready(&tickets, &outcomes, &HashSet::new()), Some(23));
-    }
-
-    #[test]
-    fn each_unready_label_keeps_a_ticket_from_running_and_is_named_in_its_line() {
-        for label in UNREADY {
-            let mut unready = ticket(21, true, &[], &[]);
-            unready.labels = [READY_FOR_AGENT, label]
-                .map(Label::name)
-                .into_iter()
-                .collect();
-            let tickets = [unready, ticket(22, true, &[], &[])];
-            let outcomes = BTreeMap::new();
-
-            assert_eq!(
-                next_ready(&tickets, &outcomes, &HashSet::new()),
-                Some(22),
-                "{label}"
-            );
-            assert_eq!(
-                summarize(&tickets, &outcomes)[0],
-                format!("#21 unready: labelled {label}")
-            );
-        }
-    }
-
-    #[test]
-    fn a_failed_tickets_line_says_its_cause() {
-        let tickets = [ticket(23, true, &[], &[])];
-        let cause = "git fetch origin issue-21 failed: \
-                     error: fetching ref refs/remotes/origin/issue-21 failed";
-        let outcomes = BTreeMap::from([(
-            23,
-            TicketOutcome::Ended(Ended::Failed {
-                cause: cause.to_string(),
-                log: None,
-            }),
-        )]);
-
-        assert_eq!(
-            summarize(&tickets, &outcomes),
-            ["#23 failed: git fetch origin issue-21 failed: \
-              error: fetching ref refs/remotes/origin/issue-21 failed"]
-        );
-    }
-
-    #[test]
-    fn the_checklist_ticks_done_tickets_and_says_where_each_other_stands() {
-        let mut unready = ticket(26, true, &[], &[]);
-        unready.labels = ["needs-info"].into_iter().collect();
-        let tickets = [
-            ticket(23, true, &[], &[]),
-            ticket(21, false, &[], &[]),
-            ticket(22, false, &[], &[]),
-            ticket(24, true, &[23], &[23]),
-            ticket(25, true, &[], &[]),
-            unready,
-            ticket(27, true, &[], &[]),
-        ];
-        let outcomes = BTreeMap::from([
-            (
-                21,
-                TicketOutcome::Ended(Ended::Reached {
-                    pr_url: Some("https://x/pull/1".to_string()),
-                    base_fix: None,
-                }),
-            ),
-            (
-                23,
-                TicketOutcome::Ended(Ended::Failed {
-                    cause: "claude exited 1".to_string(),
-                    log: Some("/logs/23.jsonl".to_string()),
-                }),
-            ),
-            (25, TicketOutcome::Running),
-        ]);
-
-        assert_eq!(
-            checklist(&tickets, &outcomes),
-            "<!-- thirdshift:tickets -->\n\
-             ## Tickets\n\
-             \n\
-             - [x] #21 landed with https://x/pull/1\n\
-             - [x] #22 done\n\
-             - [ ] #23 failed: claude exited 1\n\
-             - [ ] #24 blocked by #23\n\
-             - [ ] #25 running\n\
-             - [ ] #26 unready: labelled needs-info\n\
-             - [ ] #27 not started\n\
-             <!-- /thirdshift:tickets -->\n"
-        );
-    }
 
     const LIST: &str = "<!-- thirdshift:tickets -->\nnew\n<!-- /thirdshift:tickets -->\n";
 
