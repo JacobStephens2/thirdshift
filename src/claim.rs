@@ -11,7 +11,7 @@ use crate::git::Git;
 use crate::github::{self, ListedIssue};
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
-use crate::labels::{Label, Labels, READY_FOR_AGENT};
+use crate::labels::{self, Edit, Label, Labels, READY_FOR_AGENT};
 use crate::progress;
 
 /// The label of a Claimed issue.
@@ -48,17 +48,16 @@ pub fn make(issue: &IssueUrl) -> Result<Claim<'_>> {
 
 /// [`make`], its failure as `gh` gave it.
 fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
-    let labels = github::issue_labels(issue)?;
-    let (claimed, ready) = (is_on(&labels), labels.has(READY_FOR_AGENT));
+    let edit = Edit::read(issue, &[READY_FOR_AGENT], &[IN_PROGRESS])?;
     let claim = Claim {
         issue,
-        added_in_progress: !claimed,
-        removed_ready_for_agent: ready,
+        added_in_progress: edit.puts_on(IN_PROGRESS),
+        removed_ready_for_agent: edit.takes_off(READY_FOR_AGENT),
     };
-    if claimed && !ready {
+    if !claim.added_in_progress && !claim.removed_ready_for_agent {
         return Ok(claim);
     }
-    if ready {
+    if claim.removed_ready_for_agent {
         progress::step(format_args!(
             "labelling #{} {IN_PROGRESS}, in place of {READY_FOR_AGENT}",
             issue.number
@@ -66,10 +65,7 @@ fn label_in_progress(issue: &IssueUrl) -> Result<Claim<'_>> {
     } else {
         progress::step(format_args!("labelling #{} {IN_PROGRESS}", issue.number));
     }
-    if !claimed {
-        github::ensure_labels(&issue.repo_slug(), &[IN_PROGRESS])?;
-    }
-    github::set_labels(issue, &labels.swapped(&[READY_FOR_AGENT], &[IN_PROGRESS]))?;
+    edit.apply()?;
     Ok(claim)
 }
 
@@ -82,7 +78,8 @@ impl Claim<'_> {
     /// labels then go back as they were before the Claim:
     /// `in-progress` comes off if the Claim added it, and `ready-for-agent`
     /// goes back if the Claim took it off, in one request that keeps the
-    /// issue's other labels, those added since included. An issue that is no
+    /// issue's other labels, those added since included when only
+    /// `in-progress` comes off. An issue that is no
     /// longer `in-progress` is left as it is: someone took the Claim off
     /// meanwhile. A Claim that changed no label has nothing to put back, and
     /// makes no request.
@@ -115,30 +112,45 @@ impl Claim<'_> {
         if branch::started(launch, issue)?.is_some() {
             return Ok(());
         }
-        let labels = github::issue_labels(issue)?;
-        let Some(in_progress) = labels.spelled(IN_PROGRESS) else {
+        let (off, on) = self.release_labels();
+        let edit = Edit::read(issue, off, on)?;
+        if !is_on(edit.labels()) {
             return Ok(());
-        };
+        }
         let number = issue.number;
         if !self.removed_ready_for_agent {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: removing {IN_PROGRESS}"
             ));
-            return github::remove_label(issue, in_progress);
-        }
-        let off: &[Label] = if self.added_in_progress {
+        } else if self.added_in_progress {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: labelling it {READY_FOR_AGENT}, \
                  in place of {IN_PROGRESS}"
             ));
-            &[IN_PROGRESS]
         } else {
             progress::step(format_args!(
                 "releasing the Claim on #{number}: labelling it {READY_FOR_AGENT} again"
             ));
+        }
+        edit.apply()
+    }
+
+    /// The labels releasing the Claim takes off and puts on, in that order:
+    /// `in-progress`
+    /// off if making it added that, and `ready-for-agent` on if making it
+    /// took that off.
+    fn release_labels(&self) -> (&'static [Label], &'static [Label]) {
+        let off: &[Label] = if self.added_in_progress {
+            &[IN_PROGRESS]
+        } else {
             &[]
         };
-        github::set_labels(issue, &labels.swapped(off, &[READY_FOR_AGENT]))
+        let on: &[Label] = if self.removed_ready_for_agent {
+            &[READY_FOR_AGENT]
+        } else {
+            &[]
+        };
+        (off, on)
     }
 
     /// Remove the Claim once the Self-merge of the Run or the Spec run that
@@ -157,7 +169,7 @@ impl Claim<'_> {
                 format_args!(
                     "could not remove {IN_PROGRESS} from issue #{}, so remove it by hand: {}",
                     self.issue.number,
-                    github::remove_label_command(self.issue, IN_PROGRESS)
+                    labels::by_hand(self.issue, &[IN_PROGRESS], &[])
                 ),
             );
         }
@@ -169,26 +181,21 @@ impl Claim<'_> {
         if issue.is_open {
             return Ok(());
         }
-        let Some(in_progress) = issue.labels.spelled(IN_PROGRESS) else {
+        let edit = Edit::of(self.issue, issue.labels, &[IN_PROGRESS], &[]);
+        if !edit.takes_off(IN_PROGRESS) {
             return Ok(());
-        };
+        }
         progress::step(format_args!(
             "removing {IN_PROGRESS} from issue #{}",
             self.issue.number
         ));
-        github::remove_label(self.issue, in_progress)
+        edit.apply()
     }
 
     /// The commands that release the Claim by hand.
     fn release_by_hand(&self) -> String {
-        let mut commands = Vec::new();
-        if self.added_in_progress {
-            commands.push(github::remove_label_command(self.issue, IN_PROGRESS));
-        }
-        if self.removed_ready_for_agent {
-            commands.push(github::add_label_command(self.issue, READY_FOR_AGENT));
-        }
-        commands.join(" && ")
+        let (off, on) = self.release_labels();
+        labels::by_hand(self.issue, off, on)
     }
 }
 
@@ -212,14 +219,15 @@ pub fn sweep(repo: &Repo) {
         }
     };
     for ListedIssue { issue, labels, .. } in closed {
-        let Some(label) = labels.spelled(IN_PROGRESS) else {
+        let edit = Edit::of(&issue, labels, &[IN_PROGRESS], &[]);
+        if !edit.takes_off(IN_PROGRESS) {
             continue;
-        };
+        }
         progress::step(format_args!(
             "taking {IN_PROGRESS} off #{}, which is closed",
             issue.number
         ));
-        if let Err(error) = github::remove_label(&issue, label) {
+        if let Err(error) = edit.apply() {
             progress::step(format_args!(
                 "warning: could not take {IN_PROGRESS} off #{}: {error:#}",
                 issue.number

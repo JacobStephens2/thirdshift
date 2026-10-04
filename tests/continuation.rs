@@ -363,6 +363,7 @@ fn a_claimed_issue_marked_ready_again_loses_ready_for_agent_and_stays_claimed() 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(scenario.issue_labels(7), ["bug", "in-progress"]);
+    // Only `ready-for-agent` comes off, so the rest stay where they were.
+    assert_eq!(scenario.issue_labels(7), ["in-progress", "bug"]);
     assert!(scenario.gh_calls_of("label", "list").is_empty());
 }
