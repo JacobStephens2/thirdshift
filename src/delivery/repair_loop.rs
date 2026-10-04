@@ -167,23 +167,29 @@ impl Budgets {
         Ok((format!("repair-{}", self.repairs), line))
     }
 
-    /// Counts a round taken because `upstream` moved, returning `why` as its
-    /// progress line, or fails if it would be one too many.
-    fn count_upstream_move(&mut self, upstream: &str, why: String) -> Result<String> {
+    /// Counts a round taken because `upstream` moved, or fails if it would
+    /// be one too many.
+    fn count_upstream_move(&mut self, upstream: &str) -> Result<()> {
         if self.upstream_moves == MAX_UPSTREAM_MOVES {
             bail!("{upstream} kept moving: merged it again {MAX_UPSTREAM_MOVES} times");
         }
         self.upstream_moves += 1;
-        Ok(why)
+        Ok(())
     }
 
     /// Counts a round taken because `origin/<base>` moved `when`, returning
     /// its progress line.
     fn count_base_move(&mut self, base: &str, when: &str) -> Result<String> {
-        self.count_upstream_move(
-            &format!("origin/{base}"),
-            format!("origin/{base} moved {when}; merging it again"),
-        )
+        let upstream = format!("origin/{base}");
+        self.count_upstream_move(&upstream)?;
+        Ok(format!("{upstream} moved {when}; merging it again"))
+    }
+
+    /// Counts a round taken because the Issue branch on origin, `upstream`,
+    /// has new commits, returning its progress line.
+    fn count_foreign_commits(&mut self, upstream: &str) -> Result<String> {
+        self.count_upstream_move(upstream)?;
+        Ok(format!("{upstream} has new commits; merging them in"))
     }
 }
 
@@ -324,10 +330,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                 return Ok(());
             }
             let own_head = self.outside.head()?;
-            let line = self.budgets.count_upstream_move(
-                &upstream,
-                format!("{upstream} has new commits; merging them in"),
-            )?;
+            let line = self.budgets.count_foreign_commits(&upstream)?;
             self.outside.progress(line);
             for sha in &foreign {
                 self.outside
@@ -1333,10 +1336,8 @@ mod tests {
             );
         }
         assert_eq!(
-            budgets
-                .count_upstream_move("origin/issue-7", "new commits".to_string())
-                .unwrap(),
-            "new commits"
+            budgets.count_foreign_commits("origin/issue-7").unwrap(),
+            "origin/issue-7 has new commits; merging them in"
         );
 
         let error = budgets.count_base_move("main", "while CI ran").unwrap_err();
@@ -1344,9 +1345,7 @@ mod tests {
             error.to_string(),
             format!("origin/main kept moving: merged it again {MAX_UPSTREAM_MOVES} times")
         );
-        let error = budgets
-            .count_upstream_move("origin/issue-7", "new commits".to_string())
-            .unwrap_err();
+        let error = budgets.count_foreign_commits("origin/issue-7").unwrap_err();
         assert_eq!(
             error.to_string(),
             format!("origin/issue-7 kept moving: merged it again {MAX_UPSTREAM_MOVES} times")
