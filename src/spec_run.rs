@@ -66,15 +66,7 @@ pub fn run(
     let (spec, base) = (delivery.issue, delivery.base);
     let mut spec_pr = SpecPr::resume(spec, worktree.branch(), base)?;
     let base_fix = delivery.base_fix.ask_of_tickets();
-    let (ended, endings) = mpsc::channel();
-    let mut outside = ChildRunsAndGitHub {
-        spec,
-        worktree: &worktree,
-        base_fix: &base_fix,
-        spec_pr: &mut spec_pr,
-        ended,
-        endings,
-    };
+    let mut outside = ChildRunsAndGitHub::new(spec, &worktree, &base_fix, &mut spec_pr);
     let (ticket_lines, landed) = land_tickets(&mut outside, tickets, parallel);
     let ended = match landed {
         Ok(checklist) => review_and_deliver(worktree, spec_pr, &checklist, delivery),
@@ -121,7 +113,7 @@ fn review_and_deliver(
 
 /// What the Spec run's Ticket loop does or reads outside itself: the push of
 /// the Spec branch, the Tickets' child Runs, the graph read again, the Spec
-/// PR, the interrupt and its progress lines.
+/// PR, the interrupt and the loop's progress lines.
 trait Outside {
     /// Push the Spec branch to origin.
     fn push(&mut self) -> Result<()>;
@@ -147,7 +139,7 @@ trait Outside {
 /// Spec branch checked out in `worktree`: child `thirdshift` Runs, each of
 /// which may start a Base fix if `base_fix` allows one, whose threads send
 /// how each ended on `ended`, received from `endings`, GitHub and the Spec
-/// PR.
+/// PR `spec_pr`.
 struct ChildRunsAndGitHub<'a, 'pr> {
     spec: &'a IssueUrl,
     worktree: &'a Worktree,
@@ -155,6 +147,27 @@ struct ChildRunsAndGitHub<'a, 'pr> {
     spec_pr: &'a mut SpecPr<'pr>,
     ended: Sender<(u64, Result<Ended>)>,
     endings: Receiver<(u64, Result<Ended>)>,
+}
+
+impl<'a, 'pr> ChildRunsAndGitHub<'a, 'pr> {
+    /// The outside world of the Ticket loop of a Spec run on `spec`, as the
+    /// struct says, with no Ticket's Run started yet.
+    fn new(
+        spec: &'a IssueUrl,
+        worktree: &'a Worktree,
+        base_fix: &'a BaseFixAsk,
+        spec_pr: &'a mut SpecPr<'pr>,
+    ) -> Self {
+        let (ended, endings) = mpsc::channel();
+        Self {
+            spec,
+            worktree,
+            base_fix,
+            spec_pr,
+            ended,
+            endings,
+        }
+    }
 }
 
 impl Outside for ChildRunsAndGitHub<'_, '_> {
@@ -336,7 +349,7 @@ mod tests {
         /// Received that this Ticket's Run ended.
         Ended(u64),
         /// Read the Spec's Tickets again.
-        Read,
+        ReadTickets,
         /// Showed this checklist on the Spec PR.
         Show(String),
         /// Told the Spec PR a Ticket landed, with this checklist.
@@ -372,6 +385,7 @@ mod tests {
         tickets: Vec<Node>,
         /// The issues outside the Spec that are open.
         open_outside: Vec<u64>,
+        /// Whether the push of the Spec branch fails.
         push_fails: bool,
         /// The Tickets whose Runs cannot be started.
         start_fails: Vec<u64>,
@@ -379,6 +393,7 @@ mod tests {
         endings: VecDeque<(u64, Result<Ended>)>,
         /// How each read of the Spec's Tickets goes, in order.
         reads: VecDeque<Read>,
+        /// Whether opening the Spec PR, once a Ticket lands, fails.
         landed_fails: bool,
         /// How many times the Spec run is found not interrupted before it is.
         interrupted_after: Option<usize>,
@@ -484,7 +499,7 @@ mod tests {
         }
 
         fn tickets(&mut self) -> Result<Vec<Ticket>> {
-            self.did.push(Did::Read);
+            self.did.push(Did::ReadTickets);
             match self.script.reads.pop_front().unwrap_or(Read::Graph) {
                 Read::Graph => {}
                 Read::Changes(change) => change(&mut self.script.tickets),
@@ -540,6 +555,7 @@ mod tests {
         }
     }
 
+    /// Closed Ticket `number`, blocked by none.
     fn closed(number: u64) -> Node {
         Node {
             is_open: false,
@@ -592,12 +608,12 @@ mod tests {
     }
 
     /// Spec PR calls only.
-    fn spec_pr(did: &Did) -> bool {
+    fn spec_pr_calls(did: &Did) -> bool {
         matches!(did, Did::Show(_) | Did::Landed(_))
     }
 
     /// Progress lines only.
-    fn lines(did: &Did) -> bool {
+    fn progress_lines(did: &Did) -> bool {
         matches!(did, Did::Line(_))
     }
 
@@ -621,13 +637,13 @@ mod tests {
                 Did::Start(21),
                 Did::Show(checklist(&["[ ] #21 running", "[ ] #22 blocked by #21"])),
                 Did::Ended(21),
-                Did::Read,
+                Did::ReadTickets,
                 Did::Landed(checklist(&["[x] #21 landed", "[ ] #22 not started"])),
                 line("starting #22"),
                 Did::Start(22),
                 Did::Show(checklist(&["[x] #21 landed", "[ ] #22 running"])),
                 Did::Ended(22),
-                Did::Read,
+                Did::ReadTickets,
                 Did::Landed(done),
             ]
         );
@@ -827,7 +843,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            outside.did_only(self::lines),
+            outside.did_only(progress_lines),
             [line("starting #21"), line("starting #22")]
         );
     }
@@ -847,6 +863,10 @@ mod tests {
         assert_eq!(
             outside.did_only(runs),
             [Did::Start(21), Did::Start(22), Did::Ended(21)]
+        );
+        assert_eq!(
+            outside.did_only(progress_lines),
+            [line("starting #21"), line("starting #22")]
         );
     }
 
@@ -874,19 +894,34 @@ mod tests {
     #[test]
     fn the_first_error_wins_over_later_ones() {
         let mut outside = Scripted::new(Script {
-            tickets: vec![open(21, &[]), open(22, &[])],
+            tickets: vec![open(21, &[]), open(22, &[]), open(23, &[])],
             endings: VecDeque::from([
                 (21, Err(anyhow!("could not wait for #21's Run"))),
-                (22, Err(anyhow!("could not wait for #22's Run"))),
+                (22, Ok(reached())),
+                (23, Err(anyhow!("could not wait for #23's Run"))),
             ]),
             reads: VecDeque::from([Read::Graph, Read::Fails("gh: GitHub stopped answering")]),
             landed_fails: true,
             ..Script::default()
         });
 
-        let (_, landed) = land(&mut outside, 2);
+        let (_, landed) = land(&mut outside, 3);
 
         assert_eq!(error(landed), "could not wait for #21's Run");
+        // After #22 lands, its re-read fails and so does opening the Spec PR.
+        assert_eq!(
+            outside.did_only(|did| matches!(did, Did::Ended(_) | Did::Landed(_))),
+            [
+                Did::Ended(21),
+                Did::Ended(22),
+                Did::Landed(checklist(&[
+                    "[ ] #21 failed: could not wait for #21's Run",
+                    "[ ] #22 landed, but is still open",
+                    "[ ] #23 running"
+                ])),
+                Did::Ended(23),
+            ]
+        );
     }
 
     #[test]
@@ -902,7 +937,7 @@ mod tests {
 
         assert_eq!(error(landed), "Tickets not done: #22, #23");
         assert_eq!(
-            outside.did_only(spec_pr),
+            outside.did_only(spec_pr_calls),
             [
                 Did::Show(checklist(&[
                     "[ ] #21 running",
@@ -938,7 +973,7 @@ mod tests {
 
         assert_eq!(error(landed), "Tickets not done: #21, #22");
         assert_eq!(
-            outside.did_only(spec_pr),
+            outside.did_only(spec_pr_calls),
             [
                 Did::Show(checklist(&["[ ] #21 running", "[ ] #22 running"])),
                 Did::Show(checklist(&[
@@ -1006,7 +1041,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            outside.did_only(self::lines),
+            outside.did_only(progress_lines),
             [line("starting #21"), line("starting #22")]
         );
     }
