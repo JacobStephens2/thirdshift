@@ -78,7 +78,8 @@ impl Claim<'_> {
     /// labels then go back as they were before the Claim:
     /// `in-progress` comes off if the Claim added it, and `ready-for-agent`
     /// goes back if the Claim took it off, in one request that keeps the
-    /// issue's other labels, those added since included. An issue that is no
+    /// issue's other labels, those added since included when only
+    /// `in-progress` comes off. An issue that is no
     /// longer `in-progress` is left as it is: someone took the Claim off
     /// meanwhile. A Claim that changed no label has nothing to put back, and
     /// makes no request.
@@ -111,7 +112,7 @@ impl Claim<'_> {
         if branch::started(launch, issue)?.is_some() {
             return Ok(());
         }
-        let (off, on) = self.put_back();
+        let (off, on) = self.release_labels();
         let edit = Edit::read(issue, off, on)?;
         if !is_on(edit.labels()) {
             return Ok(());
@@ -134,10 +135,11 @@ impl Claim<'_> {
         edit.apply()
     }
 
-    /// The labels releasing the Claim takes off and puts on: `in-progress`
+    /// The labels releasing the Claim takes off and puts on, in that order:
+    /// `in-progress`
     /// off if making it added that, and `ready-for-agent` on if making it
     /// took that off.
-    fn put_back(&self) -> (&'static [Label], &'static [Label]) {
+    fn release_labels(&self) -> (&'static [Label], &'static [Label]) {
         let off: &[Label] = if self.added_in_progress {
             &[IN_PROGRESS]
         } else {
@@ -192,7 +194,7 @@ impl Claim<'_> {
 
     /// The commands that release the Claim by hand.
     fn release_by_hand(&self) -> String {
-        let (off, on) = self.put_back();
+        let (off, on) = self.release_labels();
         labels::by_hand(self.issue, off, on)
     }
 }

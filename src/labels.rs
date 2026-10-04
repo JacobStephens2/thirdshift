@@ -162,10 +162,10 @@ impl<'a> Edit<'a> {
         }
     }
 
-    /// Whether it takes `label` off: one of the labels to take off that the
-    /// issue has, whatever its case.
+    /// Whether it takes `label` off: one of the labels to take off, and not
+    /// one to put on, that the issue has, whatever its case.
     pub fn takes_off(&self, label: Label) -> bool {
-        self.off.contains(&label) && self.labels.has(label)
+        self.off.contains(&label) && !self.on.contains(&label) && self.labels.has(label)
     }
 
     /// Whether it puts `label` on: one of the labels to put on that the
@@ -198,10 +198,11 @@ impl<'a> Edit<'a> {
 }
 
 /// The request that takes each of `off` off an issue with `labels` and puts
-/// each of `on` on it.
+/// each of `on` on it. A label in both is put on.
 fn request(labels: &Labels, off: &[Label], on: &[Label]) -> Request {
     let taken_off: Vec<&str> = off
         .iter()
+        .filter(|label| !on.contains(label))
         .filter_map(|label| labels.spelled(*label))
         .collect();
     let missing: Vec<Label> = on
@@ -297,6 +298,20 @@ mod tests {
     }
 
     #[test]
+    fn a_label_both_taken_off_and_put_on_is_put_on() {
+        let labels = labels(&["In-Progress", "bug"]);
+
+        assert_request(
+            request(&labels, &[IN_PROGRESS], &[IN_PROGRESS]),
+            Request::None,
+        );
+        assert_request(
+            request(&labels, &[IN_PROGRESS, NEEDS_TRIAGE], &[IN_PROGRESS]),
+            Request::None,
+        );
+    }
+
+    #[test]
     fn taking_two_labels_off_writes_the_rest() {
         let labels = labels(&["Needs-Triage", "bug", "in-progress"]);
 
@@ -320,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_swaps_ready_for_agent_for_in_progress_in_one_put() {
+    fn a_claim_swaps_ready_for_agent_for_in_progress_writing_all_the_labels() {
         let labels = labels(&["Ready-For-Agent", "bug"]);
 
         assert_request(

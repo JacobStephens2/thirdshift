@@ -378,9 +378,8 @@ fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Res
 
 /// Label `idea` an Architect idea: put `needs-triage` and `architect-idea`
 /// on it, in one request that keeps its other labels, having added each to
-/// the repository if it lacks it. `needs-triage` goes
-/// back on an issue that had been triaged: the factory again takes it for the
-/// best next move.
+/// the repository if it lacks it. `needs-triage` goes back on an issue that
+/// had been triaged: the factory again takes it for the best next move.
 fn label_idea(idea: &IssueUrl) -> Result<()> {
     if interrupt::requested() {
         bail!("interrupted");
