@@ -10,7 +10,7 @@ use std::fmt::Display;
 use chrono::Local;
 use serde_json::Value;
 
-use crate::command_log;
+use crate::logs;
 
 /// The longest detail a session line shows before it is cut short.
 const MAX_DETAIL: usize = 100;
@@ -23,7 +23,7 @@ const STAMP: &str = "%H:%M:%S";
 
 /// Print one of thirdshift's own steps, stamped with the time now.
 pub fn step(message: impl Display) {
-    command_log::eprint(&stamped(message));
+    logs::eprint(&stamped(message));
 }
 
 /// Report `error`, then a warning saying what to do about it by hand.
@@ -75,7 +75,7 @@ impl<'a> ChildLine<'a> {
 /// Print `line`, from the stderr of the child thirdshift running issue
 /// `number`, as [`relayed`] gives it, and return what the line is.
 pub fn relay(number: u64, line: &str) -> ChildLine<'_> {
-    command_log::eprint(&relayed(number, line));
+    logs::eprint(&relayed(number, line));
     ChildLine::of(line)
 }
 

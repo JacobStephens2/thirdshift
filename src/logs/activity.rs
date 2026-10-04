@@ -4,8 +4,8 @@
 //! naming its Command log, and one when it ends, with its outcome. A skipped
 //! Architect run or Pickup run writes one only when its reason differs from
 //! the last line of its own kind in the file, so a repository that sits idle
-//! shows one line, not one per pass. A child Run, or a run dispatched in the
-//! same process, writes none: the command that started it writes both.
+//! shows one line, not one per pass. Which work writes its lines is
+//! [`super::started`]'s to say.
 //!
 //! Every line starts with the local date and time, then the kind. Each is
 //! appended whole, in one write, so passes on one repository that run at
@@ -22,8 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, Result};
 use chrono::Local;
 
-use crate::command_log;
-use crate::issue::Repo;
+use super::command_log;
 use crate::progress;
 
 /// The file's name, at the root of a repository's logs.
@@ -41,7 +40,7 @@ const TAIL: u64 = 64 * 1024;
 
 /// What a line is about: the command that wrote it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
+pub(super) enum Kind {
     Run,
     SpecRun,
     ArchitectRun,
@@ -73,10 +72,9 @@ static STARTED: OnceLock<Started> = OnceLock::new();
 static WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Record that this command, a `kind` on `issue`, if it has one, starts work
-/// on `repo`, whose logs are under `logs_dir`, naming its Command log, if it
+/// on the repository whose logs are at `root`, naming its Command log, if it
 /// keeps one. Only once: [`end`] then writes its end line.
-pub fn start(logs_dir: &Path, repo: &Repo, kind: Kind, issue: Option<u64>) {
-    let root = &command_log::root(logs_dir, repo);
+pub(super) fn start(root: &Path, kind: Kind, issue: Option<u64>) {
     let command_log = match command_log::path() {
         Some(path) => path
             .strip_prefix(root)
@@ -98,19 +96,18 @@ pub fn start(logs_dir: &Path, repo: &Repo, kind: Kind, issue: Option<u64>) {
 
 /// Record how the work [`start`] recorded ended, `outcome` in short. Nothing
 /// if this command started none.
-pub fn end(outcome: impl Display) {
+pub(super) fn end(outcome: impl Display) {
     if let Some(started) = STARTED.get() {
         let line = format!("{} ended: {outcome}", started.subject());
         write(&started.root, &line, None);
     }
 }
 
-/// Record that this command, a `kind`, was skipped on `repo`, whose logs are
-/// under `logs_dir`, for `reason`, unless the last line of its kind there
+/// Record that this command, a `kind`, was skipped on the repository whose
+/// logs are at `root`, for `reason`, unless the last line of its kind there
 /// already says so.
-pub fn skip(logs_dir: &Path, repo: &Repo, kind: Kind, reason: impl Display) {
-    let root = command_log::root(logs_dir, repo);
-    write(&root, &format!("{kind} skipped: {reason}"), Some(kind));
+pub(super) fn skip(root: &Path, kind: Kind, reason: impl Display) {
+    write(root, &format!("{kind} skipped: {reason}"), Some(kind));
 }
 
 impl Started {

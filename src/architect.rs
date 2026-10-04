@@ -17,19 +17,18 @@
 //! work a human shaped goes first.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
-use crate::activity::{self, Kind};
-use crate::command_log;
 use crate::failed_run::FailedRun;
 use crate::github::{self, ListedIssue};
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
+use crate::logs::{self, Pass, Work};
 use crate::plugin::Plugin;
 use crate::progress;
 use crate::prompt;
@@ -236,13 +235,11 @@ impl fmt::Display for Reviewed {
 /// repository has a Ready issue, by the very search a Pickup run makes, with
 /// its lines on the issues passed over, but with no Sweep and no Claim limit,
 /// which are the Pickup run's. A skip is recorded in the repository's
-/// Activity log under `logs_dir`. Past all four, it keeps its Command log
-/// there, where its Session logs go too, and records in the Activity log that
-/// it started work.
+/// Activity log. Past all four, it records that it started work, which keeps
+/// its Command log with its repository's logs, where its Session logs go too.
 pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
-    logs_dir: &Path,
     launch_pull: bool,
 ) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
@@ -256,13 +253,13 @@ pub fn run(
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
             let repo = &running.0;
-            activity::skip(logs_dir, repo, Kind::ArchitectRun, &running);
+            logs::skipped(Pass::ArchitectRun, repo, &running);
             return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
     let open_plans = github::open_issues_labelled(&repo.slug(), ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
-        return Ok(skip(logs_dir, &repo, Skipped::OpenPlans(open_plans)));
+        return Ok(skip(&repo, Skipped::OpenPlans(open_plans)));
     }
     let ideas = github::open_issues_labelled(&repo.slug(), ARCHITECT_IDEA)?;
     let waiting: Vec<_> = ideas
@@ -270,13 +267,12 @@ pub fn run(
         .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
         .collect();
     if !waiting.is_empty() {
-        return Ok(skip(logs_dir, &repo, Skipped::IdeasWaiting(waiting)));
+        return Ok(skip(&repo, Skipped::IdeasWaiting(waiting)));
     }
     if let Some(ReadyIssue { listed, .. }) = ready::first(&launch, &repo)? {
-        return Ok(skip(logs_dir, &repo, Skipped::ReadyIssue(listed)));
+        return Ok(skip(&repo, Skipped::ReadyIssue(listed)));
     }
-    command_log::keep(command_log::of_architect_run(logs_dir, &repo));
-    activity::start(logs_dir, &repo, Kind::ArchitectRun, None);
+    logs::started(Work::ArchitectRun(&repo));
     if launch_pull {
         run::pull_base_branch(&launch, checked_out.as_deref(), &base);
     }
@@ -285,7 +281,7 @@ pub fn run(
         return Err(anyhow!("interrupted").into());
     }
     let worktree = ReviewWorktree::create(&launch, &repo.name, &base)?;
-    let logs = Logs::of_architect_run(&repo, logs_dir);
+    let logs = Logs::of_architect_run(&repo);
     let mut log = logs.path(REVIEW);
     review(worktree, &base, focus, &origin, started, &logs, &mut log)
         .map(Outcome::Reviewed)
@@ -296,9 +292,9 @@ pub fn run(
 }
 
 /// The Architect run skipped as `skipped` says, recorded in the Activity log
-/// of `repo`, whose logs are under `logs_dir`.
-fn skip(logs_dir: &Path, repo: &Repo, skipped: Skipped) -> Outcome {
-    activity::skip(logs_dir, repo, Kind::ArchitectRun, &skipped);
+/// of `repo`.
+fn skip(repo: &Repo, skipped: Skipped) -> Outcome {
+    logs::skipped(Pass::ArchitectRun, repo, &skipped);
     Outcome::Skipped(skipped)
 }
 

@@ -9,7 +9,6 @@ use anyhow::Result;
 
 use crate::architect::Reviewed;
 use crate::base_fix::Advice;
-use crate::command_log;
 use crate::config::EmailSettings;
 use crate::email::Resend;
 use crate::failed_run::FailedRun;
@@ -17,6 +16,7 @@ use crate::github;
 use crate::host;
 use crate::issue::{IssueUrl, Repo};
 use crate::launch;
+use crate::logs;
 use crate::progress;
 use crate::run::Ended;
 
@@ -233,7 +233,7 @@ fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
 /// first. A failed send is only a warning.
 fn send(checked: &Checked, subject: &str, architect: Option<ArchitectLines>, ending: &Ending) {
     let host = host::name();
-    let command_log = command_log::path();
+    let command_log = logs::command_log_path();
     let body = Body {
         architect,
         pr_url: ending.pr_url,

@@ -1,4 +1,3 @@
-mod activity;
 mod architect;
 mod args;
 mod asks;
@@ -7,7 +6,6 @@ mod branch;
 mod child_run;
 mod ci;
 mod claim;
-mod command_log;
 mod config;
 mod email;
 mod failed_run;
@@ -18,6 +16,7 @@ mod interrupt;
 mod issue;
 mod labels;
 mod launch;
+mod logs;
 mod notification;
 mod pickup;
 mod plugin;
@@ -39,11 +38,11 @@ mod worktree;
 
 use std::process::ExitCode;
 
-use activity::Kind;
 use architect::{Outcome, Reviewed};
 use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
 use asks::Asks;
 use config::UserConfig;
+use logs::Begin;
 use notification::{ArchitectNotification, NotificationAsk, PickupNotification, RunNotification};
 use run::StartedBy;
 
@@ -282,7 +281,7 @@ folders thirdshift creates as it needs them. Session logs go in sessions/, as
 Command logs, everything a Run, a Spec run, an Architect run or a Pickup run printed, go in
 commands/issue/<n>-<stamp>.log, commands/pickup/<n>-<stamp>.log, named for the issue taken,
 and commands/architect/<stamp>.log. A Pickup run or Architect run skipped before any work
-keeps no Command log.
+keeps no Command log, nor does a Run that fails before any work, as on the Origin match.
 
     [logs]
     dir = \"~/elsewhere/logs\"
@@ -347,17 +346,14 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    match child {
-        Some(_) => command_log::begin_child(stamp),
-        None => command_log::begin(format_args!("starting on {}", issue.url)),
-    }
+    logs::begin(match child {
+        Some(_) => Begin::ChildRun(stamp),
+        None => Begin::Run(&issue),
+    });
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
     };
-    if child.is_none() {
-        command_log::keep(command_log::of_run(&config.logs_dir, &issue));
-    }
     let asks = Asks::of_run(&issue, &flags, child.as_ref(), &config);
     // First, so no interrupt can end the Run once its notification is checked.
     if let Err(error) = interrupt::install() {
@@ -371,9 +367,9 @@ fn main() -> ExitCode {
         Err(error) => return failure(&error),
     };
     let started_by = child.as_ref().map_or(StartedBy::Command, StartedBy::Child);
-    let ended = run::run_to_end(&issue, &asks, started_by, &config.logs_dir);
+    let ended = run::run_to_end(&issue, &asks, started_by);
     let code = run_ending::show(&ended);
-    activity::end(run_ending::summary(&ended));
+    logs::ended(run_ending::summary(&ended));
     if let Some(notification) = notification {
         notification.send(&ended);
     }
@@ -403,14 +399,11 @@ fn main() -> ExitCode {
 /// differs from the last, or the start and end of its work. With
 /// `activity.quiet_skips` set, a skipped run prints nothing at all.
 fn architect(args: ArchitectArgs) -> ExitCode {
-    command_log::begin_pass("Architect run starting");
+    logs::begin(Begin::ArchitectRun);
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
     };
-    if !config.quiet_skips {
-        command_log::show_held();
-    }
     // First, so no interrupt can end the Architect run once its notification
     // is checked.
     if let Err(error) = interrupt::install() {
@@ -424,7 +417,6 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     let ended = architect::run(
         args.focus.as_deref(),
         args.base.as_deref(),
-        &config.logs_dir,
         config.launch_pull,
     );
     let dispatched = match &ended {
@@ -435,15 +427,14 @@ fn architect(args: ArchitectArgs) -> ExitCode {
             ));
             let asks = Asks::of_architect_plan(plan, &args.flags, &config);
             let started_by = StartedBy::Dispatch { base };
-            Some(run::run_to_end(plan, &asks, started_by, &config.logs_dir))
+            Some(run::run_to_end(plan, &asks, started_by))
         }
         _ => None,
     };
-    if config.quiet_skips && matches!(ended, Ok(Outcome::Skipped(_))) {
-        return ExitCode::SUCCESS;
+    // A skip is recorded where it was decided, and shows only as configured.
+    if !matches!(ended, Ok(Outcome::Skipped(_))) {
+        logs::ended(run_ending::architect_summary(&ended, dispatched.as_ref()));
     }
-    command_log::show_held();
-    activity::end(run_ending::architect_summary(&ended, dispatched.as_ref()));
     let code = match (&ended, &dispatched) {
         (_, Some(dispatched)) => run_ending::show(dispatched),
         (Ok(outcome), None) => run_ending::show_architect(outcome),
@@ -475,14 +466,11 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// last, or the start and end of its work. With `activity.quiet_skips` set, a
 /// skipped pass prints nothing at all.
 fn pickup(args: PickupArgs) -> ExitCode {
-    command_log::begin_pass("Pickup run starting");
+    logs::begin(Begin::PickupRun);
     let config = match user_config() {
         Ok(config) => config,
         Err(failure) => return failure,
     };
-    if !config.quiet_skips {
-        command_log::show_held();
-    }
     // First, so no interrupt can end the Pickup run once its notification is
     // checked.
     if let Err(error) = interrupt::install() {
@@ -495,24 +483,15 @@ fn pickup(args: PickupArgs) -> ExitCode {
     };
     let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
-        Ok(pickup::Outcome::Skipped(skipped)) => {
-            activity::skip(&config.logs_dir, skipped.repo(), Kind::PickupRun, &skipped);
-            return match config.quiet_skips {
-                true => ExitCode::SUCCESS,
-                false => outcome(Ok(skipped)),
-            };
-        }
+        Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
         Err(error) => return failure(&error),
     };
-    command_log::keep(command_log::of_pickup_run(&config.logs_dir, &taken.issue));
-    let (repo, number) = (taken.issue.repo(), Some(taken.issue.number));
-    activity::start(&config.logs_dir, &repo, Kind::PickupRun, number);
     let notification = notification.map(|checked| checked.of_taken(&taken.issue, taken.title));
     let asks = Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config);
     let started_by = StartedBy::Dispatch { base: &taken.base };
-    let ended = run::run_to_end(&taken.issue, &asks, started_by, &config.logs_dir);
+    let ended = run::run_to_end(&taken.issue, &asks, started_by);
     let code = run_ending::show(&ended);
-    activity::end(run_ending::summary(&ended));
+    logs::ended(run_ending::summary(&ended));
     if let Some(notification) = notification {
         notification.send(&ended);
     }
@@ -531,18 +510,20 @@ fn asked<N>(
     }
 }
 
-/// The User config, after offering Setup where there is none, or the failure
-/// to exit with, its error reported.
+/// The User config, after offering Setup where there is none, given to the
+/// logs, or the failure to exit with, its error reported.
 fn user_config() -> Result<UserConfig, ExitCode> {
-    config::offer_setup()
+    let config = config::offer_setup()
         .and_then(|()| UserConfig::load())
-        .map_err(|error| failure(&error))
+        .map_err(|error| failure(&error))?;
+    logs::configured(&config);
+    Ok(config)
 }
 
 /// `error` on stderr, after any lines a pass held from the terminal, and the
 /// exit code of a failure.
 fn failure(error: &anyhow::Error) -> ExitCode {
-    command_log::show_held();
+    logs::show_held();
     progress::step(format_args!("{error:#}"));
     ExitCode::FAILURE
 }

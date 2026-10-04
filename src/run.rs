@@ -2,11 +2,10 @@
 //! with sub-issues is a Spec instead, handed to a Spec run.
 
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::activity;
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
@@ -18,6 +17,7 @@ use crate::git::Git;
 use crate::github::{self, Mergeable, PullRequest, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::logs::{self, Work};
 use crate::plugin::Plugin;
 use crate::poll;
 use crate::preflight;
@@ -110,12 +110,11 @@ impl<'a> StartedBy<'a> {
 }
 
 /// [`run`] the Run on `issue` that `started_by` started and that is asked
-/// `asks`, to its end, logging its sessions under `logs_dir`. Its Run
-/// notification, if `asks` has it send one, is for what started the Run to
-/// send, once it has ended.
-pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy, logs_dir: &Path) -> Ended {
+/// `asks`, to its end. Its Run notification, if `asks` has it send one, is
+/// for what started the Run to send, once it has ended.
+pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended {
     let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
-    let outcome = run(issue, asks, started_by, logs_dir, &mut base_fix);
+    let outcome = run(issue, asks, started_by, &mut base_fix);
     Ended {
         outcome,
         base_fix: base_fix.report(),
@@ -156,7 +155,6 @@ fn run(
     issue: &IssueUrl,
     asks: &Asks,
     started_by: StartedBy,
-    logs_dir: &Path,
     base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
     let launch = Git::new(std::env::current_dir().context("no current directory")?);
@@ -166,13 +164,10 @@ fn run(
         Some(_) => Vec::new(),
         None => github::tickets(issue)?,
     };
-    if matches!(started_by, StartedBy::Command) {
-        let kind = match tickets.is_empty() {
-            true => activity::Kind::Run,
-            false => activity::Kind::SpecRun,
-        };
-        activity::start(logs_dir, &issue.repo(), kind, Some(issue.number));
-    }
+    logs::started(match tickets.is_empty() {
+        true => Work::Run(issue),
+        false => Work::SpecRun(issue),
+    });
     if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(
             "parallel is only for a Spec, and #{} has no sub-issues",
@@ -205,7 +200,7 @@ fn run(
         .makes_claim()
         .then(|| claim::make(issue))
         .transpose()?;
-    let logs = Logs::of_run(issue, logs_dir);
+    let logs = Logs::of_run(issue);
     let outcome = run_in_worktree(
         issue,
         tickets,
