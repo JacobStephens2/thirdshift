@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 
 use crate::args;
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::Kind;
+use crate::child_run::Given;
 use crate::config::UserConfig;
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
@@ -23,8 +23,7 @@ pub struct Flags {
     pub email: Option<NotificationAsk>,
     /// How many Tickets a Spec run runs at once, as `parallel <n>` gave it.
     pub parallel: Option<NonZeroUsize>,
-    /// What `base-fix` or `no-base-fix` asked for, or, for a Ticket's Run,
-    /// the command its Spec run gave it to offer a Base fix with.
+    /// What `base-fix` or `no-base-fix` asked for.
     pub base_fix: Option<BaseFixAsk>,
 }
 
@@ -49,29 +48,47 @@ pub struct Asks {
 
 impl Asks {
     /// What the Run, or the Spec run, started on `issue`'s URL is asked: by
-    /// `flags`, else by `config`, unless another thirdshift started it as
-    /// the child Run `child`, a Ticket's Run in a Spec run or a Base fix.
-    ///
-    /// A child Run is always a Merge run, sends no Run notification and
-    /// leaves the Launch directory alone, whatever `flags` and `config` say:
-    /// those are for what started it. It starts no Base fix either, unless
-    /// `flags` allow one or give it the command to offer one with.
-    pub fn of_run(
-        issue: &IssueUrl,
-        flags: &Flags,
-        child: Option<&Kind>,
-        config: &UserConfig,
-    ) -> Asks {
-        let asks = Asks::resolved(issue, flags, config);
-        match child {
-            None => asks,
-            Some(_) => Asks {
-                goal: Goal::Merged,
-                notification: NotificationAsk::Skip,
-                base_fix: flags.base_fix.clone().unwrap_or(BaseFixAsk::Forbid),
-                launch_pull: false,
-                ..asks
-            },
+    /// `flags`, else by `config`. Where neither decided about a Base fix,
+    /// the command that retries `issue` is the one on its Issue URL with
+    /// `flags`.
+    pub fn of_run(issue: &IssueUrl, flags: &Flags, config: &UserConfig) -> Asks {
+        let goal = flags.goal.unwrap_or(if config.merge_always {
+            Goal::Merged
+        } else {
+            Goal::ReadyForReview
+        });
+        let base_fix = flags.base_fix.clone().unwrap_or_else(|| {
+            if config.base_fix {
+                BaseFixAsk::Allow
+            } else {
+                let retry = retry_with_base_fix(issue, flags);
+                BaseFixAsk::Undecided { retry }
+            }
+        });
+        Asks {
+            goal,
+            notification: flags.notification(config),
+            tickets_at_once: flags.parallel.unwrap_or(config.spec_parallel),
+            parallel_asked: flags.parallel.is_some(),
+            base_fix,
+            launch_pull: config.launch_pull,
+        }
+    }
+
+    /// What a child Run, a Ticket's Run in a Spec run or a Base fix, is
+    /// asked, from what it was `given`: it is always a Merge run, sends no
+    /// Run notification, leaves the Launch directory alone, and asks about a
+    /// Base fix what it was given. Neither its flags nor `config` decide
+    /// any of that: those are for what started it. As it runs no Tickets,
+    /// `config` says only how many it would run at once.
+    pub fn of_child_run(given: &Given, config: &UserConfig) -> Asks {
+        Asks {
+            goal: Goal::Merged,
+            notification: NotificationAsk::Skip,
+            tickets_at_once: config.spec_parallel,
+            parallel_asked: false,
+            base_fix: given.base_fix.clone(),
+            launch_pull: false,
         }
     }
 
@@ -112,34 +129,7 @@ impl Asks {
     fn dispatched(issue: &IssueUrl, flags: &Flags, config: &UserConfig) -> Asks {
         Asks {
             notification: NotificationAsk::Skip,
-            ..Asks::resolved(issue, flags, config)
-        }
-    }
-
-    /// Each ask as `flags` gave it, else as `config` says. Where neither
-    /// decided about a Base fix, the command that retries `issue` is the one
-    /// on its Issue URL with `flags`.
-    fn resolved(issue: &IssueUrl, flags: &Flags, config: &UserConfig) -> Asks {
-        let goal = flags.goal.unwrap_or(if config.merge_always {
-            Goal::Merged
-        } else {
-            Goal::ReadyForReview
-        });
-        let base_fix = flags.base_fix.clone().unwrap_or_else(|| {
-            if config.base_fix {
-                BaseFixAsk::Allow
-            } else {
-                let retry = retry_with_base_fix(issue, flags);
-                BaseFixAsk::Undecided { retry }
-            }
-        });
-        Asks {
-            goal,
-            notification: flags.notification(config),
-            tickets_at_once: flags.parallel.unwrap_or(config.spec_parallel),
-            parallel_asked: flags.parallel.is_some(),
-            base_fix,
-            launch_pull: config.launch_pull,
+            ..Asks::of_run(issue, flags, config)
         }
     }
 }
@@ -195,6 +185,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::child_run::Kind;
     use crate::config::EmailSettings;
 
     const URL: &str = "https://github.com/acme/widgets/issues/7";
@@ -253,7 +244,7 @@ mod tests {
 
     #[test]
     fn a_run_with_neither_a_flag_nor_a_setting_does_only_what_a_run_does() {
-        let asks = Asks::of_run(&issue(), &Flags::default(), None, &no_settings());
+        let asks = Asks::of_run(&issue(), &Flags::default(), &no_settings());
 
         assert_eq!(
             asks,
@@ -270,7 +261,7 @@ mod tests {
 
     #[test]
     fn the_user_config_decides_each_ask_the_command_says_nothing_about() {
-        let asks = Asks::of_run(&issue(), &Flags::default(), None, &every_setting());
+        let asks = Asks::of_run(&issue(), &Flags::default(), &every_setting());
 
         assert_eq!(
             asks,
@@ -293,7 +284,7 @@ mod tests {
             parallel: Some(n(2)),
             base_fix: Some(BaseFixAsk::Forbid),
         };
-        let asks = Asks::of_run(&issue(), &against, None, &every_setting());
+        let asks = Asks::of_run(&issue(), &against, &every_setting());
         assert_eq!(
             asks,
             Asks {
@@ -313,7 +304,7 @@ mod tests {
             parallel: Some(n(2)),
             base_fix: Some(BaseFixAsk::Allow),
         };
-        let asks = Asks::of_run(&issue(), &for_it, None, &no_settings());
+        let asks = Asks::of_run(&issue(), &for_it, &no_settings());
         assert_eq!(
             asks,
             Asks {
@@ -325,6 +316,15 @@ mod tests {
                 launch_pull: false,
             }
         );
+    }
+
+    /// What a child Run of `kind` is given, asked `base_fix` about a Base fix.
+    fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
+        Given {
+            kind,
+            stamp: "20261003T120000-0400".to_string(),
+            base_fix,
+        }
     }
 
     fn ticket() -> Kind {
@@ -343,45 +343,31 @@ mod tests {
     fn a_child_run_is_a_merge_run_that_sends_nothing_pulls_nothing_and_starts_no_base_fix() {
         for child in [ticket(), base_fix()] {
             for config in [no_settings(), every_setting()] {
-                let asks = Asks::of_run(&issue(), &Flags::default(), Some(&child), &config);
+                let given = given(child.clone(), BaseFixAsk::Forbid);
+
+                let asks = Asks::of_child_run(&given, &config);
 
                 assert_eq!(asks.goal, Goal::Merged, "{child:?}");
                 assert_eq!(asks.notification, NotificationAsk::Skip, "{child:?}");
                 assert!(!asks.launch_pull, "{child:?}");
+                assert!(!asks.parallel_asked, "{child:?}");
                 assert_eq!(asks.base_fix, BaseFixAsk::Forbid, "{child:?}");
             }
         }
     }
 
     #[test]
-    fn a_child_run_asks_about_a_base_fix_what_it_was_given() {
+    fn a_child_run_asks_about_a_base_fix_what_it_was_given_whatever_the_user_config_says() {
         let offer = BaseFixAsk::Undecided {
             retry: format!("thirdshift {URL} base-fix"),
         };
-        for given in [BaseFixAsk::Allow, offer] {
-            let flags = Flags {
-                base_fix: Some(given.clone()),
-                ..Flags::default()
-            };
+        for asked in [BaseFixAsk::Allow, offer] {
+            for config in [no_settings(), every_setting()] {
+                let asks = Asks::of_child_run(&given(ticket(), asked.clone()), &config);
 
-            let asks = Asks::of_run(&issue(), &flags, Some(&ticket()), &no_settings());
-
-            assert_eq!(asks.base_fix, given);
+                assert_eq!(asks.base_fix, asked);
+            }
         }
-    }
-
-    #[test]
-    fn the_flags_a_child_run_cant_use_are_ignored() {
-        let flags = Flags {
-            goal: Some(Goal::ReadyForReview),
-            email: Some(to("flag@example.com")),
-            ..Flags::default()
-        };
-
-        let asks = Asks::of_run(&issue(), &flags, Some(&ticket()), &no_settings());
-
-        assert_eq!(asks.goal, Goal::Merged);
-        assert_eq!(asks.notification, NotificationAsk::Skip);
     }
 
     /// Every flag an Architect run or a Pickup run takes for the run it
@@ -552,7 +538,7 @@ mod tests {
             // Each kind of run offers the same command: a Run on the Issue
             // URL, whatever dispatched it.
             for (kind, asks) in [
-                ("a Run", Asks::of_run(&issue(), &flags, None, &config)),
+                ("a Run", Asks::of_run(&issue(), &flags, &config)),
                 (
                     "an Architect plan",
                     Asks::of_architect_plan(&issue(), &flags, &config),
@@ -568,7 +554,7 @@ mod tests {
                 let again = parsed(&offered);
                 assert_eq!(again.issue.url, URL, "{kind}: {offered}");
                 assert_eq!(again.flags, allowed, "{kind}: {offered}");
-                assert_eq!(again.child, None, "{kind}: {offered}");
+                assert_eq!(again.given, None, "{kind}: {offered}");
             }
             // Without the `parallel` that would fail its Run by hand.
             let offered = retry_of(Asks::of_ready_issue(&issue(), false, &flags, &config));
@@ -618,7 +604,7 @@ mod tests {
             ..Flags::default()
         };
 
-        let asks = Asks::of_run(&issue(), &flags, None, &every_setting());
+        let asks = Asks::of_run(&issue(), &flags, &every_setting());
 
         assert_eq!(asks.notification, to("flag@example.com"));
     }
@@ -628,7 +614,7 @@ mod tests {
         let mut config = no_settings();
         config.email.to = Some("config@example.com".to_string());
 
-        let asks = Asks::of_run(&issue(), &Flags::default(), None, &config);
+        let asks = Asks::of_run(&issue(), &Flags::default(), &config);
 
         assert_eq!(asks.notification, NotificationAsk::Skip);
     }

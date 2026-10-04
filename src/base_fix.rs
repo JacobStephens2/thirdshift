@@ -262,9 +262,9 @@ impl BaseFix {
         let kind = Kind::BaseFix {
             base: base.to_string(),
         };
-        let child = child_run::start(&taken.issue, &kind, &BaseFixAsk::Forbid)?;
+        let child = child_run::start(&taken.issue, kind, BaseFixAsk::Forbid)?;
         progress::step(format_args!("waiting on Base fix #{number}"));
-        match child_run::wait(number, child)? {
+        match child.wait()? {
             Ended::Reached { .. } => {
                 taken.reached = true;
                 running.merged();

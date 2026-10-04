@@ -326,8 +326,7 @@ fn main() -> ExitCode {
     let RunArgs {
         issue,
         flags,
-        child,
-        stamp,
+        given,
     } = match args::parse(&args) {
         Ok(Command::Help) => {
             print!("{HELP}");
@@ -349,18 +348,23 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    let begin = match child {
-        Some(_) => Begin::ChildRun(stamp),
+    let begin = match &given {
+        Some(given) => Begin::ChildRun(&given.stamp),
         None => Begin::Run(&issue),
     };
-    let ask =
-        |config: &UserConfig| Asks::of_run(&issue, &flags, child.as_ref(), config).notification;
+    let asks_of = |config: &UserConfig| match &given {
+        Some(given) => Asks::of_child_run(given, config),
+        None => Asks::of_run(&issue, &flags, config),
+    };
+    let ask = |config: &UserConfig| asks_of(config).notification;
     let (config, started) = match command::start(begin, ask, About::Issue(&issue)) {
         Ok(started) => started,
         Err(failure) => return failure,
     };
-    let asks = Asks::of_run(&issue, &flags, child.as_ref(), &config);
-    let started_by = child.as_ref().map_or(StartedBy::Command, StartedBy::Child);
+    let asks = asks_of(&config);
+    let started_by = given
+        .as_ref()
+        .map_or(StartedBy::Command, |given| StartedBy::Child(&given.kind));
     started.finish(Ending::Run(run::run_to_end(&issue, &asks, started_by)))
 }
 

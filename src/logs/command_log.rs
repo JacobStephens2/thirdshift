@@ -85,10 +85,8 @@ pub(super) fn show_held() {
 
 /// Begin a child Run, which keeps no Command log, with the `stamp` the
 /// command that started it gave it, if it gave one.
-pub(super) fn begin_child(stamp: Option<String>) {
-    if let Some(stamp) = stamp {
-        let _ = STARTED.set(stamp);
-    }
+pub(super) fn begin_child(stamp: &str) {
+    let _ = STARTED.set(stamp.to_string());
 }
 
 /// The command's start stamp, as in `20261003T120000-0400`: made by

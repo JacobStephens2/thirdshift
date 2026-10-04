@@ -28,9 +28,9 @@ pub enum Begin<'a> {
     /// `thirdshift <Issue URL>`, a Run or a Spec run on this issue.
     Run(&'a IssueUrl),
     /// A child Run, a Ticket's Run or a Base fix, with the stamp the command
-    /// that started it gave it, if it gave one. It keeps no Command log and
+    /// that started it gave it. It keeps no Command log and
     /// writes no Activity log line: the command that started it does.
-    ChildRun(Option<String>),
+    ChildRun(&'a str),
     /// `thirdshift architect`, a pass.
     ArchitectRun,
     /// `thirdshift pickup`, a pass.
