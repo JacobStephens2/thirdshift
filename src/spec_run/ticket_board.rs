@@ -11,8 +11,6 @@ use std::num::NonZeroUsize;
 use crate::child_run::Ended;
 use crate::github::Ticket;
 
-use super::{CHECKLIST_END, CHECKLIST_START};
-
 /// Where a Ticket this Spec run started stands.
 enum Standing {
     /// Its Run has started and not yet ended.
@@ -122,15 +120,15 @@ impl TicketBoard {
         lines
     }
 
-    /// The Tickets checklist, between its markers: a line on each Ticket,
-    /// lowest number first, ticked if it is done, with where it stands.
+    /// The Tickets checklist: a line on each Ticket, lowest number first,
+    /// ticked if it is done, with where it stands.
     pub(super) fn checklist(&self) -> String {
-        let mut list = format!("{CHECKLIST_START}\n## Tickets\n\n");
+        let mut list = "## Tickets\n\n".to_string();
         for ticket in self.by_number() {
             let tick = if ticket.is_open { ' ' } else { 'x' };
             list += &format!("- [{tick}] #{} {}\n", ticket.number, self.standing(ticket));
         }
-        list + CHECKLIST_END + "\n"
+        list
     }
 
     /// How many Tickets' Runs are running.
@@ -443,8 +441,7 @@ mod tests {
 
         assert_eq!(
             board.checklist(),
-            "<!-- thirdshift:tickets -->\n\
-             ## Tickets\n\
+            "## Tickets\n\
              \n\
              - [x] #21 landed with https://x/pull/1\n\
              - [x] #22 done\n\
@@ -452,8 +449,7 @@ mod tests {
              - [ ] #24 blocked by #23\n\
              - [ ] #25 running\n\
              - [ ] #26 unready: labelled needs-info\n\
-             - [ ] #27 not started\n\
-             <!-- /thirdshift:tickets -->\n"
+             - [ ] #27 not started\n"
         );
     }
 }
