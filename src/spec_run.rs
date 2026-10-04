@@ -127,7 +127,7 @@ fn review_and_deliver(
 enum TicketOutcome {
     /// It has started and not yet ended.
     Running,
-    /// It has ended so: it landed if it reached its goal.
+    /// It has ended, as its Run told: it landed if it reached its goal.
     Ended(Ended),
 }
 

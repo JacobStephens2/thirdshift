@@ -89,7 +89,7 @@ const OFFER_BASE_FIX: &str = "--offer-base-fix";
 impl Given {
     /// The hidden arguments that give a child Run this, as [`Reader`] reads
     /// them back.
-    pub fn to_args(&self) -> Vec<&str> {
+    fn to_args(&self) -> Vec<&str> {
         let mut args = vec![
             self.kind.hidden_argument(),
             self.kind.base(),
@@ -130,9 +130,7 @@ impl Reader {
         };
         match arg {
             SPEC_BRANCH | BASE_FIX_INTO => {
-                if self.kind.is_some() {
-                    bail!("repeated argument: {arg}");
-                }
+                not_yet_given(&self.kind, arg)?;
                 let base = value("Base branch")?;
                 self.kind = Some(if arg == SPEC_BRANCH {
                     Kind::Ticket { spec_branch: base }
@@ -141,15 +139,16 @@ impl Reader {
                 });
             }
             STAMP => {
-                if self.stamp.is_some() {
-                    bail!("repeated argument: {arg}");
-                }
+                not_yet_given(&self.stamp, arg)?;
                 self.stamp = Some(value("stamp")?);
             }
             ALLOW_BASE_FIX | OFFER_BASE_FIX => {
-                if self.base_fix.is_some() {
-                    bail!("repeated argument: {arg}");
+                if let Some(given) = &self.base_fix
+                    && matches!(given, BaseFixAsk::Allow) != (arg == ALLOW_BASE_FIX)
+                {
+                    bail!("{ALLOW_BASE_FIX} and {OFFER_BASE_FIX} can't be used together");
                 }
+                not_yet_given(&self.base_fix, arg)?;
                 self.base_fix = Some(if arg == ALLOW_BASE_FIX {
                     BaseFixAsk::Allow
                 } else {
@@ -180,6 +179,14 @@ impl Reader {
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
         }))
     }
+}
+
+/// Fail if what the hidden argument `arg` gives was `given` already.
+fn not_yet_given<T>(given: &Option<T>, arg: &str) -> Result<()> {
+    if given.is_some() {
+        bail!("repeated argument: {arg}");
+    }
+    Ok(())
 }
 
 /// How a child Run ended.
@@ -449,9 +456,25 @@ mod tests {
                 vec![
                     &ticket,
                     &stamp,
-                    &["--allow-base-fix", "--offer-base-fix", "x"],
+                    &["--offer-base-fix", "x", "--offer-base-fix", "y"],
                 ],
                 "repeated argument: --offer-base-fix",
+            ),
+            (
+                vec![
+                    &ticket,
+                    &stamp,
+                    &["--allow-base-fix", "--offer-base-fix", "x"],
+                ],
+                "--allow-base-fix and --offer-base-fix can't be used together",
+            ),
+            (
+                vec![
+                    &ticket,
+                    &stamp,
+                    &["--offer-base-fix", "x", "--allow-base-fix"],
+                ],
+                "--allow-base-fix and --offer-base-fix can't be used together",
             ),
             (vec![&[URL, "--spec-branch"]], "missing Base branch"),
             (vec![&[URL, "--base-fix-into"]], "missing Base branch"),

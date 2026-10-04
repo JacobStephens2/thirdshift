@@ -84,7 +84,7 @@ pub(super) fn show_held() {
 }
 
 /// Begin a child Run, which keeps no Command log, with the `stamp` the
-/// command that started it gave it, if it gave one.
+/// command that started it gave it.
 pub(super) fn begin_child(stamp: &str) {
     let _ = STARTED.set(stamp.to_string());
 }
