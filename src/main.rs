@@ -8,6 +8,7 @@ mod ci;
 mod claim;
 mod command;
 mod config;
+mod delivery;
 mod email;
 mod failed_run;
 mod git;

@@ -1,7 +1,7 @@
 //! The Failed run path: what happens when a Run can't end with a ready PR.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use chrono::{SecondsFormat, Utc};
@@ -70,11 +70,12 @@ fn interrupted_or(error: anyhow::Error, interrupted: bool) -> anyhow::Error {
 /// so the PR stays ready on the head whose CI was watched. Problems along the
 /// way are reported, not raised, so `error` is what the Run fails with. The
 /// worktree is cleaned up, or kept if its work may not have reached origin.
+/// `log` is the most recent Session log, if a session created one.
 pub fn fail(
     issue: &IssueUrl,
     worktree: Worktree,
     base: &str,
-    log: &Path,
+    log: Option<PathBuf>,
     error: anyhow::Error,
 ) -> FailedRun {
     let interrupted = interrupt::requested();
@@ -114,7 +115,7 @@ pub fn fail(
     FailedRun {
         error,
         pr_url,
-        log: log.exists().then(|| log.to_path_buf()),
+        log,
         interrupted,
         ticket_lines: Vec::new(),
     }

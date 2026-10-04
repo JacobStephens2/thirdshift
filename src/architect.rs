@@ -29,7 +29,6 @@ use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
-use crate::plugin::Plugin;
 use crate::progress;
 use crate::prompt;
 use crate::ready::{self, ReadyIssue};
@@ -259,13 +258,11 @@ pub fn run(
     }
     let worktree = ReviewWorktree::create(&launch, &repo.name, &base)?;
     let logs = Logs::of_architect_run(&repo);
-    let mut log = logs.path(REVIEW);
-    review(worktree, &base, focus, &origin, started, &logs, &mut log)
-        .map(Outcome::Reviewed)
-        .map_err(|error| FailedRun {
-            log: log.exists().then_some(log),
-            ..FailedRun::from(error)
-        })
+    let (reviewed, log) = review(worktree, &base, focus, &origin, started, &logs);
+    reviewed.map(Outcome::Reviewed).map_err(|error| FailedRun {
+        log,
+        ..FailedRun::from(error)
+    })
 }
 
 /// The Architect run skipped as `skipped` says, recorded in the Activity log
@@ -277,7 +274,8 @@ fn skip(repo: &Repo, skipped: Skipped) -> Outcome {
 
 /// The Architecture review session in `worktree`, of the Base branch `base`,
 /// then [`conclude`] on its final message. The worktree is removed once the
-/// review is concluded. `log` is left at the most recent session's log.
+/// review is concluded. Returns how it ended with the most recent session's
+/// log, if a session created it.
 fn review(
     worktree: ReviewWorktree,
     base: &str,
@@ -285,18 +283,16 @@ fn review(
     origin: &str,
     started: DateTime<Utc>,
     logs: &Logs,
-    log: &mut PathBuf,
-) -> Result<Reviewed> {
-    let plugin = Plugin::write()?;
+) -> (Result<Reviewed>, Option<PathBuf>) {
     match focus {
         Some(focus) => progress::step(format_args!(
             "starting the Architecture review of {base}, focused on: {focus}"
         )),
         None => progress::step(format_args!("starting the Architecture review of {base}")),
     }
-    Sessions::within(logs, worktree.path(), plugin.path(), |sessions| {
+    Sessions::within(logs, worktree.path(), |sessions| {
         let prompt = prompt::architecture_review(base, focus);
-        let final_message = sessions.run_to_final_message(REVIEW, &prompt, log)?;
+        let final_message = sessions.run_to_final_message(REVIEW, &prompt)?;
         conclude(final_message.as_deref(), origin, started, base)
     })
 }
