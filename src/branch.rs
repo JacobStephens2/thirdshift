@@ -26,13 +26,13 @@ impl Selection {
         }
     }
 
-    /// What names the Base branch, if this says: the open PR's base in a
-    /// Continuation that has one. `given` is the Base branch the Run was
+    /// The open PR's base in a Continuation that has one, which names the
+    /// Base branch whatever else would. `given` is the Base branch the Run was
     /// given by what started it, if any, and `checked_out` the branch
     /// checked out in the Launch directory (`None` on a detached HEAD). Says
     /// so on stderr when the PR's base replaces a different given or
     /// checked-out branch.
-    pub fn base_named(&self, given: Option<&str>, checked_out: Option<&str>) -> Option<&str> {
+    pub fn pr_base(&self, given: Option<&str>, checked_out: Option<&str>) -> Option<&str> {
         let Selection::Continuation {
             branch,
             pr: Some(pr),

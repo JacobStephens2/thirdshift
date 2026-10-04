@@ -342,12 +342,17 @@ mod tests {
         LaunchDirectory::open(work.to_path_buf(), opening).unwrap()
     }
 
-    /// Commit on `main` in a clone of origin beside `work`, and push it, so
-    /// origin's `main` is a commit ahead of `work`'s.
-    fn advance_origin(work: &Path) {
+    /// Commit on `main` in a clone of origin beside `work`, writing `file`
+    /// with `contents` if given, and push it, so origin's `main` is a commit
+    /// ahead of `work`'s.
+    fn advance_origin(work: &Path, file: Option<(&str, &str)>) {
         let temp = work.parent().unwrap();
         isolated(temp, &["clone", "-q", "-b", "main", "origin.git", "other"]);
         let other = temp.join("other");
+        if let Some((name, contents)) = file {
+            std::fs::write(other.join(name), contents).unwrap();
+            isolated(&other, &["add", name]);
+        }
         isolated(
             &other,
             &[
@@ -475,7 +480,7 @@ mod tests {
     #[test]
     fn the_pull_fast_forwards_the_checked_out_base_branch() {
         let (_temp, work) = launch_with_origin();
-        advance_origin(&work);
+        advance_origin(&work, None);
         let directory = opened(&work, Opening::Run);
         let base = directory.base_branch(None).unwrap();
 
@@ -487,7 +492,7 @@ mod tests {
     #[test]
     fn the_pull_leaves_a_base_branch_that_is_not_checked_out_alone() {
         let (_temp, work) = launch_with_origin();
-        advance_origin(&work);
+        advance_origin(&work, None);
         isolated(&work, &["checkout", "-q", "-b", "topic"]);
         let before = head(&work);
         let directory = opened(&work, Opening::Pass);
@@ -502,25 +507,7 @@ mod tests {
     #[test]
     fn a_pull_that_cant_fast_forward_leaves_the_checkout_alone() {
         let (_temp, work) = launch_with_origin();
-        let temp = work.parent().unwrap();
-        isolated(temp, &["clone", "-q", "-b", "main", "origin.git", "other"]);
-        let other = temp.join("other");
-        std::fs::write(other.join("file.txt"), "origin's\n").unwrap();
-        isolated(&other, &["add", "file.txt"]);
-        isolated(
-            &other,
-            &[
-                "-c",
-                "user.name=Other",
-                "-c",
-                "user.email=other@example.com",
-                "commit",
-                "-q",
-                "-m",
-                "Add file",
-            ],
-        );
-        isolated(&other, &["push", "-q", "origin", "main"]);
+        advance_origin(&work, Some(("file.txt", "origin's\n")));
         std::fs::write(work.join("file.txt"), "uncommitted\n").unwrap();
         let before = head(&work);
         let directory = opened(&work, Opening::Run);

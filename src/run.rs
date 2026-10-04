@@ -184,9 +184,7 @@ fn run(
         );
     }
     let given = started_by.given_base();
-    let named = selection
-        .base_named(given, directory.checked_out())
-        .or(given);
+    let named = selection.pr_base(given, directory.checked_out()).or(given);
     let base = directory.base_branch(named)?;
     if asks.launch_pull {
         directory.pull(&base);
