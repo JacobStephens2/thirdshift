@@ -5,11 +5,11 @@ use std::iter::Peekable;
 use std::mem::discriminant;
 use std::num::NonZeroUsize;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::Kind;
+use crate::child_run::{self, Given};
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
@@ -60,28 +60,9 @@ pub struct PickupArgs {
     pub flags: Flags,
 }
 
-/// The word that lets a Run start a Base fix, which a Spec run passes on to
-/// each Ticket's Run.
+/// The word that lets a Run start a Base fix, which the command a Base fix
+/// is offered with ends in.
 pub const BASE_FIX: &str = "base-fix";
-
-/// The hidden argument a Spec run that nobody decided about a Base fix for
-/// starts each Ticket's Run with, followed by the command that starts the
-/// Spec run again with one allowed, for the Ticket's Run to offer: it asks
-/// [`BaseFixAsk::Undecided`]. Not in help.
-pub const OFFER_BASE_FIX: &str = "--offer-base-fix";
-
-/// The hidden argument a Spec run starts each Ticket's Run with, followed by
-/// the Spec branch: it makes the Run a [`Kind::Ticket`]. Not in help.
-pub const SPEC_BRANCH: &str = "--spec-branch";
-
-/// The hidden argument a Run starts its Base fix with, followed by the Run's
-/// Base branch: it makes the Run a [`Kind::BaseFix`]. Not in help.
-pub const BASE_FIX_INTO: &str = "--base-fix-into";
-
-/// The hidden argument a Run starts a child Run with, followed by its
-/// command's start stamp, which the child Run's Session logs take. Not in
-/// help.
-pub const STAMP: &str = "--stamp";
 
 /// A Run's arguments.
 pub struct RunArgs {
@@ -89,12 +70,9 @@ pub struct RunArgs {
     /// Its flags, as given: for each one the command left out, the User
     /// config decides.
     pub flags: Flags,
-    /// What the Run is, if another thirdshift started it, given with
-    /// [`SPEC_BRANCH`] or [`BASE_FIX_INTO`].
-    pub child: Option<Kind>,
-    /// The start stamp of the command that started it, if another
-    /// thirdshift did, given with [`STAMP`].
-    pub stamp: Option<String>,
+    /// What the Run was given, if another thirdshift started it as a child
+    /// Run, as the child Run module read it back from its hidden arguments.
+    pub given: Option<Given>,
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
@@ -104,7 +82,9 @@ pub struct RunArgs {
 /// `email` may be followed by the address to send the Run notification to,
 /// and `parallel` must be followed by a whole number from 1 up.
 /// `merge` and `no-merge` contradict each other, as do `email` and `no-email`,
-/// and `base-fix` and `no-base-fix`.
+/// and `base-fix` and `no-base-fix`. Every other argument is offered to the
+/// child Run module first, which takes the hidden arguments a child Run is
+/// given.
 pub fn parse(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
@@ -129,52 +109,25 @@ pub fn parse(args: &[String]) -> Result<Command> {
     }
     let mut issue = None;
     let mut flags = Flags::default();
-    let mut child = None;
-    let mut stamp = None;
+    let mut hidden = child_run::Reader::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        if take_flag(&mut flags, arg, &mut args)? {
+        if take_flag(&mut flags, arg, &mut args)? || hidden.take(arg, &mut args)? {
             continue;
         }
-        match arg.as_str() {
-            SPEC_BRANCH | BASE_FIX_INTO => {
-                if child.is_some() {
-                    bail!("repeated argument: {arg}");
-                }
-                let base = args.next().context("missing Base branch")?.clone();
-                child = Some(if arg == SPEC_BRANCH {
-                    Kind::Ticket { spec_branch: base }
-                } else {
-                    Kind::BaseFix { base }
-                });
-            }
-            STAMP => {
-                if stamp.is_some() {
-                    bail!("repeated argument: {arg}");
-                }
-                stamp = Some(args.next().context("missing stamp")?.clone());
-            }
-            OFFER_BASE_FIX => {
-                let retry = args.next().context("missing command to offer")?.clone();
-                let undecided = BaseFixAsk::Undecided { retry };
-                ask_once(&mut flags.base_fix, undecided, arg, BASE_FIX_FLAGS)?;
-            }
-            _ => {
-                if issue.is_some() {
-                    bail!("unexpected argument after the Issue URL: {arg}");
-                }
-                issue = Some(IssueUrl::parse(arg)?);
-            }
+        if issue.is_some() {
+            bail!("unexpected argument after the Issue URL: {arg}");
         }
+        issue = Some(IssueUrl::parse(arg)?);
     }
+    let given = hidden.finish()?;
     let Some(issue) = issue else {
         bail!("missing Issue URL");
     };
     Ok(Command::Run(RunArgs {
         issue,
         flags,
-        child,
-        stamp,
+        given,
     }))
 }
 
@@ -922,18 +875,6 @@ mod tests {
                 "{flag}"
             );
         }
-    }
-
-    #[test]
-    fn a_tickets_run_is_given_the_command_to_offer_a_base_fix_with() {
-        let retry = format!("thirdshift {URL} base-fix");
-        let run = run_args(&["--spec-branch", "issue-7", "--offer-base-fix", &retry, URL]);
-
-        assert_eq!(run.flags.base_fix, Some(BaseFixAsk::Undecided { retry }));
-        assert_eq!(
-            rejection(&[URL, "--offer-base-fix"]),
-            "missing command to offer"
-        );
     }
 
     #[test]

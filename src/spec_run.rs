@@ -7,14 +7,13 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::num::NonZeroUsize;
-use std::process::Child;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use anyhow::{Context, Result, bail};
 
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::{self, Ended, Kind};
+use crate::child_run::{self, Ended, Handle, Kind};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::FailedRun;
 use crate::github::{self, PullRequest, Ticket};
@@ -128,16 +127,8 @@ fn review_and_deliver(
 enum TicketOutcome {
     /// It has started and not yet ended.
     Running,
-    /// Its PR, as the Run printed it, and what became of the Base fix it
-    /// took, if any, as the Run reported it.
-    Landed {
-        pr_url: Option<String>,
-        base_fix: Option<String>,
-    },
-    /// Why, and its session log, as the Run reported them.
-    Failed { cause: String, log: Option<String> },
-    /// Ended by an interrupt passed on to it.
-    Interrupted,
+    /// It has ended, as its Run told: it landed if it reached its goal.
+    Ended(Ended),
 }
 
 /// Push the Spec branch, then keep up to `parallel` Tickets running, each
@@ -241,9 +232,9 @@ fn run_ready_tickets(
         let outcome = result.unwrap_or_else(|finish_error| {
             let cause = format!("{finish_error:#}");
             error.get_or_insert(finish_error);
-            TicketOutcome::Failed { cause, log: None }
+            TicketOutcome::Ended(Ended::Failed { cause, log: None })
         });
-        let landed = matches!(outcome, TicketOutcome::Landed { .. });
+        let landed = matches!(outcome, TicketOutcome::Ended(Ended::Reached { .. }));
         outcomes.insert(ticket, outcome);
         match github::tickets(spec) {
             Ok(reread) => *tickets = reread,
@@ -310,7 +301,7 @@ fn summarize(tickets: &[Ticket], outcomes: &BTreeMap<u64, TicketOutcome>) -> Vec
         }
         let standing = standing(ticket, tickets, outcomes);
         lines.push(match outcomes.get(&number) {
-            Some(TicketOutcome::Failed { log: Some(log), .. }) if ticket.is_open => {
+            Some(TicketOutcome::Ended(Ended::Failed { log: Some(log), .. })) if ticket.is_open => {
                 format!("#{number} {standing} (session log: {log})")
             }
             _ => format!("#{number} {standing}"),
@@ -336,7 +327,7 @@ fn standing(
 ) -> String {
     let number = ticket.number;
     let landed = match outcomes.get(&number) {
-        Some(TicketOutcome::Landed { pr_url, base_fix }) => {
+        Some(TicketOutcome::Ended(Ended::Reached { pr_url, base_fix })) => {
             let mut landed = "landed".to_string();
             if let Some(pr_url) = pr_url {
                 landed += &format!(" with {pr_url}");
@@ -353,8 +344,10 @@ fn standing(
     }
     match outcomes.get(&number) {
         Some(TicketOutcome::Running) => return "running".to_string(),
-        Some(TicketOutcome::Interrupted) => return "interrupted".to_string(),
-        Some(TicketOutcome::Failed { cause, .. }) => return format!("failed: {cause}"),
+        Some(TicketOutcome::Ended(Ended::Interrupted)) => return "interrupted".to_string(),
+        Some(TicketOutcome::Ended(Ended::Failed { cause, .. })) => {
+            return format!("failed: {cause}");
+        }
         _ => {}
     }
     if let Some(landed) = landed {
@@ -470,7 +463,7 @@ fn start_ticket(
     let kind = Kind::Ticket {
         spec_branch: spec_branch.to_string(),
     };
-    let child = child_run::start(&spec.sibling(number), &kind, base_fix)?;
+    let child = child_run::start(&spec.sibling(number), kind, base_fix.clone())?;
     thread::spawn(move || {
         let _ = ended.send((number, finish_ticket(number, child)));
     });
@@ -479,21 +472,14 @@ fn start_ticket(
 
 /// Wait for Ticket `number`'s Run `child`, relaying its stderr, and say how
 /// it ended.
-fn finish_ticket(number: u64, child: Child) -> Result<TicketOutcome> {
-    Ok(match child_run::wait(number, child)? {
-        Ended::Reached { pr_url, base_fix } => {
-            progress::step(format_args!("#{number} landed"));
-            TicketOutcome::Landed { pr_url, base_fix }
-        }
-        Ended::Interrupted => {
-            progress::step(format_args!("#{number} interrupted"));
-            TicketOutcome::Interrupted
-        }
-        Ended::Failed { cause, log } => {
-            progress::step(format_args!("#{number} failed"));
-            TicketOutcome::Failed { cause, log }
-        }
-    })
+fn finish_ticket(number: u64, child: Handle) -> Result<TicketOutcome> {
+    let ended = child.wait()?;
+    progress::step(match ended {
+        Ended::Reached { .. } => format!("#{number} landed"),
+        Ended::Interrupted => format!("#{number} interrupted"),
+        Ended::Failed { .. } => format!("#{number} failed"),
+    });
+    Ok(TicketOutcome::Ended(ended))
 }
 
 /// The open Spec PR from `spec_branch`, if there is one, converted back to a
@@ -576,10 +562,10 @@ mod tests {
         ];
         let outcomes = BTreeMap::from([(
             21,
-            TicketOutcome::Landed {
+            TicketOutcome::Ended(Ended::Reached {
                 pr_url: None,
                 base_fix: None,
-            },
+            }),
         )]);
 
         assert_eq!(next_ready(&tickets, &outcomes, &HashSet::from([22])), None);
@@ -616,10 +602,10 @@ mod tests {
                      error: fetching ref refs/remotes/origin/issue-21 failed";
         let outcomes = BTreeMap::from([(
             23,
-            TicketOutcome::Failed {
+            TicketOutcome::Ended(Ended::Failed {
                 cause: cause.to_string(),
                 log: None,
-            },
+            }),
         )]);
 
         assert_eq!(
@@ -645,17 +631,17 @@ mod tests {
         let outcomes = BTreeMap::from([
             (
                 21,
-                TicketOutcome::Landed {
+                TicketOutcome::Ended(Ended::Reached {
                     pr_url: Some("https://x/pull/1".to_string()),
                     base_fix: None,
-                },
+                }),
             ),
             (
                 23,
-                TicketOutcome::Failed {
+                TicketOutcome::Ended(Ended::Failed {
                     cause: "claude exited 1".to_string(),
                     log: Some("/logs/23.jsonl".to_string()),
-                },
+                }),
             ),
             (25, TicketOutcome::Running),
         ]);
