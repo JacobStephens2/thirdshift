@@ -6,6 +6,7 @@ mod branch;
 mod child_run;
 mod ci;
 mod claim;
+mod command;
 mod config;
 mod email;
 mod failed_run;
@@ -41,9 +42,10 @@ use std::process::ExitCode;
 use architect::{Outcome, Reviewed};
 use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
 use asks::Asks;
+use command::{Ending, failure};
 use config::UserConfig;
 use logs::Begin;
-use notification::{ArchitectNotification, NotificationAsk, PickupNotification, RunNotification};
+use notification::About;
 use run::StartedBy;
 
 const HELP: &str = "\
@@ -346,34 +348,19 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
-    logs::begin(match child {
+    let begin = match child {
         Some(_) => Begin::ChildRun(stamp),
         None => Begin::Run(&issue),
-    });
-    let config = match user_config() {
-        Ok(config) => config,
+    };
+    let ask =
+        |config: &UserConfig| Asks::of_run(&issue, &flags, child.as_ref(), config).notification;
+    let (config, started) = match command::start(begin, ask, About::Issue(&issue)) {
+        Ok(started) => started,
         Err(failure) => return failure,
     };
     let asks = Asks::of_run(&issue, &flags, child.as_ref(), &config);
-    // First, so no interrupt can end the Run once its notification is checked.
-    if let Err(error) = interrupt::install() {
-        return failure(&error);
-    }
-    let checked = asked(&asks.notification, |to| {
-        RunNotification::new(to, &config.email, &issue)
-    });
-    let notification = match checked {
-        Ok(notification) => notification,
-        Err(error) => return failure(&error),
-    };
     let started_by = child.as_ref().map_or(StartedBy::Command, StartedBy::Child);
-    let ended = run::run_to_end(&issue, &asks, started_by);
-    let code = run_ending::show(&ended);
-    logs::ended(run_ending::summary(&ended));
-    if let Some(notification) = notification {
-        notification.send(&ended);
-    }
-    code
+    started.finish(Ending::Run(run::run_to_end(&issue, &asks, started_by)))
 }
 
 /// An Architect run: the Architecture review and its plan marked ready, then,
@@ -399,28 +386,24 @@ fn main() -> ExitCode {
 /// differs from the last, or the start and end of its work. With
 /// `activity.quiet_skips` set, a skipped run prints nothing at all.
 fn architect(args: ArchitectArgs) -> ExitCode {
-    logs::begin(Begin::ArchitectRun);
-    let config = match user_config() {
-        Ok(config) => config,
+    let ask = |config: &UserConfig| args.flags.notification(config);
+    let (config, started) = match command::start(Begin::ArchitectRun, ask, About::ArchitectRun) {
+        Ok(started) => started,
         Err(failure) => return failure,
     };
-    // First, so no interrupt can end the Architect run once its notification
-    // is checked.
-    if let Err(error) = interrupt::install() {
-        return failure(&error);
-    }
-    let email = args.flags.notification(&config);
-    let notification = match asked(&email, |to| ArchitectNotification::new(to, &config.email)) {
-        Ok(notification) => notification,
-        Err(error) => return failure(&error),
-    };
-    let ended = architect::run(
+    let review = match architect::run(
         args.focus.as_deref(),
         args.base.as_deref(),
         config.launch_pull,
-    );
-    let dispatched = match &ended {
-        Ok(Outcome::Reviewed(Reviewed::PlanReady { plan, base })) if !args.plan_only => {
+    ) {
+        Ok(Outcome::Skipped(skipped)) => {
+            return started.finish(Ending::Skipped(skipped.into()));
+        }
+        Ok(Outcome::Reviewed(reviewed)) => Ok(reviewed),
+        Err(failed) => Err(failed),
+    };
+    let dispatched = match &review {
+        Ok(Reviewed::PlanReady { plan, base }) if !args.plan_only => {
             progress::step(format_args!(
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
@@ -431,23 +414,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         }
         _ => None,
     };
-    // A skip is recorded where it was decided, and shows only as configured.
-    if !matches!(ended, Ok(Outcome::Skipped(_))) {
-        logs::ended(run_ending::architect_summary(&ended, dispatched.as_ref()));
-    }
-    let code = match (&ended, &dispatched) {
-        (_, Some(dispatched)) => run_ending::show(dispatched),
-        (Ok(outcome), None) => run_ending::show_architect(outcome),
-        (Err(failed), None) => run_ending::show_failure(failed),
-    };
-    let reviewed = match &ended {
-        Ok(outcome) => outcome.reviewed().map(Ok),
-        Err(failed) => Some(Err(failed)),
-    };
-    if let (Some(notification), Some(reviewed)) = (notification, reviewed) {
-        notification.send(reviewed, dispatched.as_ref());
-    }
-    code
+    started.finish(Ending::Architect { review, dispatched })
 }
 
 /// A Pickup run: the search for the lowest-numbered Ready issue in the Launch
@@ -466,66 +433,26 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// last, or the start and end of its work. With `activity.quiet_skips` set, a
 /// skipped pass prints nothing at all.
 fn pickup(args: PickupArgs) -> ExitCode {
-    logs::begin(Begin::PickupRun);
-    let config = match user_config() {
-        Ok(config) => config,
+    let ask = |config: &UserConfig| args.flags.notification(config);
+    let (config, mut started) = match command::start(Begin::PickupRun, ask, About::PickupRun) {
+        Ok(started) => started,
         Err(failure) => return failure,
-    };
-    // First, so no interrupt can end the Pickup run once its notification is
-    // checked.
-    if let Err(error) = interrupt::install() {
-        return failure(&error);
-    }
-    let email = args.flags.notification(&config);
-    let notification = match asked(&email, |to| PickupNotification::new(to, &config.email)) {
-        Ok(notification) => notification,
-        Err(error) => return failure(&error),
     };
     let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
-        Ok(pickup::Outcome::Skipped(skipped)) => return outcome(Ok(skipped)),
+        Ok(pickup::Outcome::Skipped(skipped)) => {
+            return started.finish(Ending::Skipped(skipped.into()));
+        }
         Err(error) => return failure(&error),
     };
-    let notification = notification.map(|checked| checked.of_taken(&taken.issue, taken.title));
+    started.took(&taken.issue, taken.title);
     let asks = Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config);
     let started_by = StartedBy::Dispatch { base: &taken.base };
-    let ended = run::run_to_end(&taken.issue, &asks, started_by);
-    let code = run_ending::show(&ended);
-    logs::ended(run_ending::summary(&ended));
-    if let Some(notification) = notification {
-        notification.send(&ended);
-    }
-    code
-}
-
-/// The Run notification `email` asks for, if it asks for one: what `checked`
-/// makes of the address it gave, or its error if a check fails.
-fn asked<N>(
-    email: &NotificationAsk,
-    checked: impl FnOnce(Option<String>) -> anyhow::Result<N>,
-) -> anyhow::Result<Option<N>> {
-    match email {
-        NotificationAsk::Send(to) => checked(to.clone()).map(Some),
-        NotificationAsk::Skip => Ok(None),
-    }
-}
-
-/// The User config, after offering Setup where there is none, given to the
-/// logs, or the failure to exit with, its error reported.
-fn user_config() -> Result<UserConfig, ExitCode> {
-    let config = config::offer_setup()
-        .and_then(|()| UserConfig::load())
-        .map_err(|error| failure(&error))?;
-    logs::configured(&config);
-    Ok(config)
-}
-
-/// `error` on stderr, after any lines a pass held from the terminal, and the
-/// exit code of a failure.
-fn failure(error: &anyhow::Error) -> ExitCode {
-    logs::show_held();
-    progress::step(format_args!("{error:#}"));
-    ExitCode::FAILURE
+    started.finish(Ending::Run(run::run_to_end(
+        &taken.issue,
+        &asks,
+        started_by,
+    )))
 }
 
 /// The end of a command other than a Run: the line that says how it went,

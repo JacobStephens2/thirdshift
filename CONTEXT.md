@@ -175,6 +175,10 @@ A continuation of the same agent session, started once when that session ended i
 The full transcript of one agent session, one per session, a **Resume** and each **Repair** included. Kept with its repository's other logs, named for the session's kind and stamped with the local time its command started, so all of a command's Session logs sort together.
 _Avoid_: transcript, session file
 
+**Command**:
+One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, or a **Pickup run**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own.
+_Avoid_: invocation, job
+
 **Command log**:
 Everything one **Run**, **Spec run**, **Architect run** or **Pickup run** printed, kept in a file of its own with its repository's other logs, stamped like its **Session logs**. An Architect run's or Pickup run's covers the Spec run or Run it dispatched, and a Spec run's covers its **Tickets**' Runs, as a Run's covers its **Base fix**: none of those keeps one of its own. It is kept once the command starts work: a Pickup run or Architect run skipped before doing any work keeps none, and neither does a Run that fails before it starts work, such as on **Origin match**.
 _Avoid_: cron log, output log, run log (a **Run** is one kind of command)
