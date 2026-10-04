@@ -108,7 +108,9 @@ impl fmt::Display for Skipped {
 /// log.
 pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
     let Launch {
-        git, repo, base, ..
+        directory,
+        repo,
+        base,
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
@@ -124,7 +126,7 @@ pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
             limit,
         }));
     }
-    let Some(ReadyIssue { listed, is_spec }) = ready::first(&git, &repo)? else {
+    let Some(ReadyIssue { listed, is_spec }) = ready::first(directory.git(), &repo)? else {
         return Ok(skip(Skipped::NoReadyIssue(repo)));
     };
     progress::step(format_args!(
