@@ -351,7 +351,7 @@ impl RepairLoop<'_> {
                             pr_url,
                             base,
                             &base_commit,
-                            &failed.inherited,
+                            &failed,
                         )?;
                         continue;
                     }

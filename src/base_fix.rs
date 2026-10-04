@@ -14,9 +14,9 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 
 use crate::child_run::{self, Ended, Kind};
-use crate::ci;
+use crate::ci::{self, FailedChecks};
 use crate::git::Git;
-use crate::github::{self, Check, CheckState};
+use crate::github::{self, Check};
 use crate::issue::IssueUrl;
 use crate::labels::{Label, Labels, READY_FOR_AGENT};
 use crate::poll;
@@ -176,9 +176,10 @@ impl BaseFix {
         }
     }
 
-    /// Fix the checks `inherited`, the only red ones on the PR `pr_url` of
-    /// the Run on `issue`, started from `launch`, and all Inherited failures
-    /// from `base` at `base_commit`, with a Base fix: write its issue, start
+    /// Fix the Inherited failures in `failed`, the only red checks on the PR
+    /// `pr_url` of the Run on `issue`, started from `launch`, which fail on
+    /// `base` at `base_commit` as its checks there in `failed` say, with a
+    /// Base fix: write its issue, start
     /// it as a child `thirdshift` and wait for it to merge, after which the
     /// Run is to merge `base` in and watch CI again. If an open Base fix
     /// issue other than `issue` already names `base` and those checks, no
@@ -197,8 +198,9 @@ impl BaseFix {
         pr_url: &str,
         base: &str,
         base_commit: &str,
-        inherited: &[Check],
+        failed: &FailedChecks,
     ) -> Result<()> {
+        let inherited = &failed.inherited;
         let checks = ci::check_names(inherited);
         let base_at = ci::short(base_commit);
         if self.taken.is_some() || !self.may_start() {
@@ -209,7 +211,7 @@ impl BaseFix {
                     taken.awaited_end()
                 ),
                 None => {
-                    self.advice = self.advice_on(issue, base, base_commit, inherited);
+                    self.advice = self.advice_on(&failed.on_base);
                     String::new()
                 }
             };
@@ -237,11 +239,10 @@ impl BaseFix {
                 }
             },
             None => {
-                let on_base = failed_on_base(issue, base_commit, inherited)?;
                 let fix = github::create_issue(
                     issue,
                     &issue_title(base, &checks),
-                    &issue_body(issue, pr_url, base, base_at, &on_base),
+                    &issue_body(issue, pr_url, base, base_at, &failed.on_base),
                     &LABELS,
                 )?;
                 progress::step(format_args!(
@@ -319,25 +320,12 @@ impl BaseFix {
         Ok(())
     }
 
-    /// The advice for a Run on `issue` that the checks `inherited`, Inherited
-    /// failures from `base` at `base_commit`, fail with no Base fix taken:
-    /// each check with its URL on `base`, then, if nobody decided against a
-    /// Base fix, the command that retries the Run with one allowed and the
-    /// User config's setting that allows one for every Run. If the checks on
-    /// `base` can't be read, that is reported and none is linked.
-    fn advice_on(
-        &self,
-        issue: &IssueUrl,
-        base: &str,
-        base_commit: &str,
-        inherited: &[Check],
-    ) -> Vec<Advice> {
-        let on_base = failed_on_base(issue, base_commit, inherited).unwrap_or_else(|error| {
-            progress::step(format_args!(
-                "could not read the checks on {base}: {error:#}"
-            ));
-            Vec::new()
-        });
+    /// The advice for a Run that Inherited failures fail with no Base fix
+    /// taken: each of `on_base`, the checks behind them on the Base branch,
+    /// with its URL there, then, if nobody decided against a Base fix, the
+    /// command that retries the Run with one allowed and the User config's
+    /// setting that allows one for every Run.
+    fn advice_on(&self, on_base: &[Check]) -> Vec<Advice> {
         let mut advice: Vec<Advice> = on_base
             .iter()
             .map(|check| Advice {
@@ -441,20 +429,6 @@ impl Mark {
         }
         ended
     }
-}
-
-/// The checks that failed on the Base branch at `base_commit`, of the Run on
-/// `issue`, under the name of one of `inherited`: the Base branch's own
-/// checks, with their URLs there, not the PR's.
-fn failed_on_base(issue: &IssueUrl, base_commit: &str, inherited: &[Check]) -> Result<Vec<Check>> {
-    let on_base = github::checks_on(issue, base_commit)?
-        .into_iter()
-        .filter(|check| {
-            check.state == CheckState::Failed
-                && inherited.iter().any(|failed| failed.name == check.name)
-        })
-        .collect();
-    Ok(on_base)
 }
 
 /// The title of the Base fix issue for `checks`, their names as in
