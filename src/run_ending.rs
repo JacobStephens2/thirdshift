@@ -96,6 +96,7 @@ pub struct Review<'a> {
 pub struct Cause(String);
 
 impl Cause {
+    /// The cause of a failure that failed with `error`.
     pub fn of(error: &anyhow::Error) -> Self {
         Cause(format!("{error:#}"))
     }
@@ -144,7 +145,7 @@ impl<'a> Account<'a> {
     /// `failure` unless it was interrupted.
     fn of_failure(failed: &'a FailedRun, failure: &'static str) -> Self {
         Account {
-            outcome: interrupted_or(failed, failure),
+            outcome: failure_outcome(failed, failure),
             ended: Err(Cause::of(&failed.error)),
             interrupted: failed.interrupted,
             pr_url: failed.pr_url.as_deref(),
@@ -166,7 +167,7 @@ impl<'a> Account<'a> {
     ) -> Self {
         let line = match review {
             Ok(reviewed) => format!("{}: {}", reviewed.review(), reviewed.url()),
-            Err(failed) => interrupted_or(failed, "failed").to_string(),
+            Err(failed) => failure_outcome(failed, "failed").to_string(),
         };
         let account = match (review, dispatched) {
             (_, Some(dispatched)) => Account::of_run(dispatched),
@@ -192,7 +193,7 @@ impl<'a> Account<'a> {
     }
 
     /// Whether the command succeeded, and so exits 0.
-    pub fn success(&self) -> bool {
+    fn success(&self) -> bool {
         self.ended.is_ok()
     }
 
@@ -222,7 +223,7 @@ impl<'a> Account<'a> {
 }
 
 /// `interrupted`, or `failure` for a failure that was not an interrupt.
-fn interrupted_or(failed: &FailedRun, failure: &'static str) -> &'static str {
+fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
     if failed.interrupted {
         "interrupted"
     } else {
@@ -441,10 +442,10 @@ mod tests {
 
     /// How a Run that failed as `cause`, with its session log and no pull
     /// request, reads.
-    fn failed_account(cause_: &str) -> Account<'static> {
+    fn failed_account(cause: &str) -> Account<'static> {
         Account {
             outcome: "failed",
-            ended: Err(cause(cause_)),
+            ended: Err(Cause(cause.to_string())),
             interrupted: false,
             pr_url: None,
             advice: &[],
@@ -454,10 +455,6 @@ mod tests {
             review: None,
             urls: Vec::new(),
         }
-    }
-
-    fn read_run(ended: &Ended) -> Account<'_> {
-        Account::of_run(ended)
     }
 
     /// How a command that got past its skip checks, ending as `ending`,
@@ -478,7 +475,7 @@ mod tests {
         let base_fix = format!("{BASE_FIX_ISSUE} merged");
         let ended = with_base_fix(reached(Goal::Merged), "merged");
         assert_eq!(
-            read_run(&ended),
+            Account::of_run(&ended),
             Account {
                 base_fix: Some(&base_fix),
                 ..reached_account(Goal::Merged)
@@ -498,7 +495,7 @@ mod tests {
             )
         };
         assert_eq!(
-            read_run(&ended),
+            Account::of_run(&ended),
             Account {
                 pr_url: Some(PR),
                 advice: &advice,
@@ -517,7 +514,7 @@ mod tests {
             advice: Vec::new(),
         };
         assert_eq!(
-            read_run(&ended),
+            Account::of_run(&ended),
             Account {
                 outcome: "interrupted",
                 interrupted: true,
@@ -538,7 +535,7 @@ mod tests {
             advice: Vec::new(),
         };
         assert_eq!(
-            read_run(&ended),
+            Account::of_run(&ended),
             Account {
                 ticket_lines: &tickets,
                 ..failed_account("Tickets not done: #22")
@@ -549,7 +546,7 @@ mod tests {
             reached.ticket_lines = tickets.clone();
         }
         assert_eq!(
-            read_run(&ended),
+            Account::of_run(&ended),
             Account {
                 ticket_lines: &tickets,
                 ..reached_account(Goal::ReadyForReview)
@@ -565,13 +562,13 @@ mod tests {
         };
         assert_eq!(
             read_account(&ending),
-            (Account {
+            Account {
                 review: Some(Review {
                     line: format!("plan published: {PLAN}"),
                     dispatched: Some(PLAN),
                 }),
                 ..reached_account(Goal::ReadyForReview)
-            })
+            }
         );
         let ending = Ending::Architect {
             review: Ok(plan()),
@@ -579,13 +576,13 @@ mod tests {
         };
         assert_eq!(
             read_account(&ending),
-            (Account {
+            Account {
                 review: Some(Review {
                     line: format!("plan published: {PLAN}"),
                     dispatched: Some(PLAN),
                 }),
                 ..failed_account("CI red on test")
-            })
+            }
         );
     }
 
@@ -618,7 +615,7 @@ mod tests {
             };
             assert_eq!(
                 read_account(&ending),
-                (Account {
+                Account {
                     outcome,
                     ended: Ok(line),
                     interrupted: false,
@@ -632,7 +629,7 @@ mod tests {
                         dispatched: None,
                     }),
                     urls: vec![PLAN],
-                })
+                }
             );
         }
     }
@@ -645,14 +642,14 @@ mod tests {
         };
         assert_eq!(
             read_account(&ending),
-            (Account {
+            Account {
                 outcome: "review failed",
                 review: Some(Review {
                     line: "failed".to_string(),
                     dispatched: None,
                 }),
                 ..failed_account("claude exited 1\nno such model")
-            })
+            }
         );
         let ending = Ending::Architect {
             review: Err(interrupted(failed_run("claude exited 1"))),
@@ -660,7 +657,7 @@ mod tests {
         };
         assert_eq!(
             read_account(&ending),
-            (Account {
+            Account {
                 outcome: "interrupted",
                 interrupted: true,
                 review: Some(Review {
@@ -668,7 +665,7 @@ mod tests {
                     dispatched: None,
                 }),
                 ..failed_account("interrupted")
-            })
+            }
         );
     }
 

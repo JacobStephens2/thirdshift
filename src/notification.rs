@@ -289,10 +289,7 @@ mod tests {
     /// The subject and body of the notification about `subject` for a
     /// command that ended as `account` tells, if it sends one.
     fn told(subject: &Subject, account: &Account) -> Option<(String, String)> {
-        subject_line(subject, account.outcome).map(|subject| {
-            let body = body(account, None, "droplet-1", Duration::from_secs(4));
-            (subject, body)
-        })
+        subject_line(subject, account.outcome).map(|subject| (subject, body_of(account)))
     }
 
     /// The body for a command that ended as `account` tells, run on
