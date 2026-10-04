@@ -10,8 +10,8 @@
 //! log. A command's lines are held from its start until it starts work and
 //! the file's name is known, then written first, so a command that ends
 //! before then, as a skipped Pickup run or a Run that fails on Origin match
-//! does, never creates the file. A Command log that can't
-//! be written is one `warning:` line, and changes nothing else.
+//! does, never creates the file. A Command log that can't be written is one
+//! `warning:` line, and changes nothing else.
 //!
 //! An Architect run or a Pickup run, which may yet be skipped, holds its
 //! lines from the terminal too, until it knows it will print them: a
@@ -99,8 +99,8 @@ pub(super) fn stamp() -> &'static str {
 
 /// Create the Command log at `path`, its folder too if missing, with the
 /// lines held so far, and say where it is. Only a command [`begin`] began,
-/// and only once: any later call does nothing. One that can't be created is a warning, and the command
-/// carries on without it.
+/// and only once: any later call does nothing. One that can't be created is
+/// a warning, and the command carries on without it.
 pub(super) fn keep(path: PathBuf) {
     show_held();
     let created = {

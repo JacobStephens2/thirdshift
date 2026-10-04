@@ -20,8 +20,9 @@ use crate::prompt;
 
 /// Where a Run's or an Architect run's Session logs go: in `sessions/` under
 /// the root of its repository's logs, under the User config's `logs.dir` or
-/// `~/.thirdshift/logs`, each named for what is run and stamped
-/// with the command's start stamp, which its Command log shares.
+/// `~/.thirdshift/logs`, each named for what is run and stamped with the
+/// command's start stamp, which its Command log shares. Only once the logs
+/// are [`logs::configured`].
 pub struct Logs {
     /// What every log's name starts with: the issue's number for a Run,
     /// `architect` for an Architect run.

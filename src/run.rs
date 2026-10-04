@@ -110,8 +110,8 @@ impl<'a> StartedBy<'a> {
 }
 
 /// [`run`] the Run on `issue` that `started_by` started and that is asked
-/// `asks`, to its end. Its Run notification, if `asks` has it send one, is for what started the Run to
-/// send, once it has ended.
+/// `asks`, to its end. Its Run notification, if `asks` has it send one, is
+/// for what started the Run to send, once it has ended.
 pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended {
     let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
     let outcome = run(issue, asks, started_by, &mut base_fix);

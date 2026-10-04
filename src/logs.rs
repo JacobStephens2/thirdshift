@@ -111,7 +111,7 @@ pub fn configured(config: &UserConfig) {
 /// Run it dispatches, and a child Run records nothing, as the command that
 /// started it does.
 pub fn started(work: Work) {
-    if !record().starts() {
+    if !record().take_start() {
         return;
     }
     let root = work.root();
@@ -133,7 +133,8 @@ pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
 
 /// Record how the command ended, `outcome` in short: show any lines held
 /// from the terminal, then write the Activity log's end line, if it started
-/// work.
+/// work. A skipped pass never calls it, so that under
+/// `activity.quiet_skips` its lines stay held.
 pub fn ended(outcome: impl Display) {
     command_log::show_held();
     activity::end(outcome);
@@ -189,9 +190,9 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
 }
 
 impl Record {
-    /// Whether the work started now is the one to record: the first, and
-    /// not in a child Run.
-    fn starts(&mut self) -> bool {
+    /// Take note that work started, and say whether it is the work to
+    /// record: the first, and not in a child Run.
+    fn take_start(&mut self) -> bool {
         let first = !self.started;
         self.started = true;
         first && !self.child
@@ -301,18 +302,18 @@ mod tests {
             child: false,
             started: false,
         };
-        assert!(record.starts());
-        assert!(!record.starts());
+        assert!(record.take_start());
+        assert!(!record.take_start());
     }
 
     #[test]
-    fn a_child_run_records_no_work_it_starts() {
+    fn a_child_run_records_no_work_it_take_start() {
         let mut record = Record {
             logs_dir: None,
             child: true,
             started: false,
         };
-        assert!(!record.starts());
-        assert!(!record.starts());
+        assert!(!record.take_start());
+        assert!(!record.take_start());
     }
 }
