@@ -30,7 +30,7 @@ pub struct ReadyIssue {
 /// Nothing is changed, on GitHub or in `launch`.
 pub fn first(launch: &Git, repo: &Repo) -> Result<Option<ReadyIssue>> {
     let candidates = github::open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
-    let reads = Live { launch };
+    let reads = GitHubAndOrigin { launch };
     Search::new(&reads, candidates, Utc::now(), progress::step).first_ready()
 }
 
@@ -45,11 +45,11 @@ trait Reads {
 }
 
 /// The reads of GitHub and of the Launch directory `launch`'s origin.
-struct Live<'a> {
+struct GitHubAndOrigin<'a> {
     launch: &'a Git,
 }
 
-impl Reads for Live<'_> {
+impl Reads for GitHubAndOrigin<'_> {
     fn candidate(&self, issue: &IssueUrl) -> Result<Candidate> {
         github::candidate(issue, READY_FOR_AGENT)
     }
@@ -215,12 +215,13 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
 }
 
 /// Where `candidate`, an open issue labelled `ready-for-agent`, stands at
-/// `now`, reading what its listing doesn't give through `reads`. It is a Ready issue
-/// when it has no label that makes an Unready Ticket and no Claim, is not a
-/// sub-issue, has no `base-fix` label and no open blocker, was never started,
-/// is not a Spec whose Tickets are all closed, and is settled: [`SETTLE`] has
-/// passed since it was last labelled `ready-for-agent` and since a sub-issue
-/// or a "blocked by" link of its was last added or removed.
+/// `now`, reading what its listing doesn't give through `reads`. It is a
+/// Ready issue when it has no label that makes an Unready Ticket and no
+/// Claim, is not a sub-issue, has no `base-fix` label and no open blocker,
+/// was never started, is not a Spec whose Tickets are all closed, and is
+/// settled: [`SETTLE`] has passed since it was last labelled
+/// `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
+/// last added or removed.
 fn standing_of(
     reads: &impl Reads,
     candidate: &ListedIssue,
@@ -283,10 +284,15 @@ mod tests {
     /// An issue's facts beyond its listing, as the in-memory reads give them.
     #[derive(Default)]
     struct Facts {
+        /// The issue it is a sub-issue of, if it is one.
         parent: Option<IssueUrl>,
+        /// For each of its sub-issues, whether that one is open.
         sub_issue_is_open: Vec<bool>,
+        /// The numbers of the open issues it is blocked by.
         open_blockers: Vec<u64>,
+        /// The latest of the changes that shape it, if there is one.
         last_shaped: Option<Shaped>,
+        /// What shows it was started, if it was.
         started: Option<Started>,
     }
 
@@ -298,6 +304,7 @@ mod tests {
     }
 
     impl InMemory<'_> {
+        /// The facts of `issue`, if it has any.
         fn facts(&self, issue: &IssueUrl) -> Option<&Facts> {
             self.facts.get(&issue.number)
         }
@@ -372,15 +379,16 @@ mod tests {
             facts: facts.into_iter().collect(),
             seen: &seen,
         };
-        let line = |line| seen.borrow_mut().push(Seen::Line(line));
-        let ready = Search::new(&reads, candidates, now(), line)
+        let sink = |line| seen.borrow_mut().push(Seen::Line(line));
+        let ready = Search::new(&reads, candidates, now(), sink)
             .first_ready()
             .unwrap()
             .map(|ready| (ready.listed.issue.number, ready.is_spec));
         (ready, seen.into_inner())
     }
 
-    fn line(line: &str) -> Seen {
+    /// What the search did on passing over an issue with `line`.
+    fn passed_over(line: &str) -> Seen {
         Seen::Line(line.to_string())
     }
 
@@ -401,7 +409,11 @@ mod tests {
             let (ready, seen) = search(vec![listed(7, &[label])], vec![]);
 
             assert_eq!(ready, None, "{label}");
-            assert_eq!(seen, [line(&format!("#7 labelled {named}"))], "{label}");
+            assert_eq!(
+                seen,
+                [passed_over(&format!("#7 labelled {named}"))],
+                "{label}"
+            );
         }
     }
 
@@ -410,7 +422,7 @@ mod tests {
         let (ready, seen) = search(vec![listed(7, &["in-progress"])], vec![]);
 
         assert_eq!(ready, None);
-        assert_eq!(seen, [line("#7 labelled in-progress")]);
+        assert_eq!(seen, [passed_over("#7 labelled in-progress")]);
     }
 
     #[test]
@@ -426,7 +438,7 @@ mod tests {
             seen,
             [
                 Seen::CandidateRead(7),
-                line("#7 is a Ticket of #3, which is not ready"),
+                passed_over("#7 is a Ticket of #3, which is not ready"),
             ]
         );
     }
@@ -444,7 +456,7 @@ mod tests {
             seen,
             [
                 Seen::CandidateRead(7),
-                line("#7 is a Ticket of acme/gadgets#7, which is not ready"),
+                passed_over("#7 is a Ticket of acme/gadgets#7, which is not ready"),
             ]
         );
     }
@@ -474,10 +486,10 @@ mod tests {
             [
                 Seen::CandidateRead(7),
                 Seen::CandidateRead(20),
-                line("#7 is a Ticket of #20, which is not ready"),
-                line("#20 blocked by #30"),
+                passed_over("#7 is a Ticket of #20, which is not ready"),
+                passed_over("#20 blocked by #30"),
                 Seen::CandidateRead(21),
-                line("#21 is a Ticket of #20, which is not ready"),
+                passed_over("#21 is a Ticket of #20, which is not ready"),
             ]
         );
     }
@@ -523,7 +535,7 @@ mod tests {
             assert_eq!(ready, None, "{label}");
             assert_eq!(
                 seen,
-                [Seen::CandidateRead(7), line("#7 labelled base-fix")],
+                [Seen::CandidateRead(7), passed_over("#7 labelled base-fix")],
                 "{label}"
             );
         }
@@ -538,7 +550,10 @@ mod tests {
         let (ready, seen) = search(vec![listed(7, &[])], vec![(7, blocked)]);
 
         assert_eq!(ready, None);
-        assert_eq!(seen, [Seen::CandidateRead(7), line("#7 blocked by #5, #6")]);
+        assert_eq!(
+            seen,
+            [Seen::CandidateRead(7), passed_over("#7 blocked by #5, #6")]
+        );
     }
 
     #[test]
@@ -562,7 +577,7 @@ mod tests {
 
             assert_eq!(ready, None);
             let [candidate, started] = every_read(7);
-            assert_eq!(seen, [candidate, started, line(&said)]);
+            assert_eq!(seen, [candidate, started, passed_over(&said)]);
         }
     }
 
@@ -579,7 +594,7 @@ mod tests {
         let [candidate, started] = every_read(7);
         assert_eq!(
             seen,
-            [candidate, started, line("#7 every Ticket is closed")]
+            [candidate, started, passed_over("#7 every Ticket is closed")]
         );
 
         let branch = Started::Branch("issue-7".to_string());
@@ -587,7 +602,7 @@ mod tests {
         assert_eq!(ready, None);
         assert_eq!(
             seen.last(),
-            Some(&line("#7 already started: issue-7 is on origin"))
+            Some(&passed_over("#7 already started: issue-7 is on origin"))
         );
     }
 
@@ -633,7 +648,8 @@ mod tests {
                     assert_eq!(seen, [candidate, started], "{said}, {ago}");
                 } else {
                     assert_eq!(ready, None, "{said}, {ago}");
-                    let line = line(&format!("#7 not settled: {said} less than 10 minutes ago"));
+                    let line =
+                        passed_over(&format!("#7 not settled: {said} less than 10 minutes ago"));
                     assert_eq!(seen, [candidate, started, line], "{said}, {ago}");
                 }
             }
@@ -693,7 +709,7 @@ mod tests {
             let (ready, seen) = search(vec![listed(7, labels)], vec![(7, facts)]);
 
             assert_eq!(ready, None, "{said}");
-            assert_eq!(seen.last(), Some(&line(said)));
+            assert_eq!(seen.last(), Some(&passed_over(said)));
             let lines = seen.iter().filter(|seen| matches!(seen, Seen::Line(_)));
             assert_eq!(lines.count(), 1, "{said}");
         }
@@ -724,9 +740,9 @@ mod tests {
             [
                 candidate_7,
                 started_7,
-                line("#7 already started: issue-7 is on origin"),
-                line("#8 labelled wontfix"),
-                line("#9 labelled in-progress"),
+                passed_over("#7 already started: issue-7 is on origin"),
+                passed_over("#8 labelled wontfix"),
+                passed_over("#9 labelled in-progress"),
                 candidate_70,
                 started_70,
             ]
