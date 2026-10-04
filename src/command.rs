@@ -120,13 +120,14 @@ impl Started {
     /// recorded where it was decided, and it sends no notification. Returns
     /// its exit code.
     pub fn finish(self, ending: Ending) -> ExitCode {
-        if matches!(ending, Ending::Skipped(_)) {
-            return run_ending::show(&ending);
-        }
-        logs::ended(run_ending::summary(&ending));
-        let code = run_ending::show(&ending);
+        let account = match run_ending::read(&ending) {
+            Ok(account) => account,
+            Err(skip) => return run_ending::show_skip(skip),
+        };
+        logs::ended(account.summary());
+        let code = account.show();
         if let Some(notification) = self.notification {
-            notification.send(&ending);
+            notification.send(&account);
         }
         code
     }
