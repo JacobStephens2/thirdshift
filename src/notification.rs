@@ -7,18 +7,15 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::base_fix::Advice;
-use crate::command::Ending;
 use crate::config::EmailSettings;
 use crate::email::Resend;
-use crate::failed_run::FailedRun;
 use crate::github;
 use crate::host;
 use crate::issue::{IssueUrl, Repo};
 use crate::launch;
 use crate::logs;
 use crate::progress;
-use crate::run::Ended;
+use crate::run_ending::Account;
 
 /// What a Run, an Architect run or a Pickup run asks about its Run
 /// notification, by its command or, without `email` or `no-email`, by the
@@ -117,22 +114,24 @@ impl RunNotification {
         };
     }
 
-    /// Send the one notification for the command that ended as `ending`. A
-    /// skipped pass, or a Pickup run that took no issue, has nothing to tell,
-    /// and sends none. A failed send is only a warning: it never changes the
-    /// command's outcome.
-    pub fn send(self, ending: &Ending) {
-        let Some(message) = message(&self.subject, ending) else {
+    /// Send the one notification for the command that ended as `account`
+    /// tells. A Pickup run that took no issue has nothing to tell, and sends
+    /// none, as a skipped pass, which has no account, does not either. A
+    /// failed send is only a warning: it never changes the command's
+    /// outcome.
+    pub fn send(self, account: &Account) {
+        let Some(subject) = subject_line(&self.subject, account.outcome) else {
             return;
         };
         let host = host::name();
         let command_log = logs::command_log_path();
-        let text = message.body(
+        let text = body(
+            account,
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
         );
-        if let Err(error) = self.checked.resend.send(&message.subject, &text) {
+        if let Err(error) = self.checked.resend.send(&subject, &text) {
             progress::step(format_args!(
                 "warning: could not send the Run notification: {error:#}"
             ));
@@ -140,138 +139,13 @@ impl RunNotification {
     }
 }
 
-/// What a notification about `subject` says of the command that ended as
-/// `ending`: none for a skipped pass, nor about a Pickup run that took no
-/// issue.
-fn message<'a>(subject: &Subject, ending: &'a Ending) -> Option<Message<'a>> {
-    let (told, architect) = match ending {
-        Ending::Run(ended) => (Told::of(ended), None),
-        Ending::Architect { review, dispatched } => {
-            let told = match (review, dispatched) {
-                (_, Some(dispatched)) => Told::of(dispatched),
-                (Ok(reviewed), None) => Told {
-                    outcome: reviewed.review(),
-                    pr_url: None,
-                    cause: None,
-                    advice: &[],
-                    base_fix: None,
-                    log: None,
-                    tickets: &[],
-                },
-                (Err(failed), None) => Told {
-                    outcome: failure_outcome(failed, "review failed"),
-                    ..Told::of_failure(failed)
-                },
-            };
-            let review = match review {
-                Ok(reviewed) => format!("{}: {}", reviewed.review(), reviewed.url()),
-                Err(failed) => failure_outcome(failed, "failed").to_string(),
-            };
-            let lines = ArchitectLines {
-                review,
-                dispatched: dispatched.as_ref().map(|_| told.outcome),
-            };
-            (told, Some(lines))
-        }
-        Ending::Skipped(_) => return None,
-    };
-    let subject = match subject {
-        Subject::Issue { issue, title } => issue_subject(issue, title.as_deref(), told.outcome),
-        Subject::ArchitectRun(repo) => architect_subject(repo.as_ref(), told.outcome),
-        Subject::Pending => return None,
-    };
-    Some(Message {
-        subject,
-        architect,
-        told,
-    })
-}
-
-/// A notification's subject, and what its body tells.
-struct Message<'a> {
-    subject: String,
-    /// In an Architect run's, what it says first.
-    architect: Option<ArchitectLines>,
-    told: Told<'a>,
-}
-
-impl Message<'_> {
-    /// The plain-text body, naming `command_log`, if the command keeps one,
-    /// and `host`, for a command that `took` so long.
-    fn body(&self, command_log: Option<&Path>, host: &str, took: Duration) -> String {
-        let told = &self.told;
-        Body {
-            architect: self.architect.clone(),
-            pr_url: told.pr_url,
-            cause: told.cause.as_deref(),
-            advice: told.advice,
-            base_fix: told.base_fix,
-            log: told.log,
-            command_log,
-            host,
-            took,
-            tickets: told.tickets,
-        }
-        .text()
-    }
-}
-
-/// How a Run, a Spec run or an Architecture review ended, as a Run
-/// notification tells it.
-struct Told<'a> {
-    outcome: &'static str,
-    pr_url: Option<&'a str>,
-    cause: Option<String>,
-    /// What the Run says after its cause, if Inherited failures failed it
-    /// with no Base fix taken.
-    advice: &'a [Advice],
-    /// What became of the Base fix the Run started or waited on, if any.
-    base_fix: Option<&'a str>,
-    log: Option<&'a Path>,
-    /// In a Spec run, a line on each Ticket, as in its summary on stderr.
-    tickets: &'a [String],
-}
-
-impl<'a> Told<'a> {
-    fn of(ended: &'a Ended) -> Self {
-        let base_fix = ended.base_fix.as_deref();
-        match &ended.outcome {
-            Ok(reached) => Told {
-                outcome: reached.goal.outcome(),
-                pr_url: Some(&reached.pr_url),
-                cause: None,
-                advice: &[],
-                base_fix,
-                log: reached.log.as_deref(),
-                tickets: &reached.ticket_lines,
-            },
-            Err(failed) => Told {
-                advice: &ended.advice,
-                base_fix,
-                ..Told::of_failure(failed)
-            },
-        }
-    }
-
-    fn of_failure(failed: &'a FailedRun) -> Self {
-        Told {
-            outcome: failure_outcome(failed, "failed"),
-            pr_url: failed.pr_url.as_deref(),
-            cause: (!failed.interrupted).then(|| format!("{:#}", failed.error)),
-            advice: &[],
-            base_fix: None,
-            log: failed.log.as_deref(),
-            tickets: &failed.ticket_lines,
-        }
-    }
-}
-
-/// `interrupted`, or `failure` for a failure that was not an interrupt.
-fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
-    if failed.interrupted {
-        "interrupted"
-    } else {
-        failure
+/// The subject of a notification about `subject` for a command whose
+/// outcome is `outcome`: none about a Pickup run that took no issue.
+fn subject_line(subject: &Subject, outcome: &str) -> Option<String> {
+    match subject {
+        Subject::Issue { issue, title } => Some(issue_subject(issue, title.as_deref(), outcome)),
+        Subject::ArchitectRun(repo) => Some(architect_subject(repo.as_ref(), outcome)),
+        Subject::Pending => None,
     }
 }
 
@@ -295,71 +169,48 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
     format!("[thirdshift]{repo} Architect run: {outcome}")
 }
 
-/// What an Architect run's notification says before what a Run's does.
-#[derive(Clone)]
-struct ArchitectLines {
-    /// How the Architecture review ended, with the issue it ended on.
-    review: String,
-    /// How the Spec run or Run the plan was dispatched as ended, if it was.
-    dispatched: Option<&'static str>,
-}
-
-/// What the notification's plain-text body says.
-struct Body<'a> {
-    architect: Option<ArchitectLines>,
-    pr_url: Option<&'a str>,
-    cause: Option<&'a str>,
-    /// What the Run says after its cause, if Inherited failures failed it
-    /// with no Base fix taken.
-    advice: &'a [Advice],
-    /// What became of the Base fix the Run started or waited on, if any.
-    base_fix: Option<&'a str>,
-    log: Option<&'a Path>,
-    /// The command's Command log, if it keeps one.
-    command_log: Option<&'a Path>,
-    host: &'a str,
-    took: Duration,
-    /// In a Spec run, a line on each Ticket, as in its summary on stderr.
-    tickets: &'a [String],
-}
-
-impl Body<'_> {
-    fn text(&self) -> String {
-        let mut text = String::new();
-        if let Some(ArchitectLines { review, dispatched }) = &self.architect {
-            text += &format!("Review:       {review}\n");
-            if let Some(dispatched) = dispatched {
-                text += &format!("Dispatched:   {dispatched}\n");
-            }
+/// The plain-text body of the notification for a command that ended as
+/// `account` tells, naming `command_log`, if the command keeps one, and
+/// `host`, for a command that `took` so long. An Architect run's starts with
+/// how its review ended, and the outcome of the run it dispatched, if any.
+/// The cause is left out of an interrupted command's, whose outcome says so.
+fn body(account: &Account, command_log: Option<&Path>, host: &str, took: Duration) -> String {
+    let mut text = String::new();
+    if let Some(review) = &account.review {
+        text += &format!("Review:       {}\n", review.line);
+        if review.dispatched.is_some() {
+            text += &format!("Dispatched:   {}\n", account.outcome);
         }
-        if let Some(pr_url) = self.pr_url {
-            text += &format!("Pull request: {pr_url}\n");
-        }
-        if let Some(cause) = self.cause {
-            text += &format!("Cause:        {cause}\n");
-        }
-        for line in self.advice {
-            text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
-        }
-        if let Some(base_fix) = self.base_fix {
-            text += &format!("Base fix:     {base_fix}\n");
-        }
-        if let Some(log) = self.log {
-            text += &format!("Session log:  {}\n", log.display());
-        }
-        if let Some(log) = self.command_log {
-            text += &format!("Command log:  {}\n", log.display());
-        }
-        text += &format!("Host:         {}\n", self.host);
-        text += &format!("Took:         {}\n", took(self.took));
-        if !self.tickets.is_empty() {
-            text += "\nTickets:\n";
-            for line in self.tickets {
-                text += &format!("{line}\n");
-            }
-        }
-        text
     }
+    if let Some(pr_url) = account.pr_url {
+        text += &format!("Pull request: {pr_url}\n");
+    }
+    if let Err(cause) = &account.ended
+        && !account.interrupted
+    {
+        text += &format!("Cause:        {}\n", cause.full());
+    }
+    for line in account.advice {
+        text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
+    }
+    if let Some(base_fix) = account.base_fix {
+        text += &format!("Base fix:     {base_fix}\n");
+    }
+    if let Some(log) = account.log {
+        text += &format!("Session log:  {}\n", log.display());
+    }
+    if let Some(log) = command_log {
+        text += &format!("Command log:  {}\n", log.display());
+    }
+    text += &format!("Host:         {host}\n");
+    text += &format!("Took:         {}\n", self::took(took));
+    if !account.ticket_lines.is_empty() {
+        text += "\nTickets:\n";
+        for line in account.ticket_lines {
+            text += &format!("{line}\n");
+        }
+    }
+    text
 }
 
 /// `duration` to the second, as in `1h 2m 3s`, `2m 3s` or `3s`.
@@ -377,14 +228,11 @@ fn took(duration: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use anyhow::anyhow;
 
     use super::*;
-    use crate::architect::Reviewed;
-    use crate::command::Skip;
-    use crate::run::{Goal, Reached};
+    use crate::base_fix::Advice;
+    use crate::run_ending::{Cause, Review};
 
     const PR: &str = "https://github.com/acme/widgets/pull/1";
     const PLAN: &str = "https://github.com/acme/widgets/issues/8";
@@ -405,49 +253,55 @@ mod tests {
         Subject::ArchitectRun(Repo::of_origin("https://github.com/acme/widgets.git"))
     }
 
-    fn merged() -> Ended {
-        Ended {
-            outcome: Ok(Reached {
-                pr_url: PR.to_string(),
-                goal: Goal::Merged,
-                log: Some(PathBuf::from(LOG)),
-                ticket_lines: Vec::new(),
-            }),
-            base_fix: None,
-            advice: Vec::new(),
-        }
-    }
-
-    fn failed_run(cause: &str) -> FailedRun {
-        FailedRun {
-            error: anyhow!("{cause}"),
-            pr_url: None,
-            log: Some(PathBuf::from(LOG)),
+    /// A merged Run's account.
+    fn merged() -> Account<'static> {
+        Account {
+            outcome: "merged",
+            ended: Ok(format!("PR {PR} is merged")),
             interrupted: false,
-            ticket_lines: Vec::new(),
+            pr_url: Some(PR),
+            advice: &[],
+            base_fix: None,
+            log: Some(Path::new(LOG)),
+            ticket_lines: &[],
+            review: None,
+            urls: vec![PR],
         }
     }
 
-    fn plan() -> Reviewed {
-        Reviewed::PlanReady {
-            plan: IssueUrl::parse(PLAN).unwrap(),
-            base: "main".to_string(),
+    /// The account of a Run that failed as `cause`, with nothing else to
+    /// tell.
+    fn failed(cause: &str) -> Account<'static> {
+        Account {
+            outcome: "failed",
+            ended: Err(Cause::of(&anyhow!("{cause}"))),
+            interrupted: false,
+            pr_url: None,
+            advice: &[],
+            base_fix: None,
+            log: None,
+            ticket_lines: &[],
+            review: None,
+            urls: Vec::new(),
         }
     }
 
     /// The subject and body of the notification about `subject` for a
-    /// command that ended as `ending`, if it sends one.
-    fn told(subject: &Subject, ending: &Ending) -> Option<(String, String)> {
-        message(subject, ending).map(|message| {
-            let body = message.body(None, "droplet-1", Duration::from_secs(4));
-            (message.subject, body)
-        })
+    /// command that ended as `account` tells, if it sends one.
+    fn told(subject: &Subject, account: &Account) -> Option<(String, String)> {
+        subject_line(subject, account.outcome).map(|subject| (subject, body_of(account)))
+    }
+
+    /// The body for a command that ended as `account` tells, run on
+    /// `droplet-1` for 4s with no Command log.
+    fn body_of(account: &Account) -> String {
+        body(account, None, "droplet-1", Duration::from_secs(4))
     }
 
     #[test]
     fn a_runs_notification_tells_how_the_run_ended() {
         assert_eq!(
-            told(&about_issue(), &Ending::Run(merged())),
+            told(&about_issue(), &merged()),
             Some((
                 "[thirdshift] acme/widgets#123 Add export button: merged".to_string(),
                 format!(
@@ -458,13 +312,14 @@ mod tests {
                 )
             ))
         );
-        let ended = Ended {
-            outcome: Err(failed_run("claude exited 1")),
-            base_fix: Some(format!("{PLAN} not merged")),
-            advice: Vec::new(),
+        let base_fix = format!("{PLAN} not merged");
+        let account = Account {
+            base_fix: Some(&base_fix),
+            log: Some(Path::new(LOG)),
+            ..failed("claude exited 1")
         };
         assert_eq!(
-            told(&about_issue(), &Ending::Run(ended)),
+            told(&about_issue(), &account),
             Some((
                 "[thirdshift] acme/widgets#123 Add export button: failed".to_string(),
                 format!(
@@ -479,13 +334,34 @@ mod tests {
     }
 
     #[test]
-    fn an_architect_runs_notification_with_its_plan_dispatched_tells_how_both_ended() {
-        let ending = Ending::Architect {
-            review: Ok(plan()),
-            dispatched: Some(merged()),
+    fn an_interrupted_runs_notification_says_so_and_leaves_out_the_cause() {
+        let account = Account {
+            outcome: "interrupted",
+            interrupted: true,
+            ..failed("interrupted")
         };
         assert_eq!(
-            told(&about_architect_run(), &ending),
+            told(&about_issue(), &account),
+            Some((
+                "[thirdshift] acme/widgets#123 Add export button: interrupted".to_string(),
+                "Host:         droplet-1\n\
+                 Took:         4s\n"
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn an_architect_runs_notification_with_its_plan_dispatched_tells_how_both_ended() {
+        let account = Account {
+            review: Some(Review {
+                line: format!("plan published: {PLAN}"),
+                dispatched: Some(PLAN),
+            }),
+            ..merged()
+        };
+        assert_eq!(
+            told(&about_architect_run(), &account),
             Some((
                 "[thirdshift] acme/widgets Architect run: merged".to_string(),
                 format!(
@@ -502,12 +378,22 @@ mod tests {
 
     #[test]
     fn an_architect_runs_notification_with_nothing_dispatched_tells_how_its_review_ended() {
-        let ending = Ending::Architect {
-            review: Ok(Reviewed::IdeaFiled(IssueUrl::parse(PLAN).unwrap())),
-            dispatched: None,
+        let account = Account {
+            outcome: "idea filed",
+            ended: Ok(format!(
+                "no Strong candidate: the Architecture review filed the idea {PLAN}"
+            )),
+            pr_url: None,
+            log: None,
+            review: Some(Review {
+                line: format!("idea filed: {PLAN}"),
+                dispatched: None,
+            }),
+            urls: vec![PLAN],
+            ..merged()
         };
         assert_eq!(
-            told(&about_architect_run(), &ending),
+            told(&about_architect_run(), &account),
             Some((
                 "[thirdshift] acme/widgets Architect run: idea filed".to_string(),
                 format!(
@@ -517,24 +403,21 @@ mod tests {
                 )
             ))
         );
-        let ending = Ending::Architect {
-            review: Ok(plan()),
-            dispatched: None,
-        };
-        assert_eq!(
-            told(&about_architect_run(), &ending).map(|(subject, _)| subject),
-            Some("[thirdshift] acme/widgets Architect run: plan published".to_string())
-        );
     }
 
     #[test]
     fn an_architect_runs_notification_tells_how_its_review_failed() {
-        let ending = Ending::Architect {
-            review: Err(failed_run("claude exited 1")),
-            dispatched: None,
+        let account = Account {
+            outcome: "review failed",
+            log: Some(Path::new(LOG)),
+            review: Some(Review {
+                line: "failed".to_string(),
+                dispatched: None,
+            }),
+            ..failed("claude exited 1")
         };
         assert_eq!(
-            told(&Subject::ArchitectRun(None), &ending),
+            told(&Subject::ArchitectRun(None), &account),
             Some((
                 "[thirdshift] Architect run: review failed".to_string(),
                 format!(
@@ -549,15 +432,8 @@ mod tests {
     }
 
     #[test]
-    fn a_skipped_pass_or_a_pickup_run_that_took_nothing_has_no_notification() {
-        let skipped = Ending::Skipped(Skip {
-            reason: "no Ready issue on acme/widgets".to_string(),
-            urls: Vec::new(),
-        });
-        for subject in [about_issue(), about_architect_run(), Subject::Pending] {
-            assert_eq!(told(&subject, &skipped), None);
-        }
-        assert_eq!(told(&Subject::Pending, &Ending::Run(merged())), None);
+    fn a_pickup_run_that_took_nothing_has_no_notification() {
+        assert_eq!(told(&Subject::Pending, &merged()), None);
     }
 
     #[test]
@@ -574,33 +450,23 @@ mod tests {
 
     #[test]
     fn the_body_leaves_out_what_the_run_does_not_have() {
-        let body = Body {
-            architect: None,
-            pr_url: None,
-            cause: Some("origin mismatch"),
-            advice: &[],
-            base_fix: None,
-            log: None,
-            command_log: None,
-            host: "droplet-1",
-            took: Duration::from_secs(4),
-            tickets: &[],
-        };
         assert_eq!(
-            body.text(),
+            body_of(&failed("origin mismatch")),
             "Cause:        origin mismatch\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
-        let body = Body {
-            pr_url: Some("https://github.com/acme/widgets/pull/1"),
-            cause: None,
+        let account = Account {
             log: Some(Path::new("/home/me/.thirdshift/logs/sessions/x.jsonl")),
-            command_log: Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
-            ..body
+            ..merged()
         };
         assert_eq!(
-            body.text(),
+            body(
+                &account,
+                Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
+                "droplet-1",
+                Duration::from_secs(4)
+            ),
             "Pull request: https://github.com/acme/widgets/pull/1\n\
              Session log:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
              Command log:  /home/me/.thirdshift/logs/commands/issue/x.log\n\
@@ -611,20 +477,13 @@ mod tests {
 
     #[test]
     fn the_body_reports_the_base_fix_after_the_cause() {
-        let body = Body {
-            architect: None,
-            pr_url: Some("https://github.com/acme/widgets/pull/1"),
-            cause: Some("claude exited 1"),
-            advice: &[],
+        let account = Account {
+            pr_url: Some(PR),
             base_fix: Some("https://github.com/acme/widgets/issues/8 merged"),
-            log: None,
-            command_log: None,
-            host: "droplet-1",
-            took: Duration::from_secs(4),
-            tickets: &[],
+            ..failed("claude exited 1")
         };
         assert_eq!(
-            body.text(),
+            body_of(&account),
             "Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        claude exited 1\n\
              Base fix:     https://github.com/acme/widgets/issues/8 merged\n\
@@ -645,20 +504,14 @@ mod tests {
                 value: "base.fix = true".to_string(),
             },
         ];
-        let body = Body {
-            architect: None,
-            pr_url: Some("https://github.com/acme/widgets/pull/1"),
-            cause: Some("CI red on test, which also fails on main at 362b9ca; fix main first"),
+        let account = Account {
+            pr_url: Some(PR),
             advice: &advice,
-            base_fix: None,
             log: Some(Path::new("/home/me/.thirdshift/logs/x.jsonl")),
-            command_log: None,
-            host: "droplet-1",
-            took: Duration::from_secs(4),
-            tickets: &[],
+            ..failed("CI red on test, which also fails on main at 362b9ca; fix main first")
         };
         assert_eq!(
-            body.text(),
+            body_of(&account),
             "Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        CI red on test, which also fails on main at 362b9ca; fix main first\n\
              Base check:   test: https://ci.example/main/test\n\
@@ -675,20 +528,12 @@ mod tests {
             "#21 failed: claude exited 1".to_string(),
             "#22 blocked by #21".to_string(),
         ];
-        let body = Body {
-            architect: None,
-            pr_url: None,
-            cause: Some("Tickets not done: #21, #22"),
-            advice: &[],
-            base_fix: None,
-            log: None,
-            command_log: None,
-            host: "droplet-1",
-            took: Duration::from_secs(4),
-            tickets: &tickets,
+        let account = Account {
+            ticket_lines: &tickets,
+            ..failed("Tickets not done: #21, #22")
         };
         assert_eq!(
-            body.text(),
+            body_of(&account),
             "Cause:        Tickets not done: #21, #22\n\
              Host:         droplet-1\n\
              Took:         4s\n\
@@ -709,47 +554,6 @@ mod tests {
         assert_eq!(
             architect_subject(None, "review failed"),
             "[thirdshift] Architect run: review failed"
-        );
-    }
-
-    #[test]
-    fn an_architect_runs_body_starts_with_the_review_and_the_dispatched_runs_outcome() {
-        let body = Body {
-            architect: Some(ArchitectLines {
-                review: "plan published: https://github.com/acme/widgets/issues/8".to_string(),
-                dispatched: Some("merged"),
-            }),
-            pr_url: Some("https://github.com/acme/widgets/pull/1"),
-            cause: None,
-            advice: &[],
-            base_fix: None,
-            log: None,
-            command_log: None,
-            host: "droplet-1",
-            took: Duration::from_secs(4),
-            tickets: &[],
-        };
-        assert_eq!(
-            body.text(),
-            "Review:       plan published: https://github.com/acme/widgets/issues/8\n\
-             Dispatched:   merged\n\
-             Pull request: https://github.com/acme/widgets/pull/1\n\
-             Host:         droplet-1\n\
-             Took:         4s\n"
-        );
-        let body = Body {
-            architect: Some(ArchitectLines {
-                review: "idea filed: https://github.com/acme/widgets/issues/8".to_string(),
-                dispatched: None,
-            }),
-            pr_url: None,
-            ..body
-        };
-        assert_eq!(
-            body.text(),
-            "Review:       idea filed: https://github.com/acme/widgets/issues/8\n\
-             Host:         droplet-1\n\
-             Took:         4s\n"
         );
     }
 

@@ -11,6 +11,7 @@ use crate::host;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
+use crate::run_ending::Cause;
 use crate::worktree::Worktree;
 
 /// Why a Run did not end with a ready PR, and what the user should see.
@@ -82,11 +83,7 @@ pub fn fail(
     let error = interrupted_or(error, interrupted);
     // The cause as stderr gives it, down to what a session left running, cut
     // to its first line: the reason goes in the failure commit's subject.
-    let reason = format!("{error:#}")
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
     let keep_ready = error.is::<PolicyRefusal>();
     let pushed = if keep_ready {
