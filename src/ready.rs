@@ -4,13 +4,13 @@
 //! has one, against the very same definition.
 
 use anyhow::Result;
-use chrono::{TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::base_fix;
 use crate::branch::{self, Started};
 use crate::claim;
 use crate::git::Git;
-use crate::github::{self, ListedIssue, Shaping};
+use crate::github::{self, Candidate, ListedIssue, Shaping};
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, READY_FOR_AGENT};
 use crate::progress;
@@ -30,7 +30,33 @@ pub struct ReadyIssue {
 /// Nothing is changed, on GitHub or in `launch`.
 pub fn first(launch: &Git, repo: &Repo) -> Result<Option<ReadyIssue>> {
     let candidates = github::open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
-    Search::new(launch, candidates).first_ready()
+    let reads = Live { launch };
+    Search::new(&reads, candidates, Utc::now(), progress::step).first_ready()
+}
+
+/// What the search reads of an issue beyond its listing, each only when a
+/// rule needs it.
+trait Reads {
+    /// `issue` as the search reads it: its parent, its sub-issues, its
+    /// blockers and when it was last shaped.
+    fn candidate(&self, issue: &IssueUrl) -> Result<Candidate>;
+    /// What shows `issue` was ever started, if it was.
+    fn started(&self, issue: &IssueUrl) -> Result<Option<Started>>;
+}
+
+/// The reads of GitHub and of the Launch directory `launch`'s origin.
+struct Live<'a> {
+    launch: &'a Git,
+}
+
+impl Reads for Live<'_> {
+    fn candidate(&self, issue: &IssueUrl) -> Result<Candidate> {
+        github::candidate(issue, READY_FOR_AGENT)
+    }
+
+    fn started(&self, issue: &IssueUrl) -> Result<Option<Started>> {
+        branch::started(self.launch, issue)
+    }
 }
 
 /// How long an issue is left after it was last shaped before it is a Ready
@@ -75,28 +101,39 @@ enum Reason {
 
 /// The search of a repository's open issues labelled `ready-for-agent` for
 /// the lowest-numbered Ready issue.
-struct Search<'a> {
-    /// The Launch directory.
-    launch: &'a Git,
+struct Search<'a, R, P> {
+    /// What it reads of each issue beyond its listing.
+    reads: &'a R,
     /// The issues, lowest number first.
     candidates: Vec<ListedIssue>,
     /// Where each stands, in the same order, once it has been worked out.
     standings: Vec<Option<Standing>>,
+    /// The time of the pass, which settling is measured to.
+    now: DateTime<Utc>,
+    /// Where each line on an issue passed over goes, as soon as it is.
+    passed_over: P,
 }
 
-impl<'a> Search<'a> {
-    fn new(launch: &'a Git, mut candidates: Vec<ListedIssue>) -> Self {
+impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
+    fn new(
+        reads: &'a R,
+        mut candidates: Vec<ListedIssue>,
+        now: DateTime<Utc>,
+        passed_over: P,
+    ) -> Self {
         candidates.sort_by_key(|candidate| candidate.issue.number);
         let standings = vec![None; candidates.len()];
         Search {
-            launch,
+            reads,
             candidates,
             standings,
+            now,
+            passed_over,
         }
     }
 
-    /// The lowest-numbered Ready issue, if there is one, with a line on
-    /// stderr for each issue passed over before it.
+    /// The lowest-numbered Ready issue, if there is one, with a line for
+    /// each issue passed over before it.
     fn first_ready(mut self) -> Result<Option<ReadyIssue>> {
         for at in 0..self.candidates.len() {
             match self.standing(at)? {
@@ -106,7 +143,7 @@ impl<'a> Search<'a> {
                 }
                 Standing::PassedOver(reason) => {
                     if let Some(line) = self.line(at, &reason)? {
-                        progress::step(line);
+                        (self.passed_over)(line);
                     }
                 }
             }
@@ -119,7 +156,7 @@ impl<'a> Search<'a> {
         if let Some(standing) = &self.standings[at] {
             return Ok(standing.clone());
         }
-        let standing = standing_of(self.launch, &self.candidates[at])?;
+        let standing = standing_of(self.reads, &self.candidates[at], self.now)?;
         self.standings[at] = Some(standing.clone());
         Ok(standing)
     }
@@ -177,14 +214,18 @@ impl<'a> Search<'a> {
     }
 }
 
-/// Where `candidate`, an open issue labelled `ready-for-agent` in the
-/// repository of the Launch directory `launch`, stands. It is a Ready issue
+/// Where `candidate`, an open issue labelled `ready-for-agent`, stands at
+/// `now`, reading what its listing doesn't give through `reads`. It is a Ready issue
 /// when it has no label that makes an Unready Ticket and no Claim, is not a
 /// sub-issue, has no `base-fix` label and no open blocker, was never started,
 /// is not a Spec whose Tickets are all closed, and is settled: [`SETTLE`] has
 /// passed since it was last labelled `ready-for-agent` and since a sub-issue
 /// or a "blocked by" link of its was last added or removed.
-fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
+fn standing_of(
+    reads: &impl Reads,
+    candidate: &ListedIssue,
+    now: DateTime<Utc>,
+) -> Result<Standing> {
     let passed_over = |reason| Ok(Standing::PassedOver(reason));
     if let Some(label) = candidate.labels.unready() {
         return passed_over(Reason::Unready(label));
@@ -192,7 +233,7 @@ fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
     if claim::is_on(&candidate.labels) {
         return passed_over(Reason::Claimed);
     }
-    let read = github::candidate(&candidate.issue, READY_FOR_AGENT)?;
+    let read = reads.candidate(&candidate.issue)?;
     if let Some(spec) = read.parent {
         return passed_over(Reason::Ticket(spec));
     }
@@ -202,18 +243,493 @@ fn standing_of(launch: &Git, candidate: &ListedIssue) -> Result<Standing> {
     if !read.open_blockers.is_empty() {
         return passed_over(Reason::Blocked(read.open_blockers));
     }
-    if let Some(started) = branch::started(launch, &candidate.issue)? {
+    if let Some(started) = reads.started(&candidate.issue)? {
         return passed_over(Reason::Started(started));
     }
     if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
         return passed_over(Reason::TicketsClosed);
     }
     if let Some(shaped) = read.last_shaped
-        && Utc::now() - shaped.at < SETTLE
+        && now - shaped.at < SETTLE
     {
         return passed_over(Reason::Unsettled(shaped.by));
     }
     Ok(Standing::Ready {
         is_spec: read.has_sub_issues(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use chrono::TimeZone;
+
+    use super::*;
+    use crate::github::Shaped;
+
+    /// What the search did, in the order it did it.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Seen {
+        /// It read this issue's candidate read.
+        CandidateRead(u64),
+        /// It checked whether this issue was started.
+        StartedCheck(u64),
+        /// It passed over an issue with this line.
+        Line(String),
+    }
+
+    /// An issue's facts beyond its listing, as the in-memory reads give them.
+    #[derive(Default)]
+    struct Facts {
+        parent: Option<IssueUrl>,
+        sub_issue_is_open: Vec<bool>,
+        open_blockers: Vec<u64>,
+        last_shaped: Option<Shaped>,
+        started: Option<Started>,
+    }
+
+    /// Reads from memory, each recorded in `seen`, with an issue that has no
+    /// facts having none of them.
+    struct InMemory<'a> {
+        facts: HashMap<u64, Facts>,
+        seen: &'a RefCell<Vec<Seen>>,
+    }
+
+    impl InMemory<'_> {
+        fn facts(&self, issue: &IssueUrl) -> Option<&Facts> {
+            self.facts.get(&issue.number)
+        }
+    }
+
+    impl Reads for InMemory<'_> {
+        fn candidate(&self, issue: &IssueUrl) -> Result<Candidate> {
+            self.seen
+                .borrow_mut()
+                .push(Seen::CandidateRead(issue.number));
+            let facts = self.facts(issue);
+            Ok(Candidate {
+                parent: facts.and_then(|facts| facts.parent.clone()),
+                sub_issue_is_open: facts
+                    .map(|facts| facts.sub_issue_is_open.clone())
+                    .unwrap_or_default(),
+                open_blockers: facts
+                    .map(|facts| facts.open_blockers.clone())
+                    .unwrap_or_default(),
+                last_shaped: facts.and_then(|facts| facts.last_shaped),
+            })
+        }
+
+        fn started(&self, issue: &IssueUrl) -> Result<Option<Started>> {
+            self.seen
+                .borrow_mut()
+                .push(Seen::StartedCheck(issue.number));
+            Ok(self.facts(issue).and_then(|facts| facts.started.clone()))
+        }
+    }
+
+    /// The URL of issue `number` in `acme/widgets`.
+    fn url(number: u64) -> IssueUrl {
+        IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}")).unwrap()
+    }
+
+    /// Issue `number` as the listing gives it, labelled `ready-for-agent`
+    /// and `more`.
+    fn listed(number: u64, more: &[&str]) -> ListedIssue {
+        ListedIssue {
+            issue: url(number),
+            title: format!("Issue {number}"),
+            labels: [READY_FOR_AGENT.name()]
+                .iter()
+                .chain(more)
+                .copied()
+                .collect(),
+        }
+    }
+
+    /// The time of every pass.
+    fn now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 4, 12, 0, 0).unwrap()
+    }
+
+    /// Shaped by `by`, `ago` before [`now`].
+    fn shaped(by: Shaping, ago: TimeDelta) -> Option<Shaped> {
+        Some(Shaped {
+            by,
+            at: now() - ago,
+        })
+    }
+
+    /// A search of `candidates` with `facts`: the number of the Ready issue
+    /// it found and whether it is a Spec, if it found one, and what it did.
+    fn search(
+        candidates: Vec<ListedIssue>,
+        facts: Vec<(u64, Facts)>,
+    ) -> (Option<(u64, bool)>, Vec<Seen>) {
+        let seen = RefCell::new(Vec::new());
+        let reads = InMemory {
+            facts: facts.into_iter().collect(),
+            seen: &seen,
+        };
+        let line = |line| seen.borrow_mut().push(Seen::Line(line));
+        let ready = Search::new(&reads, candidates, now(), line)
+            .first_ready()
+            .unwrap()
+            .map(|ready| (ready.listed.issue.number, ready.is_spec));
+        (ready, seen.into_inner())
+    }
+
+    fn line(line: &str) -> Seen {
+        Seen::Line(line.to_string())
+    }
+
+    /// Every read of issue `number` the search makes for a Ready issue.
+    fn every_read(number: u64) -> [Seen; 2] {
+        [Seen::CandidateRead(number), Seen::StartedCheck(number)]
+    }
+
+    #[test]
+    fn an_issue_with_a_label_that_makes_an_unready_ticket_is_passed_over_with_no_reads() {
+        for (label, named) in [
+            ("ready-for-human", "ready-for-human"),
+            ("needs-info", "needs-info"),
+            ("wontfix", "wontfix"),
+            ("needs-triage", "needs-triage"),
+            ("Needs-Info", "needs-info"),
+        ] {
+            let (ready, seen) = search(vec![listed(7, &[label])], vec![]);
+
+            assert_eq!(ready, None, "{label}");
+            assert_eq!(seen, [line(&format!("#7 labelled {named}"))], "{label}");
+        }
+    }
+
+    #[test]
+    fn a_claimed_issue_is_passed_over_with_no_reads() {
+        let (ready, seen) = search(vec![listed(7, &["in-progress"])], vec![]);
+
+        assert_eq!(ready, None);
+        assert_eq!(seen, [line("#7 labelled in-progress")]);
+    }
+
+    #[test]
+    fn a_ticket_whose_spec_is_not_listed_names_it_with_no_started_check() {
+        let ticket = Facts {
+            parent: Some(url(3)),
+            ..Facts::default()
+        };
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, ticket)]);
+
+        assert_eq!(ready, None);
+        assert_eq!(
+            seen,
+            [
+                Seen::CandidateRead(7),
+                line("#7 is a Ticket of #3, which is not ready"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ticket_of_a_spec_in_another_repository_names_it_with_its_repository() {
+        let spec = IssueUrl::parse("https://github.com/acme/gadgets/issues/7").unwrap();
+        let ticket = Facts {
+            parent: Some(spec),
+            ..Facts::default()
+        };
+        let (_, seen) = search(vec![listed(7, &[])], vec![(7, ticket)]);
+
+        assert_eq!(
+            seen,
+            [
+                Seen::CandidateRead(7),
+                line("#7 is a Ticket of acme/gadgets#7, which is not ready"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ticket_whose_spec_is_listed_but_not_ready_names_it_above_and_below_the_spec() {
+        // #7 is a Ticket below the Spec #20, #21 one above it, and #20 is
+        // blocked.
+        let ticket = || Facts {
+            parent: Some(url(20)),
+            ..Facts::default()
+        };
+        let spec = Facts {
+            sub_issue_is_open: vec![true, true],
+            open_blockers: vec![30],
+            ..Facts::default()
+        };
+        let (ready, seen) = search(
+            vec![listed(21, &[]), listed(20, &[]), listed(7, &[])],
+            vec![(7, ticket()), (20, spec), (21, ticket())],
+        );
+
+        assert_eq!(ready, None);
+        // The Spec is read once, for #7's line, and not again for its own.
+        assert_eq!(
+            seen,
+            [
+                Seen::CandidateRead(7),
+                Seen::CandidateRead(20),
+                line("#7 is a Ticket of #20, which is not ready"),
+                line("#20 blocked by #30"),
+                Seen::CandidateRead(21),
+                line("#21 is a Ticket of #20, which is not ready"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ticket_whose_spec_is_a_ready_issue_gets_no_line_above_or_below_the_spec() {
+        let ticket = || Facts {
+            parent: Some(url(20)),
+            ..Facts::default()
+        };
+        let spec = || Facts {
+            sub_issue_is_open: vec![true, true],
+            ..Facts::default()
+        };
+
+        // Below the Spec: passed over with no line, and the Spec taken.
+        let (ready, seen) = search(
+            vec![listed(7, &[]), listed(20, &[]), listed(21, &[])],
+            vec![(7, ticket()), (20, spec()), (21, ticket())],
+        );
+        assert_eq!(ready, Some((20, true)));
+        let [candidate_20, started_20] = every_read(20);
+        assert_eq!(
+            seen,
+            [Seen::CandidateRead(7), candidate_20, started_20],
+            "below"
+        );
+
+        // Above the Spec: never reached, the Spec being taken first.
+        let (ready, seen) = search(
+            vec![listed(20, &[]), listed(21, &[])],
+            vec![(20, spec()), (21, ticket())],
+        );
+        assert_eq!(ready, Some((20, true)));
+        assert_eq!(seen, every_read(20), "above");
+    }
+
+    #[test]
+    fn a_base_fix_issue_is_passed_over_with_no_started_check() {
+        for label in ["base-fix", "Base-Fix"] {
+            let (ready, seen) = search(vec![listed(7, &[label])], vec![]);
+
+            assert_eq!(ready, None, "{label}");
+            assert_eq!(
+                seen,
+                [Seen::CandidateRead(7), line("#7 labelled base-fix")],
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blocked_issue_names_every_open_blocker_with_no_started_check() {
+        let blocked = Facts {
+            open_blockers: vec![5, 6],
+            ..Facts::default()
+        };
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, blocked)]);
+
+        assert_eq!(ready, None);
+        assert_eq!(seen, [Seen::CandidateRead(7), line("#7 blocked by #5, #6")]);
+    }
+
+    #[test]
+    fn a_started_issue_says_what_shows_it_was_started() {
+        let pr = "https://github.com/acme/widgets/pull/12";
+        for (started, said) in [
+            (
+                Started::Branch("issue-7-branch-2".to_string()),
+                "#7 already started: issue-7-branch-2 is on origin".to_string(),
+            ),
+            (
+                Started::PullRequest(pr.to_string()),
+                format!("#7 already started: PR {pr}"),
+            ),
+        ] {
+            let facts = Facts {
+                started: Some(started),
+                ..Facts::default()
+            };
+            let (ready, seen) = search(vec![listed(7, &[])], vec![(7, facts)]);
+
+            assert_eq!(ready, None);
+            let [candidate, started] = every_read(7);
+            assert_eq!(seen, [candidate, started, line(&said)]);
+        }
+    }
+
+    #[test]
+    fn a_spec_whose_tickets_are_all_closed_is_passed_over_unless_it_was_started() {
+        let spec = |started: Option<Started>| Facts {
+            sub_issue_is_open: vec![false, false],
+            started,
+            ..Facts::default()
+        };
+
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec(None))]);
+        assert_eq!(ready, None);
+        let [candidate, started] = every_read(7);
+        assert_eq!(
+            seen,
+            [candidate, started, line("#7 every Ticket is closed")]
+        );
+
+        let branch = Started::Branch("issue-7".to_string());
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec(Some(branch)))]);
+        assert_eq!(ready, None);
+        assert_eq!(
+            seen.last(),
+            Some(&line("#7 already started: issue-7 is on origin"))
+        );
+    }
+
+    #[test]
+    fn a_spec_with_a_ticket_still_open_is_a_ready_issue_and_a_spec() {
+        let spec = Facts {
+            sub_issue_is_open: vec![false, true],
+            ..Facts::default()
+        };
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
+
+        assert_eq!(ready, Some((7, true)));
+        assert_eq!(seen, every_read(7));
+    }
+
+    #[test]
+    fn an_issue_with_no_sub_issues_is_a_ready_issue_and_not_a_spec() {
+        let (ready, seen) = search(vec![listed(7, &[])], vec![]);
+
+        assert_eq!(ready, Some((7, false)));
+        assert_eq!(seen, every_read(7));
+    }
+
+    #[test]
+    fn an_issue_settles_ten_minutes_after_it_was_last_shaped_whatever_shaped_it() {
+        let just_under = SETTLE - TimeDelta::seconds(1);
+        let just_over = SETTLE + TimeDelta::seconds(1);
+        for (by, said) in [
+            (Shaping::Labelled, "labelled ready-for-agent"),
+            (Shaping::SubIssues, "a sub-issue added or removed"),
+            (Shaping::Blockers, "a \"blocked by\" link added or removed"),
+        ] {
+            for (ago, settled) in [(just_under, false), (SETTLE, true), (just_over, true)] {
+                let facts = Facts {
+                    last_shaped: shaped(by, ago),
+                    ..Facts::default()
+                };
+                let (ready, seen) = search(vec![listed(7, &[])], vec![(7, facts)]);
+
+                let [candidate, started] = every_read(7);
+                if settled {
+                    assert_eq!(ready, Some((7, false)), "{said}, {ago}");
+                    assert_eq!(seen, [candidate, started], "{said}, {ago}");
+                } else {
+                    assert_eq!(ready, None, "{said}, {ago}");
+                    let line = line(&format!("#7 not settled: {said} less than 10 minutes ago"));
+                    assert_eq!(seen, [candidate, started, line], "{said}, {ago}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
+        // Every reason applies to #7 in the first row: each row takes the
+        // first one away. Tickets all closed and not settled can't both
+        // apply with nothing started, so not settled has a row of its own.
+        let facts = |parent: bool, blocked: bool, started: bool, closed: bool| Facts {
+            parent: parent.then(|| url(3)),
+            sub_issue_is_open: if closed { vec![false] } else { vec![] },
+            open_blockers: if blocked { vec![5] } else { vec![] },
+            last_shaped: shaped(Shaping::Labelled, TimeDelta::minutes(1)),
+            started: started.then(|| Started::Branch("issue-7".to_string())),
+        };
+        for (labels, facts, said) in [
+            (
+                &["needs-info", "in-progress", "base-fix"][..],
+                facts(true, true, true, true),
+                "#7 labelled needs-info",
+            ),
+            (
+                &["in-progress", "base-fix"],
+                facts(true, true, true, true),
+                "#7 labelled in-progress",
+            ),
+            (
+                &["base-fix"],
+                facts(true, true, true, true),
+                "#7 is a Ticket of #3, which is not ready",
+            ),
+            (
+                &["base-fix"],
+                facts(false, true, true, true),
+                "#7 labelled base-fix",
+            ),
+            (&[], facts(false, true, true, true), "#7 blocked by #5"),
+            (
+                &[],
+                facts(false, false, true, true),
+                "#7 already started: issue-7 is on origin",
+            ),
+            (
+                &[],
+                facts(false, false, false, true),
+                "#7 every Ticket is closed",
+            ),
+            (
+                &[],
+                facts(false, false, false, false),
+                "#7 not settled: labelled ready-for-agent less than 10 minutes ago",
+            ),
+        ] {
+            let (ready, seen) = search(vec![listed(7, labels)], vec![(7, facts)]);
+
+            assert_eq!(ready, None, "{said}");
+            assert_eq!(seen.last(), Some(&line(said)));
+            let lines = seen.iter().filter(|seen| matches!(seen, Seen::Line(_)));
+            assert_eq!(lines.count(), 1, "{said}");
+        }
+    }
+
+    #[test]
+    fn each_line_comes_as_its_issue_is_passed_over_and_the_search_stops_at_the_first_ready_issue() {
+        let started = Facts {
+            started: Some(Started::Branch("issue-7".to_string())),
+            ..Facts::default()
+        };
+        let (ready, seen) = search(
+            vec![
+                listed(71, &["needs-info"]),
+                listed(70, &[]),
+                listed(9, &["in-progress"]),
+                listed(8, &["wontfix"]),
+                listed(7, &[]),
+            ],
+            vec![(7, started)],
+        );
+
+        assert_eq!(ready, Some((70, false)));
+        let [candidate_7, started_7] = every_read(7);
+        let [candidate_70, started_70] = every_read(70);
+        assert_eq!(
+            seen,
+            [
+                candidate_7,
+                started_7,
+                line("#7 already started: issue-7 is on origin"),
+                line("#8 labelled wontfix"),
+                line("#9 labelled in-progress"),
+                candidate_70,
+                started_70,
+            ]
+        );
+    }
 }

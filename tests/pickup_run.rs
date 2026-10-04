@@ -179,35 +179,15 @@ fn a_closed_issue_labelled_ready_for_agent_is_not_taken() {
 #[test]
 fn an_issue_that_also_has_a_label_that_makes_an_unready_ticket_is_not_taken() {
     // Whatever its case: GitHub's label names are case-insensitive.
-    for unready in [
-        "ready-for-human",
-        "needs-info",
-        "wontfix",
-        "needs-triage",
-        "Needs-Info",
-    ] {
-        let scenario = Scenario::new();
-        ready_issue(&scenario, 7, &[unready]);
-
-        let result = scenario.run(&["pickup"]);
-
-        // The line names the label as thirdshift spells it.
-        let line = format!("#7 labelled {}", unready.to_lowercase());
-        assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
-        assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, unready]);
-    }
-}
-
-#[test]
-fn an_issue_labelled_in_progress_is_not_taken() {
     let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &[IN_PROGRESS]);
+    ready_issue(&scenario, 7, &["Needs-Info"]);
 
     let result = scenario.run(&["pickup"]);
 
-    let passed_over = no_ready_issue_after(&["#7 labelled in-progress"]);
+    // The line names the label as thirdshift spells it.
+    let passed_over = no_ready_issue_after(&["#7 labelled needs-info"]);
     assert_skipped(&scenario, &result, &passed_over);
-    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, "Needs-Info"]);
 }
 
 #[test]
@@ -274,48 +254,6 @@ fn when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_take
 }
 
 #[test]
-fn a_ready_for_agent_sub_issue_is_never_run_on_its_own_whatever_its_specs_labels() {
-    for spec_labels in [&[][..], &["needs-triage"], &[READY_FOR_AGENT, "needs-info"]] {
-        let scenario = Scenario::new();
-        scenario.spec_has_tickets(7, &[(8, &[])]);
-        scenario.issue_labelled(7, spec_labels);
-        ready_issue(&scenario, 8, &[]);
-
-        let result = scenario.run(&["pickup"]);
-
-        // The Spec's own line is there only when it is labelled
-        // `ready-for-agent` itself.
-        let spec = "#7 labelled needs-info";
-        let ticket = "#8 is a Ticket of #7, which is not ready";
-        let lines = if spec_labels.contains(&READY_FOR_AGENT) {
-            vec![spec, ticket]
-        } else {
-            vec![ticket]
-        };
-        assert_skipped(&scenario, &result, &no_ready_issue_after(&lines));
-        assert_eq!(scenario.issue_labels(8), [READY_FOR_AGENT]);
-        assert_eq!(scenario.issue_labels(7), spec_labels);
-    }
-}
-
-#[test]
-fn a_ticket_numbered_below_its_spec_names_the_spec_that_is_not_ready() {
-    let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &[]);
-    scenario.spec_has_tickets(20, &[(7, &[])]);
-    ready_issue(&scenario, 20, &[]);
-    scenario.issue_blocked_by(20, &[30]);
-
-    let result = scenario.run(&["pickup"]);
-
-    let lines = [
-        "#7 is a Ticket of #20, which is not ready",
-        "#20 blocked by #30",
-    ];
-    assert_skipped(&scenario, &result, &no_ready_issue_after(&lines));
-}
-
-#[test]
 fn a_spec_that_is_a_ready_issue_is_taken_and_its_tickets_get_no_lines() {
     // #7 is a Ticket of the Spec #20, numbered below it, and #21 one numbered
     // above it: both labelled `ready-for-agent`, as the Spec is.
@@ -348,21 +286,6 @@ fn a_spec_that_is_a_ready_issue_is_taken_and_its_tickets_get_no_lines() {
 }
 
 #[test]
-fn an_issue_labelled_base_fix_is_not_taken() {
-    // Whatever its case: GitHub's label names are case-insensitive.
-    for base_fix in ["base-fix", "Base-Fix"] {
-        let scenario = Scenario::new();
-        ready_issue(&scenario, 7, &[base_fix]);
-
-        let result = scenario.run(&["pickup"]);
-
-        let passed_over = no_ready_issue_after(&["#7 labelled base-fix"]);
-        assert_skipped(&scenario, &result, &passed_over);
-        assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, base_fix]);
-    }
-}
-
-#[test]
 fn an_issue_with_an_open_blocker_is_not_taken_and_with_that_blocker_closed_it_is() {
     let scenario = ready_ticket();
     scenario.issue_blocked_by(7, &[5, 6]);
@@ -383,17 +306,6 @@ fn an_issue_with_an_open_blocker_is_not_taken_and_with_that_blocker_closed_it_is
         &pr_from(&scenario, "issue-7"),
         "ready for review",
     );
-}
-
-#[test]
-fn every_open_blocker_is_named_in_the_line() {
-    let scenario = ready_ticket();
-    scenario.issue_blocked_by(7, &[5, 6]);
-
-    let result = scenario.run(&["pickup"]);
-
-    let passed_over = no_ready_issue_after(&["#7 blocked by #5, #6"]);
-    assert_skipped(&scenario, &result, &passed_over);
 }
 
 /// What a Pickup run says of #7 when it was labelled `ready-for-agent` too
@@ -465,60 +377,9 @@ fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_ten_m
     }
 }
 
-#[test]
-fn an_issue_passed_over_for_being_unsettled_is_taken_by_a_later_pass_once_it_has_settled() {
-    let scenario = ready_spec("");
-    let labelled = (TimelineEvent::Labelled(READY_FOR_AGENT), 600);
-    scenario.issue_timeline(7, &[labelled, (TimelineEvent::SubIssueAdded, 9)]);
-    let first = scenario.run(&["pickup"]);
-    let line = "#7 not settled: a sub-issue added or removed less than 10 minutes ago";
-    assert_skipped(&scenario, &first, &no_ready_issue_after(&[line]));
-
-    // The same events, a few minutes on.
-    let labelled = (TimelineEvent::Labelled(READY_FOR_AGENT), 602);
-    scenario.issue_timeline(7, &[labelled, (TimelineEvent::SubIssueAdded, 11)]);
-    let later = scenario.run(&["pickup"]);
-
-    assert_ended_with_pr(&later, &pr_from(&scenario, "issue-7"), "ready for review");
-    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
-}
-
 /// What a Pickup run says of #7 when it is a Spec whose Tickets are all
 /// closed, with nothing started on it.
 const EVERY_TICKET_CLOSED: &str = "#7 every Ticket is closed";
-
-#[test]
-fn each_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
-    // Every reason applies to #7: each row takes the first one away.
-    let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &["needs-info", IN_PROGRESS, "base-fix"]);
-    scenario.spec_has_tickets(3, &[(7, &[])]);
-    scenario.issue_blocked_by(7, &[5]);
-    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
-    scenario.spec_has_tickets(7, &[(4, &[])]);
-    scenario.issue_is(4, "CLOSED");
-    scenario.issue_timeline(7, &[(TimelineEvent::Labelled(READY_FOR_AGENT), 1)]);
-    let expect = |line: &str| {
-        let result = scenario.run(&["pickup"]);
-        assert_skipped(&scenario, &result, &no_ready_issue_after(&[line]));
-    };
-
-    expect("#7 labelled needs-info");
-    scenario.issue_labelled(7, &[READY_FOR_AGENT, IN_PROGRESS, "base-fix"]);
-    expect("#7 labelled in-progress");
-    scenario.issue_labelled(7, &[READY_FOR_AGENT, "base-fix"]);
-    expect("#7 is a Ticket of #3, which is not ready");
-    scenario.spec_has_tickets(3, &[]);
-    expect("#7 labelled base-fix");
-    scenario.issue_labelled(7, &[READY_FOR_AGENT]);
-    expect("#7 blocked by #5");
-    scenario.issue_blocked_by(7, &[]);
-    expect("#7 already started: issue-7 is on origin");
-    scenario.origin_git(&["update-ref", "-d", "refs/heads/issue-7"]);
-    expect(EVERY_TICKET_CLOSED);
-    scenario.spec_has_tickets(7, &[]);
-    expect(LABELLED_TOO_RECENTLY);
-}
 
 /// An open issue labelled `ready-for-agent`, #7, that is a Spec whose
 /// Tickets, #5 and #6, are both closed, with no Spec branch.
@@ -571,21 +432,6 @@ fn with_only_a_spec_whose_tickets_are_all_closed_the_pass_is_skipped_changing_no
 }
 
 #[test]
-fn a_spec_whose_tickets_are_all_closed_and_that_was_started_keeps_its_already_started_line() {
-    let scenario = spec_with_every_ticket_closed();
-    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
-    let result = scenario.run(&["pickup"]);
-    let line = "#7 already started: issue-7 is on origin";
-    assert_skipped(&scenario, &result, &no_ready_issue_after(&[line]));
-
-    let scenario = spec_with_every_ticket_closed();
-    let pr = scenario.github_has_pr("issue-7", "main", "OPEN");
-    let result = scenario.run(&["pickup"]);
-    let line = format!("#7 already started: PR {pr}");
-    assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
-}
-
-#[test]
 fn a_spec_with_one_ticket_still_open_is_taken() {
     let scenario = ready_spec("");
     scenario.issue_is(8, "CLOSED");
@@ -595,24 +441,6 @@ fn a_spec_with_one_ticket_still_open_is_taken() {
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
     assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
     assert_eq!(sessions(&scenario), ["9", "7"]);
-}
-
-#[test]
-fn a_spec_whose_tickets_are_all_closed_is_never_said_to_be_not_settled() {
-    let scenario = spec_with_every_ticket_closed();
-    scenario.issue_timeline(
-        7,
-        &[
-            (TimelineEvent::SubIssueAdded, 5),
-            (TimelineEvent::Labelled(READY_FOR_AGENT), 1),
-        ],
-    );
-
-    let result = scenario.run(&["pickup"]);
-
-    let passed_over = no_ready_issue_after(&[EVERY_TICKET_CLOSED]);
-    assert_skipped(&scenario, &result, &passed_over);
-    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
 }
 
 /// A Ready issue, #7, that is a Spec with two Tickets that don't block each
