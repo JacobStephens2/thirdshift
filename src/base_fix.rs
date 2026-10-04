@@ -177,11 +177,11 @@ impl BaseFix {
     }
 
     /// Fix the Inherited failures in `failed`, the only red checks on the PR
-    /// `pr_url` of the Run on `issue`, started from `launch`, which fail on
-    /// `base` at `base_commit` as its checks there in `failed` say, with a
-    /// Base fix: write its issue, start
-    /// it as a child `thirdshift` and wait for it to merge, after which the
-    /// Run is to merge `base` in and watch CI again. If an open Base fix
+    /// `pr_url` of the Run on `issue`, started from `launch`, which also fail
+    /// on `base` at `base_commit`, where `failed` holds that commit's checks
+    /// of their names, with a Base fix: write its issue, start it as a child `thirdshift` and wait
+    /// for it to merge, after which the Run is to merge `base` in and watch
+    /// CI again. If an open Base fix
     /// issue other than `issue` already names `base` and those checks, no
     /// issue is written: the Run waits for that one to close instead, as its
     /// one Base fix (see [`BaseFix::wait_on`]), or, if a Run from `launch`

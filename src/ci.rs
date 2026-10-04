@@ -159,19 +159,18 @@ fn watch_to_end(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Resul
         check_names(&failed)
     ));
     let on_base = match base_commit {
-        Some(base_commit) => Some(github::checks_on(issue, base_commit)?),
-        None => None,
+        Some(base_commit) => github::checks_on(issue, base_commit)?,
+        None => Vec::new(),
     };
     Ok(Ci::Failed(split(failed, on_base)))
 }
 
 /// Split the checks `failed` on a commit into the branch's own and Inherited
 /// failures, by name, against `on_base`, the checks on the Base branch
-/// commit, if one was given, and pick out the Base branch's checks behind
-/// the Inherited failures. A failed check is inherited when every check of
+/// commit, none if no Base branch commit was given, and pick out the Base
+/// branch's checks behind the Inherited failures. A failed check is inherited when every check of
 /// its name on the Base branch commit failed, and there is at least one.
-fn split(failed: Vec<Check>, on_base: Option<Vec<Check>>) -> FailedChecks {
-    let on_base = on_base.unwrap_or_default();
+fn split(failed: Vec<Check>, on_base: Vec<Check>) -> FailedChecks {
     let (inherited, own): (Vec<Check>, Vec<Check>) = failed.into_iter().partition(|check| {
         let mut same_name = on_base.iter().filter(|base| base.name == check.name);
         // Checks sharing the name with only some of them failed there can't
@@ -249,7 +248,7 @@ mod tests {
         check(name, CheckState::Failed, &format!("https://head/{name}"))
     }
 
-    /// The names and URLs of `checks`, as in `test: <url>`.
+    /// `checks` as [`check_with_url`] writes them.
     fn listed(checks: &[Check]) -> Vec<String> {
         checks.iter().map(check_with_url).collect()
     }
@@ -258,7 +257,7 @@ mod tests {
     fn a_red_check_with_none_of_its_name_on_the_base_branch_is_the_branchs_own() {
         let on_base = vec![check("lint", CheckState::Failed, "https://base/lint")];
 
-        let failed = split(vec![red("test")], Some(on_base));
+        let failed = split(vec![red("test")], on_base);
 
         assert_eq!(listed(&failed.own), ["test: https://head/test"]);
         assert!(failed.inherited.is_empty());
@@ -272,7 +271,7 @@ mod tests {
             check("test", CheckState::Failed, "https://base/test/2"),
         ];
 
-        let failed = split(vec![red("test")], Some(on_base));
+        let failed = split(vec![red("test")], on_base);
 
         assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
@@ -290,7 +289,7 @@ mod tests {
             check("test", CheckState::Passed, "https://base/test/2"),
         ];
 
-        let failed = split(vec![red("test")], Some(on_base));
+        let failed = split(vec![red("test")], on_base);
 
         assert_eq!(listed(&failed.own), ["test: https://head/test"]);
         assert!(failed.inherited.is_empty());
@@ -304,15 +303,16 @@ mod tests {
             check("lint", CheckState::Failed, "https://base/lint"),
         ];
 
-        let failed = split(vec![red("test")], Some(on_base));
+        let failed = split(vec![red("test")], on_base);
 
+        assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
         assert_eq!(listed(&failed.on_base), ["test: https://base/test"]);
     }
 
     #[test]
     fn with_no_base_branch_commit_every_red_check_is_the_branchs_own() {
-        let failed = split(vec![red("test"), red("lint")], None);
+        let failed = split(vec![red("test"), red("lint")], Vec::new());
 
         assert_eq!(
             listed(&failed.own),
