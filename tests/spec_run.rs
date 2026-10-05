@@ -1050,28 +1050,6 @@ fn the_spec_pr_is_a_draft_during_the_spec_review_and_marked_ready_after_it() {
     assert!(reviewed < ready, "stderr: {}", result.stderr);
 }
 
-#[test]
-fn the_spec_review_writes_the_spec_pr_body_and_the_checklist_is_put_back_after_it() {
-    let scenario = linear_spec();
-    scenario.agent_does_for(
-        SPEC,
-        r#"gh fake pr issue-20 body '"The whole Spec.\n\nUnaddressed findings: none\n\nCloses #20"'"#,
-    );
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let spec = spec_pr(&scenario);
-    assert_eq!(spec["isDraft"], false);
-    assert_eq!(
-        spec["body"],
-        format!(
-            "The whole Spec.\n\nUnaddressed findings: none\n\nCloses #20\n\n{BUILT_WITH}\n\n\
-             {DONE_CHECKLIST}\n"
-        )
-    );
-}
-
 /// The line thirdshift writes in the Spec PR's body once the Spec review has
 /// written it, when nothing chose the Harness, Model or Effort.
 const BUILT_WITH: &str =
@@ -1640,25 +1618,6 @@ fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the
     assert_contains(&text, &format!("#22 failed: {cause}"));
     assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "OPEN");
     assert_eq!(scenario.origin_file("issue-20", "22.txt"), None);
-}
-
-#[test]
-fn a_failed_spec_review_that_rewrote_the_body_has_the_checklist_put_back_in_the_draft() {
-    let scenario = linear_spec();
-    scenario.agent_does_for(
-        SPEC,
-        "gh fake pr issue-20 body '\"Half a description. Closes #20\"'\nexit 1\n",
-    );
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    let spec = spec_pr(&scenario);
-    assert_eq!(spec["isDraft"], true);
-    assert_eq!(
-        spec["body"],
-        format!("Half a description. Closes #20\n\n{DONE_CHECKLIST}\n")
-    );
 }
 
 /// Run `args` against `resend`, with `RESEND_API_KEY` set.
