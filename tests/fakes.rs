@@ -1,7 +1,7 @@
-//! The fake `gh` and `claude` the end-to-end tests put first on PATH: one
-//! executable, which acts as whichever its name says. See `fakes/gh.rs` and
-//! `fakes/claude.rs` for what each does, and `support/fakes.rs` for how the
-//! harness builds it.
+//! The fake `gh`, `claude` and `codex` the end-to-end tests put first on
+//! PATH: one executable, which acts as whichever its name says. See
+//! `fakes/gh.rs`, `fakes/claude.rs` and `fakes/codex.rs` for what each does,
+//! and `support/fakes.rs` for how the harness builds it.
 //!
 //! It uses only the standard library, so the harness can build it with plain
 //! `rustc`. It started out as two Python scripts, whose startup cost was about
@@ -15,6 +15,8 @@
 
 #[path = "fakes/claude.rs"]
 mod claude;
+#[path = "fakes/codex.rs"]
+mod codex;
 #[path = "fakes/gh.rs"]
 mod gh;
 #[path = "fakes/json.rs"]
@@ -107,6 +109,7 @@ fn main() {
     match name {
         "gh" => gh::main(args.collect()),
         "claude" => claude::main(args.collect()),
+        "codex" => codex::main(args.collect()),
         _ => die(&format!("fake: no fake is called {name}"), 2),
     }
     exit(0);

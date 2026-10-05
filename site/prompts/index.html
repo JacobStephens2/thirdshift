@@ -38,6 +38,7 @@
     <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
     <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
+    <p class="lede">With <code>harness codex</code>, each session runs <code>codex exec --json --dangerously-bypass-approvals-and-sandbox -m <mark class="ph">&lt;model&gt;</mark> -c model_reasoning_effort="<mark class="ph">&lt;effort&gt;</mark>" -c project_doc_fallback_filenames=["CLAUDE.md"] <mark class="ph">&lt;prompt&gt;</mark></code> instead, without <code>-m <mark class="ph">&lt;model&gt;</mark></code> or the Effort's <code>-c</code> where they are not set, and with <code>resume <mark class="ph">&lt;session id&gt;</mark></code> before the prompt for a Resume. The Factory skills are linked into <code>.agents/skills/</code>, and a prompt's first line loads its skill as <code>$thirdshift-&lt;skill&gt;</code>.</p>
   </div>
 </section>
 <section class="sec" aria-labelledby="prompts-title">

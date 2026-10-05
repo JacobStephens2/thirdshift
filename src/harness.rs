@@ -6,9 +6,10 @@
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, bail};
+use serde_json::Value;
 
 use crate::progress;
 
@@ -41,8 +42,8 @@ impl Harness {
     /// Every Harness, in the order Setup lists them.
     pub const ALL: [Harness; 2] = [Harness::Claude, Harness::Codex];
 
-    /// Why sessions can't run on it on this machine, if they can't: Codex is
-    /// not supported yet, and otherwise its CLI must be on `PATH`.
+    /// Why Setup can't offer it on this machine, if it can't: Setup doesn't
+    /// offer Codex yet, and otherwise its CLI must be on `PATH`.
     pub fn unavailable(self) -> Option<Unavailable> {
         if self == Harness::Codex {
             Some(Unavailable::NotSupportedYet)
@@ -57,7 +58,7 @@ impl Harness {
 /// Why sessions can't run on a Harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unavailable {
-    /// thirdshift can't run its sessions yet.
+    /// Setup doesn't offer it yet.
     NotSupportedYet,
     /// Its CLI isn't on `PATH`.
     NotInstalled,
@@ -198,31 +199,46 @@ impl Choice {
         args
     }
 
-    /// Check, before any work, that sessions can run on this: Codex is not
-    /// supported yet; the Harness's CLI must be on `PATH`; and a Model named
-    /// for Claude must take a minimal test call, with the Effort, if any.
-    /// Each failure says what to change.
-    pub fn check(&self) -> Result<()> {
+    /// The arguments that run a Codex session on its Model and Effort, where
+    /// they are set.
+    pub fn codex_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Some(model) = &self.model {
+            args.extend(["-m".to_string(), model.clone()]);
+        }
+        if let Some(effort) = &self.effort {
+            args.extend([
+                "-c".to_string(),
+                format!("model_reasoning_effort=\"{effort}\""),
+            ]);
+        }
+        args
+    }
+
+    /// Check, before any work, that sessions can run on this, and settle the
+    /// Model and Effort on the names the Harness knows them by. The
+    /// Harness's CLI must be on `PATH`. A Model named for Claude must take a
+    /// minimal test call, with the Effort, if any. A Model or Effort named
+    /// for Codex must be in its catalog, which costs no tokens to read: each
+    /// is matched regardless of case, a Model by its slug or display name,
+    /// and becomes the name Codex takes. Each failure says what to change.
+    pub fn check(&mut self) -> Result<()> {
         let cli = self.harness.name();
-        match self.harness.unavailable() {
-            Some(Unavailable::NotSupportedYet) => bail!(
-                "harness {cli}, chosen by {}, is not supported yet: Codex sessions come in a \
-                 later thirdshift; choose harness claude",
-                self.chosen_by
-            ),
-            Some(Unavailable::NotInstalled) => bail!(
+        if !on_path(cli) {
+            bail!(
                 "{cli} is not on PATH, and the Harness {cli} is chosen by {}: install it, \
                  or choose another Harness",
                 self.chosen_by
-            ),
-            None => {}
+            );
         }
-        self.test_call()
+        match self.harness {
+            Harness::Claude => self.test_call(),
+            Harness::Codex => self.check_codex(),
+        }
     }
 
-    /// Check that the Harness's CLI takes a minimal test call on the Model,
-    /// if one is named, with the Effort, if any. A refusal says what the CLI
-    /// said. Only Claude reaches it while Codex is not supported.
+    /// Check that Claude takes a minimal test call on the Model, if one is
+    /// named, with the Effort, if any. A refusal says what Claude said.
     pub fn test_call(&self) -> Result<()> {
         let cli = self.harness.name();
         let Some(model) = &self.model else {
@@ -249,17 +265,165 @@ impl Choice {
         if output.status.success() {
             return Ok(());
         }
-        let said = [&output.stderr, &output.stdout]
-            .map(|said| String::from_utf8_lossy(said).trim().to_string())
-            .into_iter()
-            .filter(|said| !said.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
         let effort = match &self.effort {
             Some(effort) => format!(" with the Effort {effort}"),
             None => String::new(),
         };
-        bail!("{cli} refused a test call on the Model {model}{effort}: {said}")
+        bail!(
+            "{cli} refused a test call on the Model {model}{effort}: {}",
+            said(&output)
+        )
+    }
+
+    /// Settle the Model and Effort, if either is named, on Codex's names for
+    /// them, from its catalog.
+    fn check_codex(&mut self) -> Result<()> {
+        if self.model.is_none() && self.effort.is_none() {
+            return Ok(());
+        }
+        progress::step("checking the Model and Effort against codex debug models");
+        let output = Command::new("codex")
+            .args(["debug", "models"])
+            .stdin(Stdio::null())
+            .output()
+            .context("could not run codex debug models to check the Model and Effort")?;
+        if !output.status.success() {
+            bail!(
+                "codex debug models failed, so the Model and Effort can't be checked: {}",
+                said(&output)
+            );
+        }
+        let catalog = Catalog::parse(&String::from_utf8_lossy(&output.stdout))?;
+        let settled = catalog.settle(self.model.as_deref(), self.effort.as_deref())?;
+        self.model = settled.model;
+        self.effort = settled.effort;
+        Ok(())
+    }
+}
+
+/// What a CLI said on stderr and stdout, trimmed, each on its own lines.
+fn said(output: &Output) -> String {
+    [&output.stderr, &output.stdout]
+        .map(|said| String::from_utf8_lossy(said).trim().to_string())
+        .into_iter()
+        .filter(|said| !said.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One Model in Codex's catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CatalogModel {
+    /// The name Codex takes.
+    slug: String,
+    display_name: Option<String>,
+    /// The Efforts it supports.
+    efforts: Vec<String>,
+    /// Whether the catalog lists it to choose from.
+    listed: bool,
+}
+
+/// The Models Codex can run, as `codex debug models` prints them.
+#[derive(Debug)]
+struct Catalog {
+    models: Vec<CatalogModel>,
+}
+
+impl Catalog {
+    /// The catalog `codex debug models` printed as `json`.
+    fn parse(json: &str) -> Result<Catalog> {
+        let parsed: Value = serde_json::from_str(json)
+            .context("codex debug models printed no JSON catalog of Models")?;
+        let models = parsed["models"]
+            .as_array()
+            .context("codex debug models printed no list of Models")?
+            .iter()
+            .filter_map(|model| {
+                Some(CatalogModel {
+                    slug: model["slug"].as_str()?.to_string(),
+                    display_name: model["display_name"].as_str().map(String::from),
+                    efforts: model["supported_reasoning_levels"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|level| level["effort"].as_str().map(String::from))
+                        .collect(),
+                    listed: model["visibility"] != "hide",
+                })
+            })
+            .collect();
+        Ok(Catalog { models })
+    }
+
+    /// `model` and `effort` as Codex names them: the slug of the Model whose
+    /// slug or display name is `model`, regardless of case, and the Effort,
+    /// of those that Model supports, or with no Model of those any Model
+    /// supports, that is `effort`, regardless of case. Fails naming the
+    /// valid choices for a Model or Effort the catalog doesn't have.
+    fn settle(&self, model: Option<&str>, effort: Option<&str>) -> Result<ModelAndEffort> {
+        let found = match model {
+            Some(model) => Some(self.model(model)?),
+            None => None,
+        };
+        let Some(effort) = effort else {
+            return Ok(ModelAndEffort {
+                model: found.map(|found| found.slug.clone()),
+                effort: None,
+            });
+        };
+        let efforts: Vec<&str> = match found {
+            Some(found) => found.efforts.iter().map(String::as_str).collect(),
+            None => {
+                let mut efforts = Vec::new();
+                for each in self.models.iter().flat_map(|model| &model.efforts) {
+                    if !efforts.contains(&each.as_str()) {
+                        efforts.push(each.as_str());
+                    }
+                }
+                efforts
+            }
+        };
+        let Some(settled) = efforts
+            .iter()
+            .find(|supported| supported.eq_ignore_ascii_case(effort))
+        else {
+            let of = match found {
+                Some(found) => format!("the Codex Model {}", found.slug),
+                None => "any Codex Model".to_string(),
+            };
+            bail!(
+                "the Effort {effort} is not one {of} supports: choose one of {}",
+                efforts.join(", ")
+            );
+        };
+        Ok(ModelAndEffort {
+            model: found.map(|found| found.slug.clone()),
+            effort: Some(settled.to_string()),
+        })
+    }
+
+    /// The Model whose slug or display name is `name`, regardless of case.
+    fn model(&self, name: &str) -> Result<&CatalogModel> {
+        let named = |candidate: &&CatalogModel| {
+            candidate.slug.eq_ignore_ascii_case(name)
+                || candidate
+                    .display_name
+                    .as_deref()
+                    .is_some_and(|display| display.eq_ignore_ascii_case(name))
+        };
+        if let Some(found) = self.models.iter().find(named) {
+            return Ok(found);
+        }
+        let listed: Vec<&str> = self
+            .models
+            .iter()
+            .filter(|model| model.listed)
+            .map(|model| model.slug.as_str())
+            .collect();
+        bail!(
+            "the Model {name} is not in Codex's catalog: choose one of {}",
+            listed.join(", ")
+        )
     }
 }
 
@@ -456,6 +620,106 @@ mod tests {
             ),
         ] {
             assert_eq!(chosen.built_with(), line);
+        }
+    }
+
+    #[test]
+    fn codex_is_given_the_model_and_the_effort_in_its_config() {
+        for (model, effort, args) in [
+            ("", "", vec![]),
+            ("gpt-6.1-sol", "", vec!["-m", "gpt-6.1-sol"]),
+            (
+                "gpt-6.1-sol",
+                "max",
+                vec!["-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=\"max\""],
+            ),
+        ] {
+            let chosen = choice(Harness::Codex, model, effort, ChosenBy::Command);
+
+            assert_eq!(chosen.codex_args(), args);
+        }
+    }
+
+    /// A catalog as `codex debug models` prints one, trimmed to what is read.
+    fn catalog() -> Catalog {
+        Catalog::parse(
+            r#"{"models": [
+                {"slug": "gpt-6.1-sol", "display_name": "GPT-6.1-Sol", "visibility": "list",
+                 "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}, {"effort": "max"}]},
+                {"slug": "gpt-5.5", "display_name": "GPT-5.5 Classic", "visibility": "list",
+                 "supported_reasoning_levels": [{"effort": "low"}, {"effort": "xhigh"}]},
+                {"slug": "codex-auto-review", "display_name": "Auto review", "visibility": "hide",
+                 "supported_reasoning_levels": [{"effort": "minimal"}]}
+            ]}"#,
+        )
+        .unwrap()
+    }
+
+    fn settled(model: Option<&str>, effort: Option<&str>) -> Result<ModelAndEffort> {
+        catalog().settle(model, effort)
+    }
+
+    #[test]
+    fn a_codex_model_and_effort_match_regardless_of_case_and_become_codexs_names() {
+        for (model, effort, settled_as) in [
+            (Some("GPT-6.1-Sol"), Some("Max"), set("gpt-6.1-sol", "max")),
+            (Some("gpt-6.1-sol"), None, set("gpt-6.1-sol", "")),
+            (
+                Some("gpt-5.5 classic"),
+                Some("XHIGH"),
+                set("gpt-5.5", "xhigh"),
+            ),
+            (
+                Some("codex-auto-review"),
+                None,
+                set("codex-auto-review", ""),
+            ),
+            (None, Some("High"), set("", "high")),
+            (None, None, set("", "")),
+        ] {
+            assert_eq!(
+                settled(model, effort).unwrap(),
+                settled_as,
+                "{model:?} {effort:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_codex_model_fails_naming_the_listed_models() {
+        let error = settled(Some("gpt-7"), Some("max")).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "the Model gpt-7 is not in Codex's catalog: choose one of gpt-6.1-sol, gpt-5.5"
+        );
+    }
+
+    #[test]
+    fn an_effort_the_codex_model_does_not_support_fails_naming_those_it_does() {
+        let error = settled(Some("GPT-5.5"), Some("max")).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "the Effort max is not one the Codex Model gpt-5.5 supports: choose one of low, xhigh"
+        );
+    }
+
+    #[test]
+    fn with_no_codex_model_the_effort_must_be_one_some_model_supports() {
+        let error = settled(None, Some("ultra")).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "the Effort ultra is not one any Codex Model supports: choose one of low, high, max, \
+             xhigh, minimal"
+        );
+    }
+
+    #[test]
+    fn output_that_is_no_catalog_fails() {
+        for output in ["", "not json", r#"{"models": 3}"#] {
+            assert!(Catalog::parse(output).is_err(), "{output}");
         }
     }
 }

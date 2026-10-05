@@ -220,7 +220,7 @@ pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
     launch_pull: bool,
-    harness: &Choice,
+    harness: &mut Choice,
 ) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
     let Launch {
@@ -242,6 +242,7 @@ pub fn run(
         return Ok(skip(&repo, skipped));
     }
     harness.check()?;
+    let harness = &*harness;
     logs::started(Work::ArchitectRun(&repo), harness);
     if launch_pull {
         directory.pull(&base);

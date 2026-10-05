@@ -1,6 +1,6 @@
 //! The Factory skills, embedded at compile time (ADR-0001), written out once
-//! per Command and linked into each worktree its sessions run in, where
-//! Claude Code finds project skills (ADR-0012).
+//! per Command and linked into each worktree its sessions run in, where the
+//! Harness finds project skills (ADR-0012).
 
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
@@ -13,29 +13,34 @@ use include_dir::{Dir, include_dir};
 use tempfile::TempDir;
 
 use crate::git::Git;
+use crate::harness::Harness;
 
 /// The Factory skills, as they are written out and the Prompts and skills
 /// page shows them, each in its `thirdshift-<skill>` directory.
 pub static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
-/// Where in a worktree Claude Code finds its project skills.
-const PROJECT_SKILLS: &str = ".claude/skills";
-
-/// The `.git/info/exclude` pattern that keeps the linked skills out of git.
-const EXCLUDE: &str = "/.claude/skills/thirdshift-*";
+/// Where in a worktree `harness` finds its project skills.
+fn project_skills(harness: Harness) -> &'static str {
+    match harness {
+        Harness::Claude => ".claude/skills",
+        Harness::Codex => ".agents/skills",
+    }
+}
 
 /// The temp directory the Command wrote the Factory skills out to, once it
 /// has.
 static WRITTEN: Mutex<Option<TempDir>> = Mutex::new(None);
 
-/// Link every Factory skill into `worktree`'s `.claude/skills/`, writing them
-/// out first if the Command has not yet, and make sure the repository's
-/// `.git/info/exclude` keeps them out of git. The links are left in place:
-/// they go with the worktree.
-pub fn link_into(worktree: &Path) -> Result<()> {
+/// Link every Factory skill into `worktree`'s project skills for `harness`,
+/// `.claude/skills/` or `.agents/skills/`, writing them out first if the
+/// Command has not yet, and make sure the repository's `.git/info/exclude`
+/// keeps them out of git. The links are left in place: they go with the
+/// worktree.
+pub fn link_into(worktree: &Path, harness: Harness) -> Result<()> {
     let written = written_out()?;
-    exclude(&Git::new(worktree))?;
-    let project_skills = worktree.join(PROJECT_SKILLS);
+    let dir = project_skills(harness);
+    exclude(&Git::new(worktree), &format!("/{dir}/thirdshift-*"))?;
+    let project_skills = worktree.join(dir);
     fs::create_dir_all(&project_skills)
         .with_context(|| format!("could not create {}", project_skills.display()))?;
     for skill in SKILLS.dirs() {
@@ -80,11 +85,11 @@ fn written_out() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Add [`EXCLUDE`] to the `.git/info/exclude` of the repository `git` works
-/// in, unless it is there already. The file is shared by every worktree, so
-/// the entry is left there, under a lock other Runs from the same Launch
-/// directory take too.
-fn exclude(git: &Git) -> Result<()> {
+/// Add the pattern `exclude` to the `.git/info/exclude` of the repository
+/// `git` works in, unless it is there already. The file is shared by every
+/// worktree, so the entry is left there, under a lock other Runs from the
+/// same Launch directory take too.
+fn exclude(git: &Git, exclude: &str) -> Result<()> {
     let _lock = git.lock("thirdshift-exclude.lock")?;
     let info = git.common_dir()?.join("info");
     let path = info.join("exclude");
@@ -95,7 +100,7 @@ fn exclude(git: &Git) -> Result<()> {
             return Err(error).with_context(|| format!("could not read {}", path.display()));
         }
     };
-    if existing.lines().any(|line| line == EXCLUDE) {
+    if existing.lines().any(|line| line == exclude) {
         return Ok(());
     }
     fs::create_dir_all(&info).with_context(|| format!("could not create {}", info.display()))?;
@@ -108,6 +113,6 @@ fn exclude(git: &Git) -> Result<()> {
         .create(true)
         .append(true)
         .open(&path)
-        .and_then(|mut file| writeln!(file, "{separator}{EXCLUDE}"))
+        .and_then(|mut file| writeln!(file, "{separator}{exclude}"))
         .with_context(|| format!("could not add the Factory skills to {}", path.display()))
 }

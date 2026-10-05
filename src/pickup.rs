@@ -112,7 +112,7 @@ impl fmt::Display for Skipped {
 /// it dispatches will run its sessions on, failing before any work if they
 /// can't run; then it records that it started work on the issue, which
 /// keeps its Command log.
-pub fn run(base: Option<&str>, limit: NonZeroUsize, harness: &Choice) -> Result<Outcome> {
+pub fn run(base: Option<&str>, limit: NonZeroUsize, harness: &mut Choice) -> Result<Outcome> {
     let Launch {
         directory,
         repo,

@@ -85,11 +85,14 @@ default takes [harness.claude]:
     model = \"opus\"
     effort = \"high\"
 
-Before any work, the Harness's CLI must be on PATH, and a named Model gets a minimal test call
-with its Effort, which must succeed: a failure stops the command naming what to fix, before
-the Claim, the worktree and any Command log. Only claude works for now: harness codex fails as
-not supported yet. The Command log, the Activity log's start line, the pull request's body,
-as in Built with claude · opus · high, and the Run notification each name all three.
+Before any work, the Harness's CLI must be on PATH. On claude, a named Model gets a minimal
+test call with its Effort, which must succeed. On codex, a named Model and Effort must be in
+codex debug models, matched regardless of case, a Model by slug or display name, and are
+passed on as Codex names them. A failure stops the command naming what to fix, before the
+Claim, the worktree and any Command log. Codex sessions run codex exec --json
+--dangerously-bypass-approvals-and-sandbox, with the skills in .agents/skills/. The Command
+log, the Activity log's start line, the pull request's body, as in Built with claude · opus ·
+high, and the Run notification each name all three.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
@@ -383,12 +386,13 @@ fn main() -> ExitCode {
         Ok(started) => started,
         Err(failure) => return failure,
     };
-    let asks = asks_of(&config);
-    started.built_with(&asks.harness);
+    let mut asks = asks_of(&config);
     let started_by = given
         .as_ref()
         .map_or(StartedBy::Command, |given| StartedBy::Child(&given.kind));
-    started.finish(Ending::Run(run::run_to_end(&issue, &asks, started_by)))
+    let ended = run::run_to_end(&issue, &mut asks, started_by);
+    started.built_with(&asks.harness);
+    started.finish(Ending::Run(ended))
 }
 
 /// An Architect run: the Architecture review and its plan marked ready, then,
@@ -420,14 +424,15 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Ok(started) => started,
         Err(failure) => return failure,
     };
-    let harness = args.flags.harness(&config);
-    started.built_with(&harness);
-    let review = match architect::run(
+    let mut harness = args.flags.harness(&config);
+    let review = architect::run(
         args.focus.as_deref(),
         args.base.as_deref(),
         config.launch_pull,
-        &harness,
-    ) {
+        &mut harness,
+    );
+    started.built_with(&harness);
+    let review = match review {
         Ok(Outcome::Skipped(skipped)) => {
             return started.finish(Ending::Skipped(skipped.into()));
         }
@@ -440,9 +445,12 @@ fn architect(args: ArchitectArgs) -> ExitCode {
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
             ));
-            let asks = Asks::of_architect_plan(plan, &args.flags, &config);
+            let mut asks = Asks {
+                harness: harness.clone(),
+                ..Asks::of_architect_plan(plan, &args.flags, &config)
+            };
             let started_by = StartedBy::Dispatch { base };
-            Some(run::run_to_end(plan, &asks, started_by))
+            Some(run::run_to_end(plan, &mut asks, started_by))
         }
         _ => None,
     };
@@ -470,9 +478,10 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Ok(started) => started,
         Err(failure) => return failure,
     };
-    let harness = args.flags.harness(&config);
+    let mut harness = args.flags.harness(&config);
+    let taken = pickup::run(args.base.as_deref(), config.pickup_limit, &mut harness);
     started.built_with(&harness);
-    let taken = match pickup::run(args.base.as_deref(), config.pickup_limit, &harness) {
+    let taken = match taken {
         Ok(pickup::Outcome::Taken(taken)) => taken,
         Ok(pickup::Outcome::Skipped(skipped)) => {
             return started.finish(Ending::Skipped(skipped.into()));
@@ -480,11 +489,14 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Err(error) => return failure(&error),
     };
     started.took(&taken.issue, taken.title);
-    let asks = Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config);
+    let mut asks = Asks {
+        harness,
+        ..Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config)
+    };
     let started_by = StartedBy::Dispatch { base: &taken.base };
     started.finish(Ending::Run(run::run_to_end(
         &taken.issue,
-        &asks,
+        &mut asks,
         started_by,
     )))
 }
