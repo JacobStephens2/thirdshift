@@ -3,6 +3,11 @@
 //! (ADR-0006), then the Spec review and the Spec PR from the Spec branch into
 //! the Base branch, kept mergeable and green like a Run's PR, and Self-merged
 //! when the Spec run was asked to merge.
+//!
+//! Its lifecycle reaches the child Runs, GitHub, the Spec PR, the Delivery,
+//! the interrupt and the progress lines only through [`Outside`]:
+//! [`ChildRunsAndGitHub`] does that for real; `Scripted`, in tests, from a
+//! script, recording each call.
 
 mod spec_pr;
 mod ticket_board;
@@ -16,7 +21,7 @@ use anyhow::{Result, bail};
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{self, Ended, Handle, Kind};
 use crate::delivery::{Delivery, Opening};
-use crate::failed_run::FailedRun;
+use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{self, Ticket};
 use crate::harness::Choice;
 use crate::interrupt;
@@ -41,23 +46,11 @@ pub fn all_closed(open: impl IntoIterator<Item = bool>) -> bool {
 
 /// Take the Spec, `delivery`'s issue, whose Tickets were last read as
 /// `tickets`, from its Spec branch, checked out in `worktree`, to a Spec PR
-/// into `delivery`'s Base branch that reaches its goal. The Spec branch is
-/// pushed before any Ticket starts, and up to `parallel` Tickets run at once,
-/// the graph read again whenever one ends. The Spec PR is opened as a draft
-/// once the first Ticket lands, or turned back into a draft if it is already
-/// open, and its Tickets checklist rewritten as Tickets start and end. A
-/// Ticket that fails stops only the Tickets it blocks; with any Ticket not
-/// done, this is a Failed spec run, which leaves the Spec PR, if there is
-/// one, a draft. An interrupt ends it too, once the running Tickets' Runs
-/// have ended, starting nothing more. Once every Ticket has landed, the
-/// Spec PR is taken to its goal by `delivery`, opening with the Spec review
-/// on the Spec branch caught up from origin, and the Tickets checklist put
-/// back in the Spec PR's body before it is marked ready, and again if the
-/// Delivery fails. The worktree is cleaned up when this returns, or kept by
-/// the Failed run path if its work did not reach origin. However it ends, it
-/// carries a line on each Ticket it landed or did not get done, for the Run
-/// notification. If `delivery`'s Base fix may start one, so may each
-/// Ticket's Run, into the Spec branch.
+/// into `delivery`'s Base branch that reaches its goal, as [`run_through`]
+/// says, once the Spec PR, if it is open, is turned back into a draft. The
+/// worktree is cleaned up when this returns, or kept by the Failed run path
+/// if its work did not reach origin. If `delivery`'s Base fix may start one,
+/// so may each Ticket's Run, into the Spec branch.
 pub fn run(
     tickets: Vec<Ticket>,
     worktree: Worktree,
@@ -65,17 +58,49 @@ pub fn run(
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
     let (spec, base) = (delivery.issue, delivery.base);
-    let mut spec_pr = SpecPr::resume(spec, worktree.branch(), base)?;
-    let base_fix = delivery.base_fix.ask_of_tickets();
-    let mut outside =
-        ChildRunsAndGitHub::new(spec, &worktree, &base_fix, delivery.harness, &mut spec_pr);
-    let (ticket_lines, landed) = land_tickets(&mut outside, tickets, parallel);
+    let branch = worktree.branch().to_string();
+    let spec_pr = SpecPr::resume(spec, &branch, base)?;
+    let mut outside = ChildRunsAndGitHub::new(worktree, delivery, spec_pr);
+    run_through(&mut outside, spec, base, &branch, tickets, parallel)
+}
+
+/// Take `spec`, whose Tickets were last read as `tickets`, from its Spec
+/// branch `branch` to a Spec PR into `base` that reaches its goal, all
+/// through `outside`. The Spec branch is pushed before any Ticket starts,
+/// and up to `parallel` Tickets run at once, the graph read again whenever
+/// one ends. The Spec PR is opened as a draft once the first Ticket lands,
+/// and its Tickets checklist rewritten as Tickets start and end. A Ticket
+/// that fails stops only the Tickets it blocks; with any Ticket not done,
+/// this is a Failed spec run, with the Spec PR's URL if it is open, which
+/// leaves it a draft. An interrupt ends it too, once the running Tickets'
+/// Runs have ended, starting nothing more. Once every Ticket has landed,
+/// the Spec PR is told so, and taken to its goal by the Delivery, opening
+/// with the Spec review on the Spec branch caught up from origin, and the
+/// Tickets checklist put back in the Spec PR's body before it is marked
+/// ready, and shown again if the Delivery fails. However it ends, it carries
+/// a line on each Ticket it landed or did not get done, for the Run
+/// notification.
+fn run_through(
+    outside: &mut impl Outside,
+    spec: &IssueUrl,
+    base: &str,
+    branch: &str,
+    tickets: Vec<Ticket>,
+    parallel: NonZeroUsize,
+) -> Result<Reached, FailedRun> {
+    let (ticket_lines, landed) = land_tickets(outside, tickets, parallel);
     let ended = match landed {
-        Ok(checklist) => review_and_deliver(worktree, spec_pr, &checklist, delivery),
-        Err(error) => Err(FailedRun {
-            pr_url: spec_pr.url().map(str::to_string),
-            ..FailedRun::from(error)
-        }),
+        Ok(checklist) => review_and_deliver(outside, spec, base, branch, &checklist),
+        Err(error) => {
+            let interrupted = outside.interrupted();
+            Err(FailedRun {
+                error: interrupted_or(error, interrupted),
+                pr_url: outside.spec_pr_url(),
+                log: None,
+                interrupted,
+                ticket_lines: Vec::new(),
+            })
+        }
     };
     match ended {
         Ok(reached) => Ok(Reached {
@@ -89,33 +114,34 @@ pub fn run(
     }
 }
 
-/// Once every Ticket has landed: tell `spec_pr` so, with `checklist`, which
-/// opens it if it is not open, then take it to its goal by `delivery`,
-/// opening with the Spec review, as [`run`] does.
+/// Once every Ticket has landed: tell the Spec PR so, with `checklist`,
+/// which opens it if it is not open, then take it to its goal by the
+/// Delivery, opening with the Spec review, all through `outside`, as
+/// [`run_through`] does.
 fn review_and_deliver(
-    worktree: Worktree,
-    mut spec_pr: SpecPr,
+    outside: &mut impl Outside,
+    spec: &IssueUrl,
+    base: &str,
+    branch: &str,
     checklist: &str,
-    delivery: Delivery,
 ) -> Result<Reached, FailedRun> {
-    let (spec, base) = (delivery.issue, delivery.base);
-    let spec_pr_url = spec_pr.landed(checklist)?;
+    let spec_pr_url = outside.landed(checklist)?;
     let opening = Opening {
         kind: SPEC_REVIEW,
-        prompt: prompt::spec_review(spec, base, worktree.branch(), spec_pr_url),
+        prompt: prompt::spec_review(spec, base, branch, &spec_pr_url),
         catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
-    let delivered = delivery.deliver(worktree, opening, || spec_pr.put_back(checklist));
+    let delivered = outside.deliver(opening, |outside| outside.put_back(checklist));
     if delivered.is_err() {
-        spec_pr.show(checklist);
+        outside.show(checklist);
     }
     delivered
 }
 
-/// What the Spec run's Ticket loop does or reads outside itself: the push of
-/// the Spec branch, the Tickets' child Runs, the graph read again, the Spec
-/// PR, the interrupt and the loop's progress lines.
+/// What the Spec run does or reads outside itself: the push of the Spec
+/// branch, the Tickets' child Runs, the graph read again, the Spec PR, the
+/// Delivery, the interrupt and its progress lines.
 trait Outside {
     /// Push the Spec branch to origin.
     fn push(&mut self) -> Result<()>;
@@ -129,62 +155,80 @@ trait Outside {
     /// Show `checklist` as the Spec PR's Tickets checklist, if it is open.
     fn show(&mut self, checklist: &str);
     /// A Ticket landed: open the Spec PR as a draft with `checklist`, or
-    /// show it.
-    fn landed(&mut self, checklist: &str) -> Result<()>;
+    /// show it. Returns the Spec PR's URL.
+    fn landed(&mut self, checklist: &str) -> Result<String>;
+    /// The Spec PR's URL, if it is open.
+    fn spec_pr_url(&mut self) -> Option<String>;
+    /// Put `checklist` back in the Spec PR's body.
+    fn put_back(&mut self, checklist: &str) -> Result<()>;
+    /// Take the Spec PR to its goal by the Delivery, opening with `opening`,
+    /// running `before_ready` before the Spec PR is marked ready. Called at
+    /// most once, after the Ticket loop.
+    fn deliver(
+        &mut self,
+        opening: Opening,
+        before_ready: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<Reached, FailedRun>;
     /// Whether the Spec run was interrupted.
     fn interrupted(&mut self) -> bool;
     /// Write the progress line `line`.
     fn step(&mut self, line: String);
 }
 
-/// The outside world of the Ticket loop of a Spec run on `spec`, from its
-/// Spec branch checked out in `worktree`: child `thirdshift` Runs, each of
-/// which may start a Base fix if `base_fix` allows one, and runs its sessions
-/// on `harness`, whose threads send how each ended on `ended`, received from
-/// `endings`, GitHub and the Spec PR `spec_pr`.
-struct ChildRunsAndGitHub<'a, 'pr> {
+/// The outside world of a Spec run on `delivery`'s Spec, from its Spec
+/// branch checked out in `worktree`: child `thirdshift` Runs, each of which
+/// may start a Base fix if `base_fix` allows one, and runs its sessions on
+/// `harness`, whose threads send how each ended on `ended`, received from
+/// `endings`, GitHub, the Spec PR `spec_pr`, and `delivery`, which takes the
+/// worktree when it starts.
+struct ChildRunsAndGitHub<'a> {
     spec: &'a IssueUrl,
-    worktree: &'a Worktree,
-    base_fix: &'a BaseFixAsk,
+    /// Held until the Delivery starts, which takes it.
+    worktree: Option<Worktree>,
+    /// Held until it starts.
+    delivery: Option<Delivery<'a>>,
+    base_fix: BaseFixAsk,
     harness: &'a Choice,
-    spec_pr: &'a mut SpecPr<'pr>,
+    spec_pr: SpecPr<'a>,
     ended: Sender<(u64, Result<Ended>)>,
     endings: Receiver<(u64, Result<Ended>)>,
 }
 
-impl<'a, 'pr> ChildRunsAndGitHub<'a, 'pr> {
-    /// The outside world of the Ticket loop of a Spec run on `spec`, as the
-    /// struct says, with no Ticket's Run started yet.
-    fn new(
-        spec: &'a IssueUrl,
-        worktree: &'a Worktree,
-        base_fix: &'a BaseFixAsk,
-        harness: &'a Choice,
-        spec_pr: &'a mut SpecPr<'pr>,
-    ) -> Self {
+impl<'a> ChildRunsAndGitHub<'a> {
+    /// The outside world of a Spec run, as the struct says, with no Ticket's
+    /// Run started yet.
+    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: SpecPr<'a>) -> Self {
         let (ended, endings) = mpsc::channel();
         Self {
-            spec,
-            worktree,
-            base_fix,
-            harness,
+            spec: delivery.issue,
+            worktree: Some(worktree),
+            base_fix: delivery.base_fix.ask_of_tickets(),
+            harness: delivery.harness,
+            delivery: Some(delivery),
             spec_pr,
             ended,
             endings,
         }
     }
+
+    /// The worktree, before the Delivery takes it.
+    fn worktree(&self) -> &Worktree {
+        self.worktree
+            .as_ref()
+            .expect("the Ticket loop runs before the Delivery")
+    }
 }
 
-impl Outside for ChildRunsAndGitHub<'_, '_> {
+impl Outside for ChildRunsAndGitHub<'_> {
     fn push(&mut self) -> Result<()> {
-        self.worktree.push()
+        self.worktree().push()
     }
 
     /// A child `thirdshift` from the same Launch directory, and a thread
     /// that waits for it, relaying its stderr, and sends how it ended.
     fn start_ticket(&mut self, number: u64) -> Result<()> {
         let kind = Kind::Ticket {
-            spec_branch: self.worktree.branch().to_string(),
+            spec_branch: self.worktree().branch().to_string(),
         };
         let ticket = self.spec.sibling(number);
         let child = child_run::start(&ticket, kind, self.base_fix.clone(), self.harness)?;
@@ -209,8 +253,28 @@ impl Outside for ChildRunsAndGitHub<'_, '_> {
         self.spec_pr.show(checklist);
     }
 
-    fn landed(&mut self, checklist: &str) -> Result<()> {
-        self.spec_pr.landed(checklist).map(|_| ())
+    fn landed(&mut self, checklist: &str) -> Result<String> {
+        self.spec_pr.landed(checklist).map(str::to_string)
+    }
+
+    fn spec_pr_url(&mut self) -> Option<String> {
+        self.spec_pr.url().map(str::to_string)
+    }
+
+    fn put_back(&mut self, checklist: &str) -> Result<()> {
+        self.spec_pr.put_back(checklist)
+    }
+
+    /// Hands the worktree and the Delivery over, then lends `self` to
+    /// `before_ready`, as the Delivery no longer borrows it.
+    fn deliver(
+        &mut self,
+        opening: Opening,
+        before_ready: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<Reached, FailedRun> {
+        let worktree = self.worktree.take().expect("the Delivery starts once");
+        let delivery = self.delivery.take().expect("the Delivery starts once");
+        delivery.deliver(worktree, opening, || before_ready(self))
     }
 
     fn interrupted(&mut self) -> bool {
@@ -340,12 +404,20 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::path::PathBuf;
 
     use anyhow::anyhow;
 
     use super::*;
+    use crate::run::Goal;
 
-    /// What the Ticket loop did outside itself, in the order it did it.
+    /// The Spec PR's URL, once it is open.
+    const SPEC_PR: &str = "https://github.com/acme/widgets/pull/2";
+
+    /// The Delivery's Session log.
+    const DELIVERY_LOG: &str = "/logs/20-spec-review.jsonl";
+
+    /// What the Spec run did outside itself, in the order it did it.
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Did {
         /// Pushed the Spec branch.
@@ -360,6 +432,17 @@ mod tests {
         Show(String),
         /// Told the Spec PR a Ticket landed, with this checklist.
         Landed(String),
+        /// Put this checklist back in the Spec PR's body.
+        PutBack(String),
+        /// Started the Delivery, opening with the session of this kind and
+        /// prompt, caught up from origin first if `catch_up`.
+        Deliver {
+            kind: String,
+            prompt: String,
+            catch_up: bool,
+        },
+        /// The Delivery marked the Spec PR ready.
+        Ready,
         /// Wrote this progress line.
         Line(String),
     }
@@ -401,13 +484,20 @@ mod tests {
         reads: VecDeque<Read>,
         /// Whether opening the Spec PR, once a Ticket lands, fails.
         landed_fails: bool,
+        /// Whether the Spec PR is open before any Ticket lands.
+        spec_pr_open: bool,
+        /// Whether putting the checklist back fails.
+        put_back_fails: bool,
+        /// Whether the Delivery fails once the Spec PR is ready.
+        delivery_fails: bool,
         /// How many times the Spec run is found not interrupted before it is.
         interrupted_after: Option<usize>,
     }
 
-    /// The outside world as `script` answers it, with what the Ticket loop
-    /// did there recorded in `did`. A Ticket whose Run reached its goal is
-    /// closed, as its Run's Self-merge closes it on GitHub.
+    /// The outside world as `script` answers it, with what the Spec run did
+    /// there recorded in `did`. A Ticket whose Run reached its goal is
+    /// closed, as its Run's Self-merge closes it on GitHub, and the Spec PR
+    /// is open once opening it works.
     struct Scripted {
         script: Script,
         did: Vec<Did>,
@@ -415,11 +505,14 @@ mod tests {
         running: Vec<u64>,
         /// How many times the Spec run was found not interrupted.
         not_interrupted: usize,
+        /// Whether the Spec PR is open.
+        spec_pr_open: bool,
     }
 
     impl Scripted {
         fn new(script: Script) -> Self {
             Scripted {
+                spec_pr_open: script.spec_pr_open,
                 script,
                 did: Vec::new(),
                 running: Vec::new(),
@@ -457,7 +550,7 @@ mod tests {
                 .collect()
         }
 
-        /// What the Ticket loop did that is one of `kinds`.
+        /// What the Spec run did that is one of `kinds`.
         fn did_only(&self, kinds: fn(&Did) -> bool) -> Vec<Did> {
             self.did.iter().filter(|did| kinds(did)).cloned().collect()
         }
@@ -518,12 +611,61 @@ mod tests {
             self.did.push(Did::Show(checklist.to_string()));
         }
 
-        fn landed(&mut self, checklist: &str) -> Result<()> {
+        fn landed(&mut self, checklist: &str) -> Result<String> {
             self.did.push(Did::Landed(checklist.to_string()));
             if self.script.landed_fails {
                 bail!("could not open the Spec PR");
             }
+            self.spec_pr_open = true;
+            Ok(SPEC_PR.to_string())
+        }
+
+        fn spec_pr_url(&mut self) -> Option<String> {
+            self.spec_pr_open.then(|| SPEC_PR.to_string())
+        }
+
+        fn put_back(&mut self, checklist: &str) -> Result<()> {
+            self.did.push(Did::PutBack(checklist.to_string()));
+            if self.script.put_back_fails {
+                bail!("could not put the Tickets checklist back");
+            }
             Ok(())
+        }
+
+        /// Runs `before_ready`, then marks the Spec PR ready, as the
+        /// Delivery does, failing as the Failed run path would.
+        fn deliver(
+            &mut self,
+            opening: Opening,
+            before_ready: impl FnOnce(&mut Self) -> Result<()>,
+        ) -> Result<Reached, FailedRun> {
+            self.did.push(Did::Deliver {
+                kind: opening.kind.to_string(),
+                prompt: opening.prompt,
+                catch_up: opening.catch_up_from_origin,
+            });
+            let delivered = before_ready(self).and_then(|()| {
+                self.did.push(Did::Ready);
+                if self.script.delivery_fails {
+                    bail!("checks failed on the Spec PR");
+                }
+                Ok(())
+            });
+            match delivered {
+                Ok(()) => Ok(Reached {
+                    pr_url: SPEC_PR.to_string(),
+                    goal: Goal::ReadyForReview,
+                    log: Some(PathBuf::from(DELIVERY_LOG)),
+                    ticket_lines: Vec::new(),
+                }),
+                Err(error) => Err(FailedRun {
+                    error,
+                    pr_url: Some(SPEC_PR.to_string()),
+                    log: Some(PathBuf::from(DELIVERY_LOG)),
+                    interrupted: false,
+                    ticket_lines: Vec::new(),
+                }),
+            }
         }
 
         fn interrupted(&mut self) -> bool {
@@ -588,6 +730,49 @@ mod tests {
     fn land(outside: &mut Scripted, parallel: usize) -> (Vec<String>, Result<String>) {
         let tickets = outside.graph();
         land_tickets(outside, tickets, NonZeroUsize::new(parallel).unwrap())
+    }
+
+    /// Take Spec #20, its Tickets as `outside` has them, up to `parallel`
+    /// at once, from its Spec branch `issue-20` to a Spec PR into `main`.
+    fn spec_run(outside: &mut Scripted, parallel: usize) -> Result<Reached, FailedRun> {
+        let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
+        let tickets = outside.graph();
+        let parallel = NonZeroUsize::new(parallel).unwrap();
+        run_through(outside, &spec, "main", "issue-20", tickets, parallel)
+    }
+
+    /// The Reached of `ended`, which must be one.
+    fn reached_of(ended: Result<Reached, FailedRun>) -> Reached {
+        match ended {
+            Ok(reached) => reached,
+            Err(failed) => panic!("failed: {:#}", failed.error),
+        }
+    }
+
+    /// The Failed spec run of `ended`, which must be one.
+    fn failed_of(ended: Result<Reached, FailedRun>) -> FailedRun {
+        match ended {
+            Ok(reached) => panic!("reached {}", reached.pr_url),
+            Err(failed) => failed,
+        }
+    }
+
+    /// The Spec review's Opening, as the Delivery of Spec #20 starts it.
+    fn spec_review_opening() -> Did {
+        let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
+        Did::Deliver {
+            kind: "spec-review".to_string(),
+            prompt: prompt::spec_review(&spec, "main", "issue-20", SPEC_PR),
+            catch_up: true,
+        }
+    }
+
+    /// Spec PR calls and the Delivery's steps only.
+    fn after_the_loop(did: &Did) -> bool {
+        matches!(
+            did,
+            Did::Landed(_) | Did::Show(_) | Did::PutBack(_) | Did::Deliver { .. } | Did::Ready
+        )
     }
 
     /// The error of `result`, which must be one.
@@ -1049,6 +1234,171 @@ mod tests {
         assert_eq!(
             outside.did_only(progress_lines),
             [line("starting #21"), line("starting #22")]
+        );
+    }
+
+    #[test]
+    fn once_every_ticket_lands_the_spec_pr_is_told_then_delivered_with_the_spec_review_and_the_checklist_put_back_before_ready()
+     {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[])],
+            ..Script::default()
+        });
+
+        let reached = reached_of(spec_run(&mut outside, 3));
+
+        let done = checklist(&["[x] #21 landed"]);
+        assert_eq!(
+            outside.did_only(after_the_loop),
+            [
+                Did::Show(checklist(&["[ ] #21 running"])),
+                Did::Landed(done.clone()),
+                Did::Landed(done.clone()),
+                spec_review_opening(),
+                Did::PutBack(done),
+                Did::Ready,
+            ]
+        );
+        assert_eq!(reached.pr_url, SPEC_PR);
+        assert_eq!(reached.log, Some(PathBuf::from(DELIVERY_LOG)));
+        assert_eq!(reached.ticket_lines, ["#21 landed"]);
+    }
+
+    #[test]
+    fn a_failed_landing_means_no_delivery_and_carries_the_spec_prs_url_and_the_ticket_lines() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[]), open(22, &[])],
+            endings: VecDeque::from([(21, Ok(failed("claude exited 1")))]),
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 1));
+
+        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21");
+        assert_eq!(failed.pr_url.as_deref(), Some(SPEC_PR));
+        assert_eq!(failed.log, None);
+        assert!(!failed.interrupted);
+        assert_eq!(
+            failed.ticket_lines,
+            [
+                "#21 failed: claude exited 1 (session log: /logs/session.jsonl)",
+                "#22 landed"
+            ]
+        );
+        assert!(
+            !outside
+                .did
+                .iter()
+                .any(|did| matches!(did, Did::Deliver { .. }))
+        );
+    }
+
+    #[test]
+    fn a_failed_landing_with_no_spec_pr_open_carries_no_pr_url() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![labelled(21, "needs-info")],
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 3));
+
+        assert_eq!(failed.pr_url, None);
+        assert_eq!(failed.ticket_lines, ["#21 unready: labelled needs-info"]);
+    }
+
+    #[test]
+    fn a_failed_landing_with_an_interrupt_requested_ends_as_interrupted() {
+        // Found not interrupted before #21, the only time the loop asks once
+        // its start failed; the interrupt comes as the landing fails.
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[])],
+            spec_pr_open: true,
+            start_fails: vec![21],
+            interrupted_after: Some(1),
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 3));
+
+        assert!(failed.interrupted);
+        assert_eq!(format!("{:#}", failed.error), "interrupted");
+        assert_eq!(failed.pr_url.as_deref(), Some(SPEC_PR));
+        assert_eq!(failed.ticket_lines, ["#21 not started"]);
+    }
+
+    #[test]
+    fn a_spec_pr_that_cannot_be_opened_after_the_last_landing_means_no_delivery() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![closed(21)],
+            landed_fails: true,
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 3));
+
+        assert_eq!(format!("{:#}", failed.error), "could not open the Spec PR");
+        assert_eq!(failed.pr_url, None);
+        assert_eq!(
+            outside.did_only(after_the_loop),
+            [Did::Landed(checklist(&["[x] #21 done"]))]
+        );
+    }
+
+    #[test]
+    fn a_failed_delivery_shows_the_checklist_again_and_keeps_its_pr_url_log_and_the_ticket_lines() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[])],
+            delivery_fails: true,
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 3));
+
+        let done = checklist(&["[x] #21 landed"]);
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "checks failed on the Spec PR"
+        );
+        assert_eq!(
+            outside.did_only(after_the_loop),
+            [
+                Did::Show(checklist(&["[ ] #21 running"])),
+                Did::Landed(done.clone()),
+                Did::Landed(done.clone()),
+                spec_review_opening(),
+                Did::PutBack(done.clone()),
+                Did::Ready,
+                Did::Show(done),
+            ]
+        );
+        assert_eq!(failed.pr_url.as_deref(), Some(SPEC_PR));
+        assert_eq!(failed.log, Some(PathBuf::from(DELIVERY_LOG)));
+        assert_eq!(failed.ticket_lines, ["#21 landed"]);
+    }
+
+    #[test]
+    fn a_put_back_that_fails_fails_the_delivery_before_ready() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![closed(21)],
+            put_back_fails: true,
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 3));
+
+        let done = checklist(&["[x] #21 done"]);
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "could not put the Tickets checklist back"
+        );
+        assert_eq!(
+            outside.did_only(after_the_loop),
+            [
+                Did::Landed(done.clone()),
+                spec_review_opening(),
+                Did::PutBack(done.clone()),
+                Did::Show(done),
+            ]
         );
     }
 }
