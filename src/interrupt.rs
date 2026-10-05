@@ -27,12 +27,6 @@ pub fn requested() -> bool {
         .is_some_and(|flag| flag.load(Ordering::SeqCst))
 }
 
-/// Run `step`, and once more if it failed with the Run interrupted: Ctrl-C in
-/// a terminal also kills the git or gh the step was running.
-pub fn retry_if_interrupted(step: impl Fn() -> Result<()>) -> Result<()> {
-    step().or_else(|error| if requested() { step() } else { Err(error) })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
