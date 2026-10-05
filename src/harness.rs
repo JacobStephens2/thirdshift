@@ -37,6 +37,40 @@ impl Harness {
             Harness::Codex => "codex",
         }
     }
+
+    /// Every Harness, in the order Setup lists them.
+    pub const ALL: [Harness; 2] = [Harness::Claude, Harness::Codex];
+
+    /// Why sessions can't run on it on this machine, if they can't: Codex is
+    /// not supported yet, and otherwise its CLI must be on `PATH`.
+    pub fn unavailable(self) -> Option<Unavailable> {
+        if self == Harness::Codex {
+            Some(Unavailable::NotSupportedYet)
+        } else if !on_path(self.name()) {
+            Some(Unavailable::NotInstalled)
+        } else {
+            None
+        }
+    }
+}
+
+/// Why sessions can't run on a Harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unavailable {
+    /// thirdshift can't run its sessions yet.
+    NotSupportedYet,
+    /// Its CLI isn't on `PATH`.
+    NotInstalled,
+}
+
+impl fmt::Display for Unavailable {
+    /// As Setup marks a Harness with it, as in `codex (not supported yet)`.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Unavailable::NotSupportedYet => "not supported yet",
+            Unavailable::NotInstalled => "not installed",
+        })
+    }
 }
 
 /// The names a Harness is chosen by, for the messages that list them.
@@ -63,7 +97,7 @@ pub struct Settings {
 
 impl Settings {
     /// The Model and Effort set for `harness`.
-    fn of(&self, harness: Harness) -> &ModelAndEffort {
+    pub fn of(&self, harness: Harness) -> &ModelAndEffort {
         match harness {
             Harness::Claude => &self.claude,
             Harness::Codex => &self.codex,
@@ -170,20 +204,26 @@ impl Choice {
     /// Each failure says what to change.
     pub fn check(&self) -> Result<()> {
         let cli = self.harness.name();
-        if self.harness == Harness::Codex {
-            bail!(
-                "harness codex, chosen by {}, is not supported yet: Codex sessions come in a \
+        match self.harness.unavailable() {
+            Some(Unavailable::NotSupportedYet) => bail!(
+                "harness {cli}, chosen by {}, is not supported yet: Codex sessions come in a \
                  later thirdshift; choose harness claude",
                 self.chosen_by
-            );
-        }
-        if !on_path(cli) {
-            bail!(
+            ),
+            Some(Unavailable::NotInstalled) => bail!(
                 "{cli} is not on PATH, and the Harness {cli} is chosen by {}: install it, \
                  or choose another Harness",
                 self.chosen_by
-            );
+            ),
+            None => {}
         }
+        self.test_call()
+    }
+
+    /// Check that Claude takes a minimal test call on the Model, if one is
+    /// named, with the Effort, if any. A refusal says what Claude said.
+    pub fn test_call(&self) -> Result<()> {
+        let cli = self.harness.name();
         let Some(model) = &self.model else {
             return Ok(());
         };

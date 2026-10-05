@@ -367,17 +367,28 @@ fn with_answers(text: &str, answers: &Answers) -> Result<String> {
         set(&mut document, "email", "from", notifications.from.as_str());
         set_email_to(&mut document, &notifications.to);
     }
+    if let Some((harness, chosen)) = &answers.harness {
+        set(&mut document, "harness", "default", harness.name());
+        let section = format!("harness.{}", harness.name());
+        for (key, value) in [("model", &chosen.model), ("effort", &chosen.effort)] {
+            set(&mut document, &section, key, value.as_deref().unwrap_or(""));
+        }
+    }
     Ok(document.to_string())
 }
 
 /// Set `section.key`, which `document` holds, to `value`, keeping the
 /// spacing and comment around the old value, and the comment in the same
 /// column where the spaces before it allow. An equal value is left as it was
-/// written.
+/// written. `section` may be a subsection, as `harness.claude`.
 fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<toml_edit::Value>) {
     let value = value.into();
-    let old = document[section]
-        .as_table_like_mut()
+    let old = section
+        .split('.')
+        .try_fold(document.as_item_mut(), |item, name| {
+            item.as_table_like_mut()?.get_mut(name)
+        })
+        .and_then(Item::as_table_like_mut)
         .and_then(|settings| settings.get_mut(key))
         .and_then(Item::as_value_mut)
         .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
@@ -475,46 +486,23 @@ pub fn replace(path: &Path, text: &str) -> std::io::Result<()> {
 /// `text`, a User config a Run accepts, with each key it lacks added at its
 /// default, as `DEFAULTS` writes it. Everything already in `text` stays as
 /// it was: a missing key goes at the end of its section, and a missing
-/// section after the last line of `text`. A key added to an inline table
+/// section, or a key of a section `text` names only in its subsections'
+/// headers, after the last line of `text`. A key added to an inline table
 /// gets no comment, as TOML has no place for one there.
 fn complete(text: &str) -> Result<String> {
     let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
     let defaults: DocumentMut = DEFAULTS.parse().expect("DEFAULTS is valid TOML");
     let mut missing = DocumentMut::new();
-    for (section, default_settings) in defaults.iter() {
-        let default_settings = default_settings
-            .as_table()
-            .expect("every key in DEFAULTS is in a section");
-        match document.get_mut(section) {
-            None => {
-                missing.insert(section, Item::Table(default_settings.clone()));
-            }
-            Some(Item::Table(settings)) => {
-                for (key, item) in default_settings.iter() {
-                    if !settings.contains_key(key) {
-                        let mut key = default_settings
-                            .key(key)
-                            .expect("the key is in DEFAULTS")
-                            .clone();
-                        key.leaf_decor_mut().set_prefix("");
-                        settings.insert_formatted(&key, item.clone());
-                    }
-                }
-                if section == "email" && !settings.is_dotted() {
-                    note_email_to(settings, default_settings, text);
-                }
-            }
-            Some(Item::Value(toml_edit::Value::InlineTable(settings))) => {
-                for (key, item) in default_settings.iter() {
-                    if !settings.contains_key(key) {
-                        let mut value = item.as_value().expect("DEFAULTS has only values").clone();
-                        value.decor_mut().clear();
-                        settings.insert(key, value);
-                    }
-                }
-            }
-            Some(_) => unreachable!("a Run refuses {section} that isn't a section"),
-        }
+    complete_table(
+        document.as_table_mut(),
+        defaults.as_table(),
+        missing.as_table_mut(),
+    );
+    if let Some(Item::Table(email)) = document.get_mut("email")
+        && !email.is_dotted()
+    {
+        let defaults = defaults["email"].as_table().expect("DEFAULTS has [email]");
+        note_email_to(email, defaults, text);
     }
     let mut completed = document.to_string();
     let missing = missing.to_string();
@@ -527,6 +515,78 @@ fn complete(text: &str) -> Result<String> {
     }
     completed.push_str(missing);
     Ok(completed)
+}
+
+/// Add to `settings`, a table of a User config, each key of `defaults`, the
+/// same table in `DEFAULTS`, that it lacks, and the same for each of its
+/// subsections. A missing key goes at the end of `settings`, unless
+/// `settings` has no header of its own, as `[harness]` with only
+/// `[harness.claude]` written; then it goes, as does a missing subsection, in
+/// `missing`, the same table of what is written after the file.
+fn complete_table(
+    settings: &mut toml_edit::Table,
+    defaults: &toml_edit::Table,
+    missing: &mut toml_edit::Table,
+) {
+    let implicit = settings.is_implicit() && !settings.is_dotted();
+    for (key, item) in defaults.iter() {
+        let default_key = defaults.key(key).expect("the key is in DEFAULTS");
+        match (item, settings.get_mut(key)) {
+            (Item::Table(default_settings), Some(Item::Table(settings))) => {
+                let missing = missing.entry(key).or_insert_with(|| {
+                    let mut table = toml_edit::Table::new();
+                    table.set_implicit(true);
+                    table.set_position(default_settings.position());
+                    Item::Table(table)
+                });
+                let missing = missing
+                    .as_table_mut()
+                    .expect("a missing section is a table");
+                complete_table(settings, default_settings, missing);
+            }
+            (
+                Item::Table(default_settings),
+                Some(Item::Value(toml_edit::Value::InlineTable(settings))),
+            ) => complete_inline(settings, default_settings),
+            (Item::Table(_), Some(_)) => unreachable!("a Run refuses {key} that isn't a section"),
+            (Item::Table(_), None) => {
+                missing.insert_formatted(default_key, item.clone());
+            }
+            (_, Some(_)) => {}
+            (_, None) if implicit => {
+                missing.set_implicit(false);
+                missing.insert_formatted(default_key, item.clone());
+            }
+            (_, None) => {
+                let mut key = default_key.clone();
+                key.leaf_decor_mut().set_prefix("");
+                settings.insert_formatted(&key, item.clone());
+            }
+        }
+    }
+}
+
+/// Add to `settings`, an inline table of a User config, each key of
+/// `defaults`, the same table in `DEFAULTS`, that it lacks, with no comment.
+fn complete_inline(settings: &mut toml_edit::InlineTable, defaults: &toml_edit::Table) {
+    for (key, item) in defaults.iter() {
+        match (item, settings.get_mut(key)) {
+            (Item::Table(defaults), Some(toml_edit::Value::InlineTable(settings))) => {
+                complete_inline(settings, defaults)
+            }
+            (_, Some(_)) => {}
+            (Item::Table(defaults), None) => {
+                let mut table = toml_edit::InlineTable::new();
+                complete_inline(&mut table, defaults);
+                settings.insert(key, toml_edit::Value::InlineTable(table));
+            }
+            (_, None) => {
+                let mut value = item.as_value().expect("DEFAULTS has only values").clone();
+                value.decor_mut().clear();
+                settings.insert(key, value);
+            }
+        }
+    }
 }
 
 /// With no `email.to` in `email`, the `[email]` section of `text`, and no
@@ -620,6 +680,17 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
+
+[harness]
+default = "claude"   # the Harness every Run's sessions run on, claude or codex; default claude
+
+[harness.claude]
+model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
+effort = ""   # how hard that Model reasons; default blank, for Claude Code's own
+
+[harness.codex]
+model = ""    # the Model Codex's sessions run on; default blank, for Codex's own
+effort = ""   # how hard that Model reasons; default blank, for Codex's own
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -730,6 +801,8 @@ mod tests {
             Some(crate::email::DEFAULT_FROM)
         );
         config.email.from = None;
+        assert_eq!(config.harness.default, Some(Harness::Claude));
+        config.harness.default = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
     }
 
@@ -994,7 +1067,8 @@ mod tests {
     }
 
     /// `text` completed, after checking a Run reads it with the settings it
-    /// had, plus the defaults for the keys it lacked.
+    /// had, plus the defaults for the keys it lacked, which change nothing a
+    /// Run does.
     fn completed(text: &str) -> String {
         let completed = complete(text).unwrap();
         let before = parse(text).unwrap();
@@ -1005,6 +1079,10 @@ mod tests {
                 Some(crate::email::DEFAULT_FROM)
             );
             after.email.from = None;
+        }
+        if before.harness.default.is_none() {
+            assert_eq!(after.harness.default, Some(Harness::Claude));
+            after.harness.default = None;
         }
         assert_eq!(after, before, "{completed}");
         let again = complete(&completed).unwrap();
@@ -1045,6 +1123,38 @@ mod tests {
     }
 
     #[test]
+    fn completing_adds_each_harness_key_a_user_config_lacks() {
+        for text in [
+            "[harness]\ndefault = \"claude\"\n",
+            "[harness.claude]\nmodel = \"opus\" # mine\n",
+            "[harness.codex]\neffort = \"max\"\n\n[merge]\nalways = true\n",
+            "[harness]\n\n[harness.claude]\neffort = \"high\"\n",
+            "harness.default = \"claude\"\nharness.claude.model = \"opus\"\n",
+            "harness = { claude = { model = \"opus\" } }\n",
+            "[harness]\nclaude = { effort = \"low\" }\n",
+        ] {
+            let completed = completed(text);
+            let config: toml::Table = completed.parse().unwrap();
+            let harness = config["harness"].as_table().unwrap();
+            assert!(harness.contains_key("default"), "{text:?}:\n{completed}");
+            for name in ["claude", "codex"] {
+                let set = harness[name].as_table().unwrap();
+                for key in ["model", "effort"] {
+                    assert!(set.contains_key(key), "{text:?}:\n{completed}");
+                }
+            }
+            // An inline table gains its missing keys on its own line.
+            let mut lines = completed.lines();
+            for line in text.lines().filter(|line| !line.contains('{')) {
+                assert!(
+                    lines.any(|kept| kept == line),
+                    "{line:?} of {text:?} is lost or moved:\n{completed}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn completing_adds_email_to_commented_out_once() {
         for text in [
             "",
@@ -1066,6 +1176,7 @@ mod tests {
 
     fn notifications_to(to: &str) -> Answers {
         Answers {
+            harness: None,
             merge_always: false,
             base_fix: false,
             launch_pull: false,
