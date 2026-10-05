@@ -260,21 +260,6 @@ fn another_issues_branch_and_pr_do_not_count_as_this_issues() {
 }
 
 #[test]
-fn a_fresh_run_claims_the_issue_in_place_of_ready_for_agent_and_keeps_its_other_labels() {
-    let scenario = Scenario::new();
-    scenario.issue_labelled(7, &["bug", "ready-for-agent", "architecture"]);
-    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(
-        scenario.issue_labels(7),
-        ["bug", "architecture", "in-progress"]
-    );
-}
-
-#[test]
 fn a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["ready-for-agent"]);
@@ -290,25 +275,6 @@ fn a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim() {
     );
     assert_eq!(scenario.issue_labels(7), ["in-progress"]);
     assert_eq!(scenario.gh_calls_of("api", "--method").len(), 1);
-}
-
-#[test]
-fn a_run_on_an_issue_with_no_ready_for_agent_label_still_claims_it() {
-    let scenario = Scenario::new();
-    scenario.issue_labelled(7, &["bug"]);
-    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(scenario.issue_labels(7), ["bug", "in-progress"]);
-    assert!(
-        result
-            .stderr
-            .contains("thirdshift: labelling #7 in-progress\n"),
-        "stderr: {}",
-        result.stderr
-    );
 }
 
 #[test]

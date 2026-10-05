@@ -144,9 +144,9 @@ pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended
 ///
 /// Once those checks pass, and before the worktree is created, the Run, or
 /// the Spec run, makes the Claim on `issue`, unless it is a child Run. A Claim
-/// that can't be made fails it there, before any work. The Claim is released
-/// if it then fails with nothing on origin to take over, and removed once its
-/// Self-merge has left `issue` closed: see [`claim::Claim`].
+/// that can't be made fails it there, before any work. Once the Run, or the
+/// Spec run, has ended, the Claim is ended with the goal it reached, or none
+/// if it failed: see [`claim::Claim::end`].
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures: what
@@ -195,7 +195,7 @@ fn run(
     }
     let claim = started_by
         .makes_claim()
-        .then(|| claim::make(issue))
+        .then(|| claim::make(issue, launch))
         .transpose()?;
     let logs = Logs::of_run(issue);
     let delivery = Delivery {
@@ -207,12 +207,7 @@ fn run(
     };
     let outcome = run_in_worktree(tickets, launch, &selection, delivery, asks.tickets_at_once);
     if let Some(claim) = claim {
-        match &outcome {
-            Ok(reached) if reached.goal == Goal::Merged => claim.remove_if_closed(),
-            // Ready for review: the Claim stays while the pull request waits.
-            Ok(_) => {}
-            Err(_) => claim.release_if_nothing_on_origin(launch),
-        }
+        claim.end(outcome.as_ref().ok().map(|reached| reached.goal));
     }
     outcome
 }
