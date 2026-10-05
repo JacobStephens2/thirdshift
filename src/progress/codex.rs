@@ -1,7 +1,8 @@
 //! Codex's `exec --json` stream, condensed: `thread.started` gives the
 //! session id, `item.*` events give a progress line per command, file
-//! change and tool call, `turn.completed` the token totals and
-//! `turn.failed` the error the session failed with. See
+//! change and tool call, `turn.completed` the token totals and the commands
+//! and sub-agent calls killed as the session ends, and `turn.failed` the
+//! error the session failed with. See
 //! `docs/research/codex-headless-harness.md`.
 
 use std::collections::HashSet;
@@ -13,10 +14,10 @@ use super::{Stream, bash, shorten};
 
 /// Condenses one Codex session's JSONL stream, a line at a time.
 ///
-/// `codex exec` runs one turn per process. A command the agent left running
-/// shows as a `command_execution` item still `in_progress` when the turn
-/// completes, and it is killed as Codex exits: see
-/// [`Stream::killed_background_work`].
+/// `codex exec` runs one turn per process. A command or sub-agent call the
+/// agent left running shows as a `command_execution` or `collab_tool_call`
+/// item still `in_progress` when the turn completes, and it is killed as
+/// Codex exits: see [`Stream::killed_background_work`].
 #[derive(Default)]
 pub struct CodexProgress {
     /// The worktree the session runs in, which Codex's stream doesn't name.
@@ -24,9 +25,10 @@ pub struct CodexProgress {
     session_id: Option<String>,
     /// The ids of the items that have had their line.
     seen: HashSet<String>,
-    /// The commands still running, by item id, in the order they started.
+    /// The descriptions of the commands and sub-agent calls still running,
+    /// by item id, in the order they started.
     running: Vec<(String, String)>,
-    /// The commands still running when the turn completed.
+    /// The descriptions of those still running when the turn completed.
     killed: Vec<String>,
     /// Token totals from `turn.completed`.
     tokens: Option<Tokens>,
@@ -66,11 +68,10 @@ impl CodexProgress {
     fn item(&mut self, item: &Value) -> Vec<String> {
         let id = item["id"].as_str().unwrap_or("").to_string();
         match item["type"].as_str() {
-            Some("command_execution") => {
+            Some("command_execution" | "collab_tool_call") => {
                 self.running.retain(|(running, _)| *running != id);
                 if item["status"] == "in_progress" {
-                    let command = unwrapped(item["command"].as_str().unwrap_or(""));
-                    self.running.push((id.clone(), command));
+                    self.running.push((id.clone(), running_work(item)));
                 }
             }
             Some("agent_message") => {
@@ -191,7 +192,8 @@ impl Stream for CodexProgress {
         self.session_id.as_deref()
     }
 
-    /// The commands still running when the turn completed.
+    /// The commands and sub-agent calls still running when the turn
+    /// completed.
     fn killed_background_work(&self) -> Vec<&str> {
         if self.failure.is_some() {
             return Vec::new();
@@ -205,6 +207,24 @@ impl Stream for CodexProgress {
 
     fn error(&self) -> Option<&str> {
         self.failure.as_deref().or(self.last_error.as_deref())
+    }
+}
+
+/// How a command or sub-agent call left running is described: a command as
+/// it was run, without its shell, and a sub-agent call by its tool and the
+/// first line of the prompt it gave, if any, as in `agent spawn_agent:
+/// Review the diff`.
+fn running_work(item: &Value) -> String {
+    if item["type"] == "command_execution" {
+        return unwrapped(item["command"].as_str().unwrap_or(""));
+    }
+    let tool = item["tool"].as_str().unwrap_or("?");
+    match item["prompt"]
+        .as_str()
+        .and_then(|prompt| prompt.lines().next())
+    {
+        Some(prompt) if !prompt.is_empty() => format!("agent {tool}: {}", shorten(prompt)),
+        _ => format!("agent {tool}"),
     }
 }
 
@@ -432,6 +452,35 @@ mod tests {
         ]);
 
         assert_eq!(progress.killed_background_work(), ["npm run dev"]);
+    }
+
+    #[test]
+    fn a_sub_agent_call_still_running_when_the_turn_completes_is_killed_background_work() {
+        let call = |kind: &str, id: &str, tool: &str, prompt: &str, status: &str| {
+            item(
+                kind,
+                id,
+                json!({ "type": "collab_tool_call", "tool": tool, "prompt": prompt, "status": status }),
+            )
+        };
+        let (progress, _) = lines(&[
+            call(
+                "item.started",
+                "item_1",
+                "spawn_agent",
+                "Review the diff\nThen report.",
+                "in_progress",
+            ),
+            call("item.started", "item_2", "wait", "", "in_progress"),
+            call("item.completed", "item_2", "wait", "", "completed"),
+            call("item.started", "item_3", "spawn_agent", "", "in_progress"),
+            completed(10, 2),
+        ]);
+
+        assert_eq!(
+            progress.killed_background_work(),
+            ["agent spawn_agent: Review the diff", "agent spawn_agent"]
+        );
     }
 
     #[test]
