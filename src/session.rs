@@ -61,8 +61,8 @@ impl Logs {
 /// its `logs`. It lasts for the steps given to [`Sessions::within`].
 pub struct Sessions<'a> {
     logs: &'a Logs,
-    worktree: &'a Path,
-    harness: &'a Choice,
+    /// How each session is run, and where progress lines go.
+    outside: RefCell<Box<dyn Outside>>,
     /// The log of the session started last, a Resume included.
     last_log: RefCell<Option<PathBuf>>,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -89,15 +89,30 @@ impl<'a> Sessions<'a> {
         if let Err(error) = skills::link_into(worktree, harness.harness) {
             return (Err(error), None);
         }
+        let on_machine = OnMachine {
+            worktree: worktree.to_path_buf(),
+            harness: harness.clone(),
+        };
+        let (taken, log) = Sessions::taking(logs, Box::new(on_machine), steps);
+        (taken, log.filter(|log| log.exists()))
+    }
+
+    /// [`Sessions::within`], its sessions run through `outside`, once the
+    /// Factory skills are linked. The log it returns is the most recent
+    /// session's, whether or not the session created it.
+    fn taking<T>(
+        logs: &'a Logs,
+        outside: Box<dyn Outside>,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>) {
         let sessions = Sessions {
             logs,
-            worktree,
-            harness,
+            outside: RefCell::new(outside),
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
         };
         let taken = steps(&sessions);
-        let log = sessions.last_log.into_inner().filter(|log| log.exists());
+        let log = sessions.last_log.into_inner();
         let endings = sessions.endings_with_killed_work.into_inner();
         if endings.is_empty() {
             return (taken, log);
@@ -125,38 +140,108 @@ impl<'a> Sessions<'a> {
         let mut ended = self.start(kind, None, prompt)?;
         // What ended last, as the progress line on its killed work calls it.
         let mut ended_last = "session";
-        let killed = ended.killed_background_work();
-        if let (false, Some(session_id)) = (killed.is_empty(), ended.session_id()) {
-            let (session_id, resume_prompt) = (session_id.to_string(), prompt::resume(&killed));
-            progress::step(format_args!(
+        if let (false, Some(session_id)) = (ended.killed.is_empty(), &ended.session_id) {
+            let resume_prompt = prompt::resume(&ended.killed());
+            self.step(format!(
                 "{kind}: background work was killed as the session ended; resuming it once"
             ));
-            ended = self.start(&format!("{kind}-resume"), Some(&session_id), &resume_prompt)?;
+            ended = self.start(&format!("{kind}-resume"), Some(session_id), &resume_prompt)?;
             ended_last = "Resume";
         }
-        let killed = ended.killed_background_work();
-        if !killed.is_empty() {
-            let ending = ending_with(&killed);
-            progress::step(format_args!(
+        if !ended.killed.is_empty() {
+            let ending = ending_with(&ended.killed());
+            self.step(format!(
                 "{kind}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
             ));
             self.endings_with_killed_work
                 .borrow_mut()
                 .push(format!("{kind} session {ending}"));
         }
-        Ok(ended.final_message().map(String::from))
+        Ok(ended.final_message)
     }
 
     /// Run one session as `kind`, logged under its own path, which becomes
     /// the last log.
-    fn start(&self, kind: &str, resume: Option<&str>, prompt: &str) -> Result<Box<dyn Stream>> {
+    fn start(&self, kind: &str, resume: Option<&str>, prompt: &str) -> Result<Ended> {
         let log = self.logs.path(kind);
-        progress::step(format_args!("logging the session to {}", log.display()));
+        self.step(format!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
+        self.outside
+            .borrow_mut()
+            .run_session(kind, resume, prompt, &log)
+    }
+
+    /// Hand on the progress line `line`.
+    fn step(&self, line: String) {
+        self.outside.borrow_mut().step(line);
+    }
+}
+
+/// How the Resume rules run a session, and where their progress lines go.
+trait Outside {
+    /// Run a session given `prompt`, labelled as `kind`, continuing the
+    /// session with id `resume`, if any, its stream logged to `log`. Returns
+    /// what it ended with once it has exited cleanly, its turn not failed.
+    fn run_session(
+        &mut self,
+        kind: &str,
+        resume: Option<&str>,
+        prompt: &str,
+        log: &Path,
+    ) -> Result<Ended>;
+    /// Hand on the progress line `line`.
+    fn step(&mut self, line: String);
+}
+
+/// What a session ended with, as its stream showed it.
+struct Ended {
+    /// Its id, which a Resume continues.
+    session_id: Option<String>,
+    /// Descriptions of the background work killed as it ended.
+    killed: Vec<String>,
+    /// What the agent said as it ended its last turn, if anything.
+    final_message: Option<String>,
+}
+
+impl Ended {
+    /// The descriptions of the killed background work, borrowed.
+    fn killed(&self) -> Vec<&str> {
+        self.killed.iter().map(String::as_str).collect()
+    }
+}
+
+/// Sessions run by the Command's `harness`'s CLI in `worktree`, where it
+/// finds the Factory skills, and progress lines printed on stderr.
+struct OnMachine {
+    worktree: PathBuf,
+    harness: Choice,
+}
+
+impl Outside for OnMachine {
+    fn run_session(
+        &mut self,
+        kind: &str,
+        resume: Option<&str>,
+        prompt: &str,
+        log: &Path,
+    ) -> Result<Ended> {
         let harness = self.harness.harness;
-        let args = session_args(self.harness, resume, prompt);
-        let stream = progress::for_harness(harness, self.worktree);
-        run(kind, harness, self.worktree, &args, &log, stream)
+        let args = session_args(&self.harness, resume, prompt);
+        let stream = progress::for_harness(harness, &self.worktree);
+        let stream = run(kind, harness, &self.worktree, &args, log, stream)?;
+        Ok(Ended {
+            session_id: stream.session_id().map(String::from),
+            killed: stream
+                .killed_background_work()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            final_message: stream.final_message().map(String::from),
+        })
+    }
+
+    fn step(&mut self, line: String) {
+        progress::step(line);
     }
 }
 
@@ -406,7 +491,262 @@ fn minutes_and_seconds(duration: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
     use super::*;
+
+    /// What the rules asked of the scripted [`Outside`], in order.
+    #[derive(Debug, PartialEq)]
+    enum Call {
+        Session {
+            kind: String,
+            resume: Option<String>,
+            prompt: String,
+            log: PathBuf,
+        },
+        Step(String),
+    }
+
+    /// Sessions that end as scripted, in turn, recording every call in
+    /// `calls`.
+    struct Scripted {
+        endings: VecDeque<Result<Ended>>,
+        calls: Rc<RefCell<Vec<Call>>>,
+    }
+
+    impl Outside for Scripted {
+        fn run_session(
+            &mut self,
+            kind: &str,
+            resume: Option<&str>,
+            prompt: &str,
+            log: &Path,
+        ) -> Result<Ended> {
+            self.calls.borrow_mut().push(Call::Session {
+                kind: kind.to_string(),
+                resume: resume.map(String::from),
+                prompt: prompt.to_string(),
+                log: log.to_path_buf(),
+            });
+            self.endings
+                .pop_front()
+                .expect("a session was run that was not scripted")
+        }
+
+        fn step(&mut self, line: String) {
+            self.calls.borrow_mut().push(Call::Step(line));
+        }
+    }
+
+    /// A session ending with id `session_id`, if any, with `killed` work
+    /// and the final message `said`.
+    fn ended(session_id: Option<&str>, killed: &[&str], said: &str) -> Result<Ended> {
+        Ok(Ended {
+            session_id: session_id.map(String::from),
+            killed: killed.iter().map(|work| work.to_string()).collect(),
+            final_message: Some(said.to_string()),
+        })
+    }
+
+    fn logs() -> Logs {
+        Logs {
+            name: "7".to_string(),
+            dir: PathBuf::from("/logs/sessions"),
+        }
+    }
+
+    /// Take `steps` through sessions that end as `endings` script them.
+    /// Returns what the steps came to, the last log, and every call made.
+    fn take<T>(
+        endings: Vec<Result<Ended>>,
+        steps: impl FnOnce(&Sessions) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>, Vec<Call>) {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let scripted = Scripted {
+            endings: endings.into(),
+            calls: Rc::clone(&calls),
+        };
+        let logs = logs();
+        let (taken, log) = Sessions::taking(&logs, Box::new(scripted), steps);
+        let calls = calls.take();
+        (taken, log, calls)
+    }
+
+    fn session(kind: &str, resume: Option<&str>, prompt: &str) -> Call {
+        Call::Session {
+            kind: kind.to_string(),
+            resume: resume.map(String::from),
+            prompt: prompt.to_string(),
+            log: logs().path(kind),
+        }
+    }
+
+    fn logging(kind: &str) -> Call {
+        Call::Step(format!(
+            "logging the session to {}",
+            logs().path(kind).display()
+        ))
+    }
+
+    fn sessions_run(calls: &[Call]) -> Vec<&Call> {
+        calls
+            .iter()
+            .filter(|call| matches!(call, Call::Session { .. }))
+            .collect()
+    }
+
+    const TESTS_KILLED: &str =
+        "ended with a background task still running (cargo test), which was killed";
+
+    #[test]
+    fn a_clean_session_runs_once_and_returns_its_final_message() {
+        let (taken, log, calls) = take(vec![ended(Some("s1"), &[], "done")], |sessions| {
+            sessions.run_to_final_message("implement", "do it")
+        });
+
+        assert_eq!(taken.unwrap(), Some("done".to_string()));
+        assert_eq!(
+            calls,
+            [logging("implement"), session("implement", None, "do it")]
+        );
+        assert_eq!(log, Some(logs().path("implement")));
+    }
+
+    #[test]
+    fn a_session_whose_background_work_was_killed_is_resumed_once_on_its_id() {
+        let (taken, log, calls) = take(
+            vec![
+                ended(Some("s1"), &["cargo test"], "waiting"),
+                ended(Some("s1"), &[], "done"),
+            ],
+            |sessions| sessions.run_to_final_message("implement", "do it"),
+        );
+
+        assert_eq!(taken.unwrap(), Some("done".to_string()));
+        assert_eq!(
+            calls,
+            [
+                logging("implement"),
+                session("implement", None, "do it"),
+                Call::Step(
+                    "implement: background work was killed as the session ended; resuming it once"
+                        .to_string()
+                ),
+                logging("implement-resume"),
+                session(
+                    "implement-resume",
+                    Some("s1"),
+                    &prompt::resume(&["cargo test"])
+                ),
+            ]
+        );
+        assert_eq!(log, Some(logs().path("implement-resume")));
+    }
+
+    #[test]
+    fn a_resume_that_ends_the_same_way_gets_no_second_and_a_later_failure_names_the_work() {
+        let (taken, log, calls) = take(
+            vec![
+                ended(Some("s1"), &["cargo test"], "waiting"),
+                ended(Some("s1"), &["cargo test"], "still waiting"),
+            ],
+            |sessions| -> Result<()> {
+                assert_eq!(
+                    sessions.run_to_final_message("implement", "do it").unwrap(),
+                    Some("still waiting".to_string())
+                );
+                bail!("no PR found")
+            },
+        );
+
+        assert_eq!(sessions_run(&calls).len(), 2, "one Resume, never two");
+        assert_eq!(
+            calls.last(),
+            Some(&Call::Step(format!(
+                "implement: the Resume {TESTS_KILLED}; carrying on, as it may have been abandoned"
+            )))
+        );
+        assert_eq!(
+            format!("{:#}", taken.unwrap_err()),
+            format!("implement session {TESTS_KILLED}, and a later step failed: no PR found")
+        );
+        assert_eq!(log, Some(logs().path("implement-resume")));
+    }
+
+    #[test]
+    fn a_session_with_no_id_to_resume_is_not_resumed_and_carries_on() {
+        let (taken, log, calls) = take(
+            vec![ended(None, &["cargo test", "npm test"], "waiting")],
+            |sessions| sessions.run("implement", "do it"),
+        );
+
+        taken.unwrap();
+        assert_eq!(
+            calls,
+            [
+                logging("implement"),
+                session("implement", None, "do it"),
+                Call::Step(
+                    "implement: the session ended with background tasks still running \
+                     (cargo test; npm test), which were killed; carrying on, as it may have \
+                     been abandoned"
+                        .to_string()
+                ),
+            ]
+        );
+        assert_eq!(log, Some(logs().path("implement")));
+    }
+
+    #[test]
+    fn a_failing_session_fails_unchanged_without_a_resume_or_an_ending() {
+        let (taken, log, calls) = take(vec![Err(anyhow!("claude exited 3"))], |sessions| {
+            sessions.run("implement", "do it")
+        });
+
+        assert_eq!(format!("{:#}", taken.unwrap_err()), "claude exited 3");
+        assert_eq!(
+            calls,
+            [logging("implement"), session("implement", None, "do it")]
+        );
+        // The failing session's log is still the last log.
+        assert_eq!(log, Some(logs().path("implement")));
+    }
+
+    #[test]
+    fn steps_that_succeed_after_killed_work_come_to_what_they_came_to() {
+        let (taken, _, _) = take(vec![ended(None, &["cargo test"], "waiting")], |sessions| {
+            sessions.run("implement", "do it")?;
+            Ok(42)
+        });
+
+        assert_eq!(taken.unwrap(), 42);
+    }
+
+    #[test]
+    fn every_session_that_left_killed_work_is_named_oldest_first() {
+        let (taken, _, calls) = take(
+            vec![
+                ended(None, &["cargo test"], "waiting"),
+                ended(None, &["npm test"], "waiting"),
+            ],
+            |sessions| -> Result<()> {
+                sessions.run("implement", "do it")?;
+                sessions.run("repair-1", "fix it")?;
+                bail!("CI failed")
+            },
+        );
+
+        assert_eq!(sessions_run(&calls).len(), 2);
+        assert_eq!(
+            format!("{:#}", taken.unwrap_err()),
+            format!(
+                "implement session {TESTS_KILLED}; repair-1 session ended with a background \
+                 task still running (npm test), which was killed, and a later step failed: \
+                 CI failed"
+            )
+        );
+    }
 
     #[test]
     fn a_prompt_that_loads_a_skill_loads_it_with_codexs_sigil_on_codex() {
