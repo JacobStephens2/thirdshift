@@ -64,15 +64,25 @@ impl CodexProgress {
         }
     }
 
+    /// Track whether the command or sub-agent call `item`, with id `id`, is
+    /// still running, as `description`.
+    fn track_running(&mut self, id: &str, item: &Value, description: String) {
+        self.running.retain(|(running, _)| running != id);
+        if item["status"] == "in_progress" {
+            self.running.push((id.to_string(), description));
+        }
+    }
+
     /// Track an item's state, and give its line the first time it is seen.
     fn item(&mut self, item: &Value) -> Vec<String> {
         let id = item["id"].as_str().unwrap_or("").to_string();
         match item["type"].as_str() {
-            Some("command_execution" | "collab_tool_call") => {
-                self.running.retain(|(running, _)| *running != id);
-                if item["status"] == "in_progress" {
-                    self.running.push((id.clone(), running_work(item)));
-                }
+            Some("command_execution") => {
+                let command = unwrapped(item["command"].as_str().unwrap_or(""));
+                self.track_running(&id, item, command);
+            }
+            Some("collab_tool_call") => {
+                self.track_running(&id, item, sub_agent_call(item));
             }
             Some("agent_message") => {
                 if let Some(text) = item["text"].as_str() {
@@ -210,14 +220,10 @@ impl Stream for CodexProgress {
     }
 }
 
-/// How a command or sub-agent call left running is described: a command as
-/// it was run, without its shell, and a sub-agent call by its tool and the
-/// first line of the prompt it gave, if any, as in `agent spawn_agent:
-/// Review the diff`.
-fn running_work(item: &Value) -> String {
-    if item["type"] == "command_execution" {
-        return unwrapped(item["command"].as_str().unwrap_or(""));
-    }
+/// The sub-agent call `item` as killed background work is described: by its
+/// tool and the first line of the prompt it gave, if any, as in `agent
+/// spawn_agent: Review the diff`.
+fn sub_agent_call(item: &Value) -> String {
     let tool = item["tool"].as_str().unwrap_or("?");
     match item["prompt"]
         .as_str()

@@ -350,7 +350,7 @@ const STOP_GRACE: Duration = Duration::from_secs(10);
 /// then SIGKILL.
 fn stop(child: &mut Child, harness: Harness) {
     let group = -(child.id() as libc::pid_t);
-    for &signal in stop_signals(harness) {
+    for &signal in harness.stop_signals() {
         // SAFETY: kill has no memory-safety preconditions.
         unsafe { libc::kill(group, signal) };
         let deadline = Instant::now() + STOP_GRACE;
@@ -364,16 +364,6 @@ fn stop(child: &mut Child, harness: Harness) {
     // SAFETY: as above.
     unsafe { libc::kill(group, libc::SIGKILL) };
     let _ = child.wait();
-}
-
-/// The signals that ask a session on `harness` to stop, in the order they
-/// are sent: SIGTERM, after SIGINT for Codex, which stops cleanly only on
-/// SIGINT, interrupting its turn.
-fn stop_signals(harness: Harness) -> &'static [libc::c_int] {
-    match harness {
-        Harness::Claude => &[libc::SIGTERM],
-        Harness::Codex => &[libc::SIGINT, libc::SIGTERM],
-    }
 }
 
 /// Copy every line of `stream` to `log_file` and print the progress lines it
