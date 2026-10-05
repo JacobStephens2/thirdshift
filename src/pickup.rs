@@ -228,16 +228,7 @@ fn sweep(outside: &mut impl Outside) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pass::{Call, InMemory};
-    use crate::run::{Goal, Reached};
-
-    /// The repository every pass is on.
-    fn widgets() -> Repo {
-        Repo {
-            owner: "acme".to_string(),
-            name: "widgets".to_string(),
-        }
-    }
+    use crate::pass::{Call, InMemory, PR_URL, ready_for_review, widgets};
 
     /// The gates of a Pickup run on `repo` with the Claim limit `limit`:
     /// the line of the reason it is skipped, or the number of the Ready
@@ -450,22 +441,6 @@ mod tests {
         assert_eq!(calls, [CLOSED, CLAIMED, Call::ReadySearch]);
     }
 
-    const PR_URL: &str = "https://github.com/acme/widgets/pull/12";
-
-    /// A dispatched run that ended ready for review on [`PR_URL`].
-    fn ready_for_review() -> Ended {
-        Ended {
-            outcome: Ok(Reached {
-                pr_url: PR_URL.to_string(),
-                goal: Goal::ReadyForReview,
-                log: None,
-                ticket_lines: Vec::new(),
-            }),
-            base_fix: None,
-            advice: Vec::new(),
-        }
-    }
-
     /// A Pickup run on `repo`, past its lock, on the Base branch `main` with
     /// the Claim limit 3, its dispatched run ending ready for review: how it
     /// ended, and what it did outside itself.
@@ -545,7 +520,7 @@ mod tests {
                 taking_9(),
                 Call::HarnessCheck,
                 Call::Started(Some(9)),
-                Call::Dispatch {
+                Call::DispatchReadyIssue {
                     issue: 9,
                     is_spec: false,
                     base: "main".to_string(),
@@ -560,7 +535,7 @@ mod tests {
 
         assert_eq!(
             calls.last(),
-            Some(&Call::Dispatch {
+            Some(&Call::DispatchReadyIssue {
                 issue: 9,
                 is_spec: true,
                 base: "main".to_string(),

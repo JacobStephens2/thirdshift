@@ -170,11 +170,11 @@ impl Outside for LaunchAndGitHub<'_> {
             Ok(worktree) => worktree,
             Err(error) => return (Err(error), None),
         };
-        progress::step(starting);
         let logs = Logs::of_architect_run(self.repo);
         // Cloned, so the conclusion can take the seam itself.
         let harness = self.harness.clone();
         let concluded = Sessions::within(&logs, worktree.path(), &harness, |sessions| {
+            progress::step(starting);
             let final_message = sessions.run_to_final_message(REVIEW, prompt)?;
             conclude(self, final_message.as_deref())
         });
@@ -211,7 +211,7 @@ impl Outside for LaunchAndGitHub<'_> {
 }
 
 #[cfg(test)]
-pub use in_memory::{Call, InMemory};
+pub use in_memory::{Call, InMemory, PR_URL, ready_for_review, widgets};
 
 #[cfg(test)]
 mod in_memory {
@@ -222,11 +222,11 @@ mod in_memory {
 
     use super::{Dispatch, Outside};
     use crate::github::{Issue, ListedIssue};
-    use crate::issue::IssueUrl;
+    use crate::issue::{IssueUrl, Repo};
     use crate::labels::{Edit, Label, Labels};
     use crate::logs::{Pass, Work};
     use crate::ready::ReadyIssue;
-    use crate::run::Ended;
+    use crate::run::{Ended, Goal, Reached};
 
     /// A call a pass made outside itself, in the order it made it.
     #[derive(Debug, PartialEq, Eq)]
@@ -261,8 +261,9 @@ mod in_memory {
         /// It ran the Architecture review session of this Base branch on
         /// this prompt, handing on its starting line next.
         Review { base: String, prompt: String },
-        /// It dispatched this issue, a Spec or not, on this Base branch.
-        Dispatch {
+        /// It dispatched this Ready issue, a Spec or not, on this Base
+        /// branch.
+        DispatchReadyIssue {
             issue: u64,
             is_spec: bool,
             base: String,
@@ -539,7 +540,7 @@ mod in_memory {
                     issue,
                     is_spec,
                     base,
-                } => Call::Dispatch {
+                } => Call::DispatchReadyIssue {
                     issue: issue.number,
                     is_spec,
                     base: base.to_string(),
@@ -559,6 +560,30 @@ mod in_memory {
                 .unwrap(),
             title: format!("Issue {number}"),
             labels: labels.iter().copied().collect::<Labels>(),
+        }
+    }
+
+    /// The repository every pass is on, whose issues [`InMemory`] has.
+    pub fn widgets() -> Repo {
+        Repo {
+            owner: "acme".to_string(),
+            name: "widgets".to_string(),
+        }
+    }
+
+    pub const PR_URL: &str = "https://github.com/acme/widgets/pull/12";
+
+    /// A dispatched run that ended ready for review on [`PR_URL`].
+    pub fn ready_for_review() -> Ended {
+        Ended {
+            outcome: Ok(Reached {
+                pr_url: PR_URL.to_string(),
+                goal: Goal::ReadyForReview,
+                log: None,
+                ticket_lines: Vec::new(),
+            }),
+            base_fix: None,
+            advice: Vec::new(),
         }
     }
 }

@@ -306,11 +306,11 @@ fn run_through(outside: &mut impl Outside, architect_run: &ArchitectRun) -> Outc
     Outcome::Ran { review, dispatched }
 }
 
-/// The Architect run failed, as `failed` says, before any review got
+/// The Architect run failed, as `run` says, before any review got
 /// anywhere: nothing to dispatch.
-fn failed(failed: FailedRun) -> Outcome {
+fn failed(run: FailedRun) -> Outcome {
     Outcome::Ran {
-        review: Err(failed),
+        review: Err(run),
         dispatched: None,
     }
 }
@@ -544,8 +544,7 @@ mod tests {
 
     use super::*;
     use crate::github;
-    use crate::pass::{Call, InMemory};
-    use crate::run::{Goal, Reached};
+    use crate::pass::{Call, InMemory, ready_for_review, widgets};
 
     const URL: &str = "https://github.com/acme/widgets/issues/8";
 
@@ -1068,14 +1067,6 @@ mod tests {
         assert_eq!(repo.calls, []);
     }
 
-    /// The repository every Architect run is on.
-    fn widgets() -> Repo {
-        Repo {
-            owner: "acme".to_string(),
-            name: "widgets".to_string(),
-        }
-    }
-
     /// An Architect run on `repo`, past its lock, with no focus, no pull,
     /// and no plan-only, on the Base branch `main`, except as `asked`
     /// changes them, its dispatched run ending ready for review: how it
@@ -1100,23 +1091,9 @@ mod tests {
         (outcome, repo.calls)
     }
 
-    /// A dispatched run that ended ready for review.
-    fn ready_for_review() -> Ended {
-        Ended {
-            outcome: Ok(Reached {
-                pr_url: "https://github.com/acme/widgets/pull/12".to_string(),
-                goal: Goal::ReadyForReview,
-                log: None,
-                ticket_lines: Vec::new(),
-            }),
-            base_fix: None,
-            advice: Vec::new(),
-        }
-    }
-
     /// What an Architect run that got past its gates came to: how its review
     /// ended, as its line or its cause, and whether it dispatched a run.
-    fn reviewed(outcome: Outcome) -> (Result<String, String>, bool) {
+    fn review_and_dispatch(outcome: Outcome) -> (Result<String, String>, bool) {
         let Outcome::Ran { review, dispatched } = outcome else {
             panic!("the Architect run was skipped");
         };
@@ -1178,7 +1155,7 @@ mod tests {
         let (outcome, calls) = architect(repo, |run| run.pull = true);
 
         assert_eq!(
-            reviewed(outcome),
+            review_and_dispatch(outcome),
             (Err("claude is not on PATH".to_string()), false)
         );
         assert_eq!(calls, [PLANS, IDEAS, Call::ReadySearch, Call::HarnessCheck]);
@@ -1271,7 +1248,7 @@ mod tests {
             });
 
             assert_eq!(
-                reviewed(outcome),
+                review_and_dispatch(outcome),
                 (
                     Ok(format!("plan {} is ready for an agent", url(8))),
                     !plan_only
@@ -1305,7 +1282,7 @@ mod tests {
 
             let (outcome, calls) = architect(repo, |_| {});
 
-            let (review, dispatched) = reviewed(outcome);
+            let (review, dispatched) = review_and_dispatch(outcome);
             assert!(review.is_ok(), "{line}: {review:?}");
             assert!(!dispatched, "{line}");
             assert!(
