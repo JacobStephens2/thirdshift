@@ -1,10 +1,11 @@
-//! An Architect run up to its plan: an Architecture review of the Base
-//! branch, the one its command named or else the one checked out in the
-//! Launch directory, from the Launch directory with no Issue URL, then the
-//! checks on the Architect plan it published and the label change that marks
-//! it ready and labels it `architect-plan`, for the command to stop at or to
-//! dispatch. A review that found no Strong candidate published no plan, and
-//! the Architect run ends on the issue it named instead, labelled an
+//! An Architect run: an Architecture review of the Base branch, the one its
+//! command named or else the one checked out in the Launch directory, from
+//! the Launch directory with no Issue URL, then the checks on the Architect
+//! plan it published and the label change that marks it ready and labels it
+//! `architect-plan`, then, unless the command asked to stop at the plan, the
+//! plan dispatched on the Base branch. A review that found no Strong
+//! candidate published no plan, and the Architect run ends on the issue it
+//! named instead, labelled an
 //! Architect idea: the idea issue it filed for its top recommendation, or the
 //! open issue that already covers it. Only one Architect run or Pickup run
 //! per repository runs at a time on a machine: an Architect run started while
@@ -26,21 +27,14 @@ use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
 use crate::harness::Choice;
-use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
-use crate::pass::{LaunchAndGitHub, Outside};
-use crate::progress;
+use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
 use crate::prompt;
 use crate::ready::ReadyIssue;
-use crate::session::{Logs, Sessions};
-use crate::worktree::ReviewWorktree;
-
-/// The Architecture review session's kind, in its progress lines and log
-/// name.
-const REVIEW: &str = "architecture-review";
+use crate::run::Ended;
 
 /// The label thirdshift marks an Architect plan with, which a later Architect
 /// run finds an open one by.
@@ -56,13 +50,17 @@ const ARCHITECT_IDEA: Label = Label::new(
     "An Architect idea: the issue an Architecture review with no Strong candidate ended on",
 );
 
-/// How an Architect run ended, short of a failure and before any dispatch.
-#[derive(Debug)]
+/// How an Architect run ended.
 pub enum Outcome {
     /// Skipped, before any review, having done nothing.
     Skipped(Skipped),
-    /// Its Architecture review ended on an issue.
-    Reviewed(Reviewed),
+    /// It was not skipped: how its Architecture review ended, failing if
+    /// anything before it did, and how the run it dispatched its plan as
+    /// ended, if it dispatched one.
+    Ran {
+        review: Result<Reviewed, FailedRun>,
+        dispatched: Option<Ended>,
+    },
 }
 
 /// Why an Architect run was skipped. Its `Display` is the reason, as the
@@ -142,9 +140,8 @@ fn write_joined(
 /// issue.
 #[derive(Debug)]
 pub enum Reviewed {
-    /// The plan the review published is marked ready, with the Architect
-    /// run's Base branch, which the run the plan is dispatched as takes.
-    PlanReady { plan: IssueUrl, base: String },
+    /// The plan the review published is marked ready.
+    PlanReady(IssueUrl),
     /// The review found no Strong candidate, and filed its top
     /// recommendation as this issue.
     IdeaFiled(IssueUrl),
@@ -158,7 +155,7 @@ impl Reviewed {
     /// notification says it.
     pub fn review(&self) -> &'static str {
         match self {
-            Self::PlanReady { .. } => "plan published",
+            Self::PlanReady(_) => "plan published",
             Self::IdeaFiled(_) => "idea filed",
             Self::AlreadyFiled(_) => "idea already filed",
         }
@@ -167,9 +164,9 @@ impl Reviewed {
     /// The URL of the issue the Architecture review ended on.
     pub fn url(&self) -> &str {
         match self {
-            Self::PlanReady { plan: issue, .. }
-            | Self::IdeaFiled(issue)
-            | Self::AlreadyFiled(issue) => &issue.url,
+            Self::PlanReady(issue) | Self::IdeaFiled(issue) | Self::AlreadyFiled(issue) => {
+                &issue.url
+            }
         }
     }
 }
@@ -178,7 +175,7 @@ impl fmt::Display for Reviewed {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let url = self.url();
         match self {
-            Self::PlanReady { .. } => write!(f, "plan {url} is ready for an agent"),
+            Self::PlanReady(_) => write!(f, "plan {url} is ready for an agent"),
             Self::IdeaFiled(_) => write!(
                 f,
                 "no Strong candidate: the Architecture review filed the idea {url}"
@@ -192,50 +189,48 @@ impl fmt::Display for Reviewed {
 }
 
 /// Run an Architecture review of the Base branch, pointed at `focus` if
-/// given, and mark the plan it publishes ready. The Base branch is `base`,
-/// the branch the command named, whatever the Launch directory has checked
-/// out, or without one the branch checked out there. A review that reports
-/// an idea issue it filed, or the open issue that already covers its top
-/// recommendation, instead of a plan, has that issue labelled an Architect
-/// idea. With `config`'s `launch.pull`, the Launch directory's checkout of
-/// the Base branch, if that is the branch checked out, is first brought up
-/// to date with origin. The review's
-/// worktree is gone when this returns. A failure
-/// after the plan is published leaves its labels as the review left them.
+/// given, and mark the plan it publishes ready, then, unless `plan_only`,
+/// dispatch it as `thirdshift <plan URL>` with `flags` would run it, but on
+/// the Base branch. The Base branch is `base`, the branch the command named,
+/// whatever the Launch directory has checked out, or without one the branch
+/// checked out there. A review that reports an idea issue it filed, or the
+/// open issue that already covers its top recommendation, instead of a plan,
+/// has that issue labelled an Architect idea, and dispatches nothing. With
+/// `config`'s `launch.pull`, the Launch directory's checkout of the Base
+/// branch, if that is the branch checked out, is first brought up to date
+/// with origin. The review's worktree is gone when the review is concluded.
+/// A failure after the plan is published leaves its labels as the review
+/// left them. A failure before the review, the preflight checks included, is
+/// a failed review too.
 ///
 /// Once the preflight checks pass, and before anything else, the Architect
 /// run is skipped, with nothing done, if another on the same repository, or a
-/// Pickup run, is still running on this machine: see [`launch::start`]. It is
-/// then skipped, likewise, if the repository has an open Architect plan: only
-/// then, so that the plan of an Architect run still running is never taken
-/// for an unfinished one. It is then skipped if the repository has an open
-/// Architect idea still labelled `needs-triage`. It is then skipped if the
-/// repository has a Ready issue, by the very search a Pickup run makes, with
-/// its lines on the issues passed over, but with no Sweep and no Claim limit,
-/// which are the Pickup run's. A skip is recorded in the repository's
-/// Activity log. Past all four, it checks `harness`, the Harness, Model and
-/// Effort its review, and the run it dispatches, run their sessions on,
-/// failing before any work if they can't run. Then it records that it
-/// started work, which keeps its Command log with its repository's logs,
-/// where its Session logs go too.
+/// Pickup run, is still running on this machine: see [`launch::start`]. A
+/// skip is recorded in the repository's Activity log. The rest, from the
+/// gates to the dispatch, is [`run_through`], through the Launch directory,
+/// GitHub, the logs and `harness`, the Harness, Model and Effort its review,
+/// and the run it dispatches, run their sessions on, and `flags` and
+/// `config`, which ask that run.
 pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
+    plan_only: bool,
     flags: &Flags,
     config: &UserConfig,
     harness: &mut Choice,
-) -> Result<Outcome, FailedRun> {
+) -> Outcome {
     let started = Utc::now();
     let Launch {
         directory,
         repo,
         base,
-    } = match launch::start(base)? {
-        Start::Clear(launch) => launch,
-        Start::AlreadyRunning(running) => {
-            let repo = running.0.clone();
-            return Ok(skip(&repo, Skipped::AlreadyRunning(running)));
+    } = match launch::start(base) {
+        Ok(Start::Clear(launch)) => launch,
+        Ok(Start::AlreadyRunning(running)) => {
+            logs::skipped(Pass::ArchitectRun, &running.0, &running);
+            return Outcome::Skipped(Skipped::AlreadyRunning(running));
         }
+        Err(error) => return failed(error.into()),
     };
     let mut outside = LaunchAndGitHub {
         launch: &directory,
@@ -244,35 +239,118 @@ pub fn run(
         flags,
         config,
     };
-    if let Decision::Skip(skipped) = gates(&mut outside)? {
-        return Ok(skip(&repo, skipped));
-    }
-    outside.check_harness()?;
-    outside.started(Work::ArchitectRun(&repo));
-    // Cloned, so the review's conclusion can take `outside` itself.
-    let harness = outside.harness.clone();
-    if config.launch_pull {
-        directory.pull(&base);
-    }
+    let architect_run = ArchitectRun {
+        repo: &repo,
+        base: &base,
+        origin: directory.origin(),
+        focus,
+        started,
+        pull: config.launch_pull,
+        plan_only,
+    };
+    run_through(&mut outside, &architect_run)
+}
 
-    if interrupt::requested() {
-        return Err(anyhow!("interrupted").into());
+/// An Architect run past its lock and preflight checks: what it runs on,
+/// and what it was asked for.
+struct ArchitectRun<'a> {
+    /// The repository it runs on.
+    repo: &'a Repo,
+    /// The Base branch.
+    base: &'a str,
+    /// The URL of the Launch directory's `origin`, which its plan must be in.
+    origin: &'a str,
+    /// What the command pointed the review at, if anything.
+    focus: Option<&'a str>,
+    /// When the Architect run started, before its plan can have been
+    /// created.
+    started: DateTime<Utc>,
+    /// Whether to pull the Launch directory's checkout of the Base branch
+    /// first.
+    pull: bool,
+    /// Whether to stop at the plan, dispatching nothing.
+    plan_only: bool,
+}
+
+/// [`run`], once it holds its repository's lock, through `outside`: its
+/// [`gates`], a skip recorded with its reason if one skips; then the check of
+/// its Harness, failing before any work if it can't run; then the record
+/// that it started work, which keeps its Command log with its repository's
+/// logs, where its Session logs go too; then the Launch directory's pull, if
+/// asked for. Then, unless it was interrupted, the Architecture review
+/// session and its [`conclude`]; then, unless `plan_only`, the plan it
+/// marked ready dispatched on its Base branch.
+fn run_through(outside: &mut impl Outside, architect_run: &ArchitectRun) -> Outcome {
+    match gates(outside) {
+        Ok(Decision::GoAhead) => {}
+        Ok(Decision::Skip(skipped)) => {
+            outside.skipped(Pass::ArchitectRun, &skipped);
+            return Outcome::Skipped(skipped);
+        }
+        Err(error) => return failed(error.into()),
     }
-    let worktree = ReviewWorktree::create(directory.git(), &repo.name, &base)?;
-    let logs = Logs::of_architect_run(&repo);
-    let (reviewed, log) = Sessions::within(&logs, worktree.path(), &harness, |sessions| {
-        review(
-            &mut outside,
-            sessions,
-            &base,
-            focus,
-            directory.origin(),
-            started,
-        )
+    let review = up_to_the_dispatch(outside, architect_run);
+    let dispatched = match &review {
+        Ok(Reviewed::PlanReady(plan)) if !architect_run.plan_only => {
+            outside.step(format!(
+                "dispatching the plan {url}, as thirdshift {url} would",
+                url = plan.url
+            ));
+            Some(outside.dispatch(Dispatch::ArchitectPlan {
+                plan,
+                base: architect_run.base,
+            }))
+        }
+        _ => None,
+    };
+    Outcome::Ran { review, dispatched }
+}
+
+/// The Architect run failed, as `failed` says, before any review got
+/// anywhere: nothing to dispatch.
+fn failed(failed: FailedRun) -> Outcome {
+    Outcome::Ran {
+        review: Err(failed),
+        dispatched: None,
+    }
+}
+
+/// [`run_through`] past its gates, up to its dispatch: the Harness check,
+/// the start, the pull, and the Architecture review, with its conclusion,
+/// failing with the review's Session log if it gets that far.
+fn up_to_the_dispatch(
+    outside: &mut impl Outside,
+    architect_run: &ArchitectRun,
+) -> Result<Reviewed, FailedRun> {
+    let ArchitectRun {
+        repo,
+        base,
+        origin,
+        focus,
+        started,
+        pull,
+        ..
+    } = *architect_run;
+    outside.check_harness()?;
+    outside.started(Work::ArchitectRun(repo));
+    if pull {
+        outside.pull(base);
+    }
+    if outside.interrupted() {
+        return Err(FailedRun {
+            interrupted: true,
+            ..FailedRun::from(anyhow!("interrupted"))
+        });
+    }
+    let starting = match focus {
+        Some(focus) => format!("starting the Architecture review of {base}, focused on: {focus}"),
+        None => format!("starting the Architecture review of {base}"),
+    };
+    let prompt = prompt::architecture_review(base, focus);
+    let (reviewed, log) = outside.review(base, starting, &prompt, |outside, final_message| {
+        conclude(outside, final_message, origin, started)
     });
-    // Removed once the review is concluded.
-    drop(worktree);
-    reviewed.map(Outcome::Reviewed).map_err(|error| FailedRun {
+    reviewed.map_err(|error| FailedRun {
         log,
         ..FailedRun::from(error)
     })
@@ -309,34 +387,6 @@ fn gates(outside: &mut impl Outside) -> Result<Decision> {
     })
 }
 
-/// The Architect run skipped as `skipped` says, recorded in the Activity log
-/// of `repo`.
-fn skip(repo: &Repo, skipped: Skipped) -> Outcome {
-    logs::skipped(Pass::ArchitectRun, repo, &skipped);
-    Outcome::Skipped(skipped)
-}
-
-/// The Architecture review session, of the Base branch `base`, run through
-/// `sessions`, then [`conclude`] on its final message, through `outside`.
-fn review(
-    outside: &mut impl Outside,
-    sessions: &Sessions,
-    base: &str,
-    focus: Option<&str>,
-    origin: &str,
-    started: DateTime<Utc>,
-) -> Result<Reviewed> {
-    match focus {
-        Some(focus) => progress::step(format_args!(
-            "starting the Architecture review of {base}, focused on: {focus}"
-        )),
-        None => progress::step(format_args!("starting the Architecture review of {base}")),
-    }
-    let prompt = prompt::architecture_review(base, focus);
-    let final_message = sessions.run_to_final_message(REVIEW, &prompt)?;
-    conclude(outside, final_message.as_deref(), origin, started, base)
-}
-
 /// What an Architecture review reported in the last line of its final
 /// message.
 #[derive(Debug, PartialEq, Eq)]
@@ -368,8 +418,8 @@ impl Report {
     }
 }
 
-/// End the Architecture review, of the Base branch `base`, on the issue the
-/// last line of its `final_message` names, reaching it through `outside`: a
+/// End the Architecture review on the issue the last line of its
+/// `final_message` names, reaching it through `outside`: a
 /// plan is marked ready, and an idea issue, or the issue that already covers
 /// the top recommendation, is labelled an Architect idea. Fails, with no
 /// call made, if the session had no final message or its last line is not
@@ -380,13 +430,11 @@ fn conclude(
     final_message: Option<&str>,
     origin: &str,
     started: DateTime<Utc>,
-    base: &str,
 ) -> Result<Reviewed> {
     match final_message.and_then(Report::read) {
         Some(Report::Plan(plan)) => {
             mark_plan_ready(outside, &plan, origin, started)?;
-            let base = base.to_string();
-            Ok(Reviewed::PlanReady { plan, base })
+            Ok(Reviewed::PlanReady(plan))
         }
         Some(Report::Idea(idea)) => {
             label_idea(outside, &idea)?;
@@ -492,9 +540,12 @@ fn check_plan(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::github;
     use crate::pass::{Call, InMemory};
+    use crate::run::{Goal, Reached};
 
     const URL: &str = "https://github.com/acme/widgets/issues/8";
 
@@ -711,7 +762,7 @@ mod tests {
     /// The Architect run's conclusion on `final_message`, through `repo`:
     /// how the review ended, or the cause it failed with, and what it did.
     fn concluded(mut repo: InMemory, final_message: &str) -> (Result<String, String>, Vec<Call>) {
-        let ended = conclude(&mut repo, Some(final_message), ORIGIN, started(), "main")
+        let ended = conclude(&mut repo, Some(final_message), ORIGIN, started())
             .map(|reviewed| reviewed.to_string())
             .map_err(|error| format!("{error:#}"));
         (ended, repo.calls)
@@ -1008,12 +1059,295 @@ mod tests {
     fn no_final_message_fails_with_no_call_made() {
         let mut repo = InMemory::default();
 
-        let ended = conclude(&mut repo, None, ORIGIN, started(), "main");
+        let ended = conclude(&mut repo, None, ORIGIN, started());
 
         assert_eq!(
             ended.unwrap_err().to_string(),
             "the Architecture review ended without the final line its prompt asks for"
         );
         assert_eq!(repo.calls, []);
+    }
+
+    /// The repository every Architect run is on.
+    fn widgets() -> Repo {
+        Repo {
+            owner: "acme".to_string(),
+            name: "widgets".to_string(),
+        }
+    }
+
+    /// An Architect run on `repo`, past its lock, with no focus, no pull,
+    /// and no plan-only, on the Base branch `main`, except as `asked`
+    /// changes them, its dispatched run ending ready for review: how it
+    /// ended, and what it did outside itself.
+    fn architect(
+        repo: InMemory,
+        asked: impl FnOnce(&mut ArchitectRun<'_>),
+    ) -> (Outcome, Vec<Call>) {
+        let mut repo = repo.dispatched_ending(ready_for_review());
+        let widgets = widgets();
+        let mut architect_run = ArchitectRun {
+            repo: &widgets,
+            base: "main",
+            origin: ORIGIN,
+            focus: None,
+            started: started(),
+            pull: false,
+            plan_only: false,
+        };
+        asked(&mut architect_run);
+        let outcome = run_through(&mut repo, &architect_run);
+        (outcome, repo.calls)
+    }
+
+    /// A dispatched run that ended ready for review.
+    fn ready_for_review() -> Ended {
+        Ended {
+            outcome: Ok(Reached {
+                pr_url: "https://github.com/acme/widgets/pull/12".to_string(),
+                goal: Goal::ReadyForReview,
+                log: None,
+                ticket_lines: Vec::new(),
+            }),
+            base_fix: None,
+            advice: Vec::new(),
+        }
+    }
+
+    /// What an Architect run that got past its gates came to: how its review
+    /// ended, as its line or its cause, and whether it dispatched a run.
+    fn reviewed(outcome: Outcome) -> (Result<String, String>, bool) {
+        let Outcome::Ran { review, dispatched } = outcome else {
+            panic!("the Architect run was skipped");
+        };
+        let review = review
+            .map(|reviewed| reviewed.to_string())
+            .map_err(|failed| format!("{:#}", failed.error));
+        (review, dispatched.is_some())
+    }
+
+    /// The calls that start the Architecture review of `main`, with no
+    /// focus.
+    fn reviewing_main() -> [Call; 2] {
+        [
+            Call::Review {
+                base: "main".to_string(),
+                prompt: prompt::architecture_review("main", None),
+            },
+            step("starting the Architecture review of main"),
+        ]
+    }
+
+    /// A repository whose review publishes plan #8, which passes its checks.
+    fn publishing_a_plan() -> InMemory {
+        InMemory::default()
+            .reviewed(&message(prompt::PLAN_LINE))
+            .viewable(8, viewed(true, 0, &["needs-triage"]))
+    }
+
+    #[test]
+    fn a_skipped_architect_run_records_its_reason_with_no_harness_check_start_pull_or_review() {
+        for (repo, gates_read) in [
+            (InMemory::default().issue(5, true, &["architect-plan"]), 1),
+            (
+                InMemory::default().issue(5, true, &["architect-idea", "needs-triage"]),
+                2,
+            ),
+            (InMemory::default().ready(5, false), 3),
+        ] {
+            let repo = repo.reviewed(&message(prompt::PLAN_LINE));
+
+            let (outcome, calls) = architect(repo, |run| run.pull = true);
+
+            let Outcome::Skipped(skipped) = outcome else {
+                panic!("the Architect run was not skipped");
+            };
+            let mut expected: Vec<Call> = [PLANS, IDEAS, Call::ReadySearch]
+                .into_iter()
+                .take(gates_read)
+                .collect();
+            expected.push(Call::Skipped(skipped.to_string()));
+            assert_eq!(calls, expected, "{skipped}");
+        }
+    }
+
+    #[test]
+    fn a_harness_that_fails_its_check_fails_the_architect_run_before_its_start() {
+        let repo = publishing_a_plan().harness_failing();
+
+        let (outcome, calls) = architect(repo, |run| run.pull = true);
+
+        assert_eq!(
+            reviewed(outcome),
+            (Err("claude is not on PATH".to_string()), false)
+        );
+        assert_eq!(calls, [PLANS, IDEAS, Call::ReadySearch, Call::HarnessCheck]);
+    }
+
+    #[test]
+    fn the_pull_is_made_only_when_asked_after_the_start_is_recorded() {
+        for pull in [false, true] {
+            let (_, calls) = architect(publishing_a_plan(), |run| run.pull = pull);
+
+            let mut expected = vec![
+                PLANS,
+                IDEAS,
+                Call::ReadySearch,
+                Call::HarnessCheck,
+                Call::Started(None),
+            ];
+            if pull {
+                expected.push(Call::Pull("main".to_string()));
+            }
+            expected.extend(reviewing_main());
+            assert_eq!(calls[..expected.len()], expected, "pull: {pull}");
+        }
+    }
+
+    #[test]
+    fn an_interrupt_after_the_gates_fails_the_architect_run_as_interrupted_with_no_review() {
+        let repo = publishing_a_plan().interrupted();
+
+        let (outcome, calls) = architect(repo, |run| run.pull = true);
+
+        let Outcome::Ran {
+            review: Err(failed),
+            dispatched: None,
+        } = outcome
+        else {
+            panic!("the Architect run did not fail, or dispatched a run");
+        };
+        assert_eq!(failed.error.to_string(), "interrupted");
+        assert!(failed.interrupted);
+        assert_eq!(failed.log, None);
+        assert_eq!(
+            calls,
+            [
+                PLANS,
+                IDEAS,
+                Call::ReadySearch,
+                Call::HarnessCheck,
+                Call::Started(None),
+                Call::Pull("main".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_reviews_prompt_carries_the_base_branch_and_the_focus() {
+        let (_, calls) = architect(publishing_a_plan(), |run| {
+            run.base = "develop";
+            run.focus = Some("the Spec run");
+        });
+
+        let review = calls
+            .iter()
+            .position(|call| matches!(call, Call::Review { .. }))
+            .expect("no review session");
+        let Call::Review { base, prompt } = &calls[review] else {
+            unreachable!();
+        };
+        assert_eq!(
+            calls[review + 1],
+            step("starting the Architecture review of develop, focused on: the Spec run")
+        );
+        assert_eq!(base, "develop");
+        assert!(
+            prompt.contains("the base branch develop:"),
+            "prompt: {prompt}"
+        );
+        assert!(
+            prompt.contains("Focus the review on: the Spec run\n"),
+            "prompt: {prompt}"
+        );
+    }
+
+    #[test]
+    fn a_plan_is_dispatched_on_the_base_branch_after_the_label_swap_unless_plan_only() {
+        for plan_only in [false, true] {
+            let (outcome, calls) = architect(publishing_a_plan(), |run| {
+                run.base = "develop";
+                run.plan_only = plan_only;
+            });
+
+            assert_eq!(
+                reviewed(outcome),
+                (
+                    Ok(format!("plan {} is ready for an agent", url(8))),
+                    !plan_only
+                )
+            );
+            let swap = calls
+                .iter()
+                .position(|call| matches!(call, Call::Edit { .. }))
+                .expect("the plan was not marked ready");
+            let dispatch = [
+                step(&format!(
+                    "dispatching the plan {url}, as thirdshift {url} would",
+                    url = url(8)
+                )),
+                Call::DispatchPlan {
+                    plan: 8,
+                    base: "develop".to_string(),
+                },
+            ];
+            let after_swap: &[Call] = if plan_only { &[] } else { &dispatch };
+            assert_eq!(calls[swap + 1..], *after_swap, "plan-only: {plan_only}");
+        }
+    }
+
+    #[test]
+    fn an_idea_filed_or_already_filed_dispatches_nothing() {
+        for line in [prompt::IDEA_LINE, prompt::ALREADY_FILED_LINE] {
+            let repo = InMemory::default()
+                .reviewed(&message(line))
+                .viewable(8, viewed(true, -3600, &[]));
+
+            let (outcome, calls) = architect(repo, |_| {});
+
+            let (review, dispatched) = reviewed(outcome);
+            assert!(review.is_ok(), "{line}: {review:?}");
+            assert!(!dispatched, "{line}");
+            assert!(
+                matches!(calls.last(), Some(Call::Edit { .. })),
+                "{line}: {calls:?}"
+            );
+        }
+    }
+
+    const SESSION_LOG: &str = "/logs/acme/widgets/sessions/architect-1-architecture-review.jsonl";
+
+    #[test]
+    fn a_failed_review_dispatches_nothing_and_carries_the_reviews_session_log() {
+        for repo in [
+            InMemory::default().review_failing("claude exited with status 1"),
+            InMemory::default().reviewed("Published the plan."),
+            InMemory::default()
+                .reviewed(&message(prompt::PLAN_LINE))
+                .viewable(8, viewed(false, 0, &["needs-triage"])),
+        ] {
+            let (outcome, calls) = architect(repo.session_log(SESSION_LOG), |_| {});
+
+            let Outcome::Ran {
+                review: Err(failed),
+                dispatched: None,
+            } = outcome
+            else {
+                panic!("the review did not fail, or a run was dispatched");
+            };
+            assert_eq!(
+                failed.log.as_deref(),
+                Some(Path::new(SESSION_LOG)),
+                "{:#}",
+                failed.error
+            );
+            assert!(
+                !calls
+                    .iter()
+                    .any(|call| matches!(call, Call::DispatchPlan { .. })),
+                "{:#}",
+                failed.error
+            );
+        }
     }
 }
