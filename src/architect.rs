@@ -301,9 +301,9 @@ fn skip(repo: &Repo, skipped: Skipped) -> Outcome {
 }
 
 /// The Architecture review session in `worktree`, of the Base branch `base`,
-/// then [`conclude`] on its final message, through `outside`. The worktree is removed once the
-/// review is concluded. Returns how it ended with the most recent session's
-/// log, if a session created it.
+/// then [`conclude`] on its final message, through `outside`. The worktree is
+/// removed once the review is concluded. Returns how it ended with the most
+/// recent session's log, if a session created it.
 fn review(
     outside: &mut impl Outside,
     worktree: ReviewWorktree,
@@ -849,15 +849,13 @@ mod tests {
 
     #[test]
     fn an_idea_filed_or_already_filed_is_labelled_an_architect_idea_keeping_its_other_labels() {
-        for (line, ending, labels, after) in [
+        for (line, ending) in [
             (
                 prompt::IDEA_LINE,
                 format!(
                     "no Strong candidate: the Architecture review filed the idea {}",
                     url(8)
                 ),
-                vec!["architecture", "needs-triage"],
-                vec!["architecture", "needs-triage", "architect-idea"],
             ),
             (
                 prompt::ALREADY_FILED_LINE,
@@ -865,47 +863,109 @@ mod tests {
                     "no Strong candidate: {} already covers the Architecture review's top recommendation, so it filed nothing",
                     url(8)
                 ),
-                vec!["bug", "ready-for-agent"],
-                vec!["bug", "ready-for-agent", "needs-triage", "architect-idea"],
             ),
         ] {
-            let repo = InMemory::default().viewable(8, viewed(true, -3600, &labels));
+            let repo = InMemory::default()
+                .viewable(8, viewed(true, -3600, &["architecture", "needs-triage"]));
 
             let (ended, calls) = concluded(repo, &message(line));
 
-            let on: Vec<&'static str> = ["needs-triage", "architect-idea"]
-                .into_iter()
-                .filter(|label| !labels.contains(label))
-                .collect();
             assert_eq!(ended.unwrap(), ending);
             assert_eq!(
                 calls,
-                [step(LABELLING), Call::View(8), edit(8, &[], &on, &after),],
+                [
+                    step(LABELLING),
+                    Call::View(8),
+                    edit(
+                        8,
+                        &[],
+                        &["architect-idea"],
+                        &["architecture", "needs-triage", "architect-idea"],
+                    ),
+                ],
                 "{line}"
             );
         }
     }
 
     #[test]
-    fn an_idea_that_cannot_be_viewed_or_edited_fails_naming_it_ahead_of_the_cause() {
-        let unviewable = InMemory::default();
-        let (ended, calls) = concluded(unviewable, &message(prompt::IDEA_LINE));
+    fn an_idea_already_filed_and_triaged_goes_back_to_needs_triage_keeping_its_other_labels() {
+        for (triaged, on, after) in [
+            (
+                &["ready-for-human", "architecture"][..],
+                &["needs-triage", "architect-idea"][..],
+                &[
+                    "ready-for-human",
+                    "architecture",
+                    "needs-triage",
+                    "architect-idea",
+                ][..],
+            ),
+            (
+                &["Architecture", "WONTFIX", "Architect-Idea"],
+                &["needs-triage"],
+                &["Architecture", "WONTFIX", "needs-triage", "architect-idea"],
+            ),
+            (
+                &["needs-info"],
+                &["needs-triage", "architect-idea"],
+                &["needs-info", "needs-triage", "architect-idea"],
+            ),
+            (
+                &[],
+                &["needs-triage", "architect-idea"],
+                &["needs-triage", "architect-idea"],
+            ),
+        ] {
+            let repo = InMemory::default().viewable(8, viewed(true, -3600, triaged));
+
+            let (ended, calls) = concluded(repo, &message(prompt::ALREADY_FILED_LINE));
+
+            assert!(ended.is_ok(), "{triaged:?}: {ended:?}");
+            assert_eq!(
+                calls,
+                [step(LABELLING), Call::View(8), edit(8, &[], on, after)],
+                "{triaged:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_idea_that_cannot_be_viewed_fails_naming_it_ahead_of_the_cause() {
+        let (ended, calls) = concluded(InMemory::default(), &message(prompt::IDEA_LINE));
+
         assert_eq!(
             ended.unwrap_err(),
             "could not label the Architect idea #8: gh: Could not resolve to an issue with the number of 8"
         );
         assert_eq!(calls, [step(LABELLING), Call::View(8)]);
+    }
 
-        let uneditable = InMemory::default()
-            .viewable(8, viewed(true, 0, &[]))
+    #[test]
+    fn an_idea_that_cannot_be_edited_fails_naming_it_ahead_of_the_cause() {
+        let repo = InMemory::default()
+            .viewable(8, viewed(true, 0, &["bug"]))
             .edit_failing(8);
-        let (ended, calls) = concluded(uneditable, &message(prompt::ALREADY_FILED_LINE));
+
+        let (ended, calls) = concluded(repo, &message(prompt::ALREADY_FILED_LINE));
+
         assert_eq!(
             ended.unwrap_err(),
             "could not label the Architect idea #8: gh: could not edit #8"
         );
-        assert_eq!(calls.len(), 3);
-        assert!(matches!(calls[2], Call::Edit { issue: 8, .. }));
+        assert_eq!(
+            calls,
+            [
+                step(LABELLING),
+                Call::View(8),
+                edit(
+                    8,
+                    &[],
+                    &["needs-triage", "architect-idea"],
+                    &["bug", "needs-triage", "architect-idea"],
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -931,10 +991,18 @@ mod tests {
             "the Architecture review ended without the final line its prompt asks for"
         );
         assert_eq!(calls, []);
+    }
 
+    #[test]
+    fn no_final_message_fails_with_no_call_made() {
         let mut repo = InMemory::default();
+
         let ended = conclude(&mut repo, None, ORIGIN, started(), "main");
-        assert!(ended.is_err());
+
+        assert_eq!(
+            ended.unwrap_err().to_string(),
+            "the Architecture review ended without the final line its prompt asks for"
+        );
         assert_eq!(repo.calls, []);
     }
 }
