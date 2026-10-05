@@ -51,6 +51,7 @@ fn a_session_whose_background_work_was_killed_is_resumed_once_and_the_run_goes_o
         "argv: {argv:?}"
     );
     assert_eq!(calls[1]["cwd"], calls[0]["cwd"]);
+    scenario.assert_every_session_found_the_factory_skills();
     let prompt = calls[1]["prompt"].as_str().unwrap();
     assert!(
         prompt.contains("was killed when your turn ended") && prompt.contains("in the foreground"),

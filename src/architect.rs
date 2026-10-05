@@ -198,7 +198,7 @@ impl fmt::Display for Reviewed {
 /// idea. With `launch_pull`, the Launch directory's checkout of the Base
 /// branch, if that is the branch checked out, is first brought up to date
 /// with origin. The review's
-/// worktree and the plugin directory are gone when this returns. A failure
+/// worktree is gone when this returns. A failure
 /// after the plan is published leaves its labels as the review left them.
 ///
 /// Once the preflight checks pass, and before anything else, the Architect

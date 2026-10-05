@@ -335,10 +335,9 @@ fn the_session_prompt_names_the_factory_skills_the_base_branch_and_the_final_lin
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let prompt = scenario.first_prompt();
     for expected in [
-        "/thirdshift:improve-codebase-architecture",
-        "/thirdshift:codebase-design",
-        "/thirdshift:to-spec",
-        "/thirdshift:to-tickets",
+        "/thirdshift-improve-codebase-architecture\n",
+        "the `thirdshift-codebase-design` skill",
+        "the `thirdshift-to-spec` and `thirdshift-to-tickets` skills",
         "the base branch develop",
         "\nArchitecture review plan: <",
         "\nArchitecture review idea: <",
@@ -816,7 +815,7 @@ fn a_single_ticket_plan_starts_a_run_on_it_and_ends_as_that_run_does() {
     assert_eq!(calls.len(), 2, "sessions: {calls:?}");
     let prompt = calls[1]["prompt"].as_str().unwrap();
     assert!(
-        prompt.starts_with(&format!("/thirdshift:implement {PLAN_URL}\n")),
+        prompt.starts_with(&format!("/thirdshift-implement {PLAN_URL}\n")),
         "{prompt}"
     );
     assert_eq!(calls[1]["branch"], "issue-8");
@@ -1084,6 +1083,9 @@ fn base_fix_reaches_each_tickets_run_of_the_dispatched_spec_run() {
     for file in ["issue-9.txt", "issue-10.txt", "ci-fix.txt"] {
         assert!(scenario.origin_file("issue-8", file).is_some(), "{file}");
     }
+    // The Architecture review, each Ticket's Run, the Base fix and the Spec
+    // review.
+    scenario.assert_every_session_found_the_factory_skills();
 }
 
 #[test]
@@ -1825,7 +1827,7 @@ fn a_second_architect_run_is_skipped_while_the_firsts_dispatched_run_or_spec_run
         assert_ended_with_pr(&first, &pr_from(&scenario, "issue-8"), "ready for review");
         let reviews = scenario.claude_calls().into_iter().filter(|call| {
             let prompt = call["prompt"].as_str().unwrap();
-            prompt.contains("/thirdshift:improve-codebase-architecture")
+            prompt.contains("/thirdshift-improve-codebase-architecture")
         });
         assert_eq!(reviews.count(), 1, "a second review was started");
     }

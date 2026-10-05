@@ -1,5 +1,5 @@
 ---
-name: to-tickets
+name: thirdshift-to-tickets
 description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links. Only for an Architecture review.
 disable-model-invocation: false
 ---

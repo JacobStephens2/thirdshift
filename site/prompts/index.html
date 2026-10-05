@@ -34,10 +34,10 @@
 <section class="sec" aria-labelledby="command-title">
   <div class="wrap">
     <div class="sec-head"><p class="eyebrow">The command line</p><h2 id="command-title">How each session starts</h2></div>
-    <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode, with the Factory skills loaded as a plugin from a temporary directory. The prompt is one of the templates below.</p>
-    <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --plugin-dir <mark class="ph">&lt;plugin dir&gt;</mark> --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
+    <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
+    <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
-    <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --plugin-dir <mark class="ph">&lt;plugin dir&gt;</mark> --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
+    <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
   </div>
 </section>
 <section class="sec" aria-labelledby="prompts-title">
@@ -49,10 +49,10 @@
         <h3 id="prompt-fresh-title">Fresh</h3>
         <p>Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
-        <pre class="job-text"><code>/thirdshift:implement <mark class="ph">&lt;Issue URL&gt;</mark>
-The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
+        <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
+The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
 Address the Standards and Spec findings you agree with.
-Push branch <mark class="ph">&lt;branch&gt;</mark> and create a pull request against <mark class="ph">&lt;base&gt;</mark> using /thirdshift:pr, marked ready for review.
+Push branch <mark class="ph">&lt;branch&gt;</mark> and create a pull request against <mark class="ph">&lt;base&gt;</mark> using the `thirdshift-pr` skill, marked ready for review.
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.
@@ -62,17 +62,17 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <h3 id="prompt-continuation-title">Continuation, with no pull request</h3>
         <p>Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
-        <pre class="job-text"><code>/thirdshift:implement <mark class="ph">&lt;Issue URL&gt;</mark>
+        <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
 
 You are continuing work on branch <mark class="ph">&lt;branch&gt;</mark>, which already has commits (see git log <mark class="ph">&lt;base&gt;</mark>..HEAD). Build on them; don't start over.
 
-The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
+The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
 
 Address the Standards and Spec findings you agree with.
 
 Push branch <mark class="ph">&lt;branch&gt;</mark>.
 
-Create a pull request against <mark class="ph">&lt;base&gt;</mark> using /thirdshift:pr, marked ready for review.
+Create a pull request against <mark class="ph">&lt;base&gt;</mark> using the `thirdshift-pr` skill, marked ready for review.
 
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 
@@ -85,17 +85,17 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <h3 id="prompt-continuation-pr-title">Continuation, with an open pull request</h3>
         <p>Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
-        <pre class="job-text"><code>/thirdshift:implement <mark class="ph">&lt;Issue URL&gt;</mark>
+        <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
 
 You are continuing work on branch <mark class="ph">&lt;branch&gt;</mark>, which already has commits (see git log <mark class="ph">&lt;base&gt;</mark>..HEAD). Build on them; don't start over.
 
-The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
+The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
 
 Address the Standards and Spec findings you agree with.
 
 Push branch <mark class="ph">&lt;branch&gt;</mark>.
 
-Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using /thirdshift:pr, rewriting its body to cover the whole branch, marked ready for review.
+Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using the `thirdshift-pr` skill, rewriting its body to cover the whole branch, marked ready for review.
 
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 
@@ -108,17 +108,17 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <h3 id="prompt-spec-review-title">Spec review</h3>
         <p>In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.</p>
         <p class="sent-by">Sent by <a href="/#unit-3">3 · Y · Review</a></p>
-        <pre class="job-text"><code>/thirdshift:code-review <mark class="ph">&lt;base&gt;</mark>, with the Spec <mark class="ph">&lt;Spec URL&gt;</mark> as the spec
+        <pre class="job-text"><code>/thirdshift-code-review <mark class="ph">&lt;base&gt;</mark>, with the Spec <mark class="ph">&lt;Spec URL&gt;</mark> as the spec
 
 Every Ticket of the Spec <mark class="ph">&lt;Spec URL&gt;</mark> has landed on branch <mark class="ph">&lt;Spec branch&gt;</mark>, its Spec branch (see git log <mark class="ph">&lt;base&gt;</mark>..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.
 
-Review with /thirdshift:code-review using <mark class="ph">&lt;base&gt;</mark> as the fixed point and <mark class="ph">&lt;Spec URL&gt;</mark> as the spec.
+Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point and <mark class="ph">&lt;Spec URL&gt;</mark> as the spec.
 
-Address the Standards and Spec findings you agree with, using /thirdshift:tdd where it fits, and commit.
+Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.
 
 Push branch <mark class="ph">&lt;Spec branch&gt;</mark>. Do not rebase or force-push.
 
-Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.
+Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.
 
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 
@@ -131,15 +131,15 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <h3 id="prompt-architecture-review-title">Architecture review</h3>
         <p>Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.</p>
         <p class="sent-by">Sent by an Architect run, before any unit</p>
-        <pre class="job-text"><code>/thirdshift:improve-codebase-architecture
+        <pre class="job-text"><code>/thirdshift-improve-codebase-architecture
 
 This is an Architecture review of the base branch <mark class="ph">&lt;base&gt;</mark>: this worktree is checked out at its head on origin, on no branch.
 
 Focus the review on: <mark class="ph">&lt;focus&gt;</mark>
 
-Find the deepening opportunities with /thirdshift:improve-codebase-architecture, using /thirdshift:codebase-design for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.
+Find the deepening opportunities with the `thirdshift-improve-codebase-architecture` skill, using the `thirdshift-codebase-design` skill for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.
 
-If it is Strong, settle its design yourself and publish it as the plan with /thirdshift:to-spec and /thirdshift:to-tickets: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `needs-triage`, not `ready-for-agent`: thirdshift marks it ready once you are done.
+If it is Strong, settle its design yourself and publish it as the plan with the `thirdshift-to-spec` and `thirdshift-to-tickets` skills: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `needs-triage`, not `ready-for-agent`: thirdshift marks it ready once you are done.
 
 If it is not Strong, file it as one issue labelled `needs-triage`, unless an open issue already covers it.
 
@@ -157,7 +157,7 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <h3 id="prompt-conflict-repair-title">Conflict Repair</h3>
         <p>Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
-        <pre class="job-text"><code>/thirdshift:resolving-merge-conflicts
+        <pre class="job-text"><code>/thirdshift-resolving-merge-conflicts
 
 A merge of origin/<mark class="ph">&lt;base&gt;</mark> into <mark class="ph">&lt;branch&gt;</mark> is in progress in this worktree and has conflicts.
 <mark class="ph">&lt;branch&gt;</mark> implements <mark class="ph">&lt;Issue URL&gt;</mark>; its pull request is <mark class="ph">&lt;pull request URL&gt;</mark>.
@@ -171,7 +171,7 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <h3 id="prompt-foreign-conflict-repair-title">Conflict Repair, on Foreign commits</h3>
         <p>In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
-        <pre class="job-text"><code>/thirdshift:resolving-merge-conflicts
+        <pre class="job-text"><code>/thirdshift-resolving-merge-conflicts
 
 A merge of origin/<mark class="ph">&lt;branch&gt;</mark> into <mark class="ph">&lt;branch&gt;</mark> is in progress in this worktree and has conflicts.
 <mark class="ph">&lt;branch&gt;</mark> implements <mark class="ph">&lt;Issue URL&gt;</mark>; its pull request is <mark class="ph">&lt;pull request URL&gt;</mark>.
@@ -185,11 +185,11 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <h3 id="prompt-review-repair-title">Review Repair</h3>
         <p>In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
-        <pre class="job-text"><code>/thirdshift:code-review <mark class="ph">&lt;own head&gt;</mark>
+        <pre class="job-text"><code>/thirdshift-code-review <mark class="ph">&lt;own head&gt;</mark>
 
 Someone else pushed commits to <mark class="ph">&lt;branch&gt;</mark> while it was being worked on, and they have been merged into <mark class="ph">&lt;branch&gt;</mark> in this worktree. <mark class="ph">&lt;branch&gt;</mark> implements <mark class="ph">&lt;Issue URL&gt;</mark>; its pull request is <mark class="ph">&lt;pull request URL&gt;</mark>. They are merged into the base branch only once you have reviewed them.
 
-Review with /thirdshift:code-review using <mark class="ph">&lt;own head&gt;</mark> as the fixed point: <mark class="ph">&lt;branch&gt;</mark>'s head before their commits were merged in.
+Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;own head&gt;</mark> as the fixed point: <mark class="ph">&lt;branch&gt;</mark>'s head before their commits were merged in.
 
 Address the Standards and Spec findings you agree with.
 
@@ -254,14 +254,14 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
 <section class="sec" aria-labelledby="skills-title">
   <div class="wrap">
     <div class="sec-head"><p class="eyebrow">Factory skills</p><h2 id="skills-title">The skills, as the agent reads them</h2></div>
-    <p class="lede">Every Factory skill and supporting file, raw, exactly as the plugin writes it out.</p>
+    <p class="lede">Every Factory skill and supporting file, raw, exactly as thirdshift writes it out.</p>
     <div class="job-sheets">
-      <article class="job-sheet" id="skill-code-review" aria-labelledby="skill-code-review-title">
-        <h3 id="skill-code-review-title">code-review</h3>
+      <article class="job-sheet" id="skill-thirdshift-code-review" aria-labelledby="skill-thirdshift-code-review-title">
+        <h3 id="skill-thirdshift-code-review-title">thirdshift-code-review</h3>
         <p class="sent-by">Used by <a href="/#unit-3">3 · Y · Review</a></p>
-        <h4 id="file-code-review-skill-md"><code>code-review/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-code-review-skill-md"><code>thirdshift-code-review/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: code-review
+name: thirdshift-code-review
 description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
 ---
 
@@ -348,18 +348,18 @@ A change can pass one axis and fail the other:
 
 Reporting them separately stops one axis from masking the other.
 </code></pre>
-        <h4 id="file-code-review-agents-openai-yaml"><code>code-review/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-code-review-agents-openai-yaml"><code>thirdshift-code-review/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "Code Review"
   short_description: "Review a diff on standards and spec"
 </code></pre>
       </article>
-      <article class="job-sheet" id="skill-codebase-design" aria-labelledby="skill-codebase-design-title">
-        <h3 id="skill-codebase-design-title">codebase-design</h3>
+      <article class="job-sheet" id="skill-thirdshift-codebase-design" aria-labelledby="skill-thirdshift-codebase-design-title">
+        <h3 id="skill-thirdshift-codebase-design-title">thirdshift-codebase-design</h3>
         <p class="sent-by">Used by the Architecture review, in an Architect run</p>
-        <h4 id="file-codebase-design-skill-md"><code>codebase-design/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-codebase-design-skill-md"><code>thirdshift-codebase-design/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: codebase-design
+name: thirdshift-codebase-design
 description: Shared vocabulary for designing deep modules. Use when designing or improving a module's interface, finding deepening opportunities, deciding where a seam goes, making code more testable or AI-navigable, or when another skill needs the deep-module vocabulary.
 ---
 
@@ -473,7 +473,7 @@ Good interfaces make testing natural:
 - **Deepening a cluster given its dependencies**, see [DEEPENING.md](DEEPENING.md): dependency categories, seam discipline, and replace-don't-layer testing.
 - **Exploring alternative interfaces**, see [DESIGN-IT-TWICE.md](DESIGN-IT-TWICE.md): spin up parallel sub-agents to design the interface several radically different ways, then compare on depth, locality, and seam placement.
 </code></pre>
-        <h4 id="file-codebase-design-deepening-md"><code>codebase-design/DEEPENING.md</code></h4>
+        <h4 id="file-thirdshift-codebase-design-deepening-md"><code>thirdshift-codebase-design/DEEPENING.md</code></h4>
         <pre class="job-text"><code># Deepening
 
 How to deepen a cluster of shallow modules safely, given its dependencies. Assumes the vocabulary in [SKILL.md](SKILL.md): **module**, **interface**, **seam**, **adapter**.
@@ -512,7 +512,7 @@ Third-party services (Stripe, Twilio, etc.) you don't control. The deepened modu
 - Tests assert on observable outcomes through the interface, not internal state.
 - Tests should survive internal refactors, since they describe behaviour, not implementation. If a test has to change when the implementation changes, it's testing past the interface.
 </code></pre>
-        <h4 id="file-codebase-design-design-it-twice-md"><code>codebase-design/DESIGN-IT-TWICE.md</code></h4>
+        <h4 id="file-thirdshift-codebase-design-design-it-twice-md"><code>thirdshift-codebase-design/DESIGN-IT-TWICE.md</code></h4>
         <pre class="job-text"><code># Design It Twice
 
 To explore alternative interfaces for a chosen deepening candidate, use this parallel sub-agent pattern. Based on "Design It Twice" (Ousterhout): your first idea is unlikely to be the best.
@@ -558,33 +558,33 @@ Compare the designs in prose. Contrast by **depth** (leverage at the interface),
 
 After comparing, decide: which design is strongest and why. If elements from different designs would combine well, take a hybrid. Be opinionated: the choice is yours to make, and nobody picks from a menu. Record the decision and its reason, with the designs you turned down and why.
 </code></pre>
-        <h4 id="file-codebase-design-agents-openai-yaml"><code>codebase-design/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-codebase-design-agents-openai-yaml"><code>thirdshift-codebase-design/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "Codebase Design"
   short_description: "Vocabulary for deep-module design"
 </code></pre>
       </article>
-      <article class="job-sheet" id="skill-implement" aria-labelledby="skill-implement-title">
-        <h3 id="skill-implement-title">implement</h3>
+      <article class="job-sheet" id="skill-thirdshift-implement" aria-labelledby="skill-thirdshift-implement-title">
+        <h3 id="skill-thirdshift-implement-title">thirdshift-implement</h3>
         <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
-        <h4 id="file-implement-skill-md"><code>implement/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-implement-skill-md"><code>thirdshift-implement/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: implement
+name: thirdshift-implement
 description: "Implement a piece of work based on a spec or set of tickets."
 disable-model-invocation: false
 ---
 
 Implement the work described by the user in the spec or tickets.
 
-Use /thirdshift:tdd where possible, at pre-agreed seams.
+Use the `thirdshift-tdd` skill where possible, at pre-agreed seams.
 
 Run typechecking regularly, single test files regularly, and the full test suite once at the end.
 
-Once done, use /thirdshift:code-review to review the work.
+Once done, use the `thirdshift-code-review` skill to review the work.
 
 Commit your work to the current branch.
 </code></pre>
-        <h4 id="file-implement-agents-openai-yaml"><code>implement/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-implement-agents-openai-yaml"><code>thirdshift-implement/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "Implement"
   short_description: "Build work from a spec or tickets"
@@ -592,12 +592,12 @@ policy:
   allow_implicit_invocation: true
 </code></pre>
       </article>
-      <article class="job-sheet" id="skill-improve-codebase-architecture" aria-labelledby="skill-improve-codebase-architecture-title">
-        <h3 id="skill-improve-codebase-architecture-title">improve-codebase-architecture</h3>
+      <article class="job-sheet" id="skill-thirdshift-improve-codebase-architecture" aria-labelledby="skill-thirdshift-improve-codebase-architecture-title">
+        <h3 id="skill-thirdshift-improve-codebase-architecture-title">thirdshift-improve-codebase-architecture</h3>
         <p class="sent-by">Used by the Architecture review, in an Architect run</p>
-        <h4 id="file-improve-codebase-architecture-skill-md"><code>improve-codebase-architecture/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-improve-codebase-architecture-skill-md"><code>thirdshift-improve-codebase-architecture/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: improve-codebase-architecture
+name: thirdshift-improve-codebase-architecture
 description: "Scan a codebase for deepening opportunities, take the top recommendation, and publish it to the issue tracker: as a plan when it is Strong, as an idea otherwise. Only for an Architecture review."
 disable-model-invocation: false
 ---
@@ -612,7 +612,7 @@ It changes nothing in the repository. Never commit, push, create a branch or ope
 
 This command is _informed_ by the project's domain model and built on a shared design vocabulary:
 
-- Call the Skill tool with "thirdshift:codebase-design" for the architecture vocabulary (**module**, **interface**, **depth**, **seam**, **adapter**, **leverage**, **locality**) and its principles (the deletion test, "the interface is the test surface", "one adapter = hypothetical seam, two = real"). Use these terms exactly in every suggestion, and don't drift into "component," "service," "API," or "boundary."
+- Use the `thirdshift-codebase-design` skill for the architecture vocabulary (**module**, **interface**, **depth**, **seam**, **adapter**, **leverage**, **locality**) and its principles (the deletion test, "the interface is the test surface", "one adapter = hypothetical seam, two = real"). Use these terms exactly in every suggestion, and don't drift into "component," "service," "API," or "boundary."
 - The domain language in `CONTEXT.md` gives names to good seams; ADRs in `docs/adr/` record decisions this command should not re-litigate.
 
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to the `gh` CLI. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
@@ -669,7 +669,7 @@ Every other candidate is dropped. Don't file it, and don't list it in the plan o
 
 If the scan surfaced no candidate at all, file nothing, and say so plainly in place of the final line of step 6: there is no issue for it to name.
 
-**Use CONTEXT.md vocabulary for the domain, and the `/thirdshift:codebase-design` vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
+**Use CONTEXT.md vocabulary for the domain, and the `thirdshift-codebase-design` skill's vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
 
 **ADR conflicts**: if a candidate contradicts an existing ADR, only keep it when the friction is real enough to warrant revisiting the ADR. Mark it clearly in the report (e.g. a warning callout: _"contradicts ADR-0007, but worth reopening because…"_). Don't raise every theoretical refactor an ADR forbids.
 
@@ -690,7 +690,7 @@ Side effects are recorded, never written:
 - **Naming a deepened module after a concept not in `CONTEXT.md`?** Record the term and its definition as work for a Ticket.
 - **Sharpening a fuzzy term as you decide?** Record the sharper definition as work for a Ticket.
 - **Reopening an ADR, or making a decision worth one?** Record the new or changed ADR as work for a Ticket. A decision is worth an ADR only when it is hard to reverse, surprising without context, and the result of a real trade-off.
-- **Want to explore alternative interfaces for the deepened module?** Call the Skill tool with "thirdshift:codebase-design" and use its design-it-twice parallel sub-agent pattern.
+- **Want to explore alternative interfaces for the deepened module?** Use the `thirdshift-codebase-design` skill and its design-it-twice parallel sub-agent pattern.
 
 ### 4. Publish the plan
 
@@ -698,8 +698,8 @@ Only for a `Strong` top recommendation whose design is settled.
 
 Decide the plan's size. If one session, a single fresh context window, is enough for the whole change, the plan is a single **Ticket**. Otherwise it is a **Spec** with **Tickets**. Don't force a small refactor into a Spec.
 
-- **A Spec with Tickets**: call the Skill tool with "thirdshift:to-spec" to publish the Spec, then with "thirdshift:to-tickets" to publish its Tickets as the Spec's sub-issues.
-- **A single Ticket**: call the Skill tool with "thirdshift:to-tickets" to publish one standalone Ticket, with no parent.
+- **A Spec with Tickets**: use the `thirdshift-to-spec` skill to publish the Spec, then the `thirdshift-to-tickets` skill to publish its Tickets as the Spec's sub-issues.
+- **A single Ticket**: use the `thirdshift-to-tickets` skill to publish one standalone Ticket, with no parent.
 
 The plan's top issue, the Spec or the single Ticket, is labelled `needs-triage` and nothing else. thirdshift marks it ready once the session has ended and the plan passes its checks; you never do. Tickets under a Spec are labelled `ready-for-agent`.
 
@@ -728,7 +728,7 @@ Unless the scan surfaced no candidate at all, end your final message with the on
 
 thirdshift reads only that line, so everything else you want read belongs in the issue.
 </code></pre>
-        <h4 id="file-improve-codebase-architecture-report-md"><code>improve-codebase-architecture/REPORT.md</code></h4>
+        <h4 id="file-thirdshift-improve-codebase-architecture-report-md"><code>thirdshift-improve-codebase-architecture/REPORT.md</code></h4>
         <pre class="job-text"><code># Report Format
 
 The Architecture review's report is Markdown, written into the issue it publishes: the plan's top issue, or the idea issue. GitHub renders Mermaid in a fenced `mermaid` block, so the diagrams live where the issue is read. Write no file, and open nothing.
@@ -737,7 +737,7 @@ The report is one candidate's card: the top recommendation's. The candidates tha
 
 ## Candidate card
 
-The diagrams carry the weight. Prose is sparse, plain, and uses the glossary terms (from the `/thirdshift:codebase-design` skill) without ceremony.
+The diagrams carry the weight. Prose is sparse, plain, and uses the glossary terms (from the `thirdshift-codebase-design` skill) without ceremony.
 
 ```md
 **Strength**: Strong · **Dependencies**: in-process
@@ -824,7 +824,7 @@ flowchart LR
 
 ## Tone
 
-Plain English, concise, but the architectural nouns and verbs come straight from the `/thirdshift:codebase-design` skill. Concision is not an excuse to drift.
+Plain English, concise, but the architectural nouns and verbs come straight from the `thirdshift-codebase-design` skill. Concision is not an excuse to drift.
 
 **Use exactly:** module, interface, implementation, depth, deep, shallow, seam, adapter, leverage, locality.
 
@@ -839,9 +839,9 @@ Plain English, concise, but the architectural nouns and verbs come straight from
 
 **Wins bullets** name the gain in glossary terms: *"locality: bugs concentrate in one module"*, *"leverage: one interface, N call sites"*, *"interface shrinks; implementation absorbs the wrappers"*. Don't write *"easier to maintain"* or *"cleaner code"*, because those terms aren't in the glossary and don't earn their place.
 
-No hedging, no throat-clearing, no "it's worth noting that…". If a sentence could be a bullet, make it a bullet. If a bullet could be cut, cut it. If a term isn't in the `/thirdshift:codebase-design` glossary, reach for one that is before inventing a new one.
+No hedging, no throat-clearing, no "it's worth noting that…". If a sentence could be a bullet, make it a bullet. If a bullet could be cut, cut it. If a term isn't in the `thirdshift-codebase-design` skill's glossary, reach for one that is before inventing a new one.
 </code></pre>
-        <h4 id="file-improve-codebase-architecture-agents-openai-yaml"><code>improve-codebase-architecture/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-improve-codebase-architecture-agents-openai-yaml"><code>thirdshift-improve-codebase-architecture/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "Improve Codebase Architecture"
   short_description: "Find and publish the top architecture improvement"
@@ -849,12 +849,12 @@ policy:
   allow_implicit_invocation: true
 </code></pre>
       </article>
-      <article class="job-sheet" id="skill-pr" aria-labelledby="skill-pr-title">
-        <h3 id="skill-pr-title">pr</h3>
+      <article class="job-sheet" id="skill-thirdshift-pr" aria-labelledby="skill-thirdshift-pr-title">
+        <h3 id="skill-thirdshift-pr-title">thirdshift-pr</h3>
         <p class="sent-by">Used by <a href="/#unit-3">3 · Y · Review</a></p>
-        <h4 id="file-pr-skill-md"><code>pr/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-pr-skill-md"><code>thirdshift-pr/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: pr
+name: thirdshift-pr
 description: "Use when writing a PR body."
 metadata:
   credits:
@@ -1022,23 +1022,23 @@ Describe whether it's a one-way or two-way door. You can walk back through two-w
 
 The blast radius is the potential impact or scope of the changes introduced by this PR. Consider all possibilities. Examples are layout shift, breakages for consumers, mobile responsiveness, etc.
 </code></pre>
-        <h4 id="file-pr-credits-md"><code>pr/CREDITS.md</code></h4>
+        <h4 id="file-thirdshift-pr-credits-md"><code>thirdshift-pr/CREDITS.md</code></h4>
         <pre class="job-text"><code># Credits
 
 "The shape of the change" section is [Dex Horthy](https://github.com/dexhorthy)'s [`show-me`](https://github.com/humanlayer/humanlayer) skill, reproduced almost word for word, aimed at a diff instead of a live conversation. `pr` does not depend on `show-me` as a skill (it isn't part of this repo, and a hard dependency would break standalone installs), so the content is copied in rather than pointed at; this file is the attribution a dependency would otherwise have carried.
 </code></pre>
-        <h4 id="file-pr-agents-openai-yaml"><code>pr/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-pr-agents-openai-yaml"><code>thirdshift-pr/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "PR"
   short_description: "Write a PR body that's fast to review"
 </code></pre>
       </article>
-      <article class="job-sheet" id="skill-resolving-merge-conflicts" aria-labelledby="skill-resolving-merge-conflicts-title">
-        <h3 id="skill-resolving-merge-conflicts-title">resolving-merge-conflicts</h3>
+      <article class="job-sheet" id="skill-thirdshift-resolving-merge-conflicts" aria-labelledby="skill-thirdshift-resolving-merge-conflicts-title">
+        <h3 id="skill-thirdshift-resolving-merge-conflicts-title">thirdshift-resolving-merge-conflicts</h3>
         <p class="sent-by">Used by <a href="/#unit-4">4 · K · Finish</a>, in a Repair</p>
-        <h4 id="file-resolving-merge-conflicts-skill-md"><code>resolving-merge-conflicts/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-resolving-merge-conflicts-skill-md"><code>thirdshift-resolving-merge-conflicts/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: resolving-merge-conflicts
+name: thirdshift-resolving-merge-conflicts
 description: "Use when you need to resolve an in-progress git merge/rebase conflict."
 ---
 
@@ -1051,18 +1051,18 @@ description: "Use when you need to resolve an in-progress git merge/rebase confl
 4. Discover the project's **automated checks** and run them, typically typecheck, then tests, then format. Fix anything the merge broke.
 
 5. **Finish the merge/rebase.** Stage everything, commit, and push. If rebasing, continue the rebase process until all commits are rebased.</code></pre>
-        <h4 id="file-resolving-merge-conflicts-agents-openai-yaml"><code>resolving-merge-conflicts/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-resolving-merge-conflicts-agents-openai-yaml"><code>thirdshift-resolving-merge-conflicts/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "Resolving Merge Conflicts"
   short_description: "Resolve merge and rebase conflicts"
 </code></pre>
       </article>
-      <article class="job-sheet" id="skill-tdd" aria-labelledby="skill-tdd-title">
-        <h3 id="skill-tdd-title">tdd</h3>
+      <article class="job-sheet" id="skill-thirdshift-tdd" aria-labelledby="skill-thirdshift-tdd-title">
+        <h3 id="skill-thirdshift-tdd-title">thirdshift-tdd</h3>
         <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
-        <h4 id="file-tdd-skill-md"><code>tdd/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-tdd-skill-md"><code>thirdshift-tdd/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: tdd
+name: thirdshift-tdd
 description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
 ---
 
@@ -1086,7 +1086,7 @@ A **seam** is the public boundary you test at: the interface where you observe b
 
 Decide: "What's the public interface, and which seams should we test?"
 
-When the shape of that interface is itself in question (how deep the module is, where the seam belongs, what the interface should expose), call the Skill tool with "codebase-design" for the vocabulary. It is the shared source of the module, interface, depth, seam, adapter, leverage and locality terms, and it is a reference to consult, not a session to run.
+When the shape of that interface is itself in question (how deep the module is, where the seam belongs, what the interface should expose), use the `thirdshift-codebase-design` skill for the vocabulary. It is the shared source of the module, interface, depth, seam, adapter, leverage and locality terms, and it is a reference to consult, not a session to run.
 
 ## Anti-patterns
 
@@ -1098,14 +1098,14 @@ When the shape of that interface is itself in question (how deep the module is, 
 
 - **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
 - **One slice at a time.** One seam, one test, one minimal implementation per cycle.
-- **Refactoring is not part of the loop.** It belongs to the review stage (see the `code-review` skill), not the red → green implementation cycle.
+- **Refactoring is not part of the loop.** It belongs to the review stage (see the `thirdshift-code-review` skill), not the red → green implementation cycle.
 </code></pre>
-        <h4 id="file-tdd-agents-openai-yaml"><code>tdd/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-tdd-agents-openai-yaml"><code>thirdshift-tdd/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "TDD"
   short_description: "Test-driven red-green-refactor"
 </code></pre>
-        <h4 id="file-tdd-mocking-md"><code>tdd/mocking.md</code></h4>
+        <h4 id="file-thirdshift-tdd-mocking-md"><code>thirdshift-tdd/mocking.md</code></h4>
         <pre class="job-text"><code># When to Mock
 
 Mock at **system boundaries** only:
@@ -1166,7 +1166,7 @@ The SDK approach means:
 - Easier to see which endpoints a test exercises
 - Type safety per endpoint
 </code></pre>
-        <h4 id="file-tdd-tests-md"><code>tdd/tests.md</code></h4>
+        <h4 id="file-thirdshift-tdd-tests-md"><code>thirdshift-tdd/tests.md</code></h4>
         <pre class="job-text"><code># Good and Bad Tests
 
 ## Good Tests
@@ -1246,12 +1246,12 @@ test("calculateTotal sums line items", () =&gt; {
 ```
 </code></pre>
       </article>
-      <article class="job-sheet" id="skill-to-spec" aria-labelledby="skill-to-spec-title">
-        <h3 id="skill-to-spec-title">to-spec</h3>
+      <article class="job-sheet" id="skill-thirdshift-to-spec" aria-labelledby="skill-thirdshift-to-spec-title">
+        <h3 id="skill-thirdshift-to-spec-title">thirdshift-to-spec</h3>
         <p class="sent-by">Used by the Architecture review, in an Architect run</p>
-        <h4 id="file-to-spec-skill-md"><code>to-spec/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-to-spec-skill-md"><code>thirdshift-to-spec/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: to-spec
+name: thirdshift-to-spec
 description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled. Only for an Architecture review."
 disable-model-invocation: false
 ---
@@ -1328,7 +1328,7 @@ Any further notes about the feature.
 
 &lt;/spec-template&gt;
 </code></pre>
-        <h4 id="file-to-spec-agents-openai-yaml"><code>to-spec/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-to-spec-agents-openai-yaml"><code>thirdshift-to-spec/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "To Spec"
   short_description: "Turn a session into a spec"
@@ -1336,12 +1336,12 @@ policy:
   allow_implicit_invocation: true
 </code></pre>
       </article>
-      <article class="job-sheet" id="skill-to-tickets" aria-labelledby="skill-to-tickets-title">
-        <h3 id="skill-to-tickets-title">to-tickets</h3>
+      <article class="job-sheet" id="skill-thirdshift-to-tickets" aria-labelledby="skill-thirdshift-to-tickets-title">
+        <h3 id="skill-thirdshift-to-tickets-title">thirdshift-to-tickets</h3>
         <p class="sent-by">Used by the Architecture review, in an Architect run</p>
-        <h4 id="file-to-tickets-skill-md"><code>to-tickets/SKILL.md</code></h4>
+        <h4 id="file-thirdshift-to-tickets-skill-md"><code>thirdshift-to-tickets/SKILL.md</code></h4>
         <pre class="job-text"><code>---
-name: to-tickets
+name: thirdshift-to-tickets
 description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links. Only for an Architecture review.
 disable-model-invocation: false
 ---
@@ -1441,7 +1441,7 @@ The end-to-end behaviour this ticket makes work, from the user's perspective, no
 
 Avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
 </code></pre>
-        <h4 id="file-to-tickets-agents-openai-yaml"><code>to-tickets/agents/openai.yaml</code></h4>
+        <h4 id="file-thirdshift-to-tickets-agents-openai-yaml"><code>thirdshift-to-tickets/agents/openai.yaml</code></h4>
         <pre class="job-text"><code>interface:
   display_name: "To Tickets"
   short_description: "Split a plan into tracer-bullet tickets"
@@ -1455,7 +1455,7 @@ policy:
 <section class="sec" aria-labelledby="licence-title">
   <div class="wrap">
     <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
-    <p class="lede">The Factory skills are adapted from Matt Pocock's skills, under this licence. The <a href="#skill-pr">pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-pr-credits-md">CREDITS.md</a>.</p>
+    <p class="lede">The Factory skills are adapted from Matt Pocock's skills, under this licence. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>.</p>
     <h4 id="file-license"><code>LICENSE</code></h4>
     <pre class="job-text"><code>MIT License
 

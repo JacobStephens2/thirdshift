@@ -5,7 +5,7 @@
 Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.
 
 ```
-/thirdshift:resolving-merge-conflicts
+/thirdshift-resolving-merge-conflicts
 
 A merge of origin/<base> into <branch> is in progress in this worktree and has conflicts.
 <branch> implements <Issue URL>; its pull request is <pull request URL>.

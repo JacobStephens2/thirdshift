@@ -4,16 +4,16 @@
 
 Every Session prompt thirdshift can start or resume an agent session with, one file each, with placeholders such as `<branch>` where each Run fills in its own values. The [Prompts and skills page](https://thirdshift.app/prompts/) shows the same prompts.
 
-Every session runs `claude` headless in the Run's worktree, in auto permission mode, with the Factory skills loaded as a plugin from a temporary directory:
+Every session runs `claude` headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's `.claude/skills/`, where Claude Code finds them, and kept out of git:
 
 ```sh
-claude -p --permission-mode auto --plugin-dir <plugin dir> --output-format stream-json --verbose <prompt>
+claude -p --permission-mode auto --output-format stream-json --verbose <prompt>
 ```
 
 A [Resume](resume.md) continues the session that ended:
 
 ```sh
-claude -p --permission-mode auto --plugin-dir <plugin dir> --output-format stream-json --verbose --resume <session id> <prompt>
+claude -p --permission-mode auto --output-format stream-json --verbose --resume <session id> <prompt>
 ```
 
 | Prompt | When it is sent | File |
@@ -30,4 +30,4 @@ claude -p --permission-mode auto --plugin-dir <plugin dir> --output-format strea
 | CI-fix Repair, with Inherited failures | Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix. | [ci-fix-repair-inherited.md](ci-fix-repair-inherited.md) |
 | Resume | Continues any session, once, that ended its turn with background work still running, which was killed with it. | [resume.md](resume.md) |
 
-The Factory skills the prompts name are in [`skills/`](../skills/), as the plugin writes them out.
+The Factory skills the prompts name are in [`skills/`](../skills/), as thirdshift writes them out.

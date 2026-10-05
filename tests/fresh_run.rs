@@ -68,7 +68,7 @@ fn runs_claude_headless_in_auto_mode_in_a_sibling_worktree_on_the_issue_branch()
         "argv: {argv:?}"
     );
     assert!(argv.contains(&"--verbose"), "argv: {argv:?}");
-    assert!(argv.contains(&"--plugin-dir"), "argv: {argv:?}");
+    assert!(!argv.contains(&"--plugin-dir"), "argv: {argv:?}");
     assert_eq!(
         call["cwd"],
         scenario.path("work/widgets-issue-7").to_str().unwrap()
@@ -85,10 +85,10 @@ fn gives_the_agent_the_fresh_prompt() {
 
     assert_eq!(
         scenario.claude_calls()[0]["prompt"],
-        "/thirdshift:implement https://github.com/acme/widgets/issues/7\n\
-         The base branch is main. Review with /thirdshift:code-review using main as the fixed point.\n\
+        "/thirdshift-implement https://github.com/acme/widgets/issues/7\n\
+         The base branch is main. Review with the `thirdshift-code-review` skill using main as the fixed point.\n\
          Address the Standards and Spec findings you agree with.\n\
-         Push branch issue-7 and create a pull request against main using /thirdshift:pr, marked ready for review.\n\
+         Push branch issue-7 and create a pull request against main using the `thirdshift-pr` skill, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
          Include \"Closes #7\" in the PR body.\n\
          You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.\n"
@@ -96,46 +96,23 @@ fn gives_the_agent_the_fresh_prompt() {
 }
 
 #[test]
-fn loads_every_factory_skill_as_the_thirdshift_plugin() {
+fn finds_every_factory_skill_in_the_worktree_as_thirdshift_skill() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    let files = &scenario.claude_calls()[0]["plugin_files"];
-    let manifest: serde_json::Value = serde_json::from_str(
-        files[".claude-plugin/plugin.json"]
-            .as_str()
-            .expect("no plugin manifest"),
-    )
-    .unwrap();
-    assert_eq!(manifest["name"], "thirdshift");
-    for skill in [
-        "implement",
-        "code-review",
-        "pr",
-        "tdd",
-        "resolving-merge-conflicts",
-        "improve-codebase-architecture",
-        "to-spec",
-        "to-tickets",
-        "codebase-design",
-    ] {
-        let skill_md = files[format!("skills/{skill}/SKILL.md")].as_str();
-        assert!(
-            skill_md.is_some_and(|text| text.contains(&format!("name: {skill}"))),
-            "skill {skill} missing from the plugin"
-        );
-    }
+    scenario.assert_every_session_found_the_factory_skills();
+    let files = &scenario.claude_calls()[0]["skill_files"];
     for supporting in [
-        "skills/tdd/tests.md",
-        "skills/improve-codebase-architecture/REPORT.md",
-        "skills/codebase-design/DEEPENING.md",
-        "skills/codebase-design/DESIGN-IT-TWICE.md",
+        "thirdshift-tdd/tests.md",
+        "thirdshift-improve-codebase-architecture/REPORT.md",
+        "thirdshift-codebase-design/DEEPENING.md",
+        "thirdshift-codebase-design/DESIGN-IT-TWICE.md",
     ] {
         assert!(
             files[supporting].is_string(),
-            "the supporting file {supporting} is missing from the plugin"
+            "the supporting file {supporting} is missing from the worktree's .claude/skills/"
         );
     }
 }
@@ -148,12 +125,62 @@ fn ships_the_mattpocock_skills_mit_notice_with_the_factory_skills() {
     scenario.run(&[&scenario.issue_url(7)]);
 
     let calls = scenario.claude_calls();
-    let license = calls[0]["plugin_files"]["skills/LICENSE"].as_str();
+    let license = calls[0]["beside_skills"]["LICENSE"].as_str();
     assert!(
         license
             .is_some_and(|text| text.contains("MIT License")
                 && text.contains("Copyright (c) 2026 Matt Pocock")),
         "license: {license:?}"
+    );
+}
+
+#[test]
+fn the_linked_skills_are_kept_out_of_git() {
+    let scenario = Scenario::new();
+    let status = scenario.path("status.txt");
+    scenario.agent_does(&format!(
+        "git status --porcelain --untracked-files=all > '{}'\n\
+         echo feature > feature.txt\n\
+         git add -A\n\
+         git commit -q -m 'Add everything'\n\
+         gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'\n",
+        status.display()
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(std::fs::read_to_string(&status).unwrap(), "");
+    let committed = scenario.origin_git(&["ls-tree", "-r", "--name-only", "issue-7"]);
+    assert!(committed.contains("feature.txt"), "committed: {committed}");
+    assert!(!committed.contains(".claude"), "committed: {committed}");
+}
+
+#[test]
+fn a_second_run_adds_no_second_exclude_entry() {
+    let scenario = Scenario::new();
+    scenario.issue_is(8, "OPEN");
+    scenario.agent_does_for(7, AGENT_COMMITS_AND_OPENS_PR);
+    scenario.agent_does_for(
+        8,
+        "echo other > other.txt\ngit add other.txt\ngit commit -q -m 'Add other'\n\
+         gh pr create --base main --head issue-8 --title 'Add other' --body 'Closes #8'\n",
+    );
+
+    let first = scenario.run(&[&scenario.issue_url(7)]);
+    let second = scenario.run(&[&scenario.issue_url(8)]);
+
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    let exclude = std::fs::read_to_string(scenario.launch_dir().join(".git/info/exclude")).unwrap();
+    let entries: Vec<_> = exclude
+        .lines()
+        .filter(|line| line.contains("thirdshift-"))
+        .collect();
+    assert_eq!(
+        entries,
+        ["/.claude/skills/thirdshift-*"],
+        "exclude: {exclude}"
     );
 }
 

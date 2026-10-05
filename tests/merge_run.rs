@@ -322,12 +322,12 @@ fn assert_review_repair_from(prompt: &serde_json::Value, fixed_point: &str) {
     let prompt = prompt.as_str().unwrap();
     let fixed_point = fixed_point.trim();
     assert!(
-        prompt.starts_with("/thirdshift:code-review"),
+        prompt.starts_with("/thirdshift-code-review"),
         "prompt: {prompt}"
     );
     assert!(
         prompt.contains(&format!(
-            "Review with /thirdshift:code-review using {fixed_point} as the fixed point"
+            "Review with the `thirdshift-code-review` skill using {fixed_point} as the fixed point"
         )),
         "prompt: {prompt}"
     );
@@ -404,7 +404,7 @@ fn a_foreign_commit_that_conflicts_with_local_work_gets_a_conflict_repair_then_a
     assert_eq!(calls[2]["merging"], true);
     let conflict = calls[2]["prompt"].as_str().unwrap();
     assert!(
-        conflict.starts_with("/thirdshift:resolving-merge-conflicts")
+        conflict.starts_with("/thirdshift-resolving-merge-conflicts")
             && conflict.contains("A merge of origin/issue-7 into issue-7 is in progress"),
         "prompt: {conflict}"
     );

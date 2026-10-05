@@ -80,7 +80,7 @@ fn the_open_prs_base_is_the_base_branch_whatever_is_checked_out() {
     let prompt = scenario.first_prompt();
     assert!(
         prompt.contains("(see git log main..HEAD)")
-            && prompt.contains("The base branch is main. Review with /thirdshift:code-review using main as the fixed point.")
+            && prompt.contains("The base branch is main. Review with the `thirdshift-code-review` skill using main as the fixed point.")
             && !prompt.contains("develop"),
         "prompt: {prompt}"
     );

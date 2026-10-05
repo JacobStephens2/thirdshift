@@ -1,5 +1,5 @@
 ---
-name: codebase-design
+name: thirdshift-codebase-design
 description: Shared vocabulary for designing deep modules. Use when designing or improving a module's interface, finding deepening opportunities, deciding where a seam goes, making code more testable or AI-navigable, or when another skill needs the deep-module vocabulary.
 ---
 
