@@ -13,7 +13,7 @@ use signal_hook::low_level;
 
 use crate::config::UserConfig;
 use crate::email::DEFAULT_FROM;
-use crate::harness::{self, Choice, ChosenBy, Harness, ModelAndEffort, Unavailable};
+use crate::harness::{self, Catalog, Choice, ChosenBy, Harness, ModelAndEffort};
 use crate::resend_key::{self, Credentials, Source};
 
 /// What the user chose.
@@ -159,70 +159,112 @@ pub fn ask(
     })
 }
 
-/// Ask which Harness every Run's sessions run on, listing each with why
-/// sessions can't run on it here, if they can't, and refusing that one; then
-/// its Model and Effort, with those `current` sets for it as the defaults.
-/// The Harness's default is the first one sessions can run on, so `claude`
-/// when both can. A Model is checked with a test call, as a Run
-/// checks it, and on a refusal the Model and Effort are asked again. With no
-/// Harness to choose, nothing is asked, and the answer is `None`.
+/// Ask which Harness every Run's sessions run on, listing each, marked where
+/// it isn't installed, and refusing that one; then its Model and Effort,
+/// with those `current` sets for it as the defaults, checked as a Run
+/// checks them, as [`ask_claude`] and [`ask_codex`] ask them. The Harness's
+/// default is the first one installed, so `claude` when both are. With no
+/// Harness to choose, or Codex chosen and its catalog unreadable, the answer
+/// is `None`.
 fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndEffort)>> {
-    let listed: Vec<String> = Harness::ALL
+    let harnesses: Vec<String> = Harness::ALL
         .iter()
-        .map(|harness| match harness.unavailable() {
-            Some(why) => format!("{} ({why})", harness.name()),
-            None => harness.name().to_string(),
+        .map(|harness| {
+            if harness.installed() {
+                harness.name().to_string()
+            } else {
+                format!("{} (not installed)", harness.name())
+            }
         })
         .collect();
-    let listed = listed.join(" or ");
-    let default = Harness::ALL
-        .into_iter()
-        .find(|harness| harness.unavailable().is_none());
+    let harnesses = harnesses.join(" or ");
+    let default = Harness::ALL.into_iter().find(|harness| harness.installed());
     let Some(default) = default else {
         say(&format!(
-            "Harness for every Run's sessions: {listed}. Sessions can run on neither here, so \
-             the harness settings stay as they are; install claude, then rerun `thirdshift setup`."
+            "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \
+             the harness settings stay as they are; install claude or codex, then rerun \
+             `thirdshift setup`."
         ));
         return Ok(None);
     };
     let harness = loop {
         let name = answer(
-            &format!("Harness for every Run's sessions, {listed}"),
+            &format!("Harness for every Run's sessions, {harnesses}"),
             Some(default.name()),
         )?;
         match Harness::named(&name) {
             None => say(&format!("Choose {}.", harness::NAMES)),
-            Some(harness) => match harness.unavailable() {
-                None => break harness,
-                Some(Unavailable::NotSupportedYet) => say(&format!(
-                    "{name} is not supported yet: Codex sessions come in a later thirdshift."
-                )),
-                Some(Unavailable::NotInstalled) => {
-                    say(&format!("{name} is not installed: it isn't on PATH."))
-                }
-            },
+            Some(harness) if !harness.installed() => {
+                say(&format!("{name} is not installed: it isn't on PATH."))
+            }
+            Some(harness) => break harness,
         }
     };
-    let current_settings = current.of(harness);
+    let set = current.of(harness);
+    let chosen = match harness {
+        Harness::Claude => ask_claude(set)?,
+        Harness::Codex => match Catalog::read() {
+            Ok(catalog) => ask_codex(&catalog, set)?,
+            Err(error) => {
+                say(&format!(
+                    "{error:#}\nThe harness settings stay as they are; rerun `thirdshift \
+                     setup` once codex debug models works."
+                ));
+                return Ok(None);
+            }
+        },
+    };
+    Ok(Some((harness, chosen)))
+}
+
+/// Ask Claude's Model and Effort, with `current` as the defaults. A Model is
+/// checked with a test call, as a Run checks it, and on a refusal the Model
+/// and Effort are asked again.
+fn ask_claude(current: &ModelAndEffort) -> Result<ModelAndEffort> {
     loop {
-        let model = ask_setting("Model", harness, current_settings.model.as_deref())?;
-        let effort = ask_setting("Effort", harness, current_settings.effort.as_deref())?;
+        let model = ask_setting("Model", Harness::Claude, current.model.as_deref())?;
+        let effort = ask_setting("Effort", Harness::Claude, current.effort.as_deref())?;
         let choice = Choice {
-            harness,
+            harness: Harness::Claude,
             model,
             effort,
             chosen_by: ChosenBy::UserConfig,
         };
         match choice.test_call() {
             Ok(()) => {
-                return Ok(Some((
-                    harness,
-                    ModelAndEffort {
-                        model: choice.model,
-                        effort: choice.effort,
-                    },
-                )));
+                return Ok(ModelAndEffort {
+                    model: choice.model,
+                    effort: choice.effort,
+                });
             }
+            Err(error) => say(&format!("{error:#}")),
+        }
+    }
+}
+
+/// Ask Codex's Model, listing those in its `catalog`, then its Effort,
+/// listing those the Model chosen supports, with `current` as the defaults.
+/// Each is matched against the catalog as a Run matches it, and written as
+/// Codex names it; one the catalog doesn't have is asked again, with the
+/// valid choices.
+fn ask_codex(catalog: &Catalog, current: &ModelAndEffort) -> Result<ModelAndEffort> {
+    say(&format!("Codex's Models: {}", catalog.listed().join(", ")));
+    let model = loop {
+        let model = ask_setting("Model", Harness::Codex, current.model.as_deref())?;
+        match catalog.settle(model.as_deref(), None) {
+            Ok(settled) => break settled.model,
+            Err(error) => say(&format!("{error:#}")),
+        }
+    };
+    let efforts = catalog.efforts(model.as_deref()).join(", ");
+    say(&match &model {
+        Some(model) => format!("Efforts {model} supports: {efforts}"),
+        None => format!("Efforts Codex's Models support: {efforts}"),
+    });
+    loop {
+        let effort = ask_setting("Effort", Harness::Codex, current.effort.as_deref())?;
+        match catalog.settle(model.as_deref(), effort.as_deref()) {
+            Ok(settled) => return Ok(settled),
             Err(error) => say(&format!("{error:#}")),
         }
     }

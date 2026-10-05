@@ -5,8 +5,10 @@
 //! From a terminal, it first asks the Setup questions on stderr, each with the
 //! current value as its default answer. Base fixes are asked about only
 //! with every Run a Merge run. The Harness question lists both Harnesses,
-//! refusing one sessions can't run on here, and the Model and Effort are
-//! asked for the Harness chosen, a Claude Model checked with a test call.
+//! refusing one that isn't installed, and the Model and Effort are asked for
+//! the Harness chosen: a Claude Model checked with a test call, and a Codex
+//! Model and Effort chosen from Codex's catalog and written as Codex names
+//! them.
 
 mod support;
 
@@ -1410,8 +1412,9 @@ exit 1
 /// The answers that leave every setting but the Harness's as it is.
 const NOTHING_ELSE: [Keystrokes; 3] = [(MERGE, ""), (PULL, ""), (NOTIFY, "")];
 
-/// `PATH` with the scenario's fakes and the system's tools, and so no
-/// `codex`, whatever is installed on the machine the tests run on.
+/// `PATH` with the scenario's fakes and the system's tools, and so no other
+/// `claude` or `codex`, whatever is installed on the machine the tests run
+/// on.
 fn fakes_only_path(scenario: &Scenario) -> String {
     format!("{}:/usr/bin:/bin", scenario.path("bin").display())
 }
@@ -1444,9 +1447,9 @@ fn on_a_terminal_the_harness_question_lists_both_harnesses_and_defaults_to_claud
     let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
 
     assert!(
-        result.stderr.contains(
-            "Harness for every Run's sessions, claude or codex (not supported yet) [claude]: "
-        ),
+        result
+            .stderr
+            .contains("Harness for every Run's sessions, claude or codex [claude]: "),
         "terminal: {}",
         result.stderr
     );
@@ -1466,23 +1469,24 @@ fn on_a_terminal_the_harness_question_lists_both_harnesses_and_defaults_to_claud
 }
 
 #[test]
-fn on_a_terminal_a_harness_sessions_cant_run_on_is_refused_and_asked_again() {
+fn on_a_terminal_a_harness_not_installed_is_refused_and_asked_again() {
     let scenario = Scenario::new();
     scenario.git_email_is(None);
+    fs::remove_file(scenario.path("bin/claude")).unwrap();
     let path = fakes_only_path(&scenario);
     let mut keystrokes = vec![
-        (HARNESS, "codex"),
-        (HARNESS, "gemini"),
         (HARNESS, "claude"),
-        (MODEL, ""),
-        (EFFORT, ""),
+        (HARNESS, "gemini"),
+        (HARNESS, "codex"),
+        (CODEX_MODEL, ""),
+        (CODEX_EFFORT, ""),
     ];
     keystrokes.extend(NOTHING_ELSE);
 
     let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
 
     for refusal in [
-        "codex is not supported yet: Codex sessions come in a later thirdshift.",
+        "claude is not installed: it isn't on PATH.",
         "Choose claude or codex.",
     ] {
         assert!(
@@ -1491,18 +1495,16 @@ fn on_a_terminal_a_harness_sessions_cant_run_on_is_refused_and_asked_again() {
             result.stderr
         );
     }
-    assert_eq!(
-        table(&result)["harness"]["default"].as_str(),
-        Some("claude")
-    );
+    assert_eq!(table(&result)["harness"]["default"].as_str(), Some("codex"));
 }
 
 #[test]
-fn on_a_terminal_with_claude_not_installed_the_harness_is_left_as_it_was() {
+fn on_a_terminal_with_neither_harness_installed_the_harness_is_left_as_it_was() {
     let scenario = Scenario::new();
     scenario.git_email_is(None);
     scenario.user_config_is("[harness.claude]\nmodel = \"opus\"\n");
     fs::remove_file(scenario.path("bin/claude")).unwrap();
+    fs::remove_file(scenario.path("bin/codex")).unwrap();
     let path = fakes_only_path(&scenario);
 
     let result = setup_on_terminal(&scenario, &[("PATH", &path)], &NOTHING_ELSE);
@@ -1510,7 +1512,7 @@ fn on_a_terminal_with_claude_not_installed_the_harness_is_left_as_it_was() {
     assert!(
         result
             .stderr
-            .contains("claude (not installed) or codex (not supported yet)"),
+            .contains("claude (not installed) or codex (not installed)"),
         "terminal: {}",
         result.stderr
     );
@@ -1610,4 +1612,192 @@ fn on_a_terminal_a_model_claude_refuses_is_asked_again_with_claudes_error() {
         Some("opus")
     );
     assert_eq!(test_calls(&scenario).len(), 2);
+}
+
+// Codex.
+
+const CODEX_MODEL: &str = "Model for codex";
+const CODEX_EFFORT: &str = "Effort for codex";
+
+/// How Setup lists the fake `codex`'s catalog of Models.
+const CODEX_MODELS: &str =
+    "Codex's Models: gpt-6.1-sol (GPT-6.1-Sol), gpt-6-luna (GPT-6-Luna), gpt-5.5 (GPT-5.5)";
+
+#[test]
+fn on_a_terminal_codex_is_offered_with_its_models_and_the_chosen_models_efforts() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    let path = fakes_only_path(&scenario);
+    let mut keystrokes = vec![
+        (HARNESS, "codex"),
+        (CODEX_MODEL, "gpt-5.5"),
+        (CODEX_EFFORT, "high"),
+    ];
+    keystrokes.extend(NOTHING_ELSE);
+
+    let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
+
+    for shown in [
+        "Harness for every Run's sessions, claude or codex [claude]: ",
+        CODEX_MODELS,
+        "Efforts gpt-5.5 supports: low, medium, high, xhigh",
+    ] {
+        assert!(result.stderr.contains(shown), "terminal: {}", result.stderr);
+    }
+    let config = table(&result);
+    assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
+    assert_eq!(
+        config["harness"]["codex"]["model"].as_str(),
+        Some("gpt-5.5")
+    );
+    assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("high"));
+    assert_eq!(config["harness"]["claude"]["model"].as_str(), Some(""));
+    assert!(test_calls(&scenario).is_empty());
+    assert!(scenario.codex_calls().is_empty());
+}
+
+#[test]
+fn on_a_terminal_with_only_codex_installed_codex_is_the_default_answer() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    fs::remove_file(scenario.path("bin/claude")).unwrap();
+    let path = fakes_only_path(&scenario);
+    let mut keystrokes = vec![(HARNESS, ""), (CODEX_MODEL, ""), (CODEX_EFFORT, "")];
+    keystrokes.extend(NOTHING_ELSE);
+
+    let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
+
+    for shown in [
+        "Harness for every Run's sessions, claude (not installed) or codex [codex]: ",
+        "Efforts Codex's Models support: low, medium, high, xhigh, max, ultra",
+    ] {
+        assert!(result.stderr.contains(shown), "terminal: {}", result.stderr);
+    }
+    let config = table(&result);
+    assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
+    assert_eq!(config["harness"]["codex"]["model"].as_str(), Some(""));
+    assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some(""));
+}
+
+#[test]
+fn on_a_terminal_a_codex_display_name_and_capitalised_effort_are_written_as_codex_names_them() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    let path = fakes_only_path(&scenario);
+    let mut keystrokes = vec![
+        (HARNESS, "codex"),
+        (CODEX_MODEL, "GPT-6.1-Sol"),
+        (CODEX_EFFORT, "Max"),
+    ];
+    keystrokes.extend(NOTHING_ELSE);
+
+    let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
+
+    let config = table(&result);
+    assert_eq!(
+        config["harness"]["codex"]["model"].as_str(),
+        Some("gpt-6.1-sol")
+    );
+    assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("max"));
+}
+
+#[test]
+fn on_a_terminal_an_unknown_codex_model_or_unsupported_effort_is_asked_again_with_the_choices() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    let path = fakes_only_path(&scenario);
+    let mut keystrokes = vec![
+        (HARNESS, "codex"),
+        (CODEX_MODEL, "gpt-7"),
+        (CODEX_MODEL, "GPT-5.5"),
+        (CODEX_EFFORT, "max"),
+        (CODEX_EFFORT, "XHigh"),
+    ];
+    keystrokes.extend(NOTHING_ELSE);
+
+    let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
+
+    for refusal in [
+        "the Model gpt-7 is not in Codex's catalog: choose one of gpt-6.1-sol, gpt-6-luna, \
+         gpt-5.5",
+        "the Effort max is not one the Codex Model gpt-5.5 supports: choose one of low, \
+         medium, high, xhigh",
+    ] {
+        assert!(
+            result.stderr.contains(refusal),
+            "terminal: {}",
+            result.stderr
+        );
+    }
+    let config = table(&result);
+    assert_eq!(
+        config["harness"]["codex"]["model"].as_str(),
+        Some("gpt-5.5")
+    );
+    assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("xhigh"));
+}
+
+#[test]
+fn on_a_terminal_the_codex_model_and_effort_default_to_the_current_ones_as_codex_names_them() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    scenario.user_config_is("[harness.codex]\nmodel = \"GPT-6-Luna\"\neffort = \"High\"\n");
+    let path = fakes_only_path(&scenario);
+    let mut keystrokes = vec![(HARNESS, "codex"), (CODEX_MODEL, ""), (CODEX_EFFORT, "")];
+    keystrokes.extend(NOTHING_ELSE);
+
+    let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
+
+    for shown in [
+        "Model for codex, - for codex's own default [GPT-6-Luna]: ",
+        "Efforts gpt-6-luna supports: low, medium, high, xhigh, max",
+        "Effort for codex, - for codex's own default [High]: ",
+    ] {
+        assert!(result.stderr.contains(shown), "terminal: {}", result.stderr);
+    }
+    let config = table(&result);
+    assert_eq!(
+        config["harness"]["codex"]["model"].as_str(),
+        Some("gpt-6-luna")
+    );
+    assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("high"));
+}
+
+#[test]
+fn on_a_terminal_when_codexs_catalog_cant_be_read_the_harness_is_left_as_it_was() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    scenario.user_config_is("[harness.codex]\nmodel = \"gpt-5.5\"\n");
+    // The fake is a link to the build every test shares, so it's replaced,
+    // not written through.
+    let codex = scenario.path("bin/codex");
+    fs::remove_file(&codex).unwrap();
+    fs::write(&codex, "#!/bin/sh\necho 'not logged in' >&2\nexit 1\n").unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = fakes_only_path(&scenario);
+    let mut keystrokes = vec![(HARNESS, "codex")];
+    keystrokes.extend(NOTHING_ELSE);
+
+    let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
+
+    assert!(
+        result.stderr.contains(
+            "codex debug models failed, so Codex's Models can't be read: not logged in\n\
+             The harness settings stay as they are; rerun `thirdshift setup` once codex debug \
+             models works."
+        ),
+        "terminal: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains(CODEX_MODEL),
+        "terminal: {}",
+        result.stderr
+    );
+    let config = table(&result);
+    assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
+    assert_eq!(
+        config["harness"]["codex"]["model"].as_str(),
+        Some("gpt-5.5")
+    );
 }

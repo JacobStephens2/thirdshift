@@ -52,35 +52,9 @@ impl Harness {
     /// Every Harness, in the order Setup lists them.
     pub const ALL: [Harness; 2] = [Harness::Claude, Harness::Codex];
 
-    /// Why Setup can't offer it on this machine, if it can't: Setup doesn't
-    /// offer Codex yet, and otherwise its CLI must be on `PATH`.
-    pub fn unavailable(self) -> Option<Unavailable> {
-        if self == Harness::Codex {
-            Some(Unavailable::NotSupportedYet)
-        } else if !on_path(self.name()) {
-            Some(Unavailable::NotInstalled)
-        } else {
-            None
-        }
-    }
-}
-
-/// Why sessions can't run on a Harness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unavailable {
-    /// Setup doesn't offer it yet.
-    NotSupportedYet,
-    /// Its CLI isn't on `PATH`.
-    NotInstalled,
-}
-
-impl fmt::Display for Unavailable {
-    /// As Setup marks a Harness with it, as in `codex (not supported yet)`.
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self {
-            Unavailable::NotSupportedYet => "not supported yet",
-            Unavailable::NotInstalled => "not installed",
-        })
+    /// Whether sessions can run on it here: its CLI is on `PATH`.
+    pub fn installed(self) -> bool {
+        on_path(self.name())
     }
 }
 
@@ -292,19 +266,7 @@ impl Choice {
             return Ok(());
         }
         progress::step("checking the Model and Effort against codex debug models");
-        let output = Command::new("codex")
-            .args(["debug", "models"])
-            .stdin(Stdio::null())
-            .output()
-            .context("could not run codex debug models to check the Model and Effort")?;
-        if !output.status.success() {
-            bail!(
-                "codex debug models failed, so the Model and Effort can't be checked: {}",
-                said(&output)
-            );
-        }
-        let catalog = Catalog::parse(&String::from_utf8_lossy(&output.stdout))?;
-        let settled = catalog.settle(self.model.as_deref(), self.effort.as_deref())?;
+        let settled = Catalog::read()?.settle(self.model.as_deref(), self.effort.as_deref())?;
         self.model = settled.model;
         self.effort = settled.effort;
         Ok(())
@@ -335,11 +297,28 @@ struct CatalogModel {
 
 /// The Models Codex can run, as `codex debug models` prints them.
 #[derive(Debug)]
-struct Catalog {
+pub struct Catalog {
     models: Vec<CatalogModel>,
 }
 
 impl Catalog {
+    /// The catalog `codex debug models` prints, which costs no tokens to
+    /// read.
+    pub fn read() -> Result<Catalog> {
+        let output = Command::new("codex")
+            .args(["debug", "models"])
+            .stdin(Stdio::null())
+            .output()
+            .context("could not run codex debug models to read Codex's Models")?;
+        if !output.status.success() {
+            bail!(
+                "codex debug models failed, so Codex's Models can't be read: {}",
+                said(&output)
+            );
+        }
+        Catalog::parse(&String::from_utf8_lossy(&output.stdout))
+    }
+
     /// The catalog `codex debug models` printed as `json`.
     fn parse(json: &str) -> Result<Catalog> {
         let parsed: Value = serde_json::from_str(json)
@@ -365,12 +344,41 @@ impl Catalog {
         Ok(Catalog { models })
     }
 
+    /// The Models it lists to choose from, each as its slug and, where it
+    /// has one, its display name, as in `gpt-6.1-sol (GPT-6.1-Sol)`.
+    pub fn listed(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .filter(|model| model.listed)
+            .map(|model| match &model.display_name {
+                Some(display) => format!("{} ({display})", model.slug),
+                None => model.slug.clone(),
+            })
+            .collect()
+    }
+
+    /// The Efforts the Model `slug` supports, or with no Model, those any
+    /// Model supports, each once, in the catalog's order.
+    pub fn efforts(&self, slug: Option<&str>) -> Vec<&str> {
+        let mut efforts = Vec::new();
+        let models = self
+            .models
+            .iter()
+            .filter(|model| slug.is_none_or(|slug| model.slug == slug));
+        for each in models.flat_map(|model| &model.efforts) {
+            if !efforts.contains(&each.as_str()) {
+                efforts.push(each.as_str());
+            }
+        }
+        efforts
+    }
+
     /// `model` and `effort` as Codex names them: the slug of the Model whose
     /// slug or display name is `model`, regardless of case, and the Effort,
     /// of those that Model supports, or with no Model of those any Model
     /// supports, that is `effort`, regardless of case. Fails naming the
     /// valid choices for a Model or Effort the catalog doesn't have.
-    fn settle(&self, model: Option<&str>, effort: Option<&str>) -> Result<ModelAndEffort> {
+    pub fn settle(&self, model: Option<&str>, effort: Option<&str>) -> Result<ModelAndEffort> {
         let found = match model {
             Some(model) => Some(self.model(model)?),
             None => None,
@@ -381,18 +389,7 @@ impl Catalog {
                 effort: None,
             });
         };
-        let efforts: Vec<&str> = match found {
-            Some(found) => found.efforts.iter().map(String::as_str).collect(),
-            None => {
-                let mut efforts = Vec::new();
-                for each in self.models.iter().flat_map(|model| &model.efforts) {
-                    if !efforts.contains(&each.as_str()) {
-                        efforts.push(each.as_str());
-                    }
-                }
-                efforts
-            }
-        };
+        let efforts = self.efforts(found.map(|found| found.slug.as_str()));
         let Some(settled) = efforts
             .iter()
             .find(|supported| supported.eq_ignore_ascii_case(effort))
@@ -723,6 +720,25 @@ mod tests {
             error.to_string(),
             "the Effort ultra is not one any Codex Model supports: choose one of low, high, max, \
              xhigh, minimal"
+        );
+    }
+
+    #[test]
+    fn the_catalog_lists_its_listed_models_by_slug_and_display_name() {
+        assert_eq!(
+            catalog().listed(),
+            ["gpt-6.1-sol (GPT-6.1-Sol)", "gpt-5.5 (GPT-5.5 Classic)"]
+        );
+    }
+
+    #[test]
+    fn the_efforts_are_the_models_or_with_no_model_any_models_each_once() {
+        let catalog = catalog();
+
+        assert_eq!(catalog.efforts(Some("gpt-5.5")), ["low", "xhigh"]);
+        assert_eq!(
+            catalog.efforts(None),
+            ["low", "high", "max", "xhigh", "minimal"]
         );
     }
 
