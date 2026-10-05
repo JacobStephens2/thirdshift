@@ -28,12 +28,12 @@ mod progress;
 mod prompt;
 #[cfg(test)]
 mod prompts_page;
-mod questions;
 mod ready;
 mod resend_key;
 mod run;
 mod run_ending;
 mod session;
+mod setup;
 mod skills;
 mod spec_run;
 mod update;
@@ -362,7 +362,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Ok(Command::Update) => return outcome(update::update()),
-        Ok(Command::Setup) => return outcome(config::setup()),
+        Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::EmailTest(to)) => {
             return outcome(
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),

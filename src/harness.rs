@@ -320,7 +320,7 @@ impl Catalog {
     }
 
     /// The catalog `codex debug models` printed as `json`.
-    fn parse(json: &str) -> Result<Catalog> {
+    pub fn parse(json: &str) -> Result<Catalog> {
         let parsed: Value = serde_json::from_str(json)
             .context("codex debug models printed no JSON catalog of Models")?;
         let models = parsed["models"]

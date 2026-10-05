@@ -24,7 +24,7 @@ pub struct ResendKey {
 }
 
 /// Where a Resend API key came from.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// The `RESEND_API_KEY` environment variable.
     Environment,
@@ -282,6 +282,28 @@ mod tests {
         for text in ["", "[resend]\n", "[resend]\nkey = \"\"\n"] {
             assert_eq!(parse(text, &file).unwrap(), None, "{text:?}");
         }
+    }
+
+    #[test]
+    fn a_saved_key_is_replaced_in_place_keeping_the_rest_of_the_credentials() {
+        let saved = "# My secrets.\n[resend]\n# Rotated monthly.\nkey = \"re_saved_456\"   # from the dashboard\n";
+
+        assert_eq!(
+            with_key(saved, "re_secret_123").unwrap(),
+            "# My secrets.\n[resend]\n# Rotated monthly.\nkey = \"re_secret_123\"   # from the dashboard\n"
+        );
+    }
+
+    #[test]
+    fn a_key_is_added_after_credentials_that_hold_none() {
+        let text = with_key("# Keys go here.\n", "re_secret_123").unwrap();
+
+        assert!(text.starts_with("# Keys go here.\n"), "{text}");
+        let file = Source::Credentials(PathBuf::from("/home/me/.thirdshift/credentials.toml"));
+        assert_eq!(
+            parse(&text, &file).unwrap().as_deref(),
+            Some("re_secret_123")
+        );
     }
 
     #[test]

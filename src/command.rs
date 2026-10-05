@@ -14,7 +14,7 @@
 use std::process::ExitCode;
 
 use crate::architect::{self, Reviewed};
-use crate::config::{self, UserConfig};
+use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::harness::Choice;
 use crate::interrupt;
@@ -25,6 +25,7 @@ use crate::pickup;
 use crate::progress;
 use crate::run::Ended;
 use crate::run_ending;
+use crate::setup;
 use crate::skills;
 
 /// How a command that did factory work, or was skipped before any, ended.
@@ -92,7 +93,7 @@ pub fn start(
     about: About,
 ) -> Result<(UserConfig, Started), ExitCode> {
     logs::begin(begin);
-    let config = config::offer_setup()
+    let config = setup::offer()
         .and_then(|()| UserConfig::load())
         .map_err(|error| failure(&error))?;
     logs::configured(&config);
