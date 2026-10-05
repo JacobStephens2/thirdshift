@@ -1,24 +1,53 @@
 //! The Pass seam: what an Architect run's or a Pickup run's gates, which
 //! decide before any work whether it is skipped, read and change of GitHub,
-//! and what an Architect run's conclusion after its Architecture review
-//! does, viewing and labelling the issue the review ended on.
-//! [`OnGitHub`] does each through `gh`, the Ready issue search, the
-//! interrupt flag and the progress lines; [`InMemory`], in tests, from
-//! memory, recording each call.
+//! what an Architect run's conclusion after its Architecture review does,
+//! viewing and labelling the issue the review ended on, and what a pass
+//! does outside itself around them: recording its skip or its start,
+//! checking its Harness, and dispatching the issue it ends on.
+//! [`LaunchAndGitHub`] does each through `gh`, the Ready issue search, the
+//! interrupt flag, the progress lines, the logs, the Harness check and
+//! [`run::run_to_end`]; [`InMemory`], in tests, from memory, recording each
+//! call.
+
+use std::fmt::Display;
 
 use anyhow::Result;
 
-use crate::git::Git;
+use crate::asks::{Asks, Flags};
+use crate::config::UserConfig;
 use crate::github::{self, Issue, ListedIssue};
+use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label};
+use crate::launch::LaunchDirectory;
+use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, ReadyIssue};
+use crate::run::{self, Ended, StartedBy};
+
+/// What a pass dispatches, as `thirdshift <Issue URL>` would run it, but on
+/// the pass's Base branch `base`, whatever the Launch directory has checked
+/// out.
+pub enum Dispatch<'a> {
+    /// An Architect run's Architect plan.
+    #[expect(
+        dead_code,
+        reason = "the Architect run dispatches its plan through the Pass seam from #415"
+    )]
+    ArchitectPlan { plan: &'a IssueUrl, base: &'a str },
+    /// The Ready issue a Pickup run took, a Spec or not, as `is_spec` says.
+    ReadyIssue {
+        issue: &'a IssueUrl,
+        is_spec: bool,
+        base: &'a str,
+    },
+}
 
 /// What a pass's gates, and an Architect run's conclusion, read and change of
 /// its repository on GitHub, whether the run is interrupted, and where their
-/// progress lines go.
+/// progress lines go; and what the pass records in the logs, the check of
+/// its Harness, and the run it dispatches.
 pub trait Outside {
     /// Every open issue in the repository labelled `label`.
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>>;
@@ -35,15 +64,31 @@ pub trait Outside {
     fn ready_issue(&mut self) -> Result<Option<ReadyIssue>>;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
+    /// Record that `pass` was skipped for `reason`.
+    fn skipped(&mut self, pass: Pass, reason: &dyn Display);
+    /// Check the Harness, Model and Effort the pass's sessions, and the run
+    /// it dispatches, run on, failing if they can't run.
+    fn check_harness(&mut self) -> Result<()>;
+    /// Record that the pass started `work`, on the Harness it checked.
+    fn started(&mut self, work: Work);
+    /// Run `dispatch` to its end, on the Harness the pass checked.
+    fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
 }
 
-/// The repository `repo` on GitHub, from its Launch directory `launch`.
-pub struct OnGitHub<'a> {
-    pub launch: &'a Git,
+/// The repository `repo` on GitHub, from its Launch directory `launch`, with
+/// the logs, the pass's Harness choice `harness`, and the command's `flags`
+/// and the User config `config`, which ask the run it dispatches.
+pub struct LaunchAndGitHub<'a> {
+    pub launch: &'a LaunchDirectory,
     pub repo: &'a Repo,
+    /// Settled on the Harness's names for its Model and Effort once
+    /// checked.
+    pub harness: &'a mut Choice,
+    pub flags: &'a Flags,
+    pub config: &'a UserConfig,
 }
 
-impl Outside for OnGitHub<'_> {
+impl Outside for LaunchAndGitHub<'_> {
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>> {
         github::open_issues_labelled(&self.repo.slug(), label)
     }
@@ -65,11 +110,49 @@ impl Outside for OnGitHub<'_> {
     }
 
     fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
-        ready::first(self.launch, self.repo)
+        ready::first(self.launch.git(), self.repo)
     }
 
     fn step(&mut self, line: String) {
         progress::step(line);
+    }
+
+    fn skipped(&mut self, pass: Pass, reason: &dyn Display) {
+        logs::skipped(pass, self.repo, reason);
+    }
+
+    fn check_harness(&mut self) -> Result<()> {
+        self.harness.check()
+    }
+
+    fn started(&mut self, work: Work) {
+        logs::started(work, self.harness);
+    }
+
+    /// The run's asks are the Architect plan's or the Ready issue's, from
+    /// the command's flags and the User config, on the checked Harness.
+    fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
+        let (issue, asks, base) = match dispatch {
+            Dispatch::ArchitectPlan { plan, base } => (
+                plan,
+                Asks::of_architect_plan(plan, self.flags, self.config),
+                base,
+            ),
+            Dispatch::ReadyIssue {
+                issue,
+                is_spec,
+                base,
+            } => (
+                issue,
+                Asks::of_ready_issue(issue, is_spec, self.flags, self.config),
+                base,
+            ),
+        };
+        let mut asks = Asks {
+            harness: self.harness.clone(),
+            ..asks
+        };
+        run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base })
     }
 }
 
@@ -78,15 +161,19 @@ pub use in_memory::{Call, InMemory};
 
 #[cfg(test)]
 mod in_memory {
+    use std::fmt::Display;
+
     use anyhow::{Result, bail};
 
-    use super::Outside;
+    use super::{Dispatch, Outside};
     use crate::github::{Issue, ListedIssue};
     use crate::issue::IssueUrl;
     use crate::labels::{Edit, Label, Labels};
+    use crate::logs::{Pass, Work};
     use crate::ready::ReadyIssue;
+    use crate::run::Ended;
 
-    /// A call a pass's gates made, in the order they made it.
+    /// A call a pass made outside itself, in the order it made it.
     #[derive(Debug, PartialEq, Eq)]
     pub enum Call {
         /// They listed the open issues with this label.
@@ -107,11 +194,25 @@ mod in_memory {
         ReadySearch,
         /// They handed on this progress line.
         Step(String),
+        /// It recorded that it was skipped, for this reason.
+        Skipped(String),
+        /// It checked its Harness, Model and Effort.
+        HarnessCheck,
+        /// It recorded that it started work: on this issue, for a Pickup
+        /// run, or on its repository, for an Architect run.
+        Started(Option<u64>),
+        /// It dispatched this issue, a Spec or not, on this Base branch.
+        Dispatch {
+            issue: u64,
+            is_spec: bool,
+            base: String,
+        },
     }
 
     /// A repository in memory: its issues, filed by label, open or
     /// closed, the issues it can view, the Ready issue search's answer, the
-    /// issues whose Edits fail, and whether the run was interrupted.
+    /// issues whose Edits fail, and whether the run was interrupted; with
+    /// whether the Harness check fails and how a dispatched run ends.
     #[derive(Default)]
     pub struct InMemory {
         /// Each issue, filed under the label a listing finds it by.
@@ -127,6 +228,10 @@ mod in_memory {
         /// The Ready issue search's answer: the issue, and whether it is a
         /// Spec.
         ready: Option<(ListedIssue, bool)>,
+        /// Whether the Harness check fails.
+        harness_failing: bool,
+        /// How the run dispatched ends.
+        ending: Option<Ended>,
         /// Every call made, in order.
         pub calls: Vec<Call>,
     }
@@ -188,6 +293,18 @@ mod in_memory {
         /// Make the Ready issue search find issue `number`, a Spec or not.
         pub fn ready(mut self, number: u64, is_spec: bool) -> Self {
             self.ready = Some((listed(number, &[]), is_spec));
+            self
+        }
+
+        /// Make the Harness check fail.
+        pub fn harness_failing(mut self) -> Self {
+            self.harness_failing = true;
+            self
+        }
+
+        /// Have the run dispatched end as `ending`.
+        pub fn dispatched_ending(mut self, ending: Ended) -> Self {
+            self.ending = Some(ending);
             self
         }
 
@@ -258,6 +375,47 @@ mod in_memory {
 
         fn step(&mut self, line: String) {
             self.calls.push(Call::Step(line));
+        }
+
+        fn skipped(&mut self, _: Pass, reason: &dyn Display) {
+            self.calls.push(Call::Skipped(reason.to_string()));
+        }
+
+        fn check_harness(&mut self) -> Result<()> {
+            self.calls.push(Call::HarnessCheck);
+            if self.harness_failing {
+                bail!("claude is not on PATH");
+            }
+            Ok(())
+        }
+
+        fn started(&mut self, work: Work) {
+            let issue = match work {
+                Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => {
+                    Some(issue.number)
+                }
+                Work::ArchitectRun(_) => None,
+            };
+            self.calls.push(Call::Started(issue));
+        }
+
+        fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
+            let Dispatch::ReadyIssue {
+                issue,
+                is_spec,
+                base,
+            } = dispatch
+            else {
+                unimplemented!("an Architect plan's dispatch, recorded from #415")
+            };
+            self.calls.push(Call::Dispatch {
+                issue: issue.number,
+                is_spec,
+                base: base.to_string(),
+            });
+            self.ending
+                .take()
+                .expect("a dispatch, with no ending scripted for it")
         }
     }
 

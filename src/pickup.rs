@@ -1,47 +1,45 @@
-//! A Pickup run up to the issue it takes: from the Launch directory with no
-//! Issue URL, the search for the lowest-numbered Ready issue in the
-//! repository, for the command to dispatch, saying why it passed over each
-//! issue labelled `ready-for-agent` before it. Only one Pickup run or
-//! Architect run per repository runs at a time on a machine: one started
-//! while another is still running is skipped, before any search. One that
-//! runs first makes the Sweep, and is then skipped if it finds the
-//! repository at its Claim limit, or with no Ready issue.
+//! A Pickup run: from the Launch directory with no Issue URL, the search
+//! for the lowest-numbered Ready issue in the repository, saying why it
+//! passed over each issue labelled `ready-for-agent` before it, then that
+//! issue dispatched as a Spec run or a Run. Only one Pickup run or Architect
+//! run per repository runs at a time on a machine: one started while another
+//! is still running is skipped, before any search. One that runs first makes
+//! the Sweep, and is then skipped if it finds the repository at its Claim
+//! limit, or with no Ready issue.
 
 use std::fmt;
 use std::num::NonZeroUsize;
 
 use anyhow::Result;
 
+use crate::asks::Flags;
 use crate::claim;
+use crate::config::UserConfig;
 use crate::github::ListedIssue;
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::Edit;
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
-use crate::pass::{OnGitHub, Outside};
-use crate::progress;
+use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
 use crate::ready::ReadyIssue;
+use crate::run::Ended;
 
-/// How a Pickup run ended, short of a failure and before any dispatch.
+/// How a Pickup run ended, short of a failure.
 pub enum Outcome {
-    /// It took this Ready issue, to dispatch.
-    Taken(Taken),
+    /// It took a Ready issue and dispatched it.
+    Took(Took),
     /// Skipped, having done nothing.
     Skipped(Skipped),
 }
 
-/// The Ready issue a Pickup run took.
-pub struct Taken {
+/// The Ready issue a Pickup run took, and how the run it dispatched ended.
+pub struct Took {
     pub issue: IssueUrl,
     /// Its title, as the search listed it.
     pub title: String,
-    /// The Pickup run's Base branch, which the run the issue is dispatched
-    /// as takes.
-    pub base: String,
-    /// Whether it is a Spec, an issue with sub-issues, which is dispatched
-    /// as a Spec run.
-    pub is_spec: bool,
+    /// How the Spec run or Run it was dispatched as ended.
+    pub ended: Ended,
 }
 
 /// Why a Pickup run was skipped. Its `Display` is the reason, as the skipped
@@ -59,17 +57,6 @@ pub enum Skipped {
     },
     /// The repository has no Ready issue.
     NoReadyIssue(Repo),
-}
-
-impl Skipped {
-    /// The repository the Pickup run was skipped on.
-    fn repo(&self) -> &Repo {
-        match self {
-            Self::AlreadyRunning(AlreadyRunning(repo))
-            | Self::AtClaimLimit { repo, .. }
-            | Self::NoReadyIssue(repo) => repo,
-        }
-    }
 }
 
 impl fmt::Display for Skipped {
@@ -94,25 +81,29 @@ impl fmt::Display for Skipped {
 
 /// Take the lowest-numbered Ready issue in the Launch directory's
 /// repository, saying which on stderr, after a line there on each issue
-/// labelled `ready-for-agent` it passed over on the way, with why. The Base
-/// branch is `base`, the branch the command named, whatever the Launch
-/// directory has checked out, or without one the branch checked out there.
-/// Nothing is changed in the Launch directory, nor on the issue taken: the
-/// run it is dispatched as makes the Claim.
+/// labelled `ready-for-agent` it passed over on the way, with why, and
+/// dispatch it as `thirdshift <Issue URL>` with `flags` would run it, but on
+/// the Pickup run's Base branch. The Base branch is `base`, the branch the
+/// command named, whatever the Launch directory has checked out, or without
+/// one the branch checked out there. Nothing is changed in the Launch
+/// directory, nor on the issue taken: the run it is dispatched as makes the
+/// Claim.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
 /// skipped if an Architect run or another Pickup run on the same repository
 /// is still running on this machine. Otherwise this process is that
 /// repository's one such run until it exits, through whatever it dispatches.
-/// It first makes the Sweep, taking the Claim off the repository's closed
-/// issues, and is then skipped, still before any search, if the repository
-/// is at its Claim limit: `limit` or more of its open issues carry a Claim.
-/// A skip is recorded in the repository's Activity log. Once it has found an
-/// issue to take, it checks `harness`, the Harness, Model and Effort the run
-/// it dispatches will run its sessions on, failing before any work if they
-/// can't run; then it records that it started work on the issue, which
-/// keeps its Command log.
-pub fn run(base: Option<&str>, limit: NonZeroUsize, harness: &mut Choice) -> Result<Outcome> {
+/// A skip is recorded in the repository's Activity log. The rest, from the
+/// Sweep to the dispatch, is [`run_through`], with `config`'s Claim limit,
+/// through the Launch directory, GitHub, the logs and `harness`, the
+/// Harness, Model and Effort the run it dispatches will run its sessions on,
+/// and `flags` and `config`, which ask that run.
+pub fn run(
+    base: Option<&str>,
+    flags: &Flags,
+    config: &UserConfig,
+    harness: &mut Choice,
+) -> Result<Outcome> {
     let Launch {
         directory,
         repo,
@@ -120,28 +111,55 @@ pub fn run(base: Option<&str>, limit: NonZeroUsize, harness: &mut Choice) -> Res
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
-            return Ok(skip(Skipped::AlreadyRunning(running)));
+            logs::skipped(Pass::PickupRun, &running.0, &running);
+            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
-    let mut on_github = OnGitHub {
-        launch: directory.git(),
+    let mut outside = LaunchAndGitHub {
+        launch: &directory,
         repo: &repo,
+        harness,
+        flags,
+        config,
     };
-    let ReadyIssue { listed, is_spec } = match gates(&mut on_github, &repo, limit)? {
+    run_through(&mut outside, &repo, &base, config.pickup_limit)
+}
+
+/// [`run`], once it holds its repository's lock, on `repo` with the Base
+/// branch `base` and the Claim limit `limit`, through `outside`: its
+/// [`gates`], a skip recorded with its reason if one skips; then the line
+/// naming the issue taken; then the check of its Harness, failing before
+/// any work if it can't run; then the record that it started work on the
+/// issue, which keeps its Command log; then the issue dispatched, a Spec
+/// run on a Spec and a Run otherwise, on `base`.
+fn run_through(
+    outside: &mut impl Outside,
+    repo: &Repo,
+    base: &str,
+    limit: NonZeroUsize,
+) -> Result<Outcome> {
+    let ReadyIssue { listed, is_spec } = match gates(outside, repo, limit)? {
         Decision::Take(ready) => ready,
-        Decision::Skip(skipped) => return Ok(skip(skipped)),
+        Decision::Skip(skipped) => {
+            outside.skipped(Pass::PickupRun, &skipped);
+            return Ok(Outcome::Skipped(skipped));
+        }
     };
-    progress::step(format_args!(
+    outside.step(format!(
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
         listed.issue.number, listed.title, listed.issue.url
     ));
-    harness.check()?;
-    logs::started(Work::PickupRun(&listed.issue), harness);
-    Ok(Outcome::Taken(Taken {
+    outside.check_harness()?;
+    outside.started(Work::PickupRun(&listed.issue));
+    let ended = outside.dispatch(Dispatch::ReadyIssue {
+        issue: &listed.issue,
+        is_spec,
+        base,
+    });
+    Ok(Outcome::Took(Took {
         issue: listed.issue,
         title: listed.title,
-        base,
-        is_spec,
+        ended,
     }))
 }
 
@@ -207,17 +225,11 @@ fn sweep(outside: &mut impl Outside) {
     }
 }
 
-/// The Pickup run skipped as `skipped` says, recorded in its repository's
-/// Activity log.
-fn skip(skipped: Skipped) -> Outcome {
-    logs::skipped(Pass::PickupRun, skipped.repo(), &skipped);
-    Outcome::Skipped(skipped)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pass::{Call, InMemory};
+    use crate::run::{Goal, Reached};
 
     /// The repository every pass is on.
     fn widgets() -> Repo {
@@ -436,5 +448,147 @@ mod tests {
 
         assert_eq!(decided, Ok((9, false)));
         assert_eq!(calls, [CLOSED, CLAIMED, Call::ReadySearch]);
+    }
+
+    const PR_URL: &str = "https://github.com/acme/widgets/pull/12";
+
+    /// A dispatched run that ended ready for review on [`PR_URL`].
+    fn ready_for_review() -> Ended {
+        Ended {
+            outcome: Ok(Reached {
+                pr_url: PR_URL.to_string(),
+                goal: Goal::ReadyForReview,
+                log: None,
+                ticket_lines: Vec::new(),
+            }),
+            base_fix: None,
+            advice: Vec::new(),
+        }
+    }
+
+    /// A Pickup run on `repo`, past its lock, on the Base branch `main` with
+    /// the Claim limit 3, its dispatched run ending ready for review: how it
+    /// ended, and what it did outside itself.
+    fn pickup(repo: InMemory) -> (Result<Outcome>, Vec<Call>) {
+        let mut repo = repo.dispatched_ending(ready_for_review());
+        let limit = NonZeroUsize::new(3).unwrap();
+        let outcome = run_through(&mut repo, &widgets(), "main", limit);
+        (outcome, repo.calls)
+    }
+
+    /// The line naming Ready issue #9 as taken.
+    fn taking_9() -> Call {
+        Call::Step(
+            "taking Ready issue #9 \"Issue 9\", as thirdshift \
+             https://github.com/acme/widgets/issues/9 would"
+                .to_string(),
+        )
+    }
+
+    #[test]
+    fn a_pass_skipped_for_no_ready_issue_records_its_reason_and_does_no_work() {
+        let (outcome, calls) = pickup(InMemory::default());
+
+        assert!(matches!(
+            outcome,
+            Ok(Outcome::Skipped(Skipped::NoReadyIssue(_)))
+        ));
+        assert_eq!(
+            calls,
+            [
+                CLOSED,
+                CLAIMED,
+                Call::ReadySearch,
+                Call::Skipped(NO_READY_ISSUE.to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pass_skipped_at_the_claim_limit_records_its_reason_and_does_no_work() {
+        let repo = InMemory::default()
+            .issue(4, true, &["in-progress"])
+            .issue(5, true, &["in-progress"])
+            .issue(6, true, &["in-progress"])
+            .ready(9, false);
+
+        let (outcome, calls) = pickup(repo);
+
+        assert!(matches!(
+            outcome,
+            Ok(Outcome::Skipped(Skipped::AtClaimLimit { .. }))
+        ));
+        assert_eq!(
+            calls,
+            [
+                CLOSED,
+                CLAIMED,
+                Call::Skipped(
+                    "at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, \
+                     pickup.limit is 3"
+                        .to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pass_that_takes_an_issue_names_it_checks_its_harness_starts_then_dispatches_it() {
+        let (_, calls) = pickup(InMemory::default().ready(9, false));
+
+        assert_eq!(
+            calls,
+            [
+                CLOSED,
+                CLAIMED,
+                Call::ReadySearch,
+                taking_9(),
+                Call::HarnessCheck,
+                Call::Started(Some(9)),
+                Call::Dispatch {
+                    issue: 9,
+                    is_spec: false,
+                    base: "main".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_spec_is_dispatched_as_one_on_the_pickup_runs_base_branch() {
+        let (_, calls) = pickup(InMemory::default().ready(9, true));
+
+        assert_eq!(
+            calls.last(),
+            Some(&Call::Dispatch {
+                issue: 9,
+                is_spec: true,
+                base: "main".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_harness_that_fails_its_check_fails_the_pass_with_no_start_and_no_dispatch() {
+        let repo = InMemory::default().ready(9, false).harness_failing();
+
+        let (outcome, calls) = pickup(repo);
+
+        let error = outcome.err().expect("the pass did not fail");
+        assert_eq!(format!("{error:#}"), "claude is not on PATH");
+        assert_eq!(&calls[calls.len() - 2..], [taking_9(), Call::HarnessCheck]);
+    }
+
+    #[test]
+    fn a_pass_that_took_an_issue_returns_it_with_how_its_dispatched_run_ended() {
+        let (outcome, _) = pickup(InMemory::default().ready(9, false));
+
+        let Ok(Outcome::Took(took)) = outcome else {
+            panic!("the pass took no issue");
+        };
+        assert_eq!(took.issue.number, 9);
+        assert_eq!(took.title, "Issue 9");
+        let reached = took.ended.outcome.ok().expect("the dispatched run failed");
+        assert_eq!(reached.pr_url, PR_URL);
     }
 }
