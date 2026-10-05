@@ -1,4 +1,11 @@
 //! Watching CI on the Issue branch's head commit.
+//!
+//! What it reads of GitHub and asks of it, how it waits, and its progress
+//! lines all go through [`Outside`]: [`OnGitHub`] does each through `gh`, the
+//! poll module and the progress lines; `InMemory`, in tests, from a script,
+//! recording each re-run request and progress line.
+
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -46,22 +53,7 @@ pub struct FailedChecks {
 /// `base_commit`, as in a Base fix, every check that failed is the branch's
 /// own.
 pub fn watch(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
-    let grace = poll::grace_period();
-    let short = short(sha);
-    progress::step(format_args!(
-        "waiting up to {}s for CI on {short}",
-        grace.as_secs()
-    ));
-    let appeared = poll::within(grace, || {
-        Ok((!github::checks_on(issue, sha)?.is_empty()).then_some(()))
-    })?;
-    if appeared.is_none() {
-        progress::step(format_args!(
-            "no CI checks appeared on {short}; counting that as passing"
-        ));
-        return Ok(Ci::Absent);
-    }
-    watch_to_end(issue, sha, base_commit)
+    watch_through(&mut OnGitHub { issue }, sha, base_commit)
 }
 
 /// The Check re-run of `sha`: ask GitHub to re-run the branch's own checks
@@ -82,16 +74,103 @@ pub fn rerun(
     base_commit: Option<&str>,
     failed: &FailedChecks,
 ) -> Result<Option<Ci>> {
+    rerun_through(&mut OnGitHub { issue }, sha, base_commit, failed)
+}
+
+/// What the CI watch reads of GitHub and asks of it, how it waits, and
+/// where its progress lines go.
+trait Outside {
+    /// A point the grace period ends at, from when it was started.
+    type Deadline;
+    /// The checks and statuses on the commit `sha`.
+    fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>>;
+    /// Ask GitHub to re-run the failed jobs of the workflow run
+    /// `workflow_run`.
+    fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()>;
+    /// Wait one poll interval. Fails with `interrupted` as soon as the Run
+    /// is interrupted.
+    fn pause(&mut self) -> Result<()>;
+    /// Start a grace period: how long it is, for progress lines, and the
+    /// deadline it ends at.
+    fn start_grace(&mut self) -> (Duration, Self::Deadline);
+    /// Whether `deadline` has passed.
+    fn passed(&mut self, deadline: &Self::Deadline) -> bool;
+    /// Hand on the progress line `line`.
+    fn step(&mut self, line: String);
+}
+
+/// GitHub through `gh`, for `issue`'s repository, with the poll module's
+/// interval and grace period.
+struct OnGitHub<'a> {
+    issue: &'a IssueUrl,
+}
+
+impl Outside for OnGitHub<'_> {
+    type Deadline = Instant;
+
+    fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>> {
+        github::checks_on(self.issue, sha)
+    }
+
+    fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
+        github::rerun_failed_jobs(self.issue, workflow_run)
+    }
+
+    fn pause(&mut self) -> Result<()> {
+        poll::pause()
+    }
+
+    fn start_grace(&mut self) -> (Duration, Instant) {
+        let grace = poll::grace_period();
+        (grace, Instant::now() + grace)
+    }
+
+    fn passed(&mut self, deadline: &Instant) -> bool {
+        Instant::now() >= *deadline
+    }
+
+    fn step(&mut self, line: String) {
+        progress::step(line);
+    }
+}
+
+/// [`watch`], through `outside`.
+fn watch_through(outside: &mut impl Outside, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
+    let (grace, deadline) = outside.start_grace();
+    let short = short(sha);
+    outside.step(format!(
+        "waiting up to {}s for CI on {short}",
+        grace.as_secs()
+    ));
+    let appeared = within(outside, deadline, |outside| {
+        Ok((!outside.checks_on(sha)?.is_empty()).then_some(()))
+    })?;
+    if appeared.is_none() {
+        outside.step(format!(
+            "no CI checks appeared on {short}; counting that as passing"
+        ));
+        return Ok(Ci::Absent);
+    }
+    watch_to_end(outside, sha, base_commit)
+}
+
+/// [`rerun`], through `outside`.
+fn rerun_through(
+    outside: &mut impl Outside,
+    sha: &str,
+    base_commit: Option<&str>,
+    failed: &FailedChecks,
+) -> Result<Option<Ci>> {
     let short = short(sha);
     let not_jobs = failed.own.iter().filter(|check| check.job.is_none());
     let not_jobs = check_names(not_jobs);
     if !not_jobs.is_empty() {
-        progress::step(format_args!(
+        outside.step(format!(
             "the failed checks on {short} can't be re-run: not GitHub Actions jobs: {not_jobs}"
         ));
         return Ok(None);
     }
-    progress::step(format_args!(
+    outside.step(format!(
         "re-running the failed checks on {short}: {}",
         check_names(&failed.own)
     ));
@@ -99,8 +178,8 @@ pub fn rerun(
     workflow_runs.sort_unstable();
     workflow_runs.dedup();
     for workflow_run in &workflow_runs {
-        if let Err(error) = github::rerun_failed_jobs(issue, *workflow_run) {
-            progress::step(format_args!(
+        if let Err(error) = outside.rerun_failed_jobs(*workflow_run) {
+            outside.step(format!(
                 "the failed checks on {short} were not re-run: {error:#}"
             ));
             return Ok(None);
@@ -114,34 +193,34 @@ pub fn rerun(
         .filter(|job| workflow_runs.contains(&job.workflow_run))
         .map(|job| job.check_run)
         .collect();
-    let grace = poll::grace_period();
-    let new_attempt = poll::within(grace, || {
-        let checks = github::checks_on(issue, sha)?;
+    let (grace, deadline) = outside.start_grace();
+    let new_attempt = within(outside, deadline, |outside| {
+        let checks = outside.checks_on(sha)?;
         let still_listed = jobs_of(&checks).any(|job| previous_attempt.contains(&job.check_run));
         Ok((!still_listed).then_some(()))
     })?;
     if new_attempt.is_none() {
-        progress::step(format_args!(
+        outside.step(format!(
             "no re-run appeared on {short} within {}s",
             grace.as_secs()
         ));
         return Ok(None);
     }
-    watch_to_end(issue, sha, base_commit).map(Some)
+    watch_to_end(outside, sha, base_commit).map(Some)
 }
 
-/// [`watch`], once checks have appeared on `sha`.
-fn watch_to_end(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
+/// [`watch_through`], once checks have appeared on `sha`.
+fn watch_to_end(outside: &mut impl Outside, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
     let short = short(sha);
     let mut reported_pending = None;
-    let checks = poll::until(|| {
-        let checks = github::checks_on(issue, sha)?;
+    let checks = until(outside, |outside| {
+        let checks = outside.checks_on(sha)?;
         let pending = count(&checks, CheckState::Pending);
         if pending == 0 {
             return Ok(Some(checks));
         }
         if reported_pending != Some(pending) {
-            progress::step(format_args!(
+            outside.step(format!(
                 "CI on {short}: {pending} of {} checks still running",
                 checks.len()
             ));
@@ -151,18 +230,45 @@ fn watch_to_end(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Resul
     })?;
     let failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
     if failed.is_empty() {
-        progress::step(format_args!("CI passed on {short}"));
+        outside.step(format!("CI passed on {short}"));
         return Ok(Ci::Passed);
     }
-    progress::step(format_args!(
-        "CI failed on {short}: {}",
-        check_names(&failed)
-    ));
+    outside.step(format!("CI failed on {short}: {}", check_names(&failed)));
     let on_base = match base_commit {
-        Some(base_commit) => github::checks_on(issue, base_commit)?,
+        Some(base_commit) => outside.checks_on(base_commit)?,
         None => Vec::new(),
     };
     Ok(Ci::Failed(split(failed, on_base)))
+}
+
+/// Ask `probe` every poll interval of `outside` until it answers `Some`, and
+/// return the answer. Fails with `interrupted` as soon as the Run is
+/// interrupted. Unlike [`poll::until`], `probe` is lent `outside` on each
+/// ask.
+fn until<O: Outside, T>(
+    outside: &mut O,
+    mut probe: impl FnMut(&mut O) -> Result<Option<T>>,
+) -> Result<T> {
+    loop {
+        if let Some(answer) = probe(outside)? {
+            return Ok(answer);
+        }
+        outside.pause()?;
+    }
+}
+
+/// Like [`until`], but give up with `None` once `deadline`, a grace
+/// period's, has passed.
+fn within<O: Outside, T>(
+    outside: &mut O,
+    deadline: O::Deadline,
+    mut probe: impl FnMut(&mut O) -> Result<Option<T>>,
+) -> Result<Option<T>> {
+    until(outside, |outside| match probe(outside)? {
+        Some(answer) => Ok(Some(Some(answer))),
+        None if outside.passed(&deadline) => Ok(Some(None)),
+        None => Ok(None),
+    })
 }
 
 /// Split the checks `failed` on a commit into the branch's own and Inherited
@@ -232,8 +338,124 @@ fn count(checks: &[Check], state: CheckState) -> usize {
 }
 
 #[cfg(test)]
+mod in_memory {
+    use std::time::Duration;
+
+    use anyhow::{Result, bail};
+
+    use super::Outside;
+    use crate::github::Check;
+
+    /// GitHub in memory: for each commit, a script of the check listings
+    /// its reads take in turn, the last one repeating; the workflow runs
+    /// whose re-run is refused; the pause an interrupt arrives on; and how
+    /// many pauses a grace period lasts. Records the commits read, the
+    /// re-run requests and the progress lines.
+    pub struct InMemory {
+        listings: Vec<(String, Vec<Vec<Check>>)>,
+        refused: Vec<u64>,
+        interrupted_on: Option<usize>,
+        grace_pauses: usize,
+        pauses: usize,
+        /// The commit of each read, in order.
+        pub reads: Vec<String>,
+        /// The workflow run of each re-run request, refused ones included.
+        pub reruns: Vec<u64>,
+        /// Every progress line handed on.
+        pub steps: Vec<String>,
+    }
+
+    impl InMemory {
+        /// No checks on any commit, with a grace period of three pauses.
+        pub fn new() -> Self {
+            InMemory {
+                listings: Vec::new(),
+                refused: Vec::new(),
+                interrupted_on: None,
+                grace_pauses: 3,
+                pauses: 0,
+                reads: Vec::new(),
+                reruns: Vec::new(),
+                steps: Vec::new(),
+            }
+        }
+
+        /// Script the reads of `sha` to take `listings` in turn.
+        pub fn listing(mut self, sha: &str, listings: Vec<Vec<Check>>) -> Self {
+            self.listings.push((sha.to_string(), listings));
+            self
+        }
+
+        /// Refuse a re-run of `workflow_run`.
+        pub fn refusing(mut self, workflow_run: u64) -> Self {
+            self.refused.push(workflow_run);
+            self
+        }
+
+        /// Interrupt the Run during pause `pause`, counted from 1.
+        pub fn interrupted_on_pause(mut self, pause: usize) -> Self {
+            self.interrupted_on = Some(pause);
+            self
+        }
+
+        /// The reads made of `sha`.
+        pub fn reads_of(&self, sha: &str) -> usize {
+            self.reads.iter().filter(|read| *read == sha).count()
+        }
+    }
+
+    impl Outside for InMemory {
+        /// The number of pauses at which the grace period ends.
+        type Deadline = usize;
+
+        fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>> {
+            let read = self.reads_of(sha);
+            self.reads.push(sha.to_string());
+            let listing = self
+                .listings
+                .iter()
+                .find(|(commit, _)| commit == sha)
+                .and_then(|(_, listings)| listings.get(read).or(listings.last()));
+            Ok(listing.cloned().unwrap_or_default())
+        }
+
+        fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
+            self.reruns.push(workflow_run);
+            if self.refused.contains(&workflow_run) {
+                bail!("gh: HTTP 403: workflow run {workflow_run} cannot be re-run");
+            }
+            Ok(())
+        }
+
+        fn pause(&mut self) -> Result<()> {
+            self.pauses += 1;
+            if self.interrupted_on == Some(self.pauses) {
+                bail!("interrupted");
+            }
+            Ok(())
+        }
+
+        fn start_grace(&mut self) -> (Duration, usize) {
+            (Duration::from_secs(60), self.pauses + self.grace_pauses)
+        }
+
+        fn passed(&mut self, deadline: &usize) -> bool {
+            self.pauses >= *deadline
+        }
+
+        fn step(&mut self, line: String) {
+            self.steps.push(line);
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::in_memory::InMemory;
     use super::*;
+
+    const HEAD: &str = "abcdef0123456789";
+    const BASE: &str = "0123456789abcdef";
 
     fn check(name: &str, state: CheckState, url: &str) -> Check {
         Check {
@@ -248,16 +470,127 @@ mod tests {
         check(name, CheckState::Failed, &format!("https://head/{name}"))
     }
 
+    fn pending(name: &str) -> Check {
+        check(name, CheckState::Pending, &format!("https://head/{name}"))
+    }
+
+    fn green(name: &str) -> Check {
+        check(name, CheckState::Passed, &format!("https://head/{name}"))
+    }
+
+    /// `check` as the GitHub Actions job whose check run is `check_run`, of
+    /// the workflow run `workflow_run`.
+    fn job(check: Check, check_run: u64, workflow_run: u64) -> Check {
+        Check {
+            job: Some(ActionsJob {
+                check_run,
+                workflow_run,
+            }),
+            ..check
+        }
+    }
+
     /// `checks` as [`check_with_url`] writes them.
     fn listed(checks: &[Check]) -> Vec<String> {
         checks.iter().map(check_with_url).collect()
+    }
+
+    /// The checks that failed, of `ci`, which must be red.
+    fn failed_of(ci: Ci) -> FailedChecks {
+        match ci {
+            Ci::Failed(failed) => failed,
+            Ci::Absent => panic!("CI was Absent, not Failed"),
+            Ci::Passed => panic!("CI Passed, not Failed"),
+        }
+    }
+
+    /// What watching CI on [`HEAD`] came to, against [`BASE`], where CI
+    /// ends as `head` and the Base branch commit's checks are `on_base`.
+    fn failed_on_watch(head: Vec<Check>, on_base: Vec<Check>) -> FailedChecks {
+        let mut github = InMemory::new()
+            .listing(HEAD, vec![head])
+            .listing(BASE, vec![on_base]);
+        failed_of(watch_through(&mut github, HEAD, Some(BASE)).unwrap())
+    }
+
+    #[test]
+    fn with_no_checks_within_the_grace_period_ci_is_absent() {
+        let mut github = InMemory::new();
+
+        let ci = watch_through(&mut github, HEAD, Some(BASE)).unwrap();
+
+        assert!(matches!(ci, Ci::Absent));
+        assert_eq!(
+            github.steps,
+            [
+                "waiting up to 60s for CI on abcdef0",
+                "no CI checks appeared on abcdef0; counting that as passing",
+            ]
+        );
+    }
+
+    #[test]
+    fn pending_checks_are_watched_until_they_pass_telling_each_new_running_count() {
+        let mut github = InMemory::new().listing(
+            HEAD,
+            vec![
+                vec![pending("test"), pending("lint")],
+                vec![pending("test"), pending("lint")],
+                vec![green("test"), pending("lint")],
+                vec![green("test"), pending("lint")],
+                vec![green("test"), green("lint")],
+            ],
+        );
+
+        let ci = watch_through(&mut github, HEAD, Some(BASE)).unwrap();
+
+        assert!(matches!(ci, Ci::Passed));
+        assert_eq!(
+            github.steps,
+            [
+                "waiting up to 60s for CI on abcdef0",
+                "CI on abcdef0: 2 of 2 checks still running",
+                "CI on abcdef0: 1 of 2 checks still running",
+                "CI passed on abcdef0",
+            ]
+        );
+        assert_eq!(github.reads_of(BASE), 0);
+    }
+
+    #[test]
+    fn the_base_branch_commit_is_read_once_after_every_check_has_finished() {
+        let mut github = InMemory::new()
+            .listing(
+                HEAD,
+                vec![
+                    vec![pending("test"), pending("lint")],
+                    vec![red("test"), pending("lint")],
+                    vec![red("test"), red("lint")],
+                ],
+            )
+            .listing(
+                BASE,
+                vec![vec![check("lint", CheckState::Failed, "https://base/lint")]],
+            );
+
+        let failed = failed_of(watch_through(&mut github, HEAD, Some(BASE)).unwrap());
+
+        assert_eq!(listed(&failed.own), ["test: https://head/test"]);
+        assert_eq!(listed(&failed.inherited), ["lint: https://head/lint"]);
+        assert_eq!(listed(&failed.on_base), ["lint: https://base/lint"]);
+        assert_eq!(github.reads_of(BASE), 1);
+        assert_eq!(github.reads.last().map(String::as_str), Some(BASE));
+        assert_eq!(
+            github.steps.last().map(String::as_str),
+            Some("CI failed on abcdef0: test, lint")
+        );
     }
 
     #[test]
     fn a_red_check_with_none_of_its_name_on_the_base_branch_is_the_branchs_own() {
         let on_base = vec![check("lint", CheckState::Failed, "https://base/lint")];
 
-        let failed = split(vec![red("test")], on_base);
+        let failed = failed_on_watch(vec![red("test")], on_base);
 
         assert_eq!(listed(&failed.own), ["test: https://head/test"]);
         assert!(failed.inherited.is_empty());
@@ -271,7 +604,7 @@ mod tests {
             check("test", CheckState::Failed, "https://base/test/2"),
         ];
 
-        let failed = split(vec![red("test")], on_base);
+        let failed = failed_on_watch(vec![red("test")], on_base);
 
         assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
@@ -289,7 +622,7 @@ mod tests {
             check("test", CheckState::Passed, "https://base/test/2"),
         ];
 
-        let failed = split(vec![red("test")], on_base);
+        let failed = failed_on_watch(vec![red("test")], on_base);
 
         assert_eq!(listed(&failed.own), ["test: https://head/test"]);
         assert!(failed.inherited.is_empty());
@@ -303,7 +636,7 @@ mod tests {
             check("lint", CheckState::Failed, "https://base/lint"),
         ];
 
-        let failed = split(vec![red("test")], on_base);
+        let failed = failed_on_watch(vec![red("test"), green("lint")], on_base);
 
         assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
@@ -311,8 +644,12 @@ mod tests {
     }
 
     #[test]
-    fn with_no_base_branch_commit_every_red_check_is_the_branchs_own() {
-        let failed = split(vec![red("test"), red("lint")], Vec::new());
+    fn with_no_base_branch_commit_the_base_is_never_read_and_every_red_check_is_the_branchs_own() {
+        let mut github = InMemory::new()
+            .listing(HEAD, vec![vec![red("test"), red("lint")]])
+            .listing(BASE, vec![vec![red("test"), red("lint")]]);
+
+        let failed = failed_of(watch_through(&mut github, HEAD, None).unwrap());
 
         assert_eq!(
             listed(&failed.own),
@@ -320,5 +657,155 @@ mod tests {
         );
         assert!(failed.inherited.is_empty());
         assert!(failed.on_base.is_empty());
+        assert_eq!(github.reads_of(BASE), 0);
+    }
+
+    #[test]
+    fn a_check_rerun_with_a_failed_check_that_is_no_actions_job_asks_for_nothing() {
+        let mut github = InMemory::new();
+        let failed = FailedChecks {
+            own: vec![job(red("test"), 11, 1), red("lint")],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
+
+        assert!(ci.is_none());
+        assert!(github.reruns.is_empty());
+        assert_eq!(
+            github.steps,
+            ["the failed checks on abcdef0 can't be re-run: not GitHub Actions jobs: lint"]
+        );
+    }
+
+    #[test]
+    fn a_check_rerun_asks_once_for_each_workflow_run() {
+        let mut github = InMemory::new().listing(
+            HEAD,
+            vec![vec![
+                job(green("test"), 31, 1),
+                job(green("lint"), 32, 1),
+                job(green("build"), 41, 2),
+            ]],
+        );
+        let failed = FailedChecks {
+            own: vec![
+                job(red("test"), 11, 1),
+                job(red("build"), 21, 2),
+                job(red("lint"), 12, 1),
+            ],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
+
+        assert!(matches!(ci, Some(Ci::Passed)));
+        let mut reruns = github.reruns.clone();
+        reruns.sort_unstable();
+        assert_eq!(reruns, [1, 2]);
+        assert_eq!(
+            github.steps,
+            [
+                "re-running the failed checks on abcdef0: test, build, lint",
+                "CI passed on abcdef0",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_check_rerun_whose_first_request_is_refused_asks_no_more() {
+        let mut github = InMemory::new().refusing(1).refusing(2);
+        let failed = FailedChecks {
+            own: vec![job(red("test"), 11, 1), job(red("build"), 21, 2)],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
+
+        assert!(ci.is_none());
+        assert_eq!(github.reruns.len(), 1);
+        let refused = github.reruns[0];
+        assert_eq!(
+            github.steps.last().cloned(),
+            Some(format!(
+                "the failed checks on abcdef0 were not re-run: \
+                 gh: HTTP 403: workflow run {refused} cannot be re-run"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_check_rerun_whose_attempt_before_is_still_listed_after_the_grace_period_has_none() {
+        let mut github = InMemory::new().listing(HEAD, vec![vec![job(red("test"), 11, 1)]]);
+        let failed = FailedChecks {
+            own: vec![job(red("test"), 11, 1)],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
+
+        assert!(ci.is_none());
+        assert_eq!(github.reruns, [1]);
+        assert_eq!(
+            github.steps.last().map(String::as_str),
+            Some("no re-run appeared on abcdef0 within 60s")
+        );
+    }
+
+    #[test]
+    fn a_check_rerun_waits_for_an_inherited_failure_sharing_a_workflow_run_to_be_rerun_too() {
+        let mut github = InMemory::new()
+            .listing(
+                HEAD,
+                vec![
+                    // The branch's own failure has a new attempt, but the
+                    // Inherited failure's attempt before is still listed.
+                    vec![job(pending("test"), 21, 1), job(red("lint"), 12, 1)],
+                    vec![job(pending("test"), 21, 1), job(pending("lint"), 22, 1)],
+                    vec![job(green("test"), 21, 1), job(red("lint"), 22, 1)],
+                ],
+            )
+            .listing(
+                BASE,
+                vec![vec![check("lint", CheckState::Failed, "https://base/lint")]],
+            );
+        let failed = FailedChecks {
+            own: vec![job(red("test"), 11, 1)],
+            inherited: vec![job(red("lint"), 12, 1)],
+            on_base: vec![check("lint", CheckState::Failed, "https://base/lint")],
+        };
+
+        let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
+
+        // Had the watch not waited for lint's old check run to go, it would
+        // have watched the listing after as the new attempt, still running.
+        let failed = failed_of(ci.expect("a re-run to watch"));
+        assert!(failed.own.is_empty());
+        assert_eq!(listed(&failed.inherited), ["lint: https://head/lint"]);
+        assert_eq!(github.reruns, [1]);
+        assert_eq!(
+            github.steps,
+            [
+                "re-running the failed checks on abcdef0: test",
+                "CI failed on abcdef0: lint",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_interrupt_during_a_pause_fails_the_watch() {
+        let mut github = InMemory::new()
+            .listing(HEAD, vec![vec![pending("test")]])
+            .interrupted_on_pause(1);
+
+        let error = watch_through(&mut github, HEAD, Some(BASE))
+            .err()
+            .expect("the watch to fail");
+
+        assert_eq!(error.to_string(), "interrupted");
     }
 }
