@@ -400,3 +400,36 @@ fn minutes_and_seconds(duration: Duration) -> String {
         minutes => format!("{minutes}m {}s", seconds % 60),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_prompt_that_loads_a_skill_loads_it_with_codexs_sigil_on_codex() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        for (prompt, first_line) in [
+            (
+                prompt::fresh(&issue, "main", "issue-7"),
+                "$thirdshift-implement https://github.com/acme/widgets/issues/7",
+            ),
+            (
+                prompt::conflict_repair(&issue, "main", "issue-7", "<pr>"),
+                "$thirdshift-resolving-merge-conflicts",
+            ),
+            (
+                prompt::review_repair(&issue, "issue-7", "<pr>", "abc123"),
+                "$thirdshift-code-review abc123",
+            ),
+            (
+                prompt::resume(&["cargo test"]),
+                "Your background work (cargo test) was killed when your turn ended, because \
+                 ending the turn ends the session.",
+            ),
+        ] {
+            let codex_prompt = codex_prompt(&prompt);
+            assert_eq!(codex_prompt.lines().next(), Some(first_line));
+            assert_eq!(codex_prompt[1..], prompt[1..]);
+        }
+    }
+}

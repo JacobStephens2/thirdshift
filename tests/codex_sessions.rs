@@ -234,7 +234,7 @@ fn a_session_left_with_a_command_running_is_resumed_on_its_thread_with_every_fla
 }
 
 #[test]
-fn a_failed_turn_fails_the_run_with_codexs_error_in_the_cause() {
+fn a_failed_turn_or_a_non_zero_exit_fails_the_run_with_codexs_error_in_the_cause() {
     for (script, cause) in [
         (
             "echo \"The 'gpt-6.1-sol' model is not supported.\" > \"$FAKE_CODEX_ERROR\"\nexit 1",
@@ -243,6 +243,10 @@ fn a_failed_turn_fails_the_run_with_codexs_error_in_the_cause() {
         (
             r#"echo '{"type": "turn.failed", "error": {"message": "stream disconnected"}}'"#,
             "codex's turn failed: stream disconnected",
+        ),
+        (
+            "echo '{\"type\": \"error\", \"message\": \"Reconnecting... 1/5\"}'\nkill -KILL $PPID",
+            "codex exited by signal: Reconnecting... 1/5",
         ),
     ] {
         let scenario = Scenario::new();
@@ -278,6 +282,19 @@ fn a_retried_error_alone_does_not_fail_the_session() {
         "a Model was checked with none named: {}",
         result.stderr
     );
+}
+
+#[test]
+fn a_merge_run_on_codex_merges_the_pr() {
+    let scenario = Scenario::new();
+    scenario.agent_does_for(7, AGENT_OPENS_PR);
+
+    let result = scenario.run(&["merge", "harness", "codex", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    assert_eq!(scenario.codex_calls().len(), 1);
+    assert!(scenario.claude_calls().is_empty());
 }
 
 /// Assert the Run failed with `error` before any work: no Claim, no

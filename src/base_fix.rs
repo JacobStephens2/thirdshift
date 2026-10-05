@@ -157,8 +157,8 @@ impl BaseFix {
         }
     }
 
-    /// Have a Base fix it starts run its sessions on `harness`, the Run's
-    /// once checked.
+    /// Have any Base fix it starts run its sessions on `harness`: the Run's,
+    /// once the Run has checked it.
     pub fn runs_on(&mut self, harness: Choice) {
         self.harness = harness;
     }

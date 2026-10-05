@@ -259,9 +259,9 @@ impl Choice {
             );
         }
         let catalog = Catalog::parse(&String::from_utf8_lossy(&output.stdout))?;
-        let (model, effort) = catalog.settle(self.model.as_deref(), self.effort.as_deref())?;
-        self.model = model;
-        self.effort = effort;
+        let settled = catalog.settle(self.model.as_deref(), self.effort.as_deref())?;
+        self.model = settled.model;
+        self.effort = settled.effort;
         Ok(())
     }
 }
@@ -325,17 +325,16 @@ impl Catalog {
     /// of those that Model supports, or with no Model of those any Model
     /// supports, that is `effort`, regardless of case. Fails naming the
     /// valid choices for a Model or Effort the catalog doesn't have.
-    fn settle(
-        &self,
-        model: Option<&str>,
-        effort: Option<&str>,
-    ) -> Result<(Option<String>, Option<String>)> {
+    fn settle(&self, model: Option<&str>, effort: Option<&str>) -> Result<ModelAndEffort> {
         let found = match model {
             Some(model) => Some(self.model(model)?),
             None => None,
         };
         let Some(effort) = effort else {
-            return Ok((found.map(|found| found.slug.clone()), None));
+            return Ok(ModelAndEffort {
+                model: found.map(|found| found.slug.clone()),
+                effort: None,
+            });
         };
         let efforts: Vec<&str> = match found {
             Some(found) => found.efforts.iter().map(String::as_str).collect(),
@@ -362,10 +361,10 @@ impl Catalog {
                 efforts.join(", ")
             );
         };
-        Ok((
-            found.map(|found| found.slug.clone()),
-            Some(settled.to_string()),
-        ))
+        Ok(ModelAndEffort {
+            model: found.map(|found| found.slug.clone()),
+            effort: Some(settled.to_string()),
+        })
     }
 
     /// The Model whose slug or display name is `name`, regardless of case.
@@ -590,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_is_given_the_model_and_the_effort_as_its_config_setting() {
+    fn codex_is_given_the_model_and_the_effort_in_its_config() {
         for (model, effort, args) in [
             ("", "", vec![]),
             ("gpt-6.1-sol", "", vec!["-m", "gpt-6.1-sol"]),
@@ -621,39 +620,27 @@ mod tests {
         .unwrap()
     }
 
-    fn settled(
-        model: Option<&str>,
-        effort: Option<&str>,
-    ) -> Result<(Option<String>, Option<String>)> {
+    fn settled(model: Option<&str>, effort: Option<&str>) -> Result<ModelAndEffort> {
         catalog().settle(model, effort)
-    }
-
-    fn named(model: &str, effort: &str) -> (Option<String>, Option<String>) {
-        let set = set(model, effort);
-        (set.model, set.effort)
     }
 
     #[test]
     fn a_codex_model_and_effort_match_regardless_of_case_and_become_codexs_names() {
         for (model, effort, settled_as) in [
-            (
-                Some("GPT-6.1-Sol"),
-                Some("Max"),
-                named("gpt-6.1-sol", "max"),
-            ),
-            (Some("gpt-6.1-sol"), None, named("gpt-6.1-sol", "")),
+            (Some("GPT-6.1-Sol"), Some("Max"), set("gpt-6.1-sol", "max")),
+            (Some("gpt-6.1-sol"), None, set("gpt-6.1-sol", "")),
             (
                 Some("gpt-5.5 classic"),
                 Some("XHIGH"),
-                named("gpt-5.5", "xhigh"),
+                set("gpt-5.5", "xhigh"),
             ),
             (
                 Some("codex-auto-review"),
                 None,
-                named("codex-auto-review", ""),
+                set("codex-auto-review", ""),
             ),
-            (None, Some("High"), named("", "high")),
-            (None, None, named("", "")),
+            (None, Some("High"), set("", "high")),
+            (None, None, set("", "")),
         ] {
             assert_eq!(
                 settled(model, effort).unwrap(),

@@ -90,8 +90,9 @@ test call with its Effort, which must succeed. On codex, a named Model and Effor
 codex debug models, matched regardless of case, a Model by slug or display name, and are
 passed on as Codex names them. A failure stops the command naming what to fix, before the
 Claim, the worktree and any Command log. Codex sessions run codex exec --json
---dangerously-bypass-approvals-and-sandbox, with the skills in .agents/skills/. The Command log, the Activity log's start line, the pull request's body,
-as in Built with claude · opus · high, and the Run notification each name all three.
+--dangerously-bypass-approvals-and-sandbox, with the skills in .agents/skills/. The Command
+log, the Activity log's start line, the pull request's body, as in Built with claude · opus ·
+high, and the Run notification each name all three.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word

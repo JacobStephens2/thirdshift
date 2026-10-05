@@ -28,14 +28,21 @@ pub struct CodexProgress {
     running: Vec<(String, String)>,
     /// The commands still running when the turn completed.
     killed: Vec<String>,
-    /// Token totals from `turn.completed`: input, of which cached, and
-    /// output.
-    tokens: Option<(u64, u64, u64)>,
+    /// Token totals from `turn.completed`.
+    tokens: Option<Tokens>,
     final_message: Option<String>,
     /// What failed the turn, from `turn.failed`.
     failure: Option<String>,
     /// The last error the stream reported, which may have been retried.
     last_error: Option<String>,
+}
+
+/// A session's token totals.
+struct Tokens {
+    input: u64,
+    /// Of the input, how many were cached.
+    cached: u64,
+    output: u64,
 }
 
 impl CodexProgress {
@@ -44,6 +51,14 @@ impl CodexProgress {
         CodexProgress {
             cwd: worktree.display().to_string(),
             ..CodexProgress::default()
+        }
+    }
+
+    /// Keep the message of an `error`, an event or an item, as the last
+    /// error reported.
+    fn reported(&mut self, error: &Value) {
+        if let Some(message) = error["message"].as_str() {
+            self.last_error = Some(message.to_string());
         }
     }
 
@@ -64,9 +79,7 @@ impl CodexProgress {
                 }
             }
             Some("error") => {
-                if let Some(message) = item["message"].as_str() {
-                    self.last_error = Some(message.to_string());
-                }
+                self.reported(item);
             }
             _ => {}
         }
@@ -127,7 +140,11 @@ impl Stream for CodexProgress {
                 if let (Some(input), Some(output)) = (count("input_tokens"), count("output_tokens"))
                 {
                     let cached = count("cached_input_tokens").unwrap_or(0);
-                    self.tokens = Some((input, cached, output));
+                    self.tokens = Some(Tokens {
+                        input,
+                        cached,
+                        output,
+                    });
                 }
                 self.killed = self
                     .running
@@ -144,9 +161,7 @@ impl Stream for CodexProgress {
                 Vec::new()
             }
             Some("error") => {
-                if let Some(message) = event["message"].as_str() {
-                    self.last_error = Some(message.to_string());
-                }
+                self.reported(&event);
                 Vec::new()
             }
             _ => Vec::new(),
@@ -156,7 +171,11 @@ impl Stream for CodexProgress {
     /// The token totals from `turn.completed`: Codex reports no turns and no
     /// cost.
     fn summary(&self) -> Option<String> {
-        let (input, cached, output) = self.tokens?;
+        let Tokens {
+            input,
+            cached,
+            output,
+        } = self.tokens.as_ref()?;
         Some(format!(
             "{input} input tokens ({cached} cached), {output} output tokens"
         ))

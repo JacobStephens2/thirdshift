@@ -1,9 +1,8 @@
 //! Progress lines on stderr: thirdshift's own steps, and a session's
 //! stream, Claude's stream-json or Codex's JSONL, condensed to one short
-//! line per notable event. Each
-//! line is stamped with the local time it was printed, so a stalled Run can
-//! be told from a busy one. Each is kept in the Command log too, if the
-//! command keeps one.
+//! line per notable event. Each line is stamped with the local time it was
+//! printed, so a stalled Run can be told from a busy one. Each is kept in the
+//! Command log too, if the command keeps one.
 
 mod codex;
 
@@ -154,26 +153,26 @@ pub trait Stream: Send {
 /// The [`Stream`] of a session on `harness` in `worktree`.
 pub fn for_harness(harness: Harness, worktree: &Path) -> Box<dyn Stream> {
     match harness {
-        Harness::Claude => Box::new(Progress::default()),
+        Harness::Claude => Box::new(ClaudeProgress::default()),
         Harness::Codex => Box::new(codex::CodexProgress::in_worktree(worktree)),
     }
 }
 
-/// Condenses one Claude session's stream-json, a line at a time. Unknown and malformed
-/// lines are skipped, never an error.
+/// Condenses one Claude session's stream-json, a line at a time. Unknown and
+/// malformed lines are skipped, never an error.
 ///
 /// A `result` event doesn't mean the session is over: a session that waits on
 /// background sub-agents resumes, with another `system`/`init` event, and ends
 /// each resumption with another `result`. So only the first `init` gives a
-/// line, `result` events give none, and [`Progress::summary`] reports the last
+/// line, `result` events give none, and [`ClaudeProgress::summary`] reports the last
 /// one once the process has exited.
 ///
 /// A background task still running when the session ends its turn for good is
 /// killed as the process exits, so a task killed after the last `result` is
 /// work the session may have been waiting on, or work it had given up on and
-/// left running: see [`Progress::killed_background_work`].
+/// left running: see [`ClaudeProgress::killed_background_work`].
 #[derive(Default)]
-pub struct Progress {
+pub struct ClaudeProgress {
     started: bool,
     cwd: Option<String>,
     session_id: Option<String>,
@@ -191,7 +190,7 @@ pub struct Progress {
     final_message: Option<String>,
 }
 
-impl Stream for Progress {
+impl Stream for ClaudeProgress {
     fn condense(&mut self, raw: &str) -> Vec<String> {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
             return Vec::new();
@@ -270,7 +269,7 @@ impl Stream for Progress {
     }
 }
 
-impl Progress {
+impl ClaudeProgress {
     /// Track a background task's description and whether it was killed.
     fn track_task(&mut self, event: &Value) {
         let Some(id) = event["task_id"].as_str() else {
@@ -358,8 +357,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn lines(events: &[Value]) -> (Progress, Vec<Vec<String>>) {
-        let mut progress = Progress::default();
+    fn lines(events: &[Value]) -> (ClaudeProgress, Vec<Vec<String>>) {
+        let mut progress = ClaudeProgress::default();
         let lines = events
             .iter()
             .map(|event| progress.condense(&event.to_string()))
@@ -544,7 +543,7 @@ mod tests {
 
     #[test]
     fn no_result_means_no_summary() {
-        assert_eq!(Progress::default().summary(), None);
+        assert_eq!(ClaudeProgress::default().summary(), None);
     }
 
     fn task_started(id: &str, description: &str) -> Value {
@@ -726,7 +725,7 @@ mod tests {
 
     #[test]
     fn unknown_and_malformed_lines_are_skipped() {
-        let mut progress = Progress::default();
+        let mut progress = ClaudeProgress::default();
         for raw in [
             "",
             "not json",
