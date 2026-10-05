@@ -279,35 +279,6 @@ fn a_harness_missing_from_path_fails_the_run_before_any_work_naming_what_chose_i
 }
 
 #[test]
-fn harness_codex_fails_the_run_before_any_work_as_not_supported_yet() {
-    for (args, config, chosen_by) in [
-        (vec!["harness", "codex"], None, "the harness flag"),
-        (
-            vec![],
-            Some("[harness]\ndefault = \"codex\"\n"),
-            "harness.default in the User config",
-        ),
-    ] {
-        let scenario = scenario();
-        if let Some(config) = config {
-            scenario.user_config_is(config);
-        }
-        let url = scenario.issue_url(7);
-        let mut args = args;
-        args.push(&url);
-
-        let result = scenario.run(&args);
-
-        assert_failed_before_any_work(
-            &scenario,
-            &result,
-            &format!("harness codex, chosen by {chosen_by}, is not supported yet"),
-        );
-        assert!(scenario.claude_calls().is_empty());
-    }
-}
-
-#[test]
 fn the_command_log_the_activity_log_and_the_pr_body_name_the_harness_model_and_effort() {
     let scenario = scenario();
 

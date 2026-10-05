@@ -1,4 +1,4 @@
-//! Headless Claude Code sessions and their logs.
+//! Headless agent sessions, on Claude Code or Codex, and their logs.
 
 use std::cell::RefCell;
 use std::fs::{self, File};
@@ -11,11 +11,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::harness::Choice;
+use crate::harness::{Choice, Harness};
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
-use crate::progress::{self, Progress};
+use crate::progress::{self, Stream};
 use crate::prompt;
 use crate::skills;
 
@@ -86,7 +86,7 @@ impl<'a> Sessions<'a> {
         harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        if let Err(error) = skills::link_into(worktree) {
+        if let Err(error) = skills::link_into(worktree, harness.harness) {
             return (Err(error), None);
         }
         let sessions = Sessions {
@@ -149,12 +149,14 @@ impl<'a> Sessions<'a> {
 
     /// Run one session as `kind`, logged under its own path, which becomes
     /// the last log.
-    fn start(&self, kind: &str, resume: Option<&str>, prompt: &str) -> Result<Progress> {
+    fn start(&self, kind: &str, resume: Option<&str>, prompt: &str) -> Result<Box<dyn Stream>> {
         let log = self.logs.path(kind);
         progress::step(format_args!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
-        let args = claude_args(self.harness, resume, prompt);
-        run(kind, self.worktree, &args, &log)
+        let harness = self.harness.harness;
+        let args = session_args(self.harness, resume, prompt);
+        let stream = progress::for_harness(harness, self.worktree);
+        run(kind, harness, self.worktree, &args, &log, stream)
     }
 }
 
@@ -170,19 +172,29 @@ fn ending_with(killed: &[&str]) -> String {
     }
 }
 
-/// Run `claude` with `args`, as [`claude_args`] gives them, in `worktree`,
-/// where it finds the Factory skills, streaming its output to `log` and
-/// condensing it to progress lines on stderr, each labelled `kind`. Returns
-/// what the stream showed once `claude` has exited cleanly. An interrupt
-/// stops the session and fails with `interrupted`.
-fn run(kind: &str, worktree: &Path, args: &[&str], log: &Path) -> Result<Progress> {
+/// Run `harness`'s CLI with `args`, as [`session_args`] gives them, in
+/// `worktree`, where it finds the Factory skills, streaming its output to
+/// `log` and condensing it through `stream` to progress lines on stderr,
+/// each labelled `kind`. Returns what the stream showed once the CLI has
+/// exited cleanly, its turn not failed. Otherwise fails with the error the
+/// stream gave, if any. An interrupt stops the session and fails with
+/// `interrupted`.
+fn run(
+    kind: &str,
+    harness: Harness,
+    worktree: &Path,
+    args: &[String],
+    log: &Path,
+    mut stream: Box<dyn Stream>,
+) -> Result<Box<dyn Stream>> {
+    let cli = harness.name();
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
     let mut log_file =
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
-    let mut child = Command::new("claude")
+    let mut child = Command::new(cli)
         .args(args)
         .current_dir(worktree)
         .stdin(Stdio::null())
@@ -191,60 +203,96 @@ fn run(kind: &str, worktree: &Path, args: &[&str], log: &Path) -> Result<Progres
         // can stop everything it started.
         .process_group(0)
         .spawn()
-        .context("could not run claude")?;
+        .with_context(|| format!("could not run {cli}"))?;
 
     // Follow the stream on its own thread, so this one can watch for an
     // interrupt while the session runs.
-    let stream = child.stdout.take().context("no stdout from claude")?;
+    let output = child
+        .stdout
+        .take()
+        .with_context(|| format!("no stdout from {cli}"))?;
     let group = -(child.id() as libc::pid_t);
     let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
     let follower = thread::spawn(move || {
-        let mut progress = Progress::default();
         let followed = follow(
             &kind_owned,
-            stream,
+            output,
             &mut log_file,
             &log_owned,
-            &mut progress,
+            stream.as_mut(),
         );
         if followed.is_err() {
             // Nothing reads its output any more, so it could block forever.
             // SAFETY: kill has no memory-safety preconditions.
             unsafe { libc::kill(group, libc::SIGKILL) };
         }
-        (followed, progress)
+        (followed, stream)
     });
     let status = loop {
         if interrupt::requested() {
             stop(&mut child);
             bail!("interrupted");
         }
-        if let Some(status) = child.try_wait().context("could not wait for claude")? {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("could not wait for {cli}"))?
+        {
             break status;
         }
         thread::sleep(POLL);
     };
-    let (followed, progress) = follower
+    let (followed, stream) = follower
         .join()
         .map_err(|_| anyhow!("the session stream reader panicked"))?;
 
     let elapsed = minutes_and_seconds(started.elapsed());
-    let summary = progress
+    let summary = stream
         .summary()
         .map_or(String::new(), |summary| format!(": {summary}"));
     progress::step(format_args!(
         "{kind}: session ended after {elapsed}{summary}"
     ));
     followed?;
-    if !status.success() {
-        bail!(
-            "claude exited {}",
+    if status.success() && !stream.failed() {
+        return Ok(stream);
+    }
+    let ended = if status.success() {
+        "'s turn failed".to_string()
+    } else {
+        format!(
+            " exited {}",
             status
                 .code()
                 .map_or("by signal".to_string(), |code| code.to_string())
-        );
+        )
+    };
+    match stream.error() {
+        Some(error) => bail!("{cli}{ended}: {error}"),
+        None => bail!("{cli}{ended}"),
     }
-    Ok(progress)
+}
+
+/// The arguments a session runs `harness`'s CLI with, as [`claude_args`] or
+/// [`codex_args`] give them, its prompt loading its skill with that
+/// Harness's sigil.
+fn session_args(harness: &Choice, resume: Option<&str>, prompt: &str) -> Vec<String> {
+    match harness.harness {
+        Harness::Claude => claude_args(harness, resume, prompt)
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        Harness::Codex => codex_args(harness, resume, &codex_prompt(prompt)),
+    }
+}
+
+/// `prompt` as Codex takes it: a first line that loads a Factory skill,
+/// `/thirdshift-<skill>` as Claude's prompts write it, loads it as
+/// `$thirdshift-<skill>`.
+pub fn codex_prompt(prompt: &str) -> String {
+    match prompt.strip_prefix("/thirdshift-") {
+        Some(rest) => format!("$thirdshift-{rest}"),
+        None => prompt.to_string(),
+    }
 }
 
 /// The arguments every session runs `claude` with: headless in auto mode,
@@ -264,6 +312,33 @@ pub fn claude_args<'a>(
     args.push(prompt);
     args
 }
+
+/// The arguments every session runs `codex` with: `exec`, streaming JSONL,
+/// with no approvals and no sandbox (ADR-0012), on the Model and Effort
+/// `harness` sets, if any, reading `CLAUDE.md` where a directory has no
+/// `AGENTS.md`. With `resume`, the session with that id continues, given
+/// every one of those again, as Codex keeps none of them. The prompt comes
+/// last.
+pub fn codex_args(harness: &Choice, resume: Option<&str>, prompt: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "exec",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+    ]
+    .map(String::from)
+    .to_vec();
+    args.extend(harness.codex_args());
+    args.extend(["-c".to_string(), CLAUDE_MD_FALLBACK.to_string()]);
+    if let Some(session_id) = resume {
+        args.extend(["resume".to_string(), session_id.to_string()]);
+    }
+    args.push(prompt.to_string());
+    args
+}
+
+/// The config setting that has Codex read `CLAUDE.md` where a directory has
+/// no `AGENTS.md`.
+const CLAUDE_MD_FALLBACK: &str = r#"project_doc_fallback_filenames=["CLAUDE.md"]"#;
 
 const POLL: Duration = Duration::from_millis(100);
 
@@ -295,7 +370,7 @@ fn follow(
     stream: impl Read,
     log_file: &mut File,
     log: &Path,
-    progress: &mut Progress,
+    progress: &mut dyn Stream,
 ) -> Result<()> {
     let mut stream = BufReader::new(stream);
     let mut line = Vec::new();

@@ -157,6 +157,12 @@ impl BaseFix {
         }
     }
 
+    /// Have a Base fix it starts run its sessions on `harness`, the Run's
+    /// once checked.
+    pub fn runs_on(&mut self, harness: Choice) {
+        self.harness = harness;
+    }
+
     /// Whether the Run compares its red checks with the Base branch's, so
     /// that some may be Inherited failures.
     pub fn sees_inherited_failures(&self) -> bool {

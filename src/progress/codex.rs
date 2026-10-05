@@ -1,0 +1,473 @@
+//! Codex's `exec --json` stream, condensed: `thread.started` gives the
+//! session id, `item.*` events give a progress line per command, file
+//! change and tool call, `turn.completed` the token totals and
+//! `turn.failed` the error the session failed with. See
+//! `docs/research/codex-headless-harness.md`.
+
+use std::collections::HashSet;
+use std::path::Path;
+
+use serde_json::Value;
+
+use super::{Stream, bash, shorten};
+
+/// Condenses one Codex session's JSONL stream, a line at a time.
+///
+/// `codex exec` runs one turn per process. A command the agent left running
+/// shows as a `command_execution` item still `in_progress` when the turn
+/// completes, and it is killed as Codex exits: see
+/// [`Stream::killed_background_work`].
+#[derive(Default)]
+pub struct CodexProgress {
+    /// The worktree the session runs in, which Codex's stream doesn't name.
+    cwd: String,
+    session_id: Option<String>,
+    /// The ids of the items that have had their line.
+    seen: HashSet<String>,
+    /// The commands still running, by item id, in the order they started.
+    running: Vec<(String, String)>,
+    /// The commands still running when the turn completed.
+    killed: Vec<String>,
+    /// Token totals from `turn.completed`: input, of which cached, and
+    /// output.
+    tokens: Option<(u64, u64, u64)>,
+    final_message: Option<String>,
+    /// What failed the turn, from `turn.failed`.
+    failure: Option<String>,
+    /// The last error the stream reported, which may have been retried.
+    last_error: Option<String>,
+}
+
+impl CodexProgress {
+    /// The stream of a session running in `worktree`.
+    pub fn in_worktree(worktree: &Path) -> Self {
+        CodexProgress {
+            cwd: worktree.display().to_string(),
+            ..CodexProgress::default()
+        }
+    }
+
+    /// Track an item's state, and give its line the first time it is seen.
+    fn item(&mut self, item: &Value) -> Vec<String> {
+        let id = item["id"].as_str().unwrap_or("").to_string();
+        match item["type"].as_str() {
+            Some("command_execution") => {
+                self.running.retain(|(running, _)| *running != id);
+                if item["status"] == "in_progress" {
+                    let command = unwrapped(item["command"].as_str().unwrap_or(""));
+                    self.running.push((id.clone(), command));
+                }
+            }
+            Some("agent_message") => {
+                if let Some(text) = item["text"].as_str() {
+                    self.final_message = Some(text.to_string());
+                }
+            }
+            Some("error") => {
+                if let Some(message) = item["message"].as_str() {
+                    self.last_error = Some(message.to_string());
+                }
+            }
+            _ => {}
+        }
+        if !self.seen.insert(id) {
+            return Vec::new();
+        }
+        self.lines_for(item)
+    }
+
+    /// The progress lines an item gives.
+    fn lines_for(&self, item: &Value) -> Vec<String> {
+        let text = |key: &str| item[key].as_str().unwrap_or("?");
+        match item["type"].as_str() {
+            Some("command_execution") => vec![bash(&unwrapped(text("command")))],
+            Some("file_change") => item["changes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|change| {
+                    let path = change["path"].as_str().unwrap_or("?");
+                    let kind = match change["kind"].as_str() {
+                        Some("add") => "Add",
+                        Some("delete") => "Delete",
+                        _ => "Edit",
+                    };
+                    format!("{kind} {}", shorten(self.relative(path)))
+                })
+                .collect(),
+            Some("mcp_tool_call") => vec![format!("{} {}", text("server"), text("tool"))],
+            Some("web_search") => vec![format!("web search {}", shorten(text("query")))],
+            Some("collab_tool_call") => vec![format!("agent {}", text("tool"))],
+            _ => Vec::new(),
+        }
+    }
+
+    /// `path` relative to the worktree, if it is inside it.
+    fn relative<'a>(&self, path: &'a str) -> &'a str {
+        path.strip_prefix(&self.cwd)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .unwrap_or(path)
+    }
+}
+
+impl Stream for CodexProgress {
+    fn condense(&mut self, raw: &str) -> Vec<String> {
+        let Ok(event) = serde_json::from_str::<Value>(raw) else {
+            return Vec::new();
+        };
+        match event["type"].as_str() {
+            Some("thread.started") if self.session_id.is_none() => {
+                self.session_id = event["thread_id"].as_str().map(String::from);
+                vec!["session started".to_string()]
+            }
+            Some("item.started" | "item.updated" | "item.completed") => self.item(&event["item"]),
+            Some("turn.completed") => {
+                let usage = &event["usage"];
+                let count = |key: &str| usage[key].as_u64();
+                if let (Some(input), Some(output)) = (count("input_tokens"), count("output_tokens"))
+                {
+                    let cached = count("cached_input_tokens").unwrap_or(0);
+                    self.tokens = Some((input, cached, output));
+                }
+                self.killed = self
+                    .running
+                    .iter()
+                    .map(|(_, command)| command.clone())
+                    .collect();
+                Vec::new()
+            }
+            Some("turn.failed") => {
+                if self.failure.is_none() {
+                    let message = event["error"]["message"].as_str().unwrap_or("turn failed");
+                    self.failure = Some(message.to_string());
+                }
+                Vec::new()
+            }
+            Some("error") => {
+                if let Some(message) = event["message"].as_str() {
+                    self.last_error = Some(message.to_string());
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The token totals from `turn.completed`: Codex reports no turns and no
+    /// cost.
+    fn summary(&self) -> Option<String> {
+        let (input, cached, output) = self.tokens?;
+        Some(format!(
+            "{input} input tokens ({cached} cached), {output} output tokens"
+        ))
+    }
+
+    /// The text of the last `agent_message` item.
+    fn final_message(&self) -> Option<&str> {
+        self.final_message.as_deref()
+    }
+
+    /// The thread id from `thread.started`, which `codex exec resume` takes.
+    fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// The commands still running when the turn completed.
+    fn killed_background_work(&self) -> Vec<&str> {
+        if self.failure.is_some() {
+            return Vec::new();
+        }
+        self.killed.iter().map(String::as_str).collect()
+    }
+
+    fn failed(&self) -> bool {
+        self.failure.is_some()
+    }
+
+    fn error(&self) -> Option<&str> {
+        self.failure.as_deref().or(self.last_error.as_deref())
+    }
+}
+
+/// `command` without the shell Codex wraps it in, as in `/bin/bash -lc 'git
+/// push'`, if it is wrapped so.
+fn unwrapped(command: &str) -> String {
+    let mut words = command.splitn(3, ' ');
+    let (Some(shell), Some(flag), Some(script)) = (words.next(), words.next(), words.next()) else {
+        return command.to_string();
+    };
+    let is_shell = ["bash", "sh", "zsh"]
+        .iter()
+        .any(|name| shell == *name || shell.ends_with(&format!("/{name}")));
+    if !is_shell || !matches!(flag, "-c" | "-lc") {
+        return command.to_string();
+    }
+    if let Some(quoted) = script
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+    {
+        return quoted.replace("'\\''", "'");
+    }
+    if let Some(quoted) = script
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
+        return quoted.replace("\\\"", "\"");
+    }
+    script.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn lines(events: &[Value]) -> (CodexProgress, Vec<Vec<String>>) {
+        let mut progress = CodexProgress::in_worktree(Path::new("/work/widgets-issue-7"));
+        let lines = events
+            .iter()
+            .map(|event| progress.condense(&event.to_string()))
+            .collect();
+        (progress, lines)
+    }
+
+    fn item(kind: &str, id: &str, item: Value) -> Value {
+        let mut item = item;
+        item["id"] = json!(id);
+        json!({ "type": kind, "item": item })
+    }
+
+    fn command(kind: &str, id: &str, command: &str, status: &str) -> Value {
+        item(
+            kind,
+            id,
+            json!({ "type": "command_execution", "command": command, "status": status }),
+        )
+    }
+
+    fn completed(input: u64, output: u64) -> Value {
+        json!({ "type": "turn.completed", "usage": {
+            "input_tokens": input, "cached_input_tokens": 100, "output_tokens": output
+        } })
+    }
+
+    #[test]
+    fn the_first_thread_started_starts_the_session_and_gives_its_id() {
+        let (progress, lines) = lines(&[
+            json!({ "type": "thread.started", "thread_id": "019a-thread" }),
+            json!({ "type": "turn.started" }),
+        ]);
+
+        assert_eq!(lines, [vec!["session started".to_string()], vec![]]);
+        assert_eq!(progress.session_id(), Some("019a-thread"));
+    }
+
+    #[test]
+    fn a_command_gets_one_line_without_its_shell_naming_commits_and_pushes() {
+        let (_, lines) = lines(&[
+            command(
+                "item.started",
+                "item_1",
+                "/bin/bash -lc 'cargo test'",
+                "in_progress",
+            ),
+            command(
+                "item.completed",
+                "item_1",
+                "/bin/bash -lc 'cargo test'",
+                "completed",
+            ),
+            command(
+                "item.started",
+                "item_2",
+                "bash -lc 'git add -A && git commit -m '\\''x'\\'' && git push'",
+                "in_progress",
+            ),
+            command("item.completed", "item_3", "git push", "completed"),
+        ]);
+
+        assert_eq!(
+            lines,
+            [
+                vec!["$ cargo test".to_string()],
+                vec![],
+                vec!["commit and push".to_string()],
+                vec!["push".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn file_changes_tool_calls_and_searches_get_a_line_each() {
+        let (_, lines) = lines(&[
+            item(
+                "item.completed",
+                "item_1",
+                json!({ "type": "file_change", "status": "completed", "changes": [
+                    { "path": "/work/widgets-issue-7/src/run.rs", "kind": "update" },
+                    { "path": "/work/widgets-issue-7/NOTES.md", "kind": "add" },
+                    { "path": "/etc/hosts", "kind": "delete" }
+                ] }),
+            ),
+            item(
+                "item.started",
+                "item_2",
+                json!({ "type": "mcp_tool_call", "server": "github", "tool": "get_issue" }),
+            ),
+            item(
+                "item.started",
+                "item_3",
+                json!({ "type": "web_search", "query": "codex exec json" }),
+            ),
+            item(
+                "item.started",
+                "item_4",
+                json!({ "type": "collab_tool_call", "tool": "spawn_agent" }),
+            ),
+        ]);
+
+        assert_eq!(
+            lines,
+            [
+                vec![
+                    "Edit src/run.rs".to_string(),
+                    "Add NOTES.md".to_string(),
+                    "Delete /etc/hosts".to_string()
+                ],
+                vec!["github get_issue".to_string()],
+                vec!["web search codex exec json".to_string()],
+                vec!["agent spawn_agent".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn messages_reasoning_and_turn_events_give_no_line() {
+        let (_, lines) = lines(&[
+            item(
+                "item.completed",
+                "item_1",
+                json!({ "type": "reasoning", "text": "Thinking." }),
+            ),
+            item(
+                "item.completed",
+                "item_2",
+                json!({ "type": "agent_message", "text": "Done." }),
+            ),
+            json!({ "type": "turn.started" }),
+            completed(10, 2),
+        ]);
+
+        assert_eq!(lines, [vec![], vec![], vec![], vec![]] as [Vec<String>; 4]);
+    }
+
+    #[test]
+    fn the_final_message_is_the_last_agent_message() {
+        let said = |id: &str, text: &str| {
+            item(
+                "item.completed",
+                id,
+                json!({ "type": "agent_message", "text": text }),
+            )
+        };
+        let (progress, _) = lines(&[said("item_1", "Running tests."), said("item_5", "Done.")]);
+
+        assert_eq!(progress.final_message(), Some("Done."));
+    }
+
+    #[test]
+    fn the_summary_is_the_token_totals() {
+        let (progress, _) = lines(&[completed(12000, 345)]);
+
+        assert_eq!(
+            progress.summary().as_deref(),
+            Some("12000 input tokens (100 cached), 345 output tokens")
+        );
+        assert_eq!(lines(&[]).0.summary(), None);
+    }
+
+    #[test]
+    fn a_command_still_running_when_the_turn_completes_is_killed_background_work() {
+        let (progress, _) = lines(&[
+            command(
+                "item.started",
+                "item_1",
+                "/bin/bash -lc 'sleep 188'",
+                "in_progress",
+            ),
+            command("item.started", "item_2", "cargo build", "in_progress"),
+            command("item.completed", "item_2", "cargo build", "completed"),
+            completed(10, 2),
+        ]);
+
+        assert_eq!(progress.killed_background_work(), ["sleep 188"]);
+        assert!(!progress.failed());
+    }
+
+    #[test]
+    fn a_command_reconciled_as_in_progress_at_turn_end_is_killed_background_work() {
+        let (progress, _) = lines(&[
+            command("item.started", "item_1", "npm run dev", "in_progress"),
+            command("item.completed", "item_1", "npm run dev", "in_progress"),
+            completed(10, 2),
+        ]);
+
+        assert_eq!(progress.killed_background_work(), ["npm run dev"]);
+    }
+
+    #[test]
+    fn a_failed_turn_fails_with_its_error_and_kills_no_background_work() {
+        let (progress, _) = lines(&[
+            command("item.started", "item_1", "sleep 188", "in_progress"),
+            json!({ "type": "error", "message": "Reconnecting... 1/5" }),
+            json!({ "type": "turn.failed", "error": { "message": "The 'GPT-6.1-Sol' model is not supported." } }),
+        ]);
+
+        assert!(progress.failed());
+        assert_eq!(
+            progress.error(),
+            Some("The 'GPT-6.1-Sol' model is not supported.")
+        );
+        assert!(progress.killed_background_work().is_empty());
+    }
+
+    #[test]
+    fn an_error_event_alone_does_not_fail_the_session_but_is_its_last_error() {
+        let (progress, _) = lines(&[
+            json!({ "type": "error", "message": "Reconnecting... 1/5" }),
+            completed(10, 2),
+        ]);
+
+        assert!(!progress.failed());
+        assert_eq!(progress.error(), Some("Reconnecting... 1/5"));
+    }
+
+    #[test]
+    fn unknown_and_malformed_lines_are_skipped() {
+        let mut progress = CodexProgress::default();
+        for raw in [
+            "",
+            "not json",
+            "[1, 2]",
+            r#"{"type": "item.started""#,
+            r#"{"type": "item.started", "item": 3}"#,
+            r#"{"type": "item.started", "item": {"type": "command_execution"}}"#,
+            r#"{"type": "turn.completed", "usage": {"input_tokens": "many"}}"#,
+        ] {
+            let lines = progress.condense(raw);
+            assert!(lines.len() <= 1, "{raw}: {lines:?}");
+        }
+        assert_eq!(progress.summary(), None);
+    }
+
+    #[test]
+    fn a_command_not_wrapped_in_a_shell_is_kept_as_it_is() {
+        for command in ["cargo test", "bash script.sh", "bash -lc", "python -c 'x'"] {
+            assert_eq!(unwrapped(command), command);
+        }
+        assert_eq!(
+            unwrapped("/usr/bin/zsh -c \"echo \\\"hi\\\"\""),
+            "echo \"hi\""
+        );
+    }
+}

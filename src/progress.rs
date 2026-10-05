@@ -1,15 +1,20 @@
 //! Progress lines on stderr: thirdshift's own steps, and a session's
-//! stream-json output condensed to one short line per notable event. Each
+//! stream, Claude's stream-json or Codex's JSONL, condensed to one short
+//! line per notable event. Each
 //! line is stamped with the local time it was printed, so a stalled Run can
 //! be told from a busy one. Each is kept in the Command log too, if the
 //! command keeps one.
 
+mod codex;
+
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::path::Path;
 
 use chrono::Local;
 use serde_json::Value;
 
+use crate::harness::Harness;
 use crate::logs;
 
 /// The longest detail a session line shows before it is cut short.
@@ -108,7 +113,53 @@ fn split_stamp(line: &str) -> Option<(&str, &str)> {
     is_stamp.then_some((time, message))
 }
 
-/// Condenses one session's stream, a line at a time. Unknown and malformed
+/// What a session's stream shows, read a line at a time: the progress lines
+/// it condenses to, and once it has ended, how the session went. Each
+/// Harness streams its own events: see [`for_harness`].
+pub trait Stream: Send {
+    /// The stderr lines, without the `thirdshift: ` prefix, for one line of
+    /// the stream: one per notable event in it, often none. Unknown and
+    /// malformed lines give none, never an error.
+    fn condense(&mut self, raw: &str) -> Vec<String>;
+
+    /// What the session-ended line says the session took, if the stream
+    /// told.
+    fn summary(&self) -> Option<String>;
+
+    /// The session's final message: what the agent said as it ended its
+    /// last turn, if anything.
+    fn final_message(&self) -> Option<&str>;
+
+    /// The session's id, which a Resume continues.
+    fn session_id(&self) -> Option<&str>;
+
+    /// Descriptions of the background work killed as the session ended: the
+    /// work still running when it ended its last turn, which it may have
+    /// been waiting on. None if that turn failed: the session ended for
+    /// another reason.
+    fn killed_background_work(&self) -> Vec<&str>;
+
+    /// Whether the stream says the session failed, whatever its exit code.
+    fn failed(&self) -> bool {
+        false
+    }
+
+    /// The error the stream gave for the session, for a failure's cause:
+    /// what failed its turn, else the last error it reported, if any.
+    fn error(&self) -> Option<&str> {
+        None
+    }
+}
+
+/// The [`Stream`] of a session on `harness` in `worktree`.
+pub fn for_harness(harness: Harness, worktree: &Path) -> Box<dyn Stream> {
+    match harness {
+        Harness::Claude => Box::new(Progress::default()),
+        Harness::Codex => Box::new(codex::CodexProgress::in_worktree(worktree)),
+    }
+}
+
+/// Condenses one Claude session's stream-json, a line at a time. Unknown and malformed
 /// lines are skipped, never an error.
 ///
 /// A `result` event doesn't mean the session is over: a session that waits on
@@ -140,10 +191,8 @@ pub struct Progress {
     final_message: Option<String>,
 }
 
-impl Progress {
-    /// The stderr lines, without the `thirdshift: ` prefix, for one line of
-    /// the stream: one per notable event in it, often none.
-    pub fn condense(&mut self, raw: &str) -> Vec<String> {
+impl Stream for Progress {
+    fn condense(&mut self, raw: &str) -> Vec<String> {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
             return Vec::new();
         };
@@ -186,7 +235,7 @@ impl Progress {
     /// Turns and cost from the last `result` event that reported them. On a
     /// claude.ai subscription the cost is the API-price equivalent, not a
     /// charge, and says so.
-    pub fn summary(&self) -> Option<String> {
+    fn summary(&self) -> Option<String> {
         let (turns, cost) = self.turns_and_cost?;
         let basis = if self.subscription {
             " at API prices"
@@ -196,24 +245,21 @@ impl Progress {
         Some(format!("{turns} turns, ${cost:.2}{basis}"))
     }
 
-    /// The session's final message: the text of its last `result` event,
-    /// what the agent said as it ended its last turn. None if that `result`
-    /// had no text, as one that is an error may not.
-    pub fn final_message(&self) -> Option<&str> {
+    /// The text of the last `result` event. None if that `result` had no
+    /// text, as one that is an error may not.
+    fn final_message(&self) -> Option<&str> {
         self.final_message.as_deref()
     }
 
     /// The session's id, from its first `init` event.
-    pub fn session_id(&self) -> Option<&str> {
+    fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
     }
 
-    /// Descriptions of the background tasks killed after the last `result`:
-    /// the work still running when the session ended, which it may have been
-    /// waiting on. The stream doesn't say whether it was, or had been
-    /// abandoned. None if that `result` was an error: the session ended for
-    /// another reason.
-    pub fn killed_background_work(&self) -> Vec<&str> {
+    /// Descriptions of the background tasks killed after the last `result`.
+    /// The stream doesn't say whether the session was waiting on them, or
+    /// had abandoned them. None if that `result` was an error.
+    fn killed_background_work(&self) -> Vec<&str> {
         if self.failed {
             return Vec::new();
         }
@@ -222,7 +268,9 @@ impl Progress {
             .map(|(_, description)| description.as_str())
             .collect()
     }
+}
 
+impl Progress {
     /// Track a background task's description and whether it was killed.
     fn track_task(&mut self, event: &Value) {
         let Some(id) = event["task_id"].as_str() else {

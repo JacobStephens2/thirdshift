@@ -111,9 +111,10 @@ impl<'a> StartedBy<'a> {
 }
 
 /// [`run`] the Run on `issue` that `started_by` started and that is asked
-/// `asks`, to its end. Its Run notification, if `asks` has it send one, is
-/// for what started the Run to send, once it has ended.
-pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended {
+/// `asks`, to its end, with the Model and Effort in `asks` settled on the
+/// Harness's names for them once checked. Its Run notification, if `asks`
+/// has it send one, is for what started the Run to send, once it has ended.
+pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> Ended {
     let mut base_fix = BaseFix::new(
         started_by.child(),
         asks.base_fix.clone(),
@@ -139,8 +140,9 @@ pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended
 /// The Launch directory is opened first, with its Origin match, the check
 /// that `issue` is open and the git identity check. A Run started by its
 /// command then checks the Harness, Model and Effort its sessions run on, as
-/// `asks` say: one started by another thirdshift, or dispatched by a pass,
-/// runs on what that command checked. The rest is [`start`], through the
+/// `asks` say, settling the Model and Effort in them, and in `base_fix`, on
+/// the Harness's names: one started by another thirdshift, or dispatched by
+/// a pass, runs on what that command checked. The rest is [`start`], through the
 /// Launch directory, GitHub and the logs.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
@@ -148,14 +150,16 @@ pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended
 /// `asks` ask about one is already in it.
 fn run(
     issue: &IssueUrl,
-    asks: &Asks,
+    asks: &mut Asks,
     started_by: StartedBy,
     base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
         asks.harness.check()?;
+        base_fix.runs_on(asks.harness.clone());
     }
+    let asks = &*asks;
     let mut outside = LaunchAndGitHub {
         directory: &directory,
         issue,

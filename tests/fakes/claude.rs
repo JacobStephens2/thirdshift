@@ -66,9 +66,10 @@ fn snapshot_into(files: &mut Json, root: &Path, dir: &Path) {
     }
 }
 
-/// The `thirdshift-*` entries of the working directory's `.claude/skills/`.
-fn linked_skills() -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(SKILLS) else {
+/// The `thirdshift-*` entries of the working directory's `skills`, its
+/// project skills.
+fn linked_skills(skills: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(skills) else {
         return Vec::new();
     };
     entries
@@ -82,22 +83,22 @@ fn linked_skills() -> Vec<PathBuf> {
 }
 
 /// Every file of the `thirdshift-*` skills in the working directory's
-/// `.claude/skills/`, through their links, by its path relative to
-/// `.claude/skills/`, with its contents.
-fn skills_snapshot() -> Json {
+/// `skills`, through their links, by its path relative to `skills`, with its
+/// contents.
+pub fn skills_snapshot(skills: &str) -> Json {
     let mut files = object([]);
-    for skill in linked_skills() {
-        snapshot_into(&mut files, Path::new(SKILLS), &skill);
+    for skill in linked_skills(skills) {
+        snapshot_into(&mut files, Path::new(skills), &skill);
     }
     files
 }
 
 /// The files written out beside the skills the `thirdshift-*` links in the
-/// working directory's `.claude/skills/` point to, such as their licence, by
-/// name, with their contents.
-fn beside_skills_snapshot() -> Json {
+/// working directory's `skills` point to, such as their licence, by name,
+/// with their contents.
+pub fn beside_skills_snapshot(skills: &str) -> Json {
     let mut files = object([]);
-    let written = linked_skills()
+    let written = linked_skills(skills)
         .first()
         .and_then(|link| fs::read_link(link).ok())
         .and_then(|target| target.parent().map(Path::to_owned));
@@ -135,7 +136,7 @@ fn prompt_of(record: &Json) -> &str {
 }
 
 /// The script for the session just recorded last in `records`.
-fn script_for(records: &[Json]) -> PathBuf {
+pub fn script_for(records: &[Json]) -> PathBuf {
     let script = crate::env_path("FAKE_CLAUDE_SCRIPT").display().to_string();
     let mut candidates = Vec::new();
     if let Some(issue) = issue_of(prompt_of(records.last().unwrap())) {
@@ -156,7 +157,7 @@ fn script_for(records: &[Json]) -> PathBuf {
 
 /// `git` in the working directory, with its stdout trimmed, and whether it
 /// succeeded.
-fn git_here(args: &[&str]) -> (String, bool) {
+pub fn git_here(args: &[&str]) -> (String, bool) {
     let output = crate::git(Path::new("."), args);
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     (stdout, output.status.success())
@@ -164,7 +165,7 @@ fn git_here(args: &[&str]) -> (String, bool) {
 
 /// The exit code a Python fake gave for `status`, which is negative for a
 /// signal and wraps as an exit code.
-fn exit_code(status: ExitStatus) -> i32 {
+pub fn exit_code(status: ExitStatus) -> i32 {
     status
         .code()
         .unwrap_or_else(|| -status.signal().unwrap() & 0xff)
@@ -195,8 +196,8 @@ pub fn main(argv: Vec<String>) {
             ("cwd", string(cwd)),
             ("branch", string(branch)),
             ("merging", Bool(merging)),
-            ("skill_files", skills_snapshot()),
-            ("beside_skills", beside_skills_snapshot()),
+            ("skill_files", skills_snapshot(SKILLS)),
+            ("beside_skills", beside_skills_snapshot(SKILLS)),
             ("stdin", stdin),
         ]),
     );
