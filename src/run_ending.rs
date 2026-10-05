@@ -378,10 +378,7 @@ mod tests {
     const PLAN: &str = "https://github.com/acme/widgets/issues/40";
 
     fn plan() -> Reviewed {
-        Reviewed::PlanReady {
-            plan: IssueUrl::parse(PLAN).unwrap(),
-            base: "main".to_string(),
-        }
+        Reviewed::PlanReady(IssueUrl::parse(PLAN).unwrap())
     }
 
     fn failed_run(cause: &str) -> FailedRun {

@@ -41,7 +41,7 @@ mod worktree;
 
 use std::process::ExitCode;
 
-use architect::{Outcome, Reviewed};
+use architect::Outcome;
 use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
 use asks::Asks;
 use command::{Ending, failure};
@@ -426,37 +426,19 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Err(failure) => return failure,
     };
     let mut harness = args.flags.harness(&config);
-    let review = architect::run(
+    let outcome = architect::run(
         args.focus.as_deref(),
         args.base.as_deref(),
+        args.plan_only,
         &args.flags,
         &config,
         &mut harness,
     );
     started.built_with(&harness);
-    let review = match review {
-        Ok(Outcome::Skipped(skipped)) => {
-            return started.finish(Ending::Skipped(skipped.into()));
-        }
-        Ok(Outcome::Reviewed(reviewed)) => Ok(reviewed),
-        Err(failed) => Err(failed),
-    };
-    let dispatched = match &review {
-        Ok(Reviewed::PlanReady { plan, base }) if !args.plan_only => {
-            progress::step(format_args!(
-                "dispatching the plan {url}, as thirdshift {url} would",
-                url = plan.url
-            ));
-            let mut asks = Asks {
-                harness: harness.clone(),
-                ..Asks::of_architect_plan(plan, &args.flags, &config)
-            };
-            let started_by = StartedBy::Dispatch { base };
-            Some(run::run_to_end(plan, &mut asks, started_by))
-        }
-        _ => None,
-    };
-    started.finish(Ending::Architect { review, dispatched })
+    started.finish(match outcome {
+        Outcome::Skipped(skipped) => Ending::Skipped(skipped.into()),
+        Outcome::Reviewed { review, dispatched } => Ending::Architect { review, dispatched },
+    })
 }
 
 /// A Pickup run: the search for the lowest-numbered Ready issue in the Launch

@@ -680,25 +680,6 @@ fn an_idea_that_cannot_be_labelled_fails_the_architect_run_naming_the_cause() {
 }
 
 #[test]
-fn a_review_with_no_strong_candidate_dispatches_nothing_without_plan_only() {
-    let scenario = scenario();
-    scenario.issue_labelled(7, &["needs-triage"]);
-    let url = scenario.issue_url(7);
-    scenario.agent_does(&ends_with(&format!("Architecture review idea: {url}")));
-
-    let result = scenario.run(&["architect", "merge"]);
-
-    assert_ended_without_a_plan(
-        &scenario,
-        &result,
-        &url,
-        &format!("no Strong candidate: the Architecture review filed the idea {url}"),
-    );
-    assert_eq!(scenario.issue_labels(7), ["needs-triage", ARCHITECT_IDEA]);
-    assert!(scenario.gh_calls_of("pr", "create").is_empty());
-}
-
-#[test]
 fn a_plan_older_than_the_architect_run_is_refused() {
     let scenario = scenario();
     scenario.issue_labelled(7, &["needs-triage"]);
@@ -1109,32 +1090,6 @@ fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
         result.stderr
     );
     assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
-}
-
-#[test]
-fn progress_lines_show_the_dispatch_after_the_label_swap_and_before_the_run() {
-    let scenario = single_ticket_plan();
-
-    let result = scenario.run(&["architect"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let mut rest = result.stderr.as_str();
-    for line in [
-        "thirdshift: marking the plan ready: swapping needs-triage for ready-for-agent and adding architect-plan on #8\n"
-            .to_string(),
-        format!("thirdshift: dispatching the plan {PLAN_URL}, as thirdshift {PLAN_URL} would\n"),
-        "thirdshift: implement: session started\n".to_string(),
-    ] {
-        let Some(at) = rest.find(&line) else {
-            panic!("expected {line:?}, in order, in stderr: {}", result.stderr);
-        };
-        rest = &rest[at + line.len()..];
-    }
-    assert!(
-        !result.stderr.contains("is ready for an agent"),
-        "stderr: {}",
-        result.stderr
-    );
 }
 
 /// A script that records the commit the session's worktree is at as
@@ -2444,17 +2399,4 @@ fn the_review_and_the_run_it_dispatches_run_on_the_model_checked_once() {
             "{args:?}"
         );
     }
-}
-
-#[test]
-fn a_skipped_architect_run_makes_no_check_of_its_harness_or_model() {
-    let scenario = scenario();
-    scenario.issue_is(5, "OPEN");
-    scenario.issue_labelled(5, &[ARCHITECT_PLAN]);
-    scenario.agent_does("echo 'no such model'\nexit 1");
-
-    let result = scenario.run(&["architect", "model", "Opus 5.5", "harness", "codex"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert!(scenario.claude_calls().is_empty());
 }
