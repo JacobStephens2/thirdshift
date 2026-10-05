@@ -1201,3 +1201,74 @@ though I'm thinking about a second issue for the one-off migration of existing
 
 ## 8
 I merged https://github.com/JacobStephens2/thirdshift/pull/340.
+
+
+# Oct 4 2026, codex, issue 136
+/grill-with-docs https://github.com/JacobStephens2/thirdshift/issues/136 - I'm
+  thinking about configuring this such that I can use a flag to choose the model
+  which operates the run / is used throughout. I'm also interested in being able for
+  the user to set their default model in their User config, and having this asked in
+  the `thirdshift setup` process.
+
+## 2
+I just installed codex, so you can use it and test with it.
+
+1. I want both the agent and model, so yeah c. Though I want to call claude and codex harnesses, and GPT-6.1-Sol or Opus 5.5 models, so then the flag can be like `harness codex model GPT-6.1-Sol effort Max`. I'd also like to be able to control the effort in this way too.
+
+2. agreed
+
+3. Let's include choosing Claude in the scope here.
+
+## 3
+Use /research if useful
+
+## 4
+4. agree, though I want to cover codex model and effort settings as well in this spec and tickets.
+
+5. agree
+
+6. agree
+
+7. agree
+
+8. agree
+
+9. agree
+
+10. agree, though how do these compare to `--yolo`? And is there some workspace restriction setting to try to get the Codex agent to stay within its Launch directory?
+
+11. Agree, though I generally shoot for just using AGENTS.md (which claude code reads).
+
+12. agree - leave that to me. I'm having an agent copying to .codex now
+
+## 5
+13. agree
+14. agree
+15. agree - it doesn't have to accept Opus 5.5 if that is rejected, it can just accept the correct value.
+16. maybe setup should also check what the user has installed, and only offer for the harnesses which are intalled. Otherwise yes this looks good. Thinking that these wouldn't be relevant questions for someone who only uses claude, though I suppose showing anyway teaches the user more about the possibilities and how thirdshift works, and it would only probably be quite power user type users who will be using this, so maybe worth it to keep the qeustions even when the other harnesses aren't installed?
+17. agree
+
+## 6
+18. agree, and I'm wondering if we should change claude to use the namespace too to keep the behavior more similar across harnesses, and drop the claude plugin system use.
+19. agree, though this may change in light of 18
+20. we'll run the to-spec skill then the to-tickets skill and finalize this after we establish shared understanding. This kind of shape is sounding good. And the ADR sounds good.
+
+## 7
+21. agree
+22. agree
+23. agree
+
+## 8
+That matches my understanding. /to-spec
+
+## 9
+yes those match
+
+## 10
+/to-tickets
+
+## 11
+that looks right, file them as sub-issues with dependencies where appropriate
+
+## 12
+Yes, and will the thirdshift pickup crontab entry pick this spec up? if so when?
