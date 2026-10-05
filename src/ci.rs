@@ -90,10 +90,9 @@ trait Outside {
     /// Wait one poll interval. Fails with `interrupted` as soon as the Run
     /// is interrupted.
     fn pause(&mut self) -> Result<()>;
-    /// How long the grace period is, for progress lines.
-    fn grace_period(&mut self) -> Duration;
-    /// Start a grace period, ending at the deadline returned.
-    fn start_grace(&mut self) -> Self::Deadline;
+    /// Start a grace period: how long it is, for progress lines, and the
+    /// deadline it ends at.
+    fn start_grace(&mut self) -> (Duration, Self::Deadline);
     /// Whether `deadline` has passed.
     fn passed(&mut self, deadline: &Self::Deadline) -> bool;
     /// Hand on the progress line `line`.
@@ -121,12 +120,9 @@ impl Outside for OnGitHub<'_> {
         poll::pause()
     }
 
-    fn grace_period(&mut self) -> Duration {
-        poll::grace_period()
-    }
-
-    fn start_grace(&mut self) -> Instant {
-        Instant::now() + poll::grace_period()
+    fn start_grace(&mut self) -> (Duration, Instant) {
+        let grace = poll::grace_period();
+        (grace, Instant::now() + grace)
     }
 
     fn passed(&mut self, deadline: &Instant) -> bool {
@@ -140,13 +136,13 @@ impl Outside for OnGitHub<'_> {
 
 /// [`watch`], through `outside`.
 fn watch_through(outside: &mut impl Outside, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
-    let grace = outside.grace_period();
+    let (grace, deadline) = outside.start_grace();
     let short = short(sha);
     outside.step(format!(
         "waiting up to {}s for CI on {short}",
         grace.as_secs()
     ));
-    let appeared = within(outside, |outside| {
+    let appeared = within(outside, deadline, |outside| {
         Ok((!outside.checks_on(sha)?.is_empty()).then_some(()))
     })?;
     if appeared.is_none() {
@@ -197,8 +193,8 @@ fn rerun_through(
         .filter(|job| workflow_runs.contains(&job.workflow_run))
         .map(|job| job.check_run)
         .collect();
-    let grace = outside.grace_period();
-    let new_attempt = within(outside, |outside| {
+    let (grace, deadline) = outside.start_grace();
+    let new_attempt = within(outside, deadline, |outside| {
         let checks = outside.checks_on(sha)?;
         let still_listed = jobs_of(&checks).any(|job| previous_attempt.contains(&job.check_run));
         Ok((!still_listed).then_some(()))
@@ -261,13 +257,13 @@ fn until<O: Outside, T>(
     }
 }
 
-/// Like [`until`], but give up with `None` once the grace period has
-/// passed.
+/// Like [`until`], but give up with `None` once `deadline`, a grace
+/// period's, has passed.
 fn within<O: Outside, T>(
     outside: &mut O,
+    deadline: O::Deadline,
     mut probe: impl FnMut(&mut O) -> Result<Option<T>>,
 ) -> Result<Option<T>> {
-    let deadline = outside.start_grace();
     until(outside, |outside| match probe(outside)? {
         Some(answer) => Ok(Some(Some(answer))),
         None if outside.passed(&deadline) => Ok(Some(None)),
@@ -439,12 +435,8 @@ mod in_memory {
             Ok(())
         }
 
-        fn grace_period(&mut self) -> Duration {
-            Duration::from_secs(60)
-        }
-
-        fn start_grace(&mut self) -> usize {
-            self.pauses + self.grace_pauses
+        fn start_grace(&mut self) -> (Duration, usize) {
+            (Duration::from_secs(60), self.pauses + self.grace_pauses)
         }
 
         fn passed(&mut self, deadline: &usize) -> bool {
@@ -503,7 +495,8 @@ mod tests {
         checks.iter().map(check_with_url).collect()
     }
 
-    fn red_checks(ci: Ci) -> FailedChecks {
+    /// The checks that failed, of `ci`, which must be red.
+    fn failed_of(ci: Ci) -> FailedChecks {
         match ci {
             Ci::Failed(failed) => failed,
             Ci::Absent => panic!("CI was Absent, not Failed"),
@@ -513,11 +506,11 @@ mod tests {
 
     /// What watching CI on [`HEAD`] came to, against [`BASE`], where CI
     /// ends as `head` and the Base branch commit's checks are `on_base`.
-    fn watched_red(head: Vec<Check>, on_base: Vec<Check>) -> FailedChecks {
+    fn failed_on_watch(head: Vec<Check>, on_base: Vec<Check>) -> FailedChecks {
         let mut github = InMemory::new()
             .listing(HEAD, vec![head])
             .listing(BASE, vec![on_base]);
-        red_checks(watch_through(&mut github, HEAD, Some(BASE)).unwrap())
+        failed_of(watch_through(&mut github, HEAD, Some(BASE)).unwrap())
     }
 
     #[test]
@@ -580,7 +573,7 @@ mod tests {
                 vec![vec![check("lint", CheckState::Failed, "https://base/lint")]],
             );
 
-        let failed = red_checks(watch_through(&mut github, HEAD, Some(BASE)).unwrap());
+        let failed = failed_of(watch_through(&mut github, HEAD, Some(BASE)).unwrap());
 
         assert_eq!(listed(&failed.own), ["test: https://head/test"]);
         assert_eq!(listed(&failed.inherited), ["lint: https://head/lint"]);
@@ -597,7 +590,7 @@ mod tests {
     fn a_red_check_with_none_of_its_name_on_the_base_branch_is_the_branchs_own() {
         let on_base = vec![check("lint", CheckState::Failed, "https://base/lint")];
 
-        let failed = watched_red(vec![red("test")], on_base);
+        let failed = failed_on_watch(vec![red("test")], on_base);
 
         assert_eq!(listed(&failed.own), ["test: https://head/test"]);
         assert!(failed.inherited.is_empty());
@@ -611,7 +604,7 @@ mod tests {
             check("test", CheckState::Failed, "https://base/test/2"),
         ];
 
-        let failed = watched_red(vec![red("test")], on_base);
+        let failed = failed_on_watch(vec![red("test")], on_base);
 
         assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
@@ -629,7 +622,7 @@ mod tests {
             check("test", CheckState::Passed, "https://base/test/2"),
         ];
 
-        let failed = watched_red(vec![red("test")], on_base);
+        let failed = failed_on_watch(vec![red("test")], on_base);
 
         assert_eq!(listed(&failed.own), ["test: https://head/test"]);
         assert!(failed.inherited.is_empty());
@@ -643,7 +636,7 @@ mod tests {
             check("lint", CheckState::Failed, "https://base/lint"),
         ];
 
-        let failed = watched_red(vec![red("test"), green("lint")], on_base);
+        let failed = failed_on_watch(vec![red("test"), green("lint")], on_base);
 
         assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
@@ -656,7 +649,7 @@ mod tests {
             .listing(HEAD, vec![vec![red("test"), red("lint")]])
             .listing(BASE, vec![vec![red("test"), red("lint")]]);
 
-        let failed = red_checks(watch_through(&mut github, HEAD, None).unwrap());
+        let failed = failed_of(watch_through(&mut github, HEAD, None).unwrap());
 
         assert_eq!(
             listed(&failed.own),
@@ -788,7 +781,9 @@ mod tests {
 
         let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
 
-        let failed = red_checks(ci.expect("a re-run to watch"));
+        // Had the watch not waited for lint's old check run to go, it would
+        // have watched the listing after as the new attempt, still running.
+        let failed = failed_of(ci.expect("a re-run to watch"));
         assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["lint: https://head/lint"]);
         assert_eq!(github.reruns, [1]);
