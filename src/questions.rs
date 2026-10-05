@@ -164,9 +164,10 @@ pub fn ask(
 /// with those `current` sets for it as the defaults, checked as a Run
 /// checks them, as [`ask_claude`] and [`ask_codex`] ask them. The Harness's
 /// default is the first one installed, so `claude` when both are. With no
-/// Harness to choose, nothing is asked, and the answer is `None`.
+/// Harness to choose, or Codex chosen and its catalog unreadable, the answer
+/// is `None`.
 fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndEffort)>> {
-    let listed: Vec<String> = Harness::ALL
+    let harnesses: Vec<String> = Harness::ALL
         .iter()
         .map(|harness| {
             if harness.installed() {
@@ -176,45 +177,44 @@ fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndE
             }
         })
         .collect();
-    let listed = listed.join(" or ");
+    let harnesses = harnesses.join(" or ");
     let default = Harness::ALL.into_iter().find(|harness| harness.installed());
     let Some(default) = default else {
         say(&format!(
-            "Harness for every Run's sessions: {listed}. Sessions can run on neither here, so \
+            "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \
              the harness settings stay as they are; install claude or codex, then rerun \
              `thirdshift setup`."
         ));
         return Ok(None);
     };
-    loop {
+    let harness = loop {
         let name = answer(
-            &format!("Harness for every Run's sessions, {listed}"),
+            &format!("Harness for every Run's sessions, {harnesses}"),
             Some(default.name()),
         )?;
-        let harness = match Harness::named(&name) {
-            None => {
-                say(&format!("Choose {}.", harness::NAMES));
-                continue;
-            }
+        match Harness::named(&name) {
+            None => say(&format!("Choose {}.", harness::NAMES)),
             Some(harness) if !harness.installed() => {
-                say(&format!("{name} is not installed: it isn't on PATH."));
-                continue;
+                say(&format!("{name} is not installed: it isn't on PATH."))
             }
-            Some(harness) => harness,
-        };
-        let current = current.of(harness);
-        let chosen = match harness {
-            Harness::Claude => ask_claude(current)?,
-            Harness::Codex => match Catalog::read() {
-                Ok(catalog) => ask_codex(&catalog, current)?,
-                Err(error) => {
-                    say(&format!("{error:#}"));
-                    continue;
-                }
-            },
-        };
-        return Ok(Some((harness, chosen)));
-    }
+            Some(harness) => break harness,
+        }
+    };
+    let set = current.of(harness);
+    let chosen = match harness {
+        Harness::Claude => ask_claude(set)?,
+        Harness::Codex => match Catalog::read() {
+            Ok(catalog) => ask_codex(&catalog, set)?,
+            Err(error) => {
+                say(&format!(
+                    "{error:#}\nThe harness settings stay as they are; rerun `thirdshift \
+                     setup` once codex debug models works."
+                ));
+                return Ok(None);
+            }
+        },
+    };
+    Ok(Some((harness, chosen)))
 }
 
 /// Ask Claude's Model and Effort, with `current` as the defaults. A Model is

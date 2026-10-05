@@ -1762,3 +1762,42 @@ fn on_a_terminal_the_codex_model_and_effort_default_to_the_current_ones_as_codex
     );
     assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("high"));
 }
+
+#[test]
+fn on_a_terminal_when_codexs_catalog_cant_be_read_the_harness_is_left_as_it_was() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    scenario.user_config_is("[harness.codex]\nmodel = \"gpt-5.5\"\n");
+    // The fake is a link to the build every test shares, so it's replaced,
+    // not written through.
+    let codex = scenario.path("bin/codex");
+    fs::remove_file(&codex).unwrap();
+    fs::write(&codex, "#!/bin/sh\necho 'not logged in' >&2\nexit 1\n").unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = fakes_only_path(&scenario);
+    let mut keystrokes = vec![(HARNESS, "codex")];
+    keystrokes.extend(NOTHING_ELSE);
+
+    let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
+
+    assert!(
+        result.stderr.contains(
+            "codex debug models failed, so Codex's Models can't be read: not logged in\n\
+             The harness settings stay as they are; rerun `thirdshift setup` once codex debug \
+             models works."
+        ),
+        "terminal: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains(CODEX_MODEL),
+        "terminal: {}",
+        result.stderr
+    );
+    let config = table(&result);
+    assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
+    assert_eq!(
+        config["harness"]["codex"]["model"].as_str(),
+        Some("gpt-5.5")
+    );
+}

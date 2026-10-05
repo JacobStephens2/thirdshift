@@ -299,10 +299,10 @@ impl Catalog {
             .args(["debug", "models"])
             .stdin(Stdio::null())
             .output()
-            .context("could not run codex debug models to check the Model and Effort")?;
+            .context("could not run codex debug models to read Codex's Models")?;
         if !output.status.success() {
             bail!(
-                "codex debug models failed, so the Model and Effort can't be checked: {}",
+                "codex debug models failed, so Codex's Models can't be read: {}",
                 said(&output)
             );
         }
@@ -351,11 +351,11 @@ impl Catalog {
     /// Model supports, each once, in the catalog's order.
     pub fn efforts(&self, slug: Option<&str>) -> Vec<&str> {
         let mut efforts = Vec::new();
-        let of = self
+        let models = self
             .models
             .iter()
             .filter(|model| slug.is_none_or(|slug| model.slug == slug));
-        for each in of.flat_map(|model| &model.efforts) {
+        for each in models.flat_map(|model| &model.efforts) {
             if !efforts.contains(&each.as_str()) {
                 efforts.push(each.as_str());
             }
