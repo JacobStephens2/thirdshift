@@ -86,29 +86,19 @@ impl Delivery<'_> {
             base: self.base,
             branch: worktree.branch(),
             goal: self.goal,
+            harness: self.harness,
         };
-        let harness = self.harness;
-        let (delivered, log) = Sessions::within(self.logs, worktree.path(), harness, |sessions| {
-            let mut outside = InWorktree {
-                issue: self.issue,
-                worktree: &worktree,
-                base: self.base,
-                base_fix: self.base_fix,
-                sessions,
-            };
-            route.steps(&mut outside, &opening, |_| {
-                if let Err(error) = write_built_with(self.issue, worktree.branch(), harness) {
-                    progress::warn(
-                        &error,
-                        format_args!(
-                            "could not write \"{}\" in the pull request's body",
-                            harness.built_with()
-                        ),
-                    );
-                }
-                before_ready()
-            })
-        });
+        let (delivered, log) =
+            Sessions::within(self.logs, worktree.path(), self.harness, |sessions| {
+                let mut outside = InWorktree {
+                    issue: self.issue,
+                    worktree: &worktree,
+                    base: self.base,
+                    base_fix: self.base_fix,
+                    sessions,
+                };
+                route.steps(&mut outside, &opening, |_| before_ready())
+            });
         match delivered {
             Ok(pr_url) => Ok(Reached {
                 pr_url,
@@ -126,27 +116,6 @@ impl Delivery<'_> {
             }
         }
     }
-}
-
-/// Write the line that says the pull request from `branch`, for `issue`, was
-/// built with `harness` in its body, in place of any thirdshift wrote there
-/// before. Nothing if there is no such pull request: marking it ready says
-/// so. A failure is for the Delivery to warn of, as the work is done
-/// without it.
-fn write_built_with(issue: &IssueUrl, branch: &str, harness: &Choice) -> Result<()> {
-    let Some(pr) = github::pull_request_for(issue, branch)? else {
-        return Ok(());
-    };
-    let body = github::pr_body(issue, pr.number)?;
-    let written = with_built_with(&body, harness);
-    if written != body {
-        progress::step(format_args!(
-            "writing \"{}\" in the pull request's body",
-            harness.built_with()
-        ));
-        github::set_pr_body(issue, pr.number, &written)?;
-    }
-    Ok(())
 }
 
 /// The marker that ends the line thirdshift writes in a pull request's body,
@@ -177,18 +146,20 @@ pub fn with_built_with(body: &str, choice: &Choice) -> String {
 }
 
 /// The steps of a Delivery of the pull request for `issue`, from `branch`
-/// into the Base branch `base`, to `goal`.
+/// into the Base branch `base`, to `goal`, its sessions run on `harness`.
 struct Route<'a> {
     issue: &'a IssueUrl,
     base: &'a str,
     branch: &'a str,
     goal: Goal,
+    harness: &'a Choice,
 }
 
 impl Route<'_> {
     /// [`Delivery::deliver`]'s steps, through `outside`, in order: catch up
-    /// from origin if `opening` says to, the opening session, the push,
-    /// `before_ready`, marking the pull request ready, taking it to the goal
+    /// from origin if `opening` says to, the opening session, the push, the
+    /// line saying what it was built with, `before_ready`, marking the pull
+    /// request ready, taking it to the goal
     /// through the Repair loop, then for [`Goal::Merged`], the steps after
     /// the merge. Returns the pull request's URL.
     fn steps<O: Outside>(
@@ -202,6 +173,7 @@ impl Route<'_> {
         }
         outside.session(opening.kind, &opening.prompt)?;
         outside.push()?;
+        self.write_built_with(outside);
         before_ready(outside)?;
         let pr = self.mark_pr_ready(outside)?;
         outside.take_to_goal(&pr.url, self.goal)?;
@@ -209,6 +181,36 @@ impl Route<'_> {
             self.after_merge(outside, &pr);
         }
         Ok(pr.url)
+    }
+
+    /// Write the line that says the pull request was built with the Harness
+    /// in its body, in place of any thirdshift wrote there before, only
+    /// warning if that fails, as the work is done without it. Nothing if
+    /// there is no pull request: marking it ready says so.
+    fn write_built_with(&self, outside: &mut impl Outside) {
+        let built_with = self.harness.built_with();
+        if let Err(error) = self.try_write_built_with(outside, &built_with) {
+            outside.warn(
+                &error,
+                format!("could not write \"{built_with}\" in the pull request's body"),
+            );
+        }
+    }
+
+    /// [`Route::write_built_with`], failing if it fails.
+    fn try_write_built_with(&self, outside: &mut impl Outside, built_with: &str) -> Result<()> {
+        let Some(pr) = outside.pull_request()? else {
+            return Ok(());
+        };
+        let body = outside.pr_body(pr.number)?;
+        let written = with_built_with(&body, self.harness);
+        if written != body {
+            outside.step(format!(
+                "writing \"{built_with}\" in the pull request's body"
+            ));
+            outside.set_pr_body(pr.number, &written)?;
+        }
+        Ok(())
     }
 
     /// Mark the PR for the Issue branch ready for review, failing unless it
@@ -365,6 +367,10 @@ trait Outside {
     fn push(&mut self) -> Result<()>;
     /// The pull request for the Issue branch, if it has one.
     fn pull_request(&mut self) -> Result<Option<PullRequest>>;
+    /// The body of pull request `number`.
+    fn pr_body(&mut self, number: u64) -> Result<String>;
+    /// Set the body of pull request `number` to `body`.
+    fn set_pr_body(&mut self, number: u64, body: &str) -> Result<()>;
     /// Mark the pull request ready for review.
     fn mark_ready(&mut self) -> Result<()>;
     /// Take the ready pull request at `pr_url` to `goal` through the Repair
@@ -428,6 +434,14 @@ impl Outside for InWorktree<'_> {
 
     fn pull_request(&mut self) -> Result<Option<PullRequest>> {
         github::pull_request_for(self.issue, self.worktree.branch())
+    }
+
+    fn pr_body(&mut self, number: u64) -> Result<String> {
+        github::pr_body(self.issue, number)
+    }
+
+    fn set_pr_body(&mut self, number: u64, body: &str) -> Result<()> {
+        github::set_pr_body(self.issue, number, body)
     }
 
     fn mark_ready(&mut self) -> Result<()> {
@@ -681,9 +695,10 @@ mod scripted {
 
     use anyhow::{Result, anyhow, bail};
 
-    use super::{FailedOutside, Outside};
+    use super::{FailedOutside, Outside, with_built_with};
     use crate::failed_run::PolicyRefusal;
     use crate::github::{PrState, PullRequest};
+    use crate::harness::Choice;
     use crate::run::Goal;
 
     /// A step of [`Outside`] or [`FailedOutside`], or the step before ready,
@@ -695,6 +710,8 @@ mod scripted {
         Push,
         BeforeReady,
         PullRequest,
+        PrBody,
+        SetPrBody,
         MarkReady,
         TakeToGoal,
         DeleteBranch,
@@ -715,6 +732,10 @@ mod scripted {
         BeforeReady,
         /// It read the pull request for the Issue branch.
         PullRequest,
+        /// It read the pull request's body.
+        PrBody,
+        /// It set the pull request's body to this.
+        SetPrBody(String),
         MarkReady,
         /// It took the pull request to this goal through the Repair loop.
         TakeToGoal(Goal),
@@ -748,11 +769,12 @@ mod scripted {
     }
 
     /// The outside world as a script answers it: the pull request, if there
-    /// is one, whether the issue is open, whether an interrupt was
+    /// is one, and its body, whether the issue is open, whether an interrupt was
     /// requested, whether the Repair loop ends in a Policy refusal, and which
     /// steps fail, and how many times more.
     pub struct Scripted {
         pub pr: Option<Pr>,
+        pub body: String,
         pub issue_open: bool,
         pub interrupted: bool,
         /// Whether taking the pull request to the goal fails with a Policy
@@ -771,8 +793,8 @@ mod scripted {
     }
 
     impl Default for Scripted {
-        /// An open draft pull request into `main`, an open issue, and every
-        /// step succeeding.
+        /// An open draft pull request into `main`, its body saying what it
+        /// was built with already, an open issue, and every step succeeding.
         fn default() -> Self {
             Scripted {
                 pr: Some(Pr {
@@ -780,6 +802,7 @@ mod scripted {
                     base: "main",
                     draft: true,
                 }),
+                body: with_built_with("Closes #7\n", &Choice::default()),
                 issue_open: true,
                 interrupted: false,
                 refused: false,
@@ -857,6 +880,19 @@ mod scripted {
             self.calls.push(Call::PullRequest);
             self.fail_if(Fails::PullRequest)?;
             Ok(self.read_pr())
+        }
+
+        fn pr_body(&mut self, _number: u64) -> Result<String> {
+            self.calls.push(Call::PrBody);
+            self.fail_if(Fails::PrBody)?;
+            Ok(self.body.clone())
+        }
+
+        fn set_pr_body(&mut self, _number: u64, body: &str) -> Result<()> {
+            self.calls.push(Call::SetPrBody(body.to_string()));
+            self.fail_if(Fails::SetPrBody)?;
+            self.body = body.to_string();
+            Ok(())
         }
 
         fn mark_ready(&mut self) -> Result<()> {
@@ -969,6 +1005,7 @@ mod tests {
             base: "main",
             branch: "issue-7",
             goal,
+            harness: &Choice::default(),
         };
         let opening = Opening {
             kind: if spec_pr { "spec-review" } else { "implement" },
@@ -998,11 +1035,14 @@ mod tests {
         Call::Session("implement".to_string())
     }
 
-    /// The calls up to the pull request taken to `goal`, from a draft.
+    /// The calls up to the pull request taken to `goal`, from a draft whose
+    /// body says what it was built with already.
     fn up_to_the_goal(goal: Goal) -> Vec<Call> {
         vec![
             session(),
             Call::Push,
+            Call::PullRequest,
+            Call::PrBody,
             Call::BeforeReady,
             step("checking the PR"),
             Call::PullRequest,
@@ -1087,6 +1127,85 @@ mod tests {
                 .calls
                 .contains(&Call::TakeToGoal(Goal::ReadyForReview))
         );
+        assert!(!outside.calls.contains(&Call::PrBody));
+    }
+
+    /// The line saying the pull request was built with the default Choice.
+    fn built_with() -> String {
+        Choice::default().built_with()
+    }
+
+    #[test]
+    fn the_built_with_line_is_written_after_the_push_and_before_the_step_before_ready() {
+        let mut outside = Scripted {
+            body: "Closes #7\n".to_string(),
+            ..Scripted::default()
+        };
+
+        deliver(Goal::ReadyForReview, false, &mut outside)
+            .ok()
+            .unwrap();
+
+        let written = with_built_with("Closes #7\n", &Choice::default());
+        assert_eq!(
+            after(&outside, &Call::Push)[..6],
+            [
+                Call::PullRequest,
+                Call::PrBody,
+                step(&format!(
+                    "writing \"{}\" in the pull request's body",
+                    built_with()
+                )),
+                Call::SetPrBody(written.clone()),
+                Call::BeforeReady,
+                step("checking the PR"),
+            ]
+        );
+        assert_eq!(outside.body, written);
+    }
+
+    #[test]
+    fn a_body_with_the_built_with_line_already_is_not_set() {
+        let mut outside = Scripted::default();
+
+        deliver(Goal::ReadyForReview, false, &mut outside)
+            .ok()
+            .unwrap();
+
+        assert!(
+            !outside
+                .calls
+                .iter()
+                .any(|call| matches!(call, Call::SetPrBody(_)))
+        );
+    }
+
+    #[test]
+    fn a_built_with_line_that_cannot_be_written_is_a_warning_and_the_pr_is_still_marked_ready() {
+        let mut outside = Scripted {
+            body: "Closes #7\n".to_string(),
+            ..Scripted::default()
+        }
+        .failing(Fails::SetPrBody);
+
+        let delivered = deliver(Goal::ReadyForReview, false, &mut outside);
+
+        assert_eq!(delivered.ok().as_deref(), Some(PR_URL));
+        assert_eq!(
+            after(&outside, &Call::PrBody)[1..4],
+            [
+                Call::SetPrBody(with_built_with("Closes #7\n", &Choice::default())),
+                Call::Warn {
+                    error: "SetPrBody failed".to_string(),
+                    warning: format!(
+                        "could not write \"{}\" in the pull request's body",
+                        built_with()
+                    ),
+                },
+                Call::BeforeReady,
+            ]
+        );
+        assert!(outside.calls.contains(&Call::MarkReady));
     }
 
     #[test]
