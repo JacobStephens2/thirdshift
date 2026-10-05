@@ -87,7 +87,8 @@ fn codex_args(model: &str, effort: &str) -> Vec<String> {
 /// and `effort`, the `CLAUDE.md` fallback and stdin set to null, its prompt
 /// last, and found every Factory skill in `.agents/skills/` with none of
 /// them in `git status`; that its prompt's first line loads its skill with
-/// Codex's sigil, if it loads one; and that none ran on `claude`.
+/// Codex's sigil, if it loads one, and it names no tool only Claude has; and
+/// that none ran on `claude`.
 fn assert_sessions_on_codex(scenario: &Scenario, model: &str, effort: &str) {
     let calls = scenario.codex_calls();
     assert!(!calls.is_empty(), "no Codex session ran");
@@ -103,6 +104,12 @@ fn assert_sessions_on_codex(scenario: &Scenario, model: &str, effort: &str) {
         assert_eq!(call["stdin_null"], true, "{args:?}");
         assert_eq!(call["git_status"], "", "{args:?}");
         assert!(!prompt.starts_with("/thirdshift-"), "{prompt}");
+        assert!(!prompt.contains("Bash"), "{prompt}");
+        assert_eq!(
+            prompt.matches("`TaskStop`").count(),
+            prompt.matches("`TaskStop` tool, if you have it").count(),
+            "{prompt}"
+        );
     }
     scenario.assert_every_codex_session_found_the_factory_skills();
 }

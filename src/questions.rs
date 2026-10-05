@@ -163,7 +163,8 @@ pub fn ask(
 /// it isn't installed, and refusing that one; then its Model and Effort,
 /// with those `current` sets for it as the defaults, checked as a Run
 /// checks them, as [`ask_claude`] and [`ask_codex`] ask them. The Harness's
-/// default is the first one installed, so `claude` when both are. With no
+/// default is the `current` one if it's installed, else the first one
+/// installed, so `claude` when both are. With no
 /// Harness to choose, or Codex chosen and its catalog unreadable, the answer
 /// is `None`.
 fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndEffort)>> {
@@ -178,7 +179,10 @@ fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndE
         })
         .collect();
     let harnesses = harnesses.join(" or ");
-    let default = Harness::ALL.into_iter().find(|harness| harness.installed());
+    let default = current
+        .default
+        .filter(|harness| harness.installed())
+        .or_else(|| Harness::ALL.into_iter().find(|harness| harness.installed()));
     let Some(default) = default else {
         say(&format!(
             "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \

@@ -1680,6 +1680,34 @@ fn on_a_terminal_with_only_codex_installed_codex_is_the_default_answer() {
 }
 
 #[test]
+fn on_a_terminal_rerunning_setup_defaults_to_the_harness_already_configured() {
+    let scenario = Scenario::new();
+    scenario.git_email_is(None);
+    scenario.user_config_is(
+        "[harness]\ndefault = \"codex\"\n\n[harness.codex]\nmodel = \"gpt-6.1-sol\"\n",
+    );
+    let path = fakes_only_path(&scenario);
+    let mut keystrokes = vec![(HARNESS, ""), (CODEX_MODEL, ""), (CODEX_EFFORT, "")];
+    keystrokes.extend(NOTHING_ELSE);
+
+    let result = setup_on_terminal(&scenario, &[("PATH", &path)], &keystrokes);
+
+    assert!(
+        result
+            .stderr
+            .contains("Harness for every Run's sessions, claude or codex [codex]: "),
+        "terminal: {}",
+        result.stderr
+    );
+    let config = table(&result);
+    assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
+    assert_eq!(
+        config["harness"]["codex"]["model"].as_str(),
+        Some("gpt-6.1-sol")
+    );
+}
+
+#[test]
 fn on_a_terminal_a_codex_display_name_and_capitalised_effort_are_written_as_codex_names_them() {
     let scenario = Scenario::new();
     scenario.git_email_is(None);
