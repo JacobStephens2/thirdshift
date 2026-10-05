@@ -4,21 +4,21 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
-use crate::claim;
+use crate::claim::{self, Claim};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::FailedRun;
-use crate::git::Git;
 use crate::github::{self, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::launch::LaunchDirectory;
 use crate::logs::{self, Work};
+use crate::progress;
 use crate::prompt;
 use crate::session::Logs;
 use crate::spec_run;
@@ -131,22 +131,9 @@ pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended
 /// Base branch, if that is the branch checked out, is first brought up to
 /// date with origin.
 ///
-/// The Base branch `started_by` gave the Run, if it gave one, stands in for
-/// the checked-out branch as the Base branch: the Spec branch or the Base
-/// branch of the Run that started a child Run, or the Base branch of the
-/// Architect run or the Pickup run that dispatched this one. Unless the Run
-/// is a child Run, an issue with sub-issues is a Spec, taken on by a Spec run
-/// instead, whose Spec branch is picked like an Issue branch, running as many
-/// Tickets at once as `asks.tickets_at_once` says. A `parallel` the command
-/// asked for, as `asks.parallel_asked` says, on an issue with no sub-issues
-/// fails before any work, as does a Spec whose Tickets are all closed with
-/// no Spec branch to continue.
-///
-/// Once those checks pass, and before the worktree is created, the Run, or
-/// the Spec run, makes the Claim on `issue`, unless it is a child Run. A Claim
-/// that can't be made fails it there, before any work. Once the Run, or the
-/// Spec run, has ended, the Claim is ended with the goal it reached, or none
-/// if it failed: see [`claim::Claim::end`].
+/// The Launch directory is opened first, with its Origin match, the check
+/// that `issue` is open and the git identity check; the rest is [`start`],
+/// through the Launch directory, GitHub and the logs.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures: what
@@ -158,12 +145,56 @@ fn run(
     base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
-    let launch = directory.git();
+    let mut outside = LaunchAndGitHub {
+        directory: &directory,
+        issue,
+        goal: asks.goal,
+        base_fix,
+        logs: Logs::of_run(issue),
+        claim: None,
+    };
+    start(
+        &mut outside,
+        issue,
+        asks,
+        started_by,
+        directory.checked_out(),
+    )
+}
+
+/// [`run`], once the Launch directory is open, with `checked_out` the branch
+/// checked out there, through `outside`.
+///
+/// The Base branch `started_by` gave the Run, if it gave one, stands in for
+/// the checked-out branch as the Base branch: the Spec branch or the Base
+/// branch of the Run that started a child Run, or the Base branch of the
+/// Architect run or the Pickup run that dispatched this one. A Continuation's
+/// open pull request's base beats either. Unless the Run is a child Run, an
+/// issue with sub-issues is a Spec, taken on by a Spec run instead, whose
+/// Spec branch is picked like an Issue branch, running as many Tickets at
+/// once as `asks.tickets_at_once` says. A `parallel` the command asked for,
+/// as `asks.parallel_asked` says, on an issue with no sub-issues fails before
+/// any work, as does a Spec whose Tickets are all closed with no Spec branch
+/// to continue.
+///
+/// Once those checks pass, and the Base branch is settled and, if asked,
+/// pulled, an interrupt stops the Run. Then, before the worktree is created,
+/// the Run, or the Spec run, makes the Claim on `issue`, unless it is a child
+/// Run. A Claim that can't be made fails it there, before any work. Once the
+/// Run, or the Spec run, has ended, the Claim is ended with the goal it
+/// reached, or none if it failed: see [`claim::Claim::end`].
+fn start<O: Outside>(
+    outside: &mut O,
+    issue: &IssueUrl,
+    asks: &Asks,
+    started_by: StartedBy,
+    checked_out: Option<&str>,
+) -> Result<Reached, FailedRun> {
     let tickets = match started_by.child() {
         Some(_) => Vec::new(),
-        None => github::tickets(issue)?,
+        None => outside.tickets()?,
     };
-    logs::started(match tickets.is_empty() {
+    outside.started(match tickets.is_empty() {
         true => Work::Run(issue),
         false => Work::SpecRun(issue),
     });
@@ -174,7 +205,7 @@ fn run(
         )
         .into());
     }
-    let selection = branch::select(launch, issue)?;
+    let selection = outside.select()?;
     // A Spec implemented some other way: the Spec run leaves it be.
     if matches!(selection, Selection::Fresh { .. })
         && spec_run::all_closed(tickets.iter().map(|ticket| ticket.is_open))
@@ -184,65 +215,960 @@ fn run(
         );
     }
     let given = started_by.given_base();
-    let named = selection.pr_base(given, directory.checked_out()).or(given);
-    let base = directory.base_branch(named)?;
+    let named = selection
+        .pr_base(given, checked_out, |line| outside.step(line))
+        .or(given);
+    let base = outside.base_branch(named)?;
     if asks.launch_pull {
-        directory.pull(&base);
+        outside.pull(&base);
     }
 
-    if interrupt::requested() {
-        return Err(anyhow!("interrupted").into());
+    if outside.interrupted() {
+        return Err(FailedRun {
+            interrupted: true,
+            ..anyhow!("interrupted").into()
+        });
     }
-    let claim = started_by
-        .makes_claim()
-        .then(|| claim::make(issue, launch))
-        .transpose()?;
-    let logs = Logs::of_run(issue);
-    let delivery = Delivery {
+    let claims = started_by.makes_claim();
+    if claims {
+        outside.make_claim()?;
+    }
+    let outcome = start_in_worktree(
+        outside,
         issue,
-        base: &base,
-        goal: asks.goal,
-        base_fix,
-        logs: &logs,
-    };
-    let outcome = run_in_worktree(tickets, launch, &selection, delivery, asks.tickets_at_once);
-    if let Some(claim) = claim {
-        claim.end(outcome.as_ref().ok().map(|reached| reached.goal));
+        tickets,
+        &selection,
+        &base,
+        asks.tickets_at_once,
+    );
+    if claims {
+        outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));
     }
     outcome
 }
 
-/// [`run`], from the worktree on: create it in the Launch directory `launch`
-/// for the branch `selection` picked, and take the issue there by `delivery`,
-/// as a Spec run, running up to `parallel` at once, if it has `tickets`.
-fn run_in_worktree(
+/// [`start`], from the worktree on: create it for the branch `selection`
+/// picked, on the Base branch `base`, and take `issue` there, as a Spec run,
+/// running up to `parallel` at once, if it has `tickets`.
+fn start_in_worktree<O: Outside>(
+    outside: &mut O,
+    issue: &IssueUrl,
     tickets: Vec<Ticket>,
-    launch: &Git,
     selection: &Selection,
-    delivery: Delivery,
+    base: &str,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
-    let (issue, base) = (delivery.issue, delivery.base);
     let branch = selection.branch();
-    let worktree = match selection {
-        Selection::Fresh { .. } => Worktree::create_fresh(launch, &issue.repo, branch, base)?,
-        Selection::Continuation { .. } => {
-            Worktree::continue_existing(launch, &issue.repo, branch, base)?
-        }
+    let (checkout, prompt) = match selection {
+        Selection::Fresh { .. } => (Checkout::Fresh, prompt::fresh(issue, base, branch)),
+        Selection::Continuation { pr, .. } => (
+            Checkout::Continuation,
+            prompt::continuation(issue, base, branch, pr.as_ref().map(|pr| pr.url.as_str())),
+        ),
     };
+    let worktree = outside.worktree(checkout, branch, base)?;
     if !tickets.is_empty() {
-        return spec_run::run(tickets, worktree, delivery, parallel);
+        return outside.spec_run(tickets, worktree, base, parallel);
     }
-    let prompt = match selection {
-        Selection::Fresh { .. } => prompt::fresh(issue, base, branch),
-        Selection::Continuation { pr, .. } => {
-            prompt::continuation(issue, base, branch, pr.as_ref().map(|pr| pr.url.as_str()))
-        }
-    };
     let opening = Opening {
         kind: IMPLEMENT,
         prompt,
         catch_up_from_origin: false,
     };
-    delivery.deliver(worktree, opening, || Ok(()))
+    outside.deliver(worktree, base, opening)
+}
+
+/// How a Run's worktree comes by its Issue branch: started fresh from the
+/// Base branch, or continued from origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Checkout {
+    Fresh,
+    Continuation,
+}
+
+/// What a Run's start does or reads outside itself, for its issue: the
+/// Tickets, the logs, Issue branch selection, the Launch directory's Base
+/// branch, the interrupt, the Claim, the worktree, the Spec run, the
+/// Delivery and its progress lines.
+trait Outside {
+    /// The worktree the Run's work is done in.
+    type Worktree;
+
+    /// The issue's Tickets, its sub-issues, if it is a Spec.
+    fn tickets(&mut self) -> Result<Vec<Ticket>>;
+    /// Record `work` as started.
+    fn started(&mut self, work: Work);
+    /// Select the Issue branch.
+    fn select(&mut self) -> Result<Selection>;
+    /// Settle the Base branch from `named`, the branch named for the Run, if
+    /// any, else the branch checked out in the Launch directory: see
+    /// [`LaunchDirectory::base_branch`].
+    fn base_branch(&mut self, named: Option<&str>) -> Result<String>;
+    /// Bring the Launch directory's checkout of the Base branch `base` up to
+    /// date with origin, if it is checked out there.
+    fn pull(&mut self, base: &str);
+    /// Whether the Run was interrupted.
+    fn interrupted(&mut self) -> bool;
+    /// Make the Claim on the issue.
+    fn make_claim(&mut self) -> Result<()>;
+    /// End the Claim made, with `reached`, the goal the Run reached, or none.
+    fn end_claim(&mut self, reached: Option<Goal>);
+    /// Create the worktree for the Issue branch `branch`, by `checkout`, on
+    /// the Base branch `base`.
+    fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Self::Worktree>;
+    /// Take the Spec, from its Spec branch in `worktree`, through a Spec run
+    /// into the Base branch `base` with `tickets`, `parallel` at once.
+    fn spec_run(
+        &mut self,
+        tickets: Vec<Ticket>,
+        worktree: Self::Worktree,
+        base: &str,
+        parallel: NonZeroUsize,
+    ) -> Result<Reached, FailedRun>;
+    /// Take the issue, from its Issue branch in `worktree`, through the
+    /// Delivery into the Base branch `base`, opening with `opening`.
+    fn deliver(
+        &mut self,
+        worktree: Self::Worktree,
+        base: &str,
+        opening: Opening,
+    ) -> Result<Reached, FailedRun>;
+    /// Hand on the progress line `line`.
+    fn step(&mut self, line: String);
+}
+
+/// The outside world of a Run on `issue` from the opened Launch directory
+/// `directory`: GitHub, its git, the logs, the Claim it made, the worktree,
+/// the Spec run and the Delivery to `goal`, with `base_fix` and the Run's
+/// Session `logs`.
+struct LaunchAndGitHub<'a> {
+    directory: &'a LaunchDirectory,
+    issue: &'a IssueUrl,
+    goal: Goal,
+    base_fix: &'a mut BaseFix,
+    logs: Logs,
+    claim: Option<Claim<'a>>,
+}
+
+impl LaunchAndGitHub<'_> {
+    /// The Delivery of the issue into the Base branch `base`.
+    fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
+        Delivery {
+            issue: self.issue,
+            base,
+            goal: self.goal,
+            base_fix: self.base_fix,
+            logs: &self.logs,
+        }
+    }
+}
+
+impl<'a> Outside for LaunchAndGitHub<'a> {
+    type Worktree = Worktree;
+
+    fn tickets(&mut self) -> Result<Vec<Ticket>> {
+        github::tickets(self.issue)
+    }
+
+    fn started(&mut self, work: Work) {
+        logs::started(work);
+    }
+
+    fn select(&mut self) -> Result<Selection> {
+        branch::select(self.directory.git(), self.issue)
+    }
+
+    fn base_branch(&mut self, named: Option<&str>) -> Result<String> {
+        self.directory.base_branch(named)
+    }
+
+    fn pull(&mut self, base: &str) {
+        self.directory.pull(base);
+    }
+
+    fn interrupted(&mut self) -> bool {
+        interrupt::requested()
+    }
+
+    fn make_claim(&mut self) -> Result<()> {
+        self.claim = Some(claim::make(self.issue, self.directory.git())?);
+        Ok(())
+    }
+
+    fn end_claim(&mut self, reached: Option<Goal>) {
+        if let Some(claim) = self.claim.take() {
+            claim.end(reached);
+        }
+    }
+
+    fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Worktree> {
+        let (launch, repo) = (self.directory.git(), &self.issue.repo);
+        match checkout {
+            Checkout::Fresh => Worktree::create_fresh(launch, repo, branch, base),
+            Checkout::Continuation => Worktree::continue_existing(launch, repo, branch, base),
+        }
+    }
+
+    fn spec_run(
+        &mut self,
+        tickets: Vec<Ticket>,
+        worktree: Worktree,
+        base: &str,
+        parallel: NonZeroUsize,
+    ) -> Result<Reached, FailedRun> {
+        spec_run::run(tickets, worktree, self.delivery(base), parallel)
+    }
+
+    fn deliver(
+        &mut self,
+        worktree: Worktree,
+        base: &str,
+        opening: Opening,
+    ) -> Result<Reached, FailedRun> {
+        self.delivery(base).deliver(worktree, opening, || Ok(()))
+    }
+
+    fn step(&mut self, line: String) {
+        progress::step(line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::bail;
+
+    use super::*;
+    use crate::base_fix::BaseFixAsk;
+    use crate::github::{PrState, PullRequest};
+    use crate::labels::Labels;
+    use crate::notification::NotificationAsk;
+
+    /// What the Run's start did outside itself, in the order it did it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Call {
+        /// Read the issue's Tickets.
+        Tickets,
+        /// Recorded the work as started: a Spec run if true, else a Run.
+        Started { spec_run: bool },
+        /// Selected the Issue branch.
+        Select,
+        /// Settled the Base branch from this branch named, if any.
+        BaseBranch(Option<String>),
+        /// Pulled this Base branch.
+        Pull(String),
+        /// Asked whether the Run was interrupted.
+        Interrupted,
+        /// Made the Claim.
+        MakeClaim,
+        /// Ended the Claim with this goal reached, or none.
+        EndClaim(Option<Goal>),
+        /// Created the worktree for this Issue branch, so, on this Base
+        /// branch.
+        Worktree(Checkout, String, String),
+        /// Handed the worktree created so to the Spec run, with this many
+        /// Tickets, into this Base branch, this many at once.
+        SpecRun(Checkout, usize, String, usize),
+        /// Handed the worktree created so to the Delivery, into this Base
+        /// branch, opening with this prompt.
+        Deliver(Checkout, String, String),
+        /// Wrote this progress line.
+        Step(String),
+    }
+
+    /// What the outside world answers. The Issue branch is a fresh
+    /// `issue-7`, the issue has no Tickets, the checked-out `main` settles
+    /// the Base branch when none is named, and nothing fails or is
+    /// interrupted, unless scripted otherwise.
+    #[derive(Default)]
+    struct Script {
+        /// Whether each Ticket is open.
+        tickets: Vec<bool>,
+        /// The Issue branch selected.
+        selection: Option<Selection>,
+        base_fails: bool,
+        interrupted: bool,
+        claim_fails: bool,
+        worktree_fails: bool,
+        /// Whether the Spec run or the Delivery fails.
+        work_fails: bool,
+    }
+
+    /// The outside world as `script` answers it, with each call recorded in
+    /// `calls`. The Spec run and the Delivery reach `goal`.
+    struct Scripted {
+        script: Script,
+        goal: Goal,
+        calls: Vec<Call>,
+    }
+
+    impl Scripted {
+        fn new(script: Script) -> Self {
+            Scripted {
+                script,
+                goal: Goal::ReadyForReview,
+                calls: Vec::new(),
+            }
+        }
+
+        /// How the Spec run or the Delivery ends.
+        fn work_ends(&self) -> Result<Reached, FailedRun> {
+            if self.script.work_fails {
+                return Err(anyhow!("the work failed").into());
+            }
+            Ok(Reached {
+                pr_url: PR_URL.to_string(),
+                goal: self.goal,
+                log: None,
+                ticket_lines: Vec::new(),
+            })
+        }
+    }
+
+    impl Outside for Scripted {
+        /// How it was created.
+        type Worktree = Checkout;
+
+        fn tickets(&mut self) -> Result<Vec<Ticket>> {
+            self.calls.push(Call::Tickets);
+            Ok(self
+                .script
+                .tickets
+                .iter()
+                .enumerate()
+                .map(|(at, &is_open)| ticket(10 + at as u64, is_open))
+                .collect())
+        }
+
+        fn started(&mut self, work: Work) {
+            let spec_run = match work {
+                Work::Run(_) => false,
+                Work::SpecRun(_) => true,
+                Work::PickupRun(_) | Work::ArchitectRun(_) => panic!("not a Run's work"),
+            };
+            self.calls.push(Call::Started { spec_run });
+        }
+
+        fn select(&mut self) -> Result<Selection> {
+            self.calls.push(Call::Select);
+            Ok(self.script.selection.take().unwrap_or_else(fresh))
+        }
+
+        fn base_branch(&mut self, named: Option<&str>) -> Result<String> {
+            self.calls.push(Call::BaseBranch(named.map(String::from)));
+            if self.script.base_fails {
+                bail!("base branch gone does not exist on origin; push it first");
+            }
+            Ok(named.unwrap_or(CHECKED_OUT).to_string())
+        }
+
+        fn pull(&mut self, base: &str) {
+            self.calls.push(Call::Pull(base.to_string()));
+        }
+
+        fn interrupted(&mut self) -> bool {
+            self.calls.push(Call::Interrupted);
+            self.script.interrupted
+        }
+
+        fn make_claim(&mut self) -> Result<()> {
+            self.calls.push(Call::MakeClaim);
+            if self.script.claim_fails {
+                bail!("could not make the Claim on #7");
+            }
+            Ok(())
+        }
+
+        fn end_claim(&mut self, reached: Option<Goal>) {
+            self.calls.push(Call::EndClaim(reached));
+        }
+
+        fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Checkout> {
+            self.calls.push(Call::Worktree(
+                checkout,
+                branch.to_string(),
+                base.to_string(),
+            ));
+            if self.script.worktree_fails {
+                bail!("could not create the worktree");
+            }
+            Ok(checkout)
+        }
+
+        fn spec_run(
+            &mut self,
+            tickets: Vec<Ticket>,
+            worktree: Checkout,
+            base: &str,
+            parallel: NonZeroUsize,
+        ) -> Result<Reached, FailedRun> {
+            self.calls.push(Call::SpecRun(
+                worktree,
+                tickets.len(),
+                base.to_string(),
+                parallel.get(),
+            ));
+            self.work_ends()
+        }
+
+        fn deliver(
+            &mut self,
+            worktree: Checkout,
+            base: &str,
+            opening: Opening,
+        ) -> Result<Reached, FailedRun> {
+            assert_eq!(opening.kind, IMPLEMENT);
+            assert!(!opening.catch_up_from_origin);
+            self.calls
+                .push(Call::Deliver(worktree, base.to_string(), opening.prompt));
+            self.work_ends()
+        }
+
+        fn step(&mut self, line: String) {
+            self.calls.push(Call::Step(line));
+        }
+    }
+
+    const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
+
+    /// The branch checked out in the Launch directory.
+    const CHECKED_OUT: &str = "main";
+
+    fn seven() -> IssueUrl {
+        IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
+    }
+
+    fn ticket(number: u64, is_open: bool) -> Ticket {
+        Ticket {
+            number,
+            is_open,
+            labels: Labels::default(),
+            has_sub_issues: false,
+            blockers: Vec::new(),
+            open_blockers: Vec::new(),
+        }
+    }
+
+    fn fresh() -> Selection {
+        Selection::Fresh {
+            branch: "issue-7".to_string(),
+        }
+    }
+
+    /// A Continuation of `issue-7`, with its open PR into `pr_base` if any.
+    fn continued(pr_base: Option<&str>) -> Selection {
+        Selection::Continuation {
+            branch: "issue-7".to_string(),
+            pr: pr_base.map(|base| PullRequest {
+                number: 1,
+                url: PR_URL.to_string(),
+                state: PrState::Open,
+                head: "issue-7".to_string(),
+                base: base.to_string(),
+                is_draft: false,
+            }),
+        }
+    }
+
+    /// What a Run started by its command is asked, by default.
+    fn asks() -> Asks {
+        Asks {
+            goal: Goal::ReadyForReview,
+            notification: NotificationAsk::Skip,
+            tickets_at_once: NonZeroUsize::new(1).unwrap(),
+            parallel_asked: false,
+            base_fix: BaseFixAsk::Forbid,
+            launch_pull: false,
+        }
+    }
+
+    /// Start the Run on issue #7, asked `asks` and started by `started_by`,
+    /// against `outside`, with `main` checked out.
+    fn start_by(
+        outside: &mut Scripted,
+        asks: &Asks,
+        started_by: StartedBy,
+    ) -> Result<Reached, FailedRun> {
+        start(outside, &seven(), asks, started_by, Some(CHECKED_OUT))
+    }
+
+    /// The calls of a Run its command started on `script`, and how it ended.
+    fn run_on(script: Script) -> (Vec<Call>, Result<Reached, FailedRun>) {
+        run_asked(script, &asks())
+    }
+
+    /// [`run_on`], asked `asks`.
+    fn run_asked(script: Script, asks: &Asks) -> (Vec<Call>, Result<Reached, FailedRun>) {
+        let mut outside = Scripted::new(script);
+        let ended = start_by(&mut outside, asks, StartedBy::Command);
+        (outside.calls, ended)
+    }
+
+    /// The cause a Run failed with.
+    fn cause(ended: Result<Reached, FailedRun>) -> String {
+        match ended {
+            Ok(_) => panic!("the Run reached its goal"),
+            Err(failed) => format!("{:#}", failed.error),
+        }
+    }
+
+    fn base_branch(named: Option<&str>) -> Call {
+        Call::BaseBranch(named.map(String::from))
+    }
+
+    fn worktree(checkout: Checkout, base: &str) -> Call {
+        Call::Worktree(checkout, "issue-7".to_string(), base.to_string())
+    }
+
+    /// The Delivery of a fresh `issue-7` into `base`, with the fresh prompt.
+    fn deliver_fresh(base: &str) -> Call {
+        Call::Deliver(
+            Checkout::Fresh,
+            base.to_string(),
+            prompt::fresh(&seven(), base, "issue-7"),
+        )
+    }
+
+    /// Assert that `calls` made `in_turn`, one straight after another.
+    fn assert_in_turn(calls: &[Call], in_turn: &[Call]) {
+        assert!(
+            calls.windows(in_turn.len()).any(|window| window == in_turn),
+            "{in_turn:?} not in turn in {calls:?}"
+        );
+    }
+
+    fn made_claim_or_worktree(calls: &[Call]) -> bool {
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::MakeClaim | Call::Worktree(..)))
+    }
+
+    // What started the Run.
+
+    #[test]
+    fn a_child_run_reads_no_tickets_and_makes_no_claim() {
+        let kind = Kind::Ticket {
+            spec_branch: "issue-3".to_string(),
+        };
+        let mut outside = Scripted::new(Script::default());
+
+        let ended = start_by(&mut outside, &asks(), StartedBy::Child(&kind));
+
+        assert!(ended.is_ok());
+        assert_eq!(
+            outside.calls,
+            [
+                Call::Started { spec_run: false },
+                Call::Select,
+                base_branch(Some("issue-3")),
+                Call::Interrupted,
+                worktree(Checkout::Fresh, "issue-3"),
+                deliver_fresh("issue-3"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_its_command_started_makes_the_claim_before_the_worktree_and_ends_it() {
+        let (calls, ended) = run_on(Script::default());
+
+        assert_eq!(
+            ended.ok().map(|reached| reached.pr_url),
+            Some(PR_URL.to_string())
+        );
+        assert_eq!(
+            calls,
+            [
+                Call::Tickets,
+                Call::Started { spec_run: false },
+                Call::Select,
+                base_branch(None),
+                Call::Interrupted,
+                Call::MakeClaim,
+                worktree(Checkout::Fresh, "main"),
+                deliver_fresh("main"),
+                Call::EndClaim(Some(Goal::ReadyForReview)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dispatched_run_makes_the_claim_and_ends_it() {
+        let mut outside = Scripted::new(Script::default());
+
+        let ended = start_by(
+            &mut outside,
+            &asks(),
+            StartedBy::Dispatch { base: "develop" },
+        );
+
+        assert!(ended.is_ok());
+        assert_eq!(
+            outside.calls,
+            [
+                Call::Tickets,
+                Call::Started { spec_run: false },
+                Call::Select,
+                base_branch(Some("develop")),
+                Call::Interrupted,
+                Call::MakeClaim,
+                worktree(Checkout::Fresh, "develop"),
+                deliver_fresh("develop"),
+                Call::EndClaim(Some(Goal::ReadyForReview)),
+            ]
+        );
+    }
+
+    // The work recorded as started, and the refusals.
+
+    #[test]
+    fn parallel_on_an_issue_with_no_sub_issues_is_recorded_as_a_run_and_fails_before_selection() {
+        let asks = Asks {
+            parallel_asked: true,
+            ..asks()
+        };
+
+        let (calls, ended) = run_asked(Script::default(), &asks);
+
+        assert_eq!(
+            cause(ended),
+            "parallel is only for a Spec, and #7 has no sub-issues"
+        );
+        assert_eq!(calls, [Call::Tickets, Call::Started { spec_run: false }]);
+    }
+
+    #[test]
+    fn a_fresh_spec_with_every_ticket_closed_is_recorded_as_a_spec_run_and_fails_before_its_base() {
+        let (calls, ended) = run_on(Script {
+            tickets: vec![false, false],
+            ..Script::default()
+        });
+
+        assert_eq!(
+            cause(ended),
+            "every Ticket is closed and there is no Spec branch; nothing to do"
+        );
+        assert_eq!(
+            calls,
+            [
+                Call::Tickets,
+                Call::Started { spec_run: true },
+                Call::Select
+            ]
+        );
+    }
+
+    #[test]
+    fn neither_refusal_makes_a_claim_or_a_worktree() {
+        let parallel = Asks {
+            parallel_asked: true,
+            ..asks()
+        };
+        let all_closed = Script {
+            tickets: vec![false],
+            ..Script::default()
+        };
+
+        for (calls, ended) in [run_asked(Script::default(), &parallel), run_on(all_closed)] {
+            assert!(ended.is_err());
+            assert!(!made_claim_or_worktree(&calls), "{calls:?}");
+        }
+    }
+
+    #[test]
+    fn a_continuation_of_a_spec_with_every_ticket_closed_goes_on_to_the_spec_run() {
+        let (calls, ended) = run_on(Script {
+            tickets: vec![false, false],
+            selection: Some(continued(None)),
+            ..Script::default()
+        });
+
+        assert!(ended.is_ok());
+        assert!(calls.contains(&Call::SpecRun(
+            Checkout::Continuation,
+            2,
+            "main".to_string(),
+            1
+        )));
+    }
+
+    #[test]
+    fn an_issue_with_no_sub_issues_is_never_refused_as_all_closed() {
+        let (calls, ended) = run_on(Script::default());
+
+        assert!(ended.is_ok());
+        assert!(calls.contains(&deliver_fresh("main")));
+    }
+
+    // The Base branch.
+
+    #[test]
+    fn a_continuations_open_pr_names_the_base_branch_over_the_one_given() {
+        let mut outside = Scripted::new(Script {
+            selection: Some(continued(Some("release"))),
+            ..Script::default()
+        });
+
+        let ended = start_by(
+            &mut outside,
+            &asks(),
+            StartedBy::Dispatch { base: "develop" },
+        );
+
+        assert!(ended.is_ok());
+        let line = format!(
+            "continuing issue-7 and its PR {PR_URL}, so the Base branch is release, \
+             not the given develop"
+        );
+        assert_in_turn(
+            &outside.calls,
+            &[Call::Select, Call::Step(line), base_branch(Some("release"))],
+        );
+    }
+
+    #[test]
+    fn a_continuations_open_pr_names_the_base_branch_over_the_one_checked_out() {
+        let (calls, _) = run_on(Script {
+            selection: Some(continued(Some("release"))),
+            ..Script::default()
+        });
+
+        let line = format!(
+            "continuing issue-7 and its PR {PR_URL}, so the Base branch is release, \
+             not the checked-out main"
+        );
+        assert_in_turn(
+            &calls,
+            &[Call::Select, Call::Step(line), base_branch(Some("release"))],
+        );
+    }
+
+    #[test]
+    fn an_open_pr_into_the_branch_checked_out_says_nothing_of_it() {
+        let (calls, _) = run_on(Script {
+            selection: Some(continued(Some("main"))),
+            ..Script::default()
+        });
+
+        assert_in_turn(&calls, &[Call::Select, base_branch(Some("main"))]);
+    }
+
+    #[test]
+    fn without_an_open_pr_the_branch_given_names_the_base_branch() {
+        let mut outside = Scripted::new(Script {
+            selection: Some(continued(None)),
+            ..Script::default()
+        });
+
+        let ended = start_by(
+            &mut outside,
+            &asks(),
+            StartedBy::Dispatch { base: "develop" },
+        );
+
+        assert!(ended.is_ok());
+        assert_in_turn(
+            &outside.calls,
+            &[Call::Select, base_branch(Some("develop"))],
+        );
+    }
+
+    #[test]
+    fn with_nothing_given_no_branch_is_named_and_the_checked_out_branch_settles_it() {
+        let (calls, _) = run_on(Script::default());
+
+        assert_in_turn(&calls, &[Call::Select, base_branch(None)]);
+        assert!(calls.contains(&worktree(Checkout::Fresh, CHECKED_OUT)));
+    }
+
+    #[test]
+    fn a_base_branch_that_cannot_be_settled_fails_before_the_claim() {
+        let (calls, ended) = run_on(Script {
+            base_fails: true,
+            ..Script::default()
+        });
+
+        assert_eq!(
+            cause(ended),
+            "base branch gone does not exist on origin; push it first"
+        );
+        assert_eq!(calls.last(), Some(&base_branch(None)));
+    }
+
+    // The pull.
+
+    #[test]
+    fn the_pull_asked_for_pulls_the_settled_base_branch_before_the_claim() {
+        let asks = Asks {
+            launch_pull: true,
+            ..asks()
+        };
+        let mut outside = Scripted::new(Script::default());
+
+        let ended = start_by(&mut outside, &asks, StartedBy::Dispatch { base: "develop" });
+
+        assert!(ended.is_ok());
+        assert_in_turn(
+            &outside.calls,
+            &[
+                base_branch(Some("develop")),
+                Call::Pull("develop".to_string()),
+                Call::Interrupted,
+                Call::MakeClaim,
+            ],
+        );
+    }
+
+    #[test]
+    fn without_the_pull_nothing_is_pulled() {
+        let (calls, _) = run_on(Script::default());
+
+        assert!(!calls.iter().any(|call| matches!(call, Call::Pull(_))));
+    }
+
+    // The interrupt.
+
+    #[test]
+    fn an_interrupt_before_the_claim_fails_the_run_as_interrupted() {
+        let (calls, ended) = run_on(Script {
+            interrupted: true,
+            ..Script::default()
+        });
+
+        let failed = ended.err().expect("the Run reached its goal");
+        assert!(failed.interrupted);
+        assert_eq!(failed.error.to_string(), "interrupted");
+        assert_eq!(calls.last(), Some(&Call::Interrupted));
+        assert!(!made_claim_or_worktree(&calls), "{calls:?}");
+    }
+
+    // The Claim.
+
+    #[test]
+    fn a_claim_that_cannot_be_made_fails_the_run_before_the_worktree() {
+        let (calls, ended) = run_on(Script {
+            claim_fails: true,
+            ..Script::default()
+        });
+
+        assert_eq!(cause(ended), "could not make the Claim on #7");
+        assert_eq!(calls.last(), Some(&Call::MakeClaim));
+    }
+
+    #[test]
+    fn the_claim_is_ended_with_the_goal_the_run_reached() {
+        let mut outside = Scripted::new(Script::default());
+        outside.goal = Goal::Merged;
+
+        let ended = start_by(&mut outside, &asks(), StartedBy::Command);
+
+        assert!(ended.is_ok());
+        assert_eq!(
+            outside.calls.last(),
+            Some(&Call::EndClaim(Some(Goal::Merged)))
+        );
+    }
+
+    #[test]
+    fn the_claim_is_ended_with_none_when_the_worktree_cannot_be_created() {
+        let (calls, ended) = run_on(Script {
+            worktree_fails: true,
+            ..Script::default()
+        });
+
+        assert_eq!(cause(ended), "could not create the worktree");
+        assert_eq!(
+            calls[calls.len() - 2..],
+            [worktree(Checkout::Fresh, "main"), Call::EndClaim(None)]
+        );
+    }
+
+    #[test]
+    fn the_claim_is_ended_with_none_when_the_delivery_fails() {
+        let (calls, ended) = run_on(Script {
+            work_fails: true,
+            ..Script::default()
+        });
+
+        assert!(ended.is_err());
+        assert_eq!(
+            calls[calls.len() - 2..],
+            [deliver_fresh("main"), Call::EndClaim(None)]
+        );
+    }
+
+    #[test]
+    fn the_claim_is_ended_with_none_when_the_spec_run_fails() {
+        let (calls, ended) = run_on(Script {
+            tickets: vec![true],
+            work_fails: true,
+            ..Script::default()
+        });
+
+        assert!(ended.is_err());
+        assert_eq!(
+            calls[calls.len() - 2..],
+            [
+                Call::SpecRun(Checkout::Fresh, 1, "main".to_string(), 1),
+                Call::EndClaim(None),
+            ]
+        );
+    }
+
+    // The hand-off.
+
+    #[test]
+    fn a_fresh_selection_creates_a_fresh_worktree_and_opens_with_the_fresh_prompt() {
+        let (calls, _) = run_on(Script::default());
+
+        assert_in_turn(
+            &calls,
+            &[worktree(Checkout::Fresh, "main"), deliver_fresh("main")],
+        );
+    }
+
+    #[test]
+    fn a_continuation_continues_the_worktree_and_opens_with_the_continuation_prompt() {
+        for pr_base in [None, Some("main")] {
+            let (calls, _) = run_on(Script {
+                selection: Some(continued(pr_base)),
+                ..Script::default()
+            });
+
+            let pr_url = pr_base.map(|_| PR_URL);
+            let prompt = prompt::continuation(&seven(), "main", "issue-7", pr_url);
+            assert_in_turn(
+                &calls,
+                &[
+                    worktree(Checkout::Continuation, "main"),
+                    Call::Deliver(Checkout::Continuation, "main".to_string(), prompt),
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn tickets_hand_the_worktree_to_the_spec_run_with_the_number_to_run_at_once() {
+        let asks = Asks {
+            tickets_at_once: NonZeroUsize::new(3).unwrap(),
+            ..asks()
+        };
+
+        let (calls, ended) = run_asked(
+            Script {
+                tickets: vec![true, false],
+                ..Script::default()
+            },
+            &asks,
+        );
+
+        assert!(ended.is_ok());
+        assert!(calls.contains(&Call::Started { spec_run: true }));
+        assert_in_turn(
+            &calls,
+            &[
+                worktree(Checkout::Fresh, "main"),
+                Call::SpecRun(Checkout::Fresh, 2, "main".to_string(), 3),
+            ],
+        );
+    }
 }

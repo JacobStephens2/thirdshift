@@ -1234,27 +1234,6 @@ fn a_spec_pr_closed_during_the_spec_review_fails_the_spec_run() {
 }
 
 #[test]
-fn an_issue_with_no_sub_issues_is_an_ordinary_run() {
-    let scenario = Scenario::new();
-    scenario.agent_does(
-        r#"
-echo "feature" > feature.txt
-git add feature.txt
-git commit -q -m "Add feature"
-gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
-"#,
-    );
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
-    assert_eq!(sessions_by_issue(&scenario), ["7"]);
-    assert!(!result.stderr.contains("#7:"), "stderr: {}", result.stderr);
-    assert_eq!(scenario.gh_state()["prs"][0]["base"], "main");
-}
-
-#[test]
 fn help_does_not_mention_the_ticket_runs_hidden_argument() {
     let scenario = Scenario::new();
 
@@ -1473,21 +1452,6 @@ rm {root}/running/{ticket}
         .map(|n| n.parse::<u32>().unwrap())
         .max();
     assert_eq!(most, Some(3), "{seen}");
-}
-
-#[test]
-fn parallel_on_an_issue_with_no_sub_issues_stops_before_any_work_naming_the_flag() {
-    let scenario = Scenario::new();
-
-    let result = scenario.run(&["parallel", "2", &scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    scenario.assert_rejected_before_any_work(&result, "parallel");
-    assert!(
-        scenario.origin_log("issue-7").is_none(),
-        "stderr: {}",
-        result.stderr
-    );
 }
 
 #[test]
@@ -2048,26 +2012,6 @@ fn with_every_ticket_closed_and_a_spec_branch_the_spec_run_goes_straight_to_the_
         "<!-- thirdshift:tickets -->\n## Tickets\n\n- [x] #21 done\n- [x] #22 done\n<!-- /thirdshift:tickets -->"
     );
     assert_eq!(prs_from(&scenario, "issue-20").len(), 1);
-}
-
-#[test]
-fn with_every_ticket_closed_and_no_spec_branch_there_is_nothing_to_do() {
-    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
-    scenario.issue_is(21, "CLOSED");
-    scenario.issue_is(22, "CLOSED");
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    scenario.assert_rejected_before_any_work(
-        &result,
-        "thirdshift: every Ticket is closed and there is no Spec branch; nothing to do\n",
-    );
-    assert_eq!(scenario.origin_log("issue-20"), None);
-    assert_eq!(scenario.launch_git(&["branch", "--list", "issue-20"]), "");
-    let gh = scenario.gh_state();
-    assert_eq!(gh["prs"], serde_json::json!([]));
-    assert_eq!(gh["issues"]["20"], "OPEN");
 }
 
 #[test]

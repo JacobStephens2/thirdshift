@@ -6,7 +6,6 @@ use anyhow::{Result, bail};
 use crate::git::Git;
 use crate::github::{self, PrState, PullRequest};
 use crate::issue::IssueUrl;
-use crate::progress;
 
 pub enum Selection {
     /// No Issue branch has been used yet, or the highest-numbered one's PR is
@@ -29,16 +28,10 @@ impl Selection {
     /// The open PR's base in a Continuation that has one, which names the
     /// Base branch whatever else would. `given` is the Base branch the Run was
     /// given by what started it, if any, and `checked_out` the branch
-    /// checked out in the Launch directory (`None` on a detached HEAD). Says
-    /// so on stderr when the PR's base replaces a different given or
-    /// checked-out branch.
-    pub fn pr_base(&self, given: Option<&str>, checked_out: Option<&str>) -> Option<&str> {
-        self.pr_base_to(given, checked_out, progress::step)
-    }
-
-    /// [`Selection::pr_base`], with the line saying the PR's base replaces
-    /// another branch going to `replaced_line`.
-    fn pr_base_to(
+    /// checked out in the Launch directory (`None` on a detached HEAD). When
+    /// the PR's base replaces a different given or checked-out branch, the
+    /// line saying so goes to `replaced_line`.
+    pub fn pr_base(
         &self,
         given: Option<&str>,
         checked_out: Option<&str>,
@@ -669,7 +662,7 @@ mod tests {
     ) -> (Option<String>, Vec<String>) {
         let mut lines = Vec::new();
         let base = selection
-            .pr_base_to(given, checked_out, |line| lines.push(line))
+            .pr_base(given, checked_out, |line| lines.push(line))
             .map(String::from);
         (base, lines)
     }

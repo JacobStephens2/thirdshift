@@ -43,36 +43,6 @@ fn an_issue_branch_with_no_pr_is_continued() {
 }
 
 #[test]
-fn without_a_pr_the_continuation_prompt_asks_for_one() {
-    let scenario = Scenario::new();
-    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
-    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
-
-    scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_eq!(
-        scenario.claude_calls()[0]["prompt"],
-        "/thirdshift:implement https://github.com/acme/widgets/issues/7\n\
-         \n\
-         You are continuing work on branch issue-7, which already has commits (see git log main..HEAD). Build on them; don't start over.\n\
-         \n\
-         The base branch is main. Review with /thirdshift:code-review using main as the fixed point.\n\
-         \n\
-         Address the Standards and Spec findings you agree with.\n\
-         \n\
-         Push branch issue-7.\n\
-         \n\
-         Create a pull request against main using /thirdshift:pr, marked ready for review.\n\
-         \n\
-         In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
-         \n\
-         Include \"Closes #7\" in the PR body.\n\
-         \n\
-         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.\n"
-    );
-}
-
-#[test]
 fn an_issue_branch_with_an_open_pr_is_continued_and_that_pr_is_the_result() {
     let scenario = Scenario::new();
     scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
@@ -91,31 +61,6 @@ fn an_issue_branch_with_an_open_pr_is_continued_and_that_pr_is_the_result() {
             "Earlier work".to_string(),
             "Initial commit".to_string(),
         ])
-    );
-}
-
-#[test]
-fn with_an_open_pr_the_continuation_prompt_asks_to_update_it() {
-    let scenario = Scenario::new();
-    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
-    scenario.github_has_pr("issue-7", "main", "OPEN");
-    scenario.agent_does(AGENT_COMMITS);
-
-    scenario.run(&[&scenario.issue_url(7)]);
-
-    let prompt = scenario.first_prompt();
-    assert!(
-        prompt.contains(
-            "\n\nPush branch issue-7.\n\
-             \n\
-             Update PR https://github.com/acme/widgets/pull/1 using /thirdshift:pr, rewriting its body to cover the whole branch, marked ready for review.\n\
-             \n"
-        ),
-        "prompt: {prompt}"
-    );
-    assert!(
-        !prompt.contains("Create a pull request"),
-        "prompt: {prompt}"
     );
 }
 
@@ -143,34 +88,6 @@ fn the_open_prs_base_is_the_base_branch_whatever_is_checked_out() {
         result
             .stderr
             .contains("the Base branch is main, not the checked-out develop"),
-        "stderr: {}",
-        result.stderr
-    );
-}
-
-#[test]
-fn without_an_open_pr_the_checked_out_branch_stays_the_base_branch() {
-    let scenario = Scenario::new();
-    scenario.origin_has_branch("develop", "main", &["Develop work"]);
-    scenario.launch_checks_out("develop");
-    scenario.origin_has_branch("issue-7", "develop", &["Earlier work"]);
-    scenario.agent_does(
-        r#"
-git commit -q --allow-empty -m "Continue the work"
-gh pr create --base develop --head issue-7 --title "Add feature" --body "Closes #7"
-"#,
-    );
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let prompt = scenario.first_prompt();
-    assert!(
-        prompt.contains("Create a pull request against develop"),
-        "prompt: {prompt}"
-    );
-    assert!(
-        !result.stderr.contains("Base branch"),
         "stderr: {}",
         result.stderr
     );
