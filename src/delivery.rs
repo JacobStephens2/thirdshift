@@ -1182,30 +1182,39 @@ mod tests {
 
     #[test]
     fn a_built_with_line_that_cannot_be_written_is_a_warning_and_the_pr_is_still_marked_ready() {
-        let mut outside = Scripted {
-            body: "Closes #7\n".to_string(),
-            ..Scripted::default()
-        }
-        .failing(Fails::SetPrBody);
+        for failing in [Fails::PrBody, Fails::SetPrBody] {
+            let mut outside = Scripted {
+                body: "Closes #7\n".to_string(),
+                ..Scripted::default()
+            }
+            .failing(failing);
 
-        let delivered = deliver(Goal::ReadyForReview, false, &mut outside);
+            let delivered = deliver(Goal::ReadyForReview, false, &mut outside);
 
-        assert_eq!(delivered.ok().as_deref(), Some(PR_URL));
-        assert_eq!(
-            after(&outside, &Call::PrBody)[1..4],
-            [
-                Call::SetPrBody(with_built_with("Closes #7\n", &Choice::default())),
+            assert_eq!(delivered.ok().as_deref(), Some(PR_URL), "{failing:?}");
+            assert_eq!(
+                after(&outside, &Call::BeforeReady)[0],
+                step("checking the PR"),
+                "{failing:?}"
+            );
+            let before_ready = outside
+                .calls
+                .iter()
+                .position(|call| *call == Call::BeforeReady)
+                .unwrap();
+            assert_eq!(
+                outside.calls[before_ready - 1],
                 Call::Warn {
-                    error: "SetPrBody failed".to_string(),
+                    error: format!("{failing:?} failed"),
                     warning: format!(
                         "could not write \"{}\" in the pull request's body",
                         built_with()
                     ),
                 },
-                Call::BeforeReady,
-            ]
-        );
-        assert!(outside.calls.contains(&Call::MarkReady));
+                "{failing:?}"
+            );
+            assert!(outside.calls.contains(&Call::MarkReady), "{failing:?}");
+        }
     }
 
     #[test]

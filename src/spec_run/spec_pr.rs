@@ -132,12 +132,12 @@ impl<'a, O: Outside> SpecPr<'a, O> {
     /// Put `checklist` in the body of the Spec PR `number`, in place of its
     /// Tickets checklist, leaving the rest of the body as it is.
     fn write(&mut self, number: u64, checklist: &str) -> Result<()> {
-        let body = self.outside.body(number)?;
+        let body = self.outside.pr_body(number)?;
         let updated = with_checklist(&body, checklist);
         if updated != body {
             self.outside
                 .step("updating the Spec PR's Tickets checklist".to_string());
-            self.outside.set_body(number, &updated)?;
+            self.outside.set_pr_body(number, &updated)?;
         }
         Ok(())
     }
@@ -158,9 +158,9 @@ pub(super) trait Outside {
     /// titled `title`, with `body`.
     fn create_draft(&mut self, title: &str, body: &str) -> Result<()>;
     /// The body of pull request `number`.
-    fn body(&mut self, number: u64) -> Result<String>;
+    fn pr_body(&mut self, number: u64) -> Result<String>;
     /// Set the body of pull request `number` to `body`.
-    fn set_body(&mut self, number: u64, body: &str) -> Result<()>;
+    fn set_pr_body(&mut self, number: u64, body: &str) -> Result<()>;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
 }
@@ -190,11 +190,11 @@ impl Outside for OnGitHub<'_> {
         github::create_draft_pr(self.spec, &self.branch, self.base, title, body).map(|_| ())
     }
 
-    fn body(&mut self, number: u64) -> Result<String> {
+    fn pr_body(&mut self, number: u64) -> Result<String> {
         github::pr_body(self.spec, number)
     }
 
-    fn set_body(&mut self, number: u64, body: &str) -> Result<()> {
+    fn set_pr_body(&mut self, number: u64, body: &str) -> Result<()> {
         github::set_pr_body(self.spec, number, body)
     }
 
@@ -244,8 +244,8 @@ mod in_memory {
         ConvertToDraft,
         SpecTitle,
         CreateDraft,
-        Body,
-        SetBody,
+        PrBody,
+        SetPrBody,
     }
 
     /// A call the Spec PR made, in the order it made it.
@@ -261,9 +261,9 @@ mod in_memory {
             body: String,
         },
         /// It read the body of this pull request.
-        Body(u64),
+        PrBody(u64),
         /// It set the body of this pull request to this.
-        SetBody(u64, String),
+        SetPrBody(u64, String),
         /// It handed on this progress line.
         Step(String),
     }
@@ -375,13 +375,13 @@ mod in_memory {
             Ok(())
         }
 
-        fn body(&mut self, number: u64) -> Result<String> {
-            self.call(Call::Body(number), Fails::Body)?;
+        fn pr_body(&mut self, number: u64) -> Result<String> {
+            self.call(Call::PrBody(number), Fails::PrBody)?;
             Ok(self.body.clone())
         }
 
-        fn set_body(&mut self, number: u64, body: &str) -> Result<()> {
-            self.call(Call::SetBody(number, body.to_string()), Fails::SetBody)?;
+        fn set_pr_body(&mut self, number: u64, body: &str) -> Result<()> {
+            self.call(Call::SetPrBody(number, body.to_string()), Fails::SetPrBody)?;
             self.body = body.to_string();
             Ok(())
         }
@@ -552,9 +552,9 @@ mod tests {
         assert_eq!(
             after_resume(&spec_pr),
             [
-                Call::Body(9),
+                Call::PrBody(9),
                 step(UPDATING),
-                Call::SetBody(9, format!("Closes #20\n\n{LIST}")),
+                Call::SetPrBody(9, format!("Closes #20\n\n{LIST}")),
             ]
         );
     }
@@ -576,14 +576,14 @@ mod tests {
 
         spec_pr.show("new\n");
 
-        assert_eq!(after_resume(&spec_pr), [Call::Body(9)]);
+        assert_eq!(after_resume(&spec_pr), [Call::PrBody(9)]);
     }
 
     #[test]
     fn showing_a_checklist_that_cannot_be_set_is_only_a_progress_line() {
         let spec = spec();
         let outside = InMemory {
-            failing: vec![Fails::SetBody],
+            failing: vec![Fails::SetPrBody],
             ..open_with("Closes #20\n")
         };
         let mut spec_pr = resume(&spec, outside).unwrap();
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!(
             after_resume(&spec_pr).last(),
             Some(&step(
-                "could not update the Spec PR's Tickets checklist: SetBody failed"
+                "could not update the Spec PR's Tickets checklist: SetPrBody failed"
             ))
         );
     }
@@ -610,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn putting_back_writes_the_checklist_and_fails_if_it_cannot_be_set() {
+    fn putting_back_writes_the_checklist() {
         let spec = spec();
         let mut spec_pr = resume(&spec, open_with("Rewritten. Closes #20\n")).unwrap();
 
@@ -620,15 +620,19 @@ mod tests {
             spec_pr.outside.body,
             format!("Rewritten. Closes #20\n\n{LIST}")
         );
+    }
 
+    #[test]
+    fn putting_back_a_checklist_that_cannot_be_set_fails() {
+        let spec = spec();
         let outside = InMemory {
-            failing: vec![Fails::SetBody],
+            failing: vec![Fails::SetPrBody],
             ..open_with("Rewritten. Closes #20\n")
         };
         let mut spec_pr = resume(&spec, outside).unwrap();
 
         let error = spec_pr.put_back("new\n").unwrap_err();
 
-        assert_eq!(format!("{error:#}"), "SetBody failed");
+        assert_eq!(format!("{error:#}"), "SetPrBody failed");
     }
 }
