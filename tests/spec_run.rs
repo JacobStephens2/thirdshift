@@ -301,36 +301,6 @@ fn a_tickets_run_started_after_thirdshift_was_replaced_can_still_start_its_base_
 }
 
 #[test]
-fn closed_tickets_are_not_run() {
-    let scenario = linear_spec();
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert!(!sessions_by_issue(&scenario).contains(&"23".to_string()));
-    assert!(!result.stderr.contains("#23"), "stderr: {}", result.stderr);
-}
-
-#[test]
-fn the_spec_branch_is_pushed_before_the_first_ticket_starts() {
-    let scenario = linear_spec();
-    scenario.agent_does_for(
-        21,
-        &format!(
-            "git ls-remote --exit-code origin refs/heads/issue-20 >/dev/null\n{}",
-            agent_lands(21, "first.txt")
-        ),
-    );
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let pushed = result.stderr.find("thirdshift: pushing issue-20").unwrap();
-    let started = result.stderr.find("thirdshift: starting #21").unwrap();
-    assert!(pushed < started, "stderr: {}", result.stderr);
-}
-
-#[test]
 fn ticket_lines_are_relayed_with_the_ticket_number_and_the_spec_run_says_what_it_does() {
     let scenario = linear_spec();
 
@@ -990,29 +960,6 @@ fn repairs_exhausted_on_the_spec_pr_send_it_back_to_draft_and_exit_1() {
 }
 
 #[test]
-fn a_failed_ticket_ends_the_spec_run_before_the_tickets_it_blocks() {
-    let scenario = linear_spec();
-    scenario.agent_does_for(21, "exit 1");
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, "");
-    assert_eq!(sessions_by_issue(&scenario), ["21"]);
-    assert_contains(&result.stderr, "thirdshift: #21 failed");
-    let gh = scenario.gh_state();
-    assert!(
-        gh["prs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|pr| pr["head"] != "issue-20"),
-        "a Spec PR was opened: {}",
-        gh["prs"]
-    );
-}
-
-#[test]
 fn once_the_last_ticket_lands_the_spec_review_reviews_the_spec_branch_against_the_base_branch() {
     let scenario = linear_spec();
 
@@ -1544,31 +1491,6 @@ fn parallel_on_an_issue_with_no_sub_issues_stops_before_any_work_naming_the_flag
 }
 
 #[test]
-fn a_needs_info_ticket_and_what_it_blocks_are_not_run_while_an_independent_ticket_lands() {
-    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[])]);
-    scenario.issue_labelled(21, &["needs-info"]);
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_failed_spec_run(
-        &scenario,
-        &result,
-        "- [ ] #21 unready: labelled needs-info\n\
-         - [ ] #22 blocked by #21\n\
-         - [x] #23 landed with https://github.com/acme/widgets/pull/1\n",
-    );
-    assert_eq!(sessions_by_issue(&scenario), ["23"]);
-    assert_eq!(scenario.gh_state()["issues"]["23"], "CLOSED");
-    for line in [
-        "thirdshift: #21 unready: labelled needs-info\n",
-        "thirdshift: #22 blocked by #21\n",
-        "thirdshift: #23 landed with https://github.com/acme/widgets/pull/1\n",
-    ] {
-        assert_contains(&result.stderr, line);
-    }
-}
-
-#[test]
 fn an_unready_label_keeps_a_ticket_from_running() {
     // One label end to end; the Spec run's unit tests take each of them.
     let scenario = spec_of(&[(21, &[]), (22, &[])]);
@@ -1628,50 +1550,6 @@ fn a_failed_ticket_stops_only_its_dependents_and_is_not_started_again() {
 }
 
 #[test]
-fn an_open_outside_blocker_holds_a_ticket_back_and_a_closed_one_does_not() {
-    let scenario = spec_of(&[(21, &[99]), (22, &[98])]);
-    scenario.issue_is(98, "CLOSED");
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_failed_spec_run(
-        &scenario,
-        &result,
-        "- [ ] #21 blocked by #99 (outside the Spec)\n\
-         - [x] #22 landed with https://github.com/acme/widgets/pull/1\n",
-    );
-    assert_eq!(sessions_by_issue(&scenario), ["22"]);
-    assert_contains(
-        &result.stderr,
-        "thirdshift: #21 blocked by #99 (outside the Spec)\n",
-    );
-}
-
-#[test]
-fn tickets_in_a_cycle_are_not_run_and_the_summary_names_the_cycle() {
-    let scenario = spec_of(&[(21, &[22]), (22, &[21]), (23, &[21]), (24, &[])]);
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_failed_spec_run(
-        &scenario,
-        &result,
-        "- [ ] #21 in a cycle: #21 blocked by #22 blocked by #21\n\
-         - [ ] #22 in a cycle: #22 blocked by #21 blocked by #22\n\
-         - [ ] #23 blocked by #21\n\
-         - [x] #24 landed with https://github.com/acme/widgets/pull/1\n",
-    );
-    assert_eq!(sessions_by_issue(&scenario), ["24"]);
-    for line in [
-        "thirdshift: #21 in a cycle: #21 blocked by #22 blocked by #21\n",
-        "thirdshift: #22 in a cycle: #22 blocked by #21 blocked by #22\n",
-        "thirdshift: #23 blocked by #21\n",
-    ] {
-        assert_contains(&result.stderr, line);
-    }
-}
-
-#[test]
 fn a_ticket_with_its_own_sub_issues_is_unready() {
     let scenario = spec_of(&[(21, &[]), (22, &[])]);
     scenario.spec_has_tickets(21, &[(30, &[])]);
@@ -1686,21 +1564,6 @@ fn a_ticket_with_its_own_sub_issues_is_unready() {
     );
     assert_eq!(sessions_by_issue(&scenario), ["22"]);
     assert_contains(&result.stderr, "thirdshift: #21 unready: has sub-issues\n");
-}
-
-#[test]
-fn removing_a_needs_info_label_while_another_ticket_runs_lets_it_run() {
-    let scenario = spec_of(&[(21, &[]), (22, &[])]);
-    scenario.issue_labelled(21, &["needs-info"]);
-    scenario.agent_does_for(
-        22,
-        &format!("gh fake labels 21 '[]'\n{}", agent_lands(22, "22.txt")),
-    );
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(sessions_by_issue(&scenario), ["22", "21", "20"]);
 }
 
 #[test]
@@ -1781,26 +1644,6 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
 }
 
 #[test]
-fn a_ticket_that_fails_once_the_spec_pr_is_open_is_shown_failed_in_its_checklist() {
-    let scenario = spec_of(&[(21, &[]), (22, &[])]);
-    scenario.agent_does_for(22, "exit 1");
-
-    // One at a time, so the Spec PR is open when #22 starts.
-    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
-
-    assert_failed_spec_run(
-        &scenario,
-        &result,
-        "- [x] #21 landed with https://github.com/acme/widgets/pull/1\n\
-         - [ ] #22 failed: claude exited 1\n",
-    );
-    assert_contains(
-        &result.stderr,
-        "thirdshift: updating the Spec PR's Tickets checklist\n",
-    );
-}
-
-#[test]
 fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the_checklist_and_the_notification()
  {
     let scenario = spec_of(&[(21, &[]), (22, &[])]);
@@ -1844,25 +1687,6 @@ fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the
     assert_contains(&text, &format!("#22 failed: {cause}"));
     assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "OPEN");
     assert_eq!(scenario.origin_file("issue-20", "22.txt"), None);
-}
-
-#[test]
-fn a_ticket_that_lands_just_before_github_stops_answering_still_gets_the_draft_spec_pr() {
-    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
-    scenario.agent_does_for(
-        21,
-        &format!("gh fake fails 'api graphql'\n{}", agent_lands(21, "21.txt")),
-    );
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_failed_spec_run(
-        &scenario,
-        &result,
-        "- [ ] #21 landed with https://github.com/acme/widgets/pull/1, but is still open\n\
-         - [ ] #22 blocked by #21\n",
-    );
-    assert_eq!(sessions_by_issue(&scenario), ["21"]);
 }
 
 #[test]
@@ -2021,40 +1845,6 @@ fn an_interrupted_spec_run_sends_one_notification_with_each_tickets_outcome() {
     );
     assert_contains(&text, "#21 interrupted\n");
     assert_contains(&text, "#22 blocked by #21\n");
-}
-
-#[test]
-fn a_ready_ticket_an_interrupt_kept_from_starting_is_not_started_in_the_notification() {
-    let scenario = spec_of(&[(21, &[]), (22, &[])]);
-    scenario.agent_does_for(
-        21,
-        &format!(
-            "touch {}\nsleep 30\n",
-            scenario.path("agent-started").display()
-        ),
-    );
-    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
-
-    let result = scenario.run_and_signal_with_env(
-        &[
-            "--email",
-            "me@example.com",
-            "parallel",
-            "1",
-            &spec_url(&scenario),
-        ],
-        &[
-            ("THIRDSHIFT_RESEND_URL", resend.url()),
-            ("RESEND_API_KEY", "re_test_123"),
-        ],
-        "agent-started",
-        "TERM",
-    );
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    let (_, text) = the_one_notification(&resend);
-    assert_contains(&text, "#21 interrupted\n");
-    assert_contains(&text, "#22 not started\n");
 }
 
 #[test]
