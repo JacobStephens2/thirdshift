@@ -10,6 +10,7 @@ use anyhow::{Result, bail};
 use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{self, Given};
+use crate::harness::{self, Harness};
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
@@ -133,11 +134,11 @@ pub fn parse(args: &[String]) -> Result<Command> {
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,
 /// each at most once, in any order. `base` must be followed by the Base
-/// branch. [`PLAN_ONLY`] dispatches nothing, so the
-/// flags for the dispatched run, `merge`, `no-merge`, `parallel`, `base-fix`
-/// and `no-base-fix`, can't go with it. `email` and `no-email` are for the
-/// Architect run's own Run notification, and `base` is for the Architecture
-/// review too, so they can. None of a Run's flags, nor `base`,
+/// branch. [`PLAN_ONLY`] dispatches nothing, so the flags for the dispatched
+/// run, `merge`, `no-merge`, `parallel`, `base-fix`, `no-base-fix`,
+/// `harness`, `model` and `effort`, can't go with it. `email` and `no-email`
+/// are for the Architect run's own Run notification, and `base` is for the
+/// Architecture review too, so they can. None of a Run's flags, nor `base`,
 /// is ever the focus, and any other argument that starts with a dash is
 /// unexpected rather than a focus.
 fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
@@ -157,7 +158,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
                 }
                 plan_only = true;
             }
-            "base" | "--base" => ask_base(&mut base, arg, args.next())?,
+            "base" | "--base" => ask_word(&mut base, arg, args.next(), "a branch")?,
             _ if arg.starts_with('-') => bail!("unexpected argument after architect: {arg}"),
             _ if focus.is_some() => bail!("unexpected argument after the focus: {arg}"),
             _ if arg.trim().is_empty() => bail!("the focus is empty"),
@@ -166,8 +167,8 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     }
     if plan_only && flags.any_for_dispatched_run() {
         bail!(
-            "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
-             {PLAN_ONLY}: it dispatches no run for them to apply to"
+            "merge, no-merge, parallel, base-fix, no-base-fix, harness, model and effort \
+             can't be used with {PLAN_ONLY}: it dispatches no run for them to apply to"
         );
     }
     Ok(ArchitectArgs {
@@ -189,7 +190,7 @@ fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
             continue;
         }
         match arg.as_str() {
-            "base" | "--base" => ask_base(&mut base, arg, args.next())?,
+            "base" | "--base" => ask_word(&mut base, arg, args.next(), "a branch")?,
             _ => bail!("unexpected argument after pickup: {arg}"),
         }
     }
@@ -198,8 +199,9 @@ fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
 
 /// Record in `flags` what `arg` asks for, if it is one of the flags a Run,
 /// an Architect run and a Pickup run all take, with or without its dashes,
-/// taking from `rest` the address after `email`, if one is there, and the
-/// number after `parallel`. False, taking nothing, if `arg` is none of them.
+/// taking from `rest` the address after `email`, if one is there, the
+/// number after `parallel`, and the name or level after `harness`, `model`
+/// and `effort`. False, taking nothing, if `arg` is none of them.
 fn take_flag<'a>(
     flags: &mut Flags,
     arg: &str,
@@ -228,6 +230,15 @@ fn take_flag<'a>(
         }
         "no-base-fix" | "--no-base-fix" => {
             ask_once(&mut flags.base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
+        }
+        "harness" | "--harness" => ask_harness(&mut flags.harness.harness, arg, rest.next())?,
+        "model" | "--model" => {
+            let model = &mut flags.harness.model_and_effort.model;
+            ask_word(model, arg, rest.next(), "a model")?
+        }
+        "effort" | "--effort" => {
+            let effort = &mut flags.harness.model_and_effort.effort;
+            ask_word(effort, arg, rest.next(), "an effort level")?
         }
         _ => return Ok(false),
     }
@@ -266,19 +277,39 @@ fn ask_parallel(parallel: &mut Option<NonZeroUsize>, arg: &str, n: Option<&Strin
     Ok(())
 }
 
-/// Record in `base` the `branch` that follows the flag `arg`, given once. No
-/// branch's name starts with a dash, so a flag there is not taken for one.
-fn ask_base(base: &mut Option<String>, arg: &str, branch: Option<&String>) -> Result<()> {
-    if base.is_some() {
+/// Record in `given` the `word` that follows the flag `arg`, given once: a
+/// branch, a model or an effort level, as `what` says. None of those starts
+/// with a dash, so a flag there is not taken for one.
+fn ask_word(
+    given: &mut Option<String>,
+    arg: &str,
+    word: Option<&String>,
+    what: &str,
+) -> Result<()> {
+    if given.is_some() {
         bail!("repeated argument: {arg}");
     }
-    match branch {
-        Some(branch) if branch.starts_with('-') => {
-            bail!("{arg} must be followed by a branch, not {branch}")
+    match word {
+        Some(word) if word.starts_with('-') => {
+            bail!("{arg} must be followed by {what}, not {word}")
         }
-        Some(branch) if !branch.trim().is_empty() => *base = Some(branch.clone()),
-        _ => bail!("{arg} must be followed by a branch"),
+        Some(word) if !word.trim().is_empty() => *given = Some(word.clone()),
+        _ => bail!("{arg} must be followed by {what}"),
     }
+    Ok(())
+}
+
+/// Record in `harness` the Harness `name` that follows the flag `arg`, given
+/// once.
+fn ask_harness(harness: &mut Option<Harness>, arg: &str, name: Option<&String>) -> Result<()> {
+    if harness.is_some() {
+        bail!("repeated argument: {arg}");
+    }
+    let Some(named) = name.and_then(|name| Harness::named(name)) else {
+        let given = name.map(|name| format!(", not {name}")).unwrap_or_default();
+        bail!("{arg} must be followed by {}{given}", harness::NAMES);
+    };
+    *harness = Some(named);
     Ok(())
 }
 
@@ -292,6 +323,7 @@ fn is_address(arg: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::ModelAndEffort;
 
     const URL: &str = "https://github.com/acme/widgets/issues/7";
 
@@ -521,8 +553,8 @@ mod tests {
         ] {
             assert_eq!(
                 rejection(&args),
-                "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
-                 --plan-only: it dispatches no run for them to apply to",
+                "merge, no-merge, parallel, base-fix, no-base-fix, harness, model and effort \
+                 can't be used with --plan-only: it dispatches no run for them to apply to",
                 "{args:?}"
             );
         }
@@ -681,6 +713,13 @@ mod tests {
                 email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
                 parallel: NonZeroUsize::new(2),
                 base_fix: Some(BaseFixAsk::Allow),
+                harness: harness::Asked {
+                    harness: Some(Harness::Codex),
+                    model_and_effort: ModelAndEffort {
+                        model: Some("gpt-6.1-sol".to_string()),
+                        effort: Some("max".to_string()),
+                    },
+                },
             },
         };
         for args in [
@@ -689,19 +728,31 @@ mod tests {
                 "merge",
                 "parallel",
                 "2",
+                "harness",
+                "codex",
                 "base-fix",
                 "email",
                 "me@example.com",
+                "model",
+                "gpt-6.1-sol",
                 "base",
                 "develop",
+                "effort",
+                "max",
             ],
             vec![
                 "pickup",
+                "--effort",
+                "max",
                 "--base",
                 "develop",
+                "--model",
+                "gpt-6.1-sol",
                 "--email",
                 "me@example.com",
                 "--base-fix",
+                "--harness",
+                "codex",
                 "--parallel",
                 "2",
                 "--merge",
@@ -716,6 +767,7 @@ mod tests {
                 email: Some(NotificationAsk::Skip),
                 parallel: None,
                 base_fix: Some(BaseFixAsk::Forbid),
+                harness: harness::Asked::default(),
             },
         };
         for args in [
@@ -887,6 +939,100 @@ mod tests {
                     "{args:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn harness_model_and_effort_take_the_word_after_them_on_a_run_an_architect_run_and_a_pickup_run()
+     {
+        let asked = |harness, model: Option<&str>, effort: Option<&str>| harness::Asked {
+            harness,
+            model_and_effort: ModelAndEffort {
+                model: model.map(str::to_string),
+                effort: effort.map(str::to_string),
+            },
+        };
+        for (args, expected) in [
+            (
+                vec!["harness", "claude", URL],
+                asked(Some(Harness::Claude), None, None),
+            ),
+            (
+                vec![URL, "--model", "claude-opus-5-5", "merge", "effort", "high"],
+                asked(None, Some("claude-opus-5-5"), Some("high")),
+            ),
+            (
+                vec!["effort", "max", URL, "--harness", "codex"],
+                asked(Some(Harness::Codex), None, Some("max")),
+            ),
+        ] {
+            assert_eq!(run_args(&args).flags.harness, expected, "{args:?}");
+        }
+        let architect = architect_args(&[
+            "architect",
+            "the Spec run",
+            "model",
+            "opus",
+            "harness",
+            "claude",
+        ]);
+        assert_eq!(
+            architect.flags.harness,
+            asked(Some(Harness::Claude), Some("opus"), None)
+        );
+        assert_eq!(architect.focus.as_deref(), Some("the Spec run"));
+        assert_eq!(
+            pickup_args(&["pickup", "--effort", "low"]).flags.harness,
+            asked(None, None, Some("low"))
+        );
+    }
+
+    #[test]
+    fn harness_model_and_effort_are_rejected_twice_without_a_value_or_with_plan_only() {
+        let plan_only = "merge, no-merge, parallel, base-fix, no-base-fix, harness, model and \
+                         effort can't be used with --plan-only: it dispatches no run for them \
+                         to apply to";
+        for (args, error) in [
+            (
+                vec![URL, "harness"],
+                "harness must be followed by claude or codex",
+            ),
+            (
+                vec![URL, "harness", "gemini"],
+                "harness must be followed by claude or codex, not gemini",
+            ),
+            (
+                vec!["--harness", "claude", URL, "harness", "codex"],
+                "repeated argument: harness",
+            ),
+            (vec![URL, "model"], "model must be followed by a model"),
+            (
+                vec![URL, "--model", "--merge"],
+                "--model must be followed by a model, not --merge",
+            ),
+            (
+                vec!["model", "opus", URL, "model", "sonnet"],
+                "repeated argument: model",
+            ),
+            (
+                vec![URL, "effort"],
+                "effort must be followed by an effort level",
+            ),
+            (
+                vec!["pickup", "effort", "max", "--effort", "low"],
+                "repeated argument: --effort",
+            ),
+            (
+                vec!["architect", "--plan-only", "harness", "claude"],
+                plan_only,
+            ),
+            (vec!["architect", "model", "opus", "--plan-only"], plan_only),
+            (
+                vec!["architect", "--plan-only", "--effort", "max"],
+                plan_only,
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
         }
     }
 }

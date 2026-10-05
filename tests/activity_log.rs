@@ -85,6 +85,10 @@ fn open_plan(scenario: &Scenario, number: u32) {
     scenario.issue_labelled(number, &["architect-plan"]);
 }
 
+/// How a start line names the Harness, Model and Effort when nothing chose
+/// them.
+const ON_CLAUDE: &str = "on claude · default model · default effort";
+
 #[test]
 fn a_run_typed_by_hand_writes_its_start_naming_its_command_log_and_its_end_with_its_outcome() {
     let scenario = Scenario::new();
@@ -97,7 +101,7 @@ fn a_run_typed_by_hand_writes_its_start_naming_its_command_log_and_its_end_with_
     assert_eq!(
         activity(&scenario),
         [
-            format!("Run #7 started: {command_log}"),
+            format!("Run #7 started: {command_log}, {ON_CLAUDE}"),
             format!("Run #7 ended: PR {PR_URL} is ready for review"),
         ]
     );
@@ -131,7 +135,10 @@ fn a_spec_run_writes_its_lines_and_its_tickets_write_none() {
     let command_log = the_one_command_log(&scenario, "issue");
     let lines = activity(&scenario);
     assert_eq!(lines.len(), 2, "{lines:?}");
-    assert_eq!(lines[0], format!("Spec run #20 started: {command_log}"));
+    assert_eq!(
+        lines[0],
+        format!("Spec run #20 started: {command_log}, {ON_CLAUDE}")
+    );
     assert!(lines[1].starts_with("Spec run #20 ended: PR "), "{lines:?}");
 }
 
@@ -148,7 +155,7 @@ fn a_pickup_run_that_takes_an_issue_names_it_and_the_run_it_dispatched_writes_no
     assert_eq!(
         activity(&scenario),
         [
-            format!("Pickup run #7 started: {command_log}"),
+            format!("Pickup run #7 started: {command_log}, {ON_CLAUDE}"),
             format!("Pickup run #7 ended: PR {PR_URL} is ready for review"),
         ]
     );
@@ -174,7 +181,7 @@ printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(
         activity(&scenario),
         [
-            format!("Architect run started: {command_log}"),
+            format!("Architect run started: {command_log}, {ON_CLAUDE}"),
             format!(
                 "Architect run ended: plan {} dispatched: PR {PR_URL} is ready for review",
                 scenario.issue_url(8)
@@ -255,7 +262,7 @@ fn a_pass_that_works_resets_its_kinds_skips_and_the_other_kinds_lines_do_not() {
         [
             "Pickup run skipped: no Ready issue on acme/widgets".to_string(),
             lines[1].clone(),
-            format!("Pickup run #7 started: {command_log}"),
+            format!("Pickup run #7 started: {command_log}, {ON_CLAUDE}"),
             format!("Pickup run #7 ended: PR {PR_URL} is ready for review"),
             "Pickup run skipped: no Ready issue on acme/widgets".to_string(),
         ]

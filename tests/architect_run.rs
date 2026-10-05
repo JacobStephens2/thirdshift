@@ -2408,3 +2408,53 @@ fn a_ready_for_agent_ticket_inside_a_spec_does_not_skip_the_architect_run() {
     );
     assert_eq!(scenario.claude_calls().len(), 1);
 }
+
+/// The arguments of each call to `claude` that was an agent session, which
+/// streams JSON, and of each that was the test call that checks a Model.
+fn sessions_and_test_calls(scenario: &Scenario) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+    scenario
+        .claude_calls()
+        .iter()
+        .map(|call| {
+            let args = call["argv"].as_array().unwrap().iter();
+            args.map(|arg| arg.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
+        .partition(|args| args.iter().any(|arg| arg == "--output-format"))
+}
+
+#[test]
+fn the_review_and_the_run_it_dispatches_run_on_the_model_checked_once() {
+    let scenario = scenario();
+    // The first call to claude is the test call, the second the review.
+    scenario.agent_does_in_session(1, "true");
+    scenario.agent_does_in_session(2, AGENT_PUBLISHES_A_TICKET);
+    scenario.agent_does_for(8, &agent_opens_pr(8, "main"));
+
+    let result = scenario.run(&["architect", "effort", "max", "model", "opus"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+    let (sessions, test_calls) = sessions_and_test_calls(&scenario);
+    assert_eq!(test_calls, [["-p", "--model", "opus", "--effort", "max"]]);
+    assert_eq!(sessions.len(), 2, "the review and #8's: {sessions:?}");
+    for args in sessions {
+        assert!(
+            args.windows(4)
+                .any(|window| window == ["--model", "opus", "--effort", "max"]),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn a_skipped_architect_run_makes_no_check_of_its_harness_or_model() {
+    let scenario = scenario();
+    scenario.issue_is(5, "OPEN");
+    scenario.issue_labelled(5, &[ARCHITECT_PLAN]);
+    scenario.agent_does("echo 'no such model'\nexit 1");
+
+    let result = scenario.run(&["architect", "model", "Opus 5.5", "harness", "codex"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
+}

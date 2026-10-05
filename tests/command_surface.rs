@@ -88,7 +88,7 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_when_an_archite
     for mention in [
         "<focus> is free text",
         "dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket",
-        "merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run",
+        "merge, --no-merge, base-fix, --no-base-fix, parallel <n>, harness, model and effort apply to that run",
         "as do the User config's defaults",
         "With --plan-only, the Architect run prints the plan's URL and stops instead",
         "thirdshift architect \"the Spec run\"",
@@ -116,8 +116,8 @@ fn help_documents_architect_its_focus_the_dispatch_plan_only_and_when_an_archite
     }
 }
 
-const PLAN_ONLY_DISPATCHES_NOTHING: &str = "merge, no-merge, parallel, base-fix and no-base-fix can't be used with \
-     --plan-only: it dispatches no run for them to apply to";
+const PLAN_ONLY_DISPATCHES_NOTHING: &str = "merge, no-merge, parallel, base-fix, no-base-fix, harness, model and \
+     effort can't be used with --plan-only: it dispatches no run for them to apply to";
 
 #[test]
 fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr() {
@@ -229,7 +229,7 @@ fn help_documents_pickup_the_ready_issue_the_dispatch_the_skips_and_the_run_noti
         "A sub-issue is reached through its Spec, when the Spec is itself a Ready issue",
         "Each ready-for-agent issue a pass looks at and does not take gets one line on stderr with the first reason that applies, such as #21 is a Ticket of #20, which is not ready or #30 blocked by #29, before the line that says what the pass did",
         "The Pickup run ends as that run does, with its exit code and its PR's URL",
-        "merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run, as do the User config's defaults",
+        "merge, --no-merge, base-fix, --no-base-fix, parallel <n>, harness, model and effort apply to that run, as do the User config's defaults",
         "parallel <n> is ignored when the issue is not a Spec",
         "base <branch> names the Pickup run's Base branch as it does an Architect run's",
         "pickup takes nothing else: no focus and no --plan-only",

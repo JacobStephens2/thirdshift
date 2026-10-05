@@ -13,6 +13,7 @@ use include_dir::{Dir, File};
 
 use crate::ci::FailedChecks;
 use crate::github::{Check, CheckState};
+use crate::harness::Choice;
 use crate::issue::IssueUrl;
 use crate::prompt;
 use crate::session::claude_args;
@@ -349,7 +350,8 @@ fn render() -> String {
 /// The `claude` command line a session starts with, or, given a session id,
 /// resumes with, with the page's placeholders.
 fn command(resume: Option<&str>) -> String {
-    format!("claude {}", claude_args(resume, PROMPT).join(" "))
+    let harness = Choice::default();
+    format!("claude {}", claude_args(&harness, resume, PROMPT).join(" "))
 }
 
 fn command_line(html: &mut String) {

@@ -21,6 +21,7 @@ use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
 use crate::github::{self, Mergeable, PullRequest};
+use crate::harness::Choice;
 use crate::host;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -44,6 +45,9 @@ pub struct Delivery<'a> {
     pub base_fix: &'a mut BaseFix,
     /// Where its Session logs go.
     pub logs: &'a Logs,
+    /// The Harness, Model and Effort its sessions run on, and its child
+    /// Runs' too.
+    pub harness: &'a Choice,
 }
 
 /// The session a Delivery opens with: the implement session, or the Spec
@@ -61,15 +65,16 @@ impl Delivery<'_> {
     /// Take the pull request from the branch checked out in `worktree` to the
     /// goal. With `opening.catch_up_from_origin`, first fast-forward the
     /// branch to origin. Then run the opening session, push the branch, for
-    /// any commit the session left unpushed, run `before_ready`, and mark the
-    /// pull request ready, failing unless it exists, is open and targets the
-    /// Base branch. Then keep it mergeable and its CI green through the
-    /// Repair loop, and for [`Goal::Merged`], Self-merge it. A merge that
-    /// fails goes back round the Repair loop and is tried again on the new
-    /// head; if that round finds nothing to fix, this fails with a
-    /// `PolicyRefusal`. Any failure goes through the Failed run path, which
-    /// keeps the worktree if its work did not reach origin; otherwise it is
-    /// cleaned up when this returns.
+    /// any commit the session left unpushed, write the line that says what it
+    /// was built with in the pull request's body, only warning if that fails,
+    /// run `before_ready`, and mark the pull request ready, failing unless it
+    /// exists, is open and targets the Base branch. Then keep it mergeable
+    /// and its CI green through the Repair loop, and for [`Goal::Merged`],
+    /// Self-merge it. A merge that fails goes back round the Repair loop and
+    /// is tried again on the new head; if that round finds nothing to fix,
+    /// this fails with a `PolicyRefusal`. Any failure goes through the Failed
+    /// run path, which keeps the worktree if its work did not reach origin;
+    /// otherwise it is cleaned up when this returns.
     pub fn deliver(
         self,
         worktree: Worktree,
@@ -82,7 +87,8 @@ impl Delivery<'_> {
             branch: worktree.branch(),
             goal: self.goal,
         };
-        let (delivered, log) = Sessions::within(self.logs, worktree.path(), |sessions| {
+        let harness = self.harness;
+        let (delivered, log) = Sessions::within(self.logs, worktree.path(), harness, |sessions| {
             let mut outside = InWorktree {
                 issue: self.issue,
                 worktree: &worktree,
@@ -90,7 +96,18 @@ impl Delivery<'_> {
                 base_fix: self.base_fix,
                 sessions,
             };
-            route.steps(&mut outside, &opening, |_| before_ready())
+            route.steps(&mut outside, &opening, |_| {
+                if let Err(error) = write_built_with(self.issue, worktree.branch(), harness) {
+                    progress::warn(
+                        &error,
+                        format_args!(
+                            "could not write \"{}\" in the pull request's body",
+                            harness.built_with()
+                        ),
+                    );
+                }
+                before_ready()
+            })
         });
         match delivered {
             Ok(pr_url) => Ok(Reached {
@@ -109,6 +126,54 @@ impl Delivery<'_> {
             }
         }
     }
+}
+
+/// Write the line that says the pull request from `branch`, for `issue`, was
+/// built with `harness` in its body, in place of any thirdshift wrote there
+/// before. Nothing if there is no such pull request: marking it ready says
+/// so. A failure is for the Delivery to warn of, as the work is done
+/// without it.
+fn write_built_with(issue: &IssueUrl, branch: &str, harness: &Choice) -> Result<()> {
+    let Some(pr) = github::pull_request_for(issue, branch)? else {
+        return Ok(());
+    };
+    let body = github::pr_body(issue, pr.number)?;
+    let written = with_built_with(&body, harness);
+    if written != body {
+        progress::step(format_args!(
+            "writing \"{}\" in the pull request's body",
+            harness.built_with()
+        ));
+        github::set_pr_body(issue, pr.number, &written)?;
+    }
+    Ok(())
+}
+
+/// The marker that ends the line thirdshift writes in a pull request's body,
+/// so it can be found and replaced.
+const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
+
+/// `body` with `choice`'s line in it: in place of the one thirdshift wrote
+/// before, or else added at the end.
+pub fn with_built_with(body: &str, choice: &Choice) -> String {
+    let line = format!("{} {BUILT_WITH_MARKER}", choice.built_with());
+    if body.contains(BUILT_WITH_MARKER) {
+        return body
+            .split_inclusive('\n')
+            .map(|old| {
+                if old.trim_end().ends_with(BUILT_WITH_MARKER) {
+                    let end = &old[old.trim_end_matches(['\r', '\n']).len()..];
+                    format!("{line}{end}")
+                } else {
+                    old.to_string()
+                }
+            })
+            .collect();
+    }
+    if body.trim().is_empty() {
+        return format!("{line}\n");
+    }
+    format!("{}\n\n{line}\n", body.trim_end())
 }
 
 /// The steps of a Delivery of the pull request for `issue`, from `branch`
@@ -1383,5 +1448,27 @@ mod tests {
             failed.log.as_deref(),
             Some(Path::new("/logs/7-implement.jsonl"))
         );
+    }
+
+    #[test]
+    fn the_built_with_line_is_added_to_a_body_and_replaces_the_one_written_before() {
+        let opus = Choice {
+            model: Some("opus".to_string()),
+            effort: Some("high".to_string()),
+            ..Choice::default()
+        };
+        let line = "Built with claude · opus · high <!-- thirdshift:built-with -->";
+
+        let added = with_built_with("Adds a button.\n\nCloses #7\n", &opus);
+        assert_eq!(added, format!("Adds a button.\n\nCloses #7\n\n{line}\n"));
+        assert_eq!(with_built_with("", &opus), format!("{line}\n"));
+
+        let old = "Adds a button.\n\nBuilt with claude · default model · default effort \
+                   <!-- thirdshift:built-with -->\n\nCloses #7\n";
+        assert_eq!(
+            with_built_with(old, &opus),
+            format!("Adds a button.\n\n{line}\n\nCloses #7\n")
+        );
+        assert_eq!(with_built_with(&added, &opus), added);
     }
 }

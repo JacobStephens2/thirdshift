@@ -23,6 +23,7 @@ use anyhow::{Context, Result};
 use chrono::Local;
 
 use super::command_log;
+use crate::harness::Choice;
 use crate::progress;
 
 /// The file's name, at the root of a repository's logs.
@@ -73,8 +74,10 @@ static WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Record that this command, a `kind` on `issue`, if it has one, starts work
 /// on the repository whose logs are at `root`, naming its Command log, if it
-/// keeps one. Only once: [`end`] then writes its end line.
-pub(super) fn start(root: &Path, kind: Kind, issue: Option<u64>) {
+/// keeps one, and the Harness, Model and Effort of `harness`, as in
+/// `Run #7 started: commands/issue/7-<stamp>.log, on claude · opus · high`.
+/// Only once: [`end`] then writes its end line.
+pub(super) fn start(root: &Path, kind: Kind, issue: Option<u64>, harness: &Choice) {
     let command_log = match command_log::path() {
         Some(path) => path
             .strip_prefix(root)
@@ -88,7 +91,7 @@ pub(super) fn start(root: &Path, kind: Kind, issue: Option<u64>) {
         kind,
         issue,
     };
-    let line = format!("{} started: {command_log}", started.subject());
+    let line = format!("{} started: {command_log}, on {harness}", started.subject());
     if STARTED.set(started).is_ok() {
         write(root, &line, None);
     }

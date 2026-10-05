@@ -479,3 +479,39 @@ fn help_names_base_fix_and_not_the_base_fixs_hidden_argument() {
         result.stdout
     );
 }
+
+#[test]
+fn a_base_fix_runs_its_sessions_on_the_runs_model_and_effort() {
+    let scenario = Scenario::new();
+    // The first call to claude is the test call that checks the Model.
+    scenario.agent_does_in_session(1, "true");
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    scenario.agent_does_for(8, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
+
+    let result = scenario.run(&[
+        &scenario.issue_url(7),
+        "base-fix",
+        "model",
+        "opus",
+        "effort",
+        "low",
+    ]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 3, "the test call, then #7's and #8's sessions");
+    for call in &calls[1..] {
+        let args: Vec<&str> = call["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        assert!(
+            args.windows(4)
+                .any(|window| window == ["--model", "opus", "--effort", "low"]),
+            "{args:?}"
+        );
+    }
+    assert!(prompts(&scenario)[2].contains(BASE_FIX_URL));
+}

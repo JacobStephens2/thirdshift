@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::base_fix::BaseFixAsk;
+use crate::harness::{Choice, ChosenBy, Harness};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::logs;
@@ -62,6 +63,9 @@ pub struct Given {
     pub stamp: String,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
+    /// The Harness, Model and Effort its sessions run on: the command's
+    /// that started it.
+    pub harness: Choice,
 }
 
 /// The hidden argument that makes a child Run a [`Kind::Ticket`], followed by
@@ -86,6 +90,18 @@ const ALLOW_BASE_FIX: &str = "--allow-base-fix";
 /// child Run is asked [`BaseFixAsk::Forbid`].
 const OFFER_BASE_FIX: &str = "--offer-base-fix";
 
+/// The hidden argument followed by the Harness the child Run's sessions run
+/// on. Not `--harness`, which is the `harness` flag with its dashes.
+const SESSIONS_HARNESS: &str = "--sessions-harness";
+
+/// The hidden argument followed by the Model the child Run's sessions run
+/// on. Without it, the Model is left to the Harness.
+const SESSIONS_MODEL: &str = "--sessions-model";
+
+/// The hidden argument followed by the Effort the child Run's sessions run
+/// on. Without it, the Effort is left to the Harness.
+const SESSIONS_EFFORT: &str = "--sessions-effort";
+
 impl Given {
     /// The hidden arguments that give a child Run this, as [`Reader`] reads
     /// them back.
@@ -101,6 +117,13 @@ impl Given {
             BaseFixAsk::Forbid => {}
             BaseFixAsk::Undecided { retry } => args.extend([OFFER_BASE_FIX, retry]),
         }
+        args.extend([SESSIONS_HARNESS, self.harness.harness.name()]);
+        if let Some(model) = &self.harness.model {
+            args.extend([SESSIONS_MODEL, model]);
+        }
+        if let Some(effort) = &self.harness.effort {
+            args.extend([SESSIONS_EFFORT, effort]);
+        }
         args
     }
 }
@@ -113,6 +136,9 @@ pub struct Reader {
     kind: Option<Kind>,
     stamp: Option<String>,
     base_fix: Option<BaseFixAsk>,
+    harness: Option<Harness>,
+    model: Option<String>,
+    effort: Option<String>,
 }
 
 impl Reader {
@@ -157,26 +183,60 @@ impl Reader {
                     }
                 });
             }
+            SESSIONS_HARNESS => {
+                not_yet_given(&self.harness, arg)?;
+                let name = value("Harness")?;
+                let harness = Harness::named(&name)
+                    .with_context(|| format!("{arg} must be followed by a Harness, not {name}"))?;
+                self.harness = Some(harness);
+            }
+            SESSIONS_MODEL => {
+                not_yet_given(&self.model, arg)?;
+                self.model = Some(value("Model")?);
+            }
+            SESSIONS_EFFORT => {
+                not_yet_given(&self.effort, arg)?;
+                self.effort = Some(value("Effort")?);
+            }
             _ => return Ok(false),
         }
         Ok(true)
     }
 
     /// What the child Run was given, once every argument has been taken, if
-    /// it is one. A kind needs a stamp, and the other hidden arguments a
-    /// kind.
+    /// it is one. A kind needs a stamp and a Harness, and the other hidden
+    /// arguments a kind.
     pub fn finish(self) -> Result<Option<Given>> {
         let Some(kind) = self.kind else {
-            if self.stamp.is_some() || self.base_fix.is_some() {
-                bail!("only a child Run is given {STAMP}, {ALLOW_BASE_FIX} or {OFFER_BASE_FIX}");
+            if self.stamp.is_some()
+                || self.base_fix.is_some()
+                || self.harness.is_some()
+                || self.model.is_some()
+                || self.effort.is_some()
+            {
+                bail!(
+                    "only a child Run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
+                     {SESSIONS_HARNESS}, {SESSIONS_MODEL} or {SESSIONS_EFFORT}"
+                );
             }
             return Ok(None);
         };
         let stamp = self.stamp.with_context(|| format!("missing {STAMP}"))?;
+        let harness = self
+            .harness
+            .with_context(|| format!("missing {SESSIONS_HARNESS}"))?;
         Ok(Some(Given {
             kind,
             stamp,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
+            harness: Choice {
+                harness,
+                model: self.model,
+                effort: self.effort,
+                // Chosen by the command that started it, whose checks it
+                // passed.
+                chosen_by: ChosenBy::Command,
+            },
         }))
     }
 }
@@ -212,12 +272,18 @@ pub struct Handle {
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
 /// Launch directory, given this command's start stamp for its Session logs,
-/// and asked `base_fix` about a Base fix.
-pub fn start(issue: &IssueUrl, kind: Kind, base_fix: BaseFixAsk) -> Result<Handle> {
+/// asked `base_fix` about a Base fix, and running its sessions on `harness`.
+pub fn start(
+    issue: &IssueUrl,
+    kind: Kind,
+    base_fix: BaseFixAsk,
+    harness: &Choice,
+) -> Result<Handle> {
     let given = Given {
         kind,
         stamp: logs::stamp().to_string(),
         base_fix,
+        harness: harness.clone(),
     };
     start_from(&own_executable()?, issue, &given)
 }
@@ -371,6 +437,7 @@ mod tests {
             kind: ticket(),
             stamp: STAMPED.to_string(),
             base_fix: BaseFixAsk::Forbid,
+            harness: Choice::default(),
         };
         let Err(error) = start_from(executable, &issue, &given) else {
             panic!("started from {}", executable.display());
@@ -408,12 +475,26 @@ mod tests {
         let offer = BaseFixAsk::Undecided {
             retry: format!("thirdshift {URL} --no-merge base-fix"),
         };
-        for kind in [ticket(), base_fix()] {
+        let on_claude = Choice {
+            chosen_by: ChosenBy::Command,
+            ..Choice::default()
+        };
+        let on_opus = Choice {
+            model: Some("opus".to_string()),
+            effort: Some("max".to_string()),
+            ..on_claude.clone()
+        };
+        let harnesses = [on_claude, on_opus];
+        for (kind, harness) in [ticket(), base_fix()]
+            .into_iter()
+            .zip(harnesses.iter().cycle())
+        {
             for base_fix in [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()] {
                 let given = Given {
                     kind: kind.clone(),
                     stamp: STAMPED.to_string(),
                     base_fix,
+                    harness: harness.clone(),
                 };
                 let written = given.to_args();
                 // Before, between and after the hidden arguments, each of
@@ -433,6 +514,11 @@ mod tests {
     fn a_run_given_no_hidden_argument_is_no_child_run() {
         assert_eq!(read(&[URL, "base-fix"]).unwrap(), None);
     }
+
+    /// What a Run given a hidden argument only a child Run is given, without
+    /// a kind, is rejected with.
+    const ONLY_A_CHILD_RUN: &str = "only a child Run is given --stamp, --allow-base-fix, \
+        --offer-base-fix, --sessions-harness, --sessions-model or --sessions-effort";
 
     #[test]
     fn hidden_arguments_that_are_repeated_have_no_value_or_lack_a_kind_or_stamp_are_rejected() {
@@ -484,19 +570,24 @@ mod tests {
                 "missing command to offer",
             ),
             (vec![&ticket, &[URL]], "missing --stamp"),
+            (vec![&ticket, &stamp], "missing --sessions-harness"),
+            (
+                vec![&ticket, &stamp, &["--sessions-harness", "gemini"]],
+                "--sessions-harness must be followed by a Harness, not gemini",
+            ),
+            (
+                vec![
+                    &ticket,
+                    &stamp,
+                    &["--sessions-model", "opus", "--sessions-model", "opus"],
+                ],
+                "repeated argument: --sessions-model",
+            ),
+            (vec![&[URL, "--sessions-effort", "max"]], ONLY_A_CHILD_RUN),
             (vec![&["--base-fix-into", "main", URL]], "missing --stamp"),
-            (
-                vec![&stamp, &[URL]],
-                "only a child Run is given --stamp, --allow-base-fix or --offer-base-fix",
-            ),
-            (
-                vec![&[URL, "--allow-base-fix"]],
-                "only a child Run is given --stamp, --allow-base-fix or --offer-base-fix",
-            ),
-            (
-                vec![&[URL, "--offer-base-fix", "x"]],
-                "only a child Run is given --stamp, --allow-base-fix or --offer-base-fix",
-            ),
+            (vec![&stamp, &[URL]], ONLY_A_CHILD_RUN),
+            (vec![&[URL, "--allow-base-fix"]], ONLY_A_CHILD_RUN),
+            (vec![&[URL, "--offer-base-fix", "x"]], ONLY_A_CHILD_RUN),
         ] {
             let mut args: Vec<&str> = args.concat();
             if !args.contains(&URL) {
