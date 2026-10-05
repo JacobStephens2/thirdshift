@@ -5,11 +5,11 @@
 In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.
 
 ```
-/thirdshift:code-review <own head>
+/thirdshift-code-review <own head>
 
 Someone else pushed commits to <branch> while it was being worked on, and they have been merged into <branch> in this worktree. <branch> implements <Issue URL>; its pull request is <pull request URL>. They are merged into the base branch only once you have reviewed them.
 
-Review with /thirdshift:code-review using <own head> as the fixed point: <branch>'s head before their commits were merged in.
+Review with the `thirdshift-code-review` skill using <own head> as the fixed point: <branch>'s head before their commits were merged in.
 
 Address the Standards and Spec findings you agree with.
 

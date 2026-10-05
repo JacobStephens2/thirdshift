@@ -15,9 +15,9 @@ use crate::ci::FailedChecks;
 use crate::github::{Check, CheckState};
 use crate::harness::Choice;
 use crate::issue::IssueUrl;
-use crate::plugin::SKILLS;
 use crate::prompt;
 use crate::session::claude_args;
+use crate::skills::SKILLS;
 
 use Sender::{ArchitectRun, Units};
 
@@ -56,10 +56,9 @@ const CHECK_URL: &str = "<check URL>";
 const INHERITED_CHECK: &str = "<Inherited failure>";
 const BACKGROUND_WORK: &str = "<background work>";
 const FOCUS: &str = "<focus>";
-const PLUGIN_DIR: &str = "<plugin dir>";
 const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
-const PLACEHOLDERS: [&str; 16] = [
+const PLACEHOLDERS: [&str; 15] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -73,7 +72,6 @@ const PLACEHOLDERS: [&str; 16] = [
     INHERITED_CHECK,
     BACKGROUND_WORK,
     FOCUS,
-    PLUGIN_DIR,
     SESSION_ID,
     PROMPT,
 ];
@@ -267,7 +265,7 @@ fn readme(prompts: &[Prompt]) -> String {
 
 Every Session prompt thirdshift can start or resume an agent session with, one file each, with placeholders such as `{BRANCH}` where each Run fills in its own values. The [Prompts and skills page](https://thirdshift.app/prompts/) shows the same prompts.
 
-Every session runs `claude` headless in the Run's worktree, in auto permission mode, with the Factory skills loaded as a plugin from a temporary directory:
+Every session runs `claude` headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's `.claude/skills/`, where Claude Code finds them, and kept out of git:
 
 ```sh
 {new}
@@ -296,7 +294,7 @@ A [Resume]({resume_file}) continues the session that ended:
         );
     }
     readme.push_str(
-        "\nThe Factory skills the prompts name are in [`skills/`](../skills/), as the plugin writes them out.\n",
+        "\nThe Factory skills the prompts name are in [`skills/`](../skills/), as thirdshift writes them out.\n",
     );
     readme
 }
@@ -323,10 +321,15 @@ fn fence(text: &str) -> String {
 /// when, if not always; or the Architecture review, which is no unit of a Run.
 fn skill_used_by(skill: &str) -> String {
     match skill {
-        "implement" | "tdd" => unit_links(&[IMPLEMENT]),
-        "code-review" | "pr" => unit_links(&[REVIEW]),
-        "resolving-merge-conflicts" => format!("{}, in a Repair", unit_links(&[FINISH])),
-        "improve-codebase-architecture" | "to-spec" | "to-tickets" | "codebase-design" => {
+        "thirdshift-implement" | "thirdshift-tdd" => unit_links(&[IMPLEMENT]),
+        "thirdshift-code-review" | "thirdshift-pr" => unit_links(&[REVIEW]),
+        "thirdshift-resolving-merge-conflicts" => {
+            format!("{}, in a Repair", unit_links(&[FINISH]))
+        }
+        "thirdshift-improve-codebase-architecture"
+        | "thirdshift-to-spec"
+        | "thirdshift-to-tickets"
+        | "thirdshift-codebase-design" => {
             "the Architecture review, in an Architect run".to_string()
         }
         _ => panic!("the Factory skill {skill} has no user: add it to skill_used_by"),
@@ -348,9 +351,7 @@ fn render() -> String {
 /// resumes with, with the page's placeholders.
 fn command(resume: Option<&str>) -> String {
     let harness = Choice::default();
-    let args = claude_args(OsStr::new(PLUGIN_DIR), &harness, resume, PROMPT);
-    let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
-    format!("claude {}", args.join(" "))
+    format!("claude {}", claude_args(&harness, resume, PROMPT).join(" "))
 }
 
 fn command_line(html: &mut String) {
@@ -359,7 +360,7 @@ fn command_line(html: &mut String) {
         r##"<section class="sec" aria-labelledby="command-title">
   <div class="wrap">
     <div class="sec-head"><p class="eyebrow">The command line</p><h2 id="command-title">How each session starts</h2></div>
-    <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode, with the Factory skills loaded as a plugin from a temporary directory. The prompt is one of the templates below.</p>
+    <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
     <pre class="job-text" aria-label="A new session"><code>{new}</code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
     <pre class="job-text" aria-label="A Resume"><code>{resume}</code></pre>
@@ -405,7 +406,7 @@ fn skills_section(html: &mut String) {
         r##"<section class="sec" aria-labelledby="skills-title">
   <div class="wrap">
     <div class="sec-head"><p class="eyebrow">Factory skills</p><h2 id="skills-title">The skills, as the agent reads them</h2></div>
-    <p class="lede">Every Factory skill and supporting file, raw, exactly as the plugin writes it out.</p>
+    <p class="lede">Every Factory skill and supporting file, raw, exactly as thirdshift writes it out.</p>
     <div class="job-sheets">
 "##,
     );
@@ -443,7 +444,7 @@ fn licence_section(html: &mut String) {
         r##"<section class="sec" aria-labelledby="licence-title">
   <div class="wrap">
     <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
-    <p class="lede">The Factory skills are adapted from Matt Pocock's skills, under this licence. The <a href="#skill-pr">pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-pr-credits-md">CREDITS.md</a>.</p>
+    <p class="lede">The Factory skills are adapted from Matt Pocock's skills, under this licence. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>.</p>
 "##,
     );
     let mut files: Vec<&File> = SKILLS.files().collect();

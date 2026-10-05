@@ -5,10 +5,10 @@
 Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.
 
 ```
-/thirdshift:implement <Issue URL>
-The base branch is <base>. Review with /thirdshift:code-review using <base> as the fixed point.
+/thirdshift-implement <Issue URL>
+The base branch is <base>. Review with the `thirdshift-code-review` skill using <base> as the fixed point.
 Address the Standards and Spec findings you agree with.
-Push branch <branch> and create a pull request against <base> using /thirdshift:pr, marked ready for review.
+Push branch <branch> and create a pull request against <base> using the `thirdshift-pr` skill, marked ready for review.
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 Include "Closes #<n>" in the PR body.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.

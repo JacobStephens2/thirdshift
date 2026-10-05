@@ -1,5 +1,5 @@
 ---
-name: improve-codebase-architecture
+name: thirdshift-improve-codebase-architecture
 description: "Scan a codebase for deepening opportunities, take the top recommendation, and publish it to the issue tracker: as a plan when it is Strong, as an idea otherwise. Only for an Architecture review."
 disable-model-invocation: false
 ---
@@ -14,7 +14,7 @@ It changes nothing in the repository. Never commit, push, create a branch or ope
 
 This command is _informed_ by the project's domain model and built on a shared design vocabulary:
 
-- Call the Skill tool with "thirdshift:codebase-design" for the architecture vocabulary (**module**, **interface**, **depth**, **seam**, **adapter**, **leverage**, **locality**) and its principles (the deletion test, "the interface is the test surface", "one adapter = hypothetical seam, two = real"). Use these terms exactly in every suggestion, and don't drift into "component," "service," "API," or "boundary."
+- Use the `thirdshift-codebase-design` skill for the architecture vocabulary (**module**, **interface**, **depth**, **seam**, **adapter**, **leverage**, **locality**) and its principles (the deletion test, "the interface is the test surface", "one adapter = hypothetical seam, two = real"). Use these terms exactly in every suggestion, and don't drift into "component," "service," "API," or "boundary."
 - The domain language in `CONTEXT.md` gives names to good seams; ADRs in `docs/adr/` record decisions this command should not re-litigate.
 
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to the `gh` CLI. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
@@ -71,7 +71,7 @@ Every other candidate is dropped. Don't file it, and don't list it in the plan o
 
 If the scan surfaced no candidate at all, file nothing, and say so plainly in place of the final line of step 6: there is no issue for it to name.
 
-**Use CONTEXT.md vocabulary for the domain, and the `/thirdshift:codebase-design` vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
+**Use CONTEXT.md vocabulary for the domain, and the `thirdshift-codebase-design` skill's vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
 
 **ADR conflicts**: if a candidate contradicts an existing ADR, only keep it when the friction is real enough to warrant revisiting the ADR. Mark it clearly in the report (e.g. a warning callout: _"contradicts ADR-0007, but worth reopening because…"_). Don't raise every theoretical refactor an ADR forbids.
 
@@ -92,7 +92,7 @@ Side effects are recorded, never written:
 - **Naming a deepened module after a concept not in `CONTEXT.md`?** Record the term and its definition as work for a Ticket.
 - **Sharpening a fuzzy term as you decide?** Record the sharper definition as work for a Ticket.
 - **Reopening an ADR, or making a decision worth one?** Record the new or changed ADR as work for a Ticket. A decision is worth an ADR only when it is hard to reverse, surprising without context, and the result of a real trade-off.
-- **Want to explore alternative interfaces for the deepened module?** Call the Skill tool with "thirdshift:codebase-design" and use its design-it-twice parallel sub-agent pattern.
+- **Want to explore alternative interfaces for the deepened module?** Use the `thirdshift-codebase-design` skill and its design-it-twice parallel sub-agent pattern.
 
 ### 4. Publish the plan
 
@@ -100,8 +100,8 @@ Only for a `Strong` top recommendation whose design is settled.
 
 Decide the plan's size. If one session, a single fresh context window, is enough for the whole change, the plan is a single **Ticket**. Otherwise it is a **Spec** with **Tickets**. Don't force a small refactor into a Spec.
 
-- **A Spec with Tickets**: call the Skill tool with "thirdshift:to-spec" to publish the Spec, then with "thirdshift:to-tickets" to publish its Tickets as the Spec's sub-issues.
-- **A single Ticket**: call the Skill tool with "thirdshift:to-tickets" to publish one standalone Ticket, with no parent.
+- **A Spec with Tickets**: use the `thirdshift-to-spec` skill to publish the Spec, then the `thirdshift-to-tickets` skill to publish its Tickets as the Spec's sub-issues.
+- **A single Ticket**: use the `thirdshift-to-tickets` skill to publish one standalone Ticket, with no parent.
 
 The plan's top issue, the Spec or the single Ticket, is labelled `needs-triage` and nothing else. thirdshift marks it ready once the session has ended and the plan passes its checks; you never do. Tickets under a Spec are labelled `ready-for-agent`.
 

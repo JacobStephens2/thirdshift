@@ -509,7 +509,7 @@ fn a_base_branch_that_moved_into_a_conflict_gets_a_conflict_repair_and_the_spec_
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let prompts = spec_prompts(&scenario);
     assert_eq!(prompts.len(), 2, "{prompts:?}");
-    assert_contains(&prompts[1], "/thirdshift:resolving-merge-conflicts");
+    assert_contains(&prompts[1], "/thirdshift-resolving-merge-conflicts");
     assert_contains(&prompts[1], "A merge of origin/main into issue-20");
     assert_contains(&prompts[1], &spec_url(&scenario));
     let spec = spec_pr(&scenario);
@@ -970,11 +970,11 @@ fn once_the_last_ticket_lands_the_spec_review_reviews_the_spec_branch_against_th
     assert_eq!(review["branch"], "issue-20");
     let prompt = review["prompt"].as_str().unwrap();
     for part in [
-        "/thirdshift:code-review main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
+        "/thirdshift-code-review main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
         &spec_url(&scenario),
         "using main as the fixed point",
-        "/thirdshift:tdd",
-        "Update PR https://github.com/acme/widgets/pull/2 using /thirdshift:pr",
+        "the `thirdshift-tdd` skill",
+        "Update PR https://github.com/acme/widgets/pull/2 using the `thirdshift-pr` skill",
         "\"Unaddressed findings\"",
         "Include \"Closes #20\"",
         "You run headless",

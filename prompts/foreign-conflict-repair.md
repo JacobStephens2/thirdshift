@@ -5,7 +5,7 @@
 In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.
 
 ```
-/thirdshift:resolving-merge-conflicts
+/thirdshift-resolving-merge-conflicts
 
 A merge of origin/<branch> into <branch> is in progress in this worktree and has conflicts.
 <branch> implements <Issue URL>; its pull request is <pull request URL>.

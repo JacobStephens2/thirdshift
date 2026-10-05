@@ -47,6 +47,19 @@ use tempfile::TempDir;
 pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
 
+/// Every Factory skill, by the name a session finds it under.
+pub const FACTORY_SKILLS: [&str; 9] = [
+    "thirdshift-implement",
+    "thirdshift-code-review",
+    "thirdshift-pr",
+    "thirdshift-tdd",
+    "thirdshift-resolving-merge-conflicts",
+    "thirdshift-improve-codebase-architecture",
+    "thirdshift-to-spec",
+    "thirdshift-to-tickets",
+    "thirdshift-codebase-design",
+];
+
 /// How long a test waits for a Run to reach a point, such as starting the
 /// agent or showing a prompt, before it gives the Run up as hung. A Run that
 /// exits without reaching the point fails its test at once, so only a hung
@@ -785,6 +798,24 @@ test -f {root}/{COPY_REPLACED}
         match fs::read_to_string(self.path("claude-calls.json")) {
             Ok(text) => serde_json::from_str(&text).unwrap(),
             Err(_) => Vec::new(),
+        }
+    }
+
+    /// Assert every `claude` call found every Factory skill, by its
+    /// `thirdshift-<skill>` name, in its worktree's `.claude/skills/`.
+    pub fn assert_every_session_found_the_factory_skills(&self) {
+        let calls = self.claude_calls();
+        assert!(!calls.is_empty(), "no session ran");
+        for call in calls {
+            for skill in FACTORY_SKILLS {
+                let skill_md = call["skill_files"][format!("{skill}/SKILL.md")].as_str();
+                assert!(
+                    skill_md.is_some_and(|text| text.contains(&format!("name: {skill}\n"))),
+                    "the session in {} with the prompt {} found no {skill}",
+                    call["cwd"],
+                    call["prompt"]
+                );
+            }
         }
     }
 
