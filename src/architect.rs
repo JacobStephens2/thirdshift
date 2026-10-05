@@ -23,10 +23,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
 use crate::failed_run::FailedRun;
-use crate::github::{self, ListedIssue};
+use crate::github::ListedIssue;
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
-use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
+use crate::labels::{Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{OnGitHub, Outside};
@@ -247,7 +247,15 @@ pub fn run(
     }
     let worktree = ReviewWorktree::create(directory.git(), &repo.name, &base)?;
     let logs = Logs::of_architect_run(&repo);
-    let (reviewed, log) = review(worktree, &base, focus, directory.origin(), started, &logs);
+    let (reviewed, log) = review(
+        &mut on_github,
+        worktree,
+        &base,
+        focus,
+        directory.origin(),
+        started,
+        &logs,
+    );
     reviewed.map(Outcome::Reviewed).map_err(|error| FailedRun {
         log,
         ..FailedRun::from(error)
@@ -293,10 +301,11 @@ fn skip(repo: &Repo, skipped: Skipped) -> Outcome {
 }
 
 /// The Architecture review session in `worktree`, of the Base branch `base`,
-/// then [`conclude`] on its final message. The worktree is removed once the
+/// then [`conclude`] on its final message, through `outside`. The worktree is removed once the
 /// review is concluded. Returns how it ended with the most recent session's
 /// log, if a session created it.
 fn review(
+    outside: &mut impl Outside,
     worktree: ReviewWorktree,
     base: &str,
     focus: Option<&str>,
@@ -313,7 +322,7 @@ fn review(
         }
         let prompt = prompt::architecture_review(base, focus);
         let final_message = sessions.run_to_final_message(REVIEW, &prompt)?;
-        conclude(final_message.as_deref(), origin, started, base)
+        conclude(outside, final_message.as_deref(), origin, started, base)
     })
 }
 
@@ -349,12 +358,14 @@ impl Report {
 }
 
 /// End the Architecture review, of the Base branch `base`, on the issue the
-/// last line of its `final_message` names: a plan is marked ready, and an
-/// idea issue, or the issue that already covers the top recommendation, is
-/// labelled an Architect idea. Fails if the session had no final message, if
-/// its last line is not one the prompt asks for, or if the plan can't be
-/// marked ready or the idea labelled.
+/// last line of its `final_message` names, reaching it through `outside`: a
+/// plan is marked ready, and an idea issue, or the issue that already covers
+/// the top recommendation, is labelled an Architect idea. Fails, with no
+/// call made, if the session had no final message or its last line is not
+/// one the prompt asks for, and fails if the plan can't be marked ready or
+/// the idea labelled.
 fn conclude(
+    outside: &mut impl Outside,
     final_message: Option<&str>,
     origin: &str,
     started: DateTime<Utc>,
@@ -362,16 +373,16 @@ fn conclude(
 ) -> Result<Reviewed> {
     match final_message.and_then(Report::read) {
         Some(Report::Plan(plan)) => {
-            mark_plan_ready(&plan, origin, started)?;
+            mark_plan_ready(outside, &plan, origin, started)?;
             let base = base.to_string();
             Ok(Reviewed::PlanReady { plan, base })
         }
         Some(Report::Idea(idea)) => {
-            label_idea(&idea)?;
+            label_idea(outside, &idea)?;
             Ok(Reviewed::IdeaFiled(idea))
         }
         Some(Report::AlreadyFiled(issue)) => {
-            label_idea(&issue)?;
+            label_idea(outside, &issue)?;
             Ok(Reviewed::AlreadyFiled(issue))
         }
         None => bail!("the Architecture review ended without the final line its prompt asks for"),
@@ -380,53 +391,78 @@ fn conclude(
 
 /// Mark `plan` ready: check it, then swap its `needs-triage` for
 /// `ready-for-agent` and label it `architect-plan`, in one request that
-/// keeps its other labels, as read once the checks are done, having added
-/// each label it puts on to the repository if it lacks it. Fails, changing
-/// no label, if the plan fails its checks.
-fn mark_plan_ready(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<()> {
-    progress::step(format_args!(
+/// keeps its other labels, as viewed for the checks, having added each label
+/// it puts on to the repository if it lacks it. Fails, changing no label, if
+/// the plan fails its checks.
+fn mark_plan_ready(
+    outside: &mut impl Outside,
+    plan: &IssueUrl,
+    origin: &str,
+    started: DateTime<Utc>,
+) -> Result<()> {
+    outside.step(format!(
         "the Architecture review published the plan {}",
         plan.url
     ));
-    check_plan(plan, origin, started)?;
-    if interrupt::requested() {
+    let labels = check_plan(outside, plan, origin, started)?;
+    if outside.interrupted() {
         bail!("interrupted");
     }
-    progress::step(format_args!(
+    outside.step(format!(
         "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} and adding {ARCHITECT_PLAN} on #{}",
         plan.number
     ));
-    Edit::read(plan, &[NEEDS_TRIAGE], &[READY_FOR_AGENT, ARCHITECT_PLAN])?.apply()
+    outside.apply(&Edit::of(
+        plan,
+        labels,
+        &[NEEDS_TRIAGE],
+        &[READY_FOR_AGENT, ARCHITECT_PLAN],
+    ))
 }
 
 /// Label `idea` an Architect idea: put `needs-triage` and `architect-idea`
-/// on it, in one request that keeps its other labels, having added each to
-/// the repository if it lacks it. `needs-triage` goes back on an issue that
-/// had been triaged: the factory again takes it for the best next move.
-fn label_idea(idea: &IssueUrl) -> Result<()> {
-    if interrupt::requested() {
+/// on it, in one request that keeps its other labels, as viewed, having
+/// added each to the repository if it lacks it. `needs-triage` goes back on
+/// an issue that had been triaged: the factory again takes it for the best
+/// next move.
+fn label_idea(outside: &mut impl Outside, idea: &IssueUrl) -> Result<()> {
+    if outside.interrupted() {
         bail!("interrupted");
     }
-    progress::step(format_args!(
+    outside.step(format!(
         "labelling #{} an Architect idea: adding {NEEDS_TRIAGE} and {ARCHITECT_IDEA}",
         idea.number
     ));
-    Edit::read(idea, &[], &[NEEDS_TRIAGE, ARCHITECT_IDEA])
-        .and_then(|edit| edit.apply())
+    outside
+        .issue(idea)
+        .and_then(|viewed| {
+            outside.apply(&Edit::of(
+                idea,
+                viewed.labels,
+                &[],
+                &[NEEDS_TRIAGE, ARCHITECT_IDEA],
+            ))
+        })
         .with_context(|| format!("could not label the Architect idea #{}", idea.number))
 }
 
-/// Check `plan`: fails unless it is in the repository at `origin`, open,
-/// created since the Architect run `started`, and has no label but
-/// `needs-triage` that makes an Unready Ticket.
-fn check_plan(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<()> {
+/// Check `plan`, viewing it: fails unless it is in the repository at
+/// `origin`, which is checked before the view, open, created since the
+/// Architect run `started`, and has no label but `needs-triage` that makes
+/// an Unready Ticket. Returns its labels, as viewed.
+fn check_plan(
+    outside: &mut impl Outside,
+    plan: &IssueUrl,
+    origin: &str,
+    started: DateTime<Utc>,
+) -> Result<Labels> {
     if !plan.matches_origin(origin) {
         bail!(
             "the plan {} is not in the repository at origin {origin}",
             plan.url
         );
     }
-    let issue = github::issue(plan)?;
+    let issue = outside.issue(plan)?;
     if !issue.is_open {
         bail!("the plan {} is closed", plan.url);
     }
@@ -440,12 +476,13 @@ fn check_plan(plan: &IssueUrl, origin: &str, started: DateTime<Utc>) -> Result<(
     if let Some(unready) = issue.labels.swapped(&[NEEDS_TRIAGE], &[]).unready() {
         bail!("the plan {} is labelled {unready}", plan.url);
     }
-    Ok(())
+    Ok(issue.labels)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github;
     use crate::pass::{Call, InMemory};
 
     const URL: &str = "https://github.com/acme/widgets/issues/8";
@@ -633,5 +670,271 @@ mod tests {
 
         assert!(line.unwrap().starts_with("Architect idea #6"));
         assert_eq!(urls, [url(6)]);
+    }
+
+    const ORIGIN: &str = "git@github.com:acme/widgets.git";
+
+    /// When the Architect run started.
+    fn started() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-10-04T09:00:00.750Z")
+            .unwrap()
+            .to_utc()
+    }
+
+    /// An issue as viewed: open or not, created `after` seconds after the
+    /// Architect run started, labelled `labels`.
+    fn viewed(open: bool, after: i64, labels: &[&str]) -> github::Issue {
+        github::Issue {
+            is_open: open,
+            labels: labels.iter().copied().collect(),
+            created: started() + chrono::Duration::seconds(after),
+        }
+    }
+
+    /// The final message of a review whose last line is `line` and the URL
+    /// of issue 8.
+    fn message(line: &str) -> String {
+        format!("Reviewed the codebase.\n\n{line}{}\n", url(8))
+    }
+
+    /// The Architect run's conclusion on `final_message`, through `repo`:
+    /// how the review ended, or the cause it failed with, and what it did.
+    fn concluded(mut repo: InMemory, final_message: &str) -> (Result<String, String>, Vec<Call>) {
+        let ended = conclude(&mut repo, Some(final_message), ORIGIN, started(), "main")
+            .map(|reviewed| reviewed.to_string())
+            .map_err(|error| format!("{error:#}"));
+        (ended, repo.calls)
+    }
+
+    fn step(line: &str) -> Call {
+        Call::Step(line.to_string())
+    }
+
+    fn edit(issue: u64, off: &[&'static str], on: &[&'static str], labels: &[&str]) -> Call {
+        Call::Edit {
+            issue,
+            off: off.to_vec(),
+            on: on.to_vec(),
+            labels: labels.iter().map(|label| label.to_string()).collect(),
+        }
+    }
+
+    const PUBLISHED: &str =
+        "the Architecture review published the plan https://github.com/acme/widgets/issues/8";
+    const MARKING: &str = "marking the plan ready: swapping needs-triage for ready-for-agent and adding architect-plan on #8";
+    const LABELLING: &str =
+        "labelling #8 an Architect idea: adding needs-triage and architect-idea";
+
+    #[test]
+    fn a_plan_is_viewed_once_and_marked_ready_in_one_edit_keeping_its_other_labels() {
+        let repo = InMemory::default().viewable(
+            8,
+            viewed(true, 0, &["architecture", "needs-triage", "Spec"]),
+        );
+
+        let (ended, calls) = concluded(repo, &message(prompt::PLAN_LINE));
+
+        assert_eq!(
+            ended.unwrap(),
+            format!("plan {} is ready for an agent", url(8))
+        );
+        assert_eq!(
+            calls,
+            [
+                step(PUBLISHED),
+                Call::View(8),
+                step(MARKING),
+                edit(
+                    8,
+                    &["needs-triage"],
+                    &["ready-for-agent", "architect-plan"],
+                    &["architecture", "Spec", "ready-for-agent", "architect-plan"],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_plan_with_needs_triage_in_another_case_has_it_taken_off() {
+        let repo = InMemory::default().viewable(8, viewed(true, 0, &["Needs-Triage"]));
+
+        let (ended, calls) = concluded(repo, &message(prompt::PLAN_LINE));
+
+        assert!(ended.is_ok());
+        assert_eq!(
+            calls.last().unwrap(),
+            &edit(
+                8,
+                &["needs-triage"],
+                &["ready-for-agent", "architect-plan"],
+                &["ready-for-agent", "architect-plan"],
+            )
+        );
+    }
+
+    #[test]
+    fn a_plan_in_another_repository_is_refused_without_a_view() {
+        let repo = InMemory::default().viewable(8, viewed(true, 0, &["needs-triage"]));
+        let other = "Architecture review plan: https://github.com/other/widgets/issues/8";
+
+        let (ended, calls) = concluded(repo, other);
+
+        assert_eq!(
+            ended.unwrap_err(),
+            format!(
+                "the plan https://github.com/other/widgets/issues/8 is not in the repository at origin {ORIGIN}"
+            )
+        );
+        assert_eq!(
+            calls,
+            [step(
+                "the Architecture review published the plan https://github.com/other/widgets/issues/8"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_plan_failing_a_check_is_refused_with_its_cause_and_no_edit() {
+        for (plan, cause) in [
+            (viewed(false, 0, &["needs-triage"]), "is closed"),
+            (
+                viewed(true, -1, &["needs-triage"]),
+                "was created before this Architect run started",
+            ),
+            (
+                viewed(true, 0, &["needs-triage", "ready-for-human"]),
+                "is labelled ready-for-human",
+            ),
+            (
+                viewed(true, 0, &["needs-triage", "Needs-Info"]),
+                "is labelled needs-info",
+            ),
+            (viewed(true, 0, &["wontfix"]), "is labelled wontfix"),
+        ] {
+            let repo = InMemory::default().viewable(8, plan);
+
+            let (ended, calls) = concluded(repo, &message(prompt::PLAN_LINE));
+
+            assert_eq!(ended.unwrap_err(), format!("the plan {} {cause}", url(8)));
+            assert_eq!(calls, [step(PUBLISHED), Call::View(8)], "{cause}");
+        }
+    }
+
+    #[test]
+    fn a_plan_created_in_the_second_the_run_started_passes() {
+        // The run started 0.75 s into its second; GitHub gives the plan's
+        // creation to the second.
+        let mut plan = viewed(true, 0, &["needs-triage"]);
+        plan.created = DateTime::parse_from_rfc3339("2026-10-04T09:00:00Z")
+            .unwrap()
+            .to_utc();
+        let repo = InMemory::default().viewable(8, plan);
+
+        let (ended, _) = concluded(repo, &message(prompt::PLAN_LINE));
+
+        assert!(ended.is_ok(), "{ended:?}");
+    }
+
+    #[test]
+    fn an_interrupt_after_the_plans_checks_makes_no_edit() {
+        let repo = InMemory::default()
+            .viewable(8, viewed(true, 0, &["needs-triage"]))
+            .interrupted();
+
+        let (ended, calls) = concluded(repo, &message(prompt::PLAN_LINE));
+
+        assert_eq!(ended.unwrap_err(), "interrupted");
+        assert_eq!(calls, [step(PUBLISHED), Call::View(8)]);
+    }
+
+    #[test]
+    fn an_idea_filed_or_already_filed_is_labelled_an_architect_idea_keeping_its_other_labels() {
+        for (line, ending, labels, after) in [
+            (
+                prompt::IDEA_LINE,
+                format!(
+                    "no Strong candidate: the Architecture review filed the idea {}",
+                    url(8)
+                ),
+                vec!["architecture", "needs-triage"],
+                vec!["architecture", "needs-triage", "architect-idea"],
+            ),
+            (
+                prompt::ALREADY_FILED_LINE,
+                format!(
+                    "no Strong candidate: {} already covers the Architecture review's top recommendation, so it filed nothing",
+                    url(8)
+                ),
+                vec!["bug", "ready-for-agent"],
+                vec!["bug", "ready-for-agent", "needs-triage", "architect-idea"],
+            ),
+        ] {
+            let repo = InMemory::default().viewable(8, viewed(true, -3600, &labels));
+
+            let (ended, calls) = concluded(repo, &message(line));
+
+            let on: Vec<&'static str> = ["needs-triage", "architect-idea"]
+                .into_iter()
+                .filter(|label| !labels.contains(label))
+                .collect();
+            assert_eq!(ended.unwrap(), ending);
+            assert_eq!(
+                calls,
+                [step(LABELLING), Call::View(8), edit(8, &[], &on, &after),],
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_idea_that_cannot_be_viewed_or_edited_fails_naming_it_ahead_of_the_cause() {
+        let unviewable = InMemory::default();
+        let (ended, calls) = concluded(unviewable, &message(prompt::IDEA_LINE));
+        assert_eq!(
+            ended.unwrap_err(),
+            "could not label the Architect idea #8: gh: Could not resolve to an issue with the number of 8"
+        );
+        assert_eq!(calls, [step(LABELLING), Call::View(8)]);
+
+        let uneditable = InMemory::default()
+            .viewable(8, viewed(true, 0, &[]))
+            .edit_failing(8);
+        let (ended, calls) = concluded(uneditable, &message(prompt::ALREADY_FILED_LINE));
+        assert_eq!(
+            ended.unwrap_err(),
+            "could not label the Architect idea #8: gh: could not edit #8"
+        );
+        assert_eq!(calls.len(), 3);
+        assert!(matches!(calls[2], Call::Edit { issue: 8, .. }));
+    }
+
+    #[test]
+    fn an_interrupt_before_an_idea_is_viewed_makes_no_call() {
+        let repo = InMemory::default()
+            .viewable(8, viewed(true, 0, &[]))
+            .interrupted();
+
+        let (ended, calls) = concluded(repo, &message(prompt::IDEA_LINE));
+
+        assert_eq!(ended.unwrap_err(), "interrupted");
+        assert_eq!(calls, []);
+    }
+
+    #[test]
+    fn a_final_message_without_the_line_as_asked_for_fails_with_no_call_made() {
+        let repo = InMemory::default().viewable(8, viewed(true, 0, &["needs-triage"]));
+
+        let (ended, calls) = concluded(repo, "Published the plan.");
+
+        assert_eq!(
+            ended.unwrap_err(),
+            "the Architecture review ended without the final line its prompt asks for"
+        );
+        assert_eq!(calls, []);
+
+        let mut repo = InMemory::default();
+        let ended = conclude(&mut repo, None, ORIGIN, started(), "main");
+        assert!(ended.is_err());
+        assert_eq!(repo.calls, []);
     }
 }

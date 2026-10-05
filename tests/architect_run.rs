@@ -244,28 +244,6 @@ fn plan_only_marks_the_published_ticket_ready_and_prints_its_url() {
 }
 
 #[test]
-fn plan_only_marks_a_published_spec_ready_and_leaves_its_tickets_and_other_labels() {
-    let scenario = scenario();
-    scenario.agent_does(
-        r#"
-spec=$(gh issue create --title "Deepen the session module" --body "The Spec" --label needs-triage,architecture)
-gh issue create --title "Move the logs" --body "A Ticket" --label ready-for-agent
-printf 'Architecture review plan: %s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
-"#,
-    );
-
-    let result = scenario.run(&["architect", "--plan-only"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
-    assert_eq!(
-        scenario.issue_labels(8),
-        ["architecture", "ready-for-agent", ARCHITECT_PLAN]
-    );
-    assert_eq!(scenario.issue_labels(9), ["ready-for-agent"]);
-}
-
-#[test]
 fn the_architect_plan_label_is_created_when_the_repository_lacks_it() {
     let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
@@ -618,38 +596,6 @@ fn a_review_whose_idea_is_already_filed_prints_that_issues_url_files_nothing_and
 }
 
 #[test]
-fn an_idea_already_filed_and_triaged_goes_back_to_needs_triage_keeping_its_other_labels() {
-    for triaged in [
-        &["ready-for-human", "architecture"][..],
-        &["Architecture", "WONTFIX", "Architect-Idea"],
-        &["needs-info"],
-        &[],
-    ] {
-        let scenario = scenario();
-        scenario.issue_labelled(7, triaged);
-        let url = scenario.issue_url(7);
-        scenario.agent_does(&ends_with(&format!(
-            "Architecture review already filed: {url}"
-        )));
-
-        let result = scenario.run(&["architect", "--plan-only"]);
-
-        assert_eq!(
-            result.stdout,
-            format!("{url}\n"),
-            "stderr: {}",
-            result.stderr
-        );
-        let kept = triaged
-            .iter()
-            .filter(|label| !label.eq_ignore_ascii_case(ARCHITECT_IDEA))
-            .copied();
-        let expected: Vec<&str> = kept.chain(["needs-triage", ARCHITECT_IDEA]).collect();
-        assert_eq!(scenario.issue_labels(7), expected, "{triaged:?}");
-    }
-}
-
-#[test]
 fn the_architect_idea_label_is_created_when_the_repository_lacks_it_and_kept_when_it_has_it() {
     for (repo_labels, created) in [
         (&["needs-triage"][..], true),
@@ -754,21 +700,6 @@ fn a_review_with_no_strong_candidate_dispatches_nothing_without_plan_only() {
 }
 
 #[test]
-fn a_closed_plan_is_refused() {
-    let scenario = scenario();
-    scenario.agent_does(&publishes_a_ticket_then("gh fake issue 8 CLOSED"));
-
-    let result = scenario.run(&["architect", "--plan-only"]);
-
-    assert_failed(
-        &scenario,
-        &result,
-        &format!("the plan {PLAN_URL} is closed"),
-    );
-    assert_eq!(scenario.issue_labels(8), ["needs-triage"]);
-}
-
-#[test]
 fn a_plan_older_than_the_architect_run_is_refused() {
     let scenario = scenario();
     scenario.issue_labelled(7, &["needs-triage"]);
@@ -784,42 +715,6 @@ fn a_plan_older_than_the_architect_run_is_refused() {
         &format!("the plan {url} was created before this Architect run started"),
     );
     assert_eq!(scenario.issue_labels(7), ["needs-triage"]);
-}
-
-#[test]
-fn a_plan_with_another_unready_label_is_refused() {
-    for label in ["ready-for-human", "needs-info", "wontfix"] {
-        let scenario = scenario();
-        scenario.agent_does(&publishes_a_ticket_then(&format!(
-            r#"gh fake labels 8 '["needs-triage", "{label}"]'"#
-        )));
-
-        let result = scenario.run(&["architect", "--plan-only"]);
-
-        assert_failed(
-            &scenario,
-            &result,
-            &format!("the plan {PLAN_URL} is labelled {label}"),
-        );
-        assert_eq!(scenario.issue_labels(8), ["needs-triage", label]);
-    }
-}
-
-#[test]
-fn a_plan_in_another_repository_is_refused() {
-    let scenario = scenario();
-    let url = "https://github.com/acme/gadgets/issues/8";
-    scenario.agent_does(&ends_with(&format!("Architecture review plan: {url}")));
-
-    let result = scenario.run(&["architect", "--plan-only"]);
-
-    assert_failed(
-        &scenario,
-        &result,
-        &format!(
-            "the plan {url} is not in the repository at origin https://github.com/acme/widgets.git"
-        ),
-    );
 }
 
 #[test]

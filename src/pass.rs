@@ -1,26 +1,35 @@
 //! The Pass seam: what an Architect run's or a Pickup run's gates, which
-//! decide before any work whether it is skipped, read and change of GitHub.
-//! [`OnGitHub`] does each through `gh`, the Ready issue search and the
-//! progress lines; [`InMemory`], in tests, from memory, recording each call.
+//! decide before any work whether it is skipped, read and change of GitHub,
+//! and what an Architect run's conclusion after its Architecture review
+//! does, viewing and labelling the issue the review ended on.
+//! [`OnGitHub`] does each through `gh`, the Ready issue search, the
+//! interrupt flag and the progress lines; [`InMemory`], in tests, from
+//! memory, recording each call.
 
 use anyhow::Result;
 
 use crate::git::Git;
-use crate::github::{self, ListedIssue};
-use crate::issue::Repo;
+use crate::github::{self, Issue, ListedIssue};
+use crate::interrupt;
+use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label};
 use crate::progress;
 use crate::ready::{self, ReadyIssue};
 
-/// What a pass's gates read and change of its repository on GitHub, and
-/// where their progress lines go.
+/// What a pass's gates, and an Architect run's conclusion, read and change of
+/// its repository on GitHub, whether the run is interrupted, and where their
+/// progress lines go.
 pub trait Outside {
     /// Every open issue in the repository labelled `label`.
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>>;
     /// Every closed issue in the repository labelled `label`.
     fn closed_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>>;
+    /// `issue`'s state, labels and when it was created.
+    fn issue(&mut self, issue: &IssueUrl) -> Result<Issue>;
     /// Make `edit`.
     fn apply(&mut self, edit: &Edit) -> Result<()>;
+    /// Whether the run was interrupted.
+    fn interrupted(&mut self) -> bool;
     /// The repository's lowest-numbered Ready issue, if it has one, by the
     /// Ready issue search, with its lines on the issues passed over.
     fn ready_issue(&mut self) -> Result<Option<ReadyIssue>>;
@@ -43,8 +52,16 @@ impl Outside for OnGitHub<'_> {
         github::closed_issues_labelled(&self.repo.slug(), label)
     }
 
+    fn issue(&mut self, issue: &IssueUrl) -> Result<Issue> {
+        github::issue(issue)
+    }
+
     fn apply(&mut self, edit: &Edit) -> Result<()> {
         edit.apply()
+    }
+
+    fn interrupted(&mut self) -> bool {
+        interrupt::requested()
     }
 
     fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
@@ -64,7 +81,7 @@ mod in_memory {
     use anyhow::{Result, bail};
 
     use super::Outside;
-    use crate::github::ListedIssue;
+    use crate::github::{Issue, ListedIssue};
     use crate::issue::IssueUrl;
     use crate::labels::{Edit, Label, Labels};
     use crate::ready::ReadyIssue;
@@ -76,6 +93,8 @@ mod in_memory {
         Open(&'static str),
         /// They listed the closed issues with this label.
         Closed(&'static str),
+        /// They viewed this issue.
+        View(u64),
         /// They applied an Edit to this issue, taking `off` off it and
         /// putting `on` on it, which leaves it with `labels`.
         Edit {
@@ -91,12 +110,16 @@ mod in_memory {
     }
 
     /// A repository in memory: its issues, filed by label, open or
-    /// closed, the Ready issue search's answer, and the issues whose Edits
-    /// fail.
+    /// closed, the issues it can view, the Ready issue search's answer, the
+    /// issues whose Edits fail, and whether the run was interrupted.
     #[derive(Default)]
     pub struct InMemory {
         /// Each issue, filed under the label a listing finds it by.
         filed: Vec<Filed>,
+        /// Each issue it can view, by number. Viewing any other fails.
+        viewable: Vec<(u64, Issue)>,
+        /// Whether the run was interrupted.
+        interrupted: bool,
         /// Whether listing the closed issues fails.
         closed_listing_fails: bool,
         /// The number of each issue an Edit to fails.
@@ -135,6 +158,18 @@ mod in_memory {
                 open,
                 listed: listed(number, labels),
             });
+            self
+        }
+
+        /// Let issue `number` be viewed, as `issue`.
+        pub fn viewable(mut self, number: u64, issue: Issue) -> Self {
+            self.viewable.push((number, issue));
+            self
+        }
+
+        /// Have the run interrupted.
+        pub fn interrupted(mut self) -> Self {
+            self.interrupted = true;
             self
         }
 
@@ -180,6 +215,21 @@ mod in_memory {
             Ok(self.labelled(label, false))
         }
 
+        fn issue(&mut self, issue: &IssueUrl) -> Result<Issue> {
+            self.calls.push(Call::View(issue.number));
+            match self
+                .viewable
+                .iter()
+                .find(|(number, _)| *number == issue.number)
+            {
+                Some((_, viewed)) => Ok(viewed.clone()),
+                None => bail!(
+                    "gh: Could not resolve to an issue with the number of {}",
+                    issue.number
+                ),
+            }
+        }
+
         fn apply(&mut self, edit: &Edit) -> Result<()> {
             let (off, on) = edit.changes();
             self.calls.push(Call::Edit {
@@ -192,6 +242,10 @@ mod in_memory {
                 bail!("gh: could not edit #{}", edit.issue().number);
             }
             Ok(())
+        }
+
+        fn interrupted(&mut self) -> bool {
+            self.interrupted
         }
 
         fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
