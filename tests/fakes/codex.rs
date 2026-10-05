@@ -13,11 +13,11 @@
 //! beside them.
 //!
 //! It emits `thread.started`, with thread id `fake-thread-<n>` for the n-th
-//! call, or none if $FAKE_CLAUDE_NO_SESSION_ID is set, then `turn.started`,
-//! then runs the script, whose stdout joins the stream. What the script
-//! writes to $FAKE_CLAUDE_FINAL_MESSAGE becomes an `agent_message` item. A
-//! script that succeeds ends the turn with `turn.completed`, and one that
-//! fails with `turn.failed`, whose error is what it wrote to
+//! call, then `turn.started`, then runs the script, whose stdout joins the
+//! stream. What the script writes to $FAKE_CLAUDE_FINAL_MESSAGE becomes an
+//! `agent_message` item. A script that succeeds ends the turn with
+//! `turn.completed`, and one that fails with `turn.failed`, whose error is
+//! what it wrote to
 //! $FAKE_CODEX_ERROR, else a default, and exits 1, as Codex does.
 //!
 //! SIGINT and SIGTERM to its process group reach its script, which decides
@@ -124,12 +124,10 @@ pub fn main(argv: Vec<String>) {
 
     let session = records.len();
     outlast_interrupts();
-    if std::env::var_os("FAKE_CLAUDE_NO_SESSION_ID").is_none() {
-        emit(object([
-            ("type", string("thread.started")),
-            ("thread_id", string(format!("fake-thread-{session}"))),
-        ]));
-    }
+    emit(object([
+        ("type", string("thread.started")),
+        ("thread_id", string(format!("fake-thread-{session}"))),
+    ]));
     emit(object([("type", string("turn.started"))]));
     // Beside the record, not in $TMPDIR, which tests expect to be left empty.
     let final_message = format!("{}.final-message.{session}", record_path.display());
