@@ -1130,7 +1130,7 @@ mod tests {
                 },
             ]
         );
-        assert!(!outside.issue_open, "the issue is still closed");
+        assert!(!outside.issue_open, "the issue was not closed");
     }
 
     #[test]
@@ -1211,6 +1211,9 @@ mod tests {
                 outside.calls
             );
             assert!(!outside.calls.contains(&Call::DeleteBranch), "{failing:?}");
+            if failing == Fails::CatchUp {
+                assert_eq!(outside.calls[..2], [Call::CatchUp, Call::Interrupted]);
+            }
         }
     }
 
