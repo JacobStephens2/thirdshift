@@ -21,6 +21,8 @@ use std::fmt;
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
+use crate::asks::Flags;
+use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
 use crate::harness::Choice;
@@ -29,7 +31,7 @@ use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
-use crate::pass::{OnGitHub, Outside};
+use crate::pass::{LaunchAndGitHub, Outside};
 use crate::progress;
 use crate::prompt;
 use crate::ready::ReadyIssue;
@@ -195,9 +197,9 @@ impl fmt::Display for Reviewed {
 /// out, or without one the branch checked out there. A review that reports
 /// an idea issue it filed, or the open issue that already covers its top
 /// recommendation, instead of a plan, has that issue labelled an Architect
-/// idea. With `launch_pull`, the Launch directory's checkout of the Base
-/// branch, if that is the branch checked out, is first brought up to date
-/// with origin. The review's
+/// idea. With `config`'s `launch.pull`, the Launch directory's checkout of
+/// the Base branch, if that is the branch checked out, is first brought up
+/// to date with origin. The review's
 /// worktree is gone when this returns. A failure
 /// after the plan is published leaves its labels as the review left them.
 ///
@@ -219,7 +221,8 @@ impl fmt::Display for Reviewed {
 pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
-    launch_pull: bool,
+    flags: &Flags,
+    config: &UserConfig,
     harness: &mut Choice,
 ) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
@@ -234,17 +237,21 @@ pub fn run(
             return Ok(skip(&repo, Skipped::AlreadyRunning(running)));
         }
     };
-    let mut on_github = OnGitHub {
-        launch: directory.git(),
+    let mut outside = LaunchAndGitHub {
+        launch: &directory,
         repo: &repo,
+        harness,
+        flags,
+        config,
     };
-    if let Decision::Skip(skipped) = gates(&mut on_github)? {
+    if let Decision::Skip(skipped) = gates(&mut outside)? {
         return Ok(skip(&repo, skipped));
     }
-    harness.check()?;
-    let harness = &*harness;
-    logs::started(Work::ArchitectRun(&repo), harness);
-    if launch_pull {
+    outside.check_harness()?;
+    outside.started(Work::ArchitectRun(&repo));
+    // Cloned, so the review's conclusion can take `outside` itself.
+    let harness = outside.harness.clone();
+    if config.launch_pull {
         directory.pull(&base);
     }
 
@@ -253,9 +260,9 @@ pub fn run(
     }
     let worktree = ReviewWorktree::create(directory.git(), &repo.name, &base)?;
     let logs = Logs::of_architect_run(&repo);
-    let (reviewed, log) = Sessions::within(&logs, worktree.path(), harness, |sessions| {
+    let (reviewed, log) = Sessions::within(&logs, worktree.path(), &harness, |sessions| {
         review(
-            &mut on_github,
+            &mut outside,
             sessions,
             &base,
             focus,

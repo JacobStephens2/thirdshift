@@ -48,6 +48,7 @@ use command::{Ending, failure};
 use config::UserConfig;
 use logs::Begin;
 use notification::About;
+use pickup::Took;
 use run::StartedBy;
 
 const HELP: &str = "\
@@ -428,7 +429,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     let review = architect::run(
         args.focus.as_deref(),
         args.base.as_deref(),
-        config.launch_pull,
+        &args.flags,
+        &config,
         &mut harness,
     );
     started.built_with(&harness);
@@ -479,26 +481,20 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Err(failure) => return failure,
     };
     let mut harness = args.flags.harness(&config);
-    let taken = pickup::run(args.base.as_deref(), config.pickup_limit, &mut harness);
+    let took = pickup::run(args.base.as_deref(), &args.flags, &config, &mut harness);
     started.built_with(&harness);
-    let taken = match taken {
-        Ok(pickup::Outcome::Taken(taken)) => taken,
-        Ok(pickup::Outcome::Skipped(skipped)) => {
-            return started.finish(Ending::Skipped(skipped.into()));
+    match took {
+        Ok(pickup::Outcome::Took(Took {
+            issue,
+            title,
+            ended,
+        })) => {
+            started.took(&issue, title);
+            started.finish(Ending::Run(ended))
         }
-        Err(error) => return failure(&error),
-    };
-    started.took(&taken.issue, taken.title);
-    let mut asks = Asks {
-        harness,
-        ..Asks::of_ready_issue(&taken.issue, taken.is_spec, &args.flags, &config)
-    };
-    let started_by = StartedBy::Dispatch { base: &taken.base };
-    started.finish(Ending::Run(run::run_to_end(
-        &taken.issue,
-        &mut asks,
-        started_by,
-    )))
+        Ok(pickup::Outcome::Skipped(skipped)) => started.finish(Ending::Skipped(skipped.into())),
+        Err(error) => failure(&error),
+    }
 }
 
 /// The end of a command other than a Run: the line that says how it went,
