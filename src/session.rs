@@ -61,7 +61,9 @@ impl Logs {
 /// its `logs`. It lasts for the steps given to [`Sessions::within`].
 pub struct Sessions<'a> {
     logs: &'a Logs,
-    /// How each session is run, and where progress lines go.
+    /// How each session is run, and where progress lines go. Held, not
+    /// passed to each call as the other seams' are, since the steps reach
+    /// it through the `&Sessions` they are given.
     outside: RefCell<Box<dyn Outside>>,
     /// The log of the session started last, a Resume included.
     last_log: RefCell<Option<PathBuf>>,
@@ -141,7 +143,7 @@ impl<'a> Sessions<'a> {
         // What ended last, as the progress line on its killed work calls it.
         let mut ended_last = "session";
         if let (false, Some(session_id)) = (ended.killed.is_empty(), &ended.session_id) {
-            let resume_prompt = prompt::resume(&ended.killed());
+            let resume_prompt = prompt::resume(&ended.killed_work());
             self.step(format!(
                 "{kind}: background work was killed as the session ended; resuming it once"
             ));
@@ -149,7 +151,7 @@ impl<'a> Sessions<'a> {
             ended_last = "Resume";
         }
         if !ended.killed.is_empty() {
-            let ending = ending_with(&ended.killed());
+            let ending = ending_with(&ended.killed_work());
             self.step(format!(
                 "{kind}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
             ));
@@ -205,7 +207,7 @@ struct Ended {
 
 impl Ended {
     /// The descriptions of the killed background work, borrowed.
-    fn killed(&self) -> Vec<&str> {
+    fn killed_work(&self) -> Vec<&str> {
         self.killed.iter().map(String::as_str).collect()
     }
 }
@@ -499,12 +501,14 @@ mod tests {
     /// What the rules asked of the scripted [`Outside`], in order.
     #[derive(Debug, PartialEq)]
     enum Call {
+        /// A session run, as `kind`, continuing `resume`, logged to `log`.
         Session {
             kind: String,
             resume: Option<String>,
             prompt: String,
             log: PathBuf,
         },
+        /// A progress line handed on.
         Step(String),
     }
 
@@ -549,6 +553,7 @@ mod tests {
         })
     }
 
+    /// The logs of the Run on issue 7, under `/logs`.
     fn logs() -> Logs {
         Logs {
             name: "7".to_string(),
@@ -573,6 +578,7 @@ mod tests {
         (taken, log, calls)
     }
 
+    /// The call that runs a session as `kind`, logged under its own path.
     fn session(kind: &str, resume: Option<&str>, prompt: &str) -> Call {
         Call::Session {
             kind: kind.to_string(),
@@ -582,6 +588,7 @@ mod tests {
         }
     }
 
+    /// The progress line saying where a session as `kind` is logged.
     fn logging(kind: &str) -> Call {
         Call::Step(format!(
             "logging the session to {}",
@@ -589,6 +596,7 @@ mod tests {
         ))
     }
 
+    /// The sessions among `calls`.
     fn sessions_run(calls: &[Call]) -> Vec<&Call> {
         calls
             .iter()
@@ -596,6 +604,7 @@ mod tests {
             .collect()
     }
 
+    /// How a session that left `cargo test` running is said to have ended.
     const TESTS_KILLED: &str =
         "ended with a background task still running (cargo test), which was killed";
 
@@ -701,9 +710,12 @@ mod tests {
     #[test]
     fn a_failing_session_fails_unchanged_without_a_resume_or_an_ending() {
         let (taken, log, calls) = take(vec![Err(anyhow!("claude exited 3"))], |sessions| {
-            sessions.run("implement", "do it")
+            let failed = sessions.run("implement", "do it").unwrap_err();
+            assert_eq!(format!("{failed:#}"), "claude exited 3");
+            Err::<(), _>(failed)
         });
 
+        // No ending was recorded, so the failure names no killed work.
         assert_eq!(format!("{:#}", taken.unwrap_err()), "claude exited 3");
         assert_eq!(
             calls,

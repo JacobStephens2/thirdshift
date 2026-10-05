@@ -15,9 +15,9 @@
 //! It emits `thread.started`, with thread id `fake-thread-<n>` for the n-th
 //! call, then `turn.started`, then runs the script, whose stdout joins the
 //! stream. What the script writes to $FAKE_CLAUDE_FINAL_MESSAGE becomes an
-//! `agent_message` item. A
-//! script that succeeds ends the turn with `turn.completed`, and one that
-//! fails with `turn.failed`, whose error is what it wrote to
+//! `agent_message` item. A script that succeeds ends the turn with
+//! `turn.completed`, and one that fails with `turn.failed`, whose error is
+//! what it wrote to
 //! $FAKE_CODEX_ERROR, else a default, and exits 1, as Codex does.
 //!
 //! SIGINT and SIGTERM to its process group reach its script, which decides
