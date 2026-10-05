@@ -437,7 +437,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     started.built_with(&harness);
     started.finish(match outcome {
         Outcome::Skipped(skipped) => Ending::Skipped(skipped.into()),
-        Outcome::Reviewed { review, dispatched } => Ending::Architect { review, dispatched },
+        Outcome::Ran { review, dispatched } => Ending::Architect { review, dispatched },
     })
 }
 

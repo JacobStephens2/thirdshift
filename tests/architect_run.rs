@@ -419,7 +419,7 @@ echo "widgets, by the review" > README.md
 }
 
 #[test]
-fn progress_lines_cover_the_review_starting_the_plan_it_reported_and_the_label_swap() {
+fn progress_lines_cover_the_worktree_the_review_starting_the_plan_it_reported_and_the_label_swap() {
     let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
@@ -428,6 +428,7 @@ fn progress_lines_cover_the_review_starting_the_plan_it_reported_and_the_label_s
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let mut rest = result.stderr.as_str();
     for line in [
+        " detached at origin/main\n".to_string(),
         "thirdshift: starting the Architecture review of main, focused on: the Spec run\n"
             .to_string(),
         "thirdshift: architecture-review: session started\n".to_string(),

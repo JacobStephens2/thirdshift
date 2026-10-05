@@ -82,14 +82,16 @@ pub trait Outside {
     /// warning if it can't.
     fn pull(&mut self, base: &str);
     /// Run the Architecture review session of the Base branch `base` on
-    /// `prompt`, on the Harness the pass checked, to its final message, then
-    /// `conclude` on this seam and that message, while the session is still
-    /// open: a failure of `conclude` after a session left background work to
-    /// be killed names that work too. Returns what `conclude` came to, with
-    /// the session's Session log, if it has one.
+    /// `prompt`, on the Harness the pass checked, to its final message,
+    /// handing on the progress line `starting` once it is ready to start it,
+    /// then `conclude` on this seam and that message, while the session is
+    /// still open: a failure of `conclude` after a session left background
+    /// work to be killed names that work too. Returns what `conclude` came
+    /// to, with the session's Session log, if it has one.
     fn review<T>(
         &mut self,
         base: &str,
+        starting: String,
         prompt: &str,
         conclude: impl FnOnce(&mut Self, Option<&str>) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>);
@@ -160,6 +162,7 @@ impl Outside for LaunchAndGitHub<'_> {
     fn review<T>(
         &mut self,
         base: &str,
+        starting: String,
         prompt: &str,
         conclude: impl FnOnce(&mut Self, Option<&str>) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
@@ -167,6 +170,7 @@ impl Outside for LaunchAndGitHub<'_> {
             Ok(worktree) => worktree,
             Err(error) => return (Err(error), None),
         };
+        progress::step(starting);
         let logs = Logs::of_architect_run(self.repo);
         // Cloned, so the conclusion can take the seam itself.
         let harness = self.harness.clone();
@@ -255,7 +259,7 @@ mod in_memory {
         /// It pulled the Launch directory's checkout of this Base branch.
         Pull(String),
         /// It ran the Architecture review session of this Base branch on
-        /// this prompt.
+        /// this prompt, handing on its starting line next.
         Review { base: String, prompt: String },
         /// It dispatched this issue, a Spec or not, on this Base branch.
         Dispatch {
@@ -509,6 +513,7 @@ mod in_memory {
         fn review<T>(
             &mut self,
             base: &str,
+            starting: String,
             prompt: &str,
             conclude: impl FnOnce(&mut Self, Option<&str>) -> Result<T>,
         ) -> (Result<T>, Option<PathBuf>) {
@@ -516,6 +521,7 @@ mod in_memory {
                 base: base.to_string(),
                 prompt: prompt.to_string(),
             });
+            self.calls.push(Call::Step(starting));
             let log = self.session_log.clone();
             match self.review.clone() {
                 Ok(final_message) => (conclude(self, final_message.as_deref()), log),
