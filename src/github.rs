@@ -753,6 +753,7 @@ pub enum CheckState {
 }
 
 /// A check run or a commit status.
+#[derive(Clone)]
 pub struct Check {
     pub name: String,
     pub state: CheckState,
