@@ -123,7 +123,7 @@ impl Started {
     /// recorded where it was decided, and it sends no notification. Returns
     /// its exit code.
     pub fn finish(self, ending: Ending) -> ExitCode {
-        skills::remove();
+        skills::remove_written();
         let account = match run_ending::read(&ending) {
             Ok(account) => account,
             Err(skip) => return run_ending::show_skip(skip),

@@ -3,7 +3,7 @@
 //! Claude Code finds project skills (ADR-0012).
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -33,7 +33,7 @@ static WRITTEN: Mutex<Option<TempDir>> = Mutex::new(None);
 /// `.git/info/exclude` keeps them out of git. The links are left in place:
 /// they go with the worktree.
 pub fn link_into(worktree: &Path) -> Result<()> {
-    let written = written()?;
+    let written = written_out()?;
     exclude(&Git::new(worktree))?;
     let project_skills = worktree.join(PROJECT_SKILLS);
     fs::create_dir_all(&project_skills)
@@ -53,7 +53,7 @@ pub fn link_into(worktree: &Path) -> Result<()> {
 
 /// Remove the Factory skills the Command wrote out, if it did, once its
 /// sessions are over.
-pub fn remove() {
+pub fn remove_written() {
     drop(
         WRITTEN
             .lock()
@@ -64,7 +64,7 @@ pub fn remove() {
 
 /// Where the Command wrote the Factory skills out, writing them now if it
 /// has not yet.
-fn written() -> Result<PathBuf> {
+fn written_out() -> Result<PathBuf> {
     let mut written = WRITTEN.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(dir) = &*written {
         return Ok(dir.path().to_owned());
@@ -90,7 +90,7 @@ fn exclude(git: &Git) -> Result<()> {
     let path = info.join("exclude");
     let existing = match fs::read_to_string(&path) {
         Ok(existing) => existing,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
         Err(error) => {
             return Err(error).with_context(|| format!("could not read {}", path.display()));
         }
