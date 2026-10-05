@@ -140,9 +140,8 @@ trait Outside {
 /// The outside world of the Ticket loop of a Spec run on `spec`, from its
 /// Spec branch checked out in `worktree`: child `thirdshift` Runs, each of
 /// which may start a Base fix if `base_fix` allows one, and runs its sessions
-/// on `harness`, whose threads send
-/// how each ended on `ended`, received from `endings`, GitHub and the Spec
-/// PR `spec_pr`.
+/// on `harness`, whose threads send how each ended on `ended`, received from
+/// `endings`, GitHub and the Spec PR `spec_pr`.
 struct ChildRunsAndGitHub<'a, 'pr> {
     spec: &'a IssueUrl,
     worktree: &'a Worktree,

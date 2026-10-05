@@ -134,11 +134,11 @@ pub fn parse(args: &[String]) -> Result<Command> {
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,
 /// each at most once, in any order. `base` must be followed by the Base
-/// branch. [`PLAN_ONLY`] dispatches nothing, so the
-/// flags for the dispatched run, `merge`, `no-merge`, `parallel`, `base-fix`,
-/// `no-base-fix`, `harness`, `model` and `effort`, can't go with it. `email` and `no-email` are for the
-/// Architect run's own Run notification, and `base` is for the Architecture
-/// review too, so they can. None of a Run's flags, nor `base`,
+/// branch. [`PLAN_ONLY`] dispatches nothing, so the flags for the dispatched
+/// run, `merge`, `no-merge`, `parallel`, `base-fix`, `no-base-fix`,
+/// `harness`, `model` and `effort`, can't go with it. `email` and `no-email`
+/// are for the Architect run's own Run notification, and `base` is for the
+/// Architecture review too, so they can. None of a Run's flags, nor `base`,
 /// is ever the focus, and any other argument that starts with a dash is
 /// unexpected rather than a focus.
 fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {

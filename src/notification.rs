@@ -186,9 +186,10 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 /// The plain-text body of the notification for a command that ended as
 /// `account` tells, with the line that says what its sessions were
 /// `built_with`, if known, naming `command_log`, if the command keeps one,
-/// and `host`, for a command that `took` so long. An Architect run's starts with
-/// how its review ended, and the outcome of the run it dispatched, if any.
-/// The cause is left out of an interrupted command's, whose outcome says so.
+/// and `host`, for a command that `took` so long. An Architect run's starts
+/// with how its review ended, and the outcome of the run it dispatched, if
+/// any. The cause is left out of an interrupted command's, whose outcome says
+/// so.
 fn body(
     account: &Account,
     built_with: Option<&str>,

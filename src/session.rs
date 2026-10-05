@@ -77,12 +77,12 @@ pub struct Sessions<'a> {
 
 impl<'a> Sessions<'a> {
     /// Write the Factory skills plugin, then take `steps`, which run their
-    /// sessions on `harness` through the `Sessions` they are given. Returns what `steps`
-    /// came to, with the most recent session's log, if a session created it.
-    /// If a session's last ending, its Resume's if it got one, left
-    /// background work to be killed and `steps` then fail, the failure names
-    /// that work ahead of its own cause: the session may have stopped short
-    /// of its job. The plugin directory is gone when this returns.
+    /// sessions on `harness` through the `Sessions` they are given. Returns
+    /// what `steps` came to, with the most recent session's log, if a session
+    /// created it. If a session's last ending, its Resume's if it got one,
+    /// left background work to be killed and `steps` then fail, the failure
+    /// names that work ahead of its own cause: the session may have stopped
+    /// short of its job. The plugin directory is gone when this returns.
     pub fn within<T>(
         logs: &'a Logs,
         worktree: &'a Path,

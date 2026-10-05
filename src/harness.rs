@@ -69,6 +69,14 @@ impl Settings {
             Harness::Codex => &self.codex,
         }
     }
+
+    /// The Model and Effort set for `harness`, to set them.
+    pub fn of_mut(&mut self, harness: Harness) -> &mut ModelAndEffort {
+        match harness {
+            Harness::Claude => &mut self.claude,
+            Harness::Codex => &mut self.codex,
+        }
+    }
 }
 
 /// What a command asked for, each none if it said nothing about it.
@@ -260,33 +268,6 @@ fn on_path(cli: &str) -> bool {
     })
 }
 
-/// The marker that ends the line thirdshift writes in a pull request's body,
-/// so it can be found and replaced.
-const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
-
-/// `body` with `choice`'s line in it: in place of the one thirdshift wrote
-/// before, or else added at the end.
-pub fn with_built_with(body: &str, choice: &Choice) -> String {
-    let line = format!("{} {BUILT_WITH_MARKER}", choice.built_with());
-    if body.contains(BUILT_WITH_MARKER) {
-        return body
-            .split_inclusive('\n')
-            .map(|old| {
-                if old.trim_end().ends_with(BUILT_WITH_MARKER) {
-                    let end = &old[old.trim_end_matches(['\r', '\n']).len()..];
-                    format!("{line}{end}")
-                } else {
-                    old.to_string()
-                }
-            })
-            .collect();
-    }
-    if body.trim().is_empty() {
-        return format!("{line}\n");
-    }
-    format!("{}\n\n{line}\n", body.trim_end())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,23 +416,5 @@ mod tests {
         ] {
             assert_eq!(chosen.built_with(), line);
         }
-    }
-
-    #[test]
-    fn the_built_with_line_is_added_to_a_body_and_replaces_the_one_written_before() {
-        let opus = choice(Harness::Claude, "opus", "high", ChosenBy::Command);
-        let line = "Built with claude · opus · high <!-- thirdshift:built-with -->";
-
-        let added = with_built_with("Adds a button.\n\nCloses #7\n", &opus);
-        assert_eq!(added, format!("Adds a button.\n\nCloses #7\n\n{line}\n"));
-        assert_eq!(with_built_with("", &opus), format!("{line}\n"));
-
-        let old = "Adds a button.\n\nBuilt with claude · default model · default effort \
-                   <!-- thirdshift:built-with -->\n\nCloses #7\n";
-        assert_eq!(
-            with_built_with(old, &opus),
-            format!("Adds a button.\n\n{line}\n\nCloses #7\n")
-        );
-        assert_eq!(with_built_with(&added, &opus), added);
     }
 }

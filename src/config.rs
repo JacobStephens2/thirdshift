@@ -165,15 +165,12 @@ impl UserConfig {
                     ("harness", "default", _) => {
                         bail!("harness.default must be a quoted name in {file}")
                     }
-                    ("harness", "claude" | "codex", Value::Table(settings)) => {
-                        let set = match key.as_str() {
-                            "claude" => &mut config.harness.claude,
-                            _ => &mut config.harness.codex,
+                    ("harness", name, value) if Harness::named(name).is_some() => {
+                        let Value::Table(settings) = value else {
+                            bail!("harness.{key} must be the section [harness.{key}] in {file}")
                         };
-                        *set = model_and_effort(settings, key, &file)?;
-                    }
-                    ("harness", "claude" | "codex", _) => {
-                        bail!("harness.{key} must be the section [harness.{key}] in {file}")
+                        let harness = Harness::named(name).expect("a Harness's name");
+                        *config.harness.of_mut(harness) = model_and_effort(settings, key, &file)?;
                     }
                     _ => bail!("unknown key {section}.{key} in {file}"),
                 }
@@ -681,7 +678,7 @@ fn model_and_effort(settings: &Table, harness: &str, file: &str) -> Result<Model
                 "harness.{harness}.{key} must be a quoted string, blank for {harness}'s own default, in {file}"
             );
         };
-        *setting = Some(value.trim().to_string()).filter(|value| !value.is_empty());
+        *setting = Some(value.clone()).filter(|value| !value.is_empty());
     }
     Ok(set)
 }
