@@ -43,8 +43,9 @@ pub fn issue_title(issue: &IssueUrl) -> Result<String> {
         .to_string())
 }
 
-/// An issue as an Architect run reads the plan its Architecture review
-/// published, and as a Claim reads its issue after a Self-merge.
+/// An issue as an Architect run reads the issue its Architecture review
+/// ended on, and as a Claim reads its issue after a Self-merge.
+#[derive(Clone)]
 pub struct Issue {
     pub is_open: bool,
     pub labels: Labels,

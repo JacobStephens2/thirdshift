@@ -146,12 +146,6 @@ enum Request {
 
 impl<'a> Edit<'a> {
     /// Taking each of `off` off `issue` and putting each of `on` on it,
-    /// against its labels as read now.
-    pub fn read(issue: &'a IssueUrl, off: &[Label], on: &[Label]) -> Result<Edit<'a>> {
-        Ok(Edit::of(issue, github::issue_labels(issue)?, off, on))
-    }
-
-    /// Taking each of `off` off `issue` and putting each of `on` on it,
     /// against `labels`, which the caller has just read.
     pub fn of(issue: &'a IssueUrl, labels: Labels, off: &[Label], on: &[Label]) -> Edit<'a> {
         Edit {
