@@ -35,7 +35,7 @@ pub fn is_on(labels: &Labels) -> bool {
 /// which it asks origin through when the Claim is released.
 pub struct Claim<'a> {
     launch: &'a Git,
-    made: Made<'a>,
+    claimed: Claimed<'a>,
 }
 
 /// Make the Claim on `issue`, from its Launch directory `launch`: label it
@@ -45,8 +45,8 @@ pub struct Claim<'a> {
 /// `ready-for-agent`, is left as it is, with no request made. A failure names
 /// the Claim as what could not be made.
 pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git) -> Result<Claim<'a>> {
-    let made = Made::make(&mut OnGitHub { launch }, issue)?;
-    Ok(Claim { launch, made })
+    let claimed = Claimed::make(&mut OnGitHub { launch }, issue)?;
+    Ok(Claim { launch, claimed })
 }
 
 impl Claim<'_> {
@@ -62,7 +62,7 @@ impl Claim<'_> {
     /// The run has ended as it has, so this never fails: a failure is a
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
     pub fn end(self, reached: Option<Goal>) {
-        self.made.end(
+        self.claimed.end(
             &mut OnGitHub {
                 launch: self.launch,
             },
@@ -77,7 +77,7 @@ trait Outside {
     /// The issue's labels.
     fn labels(&mut self, issue: &IssueUrl) -> Result<Labels>;
     /// Whether the issue is open, and its labels, read together.
-    fn state(&mut self, issue: &IssueUrl) -> Result<(bool, Labels)>;
+    fn state(&mut self, issue: &IssueUrl) -> Result<State>;
     /// Whether the issue was started on origin: an Issue branch for it,
     /// which for a Spec is its Spec branch, or a pull request from one,
     /// open, merged or closed.
@@ -93,6 +93,12 @@ trait Outside {
     fn warn(&mut self, error: &anyhow::Error, warning: String);
 }
 
+/// Whether an issue is open, and its labels, as read together.
+struct State {
+    is_open: bool,
+    labels: Labels,
+}
+
 /// The issue on GitHub, and origin as the Launch directory `launch` sees it.
 struct OnGitHub<'a> {
     launch: &'a Git,
@@ -103,9 +109,12 @@ impl Outside for OnGitHub<'_> {
         github::issue_labels(issue)
     }
 
-    fn state(&mut self, issue: &IssueUrl) -> Result<(bool, Labels)> {
+    fn state(&mut self, issue: &IssueUrl) -> Result<State> {
         let issue = github::issue(issue)?;
-        Ok((issue.is_open, issue.labels))
+        Ok(State {
+            is_open: issue.is_open,
+            labels: issue.labels,
+        })
     }
 
     fn started(&mut self, issue: &IssueUrl) -> Result<bool> {
@@ -131,7 +140,7 @@ impl Outside for OnGitHub<'_> {
 
 /// The Claim on an issue, with what making it changed, which is what
 /// releasing it puts back.
-struct Made<'a> {
+struct Claimed<'a> {
     issue: &'a IssueUrl,
     /// Whether making it added `in-progress`: the issue was not Claimed
     /// already.
@@ -140,30 +149,30 @@ struct Made<'a> {
     removed_ready_for_agent: bool,
 }
 
-impl<'a> Made<'a> {
+impl<'a> Claimed<'a> {
     /// [`make`], through `outside`.
-    fn make(outside: &mut impl Outside, issue: &'a IssueUrl) -> Result<Made<'a>> {
-        Made::label_in_progress(outside, issue)
+    fn make(outside: &mut impl Outside, issue: &'a IssueUrl) -> Result<Claimed<'a>> {
+        Claimed::label_in_progress(outside, issue)
             .with_context(|| format!("could not make the Claim on #{}", issue.number))
     }
 
-    /// [`Made::make`], its failure as `gh` gave it.
-    fn label_in_progress(outside: &mut impl Outside, issue: &'a IssueUrl) -> Result<Made<'a>> {
+    /// [`Claimed::make`], its failure as `gh` gave it.
+    fn label_in_progress(outside: &mut impl Outside, issue: &'a IssueUrl) -> Result<Claimed<'a>> {
         let edit = Edit::of(
             issue,
             outside.labels(issue)?,
             &[READY_FOR_AGENT],
             &[IN_PROGRESS],
         );
-        let made = Made {
+        let claimed = Claimed {
             issue,
             added_in_progress: edit.puts_on(IN_PROGRESS),
             removed_ready_for_agent: edit.takes_off(READY_FOR_AGENT),
         };
-        if !made.changed_any() {
-            return Ok(made);
+        if !claimed.changed_any() {
+            return Ok(claimed);
         }
-        if made.removed_ready_for_agent {
+        if claimed.removed_ready_for_agent {
             outside.step(format!(
                 "labelling #{} {IN_PROGRESS}, in place of {READY_FOR_AGENT}",
                 issue.number
@@ -172,7 +181,7 @@ impl<'a> Made<'a> {
             outside.step(format!("labelling #{} {IN_PROGRESS}", issue.number));
         }
         outside.apply(&edit)?;
-        Ok(made)
+        Ok(claimed)
     }
 
     /// [`Claim::end`], through `outside`.
@@ -217,7 +226,7 @@ impl<'a> Made<'a> {
         }
     }
 
-    /// [`Made::release_if_nothing_on_origin`], its failure as `git` or `gh`
+    /// [`Claimed::release_if_nothing_on_origin`], its failure as `git` or `gh`
     /// gave it.
     fn put_labels_back_unless_on_origin(&self, outside: &mut impl Outside) -> Result<()> {
         let issue = self.issue;
@@ -278,13 +287,13 @@ impl<'a> Made<'a> {
         }
     }
 
-    /// [`Made::remove_if_closed`], its failure as `gh` gave it.
+    /// [`Claimed::remove_if_closed`], its failure as `gh` gave it.
     fn unlabel_if_closed(&self, outside: &mut impl Outside) -> Result<()> {
-        let (is_open, labels) = outside.state(self.issue)?;
-        if is_open {
+        let state = outside.state(self.issue)?;
+        if state.is_open {
             return Ok(());
         }
-        let edit = Edit::of(self.issue, labels, &[IN_PROGRESS], &[]);
+        let edit = Edit::of(self.issue, state.labels, &[IN_PROGRESS], &[]);
         if !edit.takes_off(IN_PROGRESS) {
             return Ok(());
         }
@@ -319,7 +328,7 @@ fn retry_if_interrupted<O: Outside>(
 mod in_memory {
     use anyhow::{Result, bail};
 
-    use super::Outside;
+    use super::{Outside, State};
     use crate::issue::IssueUrl;
     use crate::labels::{Edit, Labels};
 
@@ -420,10 +429,13 @@ mod in_memory {
             Ok(self.read_labels())
         }
 
-        fn state(&mut self, _: &IssueUrl) -> Result<(bool, Labels)> {
+        fn state(&mut self, _: &IssueUrl) -> Result<State> {
             self.calls.push(Call::State);
             self.fail_if(Fails::State)?;
-            Ok((self.open, self.read_labels()))
+            Ok(State {
+                is_open: self.open,
+                labels: self.read_labels(),
+            })
         }
 
         fn started(&mut self, _: &IssueUrl) -> Result<bool> {
@@ -489,10 +501,10 @@ mod tests {
     }
 
     /// The Claim made on `issue`, with the calls making it made forgotten.
-    fn made<'a>(issue: &mut InMemory, url: &'a IssueUrl) -> Made<'a> {
-        let made = Made::make(issue, url).unwrap();
+    fn claimed<'a>(issue: &mut InMemory, url: &'a IssueUrl) -> Claimed<'a> {
+        let claimed = Claimed::make(issue, url).unwrap();
         issue.calls.clear();
-        made
+        claimed
     }
 
     const RELEASE_BY_HAND: &str = "could not release the Claim on #7, so if nothing of the run \
@@ -505,9 +517,8 @@ mod tests {
         let url = seven();
         let mut issue = InMemory::labelled(&["bug", "ready-for-agent", "architecture"]);
 
-        let made = Made::make(&mut issue, &url).unwrap();
+        Claimed::make(&mut issue, &url).unwrap();
 
-        assert!(made.added_in_progress && made.removed_ready_for_agent);
         assert_eq!(
             issue.calls,
             [
@@ -527,7 +538,7 @@ mod tests {
         let url = seven();
         let mut issue = InMemory::labelled(&["bug"]);
 
-        Made::make(&mut issue, &url).unwrap();
+        Claimed::make(&mut issue, &url).unwrap();
 
         assert_eq!(
             issue.calls,
@@ -544,9 +555,8 @@ mod tests {
         let url = seven();
         let mut issue = InMemory::labelled(&["In-Progress", "bug"]);
 
-        let made = Made::make(&mut issue, &url).unwrap();
+        Claimed::make(&mut issue, &url).unwrap();
 
-        assert!(!made.added_in_progress && !made.removed_ready_for_agent);
         assert_eq!(issue.calls, [Call::Labels]);
     }
 
@@ -555,9 +565,8 @@ mod tests {
         let url = seven();
         let mut issue = InMemory::labelled(&["in-progress", "bug", "ready-for-agent"]);
 
-        let made = Made::make(&mut issue, &url).unwrap();
+        Claimed::make(&mut issue, &url).unwrap();
 
-        assert!(!made.added_in_progress && made.removed_ready_for_agent);
         assert_eq!(
             issue.calls,
             [
@@ -574,7 +583,7 @@ mod tests {
             let url = seven();
             let mut issue = InMemory::labelled(&["ready-for-agent"]).failing(failing);
 
-            let error = Made::make(&mut issue, &url).err().unwrap();
+            let error = Claimed::make(&mut issue, &url).err().unwrap();
 
             assert_eq!(
                 format!("{error:#}"),
@@ -588,10 +597,10 @@ mod tests {
     fn a_merged_run_removes_the_claim_from_its_closed_issue() {
         let url = seven();
         let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
         issue.open = false;
 
-        made.end(&mut issue, Some(Goal::Merged));
+        claimed.end(&mut issue, Some(Goal::Merged));
 
         assert_eq!(
             issue.calls,
@@ -601,15 +610,16 @@ mod tests {
                 edit(&["in-progress"], &[], &["bug"]),
             ]
         );
+        assert_eq!(labels(&issue), ["bug"]);
     }
 
     #[test]
     fn a_merged_run_whose_issue_is_still_open_keeps_the_claim() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
 
-        made.end(&mut issue, Some(Goal::Merged));
+        claimed.end(&mut issue, Some(Goal::Merged));
 
         assert_eq!(issue.calls, [Call::State]);
         assert_eq!(labels(&issue), ["in-progress"]);
@@ -619,11 +629,11 @@ mod tests {
     fn a_merged_run_leaves_an_issue_no_longer_in_progress_as_it_is() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
         issue.open = false;
         issue.labels = vec!["ready-for-human".to_string()];
 
-        made.end(&mut issue, Some(Goal::Merged));
+        claimed.end(&mut issue, Some(Goal::Merged));
 
         assert_eq!(issue.calls, [Call::State]);
     }
@@ -633,11 +643,11 @@ mod tests {
         for failing in [Fails::State, Fails::Edit] {
             let url = seven();
             let mut issue = InMemory::labelled(&["ready-for-agent"]);
-            let made = made(&mut issue, &url);
+            let claimed = claimed(&mut issue, &url);
             issue.open = false;
             issue = issue.failing(failing);
 
-            made.end(&mut issue, Some(Goal::Merged));
+            claimed.end(&mut issue, Some(Goal::Merged));
 
             assert_eq!(
                 issue.calls.last(),
@@ -657,9 +667,9 @@ mod tests {
     fn a_run_ready_for_review_keeps_the_claim_reading_nothing() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
 
-        made.end(&mut issue, Some(Goal::ReadyForReview));
+        claimed.end(&mut issue, Some(Goal::ReadyForReview));
 
         assert_eq!(issue.calls, []);
         assert_eq!(labels(&issue), ["in-progress"]);
@@ -669,10 +679,10 @@ mod tests {
     fn a_failed_run_started_on_origin_keeps_the_claim() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
         issue.started = true;
 
-        made.end(&mut issue, None);
+        claimed.end(&mut issue, None);
 
         assert_eq!(issue.calls, [Call::Started]);
         assert_eq!(labels(&issue), ["in-progress"]);
@@ -702,9 +712,9 @@ mod tests {
         ] {
             let url = seven();
             let mut issue = InMemory::labelled(before);
-            let made = made(&mut issue, &url);
+            let claimed = claimed(&mut issue, &url);
 
-            made.end(&mut issue, None);
+            claimed.end(&mut issue, None);
 
             let after: Vec<&str> = before
                 .iter()
@@ -730,10 +740,10 @@ mod tests {
     fn a_released_claim_keeps_a_label_the_issue_was_given_during_the_run() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
         issue.labels = vec!["in-progress".to_string(), "needs-info".to_string()];
 
-        made.end(&mut issue, None);
+        claimed.end(&mut issue, None);
 
         assert_eq!(labels(&issue), ["needs-info", "ready-for-agent"]);
     }
@@ -742,10 +752,10 @@ mod tests {
     fn an_issue_whose_claim_someone_took_off_meanwhile_is_left_as_it_is() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
         issue.labels = vec!["ready-for-human".to_string()];
 
-        made.end(&mut issue, None);
+        claimed.end(&mut issue, None);
 
         assert_eq!(issue.calls, [Call::Started, Call::Labels]);
         assert_eq!(labels(&issue), ["ready-for-human"]);
@@ -755,9 +765,9 @@ mod tests {
     fn a_claim_that_changed_no_label_makes_no_request_when_the_run_fails() {
         let url = seven();
         let mut issue = InMemory::labelled(&["in-progress"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
 
-        made.end(&mut issue, None);
+        claimed.end(&mut issue, None);
 
         assert_eq!(issue.calls, []);
     }
@@ -767,10 +777,10 @@ mod tests {
         for failing in [Fails::Started, Fails::Labels, Fails::Edit] {
             let url = seven();
             let mut issue = InMemory::labelled(&["ready-for-agent"]);
-            let made = made(&mut issue, &url);
+            let claimed = claimed(&mut issue, &url);
             issue = issue.failing(failing);
 
-            made.end(&mut issue, None);
+            claimed.end(&mut issue, None);
 
             assert_eq!(
                 issue.calls.last(),
@@ -788,11 +798,11 @@ mod tests {
     fn a_release_that_fails_while_interrupted_is_tried_once_more() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
         issue.interrupted = true;
         issue = issue.failing_times(Fails::Edit, 1);
 
-        made.end(&mut issue, None);
+        claimed.end(&mut issue, None);
 
         let released = || {
             [
@@ -815,12 +825,12 @@ mod tests {
     fn a_removal_that_fails_while_interrupted_is_tried_once_more_then_warned_of() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
         issue.open = false;
         issue.interrupted = true;
         issue = issue.failing(Fails::State);
 
-        made.end(&mut issue, Some(Goal::Merged));
+        claimed.end(&mut issue, Some(Goal::Merged));
 
         assert_eq!(
             issue.calls[..3],
@@ -834,10 +844,10 @@ mod tests {
     fn a_failure_with_no_interrupt_is_not_tried_again() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let made = made(&mut issue, &url);
+        let claimed = claimed(&mut issue, &url);
         issue = issue.failing_times(Fails::Started, 1);
 
-        made.end(&mut issue, None);
+        claimed.end(&mut issue, None);
 
         assert_eq!(
             issue.calls,
