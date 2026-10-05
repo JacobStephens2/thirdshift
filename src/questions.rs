@@ -13,10 +13,15 @@ use signal_hook::low_level;
 
 use crate::config::UserConfig;
 use crate::email::DEFAULT_FROM;
+use crate::harness::{self, Choice, ChosenBy, Harness, ModelAndEffort, Unavailable};
 use crate::resend_key::{self, Credentials, Source};
 
 /// What the user chose.
 pub struct Answers {
+    /// `harness.default`, and the Model and Effort of the Harness it names,
+    /// each none for the Harness's own default; `None` when sessions can run
+    /// on no Harness here, and the harness settings stay as they were.
+    pub harness: Option<(Harness, ModelAndEffort)>,
     /// `merge.always`.
     pub merge_always: bool,
     /// `base.fix`: asked only with `merge.always` on, and otherwise its
@@ -76,6 +81,7 @@ pub fn offer(path: &Path) -> Result<bool> {
 
 /// Ask the Setup questions, with the settings in `current` as the default
 /// answers, and `suggested_address` for `email.to` when `current` has none.
+/// The Harness, Model and Effort come first, as [`ask_harness`] asks them.
 /// Base fixes are asked about only with every Run a Merge run; otherwise
 /// the answer is `base.fix`'s default, no.
 /// The address is re-asked until it has an `@`. With Run notifications on,
@@ -87,6 +93,7 @@ pub fn ask(
     credentials: &Credentials,
     suggested_address: impl FnOnce() -> Option<String>,
 ) -> Result<Answers> {
+    let harness = ask_harness(&current.harness)?;
     let merge_always = yes_or_no("Every Run a Merge run?", current.merge_always)?;
     let base_fix = merge_always
         && yes_or_no(
@@ -102,6 +109,7 @@ pub fn ask(
         current.email.always,
     )? {
         return Ok(Answers {
+            harness,
             merge_always,
             base_fix,
             launch_pull,
@@ -138,6 +146,7 @@ pub fn ask(
         false
     };
     Ok(Answers {
+        harness,
         merge_always,
         base_fix,
         launch_pull,
@@ -148,6 +157,87 @@ pub fn ask(
             send_test,
         }),
     })
+}
+
+/// Ask which Harness every Run's sessions run on, listing each with why
+/// sessions can't run on it here, if they can't, and refusing that one; then
+/// its Model and Effort, with those `current` sets for it as the defaults.
+/// The Harness's default is the first one sessions can run on, so `claude`
+/// when both can. A Model is checked with a test call, as a Run
+/// checks it, and on a refusal the Model and Effort are asked again. With no
+/// Harness to choose, nothing is asked, and the answer is `None`.
+fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndEffort)>> {
+    let listed: Vec<String> = Harness::ALL
+        .iter()
+        .map(|harness| match harness.unavailable() {
+            Some(why) => format!("{} ({why})", harness.name()),
+            None => harness.name().to_string(),
+        })
+        .collect();
+    let listed = listed.join(" or ");
+    let default = Harness::ALL
+        .into_iter()
+        .find(|harness| harness.unavailable().is_none());
+    let Some(default) = default else {
+        say(&format!(
+            "Harness for every Run's sessions: {listed}. Sessions can run on neither here, so \
+             the harness settings stay as they are; install claude, then rerun `thirdshift setup`."
+        ));
+        return Ok(None);
+    };
+    let harness = loop {
+        let name = answer(
+            &format!("Harness for every Run's sessions, {listed}"),
+            Some(default.name()),
+        )?;
+        match Harness::named(&name) {
+            None => say(&format!("Choose {}.", harness::NAMES)),
+            Some(harness) => match harness.unavailable() {
+                None => break harness,
+                Some(Unavailable::NotSupportedYet) => say(&format!(
+                    "{name} is not supported yet: Codex sessions come in a later thirdshift."
+                )),
+                Some(Unavailable::NotInstalled) => {
+                    say(&format!("{name} is not installed: it isn't on PATH."))
+                }
+            },
+        }
+    };
+    let current_settings = current.of(harness);
+    loop {
+        let model = ask_setting("Model", harness, current_settings.model.as_deref())?;
+        let effort = ask_setting("Effort", harness, current_settings.effort.as_deref())?;
+        let choice = Choice {
+            harness,
+            model,
+            effort,
+            chosen_by: ChosenBy::UserConfig,
+        };
+        match choice.test_call() {
+            Ok(()) => {
+                return Ok(Some((
+                    harness,
+                    ModelAndEffort {
+                        model: choice.model,
+                        effort: choice.effort,
+                    },
+                )));
+            }
+            Err(error) => say(&format!("{error:#}")),
+        }
+    }
+}
+
+/// Ask for the `setting`, the Model or the Effort, of `harness`, with
+/// `current` as the default; `-` is none, the Harness's own default.
+fn ask_setting(setting: &str, harness: Harness, current: Option<&str>) -> Result<Option<String>> {
+    let name = harness.name();
+    let own = format!("{name}'s own default");
+    let answer = match current {
+        Some(current) => answer(&format!("{setting} for {name}, - for {own}"), Some(current))?,
+        None => read(&format!("{setting} for {name} [{own}]: "))?,
+    };
+    Ok(Some(answer).filter(|answer| !answer.is_empty() && answer != "-"))
 }
 
 /// Ask `question` until the answer is yes, no or nothing, which is `default`.

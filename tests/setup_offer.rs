@@ -23,6 +23,9 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
 const OFFER: &str = "Set your defaults now? [Y/n]";
+const HARNESS: &str = "Harness for every Run's sessions";
+const MODEL: &str = "Model for claude";
+const EFFORT: &str = "Effort for claude";
 const MERGE: &str = "Merge run?";
 const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
@@ -79,6 +82,9 @@ fn accepting_and_choosing_merge_always_makes_that_run_a_merge_run() {
         &[],
         &[
             (OFFER, ""),
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
@@ -115,6 +121,9 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "success
         &[],
         &[
             (OFFER, ""),
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
             (MERGE, "y"),
             (BASE_FIX, "y"),
             (PULL, ""),
@@ -140,6 +149,9 @@ fn no_merge_in_the_command_wins_over_a_fresh_merge_always() {
         &[],
         &[
             (OFFER, "y"),
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
@@ -166,6 +178,9 @@ fn no_email_in_the_command_wins_over_fresh_run_notifications() {
         ],
         &[
             (OFFER, "y"),
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
             (MERGE, ""),
             (PULL, ""),
             (NOTIFY, "y"),
@@ -192,6 +207,9 @@ fn accepting_asks_for_the_key_saves_it_and_the_run_notification_goes_with_it() {
         &[("THIRDSHIFT_RESEND_URL", resend.url())],
         &[
             (OFFER, "y"),
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
             (MERGE, ""),
             (PULL, ""),
             (NOTIFY, "y"),
@@ -332,6 +350,9 @@ fn an_unwritable_user_config_is_a_warning_and_the_run_completes_on_the_defaults(
         &[],
         &[
             (OFFER, "y"),
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
@@ -385,7 +406,15 @@ fn ctrl_c_during_the_questions_writes_no_file_and_does_no_work() {
     let result = scenario.run_on_terminal(
         &[&scenario.issue_url(7)],
         &[],
-        &[(OFFER, "y"), (MERGE, "y"), (BASE_FIX, ""), (PULL, CTRL_C)],
+        &[
+            (OFFER, "y"),
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
+            (MERGE, "y"),
+            (BASE_FIX, ""),
+            (PULL, CTRL_C),
+        ],
     );
 
     assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);

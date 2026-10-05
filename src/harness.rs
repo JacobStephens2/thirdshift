@@ -38,6 +38,40 @@ impl Harness {
             Harness::Codex => "codex",
         }
     }
+
+    /// Every Harness, in the order Setup lists them.
+    pub const ALL: [Harness; 2] = [Harness::Claude, Harness::Codex];
+
+    /// Why Setup can't offer it on this machine, if it can't: Setup doesn't
+    /// offer Codex yet, and otherwise its CLI must be on `PATH`.
+    pub fn unavailable(self) -> Option<Unavailable> {
+        if self == Harness::Codex {
+            Some(Unavailable::NotSupportedYet)
+        } else if !on_path(self.name()) {
+            Some(Unavailable::NotInstalled)
+        } else {
+            None
+        }
+    }
+}
+
+/// Why sessions can't run on a Harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unavailable {
+    /// Setup doesn't offer it yet.
+    NotSupportedYet,
+    /// Its CLI isn't on `PATH`.
+    NotInstalled,
+}
+
+impl fmt::Display for Unavailable {
+    /// As Setup marks a Harness with it, as in `codex (not supported yet)`.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Unavailable::NotSupportedYet => "not supported yet",
+            Unavailable::NotInstalled => "not installed",
+        })
+    }
 }
 
 /// The names a Harness is chosen by, for the messages that list them.
@@ -64,7 +98,7 @@ pub struct Settings {
 
 impl Settings {
     /// The Model and Effort set for `harness`.
-    fn of(&self, harness: Harness) -> &ModelAndEffort {
+    pub fn of(&self, harness: Harness) -> &ModelAndEffort {
         match harness {
             Harness::Claude => &self.claude,
             Harness::Codex => &self.codex,
@@ -198,13 +232,14 @@ impl Choice {
             );
         }
         match self.harness {
-            Harness::Claude => self.check_claude(),
+            Harness::Claude => self.test_call(),
             Harness::Codex => self.check_codex(),
         }
     }
 
-    /// Make a test call to Claude on the Model, if one is named.
-    fn check_claude(&self) -> Result<()> {
+    /// Check that Claude takes a minimal test call on the Model, if one is
+    /// named, with the Effort, if any. A refusal says what Claude said.
+    pub fn test_call(&self) -> Result<()> {
         let cli = self.harness.name();
         let Some(model) = &self.model else {
             return Ok(());
