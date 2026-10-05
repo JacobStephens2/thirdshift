@@ -1,20 +1,17 @@
-//! Setup's questions, asked on the terminal: on stderr, with the answers read
-//! from stdin, so stdout stays empty. Each question's default answer, taken
-//! by pressing Enter, is the current value. The Resend API key is read with
-//! echo off, and never shown.
+//! Setup's questions, asked through [`Outside`]: on the terminal, on stderr,
+//! with the answers read from stdin, so stdout stays empty. Each question's
+//! default answer, taken by pressing Enter, is the current value. The Resend
+//! API key is read hidden, and never shown.
 
-use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
-use signal_hook::SigId;
-use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-use signal_hook::low_level;
+use anyhow::{Result, bail};
 
+use super::{Outside, suggested_address};
 use crate::config::UserConfig;
 use crate::email::DEFAULT_FROM;
-use crate::harness::{self, Catalog, Choice, ChosenBy, Harness, ModelAndEffort};
-use crate::resend_key::{self, Credentials, Source};
+use crate::harness::{self, Harness, ModelAndEffort};
+use crate::resend_key::{self, Source};
 
 /// What the user chose.
 pub struct Answers {
@@ -62,15 +59,11 @@ pub struct Notifications {
     pub send_test: bool,
 }
 
-/// Whether there is someone to ask: stdin and stderr are both terminals.
-pub fn has_terminal() -> bool {
-    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
-}
-
 /// The first Run's offer of Setup, with no User config at `path`: whether
 /// the user wants to set their defaults now, yes unless they say no.
-pub fn offer(path: &Path) -> Result<bool> {
+pub fn offer(outside: &mut impl Outside, path: &Path) -> Result<bool> {
     yes_or_no(
+        outside,
         &format!(
             "No User config at {}. Set your defaults now?",
             path.display()
@@ -80,31 +73,35 @@ pub fn offer(path: &Path) -> Result<bool> {
 }
 
 /// Ask the Setup questions, with the settings in `current` as the default
-/// answers, and `suggested_address` for `email.to` when `current` has none.
-/// The Harness, Model and Effort come first, as [`ask_harness`] asks them.
-/// Base fixes are asked about only with every Run a Merge run; otherwise
-/// the answer is `base.fix`'s default, no.
+/// answers, and the suggested address for `email.to` when `current` has
+/// none. The Harness, Model and Effort come first, as [`ask_harness`] asks
+/// them. Base fixes are asked about only with every Run a Merge run;
+/// otherwise the answer is `base.fix`'s default, no.
 /// The address is re-asked until it has an `@`. With Run notifications on,
-/// the Resend API key is asked for too, unless `RESEND_API_KEY` gives it,
-/// with Enter keeping the one in `credentials`, if any. Ends in an error if
-/// stdin closes before the last answer.
+/// the Resend API key is asked for too, unless `found`, where the key was
+/// found, is `RESEND_API_KEY`, with Enter keeping the one in the
+/// Credentials, if any. Ends in an error if stdin closes before the last
+/// answer.
 pub fn ask(
+    outside: &mut impl Outside,
     current: &UserConfig,
-    credentials: &Credentials,
-    suggested_address: impl FnOnce() -> Option<String>,
+    found: Option<Source>,
 ) -> Result<Answers> {
-    let harness = ask_harness(&current.harness)?;
-    let merge_always = yes_or_no("Every Run a Merge run?", current.merge_always)?;
+    let harness = ask_harness(outside, &current.harness)?;
+    let merge_always = yes_or_no(outside, "Every Run a Merge run?", current.merge_always)?;
     let base_fix = merge_always
         && yes_or_no(
+            outside,
             "Every Run may start a Base fix when the Base branch's CI is red?",
             current.base_fix,
         )?;
     let launch_pull = yes_or_no(
+        outside,
         "Every Run first fast-forwards your checkout of the Base branch?",
         current.launch_pull,
     )?;
     if !yes_or_no(
+        outside,
         "Run notifications, an email as each Run ends?",
         current.email.always,
     )? {
@@ -116,32 +113,36 @@ pub fn ask(
             notifications: None,
         });
     }
-    let suggested = current.email.to.clone().or_else(suggested_address);
+    let suggested = match &current.email.to {
+        Some(to) => Some(to.clone()),
+        None => suggested_address(outside),
+    };
     let to = loop {
-        let to = answer("Send Run notifications to", suggested.as_deref())?;
+        let to = answer(outside, "Send Run notifications to", suggested.as_deref())?;
         if to.contains('@') {
             break to;
         }
     };
     let from = answer(
+        outside,
         "Send them from",
         Some(current.email.from.as_deref().unwrap_or(DEFAULT_FROM)),
     )?;
-    let found = credentials.lookup().map(|key| key.source);
-    let key = match found {
+    let key = match &found {
         Some(Source::Environment) => {
-            say("The Resend API key comes from RESEND_API_KEY.");
+            outside.say("The Resend API key comes from RESEND_API_KEY.".to_string());
             None
         }
-        Some(Source::Credentials(_)) => ask_key("Enter keeps the saved one")?,
-        None => ask_key("Enter to skip")?,
+        Some(Source::Credentials(_)) => ask_key(outside, "Enter keeps the saved one")?,
+        None => ask_key(outside, "Enter to skip")?,
     };
     let send_test = if found.is_some() || key.is_some() {
-        yes_or_no("Send a test email now?", false)?
+        yes_or_no(outside, "Send a test email now?", false)?
     } else {
-        say(
+        outside.say(
             "No Resend API key, so no email can go yet. To add one later, rerun \
-             `thirdshift setup`, or set RESEND_API_KEY in the environment the Run starts from.",
+             `thirdshift setup`, or set RESEND_API_KEY in the environment the Run starts from."
+                .to_string(),
         );
         false
     };
@@ -167,11 +168,18 @@ pub fn ask(
 /// installed, so `claude` when both are. With no
 /// Harness to choose, or Codex chosen and its catalog unreadable, the answer
 /// is `None`.
-fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndEffort)>> {
+fn ask_harness(
+    outside: &mut impl Outside,
+    current: &harness::Settings,
+) -> Result<Option<(Harness, ModelAndEffort)>> {
+    let installed: Vec<Harness> = Harness::ALL
+        .into_iter()
+        .filter(|harness| outside.installed(*harness))
+        .collect();
     let harnesses: Vec<String> = Harness::ALL
         .iter()
         .map(|harness| {
-            if harness.installed() {
+            if installed.contains(harness) {
                 harness.name().to_string()
             } else {
                 format!("{} (not installed)", harness.name())
@@ -181,10 +189,10 @@ fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndE
     let harnesses = harnesses.join(" or ");
     let default = current
         .default
-        .filter(|harness| harness.installed())
-        .or_else(|| Harness::ALL.into_iter().find(|harness| harness.installed()));
+        .filter(|harness| installed.contains(harness))
+        .or_else(|| installed.first().copied());
     let Some(default) = default else {
-        say(&format!(
+        outside.say(format!(
             "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \
              the harness settings stay as they are; install claude or codex, then rerun \
              `thirdshift setup`."
@@ -193,24 +201,25 @@ fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndE
     };
     let harness = loop {
         let name = answer(
+            outside,
             &format!("Harness for every Run's sessions, {harnesses}"),
             Some(default.name()),
         )?;
         match Harness::named(&name) {
-            None => say(&format!("Choose {}.", harness::NAMES)),
-            Some(harness) if !harness.installed() => {
-                say(&format!("{name} is not installed: it isn't on PATH."))
+            None => outside.say(format!("Choose {}.", harness::NAMES)),
+            Some(harness) if !installed.contains(&harness) => {
+                outside.say(format!("{name} is not installed: it isn't on PATH."))
             }
             Some(harness) => break harness,
         }
     };
     let set = current.of(harness);
     let chosen = match harness {
-        Harness::Claude => ask_claude(set)?,
-        Harness::Codex => match Catalog::read() {
-            Ok(catalog) => ask_codex(&catalog, set)?,
+        Harness::Claude => ask_claude(outside, set)?,
+        Harness::Codex => match outside.codex_catalog() {
+            Ok(catalog) => ask_codex(outside, &catalog, set)?,
             Err(error) => {
-                say(&format!(
+                outside.say(format!(
                     "{error:#}\nThe harness settings stay as they are; rerun `thirdshift \
                      setup` once codex debug models works."
                 ));
@@ -224,24 +233,23 @@ fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndE
 /// Ask Claude's Model and Effort, with `current` as the defaults. A Model is
 /// checked with a test call, as a Run checks it, and on a refusal the Model
 /// and Effort are asked again.
-fn ask_claude(current: &ModelAndEffort) -> Result<ModelAndEffort> {
+fn ask_claude(outside: &mut impl Outside, current: &ModelAndEffort) -> Result<ModelAndEffort> {
     loop {
-        let model = ask_setting("Model", Harness::Claude, current.model.as_deref())?;
-        let effort = ask_setting("Effort", Harness::Claude, current.effort.as_deref())?;
-        let choice = Choice {
-            harness: Harness::Claude,
-            model,
-            effort,
-            chosen_by: ChosenBy::UserConfig,
+        let chosen = ModelAndEffort {
+            model: ask_setting(outside, "Model", Harness::Claude, current.model.as_deref())?,
+            effort: ask_setting(
+                outside,
+                "Effort",
+                Harness::Claude,
+                current.effort.as_deref(),
+            )?,
         };
-        match choice.test_call() {
-            Ok(()) => {
-                return Ok(ModelAndEffort {
-                    model: choice.model,
-                    effort: choice.effort,
-                });
-            }
-            Err(error) => say(&format!("{error:#}")),
+        if chosen.model.is_none() {
+            return Ok(chosen);
+        }
+        match outside.test_call(&chosen) {
+            Ok(()) => return Ok(chosen),
+            Err(error) => outside.say(format!("{error:#}")),
         }
     }
 }
@@ -251,46 +259,59 @@ fn ask_claude(current: &ModelAndEffort) -> Result<ModelAndEffort> {
 /// Each is matched against the catalog as a Run matches it, and written as
 /// Codex names it; one the catalog doesn't have is asked again, with the
 /// valid choices.
-fn ask_codex(catalog: &Catalog, current: &ModelAndEffort) -> Result<ModelAndEffort> {
-    say(&format!("Codex's Models: {}", catalog.listed().join(", ")));
+fn ask_codex(
+    outside: &mut impl Outside,
+    catalog: &harness::Catalog,
+    current: &ModelAndEffort,
+) -> Result<ModelAndEffort> {
+    outside.say(format!("Codex's Models: {}", catalog.listed().join(", ")));
     let model = loop {
-        let model = ask_setting("Model", Harness::Codex, current.model.as_deref())?;
+        let model = ask_setting(outside, "Model", Harness::Codex, current.model.as_deref())?;
         match catalog.settle(model.as_deref(), None) {
             Ok(settled) => break settled.model,
-            Err(error) => say(&format!("{error:#}")),
+            Err(error) => outside.say(format!("{error:#}")),
         }
     };
     let efforts = catalog.efforts(model.as_deref()).join(", ");
-    say(&match &model {
+    outside.say(match &model {
         Some(model) => format!("Efforts {model} supports: {efforts}"),
         None => format!("Efforts Codex's Models support: {efforts}"),
     });
     loop {
-        let effort = ask_setting("Effort", Harness::Codex, current.effort.as_deref())?;
+        let effort = ask_setting(outside, "Effort", Harness::Codex, current.effort.as_deref())?;
         match catalog.settle(model.as_deref(), effort.as_deref()) {
             Ok(settled) => return Ok(settled),
-            Err(error) => say(&format!("{error:#}")),
+            Err(error) => outside.say(format!("{error:#}")),
         }
     }
 }
 
 /// Ask for the `setting`, the Model or the Effort, of `harness`, with
 /// `current` as the default; `-` is none, the Harness's own default.
-fn ask_setting(setting: &str, harness: Harness, current: Option<&str>) -> Result<Option<String>> {
+fn ask_setting(
+    outside: &mut impl Outside,
+    setting: &str,
+    harness: Harness,
+    current: Option<&str>,
+) -> Result<Option<String>> {
     let name = harness.name();
     let own = format!("{name}'s own default");
     let answer = match current {
-        Some(current) => answer(&format!("{setting} for {name}, - for {own}"), Some(current))?,
-        None => read(&format!("{setting} for {name} [{own}]: "))?,
+        Some(current) => answer(
+            outside,
+            &format!("{setting} for {name}, - for {own}"),
+            Some(current),
+        )?,
+        None => read(outside, &format!("{setting} for {name} [{own}]: "))?,
     };
     Ok(Some(answer).filter(|answer| !answer.is_empty() && answer != "-"))
 }
 
 /// Ask `question` until the answer is yes, no or nothing, which is `default`.
-fn yes_or_no(question: &str, default: bool) -> Result<bool> {
+fn yes_or_no(outside: &mut impl Outside, question: &str, default: bool) -> Result<bool> {
     let choices = if default { "[Y/n]" } else { "[y/N]" };
     loop {
-        match read(&format!("{question} {choices} "))?
+        match read(outside, &format!("{question} {choices} "))?
             .to_ascii_lowercase()
             .as_str()
         {
@@ -304,13 +325,13 @@ fn yes_or_no(question: &str, default: bool) -> Result<bool> {
 
 /// Ask `question` for a word, showing `default`, which nothing takes, if
 /// there is one. With no default, nothing is asked again.
-fn answer(question: &str, default: Option<&str>) -> Result<String> {
+fn answer(outside: &mut impl Outside, question: &str, default: Option<&str>) -> Result<String> {
     let prompt = match default {
         Some(default) => format!("{question} [{default}]: "),
         None => format!("{question}: "),
     };
     loop {
-        match (read(&prompt)?, default) {
+        match (read(outside, &prompt)?, default) {
             (answer, _) if !answer.is_empty() => return Ok(answer),
             (_, Some(default)) => return Ok(default.to_string()),
             (_, None) => {}
@@ -320,94 +341,27 @@ fn answer(question: &str, default: Option<&str>) -> Result<String> {
 
 /// Ask for a Resend API key, hidden, until the answer is one or is nothing.
 /// `on_enter` says, in the prompt, what nothing does; it is `None`.
-fn ask_key(on_enter: &str) -> Result<Option<String>> {
+fn ask_key(outside: &mut impl Outside, on_enter: &str) -> Result<Option<String>> {
+    let prompt = format!("Resend API key (input hidden, {on_enter}): ");
     loop {
-        match read_hidden(&format!("Resend API key (input hidden, {on_enter}): "))? {
-            key if key.is_empty() => return Ok(None),
-            key if resend_key::is_key(&key) => return Ok(Some(key)),
-            _ => say("That isn't a Resend API key, which starts with re_."),
-        }
-    }
-}
-
-/// Show `prompt` on stderr and read one line from stdin, trimmed, with the
-/// terminal's echo off, so what is typed never shows.
-fn read_hidden(prompt: &str) -> Result<String> {
-    let echo_off = EchoOff::new()?;
-    let line = read(prompt)?;
-    drop(echo_off);
-    let _ = writeln!(std::io::stderr());
-    Ok(line)
-}
-
-/// The terminal on stdin with its echo off, until this is dropped. Ctrl-C,
-/// SIGTERM or SIGHUP meanwhile turn echo back on, then end the command as
-/// they would anywhere else in Setup, so it never leaves the shell blind.
-struct EchoOff {
-    saved: libc::termios,
-    handlers: Vec<SigId>,
-}
-
-impl EchoOff {
-    fn new() -> Result<Self> {
-        // SAFETY: an all-zero termios is a valid value for tcgetattr to fill.
-        let mut saved: libc::termios = unsafe { std::mem::zeroed() };
-        // SAFETY: fd 0 is open, and `saved` is a valid termios to fill.
-        if unsafe { libc::tcgetattr(0, &mut saved) } != 0 {
-            return Err(std::io::Error::last_os_error())
-                .context("can't read the terminal's settings");
-        }
-        let mut echo_off = EchoOff {
-            saved,
-            handlers: Vec::new(),
-        };
-        for signal in [SIGINT, SIGTERM, SIGHUP] {
-            // SAFETY: the handler only calls tcsetattr and signal-hook's
-            // emulate_default_handler, both async-signal-safe.
-            let handler = unsafe {
-                low_level::register(signal, move || {
-                    libc::tcsetattr(0, libc::TCSANOW, &saved);
-                    let _ = low_level::emulate_default_handler(signal);
-                })
+        match outside.read_hidden(&prompt)? {
+            None => bail!(ENDED),
+            Some(key) if key.is_empty() => return Ok(None),
+            Some(key) if resend_key::is_key(&key) => return Ok(Some(key)),
+            Some(_) => {
+                outside.say("That isn't a Resend API key, which starts with re_.".to_string())
             }
-            .context("could not install the signal handler")?;
-            echo_off.handlers.push(handler);
-        }
-        let mut hidden = saved;
-        hidden.c_lflag &= !libc::ECHO;
-        // SAFETY: fd 0 is open, and `hidden` is a valid termios.
-        if unsafe { libc::tcsetattr(0, libc::TCSANOW, &hidden) } != 0 {
-            return Err(std::io::Error::last_os_error())
-                .context("can't turn the terminal's echo off");
-        }
-        Ok(echo_off)
-    }
-}
-
-impl Drop for EchoOff {
-    fn drop(&mut self) {
-        // SAFETY: fd 0 is open, and `saved` is the termios read from it.
-        unsafe { libc::tcsetattr(0, libc::TCSANOW, &self.saved) };
-        for handler in self.handlers.drain(..) {
-            low_level::unregister(handler);
         }
     }
 }
 
-/// Show `prompt` on stderr and read one line from stdin, trimmed.
-fn read(prompt: &str) -> Result<String> {
-    let mut stderr = std::io::stderr();
-    let _ = write!(stderr, "{prompt}");
-    let _ = stderr.flush();
-    let mut line = String::new();
-    if std::io::stdin().lock().read_line(&mut line)? == 0 {
-        let _ = writeln!(stderr);
-        bail!("Setup ended before its last answer; nothing written");
+/// Show `prompt` and read one answer, trimmed, or end Setup if stdin closes.
+fn read(outside: &mut impl Outside, prompt: &str) -> Result<String> {
+    match outside.read(prompt)? {
+        Some(line) => Ok(line),
+        None => bail!(ENDED),
     }
-    Ok(line.trim().to_string())
 }
 
-/// Show `text` on stderr.
-fn say(text: &str) {
-    let _ = writeln!(std::io::stderr(), "{text}");
-}
+/// Why Setup ends when stdin closes before the last answer.
+const ENDED: &str = "Setup ended before its last answer; nothing written";

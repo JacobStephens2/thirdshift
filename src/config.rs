@@ -11,11 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
-use crate::git::Git;
 use crate::harness::{self, Harness, ModelAndEffort};
-use crate::questions::{self, Answers};
-use crate::resend_key::Credentials;
-use crate::{email, github, progress};
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
@@ -93,7 +89,7 @@ impl UserConfig {
     /// Parse `text`, the contents of the User config at `path`, expanding a
     /// leading `~` to `home`. Any key or section thirdshift doesn't know is an
     /// error, so a typo can't silently leave a setting unset.
-    fn parse(text: &str, path: &Path, home: &Path) -> Result<Self> {
+    pub fn parse(text: &str, path: &Path, home: &Path) -> Result<Self> {
         let file = format!("the User config {}", path.display());
         let table: Table = text
             .parse()
@@ -180,297 +176,6 @@ impl UserConfig {
     }
 }
 
-/// Setup: write the User config. From a terminal, the Setup questions come
-/// first, each with the current value as its default answer, and the answers
-/// are written, with `base.fix`, asked about only when every Run is a Merge
-/// run, otherwise at its default; with no terminal, nothing is asked, and every setting is at
-/// its default, with `email.to` as the suggested address, if there is one.
-/// An existing User config is edited in place, once it parses as a Run would
-/// parse it: its comments and key order stay, as do the values Setup didn't
-/// ask about, and each key it lacks is added at its default, so Setup with no
-/// terminal never resets a configured machine. A Resend API key the user
-/// gave is saved in the Credentials once the User config is written; with no
-/// terminal, the Credentials are never read or written. Nothing is written
-/// until the last answer is in. A test email, if the user asked for one, goes
-/// once the files are written, as `email-test` sends it.
-pub fn setup() -> Result<String> {
-    let (home, path) = home_and_path()?;
-    let existing = match std::fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(error).with_context(|| format!("can't read {}", path.display()));
-        }
-    };
-    let mut text = match &existing {
-        Some(text) => {
-            UserConfig::parse(text, &path, &home)?;
-            complete(text)?
-        }
-        None => with_email_to(suggested_address(&home)),
-    };
-    let mut answered = None;
-    if questions::has_terminal() {
-        let answers;
-        (text, answers) = ask(&text, &path, &home)?;
-        answered = Some(answers);
-    }
-    let asked = answered.is_some();
-    let mut written = match &existing {
-        None => {
-            write_new(&home, &path, &text)?;
-            format!("wrote the User config {}", path.display())
-        }
-        Some(existing) if *existing == text && asked => {
-            format!(
-                "the User config {} already holds your answers",
-                path.display()
-            )
-        }
-        Some(existing) if *existing == text => format!(
-            "the User config {} already lists every setting",
-            path.display()
-        ),
-        Some(_) => {
-            replace(&path, &text).with_context(|| format!("can't write {}", path.display()))?;
-            if asked {
-                format!("wrote your answers to the User config {}", path.display())
-            } else {
-                format!(
-                    "added the missing settings to the User config {}",
-                    path.display()
-                )
-            }
-        }
-    };
-    let Some(asked) = &answered else {
-        return Ok(written);
-    };
-    if let Some(key) = asked.answers.key() {
-        progress::step(written);
-        asked.credentials.save(key)?;
-        written = format!("wrote {}", asked.credentials);
-    }
-    if !asked.answers.send_test() {
-        return Ok(written);
-    }
-    progress::step(written);
-    let config = UserConfig::load()?;
-    Ok(email::send_test(None, &config.email)?.to_string())
-}
-
-/// The first Run's offer of Setup, made only from a terminal and only when
-/// there is no User config. Yes asks the Setup questions and writes the
-/// answers, and the Resend API key to the Credentials if the user gave one;
-/// no writes every setting at its default, as `setup` with no terminal does,
-/// and leaves the Credentials alone. Either way the Run then loads what was
-/// written. A User config or Credentials that can't be written, or a test
-/// email that can't go, is a warning, so the Run carries on; Credentials a
-/// Run would refuse, or stdin closing before the last answer, end the command
-/// before any work, with nothing written.
-pub fn offer_setup() -> Result<()> {
-    if !questions::has_terminal() {
-        return Ok(());
-    }
-    let (home, path) = home_and_path()?;
-    match std::fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        _ => return Ok(()),
-    }
-    let accepted = questions::offer(&path)?;
-    let mut text = with_email_to(suggested_address(&home));
-    let mut answered = None;
-    if accepted {
-        let answers;
-        (text, answers) = ask(&text, &path, &home)?;
-        answered = Some(answers);
-    }
-    if let Err(error) = write_new(&home, &path, &text) {
-        progress::step(format_args!(
-            "warning: {error:#}; carrying on with the defaults"
-        ));
-        return Ok(());
-    }
-    let Some(asked) = &answered else {
-        progress::step(format_args!(
-            "wrote the User config {} with every setting at its default; \
-             thirdshift setup changes it",
-            path.display()
-        ));
-        return Ok(());
-    };
-    progress::step(format_args!("wrote the User config {}", path.display()));
-    if let Some(key) = asked.answers.key() {
-        match asked.credentials.save(key) {
-            Ok(()) => progress::step(format_args!("wrote {}", asked.credentials)),
-            Err(error) => progress::step(format_args!("warning: {error:#}")),
-        }
-    }
-    if asked.answers.send_test() {
-        let sent = UserConfig::load().and_then(|config| email::send_test(None, &config.email));
-        match sent {
-            Ok(sent) => progress::step(sent),
-            Err(error) => progress::step(format_args!("warning: {error:#}")),
-        }
-    }
-    Ok(())
-}
-
-/// The Setup answers, and the Credentials read before asking, where a key
-/// the user gave is saved.
-struct Asked {
-    answers: Answers,
-    credentials: Credentials,
-}
-
-/// Ask the Setup questions, with the settings in `text`, the User config at
-/// `path`, and the key in the Credentials as the default answers. Credentials
-/// a Run would refuse are refused before any question. Returns `text` with
-/// the answers, and what was asked.
-fn ask(text: &str, path: &Path, home: &Path) -> Result<(String, Asked)> {
-    let current = UserConfig::parse(text, path, home)?;
-    let credentials = Credentials::read()?;
-    let answers = questions::ask(&current, &credentials, || suggested_address(home))?;
-    let text = with_answers(text, &answers)?;
-    Ok((
-        text,
-        Asked {
-            answers,
-            credentials,
-        },
-    ))
-}
-
-/// Write `text` as the User config at `path`, where there is none yet,
-/// creating `~/.thirdshift` under `home` if it is missing.
-fn write_new(home: &Path, path: &Path, text: &str) -> Result<()> {
-    std::fs::create_dir_all(home.join(".thirdshift"))
-        .and_then(|()| std::fs::write(path, text))
-        .with_context(|| format!("can't write {}", path.display()))
-}
-
-/// `text`, a User config with every key, or a commented-out `email.to`, with
-/// the values `answers` gives. Only those values change: the spacing and
-/// comments around each stay, as does everything else in `text`.
-fn with_answers(text: &str, answers: &Answers) -> Result<String> {
-    let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
-    set(&mut document, "merge", "always", answers.merge_always);
-    set(&mut document, "base", "fix", answers.base_fix);
-    set(&mut document, "launch", "pull", answers.launch_pull);
-    set(
-        &mut document,
-        "email",
-        "always",
-        answers.notifications.is_some(),
-    );
-    if let Some(notifications) = &answers.notifications {
-        set(&mut document, "email", "from", notifications.from.as_str());
-        set_email_to(&mut document, &notifications.to);
-    }
-    if let Some((harness, chosen)) = &answers.harness {
-        set(&mut document, "harness", "default", harness.name());
-        let section = format!("harness.{}", harness.name());
-        for (key, value) in [("model", &chosen.model), ("effort", &chosen.effort)] {
-            set(&mut document, &section, key, value.as_deref().unwrap_or(""));
-        }
-    }
-    Ok(document.to_string())
-}
-
-/// Set `section.key`, which `document` holds, to `value`, keeping the
-/// spacing and comment around the old value, and the comment in the same
-/// column where the spaces before it allow. An equal value is left as it was
-/// written. `section` may be a subsection, as `harness.claude`.
-fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<toml_edit::Value>) {
-    let value = value.into();
-    let old = section
-        .split('.')
-        .try_fold(document.as_item_mut(), |item, name| {
-            item.as_table_like_mut()?.get_mut(name)
-        })
-        .and_then(Item::as_table_like_mut)
-        .and_then(|settings| settings.get_mut(key))
-        .and_then(Item::as_value_mut)
-        .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
-    let same = match (old.as_bool(), old.as_str()) {
-        (Some(old), _) => value.as_bool() == Some(old),
-        (_, Some(old)) => value.as_str() == Some(old),
-        _ => false,
-    };
-    if same {
-        return;
-    }
-    let mut decor = old.decor().clone();
-    let suffix = decor_suffix(&decor);
-    let spaces = suffix.len() - suffix.trim_start_matches(' ').len();
-    if spaces > 0 && suffix[spaces..].starts_with('#') {
-        let width = |value: &toml_edit::Value| value.clone().decorated("", "").to_string().len();
-        let spaces = (spaces + width(old)).saturating_sub(width(&value)).max(1);
-        decor.set_suffix(format!(
-            "{}{}",
-            " ".repeat(spaces),
-            suffix.trim_start_matches(' ')
-        ));
-    }
-    *old = value;
-    *old.decor_mut() = decor;
-}
-
-/// Set `email.to` in `document` to `to`. With no `email.to` there yet, it
-/// takes the place of the commented-out one, if there is one, written as
-/// `DEFAULTS` would write it, with its comment.
-fn set_email_to(document: &mut DocumentMut, to: &str) {
-    let email = &mut document["email"];
-    let has_to = email
-        .as_table_like()
-        .is_some_and(|settings| settings.contains_key("to"));
-    if has_to {
-        set(document, "email", "to", to);
-        return;
-    }
-    let Some(email) = email.as_table_mut().filter(|email| !email.is_dotted()) else {
-        let settings = email.as_table_like_mut().expect("[email] is a section");
-        settings.insert("to", Item::Value(to.into()));
-        return;
-    };
-    let example: DocumentMut = with_email_to(Some(to.to_string()))
-        .parse()
-        .expect("DEFAULTS is valid TOML");
-    let (key, item) = example["email"]
-        .as_table()
-        .and_then(|example| example.get_key_value("to"))
-        .expect("the example sets email.to");
-    let mut key = key.clone();
-    key.leaf_decor_mut().set_prefix("");
-    let keys: Vec<String> = email.iter().map(|(key, _)| key.to_string()).collect();
-    let mut place = keys.len();
-    for (at, name) in keys.iter().enumerate() {
-        let mut next = email.key_mut(name).expect("the key is in [email]");
-        let prefix = decor_prefix(next.leaf_decor());
-        let mut end = 0;
-        let found = prefix.split_inclusive('\n').find_map(|line| {
-            let start = end;
-            end += line.len();
-            is_commented_out_email_to(line).then_some((start, end))
-        });
-        let Some((start, end)) = found else {
-            continue;
-        };
-        next.leaf_decor_mut().set_prefix(&prefix[end..]);
-        key.leaf_decor_mut().set_prefix(&prefix[..start]);
-        place = at;
-        break;
-    }
-    email.insert_formatted(&key, item.clone());
-    // Each key keeps its place, and `to` goes just before the key at `place`,
-    // or last: odd ranks for the keys that were there, an even one for `to`.
-    let rank = |name: &str| match keys.iter().position(|key| key == name) {
-        Some(at) => 2 * at + 1,
-        None => 2 * place,
-    };
-    email.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
-}
-
 /// Replace the file at `path` with `text` all at once, keeping its
 /// permissions, so a failed write leaves it as it was.
 pub fn replace(path: &Path, text: &str) -> std::io::Result<()> {
@@ -489,7 +194,7 @@ pub fn replace(path: &Path, text: &str) -> std::io::Result<()> {
 /// section, or a key of a section `text` names only in its subsections'
 /// headers, after the last line of `text`. A key added to an inline table
 /// gets no comment, as TOML has no place for one there.
-fn complete(text: &str) -> Result<String> {
+pub fn complete(text: &str) -> Result<String> {
     let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
     let defaults: DocumentMut = DEFAULTS.parse().expect("DEFAULTS is valid TOML");
     let mut missing = DocumentMut::new();
@@ -612,7 +317,7 @@ fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, text
 
 /// The text `decor` puts before a key: the comment and blank lines above it,
 /// and its indent.
-fn decor_prefix(decor: &toml_edit::Decor) -> String {
+pub fn decor_prefix(decor: &toml_edit::Decor) -> String {
     decor
         .prefix()
         .and_then(|prefix| prefix.as_str())
@@ -622,7 +327,7 @@ fn decor_prefix(decor: &toml_edit::Decor) -> String {
 
 /// The text `decor` puts after a value: the spaces and comment that end its
 /// line.
-fn decor_suffix(decor: &toml_edit::Decor) -> String {
+pub fn decor_suffix(decor: &toml_edit::Decor) -> String {
     decor
         .suffix()
         .and_then(|suffix| suffix.as_str())
@@ -645,7 +350,7 @@ fn has_commented_out_email_to(text: &str) -> bool {
 }
 
 /// Whether `line`, in the `[email]` section, is a commented-out `to` line.
-fn is_commented_out_email_to(line: &str) -> bool {
+pub fn is_commented_out_email_to(line: &str) -> bool {
     line.trim()
         .strip_prefix('#')
         .and_then(|comment| comment.trim_start().strip_prefix("to"))
@@ -655,7 +360,7 @@ fn is_commented_out_email_to(line: &str) -> bool {
 /// The User config Setup writes with no answers: every key at its default,
 /// each with what it does and that default. `email.to` has no default, so it
 /// is the one key written commented out.
-const DEFAULTS: &str = r#"[merge]
+pub const DEFAULTS: &str = r#"[merge]
 always = false   # every Run is a Merge run, without the merge word; default false
 
 [base]
@@ -697,30 +402,13 @@ effort = ""   # how hard that Model reasons; default blank, for Codex's own
 const NO_EMAIL_TO: &str = r#"# to = "you@example.com"        # where email goes when the command names no address; no default"#;
 
 /// `DEFAULTS` with `email.to` set to `to`, if there is one.
-fn with_email_to(to: Option<String>) -> String {
+pub fn with_email_to(to: Option<String>) -> String {
     let Some(to) = to else {
         return DEFAULTS.to_string();
     };
     let (_, comment) = NO_EMAIL_TO.split_once("  # ").unwrap();
     let line = format!("to = {}", Value::String(to));
     DEFAULTS.replace(NO_EMAIL_TO, &format!("{line:<31} # {comment}"))
-}
-
-/// The address Setup suggests for `email.to`: the public email of the user's
-/// GitHub profile, else the global git `user.email`, unless that is a
-/// `@users.noreply.github.com` address, which can't receive mail. Only Setup
-/// looks it up; a Run never falls back to it.
-fn suggested_address(home: &Path) -> Option<String> {
-    let github = github::profile_email().ok().flatten();
-    github.filter(|email| !email.is_empty()).or_else(|| {
-        let git = Git::new(home).run(&["config", "--global", "user.email"]);
-        git.ok().filter(|email| {
-            !email.is_empty()
-                && !email
-                    .to_ascii_lowercase()
-                    .ends_with("@users.noreply.github.com")
-        })
-    })
 }
 
 /// `value`, which `file` gives the setting `key`, as a whole number from 1
@@ -755,7 +443,7 @@ fn model_and_effort(settings: &Table, harness: &str, file: &str) -> Result<Model
 }
 
 /// `$HOME`, and the User config's path under it.
-fn home_and_path() -> Result<(PathBuf, PathBuf)> {
+pub fn home_and_path() -> Result<(PathBuf, PathBuf)> {
     let home = home()?;
     let path = home.join(".thirdshift/config.toml");
     Ok((home, path))
@@ -804,6 +492,49 @@ mod tests {
         assert_eq!(config.harness.default, Some(Harness::Claude));
         config.harness.default = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
+    }
+
+    #[test]
+    fn every_default_key_has_a_comment_giving_what_it_does_and_its_default() {
+        let mut section = "";
+        let mut keys = Vec::new();
+        for line in DEFAULTS.lines().filter(|line| !line.is_empty()) {
+            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                section = name;
+                continue;
+            }
+            let (setting, comment) = line.split_once(" # ").unwrap_or_else(|| {
+                panic!("no trailing comment on [{section}] {line:?}");
+            });
+            assert!(comment.contains("default"), "[{section}] {line:?}");
+            let key = setting.trim_start_matches("# ").split(' ').next().unwrap();
+            keys.push(format!("{section}.{key}"));
+        }
+        assert_eq!(
+            keys,
+            [
+                "merge.always",
+                "base.fix",
+                "launch.pull",
+                "email.always",
+                "email.to",
+                "email.from",
+                "logs.dir",
+                "activity.quiet_skips",
+                "spec.parallel",
+                "pickup.limit",
+                "harness.default",
+                "harness.claude.model",
+                "harness.claude.effort",
+                "harness.codex.model",
+                "harness.codex.effort"
+            ]
+        );
+        let commented_out: Vec<&str> = DEFAULTS
+            .lines()
+            .filter(|line| line.starts_with('#'))
+            .collect();
+        assert_eq!(commented_out, [NO_EMAIL_TO]);
     }
 
     #[test]
@@ -1172,56 +903,5 @@ mod tests {
         }
         let completed = completed("[email]\nto = \"me@example.com\"\n");
         assert!(!completed.contains("# to ="), "{completed}");
-    }
-
-    fn notifications_to(to: &str) -> Answers {
-        Answers {
-            harness: None,
-            merge_always: false,
-            base_fix: false,
-            launch_pull: false,
-            notifications: Some(questions::Notifications {
-                to: to.to_string(),
-                from: crate::email::DEFAULT_FROM.to_string(),
-                key: None,
-                send_test: false,
-            }),
-        }
-    }
-
-    #[test]
-    fn an_answered_address_takes_the_place_of_the_commented_out_line() {
-        let answered = with_answers(DEFAULTS, &notifications_to("me@example.com")).unwrap();
-        let expected = with_email_to(Some("me@example.com".to_string())).replace(
-            "always = false                  #",
-            "always = true                   #",
-        );
-        assert_eq!(answered, expected);
-    }
-
-    #[test]
-    fn an_answered_address_keeps_the_lines_around_the_commented_out_one() {
-        let text =
-            "[email]\nalways = false\n\n# mine\n# to = \"x@y.z\"\n# more\nfrom = \"a@b.c\"\n";
-        let answered = with_answers(
-            &complete(text).unwrap(),
-            &notifications_to("me@example.com"),
-        )
-        .unwrap();
-        let lines: Vec<&str> = answered.lines().collect();
-        assert_eq!(
-            lines[..4],
-            ["[email]", "always = true", "", "# mine"],
-            "{answered}"
-        );
-        assert!(
-            lines[4].starts_with("to = \"me@example.com\""),
-            "{answered}"
-        );
-        assert_eq!(
-            lines[5..7],
-            ["# more", "from = \"onboarding@resend.dev\""],
-            "{answered}"
-        );
     }
 }
