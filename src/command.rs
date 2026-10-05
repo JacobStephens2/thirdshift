@@ -33,9 +33,9 @@ pub enum Ending {
     /// A Run or a Spec run ended: started by hand, or dispatched by a Pickup
     /// run.
     Run(Ended),
-    /// An Architect run got past its skip checks: how its Architecture
-    /// review ended, and how the run it dispatched its plan as ended, if it
-    /// dispatched one.
+    /// An Architect run was not skipped: how its Architecture review ended,
+    /// failing if anything before it did, and how the run it dispatched its
+    /// plan as ended, if it dispatched one.
     Architect {
         review: Result<Reviewed, FailedRun>,
         dispatched: Option<Ended>,

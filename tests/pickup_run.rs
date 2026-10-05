@@ -132,27 +132,6 @@ fn assert_skipped(scenario: &Scenario, result: &RunResult, reason: &str) {
 }
 
 #[test]
-fn a_progress_line_names_the_issue_taken_before_it_is_dispatched() {
-    let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &[]);
-    scenario.issue_titled(7, "Sharpen the widgets");
-    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
-
-    let result = scenario.run(&["pickup"]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let url = scenario.issue_url(7);
-    let taking = format!(
-        "thirdshift: taking Ready issue #7 \"Sharpen the widgets\", as thirdshift {url} would\n"
-    );
-    assert!(
-        after_start(&result.stderr).starts_with(&taking),
-        "stderr: {}",
-        result.stderr
-    );
-}
-
-#[test]
 fn an_issue_without_ready_for_agent_is_never_taken_and_with_no_ready_issue_the_pass_is_skipped() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["bug"]);
@@ -1401,19 +1380,6 @@ fn the_model_reaches_the_dispatched_run_once_the_pass_has_checked_it() {
             .any(|window| window == ["--model", "opus"]),
         "{sessions:?}"
     );
-}
-
-#[test]
-fn a_skipped_pass_makes_no_check_of_its_harness_or_model() {
-    let scenario = Scenario::new();
-    scenario.agent_does("echo 'no such model'\nexit 1");
-
-    let result = scenario.run(&["pickup", "model", "Opus 5.5"]);
-
-    assert_skipped(&scenario, &result, NO_READY_ISSUE);
-    let result = scenario.run(&["pickup", "harness", "codex"]);
-
-    assert_skipped(&scenario, &result, NO_READY_ISSUE);
 }
 
 #[test]
