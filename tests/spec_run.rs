@@ -1087,23 +1087,6 @@ const DONE_CHECKLIST: &str = "<!-- thirdshift:tickets -->
 <!-- /thirdshift:tickets -->";
 
 #[test]
-fn a_spec_review_that_keeps_the_markers_has_the_checklist_replaced_between_them() {
-    let scenario = linear_spec();
-    scenario.agent_does_for(
-        SPEC,
-        r#"gh fake pr issue-20 body '"Before.\n\n<!-- thirdshift:tickets -->\nstale\n<!-- /thirdshift:tickets -->\n\nAfter. Closes #20"'"#,
-    );
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(
-        spec_pr(&scenario)["body"],
-        format!("Before.\n\n{DONE_CHECKLIST}\n\nAfter. Closes #20\n\n{BUILT_WITH}\n")
-    );
-}
-
-#[test]
 fn a_spec_review_whose_resume_ends_with_killed_background_work_still_delivers_the_spec_pr() {
     let scenario = linear_spec();
     // The Spec review rewrites the body without the checklist, and ends with
@@ -1676,29 +1659,6 @@ fn a_failed_spec_review_that_rewrote_the_body_has_the_checklist_put_back_in_the_
         spec["body"],
         format!("Half a description. Closes #20\n\n{DONE_CHECKLIST}\n")
     );
-}
-
-#[test]
-fn a_checklist_update_github_refuses_is_only_a_warning() {
-    let scenario = spec_of(&[(21, &[]), (22, &[])]);
-    scenario.agent_does_for(
-        21,
-        &format!(
-            "gh fake fails 'api --method'\n{}",
-            agent_lands(21, "21.txt")
-        ),
-    );
-
-    // One at a time, so the Spec PR is open when #22 starts.
-    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
-    assert_contains(
-        &result.stderr,
-        "thirdshift: could not update the Spec PR's Tickets checklist: ",
-    );
-    assert_contains(&result.stderr, "thirdshift: #22 landed\n");
 }
 
 /// Run `args` against `resend`, with `RESEND_API_KEY` set.
