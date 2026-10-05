@@ -4,29 +4,29 @@ use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 use crate::labels::{NEEDS_TRIAGE, READY_FOR_AGENT};
 
-/// Every prompt ends with this. Sessions run with `claude -p`, which exits
+/// Every prompt ends with this, worded for either Harness. A session exits
 /// once the agent ends its turn, killing any background task still running.
 /// Other sessions on the same machine run the same commands, so a wait on a
 /// process name can match theirs and outlast the session's own task.
 /// thirdshift can't tell a task the agent gave up on from one it was waiting
-/// on, so the agent is to stop the first kind itself, with `TaskStop`: auto
-/// mode may deny it a `kill`.
+/// on, so the agent is to stop the first kind itself, on Claude with
+/// `TaskStop`: auto mode may deny it a `kill`.
 const HEADLESS: &str = "You run headless: nobody is watching, and ending your turn ends the session. \
-    Run tests and other long commands in the foreground, raising the Bash timeout if needed. \
+    Run tests and other long commands in the foreground, raising the command's timeout if needed. \
     If a command is moved to the background, wait for that task by its own task id or output file, \
     never by process names or patterns (`pgrep`, `ps | grep`, and the like): \
     other sessions on this machine run the same commands. \
     Never end your turn while a background task you depend on is still running: ending the turn kills it. \
-    Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: \
+    Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): \
     a task still running when your turn ends is taken as work you were waiting on.\n";
 
 /// The fresh prompt, for a run that starts a new Issue branch.
 pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
     format!(
-        "/thirdshift:implement {url}\n\
-         The base branch is {base}. Review with /thirdshift:code-review using {base} as the fixed point.\n\
+        "/thirdshift-implement {url}\n\
+         The base branch is {base}. Review with the `thirdshift-code-review` skill using {base} as the fixed point.\n\
          Address the Standards and Spec findings you agree with.\n\
-         Push branch {branch} and create a pull request against {base} using /thirdshift:pr, marked ready for review.\n\
+         Push branch {branch} and create a pull request against {base} using the `thirdshift-pr` skill, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
          Include \"Closes #{number}\" in the PR body.\n\
          {HEADLESS}",
@@ -40,18 +40,18 @@ pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
 pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&str>) -> String {
     let pr = match pr_url {
         Some(url) => format!(
-            "Update PR {url} using /thirdshift:pr, rewriting its body to cover the whole branch, marked ready for review."
+            "Update PR {url} using the `thirdshift-pr` skill, rewriting its body to cover the whole branch, marked ready for review."
         ),
         None => format!(
-            "Create a pull request against {base} using /thirdshift:pr, marked ready for review."
+            "Create a pull request against {base} using the `thirdshift-pr` skill, marked ready for review."
         ),
     };
     format!(
-        "/thirdshift:implement {url}\n\
+        "/thirdshift-implement {url}\n\
          \n\
          You are continuing work on branch {branch}, which already has commits (see git log {base}..HEAD). Build on them; don't start over.\n\
          \n\
-         The base branch is {base}. Review with /thirdshift:code-review using {base} as the fixed point.\n\
+         The base branch is {base}. Review with the `thirdshift-code-review` skill using {base} as the fixed point.\n\
          \n\
          Address the Standards and Spec findings you agree with.\n\
          \n\
@@ -73,17 +73,17 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
 /// Ticket has landed on it, with the draft Spec PR `pr_url` into `base`.
 pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> String {
     format!(
-        "/thirdshift:code-review {base}, with the Spec {url} as the spec\n\
+        "/thirdshift-code-review {base}, with the Spec {url} as the spec\n\
          \n\
          Every Ticket of the Spec {url} has landed on branch {branch}, its Spec branch (see git log {base}..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.\n\
          \n\
-         Review with /thirdshift:code-review using {base} as the fixed point and {url} as the spec.\n\
+         Review with the `thirdshift-code-review` skill using {base} as the fixed point and {url} as the spec.\n\
          \n\
-         Address the Standards and Spec findings you agree with, using /thirdshift:tdd where it fits, and commit.\n\
+         Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.\n\
          \n\
          Push branch {branch}. Do not rebase or force-push.\n\
          \n\
-         Update PR {pr_url} using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.\n\
+         Update PR {pr_url} using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.\n\
          \n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
          \n\
@@ -113,14 +113,14 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
         None => String::new(),
     };
     format!(
-        "/thirdshift:improve-codebase-architecture\n\
+        "/thirdshift-improve-codebase-architecture\n\
          \n\
          This is an Architecture review of the base branch {base}: this worktree is checked out at its head on origin, on no branch.\n\
          \n\
          {focus}\
-         Find the deepening opportunities with /thirdshift:improve-codebase-architecture, using /thirdshift:codebase-design for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.\n\
+         Find the deepening opportunities with the `thirdshift-improve-codebase-architecture` skill, using the `thirdshift-codebase-design` skill for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.\n\
          \n\
-         If it is Strong, settle its design yourself and publish it as the plan with /thirdshift:to-spec and /thirdshift:to-tickets: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `{NEEDS_TRIAGE}`, not `{READY_FOR_AGENT}`: thirdshift marks it ready once you are done.\n\
+         If it is Strong, settle its design yourself and publish it as the plan with the `thirdshift-to-spec` and `thirdshift-to-tickets` skills: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `{NEEDS_TRIAGE}`, not `{READY_FOR_AGENT}`: thirdshift marks it ready once you are done.\n\
          \n\
          If it is not Strong, file it as one issue labelled `{NEEDS_TRIAGE}`, unless an open issue already covers it.\n\
          \n\
@@ -140,7 +140,7 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
 /// branch with Foreign commits on it.
 pub fn conflict_repair(issue: &IssueUrl, merging: &str, branch: &str, pr_url: &str) -> String {
     format!(
-        "/thirdshift:resolving-merge-conflicts\n\
+        "/thirdshift-resolving-merge-conflicts\n\
          \n\
          A merge of origin/{merging} into {branch} is in progress in this worktree and has conflicts.\n\
          {branch} implements {url}; its pull request is {pr_url}.\n\
@@ -192,11 +192,11 @@ pub fn ci_fix_repair(
 /// the Issue branch on top of `own_head`, the head it last knew as its own.
 pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &str) -> String {
     format!(
-        "/thirdshift:code-review {own_head}\n\
+        "/thirdshift-code-review {own_head}\n\
          \n\
          Someone else pushed commits to {branch} while it was being worked on, and they have been merged into {branch} in this worktree. {branch} implements {url}; its pull request is {pr_url}. They are merged into the base branch only once you have reviewed them.\n\
          \n\
-         Review with /thirdshift:code-review using {own_head} as the fixed point: {branch}'s head before their commits were merged in.\n\
+         Review with the `thirdshift-code-review` skill using {own_head} as the fixed point: {branch}'s head before their commits were merged in.\n\
          \n\
          Address the Standards and Spec findings you agree with.\n\
          \n\
@@ -216,7 +216,7 @@ pub fn resume(killed: &[&str]) -> String {
         "Your background work ({killed}) was killed when your turn ended, because ending the turn ends the session.\n\
          \n\
          Re-run whatever you were waiting on in the foreground, then finish your job. \
-         If the re-run hangs or is moved to the background again, stop it with the `TaskStop` tool, by its task id, \
+         If the re-run hangs or is moved to the background again, stop it by its task id (with the `TaskStop` tool, if you have it), \
          and say what could not be run, rather than leaving it running.\n\
          \n\
          {HEADLESS}",

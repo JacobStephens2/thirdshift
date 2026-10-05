@@ -1,7 +1,6 @@
-//! Headless Claude Code sessions and their logs.
+//! Headless agent sessions, on Claude Code or Codex, and their logs.
 
 use std::cell::RefCell;
-use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -12,12 +11,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::harness::{Choice, Harness};
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
-use crate::plugin::Plugin;
-use crate::progress::{self, Progress};
+use crate::progress::{self, Stream};
 use crate::prompt;
+use crate::skills;
 
 /// Where a Run's or an Architect run's Session logs go: in `sessions/` under
 /// the root of its repository's logs, under the User config's `logs.dir` or
@@ -57,12 +57,12 @@ impl Logs {
 }
 
 /// Where a Run's or an Architect run's sessions run: in `worktree`, with the
-/// Factory skills plugin loaded, each logged in its `logs`. It lasts for the
-/// steps given to [`Sessions::within`], and so does the plugin.
+/// Factory skills linked into it, on the Command's `harness`, each logged in
+/// its `logs`. It lasts for the steps given to [`Sessions::within`].
 pub struct Sessions<'a> {
     logs: &'a Logs,
     worktree: &'a Path,
-    plugin: Plugin,
+    harness: &'a Choice,
     /// The log of the session started last, a Resume included.
     last_log: RefCell<Option<PathBuf>>,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -73,26 +73,26 @@ pub struct Sessions<'a> {
 }
 
 impl<'a> Sessions<'a> {
-    /// Write the Factory skills plugin, then take `steps`, which run their
-    /// sessions through the `Sessions` they are given. Returns what `steps`
-    /// came to, with the most recent session's log, if a session created it.
-    /// If a session's last ending, its Resume's if it got one, left
-    /// background work to be killed and `steps` then fail, the failure names
-    /// that work ahead of its own cause: the session may have stopped short
-    /// of its job. The plugin directory is gone when this returns.
+    /// Link the Factory skills into `worktree`, then take `steps`, which run
+    /// their sessions on `harness` through the `Sessions` they are given.
+    /// Returns what `steps` came to, with the most recent session's log, if a
+    /// session created it. If a session's last ending, its Resume's if it got
+    /// one, left background work to be killed and `steps` then fail, the
+    /// failure names that work ahead of its own cause: the session may have
+    /// stopped short of its job.
     pub fn within<T>(
         logs: &'a Logs,
         worktree: &'a Path,
+        harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        let plugin = match Plugin::write() {
-            Ok(plugin) => plugin,
-            Err(error) => return (Err(error), None),
-        };
+        if let Err(error) = skills::link_into(worktree, harness.harness) {
+            return (Err(error), None);
+        }
         let sessions = Sessions {
             logs,
             worktree,
-            plugin,
+            harness,
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
         };
@@ -149,18 +149,14 @@ impl<'a> Sessions<'a> {
 
     /// Run one session as `kind`, logged under its own path, which becomes
     /// the last log.
-    fn start(&self, kind: &str, resume: Option<&str>, prompt: &str) -> Result<Progress> {
+    fn start(&self, kind: &str, resume: Option<&str>, prompt: &str) -> Result<Box<dyn Stream>> {
         let log = self.logs.path(kind);
         progress::step(format_args!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
-        run(
-            kind,
-            self.worktree,
-            self.plugin.path(),
-            resume,
-            prompt,
-            &log,
-        )
+        let harness = self.harness.harness;
+        let args = session_args(self.harness, resume, prompt);
+        let stream = progress::for_harness(harness, self.worktree);
+        run(kind, harness, self.worktree, &args, &log, stream)
     }
 }
 
@@ -176,28 +172,30 @@ fn ending_with(killed: &[&str]) -> String {
     }
 }
 
-/// Run `claude` headless in auto mode in `worktree`, with the Factory skills
-/// plugin at `plugin_dir` loaded, streaming its output to `log` and condensing
-/// it to progress lines on stderr, each labelled `kind`. With `resume`, the
-/// session with that id continues, given `prompt`. Returns what the stream
-/// showed once `claude` has exited cleanly. An interrupt stops the session and
-/// fails with `interrupted`.
+/// Run `harness`'s CLI with `args`, as [`session_args`] gives them, in
+/// `worktree`, where it finds the Factory skills, streaming its output to
+/// `log` and condensing it through `stream` to progress lines on stderr,
+/// each labelled `kind`. Returns what the stream showed once the CLI has
+/// exited cleanly, its turn not failed. Otherwise fails with the error the
+/// stream gave, if any. An interrupt stops the session, as [`stop`] does,
+/// and fails with `interrupted`.
 fn run(
     kind: &str,
+    harness: Harness,
     worktree: &Path,
-    plugin_dir: &Path,
-    resume: Option<&str>,
-    prompt: &str,
+    args: &[String],
     log: &Path,
-) -> Result<Progress> {
+    mut stream: Box<dyn Stream>,
+) -> Result<Box<dyn Stream>> {
+    let cli = harness.name();
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
     let mut log_file =
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
-    let mut child = Command::new("claude")
-        .args(claude_args(plugin_dir.as_os_str(), resume, prompt))
+    let mut child = Command::new(cli)
+        .args(args)
         .current_dir(worktree)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -205,100 +203,163 @@ fn run(
         // can stop everything it started.
         .process_group(0)
         .spawn()
-        .context("could not run claude")?;
+        .with_context(|| format!("could not run {cli}"))?;
 
     // Follow the stream on its own thread, so this one can watch for an
     // interrupt while the session runs.
-    let stream = child.stdout.take().context("no stdout from claude")?;
+    let output = child
+        .stdout
+        .take()
+        .with_context(|| format!("no stdout from {cli}"))?;
     let group = -(child.id() as libc::pid_t);
     let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
     let follower = thread::spawn(move || {
-        let mut progress = Progress::default();
         let followed = follow(
             &kind_owned,
-            stream,
+            output,
             &mut log_file,
             &log_owned,
-            &mut progress,
+            stream.as_mut(),
         );
         if followed.is_err() {
             // Nothing reads its output any more, so it could block forever.
             // SAFETY: kill has no memory-safety preconditions.
             unsafe { libc::kill(group, libc::SIGKILL) };
         }
-        (followed, progress)
+        (followed, stream)
     });
     let status = loop {
         if interrupt::requested() {
-            stop(&mut child);
+            stop(&mut child, harness);
             bail!("interrupted");
         }
-        if let Some(status) = child.try_wait().context("could not wait for claude")? {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("could not wait for {cli}"))?
+        {
             break status;
         }
         thread::sleep(POLL);
     };
-    let (followed, progress) = follower
+    let (followed, stream) = follower
         .join()
         .map_err(|_| anyhow!("the session stream reader panicked"))?;
 
     let elapsed = minutes_and_seconds(started.elapsed());
-    let summary = progress
+    let summary = stream
         .summary()
         .map_or(String::new(), |summary| format!(": {summary}"));
     progress::step(format_args!(
         "{kind}: session ended after {elapsed}{summary}"
     ));
     followed?;
-    if !status.success() {
-        bail!(
-            "claude exited {}",
+    if status.success() && !stream.failed() {
+        return Ok(stream);
+    }
+    let ended = if status.success() {
+        "'s turn failed".to_string()
+    } else {
+        format!(
+            " exited {}",
             status
                 .code()
                 .map_or("by signal".to_string(), |code| code.to_string())
-        );
+        )
+    };
+    match stream.error() {
+        Some(error) => bail!("{cli}{ended}: {error}"),
+        None => bail!("{cli}{ended}"),
     }
-    Ok(progress)
+}
+
+/// The arguments a session runs `harness`'s CLI with, as [`claude_args`] or
+/// [`codex_args`] give them, its prompt loading its skill with that
+/// Harness's sigil.
+fn session_args(harness: &Choice, resume: Option<&str>, prompt: &str) -> Vec<String> {
+    match harness.harness {
+        Harness::Claude => claude_args(harness, resume, prompt)
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        Harness::Codex => codex_args(harness, resume, &codex_prompt(prompt)),
+    }
+}
+
+/// `prompt` as Codex takes it: a first line that loads a Factory skill,
+/// `/thirdshift-<skill>` as Claude's prompts write it, loads it as
+/// `$thirdshift-<skill>`.
+pub fn codex_prompt(prompt: &str) -> String {
+    match prompt.strip_prefix("/thirdshift-") {
+        Some(rest) => format!("$thirdshift-{rest}"),
+        None => prompt.to_string(),
+    }
 }
 
 /// The arguments every session runs `claude` with: headless in auto mode,
-/// with the Factory skills plugin at `plugin_dir` loaded, streaming JSON. With
+/// on the Model and Effort `harness` sets, if any, streaming JSON. With
 /// `resume`, the session with that id continues. The prompt comes last.
 pub fn claude_args<'a>(
-    plugin_dir: &'a OsStr,
+    harness: &'a Choice,
     resume: Option<&'a str>,
     prompt: &'a str,
-) -> Vec<&'a OsStr> {
-    let mut args: Vec<&OsStr> = ["-p", "--permission-mode", "auto", "--plugin-dir"]
-        .into_iter()
-        .map(OsStr::new)
-        .collect();
-    args.push(plugin_dir);
-    args.extend(["--output-format", "stream-json", "--verbose"].map(OsStr::new));
+) -> Vec<&'a str> {
+    let mut args = vec!["-p", "--permission-mode", "auto"];
+    args.extend(harness.claude_args());
+    args.extend(["--output-format", "stream-json", "--verbose"]);
     if let Some(session_id) = resume {
-        args.extend(["--resume", session_id].map(OsStr::new));
+        args.extend(["--resume", session_id]);
     }
-    args.push(OsStr::new(prompt));
+    args.push(prompt);
     args
 }
 
+/// The arguments every session runs `codex` with: `exec`, streaming JSONL,
+/// with no approvals and no sandbox (ADR-0012), on the Model and Effort
+/// `harness` sets, if any, reading `CLAUDE.md` where a directory has no
+/// `AGENTS.md`. With `resume`, the session with that id continues, given
+/// every one of those again, as Codex keeps none of them. The prompt comes
+/// last.
+pub fn codex_args(harness: &Choice, resume: Option<&str>, prompt: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "exec",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+    ]
+    .map(String::from)
+    .to_vec();
+    args.extend(harness.codex_args());
+    args.extend(["-c".to_string(), CLAUDE_MD_FALLBACK.to_string()]);
+    if let Some(session_id) = resume {
+        args.extend(["resume".to_string(), session_id.to_string()]);
+    }
+    args.push(prompt.to_string());
+    args
+}
+
+/// The config setting that has Codex read `CLAUDE.md` where a directory has
+/// no `AGENTS.md`.
+const CLAUDE_MD_FALLBACK: &str = r#"project_doc_fallback_filenames=["CLAUDE.md"]"#;
+
 const POLL: Duration = Duration::from_millis(100);
 
-/// How long a session gets to exit after SIGTERM before it is killed.
+/// How long a session gets to exit after each signal that asks it to stop.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
-/// Stop `child`'s process group: SIGTERM, then SIGKILL if it outlives
-/// `STOP_GRACE`.
-fn stop(child: &mut Child) {
+/// Stop `child`, a session on `harness`, by its process group: with the
+/// signals that ask `harness` to stop, in turn, each given `STOP_GRACE`,
+/// then SIGKILL.
+fn stop(child: &mut Child, harness: Harness) {
     let group = -(child.id() as libc::pid_t);
-    // SAFETY: kill has no memory-safety preconditions.
-    unsafe { libc::kill(group, libc::SIGTERM) };
-    let deadline = Instant::now() + STOP_GRACE;
-    while Instant::now() < deadline {
-        if let Ok(Some(_)) = child.try_wait() {
-            return;
+    for &signal in harness.stop_signals() {
+        // SAFETY: kill has no memory-safety preconditions.
+        unsafe { libc::kill(group, signal) };
+        let deadline = Instant::now() + STOP_GRACE;
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = child.try_wait() {
+                return;
+            }
+            thread::sleep(POLL);
         }
-        thread::sleep(POLL);
     }
     // SAFETY: as above.
     unsafe { libc::kill(group, libc::SIGKILL) };
@@ -312,7 +373,7 @@ fn follow(
     stream: impl Read,
     log_file: &mut File,
     log: &Path,
-    progress: &mut Progress,
+    progress: &mut dyn Stream,
 ) -> Result<()> {
     let mut stream = BufReader::new(stream);
     let mut line = Vec::new();
@@ -340,5 +401,38 @@ fn minutes_and_seconds(duration: Duration) -> String {
     match seconds / 60 {
         0 => format!("{seconds}s"),
         minutes => format!("{minutes}m {}s", seconds % 60),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_prompt_that_loads_a_skill_loads_it_with_codexs_sigil_on_codex() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        for (prompt, first_line) in [
+            (
+                prompt::fresh(&issue, "main", "issue-7"),
+                "$thirdshift-implement https://github.com/acme/widgets/issues/7",
+            ),
+            (
+                prompt::conflict_repair(&issue, "main", "issue-7", "<pr>"),
+                "$thirdshift-resolving-merge-conflicts",
+            ),
+            (
+                prompt::review_repair(&issue, "issue-7", "<pr>", "abc123"),
+                "$thirdshift-code-review abc123",
+            ),
+            (
+                prompt::resume(&["cargo test"]),
+                "Your background work (cargo test) was killed when your turn ended, because \
+                 ending the turn ends the session.",
+            ),
+        ] {
+            let codex_prompt = codex_prompt(&prompt);
+            assert_eq!(codex_prompt.lines().next(), Some(first_line));
+            assert_eq!(codex_prompt[1..], prompt[1..]);
+        }
     }
 }

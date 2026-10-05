@@ -14,6 +14,7 @@ use anyhow::Result;
 
 use crate::claim;
 use crate::github::ListedIssue;
+use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::Edit;
 use crate::launch::{self, AlreadyRunning, Launch, Start};
@@ -106,10 +107,12 @@ impl fmt::Display for Skipped {
 /// It first makes the Sweep, taking the Claim off the repository's closed
 /// issues, and is then skipped, still before any search, if the repository
 /// is at its Claim limit: `limit` or more of its open issues carry a Claim.
-/// A skip is recorded in the repository's Activity log. Once it takes an
-/// issue, it records that it started work on it, which keeps its Command
-/// log.
-pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
+/// A skip is recorded in the repository's Activity log. Once it has found an
+/// issue to take, it checks `harness`, the Harness, Model and Effort the run
+/// it dispatches will run its sessions on, failing before any work if they
+/// can't run; then it records that it started work on the issue, which
+/// keeps its Command log.
+pub fn run(base: Option<&str>, limit: NonZeroUsize, harness: &mut Choice) -> Result<Outcome> {
     let Launch {
         directory,
         repo,
@@ -132,7 +135,8 @@ pub fn run(base: Option<&str>, limit: NonZeroUsize) -> Result<Outcome> {
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
         listed.issue.number, listed.title, listed.issue.url
     ));
-    logs::started(Work::PickupRun(&listed.issue));
+    harness.check()?;
+    logs::started(Work::PickupRun(&listed.issue), harness);
     Ok(Outcome::Taken(Taken {
         issue: listed.issue,
         title: listed.title,

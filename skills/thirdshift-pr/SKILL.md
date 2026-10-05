@@ -1,5 +1,5 @@
 ---
-name: pr
+name: thirdshift-pr
 description: "Use when writing a PR body."
 metadata:
   credits:

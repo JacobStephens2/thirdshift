@@ -5,21 +5,21 @@
 Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.
 
 ```
-/thirdshift:implement <Issue URL>
+/thirdshift-implement <Issue URL>
 
 You are continuing work on branch <branch>, which already has commits (see git log <base>..HEAD). Build on them; don't start over.
 
-The base branch is <base>. Review with /thirdshift:code-review using <base> as the fixed point.
+The base branch is <base>. Review with the `thirdshift-code-review` skill using <base> as the fixed point.
 
 Address the Standards and Spec findings you agree with.
 
 Push branch <branch>.
 
-Update PR <pull request URL> using /thirdshift:pr, rewriting its body to cover the whole branch, marked ready for review.
+Update PR <pull request URL> using the `thirdshift-pr` skill, rewriting its body to cover the whole branch, marked ready for review.
 
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 
 Include "Closes #<n>" in the PR body.
 
-You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 ```

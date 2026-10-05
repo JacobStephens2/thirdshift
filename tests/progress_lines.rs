@@ -43,7 +43,7 @@ fn prints_one_line_per_notable_session_event() {
         "{}{}{}{}{AGENT_COMMITS_AND_OPENS_PR}",
         emits(tool_use(
             "Skill",
-            json!({ "skill": "thirdshift:implement" })
+            json!({ "skill": "thirdshift-implement" })
         )),
         emits(tool_use(
             "Read",
@@ -65,7 +65,7 @@ fn prints_one_line_per_notable_session_event() {
     let lines = stderr_lines(&result.stderr);
     for expected in [
         "thirdshift: implement: session started",
-        "thirdshift: implement: skill thirdshift:implement",
+        "thirdshift: implement: skill thirdshift-implement",
         "thirdshift: implement: Read src/lib.rs",
         "thirdshift: implement: commit",
         "thirdshift: implement: push",

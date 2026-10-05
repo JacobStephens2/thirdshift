@@ -5,15 +5,15 @@
 Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.
 
 ```
-/thirdshift:improve-codebase-architecture
+/thirdshift-improve-codebase-architecture
 
 This is an Architecture review of the base branch <base>: this worktree is checked out at its head on origin, on no branch.
 
 Focus the review on: <focus>
 
-Find the deepening opportunities with /thirdshift:improve-codebase-architecture, using /thirdshift:codebase-design for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.
+Find the deepening opportunities with the `thirdshift-improve-codebase-architecture` skill, using the `thirdshift-codebase-design` skill for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.
 
-If it is Strong, settle its design yourself and publish it as the plan with /thirdshift:to-spec and /thirdshift:to-tickets: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `needs-triage`, not `ready-for-agent`: thirdshift marks it ready once you are done.
+If it is Strong, settle its design yourself and publish it as the plan with the `thirdshift-to-spec` and `thirdshift-to-tickets` skills: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `needs-triage`, not `ready-for-agent`: thirdshift marks it ready once you are done.
 
 If it is not Strong, file it as one issue labelled `needs-triage`, unless an open issue already covers it.
 
@@ -24,5 +24,5 @@ Architecture review plan: <URL of the Spec or the single Ticket you published>
 Architecture review idea: <URL of the issue you filed>
 Architecture review already filed: <URL of the open issue that already covers it>
 
-You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 ```

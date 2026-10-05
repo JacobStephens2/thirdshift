@@ -17,13 +17,13 @@
 //! work a human shaped goes first.
 
 use std::fmt;
-use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
 use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
+use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
@@ -198,7 +198,7 @@ impl fmt::Display for Reviewed {
 /// idea. With `launch_pull`, the Launch directory's checkout of the Base
 /// branch, if that is the branch checked out, is first brought up to date
 /// with origin. The review's
-/// worktree and the plugin directory are gone when this returns. A failure
+/// worktree is gone when this returns. A failure
 /// after the plan is published leaves its labels as the review left them.
 ///
 /// Once the preflight checks pass, and before anything else, the Architect
@@ -211,12 +211,16 @@ impl fmt::Display for Reviewed {
 /// repository has a Ready issue, by the very search a Pickup run makes, with
 /// its lines on the issues passed over, but with no Sweep and no Claim limit,
 /// which are the Pickup run's. A skip is recorded in the repository's
-/// Activity log. Past all four, it records that it started work, which keeps
-/// its Command log with its repository's logs, where its Session logs go too.
+/// Activity log. Past all four, it checks `harness`, the Harness, Model and
+/// Effort its review, and the run it dispatches, run their sessions on,
+/// failing before any work if they can't run. Then it records that it
+/// started work, which keeps its Command log with its repository's logs,
+/// where its Session logs go too.
 pub fn run(
     focus: Option<&str>,
     base: Option<&str>,
     launch_pull: bool,
+    harness: &mut Choice,
 ) -> Result<Outcome, FailedRun> {
     let started = Utc::now();
     let Launch {
@@ -237,7 +241,9 @@ pub fn run(
     if let Decision::Skip(skipped) = gates(&mut on_github)? {
         return Ok(skip(&repo, skipped));
     }
-    logs::started(Work::ArchitectRun(&repo));
+    harness.check()?;
+    let harness = &*harness;
+    logs::started(Work::ArchitectRun(&repo), harness);
     if launch_pull {
         directory.pull(&base);
     }
@@ -247,15 +253,18 @@ pub fn run(
     }
     let worktree = ReviewWorktree::create(directory.git(), &repo.name, &base)?;
     let logs = Logs::of_architect_run(&repo);
-    let (reviewed, log) = review(
-        &mut on_github,
-        worktree,
-        &base,
-        focus,
-        directory.origin(),
-        started,
-        &logs,
-    );
+    let (reviewed, log) = Sessions::within(&logs, worktree.path(), harness, |sessions| {
+        review(
+            &mut on_github,
+            sessions,
+            &base,
+            focus,
+            directory.origin(),
+            started,
+        )
+    });
+    // Removed once the review is concluded.
+    drop(worktree);
     reviewed.map(Outcome::Reviewed).map_err(|error| FailedRun {
         log,
         ..FailedRun::from(error)
@@ -300,30 +309,25 @@ fn skip(repo: &Repo, skipped: Skipped) -> Outcome {
     Outcome::Skipped(skipped)
 }
 
-/// The Architecture review session in `worktree`, of the Base branch `base`,
-/// then [`conclude`] on its final message, through `outside`. The worktree is
-/// removed once the review is concluded. Returns how it ended with the most
-/// recent session's log, if a session created it.
+/// The Architecture review session, of the Base branch `base`, run through
+/// `sessions`, then [`conclude`] on its final message, through `outside`.
 fn review(
     outside: &mut impl Outside,
-    worktree: ReviewWorktree,
+    sessions: &Sessions,
     base: &str,
     focus: Option<&str>,
     origin: &str,
     started: DateTime<Utc>,
-    logs: &Logs,
-) -> (Result<Reviewed>, Option<PathBuf>) {
-    Sessions::within(logs, worktree.path(), |sessions| {
-        match focus {
-            Some(focus) => progress::step(format_args!(
-                "starting the Architecture review of {base}, focused on: {focus}"
-            )),
-            None => progress::step(format_args!("starting the Architecture review of {base}")),
-        }
-        let prompt = prompt::architecture_review(base, focus);
-        let final_message = sessions.run_to_final_message(REVIEW, &prompt)?;
-        conclude(outside, final_message.as_deref(), origin, started, base)
-    })
+) -> Result<Reviewed> {
+    match focus {
+        Some(focus) => progress::step(format_args!(
+            "starting the Architecture review of {base}, focused on: {focus}"
+        )),
+        None => progress::step(format_args!("starting the Architecture review of {base}")),
+    }
+    let prompt = prompt::architecture_review(base, focus);
+    let final_message = sessions.run_to_final_message(REVIEW, &prompt)?;
+    conclude(outside, final_message.as_deref(), origin, started, base)
 }
 
 /// What an Architecture review reported in the last line of its final

@@ -6,8 +6,9 @@
 //! A command [`start`]s: it begins its record in the logs, loads the User
 //! config, offering Setup, installs the interrupt handler and checks its Run
 //! notification, in that order. It does its work, then [`Started::finish`]es
-//! with its [`Ending`]: the Activity log's end line, the terminal display and
-//! the Run notification, in that order, none of the first and last for a
+//! with its [`Ending`]: the Factory skills it wrote out for its sessions
+//! removed, then the Activity log's end line, the terminal display and the
+//! Run notification, in that order, only the display of those three for a
 //! skipped pass.
 
 use std::process::ExitCode;
@@ -15,6 +16,7 @@ use std::process::ExitCode;
 use crate::architect::{self, Reviewed};
 use crate::config::{self, UserConfig};
 use crate::failed_run::FailedRun;
+use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::logs::{self, Begin};
@@ -23,6 +25,7 @@ use crate::pickup;
 use crate::progress;
 use crate::run::Ended;
 use crate::run_ending;
+use crate::skills;
 
 /// How a command that did factory work, or was skipped before any, ended.
 pub enum Ending {
@@ -106,6 +109,14 @@ pub fn start(
 }
 
 impl Started {
+    /// Take note that the command's sessions run on `harness`, which its Run
+    /// notification names.
+    pub fn built_with(&mut self, harness: &Choice) {
+        if let Some(notification) = &mut self.notification {
+            notification.built_with(harness);
+        }
+    }
+
     /// Take note that the Pickup run took the Ready issue `issue`, titled
     /// `title`, which its Run notification is then about.
     pub fn took(&mut self, issue: &IssueUrl, title: String) {
@@ -114,12 +125,14 @@ impl Started {
         }
     }
 
-    /// Finish the command that ended as `ending`: write the Activity log's
+    /// Finish the command that ended as `ending`: remove the Factory skills
+    /// it wrote out for its sessions, if it did, write the Activity log's
     /// end line, show how it ended, then send its Run notification, if it
     /// asked for one. A skipped pass only shows how it ended: its skip is
     /// recorded where it was decided, and it sends no notification. Returns
     /// its exit code.
     pub fn finish(self, ending: Ending) -> ExitCode {
+        skills::remove_written();
         let account = match run_ending::read(&ending) {
             Ok(account) => account,
             Err(skip) => return run_ending::show_skip(skip),

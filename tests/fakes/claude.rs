@@ -2,8 +2,10 @@
 //!
 //! Each call appends a record to the JSON list in $FAKE_CLAUDE_RECORD: its
 //! argv, prompt, working directory, the branch checked out there, whether a
-//! merge is in progress there, and a snapshot of the --plugin-dir contents
-//! (the directory is gone by the time a test looks).
+//! merge is in progress there, a snapshot of the `thirdshift-*` skills in its
+//! `.claude/skills/`, through their links, and of the files written out
+//! beside the skills those links point to (the links' targets are gone by
+//! the time a test looks).
 //!
 //! It then runs a per-test bash script in the working directory, emits a
 //! couple of stream-json lines, and exits with the script's exit code. A
@@ -42,22 +44,70 @@ use std::process::{Command, ExitStatus};
 
 use crate::json::{Array, Bool, Json, Null, object, string};
 
-/// Every file under `plugin_dir`, by its path relative to it, with its
-/// contents.
-fn plugin_snapshot(plugin_dir: &Path) -> Json {
-    let mut files = object([]);
-    let mut dirs = vec![plugin_dir.to_owned()];
+/// Where Claude Code finds a worktree's project skills.
+const SKILLS: &str = ".claude/skills";
+
+/// Every file under `dir`, by its path relative to `root`, with its
+/// contents, into `files`. Like Python's os.walk, which the fake was first
+/// written with, it doesn't follow a symlink to a directory below `dir`.
+fn snapshot_into(files: &mut Json, root: &Path, dir: &Path) {
+    let mut dirs = vec![dir.to_owned()];
     while let Some(dir) = dirs.pop() {
         for entry in fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
-            // Like Python's os.walk, which the fake was first written with,
-            // this doesn't follow a symlink to a directory.
             if fs::symlink_metadata(&path).unwrap().is_dir() {
                 dirs.push(path);
             } else if !path.is_dir() {
-                let relative = path.strip_prefix(plugin_dir).unwrap();
+                let relative = path.strip_prefix(root).unwrap();
                 let contents = String::from_utf8_lossy(&fs::read(&path).unwrap()).into_owned();
                 files.set(relative.to_str().unwrap(), string(contents));
+            }
+        }
+    }
+}
+
+/// The `thirdshift-*` entries of the working directory's `skills`, its
+/// project skills.
+fn linked_skills(skills: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(skills) else {
+        return Vec::new();
+    };
+    entries
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("thirdshift-"))
+        })
+        .collect()
+}
+
+/// Every file of the `thirdshift-*` skills in the working directory's
+/// `skills`, through their links, by its path relative to `skills`, with its
+/// contents.
+pub fn skills_snapshot(skills: &str) -> Json {
+    let mut files = object([]);
+    for skill in linked_skills(skills) {
+        snapshot_into(&mut files, Path::new(skills), &skill);
+    }
+    files
+}
+
+/// The files written out beside the skills the `thirdshift-*` links in the
+/// working directory's `skills` point to, such as their licence, by name,
+/// with their contents.
+pub fn beside_skills_snapshot(skills: &str) -> Json {
+    let mut files = object([]);
+    let written = linked_skills(skills)
+        .first()
+        .and_then(|link| fs::read_link(link).ok())
+        .and_then(|target| target.parent().map(Path::to_owned));
+    if let Some(written) = written {
+        for entry in fs::read_dir(&written).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                let name = path.file_name().unwrap().to_str().unwrap();
+                files.set(name, string(fs::read_to_string(&path).unwrap()));
             }
         }
     }
@@ -86,7 +136,7 @@ fn prompt_of(record: &Json) -> &str {
 }
 
 /// The script for the session just recorded last in `records`.
-fn script_for(records: &[Json]) -> PathBuf {
+pub fn script_for(records: &[Json]) -> PathBuf {
     let script = crate::env_path("FAKE_CLAUDE_SCRIPT").display().to_string();
     let mut candidates = Vec::new();
     if let Some(issue) = issue_of(prompt_of(records.last().unwrap())) {
@@ -107,7 +157,7 @@ fn script_for(records: &[Json]) -> PathBuf {
 
 /// `git` in the working directory, with its stdout trimmed, and whether it
 /// succeeded.
-fn git_here(args: &[&str]) -> (String, bool) {
+pub fn git_here(args: &[&str]) -> (String, bool) {
     let output = crate::git(Path::new("."), args);
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     (stdout, output.status.success())
@@ -115,17 +165,13 @@ fn git_here(args: &[&str]) -> (String, bool) {
 
 /// The exit code a Python fake gave for `status`, which is negative for a
 /// signal and wraps as an exit code.
-fn exit_code(status: ExitStatus) -> i32 {
+pub fn exit_code(status: ExitStatus) -> i32 {
     status
         .code()
         .unwrap_or_else(|| -status.signal().unwrap() & 0xff)
 }
 
 pub fn main(argv: Vec<String>) {
-    let plugin_dir = argv
-        .iter()
-        .position(|arg| arg == "--plugin-dir")
-        .map(|at| PathBuf::from(&argv[at + 1]));
     let (branch, _) = git_here(&["branch", "--show-current"]);
     let (_, merging) = git_here(&["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
     let text_mode = !argv.iter().any(|arg| arg == "--output-format");
@@ -150,20 +196,8 @@ pub fn main(argv: Vec<String>) {
             ("cwd", string(cwd)),
             ("branch", string(branch)),
             ("merging", Bool(merging)),
-            (
-                "plugin_dir",
-                plugin_dir
-                    .as_ref()
-                    .map(|dir| string(dir.to_str().unwrap()))
-                    .unwrap_or(Null),
-            ),
-            (
-                "plugin_files",
-                plugin_dir
-                    .as_deref()
-                    .map(plugin_snapshot)
-                    .unwrap_or(object([])),
-            ),
+            ("skill_files", skills_snapshot(SKILLS)),
+            ("beside_skills", beside_skills_snapshot(SKILLS)),
             ("stdin", stdin),
         ]),
     );

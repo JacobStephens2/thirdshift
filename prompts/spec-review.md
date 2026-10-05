@@ -5,21 +5,21 @@
 In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.
 
 ```
-/thirdshift:code-review <base>, with the Spec <Spec URL> as the spec
+/thirdshift-code-review <base>, with the Spec <Spec URL> as the spec
 
 Every Ticket of the Spec <Spec URL> has landed on branch <Spec branch>, its Spec branch (see git log <base>..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.
 
-Review with /thirdshift:code-review using <base> as the fixed point and <Spec URL> as the spec.
+Review with the `thirdshift-code-review` skill using <base> as the fixed point and <Spec URL> as the spec.
 
-Address the Standards and Spec findings you agree with, using /thirdshift:tdd where it fits, and commit.
+Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.
 
 Push branch <Spec branch>. Do not rebase or force-push.
 
-Update PR <pull request URL> using /thirdshift:pr, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.
+Update PR <pull request URL> using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.
 
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 
 Include "Closes #<n>" in the PR body.
 
-You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 ```

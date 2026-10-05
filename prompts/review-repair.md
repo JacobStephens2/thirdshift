@@ -5,11 +5,11 @@
 In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.
 
 ```
-/thirdshift:code-review <own head>
+/thirdshift-code-review <own head>
 
 Someone else pushed commits to <branch> while it was being worked on, and they have been merged into <branch> in this worktree. <branch> implements <Issue URL>; its pull request is <pull request URL>. They are merged into the base branch only once you have reviewed them.
 
-Review with /thirdshift:code-review using <own head> as the fixed point: <branch>'s head before their commits were merged in.
+Review with the `thirdshift-code-review` skill using <own head> as the fixed point: <branch>'s head before their commits were merged in.
 
 Address the Standards and Spec findings you agree with.
 
@@ -17,5 +17,5 @@ Add each skipped finding to the "Unaddressed findings" section of the pull reque
 
 Commit and push <branch>. Do not rebase or force-push.
 
-You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 ```

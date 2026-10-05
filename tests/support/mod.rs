@@ -1,5 +1,5 @@
 //! Test harness: runs the compiled `thirdshift` binary against real git and
-//! fake `gh` and `claude` executables, and, for email, a stand-in for Resend
+//! fake `gh`, `claude` and `codex` executables, and, for email, a stand-in for Resend
 //! ([`resend::ResendStandIn`]).
 //!
 //! Layout of a scenario's temp root:
@@ -13,7 +13,7 @@
 //! home/.thirdshift/  the User config, config.toml, if the test writes one
 //! home/.config/      $XDG_CONFIG_HOME, where an install receipt would be
 //! installed/         a copy of thirdshift, if the test runs one to replace it
-//! bin/               fake gh and claude, first on PATH
+//! bin/               fake gh, claude and codex, first on PATH
 //! tmp/               $TMPDIR, so leftover temp directories are visible
 //! work/<repo>/       the launch clone, origin https://github.com/<owner>/<repo>.git
 //! gh-state.json      fake GitHub state
@@ -27,6 +27,11 @@
 //! claude-calls.json.after-result.<n>  stream lines the n-th session emits
 //!                    after its closing result
 //! claude-calls.json.final-message.<n>  the n-th session's final message
+//! codex-calls.json   what the fake agent was asked to do on Codex, whose
+//!                    sessions take the same scripts
+//! codex-calls.json.final-message.<n>, codex-calls.json.error.<n>  the n-th
+//!                    Codex session's final message, and the error it
+//!                    failed with
 //! gh-calls.json      every gh command run, by thirdshift or the fake agent
 //! ```
 
@@ -46,6 +51,19 @@ use tempfile::TempDir;
 
 pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
+
+/// Every Factory skill, by the name a session finds it under.
+pub const FACTORY_SKILLS: [&str; 9] = [
+    "thirdshift-implement",
+    "thirdshift-code-review",
+    "thirdshift-pr",
+    "thirdshift-tdd",
+    "thirdshift-resolving-merge-conflicts",
+    "thirdshift-improve-codebase-architecture",
+    "thirdshift-to-spec",
+    "thirdshift-to-tickets",
+    "thirdshift-codebase-design",
+];
 
 /// How long a test waits for a Run to reach a point, such as starting the
 /// agent or showing a prompt, before it gives the Run up as hung. A Run that
@@ -584,6 +602,7 @@ test -f {root}/{COPY_REPLACED}
             .env("FAKE_GH_STATE", self.path("gh-state.json"))
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
+            .env("FAKE_CODEX_RECORD", self.path("codex-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
             // Seconds of waiting for CI become milliseconds. Each poll starts
             // the fake gh; at 100ms the grace period holds about three reads,
@@ -786,6 +805,26 @@ test -f {root}/{COPY_REPLACED}
             Ok(text) => serde_json::from_str(&text).unwrap(),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// Every call the fake agent received on Codex, in order.
+    pub fn codex_calls(&self) -> Vec<Value> {
+        match fs::read_to_string(self.path("codex-calls.json")) {
+            Ok(text) => serde_json::from_str(&text).unwrap(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Assert every `claude` call found every Factory skill, by its
+    /// `thirdshift-<skill>` name, in its worktree's `.claude/skills/`.
+    pub fn assert_every_session_found_the_factory_skills(&self) {
+        assert_found_the_factory_skills(self.claude_calls());
+    }
+
+    /// Assert every `codex` call found every Factory skill, by its
+    /// `thirdshift-<skill>` name, in its worktree's `.agents/skills/`.
+    pub fn assert_every_codex_session_found_the_factory_skills(&self) {
+        assert_found_the_factory_skills(self.codex_calls());
     }
 
     /// The prompt of the first `claude` call.
@@ -1048,4 +1087,21 @@ fn git_output(dir: &Path, args: &[&str]) -> Output {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .unwrap()
+}
+
+/// Assert each of `calls` found every Factory skill, by its
+/// `thirdshift-<skill>` name, in its worktree's project skills.
+fn assert_found_the_factory_skills(calls: Vec<Value>) {
+    assert!(!calls.is_empty(), "no session ran");
+    for call in calls {
+        for skill in FACTORY_SKILLS {
+            let skill_md = call["skill_files"][format!("{skill}/SKILL.md")].as_str();
+            assert!(
+                skill_md.is_some_and(|text| text.contains(&format!("name: {skill}\n"))),
+                "the session in {} with the prompt {} found no {skill}",
+                call["cwd"],
+                call["prompt"]
+            );
+        }
+    }
 }

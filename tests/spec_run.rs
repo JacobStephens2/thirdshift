@@ -509,7 +509,7 @@ fn a_base_branch_that_moved_into_a_conflict_gets_a_conflict_repair_and_the_spec_
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let prompts = spec_prompts(&scenario);
     assert_eq!(prompts.len(), 2, "{prompts:?}");
-    assert_contains(&prompts[1], "/thirdshift:resolving-merge-conflicts");
+    assert_contains(&prompts[1], "/thirdshift-resolving-merge-conflicts");
     assert_contains(&prompts[1], "A merge of origin/main into issue-20");
     assert_contains(&prompts[1], &spec_url(&scenario));
     let spec = spec_pr(&scenario);
@@ -970,11 +970,11 @@ fn once_the_last_ticket_lands_the_spec_review_reviews_the_spec_branch_against_th
     assert_eq!(review["branch"], "issue-20");
     let prompt = review["prompt"].as_str().unwrap();
     for part in [
-        "/thirdshift:code-review main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
+        "/thirdshift-code-review main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
         &spec_url(&scenario),
         "using main as the fixed point",
-        "/thirdshift:tdd",
-        "Update PR https://github.com/acme/widgets/pull/2 using /thirdshift:pr",
+        "the `thirdshift-tdd` skill",
+        "Update PR https://github.com/acme/widgets/pull/2 using the `thirdshift-pr` skill",
         "\"Unaddressed findings\"",
         "Include \"Closes #20\"",
         "You run headless",
@@ -1066,10 +1066,16 @@ fn the_spec_review_writes_the_spec_pr_body_and_the_checklist_is_put_back_after_i
     assert_eq!(
         spec["body"],
         format!(
-            "The whole Spec.\n\nUnaddressed findings: none\n\nCloses #20\n\n{DONE_CHECKLIST}\n"
+            "The whole Spec.\n\nUnaddressed findings: none\n\nCloses #20\n\n{BUILT_WITH}\n\n\
+             {DONE_CHECKLIST}\n"
         )
     );
 }
+
+/// The line thirdshift writes in the Spec PR's body once the Spec review has
+/// written it, when nothing chose the Harness, Model or Effort.
+const BUILT_WITH: &str =
+    "Built with claude · default model · default effort <!-- thirdshift:built-with -->";
 
 /// The linear Spec's Tickets checklist once every Ticket is done.
 const DONE_CHECKLIST: &str = "<!-- thirdshift:tickets -->
@@ -1093,7 +1099,7 @@ fn a_spec_review_that_keeps_the_markers_has_the_checklist_replaced_between_them(
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(
         spec_pr(&scenario)["body"],
-        format!("Before.\n\n{DONE_CHECKLIST}\n\nAfter. Closes #20")
+        format!("Before.\n\n{DONE_CHECKLIST}\n\nAfter. Closes #20\n\n{BUILT_WITH}\n")
     );
 }
 
@@ -1126,7 +1132,7 @@ fn a_spec_review_whose_resume_ends_with_killed_background_work_still_delivers_th
     assert_eq!(spec["isDraft"], false);
     assert_eq!(
         spec["body"],
-        format!("Reviewed.\n\nCloses #20\n\n{DONE_CHECKLIST}\n")
+        format!("Reviewed.\n\nCloses #20\n\n{BUILT_WITH}\n\n{DONE_CHECKLIST}\n")
     );
 }
 
@@ -2058,5 +2064,42 @@ fn a_merge_run_of_a_spec_ends_with_the_spec_closed_and_its_claim_removed() {
     );
     for ticket in [21, 22] {
         assert_eq!(scenario.issue_labels(ticket), ["ready-for-agent"]);
+    }
+}
+
+/// The arguments of each call to `claude` that was an agent session, which
+/// streams JSON, and of each that was the test call that checks a Model.
+fn sessions_and_test_calls(scenario: &Scenario) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+    scenario
+        .claude_calls()
+        .iter()
+        .map(|call| {
+            let args = call["argv"].as_array().unwrap().iter();
+            args.map(|arg| arg.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
+        .partition(|args| args.iter().any(|arg| arg == "--output-format"))
+}
+
+#[test]
+fn a_spec_run_checks_its_model_once_and_every_ticket_and_the_spec_review_runs_on_it() {
+    let scenario = linear_spec();
+
+    let result = scenario.run(&[&spec_url(&scenario), "model", "opus", "effort", "high"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (sessions, test_calls) = sessions_and_test_calls(&scenario);
+    assert_eq!(test_calls.len(), 1, "{test_calls:?}");
+    assert_eq!(
+        sessions.len(),
+        3,
+        "#21, #22 and the Spec review: {sessions:?}"
+    );
+    for args in sessions {
+        assert!(
+            args.windows(4)
+                .any(|window| window == ["--model", "opus", "--effort", "high"]),
+            "{args:?}"
+        );
     }
 }

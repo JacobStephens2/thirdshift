@@ -100,7 +100,7 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(
         prompt.starts_with(&format!(
-            "/thirdshift:implement {}\n",
+            "/thirdshift-implement {}\n",
             scenario.issue_url(7)
         )),
         "{prompt}"
@@ -925,6 +925,7 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
             "Pull request: {}\n\
              Session log:  {}\n\
              Command log:  {}\n\
+             Built with claude · default model · default effort\n\
              Host:         ",
             pr["url"].as_str().unwrap(),
             log.display(),
@@ -1367,5 +1368,75 @@ fn the_sweep_takes_the_label_off_as_the_closed_issue_spells_it() {
     assert_eq!(
         deleted[0][3],
         "repos/acme/widgets/issues/3/labels/In-Progress"
+    );
+}
+
+/// The arguments of each call to `claude` that was an agent session, which
+/// streams JSON, and of each that was the test call that checks a Model.
+fn sessions_and_test_calls(scenario: &Scenario) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+    scenario
+        .claude_calls()
+        .iter()
+        .map(|call| {
+            let args = call["argv"].as_array().unwrap().iter();
+            args.map(|arg| arg.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
+        .partition(|args| args.iter().any(|arg| arg == "--output-format"))
+}
+
+#[test]
+fn the_model_reaches_the_dispatched_run_once_the_pass_has_checked_it() {
+    let scenario = ready_ticket();
+
+    let result = scenario.run(&["pickup", "--model", "opus"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    let (sessions, test_calls) = sessions_and_test_calls(&scenario);
+    assert_eq!(test_calls, [["-p", "--model", "opus"]]);
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert!(
+        sessions[0]
+            .windows(2)
+            .any(|window| window == ["--model", "opus"]),
+        "{sessions:?}"
+    );
+}
+
+#[test]
+fn a_skipped_pass_makes_no_check_of_its_harness_or_model() {
+    let scenario = Scenario::new();
+    scenario.agent_does("echo 'no such model'\nexit 1");
+
+    let result = scenario.run(&["pickup", "model", "Opus 5.5"]);
+
+    assert_skipped(&scenario, &result, NO_READY_ISSUE);
+    let result = scenario.run(&["pickup", "harness", "codex"]);
+
+    assert_skipped(&scenario, &result, NO_READY_ISSUE);
+}
+
+#[test]
+fn a_model_claude_refuses_fails_the_pass_once_it_has_taken_an_issue_before_any_work() {
+    let scenario = ready_ticket();
+    scenario.agent_does_in_session(1, "echo 'no such model: Opus 5.5'\nexit 1");
+
+    let result = scenario.run(&["pickup", "model", "Opus 5.5"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "thirdshift: claude refused a test call on the Model Opus 5.5: no such model: Opus 5.5\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/commands")
+            .exists(),
+        "a Command log was kept"
     );
 }

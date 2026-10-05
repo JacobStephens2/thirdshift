@@ -335,10 +335,9 @@ fn the_session_prompt_names_the_factory_skills_the_base_branch_and_the_final_lin
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let prompt = scenario.first_prompt();
     for expected in [
-        "/thirdshift:improve-codebase-architecture",
-        "/thirdshift:codebase-design",
-        "/thirdshift:to-spec",
-        "/thirdshift:to-tickets",
+        "/thirdshift-improve-codebase-architecture\n",
+        "the `thirdshift-codebase-design` skill",
+        "the `thirdshift-to-spec` and `thirdshift-to-tickets` skills",
         "the base branch develop",
         "\nArchitecture review plan: <",
         "\nArchitecture review idea: <",
@@ -816,7 +815,7 @@ fn a_single_ticket_plan_starts_a_run_on_it_and_ends_as_that_run_does() {
     assert_eq!(calls.len(), 2, "sessions: {calls:?}");
     let prompt = calls[1]["prompt"].as_str().unwrap();
     assert!(
-        prompt.starts_with(&format!("/thirdshift:implement {PLAN_URL}\n")),
+        prompt.starts_with(&format!("/thirdshift-implement {PLAN_URL}\n")),
         "{prompt}"
     );
     assert_eq!(calls[1]["branch"], "issue-8");
@@ -1084,6 +1083,9 @@ fn base_fix_reaches_each_tickets_run_of_the_dispatched_spec_run() {
     for file in ["issue-9.txt", "issue-10.txt", "ci-fix.txt"] {
         assert!(scenario.origin_file("issue-8", file).is_some(), "{file}");
     }
+    // The Architecture review, each Ticket's Run, the Base fix and the Spec
+    // review.
+    scenario.assert_every_session_found_the_factory_skills();
 }
 
 #[test]
@@ -1825,7 +1827,7 @@ fn a_second_architect_run_is_skipped_while_the_firsts_dispatched_run_or_spec_run
         assert_ended_with_pr(&first, &pr_from(&scenario, "issue-8"), "ready for review");
         let reviews = scenario.claude_calls().into_iter().filter(|call| {
             let prompt = call["prompt"].as_str().unwrap();
-            prompt.contains("/thirdshift:improve-codebase-architecture")
+            prompt.contains("/thirdshift-improve-codebase-architecture")
         });
         assert_eq!(reviews.count(), 1, "a second review was started");
     }
@@ -2405,4 +2407,54 @@ fn a_ready_for_agent_ticket_inside_a_spec_does_not_skip_the_architect_run() {
         result.stderr
     );
     assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+/// The arguments of each call to `claude` that was an agent session, which
+/// streams JSON, and of each that was the test call that checks a Model.
+fn sessions_and_test_calls(scenario: &Scenario) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+    scenario
+        .claude_calls()
+        .iter()
+        .map(|call| {
+            let args = call["argv"].as_array().unwrap().iter();
+            args.map(|arg| arg.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
+        .partition(|args| args.iter().any(|arg| arg == "--output-format"))
+}
+
+#[test]
+fn the_review_and_the_run_it_dispatches_run_on_the_model_checked_once() {
+    let scenario = scenario();
+    // The first call to claude is the test call, the second the review.
+    scenario.agent_does_in_session(1, "true");
+    scenario.agent_does_in_session(2, AGENT_PUBLISHES_A_TICKET);
+    scenario.agent_does_for(8, &agent_opens_pr(8, "main"));
+
+    let result = scenario.run(&["architect", "effort", "max", "model", "opus"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-8"), "ready for review");
+    let (sessions, test_calls) = sessions_and_test_calls(&scenario);
+    assert_eq!(test_calls, [["-p", "--model", "opus", "--effort", "max"]]);
+    assert_eq!(sessions.len(), 2, "the review and #8's: {sessions:?}");
+    for args in sessions {
+        assert!(
+            args.windows(4)
+                .any(|window| window == ["--model", "opus", "--effort", "max"]),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn a_skipped_architect_run_makes_no_check_of_its_harness_or_model() {
+    let scenario = scenario();
+    scenario.issue_is(5, "OPEN");
+    scenario.issue_labelled(5, &[ARCHITECT_PLAN]);
+    scenario.agent_does("echo 'no such model'\nexit 1");
+
+    let result = scenario.run(&["architect", "model", "Opus 5.5", "harness", "codex"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
 }

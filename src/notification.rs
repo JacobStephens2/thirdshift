@@ -10,6 +10,7 @@ use anyhow::Result;
 use crate::config::EmailSettings;
 use crate::email::Resend;
 use crate::github;
+use crate::harness::Choice;
 use crate::host;
 use crate::issue::{IssueUrl, Repo};
 use crate::launch;
@@ -76,6 +77,8 @@ enum Subject {
 pub struct RunNotification {
     checked: Checked,
     subject: Subject,
+    /// The line that says what the command's sessions ran on, once known.
+    built_with: Option<String>,
 }
 
 impl RunNotification {
@@ -100,7 +103,11 @@ impl RunNotification {
             About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
             About::PickupRun => Subject::Pending,
         };
-        Ok(RunNotification { checked, subject })
+        Ok(RunNotification {
+            checked,
+            subject,
+            built_with: None,
+        })
     }
 
     /// Take note that the Pickup run took `issue`, titled `title`, as its
@@ -112,6 +119,12 @@ impl RunNotification {
             issue: issue.clone(),
             title: Some(title),
         };
+    }
+
+    /// Take note that the command's sessions run on `harness`, as the
+    /// notification then says, as its pull request's body does.
+    pub fn built_with(&mut self, harness: &Choice) {
+        self.built_with = Some(harness.built_with());
     }
 
     /// Send the one notification for the command that ended as `account`
@@ -127,6 +140,7 @@ impl RunNotification {
         let command_log = logs::command_log_path();
         let text = body(
             account,
+            self.built_with.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
@@ -170,11 +184,19 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 }
 
 /// The plain-text body of the notification for a command that ended as
-/// `account` tells, naming `command_log`, if the command keeps one, and
-/// `host`, for a command that `took` so long. An Architect run's starts with
-/// how its review ended, and the outcome of the run it dispatched, if any.
-/// The cause is left out of an interrupted command's, whose outcome says so.
-fn body(account: &Account, command_log: Option<&Path>, host: &str, took: Duration) -> String {
+/// `account` tells, with the line that says what its sessions were
+/// `built_with`, if known, naming `command_log`, if the command keeps one,
+/// and `host`, for a command that `took` so long. An Architect run's starts
+/// with how its review ended, and the outcome of the run it dispatched, if
+/// any. The cause is left out of an interrupted command's, whose outcome says
+/// so.
+fn body(
+    account: &Account,
+    built_with: Option<&str>,
+    command_log: Option<&Path>,
+    host: &str,
+    took: Duration,
+) -> String {
     let mut text = String::new();
     if let Some(review) = &account.review {
         text += &format!("Review:       {}\n", review.line);
@@ -201,6 +223,9 @@ fn body(account: &Account, command_log: Option<&Path>, host: &str, took: Duratio
     }
     if let Some(log) = command_log {
         text += &format!("Command log:  {}\n", log.display());
+    }
+    if let Some(built_with) = built_with {
+        text += &format!("{built_with}\n");
     }
     text += &format!("Host:         {host}\n");
     text += &format!("Took:         {}\n", self::took(took));
@@ -295,7 +320,7 @@ mod tests {
     /// The body for a command that ended as `account` tells, run on
     /// `droplet-1` for 4s with no Command log.
     fn body_of(account: &Account) -> String {
-        body(account, None, "droplet-1", Duration::from_secs(4))
+        body(account, None, None, "droplet-1", Duration::from_secs(4))
     }
 
     #[test]
@@ -463,6 +488,7 @@ mod tests {
         assert_eq!(
             body(
                 &account,
+                Some("Built with claude · opus · high"),
                 Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
                 "droplet-1",
                 Duration::from_secs(4)
@@ -470,6 +496,7 @@ mod tests {
             "Pull request: https://github.com/acme/widgets/pull/1\n\
              Session log:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
              Command log:  /home/me/.thirdshift/logs/commands/issue/x.log\n\
+             Built with claude · opus · high\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );

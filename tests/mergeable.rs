@@ -107,14 +107,14 @@ fn hands_a_conflicting_merge_to_a_conflict_repair_and_pushes_its_resolution() {
     let repair = &calls[1];
     assert_eq!(
         repair["prompt"],
-        "/thirdshift:resolving-merge-conflicts\n\
+        "/thirdshift-resolving-merge-conflicts\n\
          \n\
          A merge of origin/main into issue-7 is in progress in this worktree and has conflicts.\n\
          issue-7 implements https://github.com/acme/widgets/issues/7; its pull request is https://github.com/acme/widgets/pull/1.\n\
          \n\
          Resolve the conflicts, finish the merge, and push issue-7. Do not rebase or force-push.\n\
          \n\
-         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the Bash timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need with the `TaskStop` tool, by its task id: a task still running when your turn ends is taken as work you were waiting on.\n"
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
     );
     assert_eq!(repair["merging"], true);
     assert_eq!(repair["branch"], "issue-7");
@@ -123,7 +123,8 @@ fn hands_a_conflicting_merge_to_a_conflict_repair_and_pushes_its_resolution() {
         let argv = call["argv"].as_array().unwrap().clone();
         argv[..argv.len() - 1].to_vec()
     };
-    assert_eq!(flags(repair), flags(&calls[0]), "same plugin and flags");
+    assert_eq!(flags(repair), flags(&calls[0]), "same flags");
+    scenario.assert_every_session_found_the_factory_skills();
     assert_merged_main_into_issue_7(&scenario);
     assert_eq!(
         scenario.origin_git(&["show", "issue-7:feature.txt"]),

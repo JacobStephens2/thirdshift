@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::config::UserConfig;
+use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
+use crate::progress;
 
 use activity::Kind;
 
@@ -104,19 +106,21 @@ pub fn configured(config: &UserConfig) {
     }
 }
 
-/// Record that the command starts `work`: keep its Command log, showing any
-/// lines held from the terminal, then write the Activity log's line that it
-/// started, naming that log. Only the outermost command's first call does
-/// anything: the work a Pickup run or an Architect run started covers the
-/// Run it dispatches, and a child Run records nothing, as the command that
-/// started it does.
-pub fn started(work: Work) {
+/// Record that the command starts `work`, its sessions on `harness`: keep its
+/// Command log, showing any lines held from the terminal, with a line naming
+/// the Harness, Model and Effort, then write the Activity log's line that it
+/// started, naming that log and those. Only the outermost command's first
+/// call does anything: the work a Pickup run or an Architect run started
+/// covers the Run it dispatches, and a child Run records nothing, as the
+/// command that started it does.
+pub fn started(work: Work, harness: &Choice) {
     if !record().take_start() {
         return;
     }
     let root = work.root();
     command_log::keep(work.command_log(&root, command_log::stamp()));
-    activity::start(&root, work.kind(), work.issue());
+    progress::step(format_args!("sessions run on {harness}"));
+    activity::start(&root, work.kind(), work.issue(), harness);
 }
 
 /// Record that `pass` was skipped on `repo` for `reason`, unless the last
