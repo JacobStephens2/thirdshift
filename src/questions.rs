@@ -162,8 +162,8 @@ pub fn ask(
 /// Ask which Harness every Run's sessions run on, listing each with why
 /// sessions can't run on it here, if they can't, and refusing that one; then
 /// its Model and Effort, with those `current` sets for it as the defaults.
-/// The Harness's default is `current`'s, if sessions can run on it, else the
-/// first one they can run on. A Model is checked with a test call, as a Run
+/// The Harness's default is the first one sessions can run on, so `claude`
+/// when both can. A Model is checked with a test call, as a Run
 /// checks it, and on a refusal the Model and Effort are asked again. With no
 /// Harness to choose, nothing is asked, and the answer is `None`.
 fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndEffort)>> {
@@ -175,11 +175,9 @@ fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndE
         })
         .collect();
     let listed = listed.join(" or ");
-    let available = |harness: &Harness| harness.unavailable().is_none();
-    let default = current
-        .default
-        .filter(available)
-        .or_else(|| Harness::ALL.into_iter().find(available));
+    let default = Harness::ALL
+        .into_iter()
+        .find(|harness| harness.unavailable().is_none());
     let Some(default) = default else {
         say(&format!(
             "Harness for every Run's sessions: {listed}. Sessions can run on neither here, so \
@@ -205,10 +203,10 @@ fn ask_harness(current: &harness::Settings) -> Result<Option<(Harness, ModelAndE
             },
         }
     };
-    let set = current.of(harness);
+    let current_settings = current.of(harness);
     loop {
-        let model = ask_setting("Model", harness, set.model.as_deref())?;
-        let effort = ask_setting("Effort", harness, set.effort.as_deref())?;
+        let model = ask_setting("Model", harness, current_settings.model.as_deref())?;
+        let effort = ask_setting("Effort", harness, current_settings.effort.as_deref())?;
         let choice = Choice {
             harness,
             model,

@@ -1138,9 +1138,9 @@ mod tests {
             let harness = config["harness"].as_table().unwrap();
             assert!(harness.contains_key("default"), "{text:?}:\n{completed}");
             for name in ["claude", "codex"] {
-                let set = harness[name].as_table().unwrap();
+                let settings = harness[name].as_table().unwrap();
                 for key in ["model", "effort"] {
-                    assert!(set.contains_key(key), "{text:?}:\n{completed}");
+                    assert!(settings.contains_key(key), "{text:?}:\n{completed}");
                 }
             }
             // An inline table gains its missing keys on its own line.

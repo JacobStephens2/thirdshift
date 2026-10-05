@@ -220,8 +220,9 @@ impl Choice {
         self.test_call()
     }
 
-    /// Check that Claude takes a minimal test call on the Model, if one is
-    /// named, with the Effort, if any. A refusal says what Claude said.
+    /// Check that the Harness's CLI takes a minimal test call on the Model,
+    /// if one is named, with the Effort, if any. A refusal says what the CLI
+    /// said. Only Claude reaches it while Codex is not supported.
     pub fn test_call(&self) -> Result<()> {
         let cli = self.harness.name();
         let Some(model) = &self.model else {
