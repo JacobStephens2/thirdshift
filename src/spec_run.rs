@@ -18,6 +18,7 @@ use crate::child_run::{self, Ended, Handle, Kind};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::FailedRun;
 use crate::github::{self, Ticket};
+use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
@@ -66,7 +67,8 @@ pub fn run(
     let (spec, base) = (delivery.issue, delivery.base);
     let mut spec_pr = SpecPr::resume(spec, worktree.branch(), base)?;
     let base_fix = delivery.base_fix.ask_of_tickets();
-    let mut outside = ChildRunsAndGitHub::new(spec, &worktree, &base_fix, &mut spec_pr);
+    let mut outside =
+        ChildRunsAndGitHub::new(spec, &worktree, &base_fix, delivery.harness, &mut spec_pr);
     let (ticket_lines, landed) = land_tickets(&mut outside, tickets, parallel);
     let ended = match landed {
         Ok(checklist) => review_and_deliver(worktree, spec_pr, &checklist, delivery),
@@ -137,13 +139,15 @@ trait Outside {
 
 /// The outside world of the Ticket loop of a Spec run on `spec`, from its
 /// Spec branch checked out in `worktree`: child `thirdshift` Runs, each of
-/// which may start a Base fix if `base_fix` allows one, whose threads send
+/// which may start a Base fix if `base_fix` allows one, and runs its sessions
+/// on `harness`, whose threads send
 /// how each ended on `ended`, received from `endings`, GitHub and the Spec
 /// PR `spec_pr`.
 struct ChildRunsAndGitHub<'a, 'pr> {
     spec: &'a IssueUrl,
     worktree: &'a Worktree,
     base_fix: &'a BaseFixAsk,
+    harness: &'a Choice,
     spec_pr: &'a mut SpecPr<'pr>,
     ended: Sender<(u64, Result<Ended>)>,
     endings: Receiver<(u64, Result<Ended>)>,
@@ -156,6 +160,7 @@ impl<'a, 'pr> ChildRunsAndGitHub<'a, 'pr> {
         spec: &'a IssueUrl,
         worktree: &'a Worktree,
         base_fix: &'a BaseFixAsk,
+        harness: &'a Choice,
         spec_pr: &'a mut SpecPr<'pr>,
     ) -> Self {
         let (ended, endings) = mpsc::channel();
@@ -163,6 +168,7 @@ impl<'a, 'pr> ChildRunsAndGitHub<'a, 'pr> {
             spec,
             worktree,
             base_fix,
+            harness,
             spec_pr,
             ended,
             endings,
@@ -181,7 +187,8 @@ impl Outside for ChildRunsAndGitHub<'_, '_> {
         let kind = Kind::Ticket {
             spec_branch: self.worktree.branch().to_string(),
         };
-        let child = child_run::start(&self.spec.sibling(number), kind, self.base_fix.clone())?;
+        let ticket = self.spec.sibling(number);
+        let child = child_run::start(&ticket, kind, self.base_fix.clone(), self.harness)?;
         let ended = self.ended.clone();
         thread::spawn(move || {
             let _ = ended.send((number, finish_ticket(number, child)));

@@ -259,6 +259,13 @@ fn another_issues_branch_and_pr_do_not_count_as_this_issues() {
     );
 }
 
+/// Every request the Run made to change an issue's labels.
+fn label_requests(scenario: &Scenario) -> Vec<Vec<String>> {
+    let mut requests = scenario.gh_calls_of("api", "--method");
+    requests.retain(|request| request.iter().any(|arg| arg.ends_with("/labels")));
+    requests
+}
+
 #[test]
 fn a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim() {
     let scenario = Scenario::new();
@@ -274,7 +281,7 @@ fn a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim() {
         result.stderr
     );
     assert_eq!(scenario.issue_labels(7), ["in-progress"]);
-    assert_eq!(scenario.gh_calls_of("api", "--method").len(), 1);
+    assert_eq!(label_requests(&scenario).len(), 1);
 }
 
 #[test]
@@ -295,7 +302,7 @@ fn the_claim_is_made_in_one_request_before_the_worktree_is_created() {
         "stderr: {}",
         result.stderr
     );
-    let requests = scenario.gh_calls_of("api", "--method");
+    let requests = label_requests(&scenario);
     assert_eq!(requests.len(), 1, "{requests:?}");
     assert_eq!(
         requests[0][2..],

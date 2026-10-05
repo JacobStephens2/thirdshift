@@ -13,6 +13,7 @@ mod email;
 mod failed_run;
 mod git;
 mod github;
+mod harness;
 mod host;
 mod interrupt;
 mod issue;
@@ -67,8 +68,28 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift version                             Print thirdshift's version
        thirdshift help                                Print this help
 
-merge, --no-merge, --email, --no-email, base-fix, --no-base-fix and parallel <n> (or
---parallel <n>) go before or after the Issue URL, in any order.
+merge, --no-merge, --email, --no-email, base-fix, --no-base-fix, parallel <n> (or
+--parallel <n>), harness <name>, model <name> and effort <level> (or --harness, --model and
+--effort) go before or after the Issue URL, in any order.
+
+harness, model and effort choose the Harness every session of the command runs on, and its
+Model and Effort, for each Ticket's Run and a Base fix too. For each, the command wins, then
+the User config, then the default: claude, with its own Model and Effort. A Model and Effort
+in the User config come from the chosen Harness's own section, so harness claude over a codex
+default takes [harness.claude]:
+
+    [harness]
+    default = \"claude\"
+
+    [harness.claude]
+    model = \"opus\"
+    effort = \"high\"
+
+Before any work, the Harness's CLI must be on PATH, and a named Model gets a minimal test call
+with its Effort, which must succeed: a failure stops the command naming what to fix, before
+the Claim, the worktree and any Command log. Only claude works for now: harness codex fails as
+not supported yet. The Command log, the Activity log's start line, the pull request's body,
+as in Built with claude · opus · high, and the Run notification each name all three.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word
@@ -133,8 +154,9 @@ labels it architect-plan, creating the label if the repository lacks it, and dis
 as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket. A Spec's
 Tickets are never labelled architect-plan. That run makes the Claim on the plan, which keeps
 architect-plan. The Architect run ends as that run does, with its exit code and its PR's URL.
-merge, --no-merge, base-fix, --no-base-fix and parallel <n> apply to that run, as do the
-User config's defaults; parallel <n> fails it if the plan is a single Ticket. The review
+merge, --no-merge, base-fix, --no-base-fix, parallel <n>, harness, model and effort apply to
+that run, as do the User config's defaults; parallel <n> fails it if the plan is a single
+Ticket. harness, model and effort apply to the review too. The review
 itself watches no CI, so only that run can start a Base fix. With --plan-only, the
 Architect run prints the plan's URL and stops instead, for you to read, edit and run with
 thirdshift <Issue URL>, and takes none of those flags. <focus> is free text, one argument,
@@ -210,8 +232,8 @@ Each ready-for-agent issue a pass looks at and does not take gets one line on st
 the first reason that applies, such as #21 is a Ticket of #20, which is not ready or #30
 blocked by #29, before the line that says what the pass did. A line names the issue taken,
 and the run it is dispatched as makes the Claim on it. The Pickup run ends as that run does,
-with its exit code and its PR's URL. merge, --no-merge, base-fix, --no-base-fix and
-parallel <n> apply to that run, as do the User config's defaults; parallel <n> is ignored
+with its exit code and its PR's URL. merge, --no-merge, base-fix, --no-base-fix,
+parallel <n>, harness, model and effort apply to that run, as do the User config's defaults; parallel <n> is ignored
 when the issue is not a Spec. base <branch> names the Pickup run's Base branch as it does an
 Architect run's, and the dispatched run branches off <branch> and targets it:
 
@@ -357,11 +379,12 @@ fn main() -> ExitCode {
         None => Asks::of_run(&issue, &flags, config),
     };
     let ask = |config: &UserConfig| asks_of(config).notification;
-    let (config, started) = match command::start(begin, ask, About::Issue(&issue)) {
+    let (config, mut started) = match command::start(begin, ask, About::Issue(&issue)) {
         Ok(started) => started,
         Err(failure) => return failure,
     };
     let asks = asks_of(&config);
+    started.built_with(&asks.harness);
     let started_by = given
         .as_ref()
         .map_or(StartedBy::Command, |given| StartedBy::Child(&given.kind));
@@ -392,14 +415,18 @@ fn main() -> ExitCode {
 /// `activity.quiet_skips` set, a skipped run prints nothing at all.
 fn architect(args: ArchitectArgs) -> ExitCode {
     let ask = |config: &UserConfig| args.flags.notification(config);
-    let (config, started) = match command::start(Begin::ArchitectRun, ask, About::ArchitectRun) {
+    let (config, mut started) = match command::start(Begin::ArchitectRun, ask, About::ArchitectRun)
+    {
         Ok(started) => started,
         Err(failure) => return failure,
     };
+    let harness = args.flags.harness(&config);
+    started.built_with(&harness);
     let review = match architect::run(
         args.focus.as_deref(),
         args.base.as_deref(),
         config.launch_pull,
+        &harness,
     ) {
         Ok(Outcome::Skipped(skipped)) => {
             return started.finish(Ending::Skipped(skipped.into()));
@@ -443,7 +470,9 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Ok(started) => started,
         Err(failure) => return failure,
     };
-    let taken = match pickup::run(args.base.as_deref(), config.pickup_limit) {
+    let harness = args.flags.harness(&config);
+    started.built_with(&harness);
+    let taken = match pickup::run(args.base.as_deref(), config.pickup_limit, &harness) {
         Ok(pickup::Outcome::Taken(taken)) => taken,
         Ok(pickup::Outcome::Skipped(skipped)) => {
             return started.finish(Ending::Skipped(skipped.into()));

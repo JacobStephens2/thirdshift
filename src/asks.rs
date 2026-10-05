@@ -9,6 +9,7 @@ use crate::args;
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::Given;
 use crate::config::UserConfig;
+use crate::harness::{self, Choice};
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
@@ -25,6 +26,8 @@ pub struct Flags {
     pub parallel: Option<NonZeroUsize>,
     /// What `base-fix` or `no-base-fix` asked for.
     pub base_fix: Option<BaseFixAsk>,
+    /// What `harness <name>`, `model <name>` and `effort <level>` asked for.
+    pub harness: harness::Asked,
 }
 
 /// Everything a Run, or a Spec run, is asked, resolved.
@@ -44,6 +47,9 @@ pub struct Asks {
     /// Whether it first brings the Launch directory's checkout of the Base
     /// branch up to date with origin.
     pub launch_pull: bool,
+    /// The Harness, Model and Effort its sessions, and its child Runs', run
+    /// on.
+    pub harness: Choice,
 }
 
 impl Asks {
@@ -72,13 +78,15 @@ impl Asks {
             parallel_asked: flags.parallel.is_some(),
             base_fix,
             launch_pull: config.launch_pull,
+            harness: flags.harness(config),
         }
     }
 
     /// What a child Run, a Ticket's Run in a Spec run or a Base fix, is
     /// asked, from what it was `given`: it is always a Merge run, sends no
     /// Run notification, leaves the Launch directory alone, and asks about a
-    /// Base fix what it was given. Neither its flags nor `config` decide
+    /// Base fix what it was given, running its sessions on the Harness,
+    /// Model and Effort it was given. Neither its flags nor `config` decide
     /// any of that: those are for what started it. As it runs no Tickets,
     /// `config` says only how many it would run at once.
     pub fn of_child_run(given: &Given, config: &UserConfig) -> Asks {
@@ -89,6 +97,7 @@ impl Asks {
             parallel_asked: false,
             base_fix: given.base_fix.clone(),
             launch_pull: false,
+            harness: given.harness.clone(),
         }
     }
 
@@ -157,6 +166,14 @@ impl Flags {
             NotificationAsk::Skip
         })
     }
+
+    /// The Harness, Model and Effort a command with these flags runs its
+    /// sessions on: each as its flag asked, else as `config` sets it, else
+    /// the default. It is a Run's, and an Architect run's or a Pickup run's
+    /// for its own sessions as for the run it dispatches.
+    pub fn harness(&self, config: &UserConfig) -> Choice {
+        Choice::of(&self.harness, &config.harness)
+    }
 }
 
 /// The command that starts the Run on `issue` again as `flags` asked for it,
@@ -177,6 +194,16 @@ fn retry_with_base_fix(issue: &IssueUrl, flags: &Flags) -> String {
     if let Some(parallel) = flags.parallel {
         command += &format!(" parallel {parallel}");
     }
+    let asked = &flags.harness;
+    if let Some(harness) = asked.harness {
+        command += &format!(" harness {}", harness.name());
+    }
+    if let Some(model) = &asked.model_and_effort.model {
+        command += &format!(" model {model}");
+    }
+    if let Some(effort) = &asked.model_and_effort.effort {
+        command += &format!(" effort {effort}");
+    }
     command + " " + args::BASE_FIX
 }
 
@@ -187,6 +214,7 @@ mod tests {
     use super::*;
     use crate::child_run::Kind;
     use crate::config::EmailSettings;
+    use crate::harness::{ChosenBy, Harness, ModelAndEffort};
 
     const URL: &str = "https://github.com/acme/widgets/issues/7";
 
@@ -214,6 +242,7 @@ mod tests {
             email: EmailSettings::default(),
             spec_parallel: n(3),
             pickup_limit: n(3),
+            harness: harness::Settings::default(),
         }
     }
 
@@ -229,7 +258,50 @@ mod tests {
                 from: None,
             },
             spec_parallel: n(5),
+            harness: harness::Settings {
+                default: Some(Harness::Codex),
+                claude: model_and_effort("opus", "high"),
+                codex: model_and_effort("gpt-6.1-sol", "max"),
+            },
             ..no_settings()
+        }
+    }
+
+    fn model_and_effort(model: &str, effort: &str) -> ModelAndEffort {
+        ModelAndEffort {
+            model: Some(model.to_string()),
+            effort: Some(effort.to_string()),
+        }
+    }
+
+    /// The sessions [`every_setting`] chooses with no flag.
+    fn configured_codex() -> Choice {
+        Choice {
+            harness: Harness::Codex,
+            model: Some("gpt-6.1-sol".to_string()),
+            effort: Some("max".to_string()),
+            chosen_by: ChosenBy::UserConfig,
+        }
+    }
+
+    /// Claude on the Model `sonnet`, as the command chose, with `effort`.
+    fn sonnet(effort: Option<&str>) -> Choice {
+        Choice {
+            harness: Harness::Claude,
+            model: Some("sonnet".to_string()),
+            effort: effort.map(str::to_string),
+            chosen_by: ChosenBy::Command,
+        }
+    }
+
+    /// The flags that choose Claude, on the Model `sonnet`.
+    fn claude_on_sonnet() -> harness::Asked {
+        harness::Asked {
+            harness: Some(Harness::Claude),
+            model_and_effort: ModelAndEffort {
+                model: Some("sonnet".to_string()),
+                effort: None,
+            },
         }
     }
 
@@ -255,6 +327,7 @@ mod tests {
                 parallel_asked: false,
                 base_fix: undecided(""),
                 launch_pull: false,
+                harness: Choice::default(),
             }
         );
     }
@@ -272,6 +345,7 @@ mod tests {
                 parallel_asked: false,
                 base_fix: BaseFixAsk::Allow,
                 launch_pull: true,
+                harness: configured_codex(),
             }
         );
     }
@@ -283,6 +357,7 @@ mod tests {
             email: Some(NotificationAsk::Skip),
             parallel: Some(n(2)),
             base_fix: Some(BaseFixAsk::Forbid),
+            harness: claude_on_sonnet(),
         };
         let asks = Asks::of_run(&issue(), &against, &every_setting());
         assert_eq!(
@@ -295,6 +370,7 @@ mod tests {
                 base_fix: BaseFixAsk::Forbid,
                 // No flag sets it.
                 launch_pull: true,
+                harness: sonnet(Some("high")),
             }
         );
 
@@ -303,6 +379,7 @@ mod tests {
             email: Some(to("flag@example.com")),
             parallel: Some(n(2)),
             base_fix: Some(BaseFixAsk::Allow),
+            harness: claude_on_sonnet(),
         };
         let asks = Asks::of_run(&issue(), &for_it, &no_settings());
         assert_eq!(
@@ -314,16 +391,19 @@ mod tests {
                 parallel_asked: true,
                 base_fix: BaseFixAsk::Allow,
                 launch_pull: false,
+                harness: sonnet(None),
             }
         );
     }
 
-    /// What a child Run of `kind` is given, asked `base_fix` about a Base fix.
+    /// What a child Run of `kind` is given, asked `base_fix` about a Base
+    /// fix, its sessions on Claude's `sonnet`.
     fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
         Given {
             kind,
             stamp: "20261003T120000-0400".to_string(),
             base_fix,
+            harness: sonnet(None),
         }
     }
 
@@ -357,6 +437,15 @@ mod tests {
     }
 
     #[test]
+    fn a_child_run_runs_its_sessions_on_what_it_was_given_whatever_the_user_config_says() {
+        for config in [no_settings(), every_setting()] {
+            let asks = Asks::of_child_run(&given(ticket(), BaseFixAsk::Forbid), &config);
+
+            assert_eq!(asks.harness, sonnet(None));
+        }
+    }
+
+    #[test]
     fn a_child_run_asks_about_a_base_fix_what_it_was_given_whatever_the_user_config_says() {
         let offer = BaseFixAsk::Undecided {
             retry: format!("thirdshift {URL} base-fix"),
@@ -378,6 +467,7 @@ mod tests {
             email: Some(to("flag@example.com")),
             parallel: Some(n(2)),
             base_fix: None,
+            harness: claude_on_sonnet(),
         }
     }
 
@@ -391,8 +481,11 @@ mod tests {
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(2),
                 parallel_asked: true,
-                base_fix: undecided(" merge --email flag@example.com parallel 2"),
+                base_fix: undecided(
+                    " merge --email flag@example.com parallel 2 harness claude model sonnet"
+                ),
                 launch_pull: false,
+                harness: sonnet(None),
             }
         );
 
@@ -407,6 +500,7 @@ mod tests {
                 parallel_asked: false,
                 base_fix: BaseFixAsk::Allow,
                 launch_pull: true,
+                harness: configured_codex(),
             }
         );
     }
@@ -421,8 +515,11 @@ mod tests {
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(2),
                 parallel_asked: true,
-                base_fix: undecided(" merge --email flag@example.com parallel 2"),
+                base_fix: undecided(
+                    " merge --email flag@example.com parallel 2 harness claude model sonnet"
+                ),
                 launch_pull: false,
+                harness: sonnet(None),
             }
         );
 
@@ -437,6 +534,7 @@ mod tests {
                 parallel_asked: false,
                 base_fix: BaseFixAsk::Allow,
                 launch_pull: true,
+                harness: configured_codex(),
             }
         );
     }
@@ -462,6 +560,10 @@ mod tests {
                 base_fix: Some(BaseFixAsk::Forbid),
                 ..Flags::default()
             },
+            Flags {
+                harness: claude_on_sonnet(),
+                ..Flags::default()
+            },
         ] {
             assert!(flags.any_for_dispatched_run(), "{flags:?}");
         }
@@ -477,11 +579,14 @@ mod tests {
         // Nor is it in the command that retries the issue, which would fail
         // a Run on an issue that is not a Spec.
         let asks = Asks::of_ready_issue(&issue(), false, &dispatch_flags(), &no_settings());
-        assert_eq!(asks.base_fix, undecided(" merge --email flag@example.com"));
+        assert_eq!(
+            asks.base_fix,
+            undecided(" merge --email flag@example.com harness claude model sonnet")
+        );
         let asks = Asks::of_ready_issue(&issue(), true, &dispatch_flags(), &no_settings());
         assert_eq!(
             asks.base_fix,
-            undecided(" merge --email flag@example.com parallel 2")
+            undecided(" merge --email flag@example.com parallel 2 harness claude model sonnet")
         );
     }
 
@@ -510,8 +615,22 @@ mod tests {
             email,
             parallel,
             base_fix: None,
+            harness: harness::Asked::default(),
+        };
+        let on_codex = Flags {
+            harness: harness::Asked {
+                harness: Some(Harness::Codex),
+                model_and_effort: model_and_effort("gpt-6.1-sol", "max"),
+            },
+            ..flags(Some(Goal::Merged), None, None)
         };
         for (flags, retry) in [
+            (
+                on_codex,
+                format!(
+                    "thirdshift {URL} merge harness codex model gpt-6.1-sol effort max base-fix"
+                ),
+            ),
             (Flags::default(), format!("thirdshift {URL} base-fix")),
             (
                 flags(Some(Goal::Merged), Some(NotificationAsk::Send(None)), None),

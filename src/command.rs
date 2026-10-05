@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use crate::architect::{self, Reviewed};
 use crate::config::{self, UserConfig};
 use crate::failed_run::FailedRun;
+use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::logs::{self, Begin};
@@ -106,6 +107,14 @@ pub fn start(
 }
 
 impl Started {
+    /// Take note that the command's sessions run on `harness`, which its Run
+    /// notification names.
+    pub fn built_with(&mut self, harness: &Choice) {
+        if let Some(notification) = &mut self.notification {
+            notification.built_with(harness);
+        }
+    }
+
     /// Take note that the Pickup run took the Ready issue `issue`, titled
     /// `title`, which its Run notification is then about.
     pub fn took(&mut self, issue: &IssueUrl, title: String) {

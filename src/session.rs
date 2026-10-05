@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
@@ -57,11 +58,13 @@ impl Logs {
 }
 
 /// Where a Run's or an Architect run's sessions run: in `worktree`, with the
-/// Factory skills plugin loaded, each logged in its `logs`. It lasts for the
-/// steps given to [`Sessions::within`], and so does the plugin.
+/// Factory skills plugin loaded, on the Command's `harness`, each logged in
+/// its `logs`. It lasts for the steps given to [`Sessions::within`], and so
+/// does the plugin.
 pub struct Sessions<'a> {
     logs: &'a Logs,
     worktree: &'a Path,
+    harness: &'a Choice,
     plugin: Plugin,
     /// The log of the session started last, a Resume included.
     last_log: RefCell<Option<PathBuf>>,
@@ -74,7 +77,7 @@ pub struct Sessions<'a> {
 
 impl<'a> Sessions<'a> {
     /// Write the Factory skills plugin, then take `steps`, which run their
-    /// sessions through the `Sessions` they are given. Returns what `steps`
+    /// sessions on `harness` through the `Sessions` they are given. Returns what `steps`
     /// came to, with the most recent session's log, if a session created it.
     /// If a session's last ending, its Resume's if it got one, left
     /// background work to be killed and `steps` then fail, the failure names
@@ -83,6 +86,7 @@ impl<'a> Sessions<'a> {
     pub fn within<T>(
         logs: &'a Logs,
         worktree: &'a Path,
+        harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let plugin = match Plugin::write() {
@@ -92,6 +96,7 @@ impl<'a> Sessions<'a> {
         let sessions = Sessions {
             logs,
             worktree,
+            harness,
             plugin,
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
@@ -153,14 +158,8 @@ impl<'a> Sessions<'a> {
         let log = self.logs.path(kind);
         progress::step(format_args!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
-        run(
-            kind,
-            self.worktree,
-            self.plugin.path(),
-            resume,
-            prompt,
-            &log,
-        )
+        let args = claude_args(self.plugin.path().as_os_str(), self.harness, resume, prompt);
+        run(kind, self.worktree, &args, &log)
     }
 }
 
@@ -176,20 +175,12 @@ fn ending_with(killed: &[&str]) -> String {
     }
 }
 
-/// Run `claude` headless in auto mode in `worktree`, with the Factory skills
-/// plugin at `plugin_dir` loaded, streaming its output to `log` and condensing
-/// it to progress lines on stderr, each labelled `kind`. With `resume`, the
-/// session with that id continues, given `prompt`. Returns what the stream
-/// showed once `claude` has exited cleanly. An interrupt stops the session and
-/// fails with `interrupted`.
-fn run(
-    kind: &str,
-    worktree: &Path,
-    plugin_dir: &Path,
-    resume: Option<&str>,
-    prompt: &str,
-    log: &Path,
-) -> Result<Progress> {
+/// Run `claude` with `args`, as [`claude_args`] gives them, in `worktree`,
+/// streaming its output to `log` and condensing it to progress lines on
+/// stderr, each labelled `kind`. Returns what the stream showed once
+/// `claude` has exited cleanly. An interrupt stops the session and fails
+/// with `interrupted`.
+fn run(kind: &str, worktree: &Path, args: &[&OsStr], log: &Path) -> Result<Progress> {
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
@@ -197,7 +188,7 @@ fn run(
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
     let mut child = Command::new("claude")
-        .args(claude_args(plugin_dir.as_os_str(), resume, prompt))
+        .args(args)
         .current_dir(worktree)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -262,10 +253,12 @@ fn run(
 }
 
 /// The arguments every session runs `claude` with: headless in auto mode,
-/// with the Factory skills plugin at `plugin_dir` loaded, streaming JSON. With
-/// `resume`, the session with that id continues. The prompt comes last.
+/// with the Factory skills plugin at `plugin_dir` loaded, on the Model and
+/// Effort `harness` sets, if any, streaming JSON. With `resume`, the session
+/// with that id continues. The prompt comes last.
 pub fn claude_args<'a>(
     plugin_dir: &'a OsStr,
+    harness: &'a Choice,
     resume: Option<&'a str>,
     prompt: &'a str,
 ) -> Vec<&'a OsStr> {
@@ -274,6 +267,7 @@ pub fn claude_args<'a>(
         .map(OsStr::new)
         .collect();
     args.push(plugin_dir);
+    args.extend(harness.claude_args().into_iter().map(OsStr::new));
     args.extend(["--output-format", "stream-json", "--verbose"].map(OsStr::new));
     if let Some(session_id) = resume {
         args.extend(["--resume", session_id].map(OsStr::new));

@@ -14,6 +14,7 @@ use crate::claim::{self, Claim};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::FailedRun;
 use crate::github::{self, Ticket};
+use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::launch::LaunchDirectory;
@@ -113,7 +114,11 @@ impl<'a> StartedBy<'a> {
 /// `asks`, to its end. Its Run notification, if `asks` has it send one, is
 /// for what started the Run to send, once it has ended.
 pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended {
-    let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
+    let mut base_fix = BaseFix::new(
+        started_by.child(),
+        asks.base_fix.clone(),
+        asks.harness.clone(),
+    );
     let outcome = run(issue, asks, started_by, &mut base_fix);
     Ended {
         outcome,
@@ -132,8 +137,11 @@ pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended
 /// date with origin.
 ///
 /// The Launch directory is opened first, with its Origin match, the check
-/// that `issue` is open and the git identity check; the rest is [`start`],
-/// through the Launch directory, GitHub and the logs.
+/// that `issue` is open and the git identity check. A Run started by its
+/// command then checks the Harness, Model and Effort its sessions run on, as
+/// `asks` say: one started by another thirdshift, or dispatched by a pass,
+/// runs on what that command checked. The rest is [`start`], through the
+/// Launch directory, GitHub and the logs.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures: what
@@ -145,12 +153,16 @@ fn run(
     base_fix: &mut BaseFix,
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
+    if let StartedBy::Command = started_by {
+        asks.harness.check()?;
+    }
     let mut outside = LaunchAndGitHub {
         directory: &directory,
         issue,
         goal: asks.goal,
         base_fix,
         logs: Logs::of_run(issue),
+        harness: &asks.harness,
         claim: None,
     };
     start(
@@ -340,13 +352,14 @@ trait Outside {
 /// The outside world of a Run on `issue` from the opened Launch directory
 /// `directory`: GitHub, its git, the logs, the Claim it made, the worktree,
 /// the Spec run and the Delivery to `goal`, with `base_fix` and the Run's
-/// Session `logs`.
+/// Session `logs`, its sessions on `harness`.
 struct LaunchAndGitHub<'a> {
     directory: &'a LaunchDirectory,
     issue: &'a IssueUrl,
     goal: Goal,
     base_fix: &'a mut BaseFix,
     logs: Logs,
+    harness: &'a Choice,
     claim: Option<Claim<'a>>,
 }
 
@@ -359,6 +372,7 @@ impl LaunchAndGitHub<'_> {
             goal: self.goal,
             base_fix: self.base_fix,
             logs: &self.logs,
+            harness: self.harness,
         }
     }
 }
@@ -371,7 +385,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn started(&mut self, work: Work) {
-        logs::started(work);
+        logs::started(work, self.harness);
     }
 
     fn select(&mut self) -> Result<Selection> {
@@ -678,6 +692,7 @@ mod tests {
             parallel_asked: false,
             base_fix: BaseFixAsk::Forbid,
             launch_pull: false,
+            harness: Choice::default(),
         }
     }
 

@@ -12,6 +12,7 @@ use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::git::Git;
+use crate::harness::{self, Harness, ModelAndEffort};
 use crate::questions::{self, Answers};
 use crate::resend_key::Credentials;
 use crate::{email, github, progress};
@@ -42,6 +43,9 @@ pub struct UserConfig {
     /// `pickup.limit`: the Claim limit, how many open issues carrying a
     /// Claim stop a Pickup run from taking another, by default 3.
     pub pickup_limit: NonZeroUsize,
+    /// The `[harness]` section: the Harness every Command runs its sessions
+    /// on, and a Model and Effort for each Harness.
+    pub harness: harness::Settings,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -82,6 +86,7 @@ impl UserConfig {
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
+            harness: harness::Settings::default(),
         }
     }
 
@@ -98,7 +103,15 @@ impl UserConfig {
         for (section, value) in &table {
             let known = matches!(
                 section.as_str(),
-                "merge" | "base" | "launch" | "logs" | "activity" | "email" | "spec" | "pickup"
+                "merge"
+                    | "base"
+                    | "launch"
+                    | "logs"
+                    | "activity"
+                    | "email"
+                    | "spec"
+                    | "pickup"
+                    | "harness"
             );
             let settings = match value {
                 Value::Table(settings) if known => settings,
@@ -141,6 +154,26 @@ impl UserConfig {
                     }
                     ("pickup", "limit", value) => {
                         config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
+                    }
+                    ("harness", "default", Value::String(name)) => match Harness::named(name) {
+                        Some(harness) => config.harness.default = Some(harness),
+                        None => bail!(
+                            "harness.default must be {}, not {name:?}, in {file}",
+                            harness::NAMES
+                        ),
+                    },
+                    ("harness", "default", _) => {
+                        bail!("harness.default must be a quoted name in {file}")
+                    }
+                    ("harness", "claude" | "codex", Value::Table(settings)) => {
+                        let set = match key.as_str() {
+                            "claude" => &mut config.harness.claude,
+                            _ => &mut config.harness.codex,
+                        };
+                        *set = model_and_effort(settings, key, &file)?;
+                    }
+                    ("harness", "claude" | "codex", _) => {
+                        bail!("harness.{key} must be the section [harness.{key}] in {file}")
                     }
                     _ => bail!("unknown key {section}.{key} in {file}"),
                 }
@@ -632,6 +665,27 @@ fn whole_number_from_1(value: &Value, key: &str, file: &str) -> Result<NonZeroUs
         .with_context(|| format!("{key} must be a whole number from 1 up in {file}"))
 }
 
+/// `settings`, the section `[harness.<harness>]` of `file`, as the Model and
+/// Effort set for that Harness, each blank to leave it to the Harness. Any
+/// other key, or a value that isn't a string, is an error naming it.
+fn model_and_effort(settings: &Table, harness: &str, file: &str) -> Result<ModelAndEffort> {
+    let mut set = ModelAndEffort::default();
+    for (key, value) in settings {
+        let setting = match key.as_str() {
+            "model" => &mut set.model,
+            "effort" => &mut set.effort,
+            _ => bail!("unknown key harness.{harness}.{key} in {file}"),
+        };
+        let Value::String(value) = value else {
+            bail!(
+                "harness.{harness}.{key} must be a quoted string, blank for {harness}'s own default, in {file}"
+            );
+        };
+        *setting = Some(value.trim().to_string()).filter(|value| !value.is_empty());
+    }
+    Ok(set)
+}
+
 /// `$HOME`, and the User config's path under it.
 fn home_and_path() -> Result<(PathBuf, PathBuf)> {
     let home = home()?;
@@ -699,6 +753,71 @@ mod tests {
             from.find("  # ").map(|at| at + 1),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_harness_section_sets_the_default_harness_and_a_model_and_effort_for_each() {
+        let config = parse(
+            "[harness]\ndefault = \"codex\"\n\n\
+             [harness.claude]\nmodel = \"opus\"\neffort = \"\"\n\n\
+             [harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"max\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.harness,
+            harness::Settings {
+                default: Some(Harness::Codex),
+                claude: ModelAndEffort {
+                    model: Some("opus".to_string()),
+                    effort: None,
+                },
+                codex: ModelAndEffort {
+                    model: Some("gpt-6.1-sol".to_string()),
+                    effort: Some("max".to_string()),
+                },
+            }
+        );
+        assert_eq!(parse("").unwrap().harness, harness::Settings::default());
+    }
+
+    #[test]
+    fn a_harness_setting_thirdshift_cant_use_is_an_error_naming_it() {
+        for (text, error) in [
+            (
+                "[harness]\ndefault = \"gemini\"\n",
+                "harness.default must be claude or codex, not \"gemini\"",
+            ),
+            (
+                "[harness]\ndefault = true\n",
+                "harness.default must be a quoted name",
+            ),
+            ("[harness]\nmodel = \"opus\"\n", "unknown key harness.model"),
+            (
+                "[harness.gemini]\nmodel = \"x\"\n",
+                "unknown key harness.gemini",
+            ),
+            (
+                "[harness]\nclaude = \"opus\"\n",
+                "harness.claude must be the section [harness.claude]",
+            ),
+            (
+                "[harness.claude]\nmodels = \"opus\"\n",
+                "unknown key harness.claude.models",
+            ),
+            (
+                "[harness.codex]\neffort = 3\n",
+                "harness.codex.effort must be a quoted string",
+            ),
+            (
+                "harness = \"claude\"\n",
+                "harness must be the section [harness]",
+            ),
+        ] {
+            let error_text = format!("{:#}", parse(text).unwrap_err());
+
+            assert!(error_text.contains(error), "{text:?}: {error_text}");
+        }
     }
 
     #[test]

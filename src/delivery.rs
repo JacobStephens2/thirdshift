@@ -21,6 +21,7 @@ use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
 use crate::github::{self, Mergeable, PullRequest};
+use crate::harness::{self, Choice};
 use crate::host;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -44,6 +45,9 @@ pub struct Delivery<'a> {
     pub base_fix: &'a mut BaseFix,
     /// Where its Session logs go.
     pub logs: &'a Logs,
+    /// The Harness, Model and Effort its sessions run on, and its child
+    /// Runs' too.
+    pub harness: &'a Choice,
 }
 
 /// The session a Delivery opens with: the implement session, or the Spec
@@ -61,7 +65,9 @@ impl Delivery<'_> {
     /// Take the pull request from the branch checked out in `worktree` to the
     /// goal. With `opening.catch_up_from_origin`, first fast-forward the
     /// branch to origin. Then run the opening session, push the branch, for
-    /// any commit the session left unpushed, run `before_ready`, and mark the
+    /// any commit the session left unpushed, write the line that says what
+    /// it was built with in the pull request's body, only warning if that
+    /// fails, run `before_ready`, and mark the
     /// pull request ready, failing unless it exists, is open and targets the
     /// Base branch. Then keep it mergeable and its CI green through the
     /// Repair loop, and for [`Goal::Merged`], Self-merge it. A merge that
@@ -82,16 +88,30 @@ impl Delivery<'_> {
             branch: worktree.branch(),
             goal: self.goal,
         };
-        let (delivered, log) = Sessions::within(self.logs, worktree.path(), |sessions| {
-            let mut outside = InWorktree {
-                issue: self.issue,
-                worktree: &worktree,
-                base: self.base,
-                base_fix: self.base_fix,
-                sessions,
-            };
-            route.steps(&mut outside, &opening, |_| before_ready())
-        });
+        let sessions_on = self.harness;
+        let (delivered, log) =
+            Sessions::within(self.logs, worktree.path(), sessions_on, |sessions| {
+                let mut outside = InWorktree {
+                    issue: self.issue,
+                    worktree: &worktree,
+                    base: self.base,
+                    base_fix: self.base_fix,
+                    sessions,
+                };
+                route.steps(&mut outside, &opening, |_| {
+                    if let Err(error) = write_built_with(self.issue, worktree.branch(), sessions_on)
+                    {
+                        progress::warn(
+                            &error,
+                            format_args!(
+                                "could not write \"{}\" in the pull request's body",
+                                sessions_on.built_with()
+                            ),
+                        );
+                    }
+                    before_ready()
+                })
+            });
         match delivered {
             Ok(pr_url) => Ok(Reached {
                 pr_url,
@@ -109,6 +129,27 @@ impl Delivery<'_> {
             }
         }
     }
+}
+
+/// Write the line that says the pull request from `branch`, for `issue`, was
+/// built with `harness` in its body, in place of any thirdshift wrote there
+/// before. Nothing if there is no such pull request: marking it ready says
+/// so. A failure is for the Delivery to warn of, as the work is done
+/// without it.
+fn write_built_with(issue: &IssueUrl, branch: &str, harness: &Choice) -> Result<()> {
+    let Some(pr) = github::pull_request_for(issue, branch)? else {
+        return Ok(());
+    };
+    let body = github::pr_body(issue, pr.number)?;
+    let written = harness::with_built_with(&body, harness);
+    if written != body {
+        progress::step(format_args!(
+            "writing \"{}\" in the pull request's body",
+            harness.built_with()
+        ));
+        github::set_pr_body(issue, pr.number, &written)?;
+    }
+    Ok(())
 }
 
 /// The steps of a Delivery of the pull request for `issue`, from `branch`

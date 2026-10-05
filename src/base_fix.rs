@@ -18,6 +18,7 @@ use crate::child_run::{self, Ended, Kind};
 use crate::ci::{self, FailedChecks};
 use crate::git::Git;
 use crate::github::{self, Check, ListedIssue};
+use crate::harness::Choice;
 use crate::issue::IssueUrl;
 use crate::labels::{Label, Labels, READY_FOR_AGENT};
 use crate::poll;
@@ -112,6 +113,9 @@ pub struct BaseFix {
     /// What the Run says after its cause, if Inherited failures failed it
     /// with no Base fix taken.
     advice: Vec<Advice>,
+    /// The Harness, Model and Effort a Base fix it starts runs its sessions
+    /// on: the Run's.
+    harness: Choice,
 }
 
 /// The Base fix a Run took as its one: one it started, or one it found
@@ -134,9 +138,10 @@ impl Taken {
 
 impl BaseFix {
     /// The Base fix of a Run that is the child Run `child`, if it is one,
-    /// and that asked `ask` about a Base fix. A Base fix starts none of its
-    /// own, whatever it asked.
-    pub fn new(child: Option<&Kind>, ask: BaseFixAsk) -> Self {
+    /// that asked `ask` about a Base fix, and whose sessions run on
+    /// `harness`, as a Base fix it starts does. A Base fix starts none of
+    /// its own, whatever it asked.
+    pub fn new(child: Option<&Kind>, ask: BaseFixAsk, harness: Choice) -> Self {
         let (on_inherited_failures, retry) = match (child, ask) {
             (Some(Kind::BaseFix { .. }), _) => (OnInheritedFailures::IsBaseFix, None),
             (_, BaseFixAsk::Allow) => (OnInheritedFailures::StartBaseFix, None),
@@ -148,6 +153,7 @@ impl BaseFix {
             retry,
             taken: None,
             advice: Vec::new(),
+            harness,
         }
     }
 
@@ -201,7 +207,12 @@ impl BaseFix {
         base_commit: &str,
         failed: &FailedChecks,
     ) -> Result<()> {
-        let mut outside = LaunchAndGitHub { launch, issue };
+        let harness = self.harness.clone();
+        let mut outside = LaunchAndGitHub {
+            launch,
+            issue,
+            harness: &harness,
+        };
         self.fix_through(&mut outside, issue, pr_url, base, base_commit, failed)
     }
 
@@ -447,10 +458,12 @@ impl<W> Mark<W> {
 }
 
 /// The outside world of a Run on `issue` started from `launch`: its git
-/// directory's locks and marks, GitHub, the child Run and the poll interval.
+/// directory's locks and marks, GitHub, the child Run, its sessions on
+/// `harness`, and the poll interval.
 struct LaunchAndGitHub<'a> {
     launch: &'a Git,
     issue: &'a IssueUrl,
+    harness: &'a Choice,
 }
 
 impl Outside for LaunchAndGitHub<'_> {
@@ -508,7 +521,7 @@ impl Outside for LaunchAndGitHub<'_> {
         let kind = Kind::BaseFix {
             base: base.to_string(),
         };
-        child_run::start(fix, kind, BaseFixAsk::Forbid)?.wait()
+        child_run::start(fix, kind, BaseFixAsk::Forbid, self.harness)?.wait()
     }
 
     fn pause(&mut self) -> Result<()> {
@@ -856,7 +869,7 @@ mod tests {
 
     /// A Run's Base fix as asked `ask`, not itself a Base fix.
     fn asked(ask: BaseFixAsk) -> BaseFix {
-        BaseFix::new(None, ask)
+        BaseFix::new(None, ask, Choice::default())
     }
 
     fn undecided() -> BaseFixAsk {
@@ -1303,14 +1316,17 @@ mod tests {
             base: "main".to_string(),
         };
         for ask in [BaseFixAsk::Allow, BaseFixAsk::Forbid, undecided()] {
-            let base_fix = BaseFix::new(Some(&child), ask);
+            let base_fix = BaseFix::new(Some(&child), ask, Choice::default());
             assert!(!base_fix.sees_inherited_failures());
             assert_eq!(base_fix.ask_of_tickets(), BaseFixAsk::Forbid);
         }
         let ticket = Kind::Ticket {
             spec_branch: "spec-3".to_string(),
         };
-        assert!(BaseFix::new(Some(&ticket), BaseFixAsk::Allow).sees_inherited_failures());
+        assert!(
+            BaseFix::new(Some(&ticket), BaseFixAsk::Allow, Choice::default())
+                .sees_inherited_failures()
+        );
         assert!(asked(BaseFixAsk::Forbid).sees_inherited_failures());
     }
 }
