@@ -39,6 +39,16 @@ impl Harness {
         }
     }
 
+    /// The signals that ask a session on it to stop, in the order they are
+    /// sent: SIGTERM, after SIGINT for Codex, which stops cleanly only on
+    /// SIGINT, interrupting its turn.
+    pub fn stop_signals(self) -> &'static [libc::c_int] {
+        match self {
+            Harness::Claude => &[libc::SIGTERM],
+            Harness::Codex => &[libc::SIGINT, libc::SIGTERM],
+        }
+    }
+
     /// Every Harness, in the order Setup lists them.
     pub const ALL: [Harness; 2] = [Harness::Claude, Harness::Codex];
 

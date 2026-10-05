@@ -19,6 +19,11 @@
 //! script that succeeds ends the turn with `turn.completed`, and one that
 //! fails with `turn.failed`, whose error is what it wrote to
 //! $FAKE_CODEX_ERROR, else a default, and exits 1, as Codex does.
+//!
+//! SIGINT and SIGTERM to its process group reach its script, which decides
+//! how the session stops: the fake waits for its script whatever signal
+//! comes, short of SIGKILL, so what the script records of the signals is
+//! there once the fake has exited.
 
 use std::fs;
 use std::io::Write;
@@ -54,6 +59,22 @@ fn stdin_is_null() -> bool {
         return false;
     };
     stdin.rdev() == null.rdev() && stdin.ino() == null.ino()
+}
+
+/// Catch SIGINT and SIGTERM, doing nothing on either, so the fake outlasts
+/// them until its script ends. A caught signal, unlike an ignored one, is
+/// back to its default in the script, which can trap it.
+fn outlast_interrupts() {
+    // From the C library, which the standard library links: SIGINT and
+    // SIGTERM are 2 and 15 on Linux and macOS alike.
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
+    }
+    extern "C" fn caught(_: i32) {}
+    for signum in [2, 15] {
+        // SAFETY: the handler does nothing, so it is async-signal-safe.
+        unsafe { signal(signum, caught) };
+    }
 }
 
 /// Print one line of the stream.
@@ -102,6 +123,7 @@ pub fn main(argv: Vec<String>) {
     drop(lock);
 
     let session = records.len();
+    outlast_interrupts();
     if std::env::var_os("FAKE_CLAUDE_NO_SESSION_ID").is_none() {
         emit(object([
             ("type", string("thread.started")),

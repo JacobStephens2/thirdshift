@@ -5,8 +5,10 @@
 //! `.agents/skills/` and its prompt loading its skill as
 //! `$thirdshift-<skill>`. Codex's stream gives the progress lines, the
 //! Session log, the session id a Resume continues and the final message, and
-//! a failed turn fails the Run with Codex's error. The Model and Effort are
-//! checked against `codex debug models` before any work.
+//! a failed turn fails the Run with Codex's error. A session that leaves a
+//! command or sub-agent call running gets one Resume on its thread, as on
+//! Claude, and an interrupt sends a session SIGINT before SIGTERM. The Model
+//! and Effort are checked against `codex debug models` before any work.
 
 mod support;
 
@@ -230,6 +232,179 @@ fn a_session_left_with_a_command_running_is_resumed_on_its_thread_with_every_fla
         ),
         "stderr: {}",
         result.stderr
+    );
+}
+
+/// Bash that has the agent leave a sub-agent call, spawning a sub-agent
+/// given `prompt`, running when its turn ends, as Codex streams it.
+fn leaves_a_sub_agent_running(prompt: &str) -> String {
+    format!(
+        r#"echo '{{"type": "item.started", "item": {{"id": "item_8", "type": "collab_tool_call", "tool": "spawn_agent", "prompt": "{prompt}", "status": "in_progress"}}}}'
+"#
+    )
+}
+
+#[test]
+fn a_session_left_with_a_sub_agent_running_is_resumed_too() {
+    let scenario = Scenario::new();
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            leaves_a_sub_agent_running("Review the diff")
+        ),
+    );
+
+    let result = scenario.run(&["harness", "codex", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.codex_calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(argv(&calls[1])[5..7], ["resume", "fake-thread-1"]);
+    let prompt = calls[1]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.starts_with("Your background work (agent spawn_agent: Review the diff) was killed"),
+        "{prompt}"
+    );
+}
+
+#[test]
+fn a_resume_that_ends_the_same_way_gets_no_second_resume_and_a_later_failure_names_the_work() {
+    let scenario = Scenario::new();
+    // Every session, the Resume included, leaves its tests running and opens
+    // no PR.
+    scenario.agent_does(&format!(
+        "echo wip >> feature.txt\n{}",
+        leaves_running("cargo test")
+    ));
+
+    let result = scenario.run(&["harness", "codex", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let calls = scenario.codex_calls();
+    assert_eq!(calls.len(), 2, "one Resume, never two");
+    assert_eq!(argv(&calls[1])[5..7], ["resume", "fake-thread-1"]);
+    let ending = "ended with a background task still running (cargo test), which was killed";
+    for line in [
+        format!("thirdshift: implement: the Resume {ending}; carrying on"),
+        format!("thirdshift: implement session {ending}, and a later step failed: no PR found"),
+    ] {
+        assert!(
+            result.stderr.lines().any(|said| said.starts_with(&line)),
+            "{line:?} in {}",
+            result.stderr
+        );
+    }
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        format!(
+            "thirdshift: failed run (implement session {ending}, and a later step failed: no PR found)"
+        )
+    );
+}
+
+#[test]
+fn resumes_count_against_no_repair_cap() {
+    let scenario = Scenario::new();
+    scenario.agent_does_for_in_session(7, 1, &format!("{AGENT_OPENS_PR}{}", checks_on_head(RED)));
+    // Repairs 1 to 4 each leave CI red and their tests running, so each gets
+    // a Resume, which does nothing; Repair 5, the cap's last, turns CI green.
+    for repair in 1..=4 {
+        scenario.agent_does_for_in_session(
+            7,
+            repair + 1,
+            &format!(
+                "echo {repair} > fix.txt\ngit add fix.txt\ngit commit -q -m Fix\n{}{}",
+                checks_on_head(RED),
+                leaves_running("cargo test")
+            ),
+        );
+    }
+    scenario.agent_does_for_in_session(
+        7,
+        6,
+        &format!(
+            "echo 5 > fix.txt\ngit add fix.txt\ngit commit -q -m Fix\n{}",
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&["harness", "codex", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.codex_calls().len(), 10);
+    for line in [
+        "thirdshift: repair-4-resume: session started\n",
+        "starting Repair 5 of 5\n",
+    ] {
+        assert!(
+            result.stderr.contains(line),
+            "{line:?} in {}",
+            result.stderr
+        );
+    }
+}
+
+/// Bash that has the agent record each SIGINT and SIGTERM its session gets
+/// to `signals` in the scenario, ending on SIGTERM and, if `ends_on_sigint`,
+/// on SIGINT too, touch `agent-started` there and then keep working until a
+/// signal ends it.
+fn records_signals(scenario: &Scenario, ends_on_sigint: bool) -> String {
+    let on_sigint = if ends_on_sigint { "; exit 130" } else { "" };
+    format!(
+        r#"trap 'echo INT >> "{signals}"{on_sigint}' INT
+trap 'echo TERM >> "{signals}"; exit 143' TERM
+echo 'half done' > wip.txt
+touch "{started}"
+while :; do sleep 0.1 || :; done
+"#,
+        signals = scenario.path("signals").display(),
+        started = scenario.path("agent-started").display(),
+    )
+}
+
+#[test]
+fn an_interrupt_sends_a_codex_session_sigint_and_the_run_ends_as_interrupted() {
+    let scenario = Scenario::new();
+    let signals = scenario.path("signals");
+    scenario.agent_does_for(7, &records_signals(&scenario, true));
+
+    let result = scenario.run_and_signal(
+        &["harness", "codex", &scenario.issue_url(7)],
+        "agent-started",
+        "INT",
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(fs::read_to_string(&signals).unwrap(), "INT\n");
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        "thirdshift: failed run (interrupted)"
+    );
+    assert_eq!(
+        scenario.origin_file("issue-7", "wip.txt"),
+        Some("half done\n".to_string())
+    );
+}
+
+#[test]
+fn a_codex_session_that_outlasts_sigint_is_sent_sigterm_after_it() {
+    let scenario = Scenario::new();
+    let signals = scenario.path("signals");
+    scenario.agent_does_for(7, &records_signals(&scenario, false));
+
+    let result = scenario.run_and_signal(
+        &["harness", "codex", &scenario.issue_url(7)],
+        "agent-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(fs::read_to_string(&signals).unwrap(), "INT\nTERM\n");
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        "thirdshift: failed run (interrupted)"
     );
 }
 

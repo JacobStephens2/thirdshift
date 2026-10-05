@@ -177,8 +177,8 @@ fn ending_with(killed: &[&str]) -> String {
 /// `log` and condensing it through `stream` to progress lines on stderr,
 /// each labelled `kind`. Returns what the stream showed once the CLI has
 /// exited cleanly, its turn not failed. Otherwise fails with the error the
-/// stream gave, if any. An interrupt stops the session and fails with
-/// `interrupted`.
+/// stream gave, if any. An interrupt stops the session, as [`stop`] does,
+/// and fails with `interrupted`.
 fn run(
     kind: &str,
     harness: Harness,
@@ -230,7 +230,7 @@ fn run(
     });
     let status = loop {
         if interrupt::requested() {
-            stop(&mut child);
+            stop(&mut child, harness);
             bail!("interrupted");
         }
         if let Some(status) = child
@@ -342,21 +342,24 @@ const CLAUDE_MD_FALLBACK: &str = r#"project_doc_fallback_filenames=["CLAUDE.md"]
 
 const POLL: Duration = Duration::from_millis(100);
 
-/// How long a session gets to exit after SIGTERM before it is killed.
+/// How long a session gets to exit after each signal that asks it to stop.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
-/// Stop `child`'s process group: SIGTERM, then SIGKILL if it outlives
-/// `STOP_GRACE`.
-fn stop(child: &mut Child) {
+/// Stop `child`, a session on `harness`, by its process group: with the
+/// signals that ask `harness` to stop, in turn, each given `STOP_GRACE`,
+/// then SIGKILL.
+fn stop(child: &mut Child, harness: Harness) {
     let group = -(child.id() as libc::pid_t);
-    // SAFETY: kill has no memory-safety preconditions.
-    unsafe { libc::kill(group, libc::SIGTERM) };
-    let deadline = Instant::now() + STOP_GRACE;
-    while Instant::now() < deadline {
-        if let Ok(Some(_)) = child.try_wait() {
-            return;
+    for &signal in harness.stop_signals() {
+        // SAFETY: kill has no memory-safety preconditions.
+        unsafe { libc::kill(group, signal) };
+        let deadline = Instant::now() + STOP_GRACE;
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = child.try_wait() {
+                return;
+            }
+            thread::sleep(POLL);
         }
-        thread::sleep(POLL);
     }
     // SAFETY: as above.
     unsafe { libc::kill(group, libc::SIGKILL) };
