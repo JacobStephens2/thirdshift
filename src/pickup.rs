@@ -485,16 +485,6 @@ mod tests {
         )
     }
 
-    /// Whether `calls` has a Harness check, a start or a dispatch.
-    fn did_work(calls: &[Call]) -> bool {
-        calls.iter().any(|call| {
-            matches!(
-                call,
-                Call::HarnessCheck | Call::Started(_) | Call::Dispatch { .. }
-            )
-        })
-    }
-
     #[test]
     fn a_pass_skipped_for_no_ready_issue_records_its_reason_and_does_no_work() {
         let (outcome, calls) = pickup(InMemory::default());
@@ -504,10 +494,14 @@ mod tests {
             Ok(Outcome::Skipped(Skipped::NoReadyIssue(_)))
         ));
         assert_eq!(
-            calls.last(),
-            Some(&Call::Skipped(NO_READY_ISSUE.to_string()))
+            calls,
+            [
+                CLOSED,
+                CLAIMED,
+                Call::ReadySearch,
+                Call::Skipped(NO_READY_ISSUE.to_string()),
+            ]
         );
-        assert!(!did_work(&calls));
     }
 
     #[test]
