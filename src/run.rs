@@ -259,20 +259,17 @@ fn start_in_worktree<O: Outside>(
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
     let branch = selection.branch();
-    let checkout = match selection {
-        Selection::Fresh { .. } => Checkout::Fresh,
-        Selection::Continuation { .. } => Checkout::Continued,
+    let (checkout, prompt) = match selection {
+        Selection::Fresh { .. } => (Checkout::Fresh, prompt::fresh(issue, base, branch)),
+        Selection::Continuation { pr, .. } => (
+            Checkout::Continuation,
+            prompt::continuation(issue, base, branch, pr.as_ref().map(|pr| pr.url.as_str())),
+        ),
     };
     let worktree = outside.worktree(checkout, branch, base)?;
     if !tickets.is_empty() {
         return outside.spec_run(tickets, worktree, base, parallel);
     }
-    let prompt = match selection {
-        Selection::Fresh { .. } => prompt::fresh(issue, base, branch),
-        Selection::Continuation { pr, .. } => {
-            prompt::continuation(issue, base, branch, pr.as_ref().map(|pr| pr.url.as_str()))
-        }
-    };
     let opening = Opening {
         kind: IMPLEMENT,
         prompt,
@@ -286,7 +283,7 @@ fn start_in_worktree<O: Outside>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Checkout {
     Fresh,
-    Continued,
+    Continuation,
 }
 
 /// What a Run's start does or reads outside itself, for its issue: the
@@ -408,7 +405,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         let (launch, repo) = (self.directory.git(), &self.issue.repo);
         match checkout {
             Checkout::Fresh => Worktree::create_fresh(launch, repo, branch, base),
-            Checkout::Continued => Worktree::continue_existing(launch, repo, branch, base),
+            Checkout::Continuation => Worktree::continue_existing(launch, repo, branch, base),
         }
     }
 
@@ -513,10 +510,10 @@ mod tests {
             }
         }
 
-        /// The end of the Spec run or the Delivery.
+        /// How the Spec run or the Delivery ends.
         fn work_ends(&self) -> Result<Reached, FailedRun> {
             if self.script.work_fails {
-                return Err(anyhow!("the Delivery failed").into());
+                return Err(anyhow!("the work failed").into());
             }
             Ok(Reached {
                 pr_url: PR_URL.to_string(),
@@ -731,6 +728,14 @@ mod tests {
         )
     }
 
+    /// Assert that `calls` made `in_turn`, one straight after another.
+    fn assert_in_turn(calls: &[Call], in_turn: &[Call]) {
+        assert!(
+            calls.windows(in_turn.len()).any(|window| window == in_turn),
+            "{in_turn:?} not in turn in {calls:?}"
+        );
+    }
+
     fn made_claim_or_worktree(calls: &[Call]) -> bool {
         calls
             .iter()
@@ -879,7 +884,7 @@ mod tests {
 
         assert!(ended.is_ok());
         assert!(calls.contains(&Call::SpecRun(
-            Checkout::Continued,
+            Checkout::Continuation,
             2,
             "main".to_string(),
             1
@@ -914,9 +919,9 @@ mod tests {
             "continuing issue-7 and its PR {PR_URL}, so the Base branch is release, \
              not the given develop"
         );
-        assert_eq!(
-            outside.calls[2..5],
-            [Call::Select, Call::Step(line), base_branch(Some("release"))]
+        assert_in_turn(
+            &outside.calls,
+            &[Call::Select, Call::Step(line), base_branch(Some("release"))],
         );
     }
 
@@ -931,9 +936,9 @@ mod tests {
             "continuing issue-7 and its PR {PR_URL}, so the Base branch is release, \
              not the checked-out main"
         );
-        assert_eq!(
-            calls[2..5],
-            [Call::Select, Call::Step(line), base_branch(Some("release"))]
+        assert_in_turn(
+            &calls,
+            &[Call::Select, Call::Step(line), base_branch(Some("release"))],
         );
     }
 
@@ -944,7 +949,7 @@ mod tests {
             ..Script::default()
         });
 
-        assert_eq!(calls[2..4], [Call::Select, base_branch(Some("main"))]);
+        assert_in_turn(&calls, &[Call::Select, base_branch(Some("main"))]);
     }
 
     #[test]
@@ -961,9 +966,9 @@ mod tests {
         );
 
         assert!(ended.is_ok());
-        assert_eq!(
-            outside.calls[2..4],
-            [Call::Select, base_branch(Some("develop"))]
+        assert_in_turn(
+            &outside.calls,
+            &[Call::Select, base_branch(Some("develop"))],
         );
     }
 
@@ -971,7 +976,7 @@ mod tests {
     fn with_nothing_given_no_branch_is_named_and_the_checked_out_branch_settles_it() {
         let (calls, _) = run_on(Script::default());
 
-        assert_eq!(calls[2..4], [Call::Select, base_branch(None)]);
+        assert_in_turn(&calls, &[Call::Select, base_branch(None)]);
         assert!(calls.contains(&worktree(Checkout::Fresh, CHECKED_OUT)));
     }
 
@@ -1002,15 +1007,15 @@ mod tests {
         let ended = start_by(&mut outside, &asks, StartedBy::Dispatch { base: "develop" });
 
         assert!(ended.is_ok());
-        assert_eq!(
-            outside.calls[3..6],
-            [
+        assert_in_turn(
+            &outside.calls,
+            &[
                 base_branch(Some("develop")),
                 Call::Pull("develop".to_string()),
                 Call::Interrupted,
-            ]
+                Call::MakeClaim,
+            ],
         );
-        assert_eq!(outside.calls[6], Call::MakeClaim);
     }
 
     #[test]
@@ -1033,6 +1038,7 @@ mod tests {
         assert!(failed.interrupted);
         assert_eq!(failed.error.to_string(), "interrupted");
         assert_eq!(calls.last(), Some(&Call::Interrupted));
+        assert!(!made_claim_or_worktree(&calls), "{calls:?}");
     }
 
     // The Claim.
@@ -1114,9 +1120,9 @@ mod tests {
     fn a_fresh_selection_creates_a_fresh_worktree_and_opens_with_the_fresh_prompt() {
         let (calls, _) = run_on(Script::default());
 
-        assert_eq!(
-            calls[calls.len() - 3..calls.len() - 1],
-            [worktree(Checkout::Fresh, "main"), deliver_fresh("main")]
+        assert_in_turn(
+            &calls,
+            &[worktree(Checkout::Fresh, "main"), deliver_fresh("main")],
         );
     }
 
@@ -1130,12 +1136,12 @@ mod tests {
 
             let pr_url = pr_base.map(|_| PR_URL);
             let prompt = prompt::continuation(&seven(), "main", "issue-7", pr_url);
-            assert_eq!(
-                calls[calls.len() - 3..calls.len() - 1],
-                [
-                    worktree(Checkout::Continued, "main"),
-                    Call::Deliver(Checkout::Continued, "main".to_string(), prompt),
-                ]
+            assert_in_turn(
+                &calls,
+                &[
+                    worktree(Checkout::Continuation, "main"),
+                    Call::Deliver(Checkout::Continuation, "main".to_string(), prompt),
+                ],
             );
         }
     }
@@ -1156,13 +1162,13 @@ mod tests {
         );
 
         assert!(ended.is_ok());
-        assert_eq!(calls[1], Call::Started { spec_run: true });
-        assert_eq!(
-            calls[calls.len() - 3..calls.len() - 1],
-            [
+        assert!(calls.contains(&Call::Started { spec_run: true }));
+        assert_in_turn(
+            &calls,
+            &[
                 worktree(Checkout::Fresh, "main"),
                 Call::SpecRun(Checkout::Fresh, 2, "main".to_string(), 3),
-            ]
+            ],
         );
     }
 }

@@ -93,25 +93,6 @@ fn the_open_prs_base_is_the_base_branch_whatever_is_checked_out() {
     );
 }
 
-#[test]
-fn an_open_pr_supplies_the_base_branch_even_on_a_detached_head() {
-    let scenario = Scenario::new();
-    scenario.launch_git(&["checkout", "-q", "--detach"]);
-    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
-    let pr = scenario.github_has_pr("issue-7", "main", "OPEN");
-    scenario.agent_does(AGENT_COMMITS);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{pr}\n"));
-    assert!(
-        scenario.first_prompt().contains("The base branch is main."),
-        "prompt: {}",
-        scenario.first_prompt()
-    );
-}
-
 /// Nothing was created: no session, worktree, temp directory or log, and the
 /// local Issue branch is still there.
 fn assert_nothing_created(scenario: &Scenario, local_branch: &str) {
@@ -206,5 +187,24 @@ fn selection_asks_github_once_for_the_pr_history() {
             .any(|w| w == ["--state", "all"]),
         "gh calls: {:?}",
         scenario.gh_calls()
+    );
+}
+
+#[test]
+fn an_open_pr_supplies_the_base_branch_even_on_a_detached_head() {
+    let scenario = Scenario::new();
+    scenario.launch_git(&["checkout", "-q", "--detach"]);
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    let pr = scenario.github_has_pr("issue-7", "main", "OPEN");
+    scenario.agent_does(AGENT_COMMITS);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{pr}\n"));
+    assert!(
+        scenario.first_prompt().contains("The base branch is main."),
+        "prompt: {}",
+        scenario.first_prompt()
     );
 }
