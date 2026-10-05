@@ -22,6 +22,7 @@
 
 use std::fs;
 use std::io::Write;
+use std::os::fd::AsFd;
 use std::os::unix::fs::MetadataExt;
 use std::process::Command;
 
@@ -42,9 +43,14 @@ const CATALOG: &str = r#"{"models": [
    "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}]}
 ]}"#;
 
-/// Whether stdin is `/dev/null`.
+/// Whether stdin is `/dev/null`, by `fstat` on it, as macOS has no `/proc`.
 fn stdin_is_null() -> bool {
-    let (Ok(stdin), Ok(null)) = (fs::metadata("/proc/self/fd/0"), fs::metadata("/dev/null")) else {
+    let stdin = std::io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .map(fs::File::from)
+        .and_then(|file| file.metadata());
+    let (Ok(stdin), Ok(null)) = (stdin, fs::metadata("/dev/null")) else {
         return false;
     };
     stdin.rdev() == null.rdev() && stdin.ino() == null.ino()
