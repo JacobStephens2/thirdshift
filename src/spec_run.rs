@@ -89,8 +89,15 @@ fn run_through(
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
     let (ticket_lines, landed) = land_tickets(outside, tickets, parallel);
+    // Every Ticket landed only once the Spec PR is told so.
+    let landed = landed.and_then(|checklist| {
+        let spec_pr_url = outside.landed(&checklist)?;
+        Ok((checklist, spec_pr_url))
+    });
     let ended = match landed {
-        Ok(checklist) => review_and_deliver(outside, spec, base, branch, &checklist),
+        Ok((checklist, spec_pr_url)) => {
+            review_and_deliver(outside, spec, base, branch, &checklist, &spec_pr_url)
+        }
         Err(error) => {
             let interrupted = outside.interrupted();
             Err(FailedRun {
@@ -114,21 +121,20 @@ fn run_through(
     }
 }
 
-/// Once every Ticket has landed: tell the Spec PR so, with `checklist`,
-/// which opens it if it is not open, then take it to its goal by the
-/// Delivery, opening with the Spec review, all through `outside`, as
-/// [`run_through`] does.
+/// Once every Ticket has landed, with `checklist`, and the Spec PR,
+/// `spec_pr_url`, is told so: take it to its goal by the Delivery, opening
+/// with the Spec review, all through `outside`, as [`run_through`] does.
 fn review_and_deliver(
     outside: &mut impl Outside,
     spec: &IssueUrl,
     base: &str,
     branch: &str,
     checklist: &str,
+    spec_pr_url: &str,
 ) -> Result<Reached, FailedRun> {
-    let spec_pr_url = outside.landed(checklist)?;
     let opening = Opening {
         kind: SPEC_REVIEW,
-        prompt: prompt::spec_review(spec, base, branch, &spec_pr_url),
+        prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
         catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
@@ -488,6 +494,9 @@ mod tests {
         spec_pr_open: bool,
         /// Whether putting the checklist back fails.
         put_back_fails: bool,
+        /// Whether the Delivery's opening session fails, before the step
+        /// before ready.
+        review_fails: bool,
         /// Whether the Delivery fails once the Spec PR is ready.
         delivery_fails: bool,
         /// How many times the Spec run is found not interrupted before it is.
@@ -644,7 +653,12 @@ mod tests {
                 prompt: opening.prompt,
                 catch_up: opening.catch_up_from_origin,
             });
-            let delivered = before_ready(self).and_then(|()| {
+            let delivered = if self.script.review_fails {
+                Err(anyhow!("the spec-review session failed"))
+            } else {
+                before_ready(self)
+            };
+            let delivered = delivered.and_then(|()| {
                 self.did.push(Did::Ready);
                 if self.script.delivery_fails {
                     bail!("checks failed on the Spec PR");
@@ -761,7 +775,7 @@ mod tests {
     fn spec_review_opening() -> Did {
         let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
         Did::Deliver {
-            kind: "spec-review".to_string(),
+            kind: SPEC_REVIEW.to_string(),
             prompt: prompt::spec_review(&spec, "main", "issue-20", SPEC_PR),
             catch_up: true,
         }
@@ -1238,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn once_every_ticket_lands_the_spec_pr_is_told_then_delivered_with_the_spec_review_and_the_checklist_put_back_before_ready()
+    fn once_every_ticket_lands_the_spec_review_opens_the_delivery_and_the_checklist_goes_back_before_ready()
      {
         let mut outside = Scripted::new(Script {
             tickets: vec![open(21, &[])],
@@ -1398,6 +1412,31 @@ mod tests {
                 spec_review_opening(),
                 Did::PutBack(done.clone()),
                 Did::Show(done),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_delivery_that_fails_in_the_spec_review_shows_the_checklist_again_without_a_put_back() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![closed(21)],
+            review_fails: true,
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 3));
+
+        let done = checklist(&["[x] #21 done"]);
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "the spec-review session failed"
+        );
+        assert_eq!(
+            outside.did_only(after_the_loop),
+            [
+                Did::Landed(done.clone()),
+                spec_review_opening(),
+                Did::Show(done)
             ]
         );
     }
