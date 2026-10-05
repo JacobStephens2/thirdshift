@@ -642,6 +642,7 @@ PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 
 - **`PATH`** is set because cron doesn't read your shell profile, and `thirdshift`, `claude`, `gh`, `git` and the repository's build tools must all be found. List every directory that holds one, written out in full: cron expands neither `~` nor `$HOME` on that line. `type thirdshift claude gh git` in your own shell shows where they are.
 - **`cd`** makes a clone of the repository the **Launch directory**, as for a hand-typed Architect run, and **`base main`** names the [Base branch](#architect-runs), so the branch checked out in the clone doesn't matter: it runs from the clone you work in, whatever you left it on.
+- **With a Pickup line on the same minutes**, add `&& sleep 20` between `cd` and `thirdshift architect`, as in the [whole crontab](#a-pickup-run-on-a-schedule) below. This gives the Pickup run a 20-second head start to take the [shared lock](#one-at-a-time) before the Architect run tries it.
 - **One line per repository, at different hours**, so the Architect runs don't compete for the machine. thirdshift keeps no list of repositories.
 - **The log file** takes everything the command prints. A failure before the [Run notification](#one-run-notification)'s checks have passed, such as a broken [User config](#user-config), a missing Resend key or a bad argument, shows up only there: no email is sent for it. Use one fixed file for every line, in a folder that already exists, such as `~/.thirdshift/logs/`: the shell opens it before thirdshift starts, so a line whose folder is missing never starts the command, and nothing reports it. What each pass did on its repository is in that repository's [Activity log](#logs), in folders thirdshift creates itself, and with `activity.quiet_skips = true` the log file holds no skips at all.
 - **`claude` and `gh` must already be logged in** for the user the schedule runs as, with git able to push, as the [Prerequisites](#prerequisites) say. Without a terminal an Architect run behaves as it does from one, except that it never offers Setup.
@@ -805,7 +806,7 @@ A whole crontab with both Weeding and a Pickup run on one repository looks like 
 PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 
 # Weeding, every five minutes: an Architect run publishes each Architect plan, and a Pickup run builds it
-*/5 * * * * cd ~/repos/widgets && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/cron.log 2>&1
+*/5 * * * * cd ~/repos/widgets && sleep 20 && thirdshift architect base main --plan-only >> ~/.thirdshift/logs/cron.log 2>&1
 
 # Pickup runs, every half hour
 */30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/cron.log 2>&1
