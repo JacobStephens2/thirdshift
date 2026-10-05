@@ -30,7 +30,7 @@ fn the_next_numbered_branch_gets_the_fresh_prompt() {
     let prompt = scenario.first_prompt();
     assert!(
         prompt.contains(
-            "\nPush branch issue-7-branch-2 and create a pull request against main using /thirdshift:pr, marked ready for review.\n"
+            "\nPush branch issue-7-branch-2 and create a pull request against main using the `thirdshift-pr` skill, marked ready for review.\n"
         ) && !prompt.contains("You are continuing work"),
         "prompt: {prompt}"
     );

@@ -5,15 +5,15 @@
 Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.
 
 ```
-/thirdshift:improve-codebase-architecture
+/thirdshift-improve-codebase-architecture
 
 This is an Architecture review of the base branch <base>: this worktree is checked out at its head on origin, on no branch.
 
 Focus the review on: <focus>
 
-Find the deepening opportunities with /thirdshift:improve-codebase-architecture, using /thirdshift:codebase-design for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.
+Find the deepening opportunities with the `thirdshift-improve-codebase-architecture` skill, using the `thirdshift-codebase-design` skill for the vocabulary. Skip any that an open issue already covers, and take the top recommendation.
 
-If it is Strong, settle its design yourself and publish it as the plan with /thirdshift:to-spec and /thirdshift:to-tickets: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `needs-triage`, not `ready-for-agent`: thirdshift marks it ready once you are done.
+If it is Strong, settle its design yourself and publish it as the plan with the `thirdshift-to-spec` and `thirdshift-to-tickets` skills: a Spec with Tickets, or a single Ticket when one session is enough. Label the plan's top issue, the Spec or the single Ticket, `needs-triage`, not `ready-for-agent`: thirdshift marks it ready once you are done.
 
 If it is not Strong, file it as one issue labelled `needs-triage`, unless an open issue already covers it.
 

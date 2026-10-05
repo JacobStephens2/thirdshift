@@ -354,9 +354,9 @@ mod tests {
         assert_eq!(
             line_for(tool_use(
                 "Skill",
-                json!({ "skill": "thirdshift:tdd", "args": "x" })
+                json!({ "skill": "thirdshift-tdd", "args": "x" })
             )),
-            Some("skill thirdshift:tdd".to_string())
+            Some("skill thirdshift-tdd".to_string())
         );
     }
 

@@ -100,7 +100,7 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(
         prompt.starts_with(&format!(
-            "/thirdshift:implement {}\n",
+            "/thirdshift-implement {}\n",
             scenario.issue_url(7)
         )),
         "{prompt}"

@@ -124,8 +124,8 @@ pub fn run_to_end(issue: &IssueUrl, asks: &Asks, started_by: StartedBy) -> Ended
 
 /// Take `issue` to a ready PR, or in a Merge run a merged one. Any failure
 /// after the worktree exists, including a merge that fails, goes through the
-/// Failed run path. The worktree, the local
-/// Issue branch and the plugin directory are gone when this returns, except
+/// Failed run path. The worktree and the local
+/// Issue branch are gone when this returns, except
 /// that a Failed run whose work did not reach origin keeps the worktree and
 /// branch. With `asks.launch_pull`, the Launch directory's checkout of the
 /// Base branch, if that is the branch checked out, is first brought up to

@@ -5,4 +5,4 @@ The factory is a Rust binary that compiles `skills/` into itself (`include_dir!`
 ## Consequences
 
 - Editing a skill has no effect until the binary is rebuilt and reinstalled (`cargo install --path .`).
-- The skills are loaded as a plugin, so they are namespaced (`/thirdshift:implement`), and their references to each other must use that namespace.
+- ~~The skills are loaded as a plugin, so they are namespaced (`/thirdshift:implement`), and their references to each other must use that namespace.~~ Replaced by [ADR 0012](0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md): the skills are linked into each worktree, named `thirdshift-<skill>`, and name each other in plain prose.

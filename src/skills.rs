@@ -1,0 +1,113 @@
+//! The Factory skills, embedded at compile time (ADR-0001), written out once
+//! per Command and linked into each worktree its sessions run in, where
+//! Claude Code finds project skills (ADR-0012).
+
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::symlink;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+
+use anyhow::{Context, Result};
+use include_dir::{Dir, include_dir};
+use tempfile::TempDir;
+
+use crate::git::Git;
+
+/// The Factory skills, as they are written out and the Prompts and skills
+/// page shows them, each in its `thirdshift-<skill>` directory.
+pub static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
+
+/// Where in a worktree Claude Code finds its project skills.
+const PROJECT_SKILLS: &str = ".claude/skills";
+
+/// The `.git/info/exclude` pattern that keeps the linked skills out of git.
+const EXCLUDE: &str = "/.claude/skills/thirdshift-*";
+
+/// The temp directory the Command wrote the Factory skills out to, once it
+/// has.
+static WRITTEN: Mutex<Option<TempDir>> = Mutex::new(None);
+
+/// Link every Factory skill into `worktree`'s `.claude/skills/`, writing them
+/// out first if the Command has not yet, and make sure the repository's
+/// `.git/info/exclude` keeps them out of git. The links are left in place:
+/// they go with the worktree.
+pub fn link_into(worktree: &Path) -> Result<()> {
+    let written = written()?;
+    exclude(&Git::new(worktree))?;
+    let project_skills = worktree.join(PROJECT_SKILLS);
+    fs::create_dir_all(&project_skills)
+        .with_context(|| format!("could not create {}", project_skills.display()))?;
+    for skill in SKILLS.dirs() {
+        let name = skill.path();
+        let link = project_skills.join(name);
+        if fs::symlink_metadata(&link).is_ok() {
+            fs::remove_file(&link)
+                .with_context(|| format!("could not replace {}", link.display()))?;
+        }
+        symlink(written.join(name), &link)
+            .with_context(|| format!("could not link {}", link.display()))?;
+    }
+    Ok(())
+}
+
+/// Remove the Factory skills the Command wrote out, if it did, once its
+/// sessions are over.
+pub fn remove() {
+    drop(
+        WRITTEN
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take(),
+    );
+}
+
+/// Where the Command wrote the Factory skills out, writing them now if it
+/// has not yet.
+fn written() -> Result<PathBuf> {
+    let mut written = WRITTEN.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(dir) = &*written {
+        return Ok(dir.path().to_owned());
+    }
+    let dir = tempfile::Builder::new()
+        .prefix("thirdshift-skills-")
+        .tempdir()?;
+    SKILLS
+        .extract(dir.path())
+        .context("could not write the Factory skills")?;
+    let path = dir.path().to_owned();
+    *written = Some(dir);
+    Ok(path)
+}
+
+/// Add [`EXCLUDE`] to the `.git/info/exclude` of the repository `git` works
+/// in, unless it is there already. The file is shared by every worktree, so
+/// the entry is left there, under a lock other Runs from the same Launch
+/// directory take too.
+fn exclude(git: &Git) -> Result<()> {
+    let _lock = git.lock("thirdshift-exclude.lock")?;
+    let info = git.common_dir()?.join("info");
+    let path = info.join("exclude");
+    let existing = match fs::read_to_string(&path) {
+        Ok(existing) => existing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not read {}", path.display()));
+        }
+    };
+    if existing.lines().any(|line| line == EXCLUDE) {
+        return Ok(());
+    }
+    fs::create_dir_all(&info).with_context(|| format!("could not create {}", info.display()))?;
+    let separator = if existing.is_empty() || existing.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "{separator}{EXCLUDE}"))
+        .with_context(|| format!("could not add the Factory skills to {}", path.display()))
+}

@@ -5,17 +5,17 @@
 Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.
 
 ```
-/thirdshift:implement <Issue URL>
+/thirdshift-implement <Issue URL>
 
 You are continuing work on branch <branch>, which already has commits (see git log <base>..HEAD). Build on them; don't start over.
 
-The base branch is <base>. Review with /thirdshift:code-review using <base> as the fixed point.
+The base branch is <base>. Review with the `thirdshift-code-review` skill using <base> as the fixed point.
 
 Address the Standards and Spec findings you agree with.
 
 Push branch <branch>.
 
-Create a pull request against <base> using /thirdshift:pr, marked ready for review.
+Create a pull request against <base> using the `thirdshift-pr` skill, marked ready for review.
 
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
 
