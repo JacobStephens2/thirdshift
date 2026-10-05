@@ -23,12 +23,23 @@ The rule that the **Issue URL** must belong to the same GitHub repository as the
 The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** or a **Pickup run** whose command names a branch, that branch, whatever is checked out; for a **Ticket**'s **Run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
 
 **Factory skills**:
-The skills in `skills/`, loaded into the session as the `thirdshift` plugin: adapted copies of Matt Pocock's skills, designed to run headless with no human in the loop.
+The skills in `skills/`, each named `thirdshift-<skill>` and placed in each **Run**'s worktree for its **Harness** to find: adapted copies of Matt Pocock's skills, designed to run headless with no human in the loop.
 _Avoid_: the skills (ambiguous with `.claude/skills/`)
 
 **Session prompt**:
 The message thirdshift starts or resumes an agent session with. It carries the **Run**'s facts (issue, **Base branch**, **Issue branch**, pull request) and names the **Factory skills** to use. Written by thirdshift, not by a human.
 _Avoid_: instructions, system prompt
+
+**Harness**:
+The headless agent CLI that runs every agent session of a **Command**: Claude Code (`claude`) or Codex (`codex`). One per Command, its child Runs and every **Resume** and **Repair** included. Chosen by the command, else the **User config**, else Claude Code.
+_Avoid_: agent, provider, backend
+
+**Model**:
+The model the **Harness** runs its sessions on, such as Opus 5.5 or GPT-6.1-Sol. One per **Command**, chosen by the command, else the **User config**'s choice for that Harness, else the Harness's own default.
+
+**Effort**:
+How hard the **Model** reasons in each session, such as `high` or `max`. One per **Command**, chosen the way the Model is.
+_Avoid_: reasoning level, thinking budget
 
 **Standards finding**:
 A finding from the Standards axis of a code review: the change breaks a documented coding standard or shows a baseline code smell.
@@ -126,7 +137,7 @@ A message thirdshift sends when a **Run**, a **Spec run** or an **Architect run*
 _Avoid_: completion email, alert
 
 **User config**:
-The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, whether a Run may start a **Base fix**, and whether a Run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
+The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, whether a Run may start a **Base fix**, whether a Run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`, and the **Harness**, with a **Model** and **Effort** for each Harness. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
 
 **Credentials**:
 The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key a **Run notification** is sent with. The key in the environment wins over it; it is what lets a **Run** started from cron, `nohup` or an agent's shell find the key. Only commands that send email read it, so the User config holds no secret.
