@@ -32,8 +32,9 @@ use questions::Answers;
 /// Setup: write the User config. From a terminal, the Setup questions come
 /// first, each with the current value as its default answer, and the answers
 /// are written, with `base.fix`, asked about only when every Run is a Merge
-/// run, otherwise at its default; with no terminal, nothing is asked, and every setting is at
-/// its default, with `email.to` as the suggested address, if there is one.
+/// run, otherwise at its default; with no terminal, nothing is asked, and
+/// every setting is at its default, with `email.to` as the suggested
+/// address, if there is one.
 /// An existing User config is edited in place, once it parses as a Run would
 /// parse it: its comments and key order stay, as do the values Setup didn't
 /// ask about, and each key it lacks is added at its default, so Setup with no
@@ -67,19 +68,15 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
     let existing = outside
         .read_user_config(path)
         .with_context(|| format!("can't read {}", path.display()))?;
-    let mut text = match &existing {
+    let text = match &existing {
         Some(text) => {
             UserConfig::parse(text, path, home)?;
             config::complete(text)?
         }
         None => config::with_email_to(suggested_address(outside)),
     };
-    let mut answered = None;
-    if outside.has_terminal() {
-        let answers;
-        (text, answers) = ask(outside, &text, path, home)?;
-        answered = Some(answers);
-    }
+    let asking = outside.has_terminal();
+    let (text, answered) = ask_if(asking, outside, text, path, home)?;
     let asked = answered.is_some();
     let mut written = match &existing {
         None => {
@@ -97,9 +94,7 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
             path.display()
         ),
         Some(_) => {
-            outside
-                .replace_user_config(path, &text)
-                .with_context(|| format!("can't write {}", path.display()))?;
+            replace(outside, path, &text)?;
             if asked {
                 format!("wrote your answers to the User config {}", path.display())
             } else {
@@ -131,13 +126,8 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
         return Ok(());
     }
     let accepted = questions::offer(outside, path)?;
-    let mut text = config::with_email_to(suggested_address(outside));
-    let mut answered = None;
-    if accepted {
-        let answers;
-        (text, answers) = ask(outside, &text, path, home)?;
-        answered = Some(answers);
-    }
+    let text = config::with_email_to(suggested_address(outside));
+    let (text, answered) = ask_if(accepted, outside, text, path, home)?;
     if let Err(error) = write_new(outside, path, &text) {
         outside.step(format!("warning: {error:#}; carrying on with the defaults"));
         return Ok(());
@@ -168,6 +158,22 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
     Ok(())
 }
 
+/// `text` with the answers to the Setup questions, and the answers, if
+/// `asking`, as [`ask`] asks them; otherwise `text` as it is.
+fn ask_if(
+    asking: bool,
+    outside: &mut impl Outside,
+    text: String,
+    path: &Path,
+    home: &Path,
+) -> Result<(String, Option<Answers>)> {
+    if !asking {
+        return Ok((text, None));
+    }
+    let (text, answers) = ask(outside, &text, path, home)?;
+    Ok((text, Some(answers)))
+}
+
 /// Ask the Setup questions, with the settings in `text`, the User config at
 /// `path` under `home`, and the key in the Credentials as the default
 /// answers. Credentials a Run would refuse are refused before any question.
@@ -189,7 +195,19 @@ fn ask(
 fn write_new(outside: &mut impl Outside, path: &Path, text: &str) -> Result<()> {
     outside
         .write_new_user_config(path, text)
-        .with_context(|| format!("can't write {}", path.display()))
+        .with_context(|| cant_write(path))
+}
+
+/// Replace the User config at `path` with `text`.
+fn replace(outside: &mut impl Outside, path: &Path, text: &str) -> Result<()> {
+    outside
+        .replace_user_config(path, text)
+        .with_context(|| cant_write(path))
+}
+
+/// What a write of the User config at `path` that failed says.
+fn cant_write(path: &Path) -> String {
+    format!("can't write {}", path.display())
 }
 
 /// The address Setup suggests for `email.to`: the public email of the user's
