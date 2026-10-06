@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::Path;
 use std::process::Command;
 
 use crate::claude::{beside_skills_snapshot, exit_code, git_here, script_for, skills_snapshot};
@@ -94,47 +93,48 @@ pub fn main(argv: Vec<String>) {
     );
     std::io::stdout().flush().unwrap();
     let final_message = format!("{}.final-message.{session}", record_path.display());
-    let after_result = format!("{}.after-result.{session}", record_path.display());
+    let result = format!("{}.result.{session}", record_path.display());
     let status = Command::new("bash")
         .arg("-e")
         .arg(script)
         .env("FAKE_CLAUDE_FINAL_MESSAGE", &final_message)
-        .env("FAKE_CLAUDE_AFTER_RESULT", &after_result)
+        .env("FAKE_GROK_RESULT", &result)
         .status()
         .unwrap();
     let code = exit_code(status);
-    println!(
-        "{}",
-        object([
-            ("type", string("result")),
-            (
-                "subtype",
-                string(if code == 0 {
-                    "success"
-                } else {
-                    "error_during_execution"
-                })
-            ),
-            ("is_error", Bool(code != 0)),
-            ("session_id", string(id)),
-            (
-                "result",
-                string(fs::read_to_string(&final_message).unwrap_or_default())
-            ),
-            ("num_turns", crate::json::number(2)),
-            ("total_cost_usd", crate::json::number(0.0127)),
-            (
-                "usage",
-                object([
-                    ("input_tokens", crate::json::number(812)),
-                    ("output_tokens", crate::json::number(210)),
-                    ("cache_read_input_tokens", crate::json::number(0)),
-                ])
-            ),
-        ])
-    );
-    if let Ok(lines) = fs::read_to_string(Path::new(&after_result)) {
-        print!("{lines}");
+    if let Ok(result) = fs::read_to_string(result) {
+        print!("{result}");
+    } else {
+        println!(
+            "{}",
+            object([
+                ("type", string("result")),
+                (
+                    "subtype",
+                    string(if code == 0 {
+                        "success"
+                    } else {
+                        "error_during_execution"
+                    })
+                ),
+                ("is_error", Bool(code != 0)),
+                ("session_id", string(id)),
+                (
+                    "result",
+                    string(fs::read_to_string(&final_message).unwrap_or_default())
+                ),
+                ("num_turns", crate::json::number(2)),
+                ("total_cost_usd", crate::json::number(0.0127)),
+                (
+                    "usage",
+                    object([
+                        ("input_tokens", crate::json::number(812)),
+                        ("output_tokens", crate::json::number(210)),
+                        ("cache_read_input_tokens", crate::json::number(0)),
+                    ])
+                ),
+            ])
+        );
     }
     crate::exit(code);
 }

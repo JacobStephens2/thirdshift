@@ -165,7 +165,7 @@ fn groks_error_is_in_the_failure_cause_even_when_the_cli_exits_zero() {
     ] {
         let scenario = Scenario::new();
         let script = if exit.is_empty() {
-            format!("{AGENT_OPENS_PR}\necho '{event}' > \"$FAKE_CLAUDE_AFTER_RESULT\"\n")
+            format!("{AGENT_OPENS_PR}\necho '{event}' > \"$FAKE_GROK_RESULT\"\n")
         } else {
             format!("echo '{event}'\n{exit}")
         };
@@ -173,6 +173,18 @@ fn groks_error_is_in_the_failure_cause_even_when_the_cli_exits_zero() {
         let result = scenario.run(&["harness", "grok", &scenario.issue_url(7)]);
         assert_eq!(result.code, Some(1), "{}", result.stderr);
         assert!(result.stderr.contains(cause), "{}", result.stderr);
+        let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
+        let log = std::fs::read_to_string(scenario.path(&format!(
+            "home/.thirdshift/logs/acme/widgets/sessions/{}",
+            logs[0]
+        )))
+        .unwrap();
+        let results = log
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| event["type"] == "result")
+            .count();
+        assert_eq!(results, 1, "{log}");
     }
 }
 
