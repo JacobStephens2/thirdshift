@@ -5,6 +5,9 @@
 mod support;
 
 use serde_json::json;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
+use std::process::Command;
 use support::Scenario;
 
 /// The agent commits its work and opens a PR, but leaves the pushing to
@@ -198,6 +201,107 @@ fn still_logs_the_whole_stream() {
         log.windows(result_event.len())
             .any(|bytes| bytes == result_event),
         "{log:?}"
+    );
+}
+
+#[test]
+fn a_log_failure_still_recovers_and_reports_warnings_and_usage() {
+    let scenario = Scenario::new();
+    let pipe = scenario.path("session-log-pipe");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let logs = scenario.path("home/.thirdshift/logs/acme/widgets");
+    // Install the failing log before the session opens it. The Command log
+    // supplies the actual start stamp, so this never predicts the clock.
+    scenario.repo_has_hook(
+        &scenario.launch_dir(),
+        "post-checkout",
+        &format!(
+            r#"#!/bin/sh
+for log in "{logs}/commands/issue/"*.log; do
+    name=${{log##*/}}
+    stamp=${{name#7-}}
+    stamp=${{stamp%.log}}
+done
+mkdir -p "{logs}/sessions"
+ln -s "{pipe}" "{logs}/sessions/7-$stamp-implement.jsonl"
+touch "{ready}"
+"#,
+            logs = logs.display(),
+            pipe = pipe.display(),
+            ready = scenario.path("log-ready").display(),
+        ),
+    );
+    // Recovery data is already on disk when the live consumer fails.
+    fs::write(
+        scenario.path("opencode-calls.fake-opencode-1.export.json"),
+        json!({
+            "info": {"outcome": "success"},
+            "messages": [{
+                "type": "assistant", "tokens": {"input": 42, "output": 7},
+                "content": [{"type": "text", "text": "recovered reply"}]
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let closed = scenario.path("log-closed");
+    scenario.agent_does(&format!(
+        r#"echo ready-to-fail
+for attempt in {{1..500}}; do
+    test -f "{closed}" && break
+    sleep 0.01
+done
+echo another-line
+exec sleep 5
+"#,
+        closed = closed.display(),
+    ));
+    let url = scenario.issue_url(7);
+    let held = scenario.run_until(
+        &["harness", "opencode", &url],
+        &[("FAKE_OPENCODE_SKIP_SKILL", "1")],
+        "log-ready",
+    );
+    let mut reader = BufReader::new(File::open(&pipe).unwrap());
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).unwrap() == 0 || line == "ready-to-fail\n" {
+            break;
+        }
+    }
+    // The next log write fails with BrokenPipe after the stream has its id.
+    drop(reader);
+    fs::write(closed, "").unwrap();
+    let result = held.finish();
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("could not write"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("Broken pipe"), "{}", result.stderr);
+    let warning = "warning: the session never loaded thirdshift-implement with its skill tool";
+    assert_eq!(
+        result.stderr.matches(warning).count(),
+        1,
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("implement: session ended after")
+            && result.stderr.contains(
+                "42 input tokens (0 cache read, 0 cache write), 7 output tokens (0 reasoning)"
+            ),
+        "{}",
+        result.stderr
     );
 }
 
