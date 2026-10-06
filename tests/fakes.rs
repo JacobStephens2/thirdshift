@@ -1,4 +1,4 @@
-//! The fake `gh`, `claude`, `codex`, `agy`, `grok` and `muse` the end-to-end tests put first on
+//! The fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode` the end-to-end tests put first on
 //! PATH: one executable, which acts as whichever its name says. See
 //! `fakes/gh.rs`, `fakes/claude.rs` and `fakes/codex.rs` for what each does,
 //! and `support/fakes.rs` for how the harness builds it.

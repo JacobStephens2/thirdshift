@@ -197,3 +197,45 @@ fn check_output(child: &mut Child) -> Result<Output> {
             .map_err(|_| anyhow!("OpenCode's check stderr reader panicked"))??,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_resume_uses_the_streamed_session_id_with_every_flag_and_the_prompt_on_stdin() {
+        let choice = Choice {
+            harness: Harness::OpenCode,
+            model: Some("provider/model".into()),
+            effort: Some("high".into()),
+            chosen_by: super::super::ChosenBy::Command,
+        };
+        let prompt = "/thirdshift-implement issue-url";
+        let mut stream = OpenCode.stream(Path::new("."), prompt);
+        stream.condense(r#"{"type":"step_start","sessionID":"ses_eedb9657fffec0RAa52IqAvyM1","part":{"type":"step-start"}}"#);
+        let invocation = OpenCode.session(&choice, stream.session_id(), prompt);
+        assert_eq!(
+            invocation.args,
+            [
+                "run",
+                "--standalone",
+                "--format",
+                "json",
+                "--auto",
+                "-m",
+                "provider/model#high",
+                "-s",
+                "ses_eedb9657fffec0RAa52IqAvyM1"
+            ]
+        );
+        assert_eq!(
+            invocation.stdin.as_deref(),
+            Some("Load thirdshift-implement with your skill tool. issue-url")
+        );
+        assert_eq!(
+            OpenCode.environment(),
+            [("OPENCODE_DISABLE_AUTOUPDATE", "1")]
+        );
+        assert!(stream.killed_background_work().is_empty());
+    }
+}

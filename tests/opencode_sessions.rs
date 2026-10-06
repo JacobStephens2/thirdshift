@@ -89,42 +89,6 @@ fn opencode_runs_standalone_with_stdin_skills_and_usage_despite_a_dropped_last_s
 }
 
 #[test]
-fn opencode_resumes_only_the_stream_session_id_with_the_same_standalone_flags() {
-    let scenario = Scenario::new();
-    scenario.agent_does_for_in_session(7, 1, &format!(r#"{AGENT_OPENS_PR}
-echo '{{"type":"tool_use","sessionID":"fake-opencode-1","part":{{"tool":"bash","state":{{"status":"error","input":{{"command":"cargo test"}},"error":{{"type":"aborted","message":"Tool execution interrupted"}}}}}}}}'
-"#));
-    let result = scenario.run(&[
-        "harness",
-        "opencode",
-        "model",
-        "provider/model",
-        "effort",
-        "high",
-        &scenario.issue_url(7),
-    ]);
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    let calls = records(&scenario, "json");
-    assert_eq!(calls.len(), 2, "{}", result.stderr);
-    assert_eq!(
-        calls[1]["argv"],
-        json!([
-            "run",
-            "--standalone",
-            "--format",
-            "json",
-            "--auto",
-            "-m",
-            "provider/model#high",
-            "-s",
-            "fake-opencode-1"
-        ])
-    );
-    assert_eq!(calls[1]["no_auto_update"], "1");
-    assert!(calls[1]["prompt"].as_str().unwrap().contains("cargo test"));
-}
-
-#[test]
 fn user_config_selects_opencode_and_command_effort_overrides_its_variant() {
     let scenario = Scenario::new();
     scenario.user_config_is("[harness]\ndefault = \"opencode\"\n[harness.opencode]\nmodel = \"provider/model#low\"\neffort = \"low\"\n");
@@ -388,9 +352,7 @@ fn an_exported_failed_check_stops_before_any_work_even_with_exit_zero() {
 #[test]
 fn without_a_stream_session_id_no_resume_or_export_id_is_invented() {
     let scenario = Scenario::new();
-    scenario.agent_does_for(7, &format!(r#"{AGENT_OPENS_PR}
-echo '{{"type":"tool_use","part":{{"tool":"bash","state":{{"status":"error","input":{{"command":"cargo test"}},"error":{{"type":"aborted","message":"Tool execution interrupted"}}}}}}}}'
-"#));
+    scenario.agent_does_for(7, AGENT_OPENS_PR);
     let result = scenario.run_with_env(
         &["harness", "opencode", &scenario.issue_url(7)],
         &[("FAKE_OPENCODE_NO_SESSION_ID", "1")],

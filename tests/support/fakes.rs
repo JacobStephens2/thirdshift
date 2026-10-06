@@ -1,4 +1,4 @@
-//! The fake `gh`, `claude`, `codex`, `agy`, `grok` and `muse`, built from
+//! The fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode`, built from
 //! `tests/fakes.rs` with plain `rustc` the first time a test needs them and
 //! kept in Cargo's scratch directory for tests. They aren't a binary target,
 //! so neither the crate nor a release ships them.
@@ -25,7 +25,7 @@ const SOURCES: [&str; 11] = [
     include_str!("../fixtures/grok-models.txt"),
 ];
 
-/// Put the fake `gh`, `claude`, `codex`, `agy`, `grok` and `muse` in `bin`.
+/// Put the fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode` in `bin`.
 pub fn install(bin: &Path) {
     for name in [
         "gh",

@@ -10,7 +10,6 @@ pub struct OpenCodeProgress {
     message: Option<String>,
     failure: Option<String>,
     skill_load: SkillLoad,
-    killed: Vec<String>,
 }
 
 impl OpenCodeProgress {
@@ -45,17 +44,6 @@ impl Stream for OpenCodeProgress {
             Some("tool_use") => {
                 let tool = part["tool"].as_str().unwrap_or("");
                 let state = &part["state"];
-                if matches!(tool, "bash" | "task")
-                    && state["status"] == "error"
-                    && state["error"]["type"] == "aborted"
-                {
-                    self.killed.push(
-                        state["input"]["command"]
-                            .as_str()
-                            .unwrap_or(tool)
-                            .to_string(),
-                    );
-                }
                 if tool == "skill" {
                     let skill = state["input"]["id"].as_str().unwrap_or("");
                     if state["status"] == "completed" {
@@ -100,11 +88,9 @@ impl Stream for OpenCodeProgress {
         self.session_id.as_deref()
     }
     fn killed_background_work(&self) -> Vec<&str> {
-        if self.failed() {
-            Vec::new()
-        } else {
-            self.killed.iter().map(String::as_str).collect()
-        }
+        // OpenCode's stream has no documented event proving background work
+        // was killed at session end. Tool cancellation alone is not evidence.
+        Vec::new()
     }
     fn failed(&self) -> bool {
         self.failure.is_some()
