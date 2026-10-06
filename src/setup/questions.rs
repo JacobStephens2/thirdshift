@@ -91,7 +91,9 @@ pub fn offer(outside: &mut impl Outside, path: &Path) -> Result<bool> {
 
 /// Ask the Setup questions, with the settings in `current` as the default
 /// answers, and the suggested address for `email.to` when `current` has
-/// none. The Harness, Model and Effort come first, through one complete Harness settings interaction. Base fixes are asked about only with every Run a Merge run;
+/// none. The Harness, Model and Effort come first, through one complete
+/// Harness settings interaction. Base fixes are asked about only with every
+/// Run a Merge run;
 /// otherwise the answer is `base.fix`'s default, no.
 /// The address is re-asked until it has an `@`. With Run notifications on,
 /// the Resend API key is asked for too, unless `found`, where the key was

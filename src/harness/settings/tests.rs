@@ -144,16 +144,10 @@ fn registered_order_and_enter_defaults_produce_one_complete_answer() {
 
 #[test]
 fn no_installed_harness_retains_all_settings_without_questions() {
-    if std::env::var_os(CHILD).is_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "harness::settings::tests::no_installed_harness_retains_all_settings_without_questions", "--nocapture"])
-            .env(CHILD, "1")
-            .env("PATH", dir.path())
-            .env("HOME", dir.path())
-            .output()
-            .unwrap();
-        assert!(result.status.success(), "{result:?}");
+    if isolated(
+        "no_installed_harness_retains_all_settings_without_questions",
+        &[],
+    ) {
         return;
     }
     let current = Settings {

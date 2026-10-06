@@ -7,8 +7,8 @@
 //! the offer carries on through. Preparing and editing a User config are
 //! the User config module's. Everything Setup does outside
 //! itself goes through [`Outside`]: [`OnMachine`] does each on the terminal,
-//! through the complete Harness interaction, `gh`, `git`, Resend and the files under the home
-//! folder; `Scripted`, in tests, from a script, recording each call.
+//! through the complete Harness interaction, `gh`, `git`, Resend and the files
+//! under the home folder; `Scripted`, in tests, from a script, recording each call.
 
 pub(crate) mod questions;
 
@@ -210,8 +210,8 @@ fn suggested_address(outside: &mut impl Outside) -> Option<String> {
 }
 
 /// What Setup does outside itself: ordinary and hidden terminal input, the
-/// complete Harness interaction, Credentials, suggested-address lookups, the User
-/// config file, the test email, and where its progress lines go.
+/// complete Harness interaction, Credentials, suggested-address lookups, the
+/// User config file, the test email, and where its progress lines go.
 pub(crate) trait Outside: Terminal {
     /// Whether there is someone to ask: stdin and stderr are both terminals.
     fn has_terminal(&mut self) -> bool;
@@ -482,7 +482,7 @@ mod scripted {
         /// It showed this line on the terminal.
         Say(String),
         /// It requested one complete interaction with these current settings.
-        HarnessSettings(Settings),
+        HarnessSettings(Box<Settings>),
         /// It wrote this new User config.
         WriteNew(String),
         /// It replaced the User config with this.
@@ -509,8 +509,8 @@ mod scripted {
 
     /// The outside world from a script: the answers to give, in order, to
     /// plain and hidden prompts alike, each with part of the prompt it
-    /// answers; the complete Harness interaction outcome; where a key is found; the two
-    /// emails; the User config, if any; and what fails.
+    /// answers; the complete Harness interaction outcome; where a key is found;
+    /// the two emails; the User config, if any; and what fails.
     pub struct Scripted {
         pub terminal: bool,
         /// Each answer, with part of the prompt it is for. Once they run
@@ -635,7 +635,8 @@ mod scripted {
             &mut self,
             current: &Settings,
         ) -> Result<Option<(Harness, ModelAndEffort)>> {
-            self.calls.push(Call::HarnessSettings(current.clone()));
+            self.calls
+                .push(Call::HarnessSettings(Box::new(current.clone())));
             self.harness.clone().map_err(|error| anyhow!("{error}"))
         }
 
@@ -805,7 +806,10 @@ mod tests {
 
             setup(&mut outside).unwrap();
 
-            assert_eq!(outside.calls[0], Call::HarnessSettings(expected.harness));
+            assert_eq!(
+                outside.calls[0],
+                Call::HarnessSettings(Box::new(expected.harness))
+            );
             assert!(matches!(&outside.calls[1], Call::Ask(prompt) if prompt.contains(MERGE)));
             assert_eq!(
                 outside
