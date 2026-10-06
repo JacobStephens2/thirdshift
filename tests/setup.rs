@@ -8,7 +8,8 @@
 mod support;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 use support::{CTRL_C, Keystrokes, Scenario, TerminalResult};
 
@@ -84,6 +85,44 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         "stderr: {}",
         result.stderr
     );
+}
+
+#[test]
+fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then_avoids_replacement()
+ {
+    let scenario = Scenario::new();
+    let original =
+        "# my machine\n[logs]\ndir = '/var/log/ts' # custom\n[merge]\nalways = true # merge\n";
+    let path = scenario.user_config_is(original);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+    let mut previous_file = fs::File::open(&path).unwrap();
+    let old_inode = previous_file.metadata().unwrap().ino();
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let text = user_config(&scenario).unwrap();
+    assert!(text.starts_with(original), "{text}");
+    let config: toml::Table = text.parse().unwrap();
+    assert_eq!(config["logs"]["dir"].as_str(), Some("/var/log/ts"));
+    assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
+    let metadata = fs::metadata(&path).unwrap();
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o640);
+    assert_ne!(metadata.ino(), old_inode);
+    let mut previous_text = String::new();
+    previous_file.read_to_string(&mut previous_text).unwrap();
+    assert_eq!(previous_text, original);
+
+    let again = scenario.run(&["setup"]);
+
+    assert_eq!(again.code, Some(0), "stderr: {}", again.stderr);
+    assert!(
+        again.stderr.contains("already lists every setting"),
+        "{}",
+        again.stderr
+    );
+    assert_eq!(user_config(&scenario).unwrap(), text);
+    assert_eq!(fs::metadata(&path).unwrap().ino(), metadata.ino());
 }
 
 #[test]

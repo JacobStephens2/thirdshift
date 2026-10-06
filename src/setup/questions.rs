@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::{Outside, suggested_address};
-use crate::config::UserConfig;
+use crate::config::{NotificationAddresses, UserConfig, UserConfigChanges};
 use crate::email::DEFAULT_FROM;
 use crate::harness::{self, Harness, ModelAndEffort};
 use crate::resend_key::{self, Source};
@@ -32,6 +32,23 @@ pub struct Answers {
 }
 
 impl Answers {
+    /// The User config changes, without Credentials or email effects.
+    pub fn changes(&self) -> UserConfigChanges {
+        UserConfigChanges {
+            merge_always: self.merge_always,
+            base_fix: self.base_fix,
+            launch_pull: self.launch_pull,
+            notifications: self
+                .notifications
+                .as_ref()
+                .map(|notifications| NotificationAddresses {
+                    to: notifications.to.clone(),
+                    from: notifications.from.clone(),
+                }),
+            harness: self.harness.clone(),
+        }
+    }
+
     /// Whether the user asked for a test email.
     pub fn send_test(&self) -> bool {
         self.notifications
