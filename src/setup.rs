@@ -369,6 +369,8 @@ pub(crate) trait Outside {
     fn codex_catalog(&mut self) -> Result<Catalog>;
     /// Read Antigravity CLI's free Model catalog.
     fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog>;
+    /// Check Muse's settings against its cache, or with its minimal test call.
+    fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort>;
     /// Read the Credentials, as strictly as a Run does: where a Resend API
     /// key is found, if anywhere.
     fn find_key(&mut self) -> Result<Option<Source>>;
@@ -463,6 +465,10 @@ impl Outside for OnMachine<'_> {
 
     fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog> {
         crate::harness::agy::Catalog::read()
+    }
+
+    fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort> {
+        crate::harness::muse::check_model_and_effort(chosen)
     }
 
     fn find_key(&mut self) -> Result<Option<Source>> {
@@ -615,6 +621,7 @@ mod scripted {
         Say(String),
         /// It made Claude's test call on this Model and Effort.
         Tested(ModelAndEffort),
+        MuseChecked(ModelAndEffort),
         /// It wrote this new User config.
         WriteNew(String),
         /// It replaced the User config with this.
@@ -656,6 +663,7 @@ mod scripted {
         /// The catalog's JSON, or what reading it fails with.
         pub catalog: Result<&'static str, &'static str>,
         pub agy_catalog: Result<&'static str, &'static str>,
+        pub muse_checks: VecDeque<Result<ModelAndEffort, &'static str>>,
         /// Where a key is found, or what reading the Credentials fails with.
         pub key: Result<Option<Source>, &'static str>,
         pub github_email: Result<Option<&'static str>, &'static str>,
@@ -669,7 +677,7 @@ mod scripted {
 
     impl Scripted {
         /// A terminal answering `answers` in order, then closing stdin,
-        /// with both Harnesses installed, no key, no email to suggest and no
+        /// with every Harness installed, no key, no email to suggest and no
         /// User config.
         pub fn answering(answers: &[(&'static str, &'static str)]) -> Self {
             Scripted {
@@ -681,6 +689,7 @@ mod scripted {
                 agy_catalog: Ok(
                     "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n",
                 ),
+                muse_checks: VecDeque::new(),
                 key: Ok(None),
                 github_email: Ok(None),
                 git_email: Err("git config --global user.email: exit status 1"),
@@ -808,6 +817,14 @@ mod scripted {
                 Ok(text) => crate::harness::agy::Catalog::parse(text),
                 Err(error) => bail!("{error}"),
             }
+        }
+
+        fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort> {
+            self.calls.push(Call::MuseChecked(chosen.clone()));
+            self.muse_checks
+                .pop_front()
+                .unwrap_or_else(|| Ok(chosen.clone()))
+                .map_err(|error| anyhow!("{error}"))
         }
 
         fn find_key(&mut self) -> Result<Option<Source>> {
@@ -1124,7 +1141,7 @@ to = \"me@example.com\"  # my inbox
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex or agy [claude]: ",
+                "Harness for every Run's sessions, claude or codex or agy or muse [claude]: ",
                 "Model for claude [claude's own default]: ",
                 "Effort for claude [claude's own default]: ",
                 "Every Run a Merge run? [y/N] ",
@@ -1227,6 +1244,10 @@ effort = \"max\"
 [harness.agy]
 model = \"\"
 effort = \"\"
+
+[harness.muse]
+model = \"\"
+effort = \"\"
 ";
         let mut outside = Scripted {
             user_config: Some(mine.to_string()),
@@ -1256,7 +1277,7 @@ effort = \"\"
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex or agy [claude]: ",
+                "Harness for every Run's sessions, claude or codex or agy or muse [claude]: ",
                 "Model for claude, - for claude's own default [opus]: ",
                 "Effort for claude, - for claude's own default [high]: ",
                 "Every Run a Merge run? [Y/n] ",
@@ -1713,6 +1734,41 @@ always = false # quiet, please
         }
     }
 
+    #[test]
+    fn muse_setup_proposes_its_non_contributor_model_and_retries_a_refused_check() {
+        let mut outside = Scripted {
+            installed: vec![Harness::Muse],
+            muse_checks: [
+                Err("Muse refused the Model"),
+                Ok(ModelAndEffort {
+                    model: Some("muse-spark-1.3".to_string()),
+                    effort: Some("high".to_string()),
+                }),
+            ]
+            .into(),
+            ..Scripted::answering(&then_nothing_else(&[
+                (HARNESS, "muse"),
+                ("Model for muse", "bad-model"),
+                ("Effort for muse", "low"),
+                ("Model for muse", ""),
+                ("Effort for muse", "High"),
+            ]))
+        };
+        setup(&mut outside).unwrap();
+        assert_eq!(
+            outside.prompts()[1],
+            "Model for muse, - for muse's own default [muse-spark-1.3]: "
+        );
+        assert!(outside.said().contains(&"Muse refused the Model"));
+        let config = table(&outside);
+        assert_eq!(config["harness"]["default"].as_str(), Some("muse"));
+        assert_eq!(
+            config["harness"]["muse"]["model"].as_str(),
+            Some("muse-spark-1.3")
+        );
+        assert_eq!(config["harness"]["muse"]["effort"].as_str(), Some("high"));
+    }
+
     // The Harness, Model and Effort.
 
     #[test]
@@ -1723,11 +1779,11 @@ always = false # quiet, please
 
         assert_eq!(
             outside.prompts()[0],
-            "Harness for every Run's sessions, claude or codex or agy [claude]: "
+            "Harness for every Run's sessions, claude or codex or agy or muse [claude]: "
         );
         let config = table(&outside);
         assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-        for harness in ["claude", "codex", "agy"] {
+        for harness in ["claude", "codex", "agy", "muse"] {
             for key in ["model", "effort"] {
                 assert_eq!(config["harness"][harness][key].as_str(), Some(""));
             }
@@ -1781,7 +1837,7 @@ always = false # quiet, please
             outside.said(),
             [
                 "No Harness is installed here, so the harness settings stay as they are; \
-                 install claude or codex or agy, then rerun `thirdshift setup`."
+                 install claude or codex or agy or muse, then rerun `thirdshift setup`."
             ]
         );
         let config = table(&outside);

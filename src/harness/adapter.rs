@@ -5,7 +5,7 @@ use std::process::Child;
 
 use anyhow::Result;
 
-use super::{Choice, Harness, ModelAndEffort, Settings, agy, claude, codex};
+use super::{Choice, Harness, ModelAndEffort, Settings, agy, claude, codex, muse};
 use crate::progress::Stream;
 use crate::setup::Outside;
 
@@ -29,7 +29,7 @@ pub trait Adapter: Sync {
         outside: &mut dyn Outside,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>>;
-    fn stream(&self, worktree: &Path) -> Box<dyn Stream>;
+    fn stream(&self, worktree: &Path, prompt: &str) -> Box<dyn Stream>;
 
     /// Stop the session and its descendants, including commands that made
     /// their own process group or session, with this Harness's stop signals.
@@ -69,7 +69,6 @@ pub struct Invocation {
 pub enum SkillLoading {
     Slash,
     Dollar,
-    #[expect(dead_code, reason = "reserved by #434 for skill-tool Harness adapters")]
     Tool,
 }
 
@@ -91,5 +90,9 @@ impl SkillLoading {
 }
 
 /// Registration comes from the adapters, including Setup's order.
-pub const REGISTERED: [(Harness, &dyn Adapter); 3] =
-    [claude::REGISTRATION, codex::REGISTRATION, agy::REGISTRATION];
+pub const REGISTERED: [(Harness, &dyn Adapter); 4] = [
+    claude::REGISTRATION,
+    codex::REGISTRATION,
+    agy::REGISTRATION,
+    muse::REGISTRATION,
+];

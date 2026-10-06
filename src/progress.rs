@@ -1,5 +1,5 @@
 //! Progress lines on stderr: thirdshift's own steps, and a session's
-//! stream, Claude's stream-json or Codex's JSONL, condensed to one short
+//! stream, condensed by its Harness adapter to one short
 //! line per notable event. Each line is stamped with the local time it was
 //! printed, so a stalled Run can be told from a busy one. Each is kept in the
 //! Command log too, if the command keeps one.
@@ -118,6 +118,11 @@ pub trait Stream: Send {
     /// the stream: one per notable event in it, often none. Unknown and
     /// malformed lines give none, never an error.
     fn condense(&mut self, raw: &str) -> Vec<String>;
+
+    /// Warnings reported once after exit, without failing or retrying the session.
+    fn warnings(&self) -> Vec<String> {
+        Vec::new()
+    }
 
     /// What the session-ended line says the session took, if the stream
     /// told.
