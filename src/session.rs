@@ -5,7 +5,6 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -18,12 +17,14 @@ pub(crate) use crate::harness::claude::claude_args;
 pub(crate) use crate::harness::codex::{codex_args, codex_prompt};
 use crate::harness::interpretation::{Ended, Interpretation};
 use crate::harness::{Adapter, Choice, Invocation, process};
-use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
 use crate::progress;
 use crate::prompt;
 use crate::skills;
+
+#[cfg(test)]
+mod execution_tests;
 
 /// Where a Run's or an Architect run's Session logs go: in `sessions/` under
 /// the root of its repository's logs, under the User config's `logs.dir` or
@@ -263,7 +264,7 @@ fn run(
     worktree: &Path,
     invocation: Invocation,
     log: &Path,
-    mut stream: Interpretation,
+    stream: Interpretation,
 ) -> Result<Ended> {
     let cli = adapter.name();
     if let Some(dir) = log.parent() {
@@ -273,38 +274,17 @@ fn run(
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
     let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
-    // A consumer failure still leaves a useful partial stream for recovery
-    // and reporting. The process owner joins the consumer before returning,
-    // so this bounded handoff never makes the caller wait on an I/O worker.
-    let (failed_stream, partial_stream) = mpsc::sync_channel(1);
     let executed = process::streaming(
         adapter,
         Command::new(cli)
             .args(&invocation.args)
             .current_dir(worktree),
         invocation.stdin.as_deref(),
-        move |output| match follow(&kind_owned, output, &mut log_file, &log_owned, &mut stream) {
-            Ok(()) => Ok(stream),
-            Err(error) => {
-                let _ = failed_stream.send(stream);
-                Err(error)
-            }
-        },
-    );
-    let (status, stream) = match executed {
-        Ok((status, stream)) => (Ok(status), stream),
-        Err(error) => {
-            if interrupt::requested() {
-                return Err(error);
-            }
-            match partial_stream.try_recv() {
-                Ok(stream) => (Err(error), stream),
-                Err(_) => return Err(error),
-            }
-        }
-    };
+        stream,
+        move |output, stream| follow(&kind_owned, output, &mut log_file, &log_owned, stream),
+    )?;
 
-    let completion = stream.finish(status);
+    let completion = executed.state.finish(executed.execution);
     if let Some(report) = completion.report {
         for warning in report.warnings {
             progress::step(format_args!("{kind}: {warning}"));

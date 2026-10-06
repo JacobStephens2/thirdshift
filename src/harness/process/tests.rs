@@ -30,17 +30,25 @@ fn captured_completion_preserves_both_byte_streams_and_nonzero_status() {
 }
 
 #[test]
-fn streamed_completion_returns_raw_bytes_and_the_consumers_result() {
-    let (status, consumed) = streaming(
+fn streamed_completion_preserves_raw_bytes_and_nonzero_status_in_consumer_state() {
+    let consumed = streaming(
         Harness::Grok.adapter(),
         &mut shell("printf 'unknown\\n\\377malformed\\n'; exit 9"),
         None,
-        |pipe| Ok((read(pipe)?, "finished")),
+        (Vec::new(), "initial"),
+        |pipe, state| {
+            state.0 = read(pipe)?;
+            state.1 = "finished";
+            Ok(())
+        },
     )
     .unwrap();
 
-    assert_eq!(status.code(), Some(9));
-    assert_eq!(consumed, (b"unknown\n\xffmalformed\n".to_vec(), "finished"));
+    assert_eq!(consumed.execution.unwrap().code(), Some(9));
+    assert_eq!(
+        consumed.state,
+        (b"unknown\n\xffmalformed\n".to_vec(), "finished")
+    );
 }
 
 #[test]
@@ -155,16 +163,51 @@ fn consumer_log_failure_cleans_up_even_with_a_blocked_prompt_writer() {
         Harness::OpenCode.adapter(),
         &mut command,
         Some(&"p".repeat(1024 * 1024)),
-        |mut pipe| std::io::copy(&mut pipe, &mut FailingLog).context("could not write Session log"),
-    );
+        b"initial".to_vec(),
+        |mut pipe, state| {
+            let mut bytes = [0; 5];
+            pipe.read_exact(&mut bytes)?;
+            state.extend_from_slice(&bytes);
+            FailingLog
+                .write_all(&bytes)
+                .context("could not write Session log")
+        },
+    )
+    .unwrap();
 
+    assert_eq!(result.state, b"initialready");
     assert_eq!(
-        format!("{:#}", result.unwrap_err()),
+        format!("{:#}", result.execution.unwrap_err()),
         "could not write Session log: log device failed"
     );
     assert!(started.elapsed() < Duration::from_secs(2));
     child.assert_stopped();
     escaped.assert_stopped();
+}
+
+#[test]
+fn prompt_failure_retains_state_and_precedes_a_consumer_failure_during_cleanup() {
+    let child = RecordedProcess::new();
+    let result = streaming(
+        Harness::OpenCode.adapter(),
+        &mut child.command("echo $$ > \"$PID_FILE\"; printf ready; exec 0<&-; exec sleep 5"),
+        Some(&"p".repeat(1024 * 1024)),
+        b"initial".to_vec(),
+        |mut pipe, state| {
+            pipe.read_to_end(state)?;
+            bail!("later consumer failure")
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.state, b"initialready");
+    let error = result.execution.unwrap_err();
+    assert_eq!(error.to_string(), "could not write the prompt to opencode");
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::BrokenPipe
+    );
+    child.assert_stopped();
 }
 
 #[test]
@@ -175,7 +218,8 @@ fn consumer_panic_stops_and_reaps_the_child_and_reports_its_cause() {
         Harness::OpenCode.adapter(),
         &mut child.command("echo $$ > \"$PID_FILE\"; printf ready; exec sleep 5"),
         None,
-        |mut pipe| {
+        (),
+        |mut pipe, _state| {
             pipe.read_exact(&mut [0; 5])?;
             panic!("consumer exploded");
         },
@@ -215,11 +259,19 @@ fn eof_does_not_finish_either_operation_before_the_child_exits() {
                 .unwrap()
                 .status
         } else {
-            streaming(Harness::OpenCode.adapter(), &mut command, None, |pipe| {
-                Ok(read(pipe)?)
-            })
+            streaming(
+                Harness::OpenCode.adapter(),
+                &mut command,
+                None,
+                Vec::new(),
+                |pipe, state| {
+                    *state = read(pipe)?;
+                    Ok(())
+                },
+            )
             .unwrap()
-            .0
+            .execution
+            .unwrap()
         };
         assert_eq!(status.code(), Some(7));
         assert!(started.elapsed() >= Duration::from_millis(250));
@@ -234,10 +286,18 @@ fn both_operations_wait_for_output_held_after_child_exit() {
             let result = output(Harness::OpenCode.adapter(), &mut command, None).unwrap();
             (result.status, result.stdout)
         } else {
-            streaming(Harness::OpenCode.adapter(), &mut command, None, |pipe| {
-                Ok(read(pipe)?)
-            })
-            .unwrap()
+            let result = streaming(
+                Harness::OpenCode.adapter(),
+                &mut command,
+                None,
+                Vec::new(),
+                |pipe, state| {
+                    *state = read(pipe)?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+            (result.execution.unwrap(), result.state)
         };
         assert_eq!(status.code(), Some(7));
         assert_eq!(bytes, b"late");
@@ -246,19 +306,36 @@ fn both_operations_wait_for_output_held_after_child_exit() {
 
 #[test]
 fn normal_completion_leaves_background_work_without_owned_io_running() {
-    let work = RecordedProcess::new();
-    let result = output(
-        Harness::OpenCode.adapter(),
-        &mut work.command("sleep 5 </dev/null >/dev/null 2>&1 & echo $! > \"$PID_FILE\"; exit 0"),
-        None,
-    )
-    .unwrap();
+    for captured in [true, false] {
+        let work = RecordedProcess::new();
+        let mut command =
+            work.command("sleep 5 </dev/null >/dev/null 2>&1 & echo $! > \"$PID_FILE\"; exit 0");
+        let status = if captured {
+            output(Harness::OpenCode.adapter(), &mut command, None)
+                .unwrap()
+                .status
+        } else {
+            streaming(
+                Harness::OpenCode.adapter(),
+                &mut command,
+                None,
+                (),
+                |pipe, _state| {
+                    read(pipe)?;
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .execution
+            .unwrap()
+        };
 
-    assert!(result.status.success());
-    assert!(
-        exists(work.pid()),
-        "normal completion killed background work"
-    );
+        assert!(status.success());
+        assert!(
+            exists(work.pid()),
+            "normal completion killed background work"
+        );
+    }
 }
 
 #[test]
@@ -293,7 +370,11 @@ fn assert_unread_prompt_interruptible(test_name: &str, captured: bool) {
                 Harness::OpenCode.adapter(),
                 &mut command,
                 Some(&prompt),
-                |pipe| Ok(read(pipe)?),
+                Vec::new(),
+                |pipe, state| {
+                    *state = read(pipe)?;
+                    Ok(())
+                },
             )
             .map(|_| ())
         };
