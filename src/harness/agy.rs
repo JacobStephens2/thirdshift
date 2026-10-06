@@ -113,3 +113,43 @@ impl Adapter for Agy {
         Box::new(stream::AgyProgress::default())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness::ChosenBy;
+
+    /// Resume uses the same public invocation interface as a new session.
+    #[test]
+    fn a_resume_reuses_every_flag_and_environment_and_the_conversation_id() {
+        let chosen = Choice {
+            harness: Harness::Agy,
+            model: Some("gemini-3.8-flash".to_string()),
+            effort: Some("medium".to_string()),
+            chosen_by: ChosenBy::Command,
+        };
+        let adapter = chosen.harness.adapter();
+        let resume = adapter.session(&chosen, Some("recorded-conversation"), "Continue.");
+        assert_eq!(
+            resume.args,
+            [
+                "-p",
+                "--dangerously-skip-permissions",
+                "--output-format",
+                "stream-json",
+                "--model",
+                "gemini-3.8-flash",
+                "--effort",
+                "medium",
+                "--conversation",
+                "recorded-conversation",
+                "Continue."
+            ]
+        );
+        assert_eq!(resume.stdin, None);
+        assert_eq!(
+            adapter.environment(),
+            [("AGY_CLI_DISABLE_AUTO_UPDATE", "true")]
+        );
+    }
+}

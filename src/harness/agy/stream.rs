@@ -2,14 +2,13 @@
 //! usage come only from the final result, never concatenated text deltas.
 use crate::progress::{Stream, bash, shorten};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Default)]
 pub struct AgyProgress {
     session_id: Option<String>,
     tools: HashSet<u64>,
     result: Option<Value>,
-    running: BTreeMap<u64, String>,
 }
 
 impl Stream for AgyProgress {
@@ -33,9 +32,6 @@ impl Stream for AgyProgress {
                 let Some(index) = step["step_index"].as_u64() else {
                     return Vec::new();
                 };
-                if step["state"] == "DONE" {
-                    self.running.remove(&index);
-                }
                 if !self.tools.insert(index) {
                     return Vec::new();
                 }
@@ -59,15 +55,6 @@ impl Stream for AgyProgress {
                         )
                     }
                 };
-                if step["state"] == "ACTIVE" && matches!(name, "run_command" | "invoke_subagent") {
-                    self.running.insert(
-                        index,
-                        description
-                            .strip_prefix("$ ")
-                            .unwrap_or(&description)
-                            .to_string(),
-                    );
-                }
                 vec![description]
             }
             Some("result") => {
@@ -100,10 +87,9 @@ impl Stream for AgyProgress {
         self.session_id.as_deref()
     }
     fn killed_background_work(&self) -> Vec<&str> {
-        if self.failed() {
-            return Vec::new();
-        }
-        self.running.values().map(String::as_str).collect()
+        // ACTIVE describes a tool step, not background work killed at exit.
+        // The recorded protocol has no explicit killed-work signal.
+        Vec::new()
     }
     fn failed(&self) -> bool {
         self.result
@@ -162,11 +148,11 @@ mod tests {
     }
 
     #[test]
-    fn unfinished_commands_are_resume_work_only_on_success() {
+    fn an_active_tool_step_does_not_prove_background_work_was_killed() {
         let mut stream = AgyProgress::default();
         stream.condense(TOOL);
         stream.condense(RESULT);
-        assert_eq!(stream.killed_background_work(), ["cargo test"]);
+        assert!(stream.killed_background_work().is_empty());
         stream.condense(r#"{"event":"result","result":{"status":"ERROR","error":"interrupted"}}"#);
         assert!(stream.killed_background_work().is_empty());
     }

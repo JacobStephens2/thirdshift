@@ -119,40 +119,6 @@ fn claude_only_instructions_are_linked_as_gemini_and_kept_out_of_git() {
 }
 
 #[test]
-fn a_session_with_unfinished_work_is_resumed_by_conversation_with_the_same_flags() {
-    let scenario = Scenario::new();
-    scenario.agent_does_for_in_session(7, 1, &format!(r#"{AGENT_OPENS_PR}
-echo '{{"event":"step_update","step_update":{{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{{"parameters":{{"CommandLine":"cargo test"}}}}}}}}'
-"#));
-    let result = scenario.run(&[
-        "harness",
-        "agy",
-        "model",
-        "gemini-3.8-flash-high",
-        &scenario.issue_url(7),
-    ]);
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    let calls = scenario.agy_calls();
-    assert_eq!(calls.len(), 2, "{}", result.stderr);
-    let args = calls[1]["argv"].as_array().unwrap();
-    assert_eq!(args[6], "--conversation");
-    assert_eq!(args[7], "fake-conversation-1");
-    assert!(
-        calls[1]["prompt"]
-            .as_str()
-            .unwrap()
-            .starts_with("Your background work (cargo test) was killed")
-    );
-    for call in calls {
-        assert_eq!(call["auto_update"], "true");
-        assert_eq!(call["stdin_null"], true);
-        assert_eq!(call["argv"][1], "--dangerously-skip-permissions");
-        assert_eq!(call["argv"][3], "stream-json");
-        assert_eq!(call["argv"][5], "gemini-3.8-flash-high");
-    }
-}
-
-#[test]
 fn existing_instruction_files_win_and_no_link_is_made_without_claude() {
     for existing in [None, Some("AGENTS.md"), Some("GEMINI.md")] {
         let scenario = Scenario::new();
