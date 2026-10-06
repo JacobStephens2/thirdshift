@@ -12,9 +12,10 @@
 mod spec_pr;
 mod ticket_board;
 
+use std::collections::{BTreeMap, VecDeque};
 use std::num::NonZeroUsize;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 
@@ -184,8 +185,8 @@ trait Outside {
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
 /// branch checked out in `worktree`: child `thirdshift` Runs, each of which
 /// may start a Base fix if `base_fix` allows one, and runs its sessions on
-/// `harness`, whose threads send how each ended on `ended`, received from
-/// `endings`, GitHub, the Spec PR `spec_pr`, and `delivery`, which takes the
+/// `harness`, their owned handles in `running`, GitHub, the Spec PR
+/// `spec_pr`, and `delivery`, which takes the
 /// worktree when it starts.
 struct ChildRunsAndGitHub<'a> {
     spec: &'a IssueUrl,
@@ -196,15 +197,14 @@ struct ChildRunsAndGitHub<'a> {
     base_fix: BaseFixAsk,
     harness: &'a Choice,
     spec_pr: SpecPr<'a>,
-    ended: Sender<(u64, Result<Ended>)>,
-    endings: Receiver<(u64, Result<Ended>)>,
+    running: BTreeMap<u64, Handle>,
+    endings: VecDeque<(u64, Result<Ended>)>,
 }
 
 impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
     fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: SpecPr<'a>) -> Self {
-        let (ended, endings) = mpsc::channel();
         Self {
             spec: delivery.issue,
             worktree: Some(worktree),
@@ -212,8 +212,8 @@ impl<'a> ChildRunsAndGitHub<'a> {
             harness: delivery.harness,
             delivery: Some(delivery),
             spec_pr,
-            ended,
-            endings,
+            running: BTreeMap::new(),
+            endings: VecDeque::new(),
         }
     }
 
@@ -230,25 +230,43 @@ impl Outside for ChildRunsAndGitHub<'_> {
         self.worktree().push()
     }
 
-    /// A child `thirdshift` from the same Launch directory, and a thread
-    /// that waits for it, relaying its stderr, and sends how it ended.
+    /// Retain the child Run's ownership until polling delivers its ending.
     fn start_ticket(&mut self, number: u64) -> Result<()> {
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
         };
         let ticket = self.spec.sibling(number);
         let child = child_run::start(&ticket, kind, self.base_fix.clone(), self.harness)?;
-        let ended = self.ended.clone();
-        thread::spawn(move || {
-            let _ = ended.send((number, finish_ticket(number, child)));
-        });
+        self.running.insert(number, child);
         Ok(())
     }
 
     fn next_ending(&mut self) -> (u64, Result<Ended>) {
-        self.endings
-            .recv()
-            .expect("a running Ticket's thread holds a sender")
+        loop {
+            // Scan every child before returning an ending. In particular,
+            // interruption reaches all active Tickets before waiting on any.
+            for (&number, child) in &mut self.running {
+                if let Some(ending) = child.try_wait() {
+                    self.endings.push_back((number, ending));
+                }
+            }
+            for (number, _) in &self.endings {
+                self.running.remove(number);
+            }
+            if let Some((number, ending)) = self.endings.pop_front() {
+                if let Ok(ended) = &ending {
+                    progress::step(match ended {
+                        Ended::Reached { .. } => format!("#{number} landed"),
+                        Ended::Interrupted => format!("#{number} interrupted"),
+                        Ended::Failed { .. } => format!("#{number} failed"),
+                    });
+                }
+                return (number, ending);
+            }
+            // GitHub's polling helper returns early on interruption; child
+            // supervision must keep its cadence while graceful cleanup runs.
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
@@ -290,18 +308,6 @@ impl Outside for ChildRunsAndGitHub<'_> {
     fn step(&mut self, line: String) {
         progress::step(line);
     }
-}
-
-/// Wait for Ticket `number`'s Run `child`, relaying its stderr, and say how
-/// it ended.
-fn finish_ticket(number: u64, child: Handle) -> Result<Ended> {
-    let ended = child.wait()?;
-    progress::step(match ended {
-        Ended::Reached { .. } => format!("#{number} landed"),
-        Ended::Interrupted => format!("#{number} interrupted"),
-        Ended::Failed { .. } => format!("#{number} failed"),
-    });
-    Ok(ended)
 }
 
 /// Push the Spec branch, then keep up to `parallel` of the Tickets, last

@@ -1575,6 +1575,75 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
 }
 
 #[test]
+fn parent_only_interruption_reaches_all_active_tickets_before_waiting_and_saves_their_work() {
+    let scenario = diamond_spec();
+    let root = scenario.path("");
+    // Each Failed run's push must meet its sibling's push before it can
+    // finish. Waiting on one Ticket before signalling the other cannot pass.
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        &format!(
+            r#"#!/bin/sh
+while read old new ref; do
+  case "$ref" in
+    refs/heads/issue-21) ticket=21; other=22 ;;
+    refs/heads/issue-22) ticket=22; other=21 ;;
+    *) continue ;;
+  esac
+  touch {root}/cleanup-$ticket
+  for attempt in $(seq 80); do
+    test -f {root}/cleanup-$other && break
+    sleep 0.05
+  done
+  test -f {root}/cleanup-$other || exit 1
+done
+"#,
+            root = root.display()
+        ),
+    );
+    for (ticket, other) in [(21, 22), (22, 21)] {
+        scenario.agent_does_for(ticket, &format!(
+            "echo 'half done {ticket}' > wip.txt\n{}touch {root}/both-started\nsleep 30\ntouch {root}/outlived-{ticket}\n",
+            waits_for_other_session(&scenario, ticket, other), root = root.display()
+        ));
+    }
+
+    let result = scenario.run_and_signal(
+        &[&spec_url(&scenario), "parallel", "2"],
+        "both-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    let mut sessions = sessions_by_issue(&scenario);
+    sessions.sort();
+    assert_eq!(sessions, ["21", "22"]);
+    for ticket in [21, 22] {
+        assert!(!scenario.path(&format!("outlived-{ticket}")).exists());
+        assert_eq!(
+            scenario.origin_file(&format!("issue-{ticket}"), "wip.txt"),
+            Some(format!("half done {ticket}\n"))
+        );
+        assert_eq!(
+            scenario.origin_log(&format!("issue-{ticket}")).unwrap()[0],
+            "thirdshift: failed run (interrupted)"
+        );
+        assert_contains(
+            &result.stderr,
+            &format!("thirdshift: #{ticket} interrupted\n"),
+        );
+        scenario.assert_cleaned_up(&format!("issue-{ticket}"));
+    }
+    assert!(!result.stderr.contains("starting #23"), "{}", result.stderr);
+    assert_eq!(
+        support::before_command_log(&result.stderr).last(),
+        Some(&"thirdshift: interrupted")
+    );
+}
+
+#[test]
 fn a_ticket_whose_red_check_also_fails_on_the_spec_branch_shows_the_cause_in_the_checklist_and_the_notification()
  {
     let scenario = spec_of(&[(21, &[]), (22, &[])]);
