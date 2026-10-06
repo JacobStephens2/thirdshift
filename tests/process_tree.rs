@@ -82,6 +82,35 @@ fn interrupting_a_muse_check_after_cli_exit_stops_the_command_holding_its_stream
 }
 
 #[test]
+fn interrupting_a_live_session_after_cli_exit_stops_the_command_holding_stdout() {
+    let scenario = Scenario::new();
+    let pid = scenario.path("stdout-holder-pid");
+    scenario.agent_does(&format!(
+        r#"bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
+echo $$ > "$2"
+touch "$3"
+exec sleep 5' holder "$PPID" "{pid}" "{started}" &
+"#,
+        pid = pid.display(),
+        started = scenario.path("cli-exited").display(),
+    ));
+    let url = scenario.issue_url(7);
+    let mut held = scenario.run_until(&[&url], &[], "cli-exited");
+    let command = SessionCommand(fs::read_to_string(pid).unwrap().trim().parse().unwrap());
+    let interrupted_at = Instant::now();
+    held.signal("INT");
+    let result = held.finish();
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+    assert!(
+        interrupted_at.elapsed() < Duration::from_secs(2),
+        "interruption waited for the stdout holder's natural expiry"
+    );
+    command.assert_stopped("the stdout holder survived interruption");
+}
+
+#[test]
 fn interrupting_an_opencode_export_stops_its_whole_process_tree() {
     assert_session_command_stopped("opencode", During::Export);
 }
@@ -112,7 +141,7 @@ fn assert_session_command_stopped(harness: &str, during: During) {
             r#"while kill -0 "$FAKE_MUSE_CHECK_PID" 2>/dev/null; do sleep 0.01; done
 echo $$ > "{pid}"
 touch "{started}"
-exec sleep 9
+exec sleep 5
 "#,
             pid = pid.display(),
             started = scenario.path("agent-started").display(),
@@ -172,8 +201,13 @@ touch "{started}"
         assert!(scenario.issue_labels(7).is_empty());
         assert_eq!(scenario.entries("work"), ["widgets"]);
     }
+    let limit = if matches!(during, During::CheckAfterExit) {
+        Duration::from_secs(2)
+    } else {
+        Duration::from_secs(8)
+    };
     assert!(
-        interrupted_at.elapsed() < Duration::from_secs(8),
+        interrupted_at.elapsed() < limit,
         "interruption waited for the command instead of stopping it"
     );
     command.assert_stopped("the session's command survived interruption");

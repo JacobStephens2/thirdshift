@@ -115,7 +115,7 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
     };
     crate::progress::step("checking OpenCode's Model and Effort with a standalone test call");
     let invocation = OpenCode.session(&choice, None, "Reply with OK.");
-    let output = super::process_output::output(
+    let output = super::process::output(
         &OpenCode,
         Command::new(OpenCode.name()).args(invocation.args),
         invocation.stdin.as_deref(),

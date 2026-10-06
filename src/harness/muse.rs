@@ -135,7 +135,7 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
                 "checking the Model {model} with a test call to muse"
             ));
             let invocation = Muse.session(&choice, None, "Reply with OK.");
-            let output = super::process_output::output(
+            let output = super::process::output(
                 &Muse,
                 Command::new(Muse.name()).args(invocation.args),
                 None,

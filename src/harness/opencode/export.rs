@@ -100,7 +100,7 @@ impl SessionExport {
 
 pub fn read_after_exit(worktree: &Path, stream: Box<dyn Stream>) -> Result<Box<dyn Stream>> {
     let export = if let Some(id) = stream.session_id() {
-        let output = super::super::process_output::output(
+        let output = super::super::process::output(
             &OpenCode,
             Command::new(OpenCode.name())
                 .args(["session", "export", "--standalone", id])
