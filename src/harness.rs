@@ -15,6 +15,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 mod instructions;
 pub(crate) mod muse;
+pub(crate) mod opencode;
 mod process_tree;
 
 pub use adapter::{Adapter, Invocation};
@@ -27,6 +28,7 @@ pub enum Harness {
     Codex,
     Agy,
     Muse,
+    OpenCode,
 }
 
 impl Harness {
@@ -100,6 +102,8 @@ pub struct Settings {
     pub agy: ModelAndEffort,
     /// `[harness.muse]`.
     pub muse: ModelAndEffort,
+    /// `[harness.opencode]`.
+    pub opencode: ModelAndEffort,
 }
 
 impl Settings {

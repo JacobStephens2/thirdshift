@@ -100,6 +100,13 @@ session and Resume uses -p --dangerously-skip-permissions --output-format stream
 null stdin and AGY_CLI_DISABLE_AUTO_UPDATE=true; a Resume uses --conversation <id>.
 agy reads AGENTS.md and GEMINI.md, falling back through an excluded GEMINI.md link to
 root CLAUDE.md when neither exists. It does not read ~/.claude/.
+On opencode (OpenCode), the Model id comes from your providers as provider/model;
+Effort is its #variant suffix and needs a Model. A minimal standalone call checks both.
+Every session, check and Resume uses run --standalone --format json --auto with the prompt
+on stdin and OPENCODE_DISABLE_AUTOUPDATE=1; a Resume adds -s <stream session id>.
+Skills load through the skill tool. OpenCode reads AGENTS.md, never CLAUDE.md or ~/.claude/;
+thirdshift supplies an excluded AGENTS.md link to root CLAUDE.md when needed. Session export
+supplies the last assistant text, usage and outcome even when the last stream event is lost.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word

@@ -5,7 +5,7 @@ use std::process::Child;
 
 use anyhow::Result;
 
-use super::{Choice, Harness, ModelAndEffort, Settings, agy, claude, codex, muse};
+use super::{Choice, Harness, ModelAndEffort, Settings, agy, claude, codex, muse, opencode};
 use crate::progress::Stream;
 use crate::setup::Outside;
 
@@ -90,9 +90,10 @@ impl SkillLoading {
 }
 
 /// Registration comes from the adapters, including Setup's order.
-pub const REGISTERED: [(Harness, &dyn Adapter); 4] = [
+pub const REGISTERED: [(Harness, &dyn Adapter); 5] = [
     claude::REGISTRATION,
     codex::REGISTRATION,
     agy::REGISTRATION,
     muse::REGISTRATION,
+    opencode::REGISTRATION,
 ];

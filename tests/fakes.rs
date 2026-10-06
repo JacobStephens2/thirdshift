@@ -25,6 +25,8 @@ mod gh;
 mod json;
 #[path = "fakes/muse.rs"]
 mod muse;
+#[path = "fakes/opencode.rs"]
+mod opencode;
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -117,6 +119,7 @@ fn main() {
         "codex" => codex::main(args.collect()),
         "agy" => agy::main(args.collect()),
         "muse" => muse::main(args.collect()),
+        "opencode" => opencode::main(args.collect()),
         "detached-command" => {
             let command = args.next().expect("no detached command");
             let mut command = Command::new(command);

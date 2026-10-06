@@ -11,19 +11,28 @@ use std::sync::OnceLock;
 
 /// The fakes' sources. They name the built executable, and including them
 /// makes Cargo rebuild the tests when they change.
-const SOURCES: [&str; 7] = [
+const SOURCES: [&str; 8] = [
     include_str!("../fakes.rs"),
     include_str!("../fakes/gh.rs"),
     include_str!("../fakes/claude.rs"),
     include_str!("../fakes/codex.rs"),
     include_str!("../fakes/agy.rs"),
     include_str!("../fakes/muse.rs"),
+    include_str!("../fakes/opencode.rs"),
     include_str!("../fakes/json.rs"),
 ];
 
 /// Put the fake `gh`, `claude`, `codex`, `agy` and `muse` in `bin`.
 pub fn install(bin: &Path) {
-    for name in ["gh", "claude", "codex", "agy", "muse", "detached-command"] {
+    for name in [
+        "gh",
+        "claude",
+        "codex",
+        "agy",
+        "muse",
+        "opencode",
+        "detached-command",
+    ] {
         std::os::unix::fs::symlink(executable(), bin.join(name)).unwrap();
     }
 }
