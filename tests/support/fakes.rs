@@ -22,7 +22,7 @@ const SOURCES: [&str; 6] = [
 
 /// Put the fake `gh`, `claude`, `codex` and `muse` in `bin`.
 pub fn install(bin: &Path) {
-    for name in ["gh", "claude", "codex", "muse"] {
+    for name in ["gh", "claude", "codex", "muse", "detached-command"] {
         std::os::unix::fs::symlink(executable(), bin.join(name)).unwrap();
     }
 }

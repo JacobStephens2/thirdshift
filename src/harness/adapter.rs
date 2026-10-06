@@ -1,6 +1,7 @@
 //! Everything that varies between Harnesses, behind one interface.
 
 use std::path::Path;
+use std::process::Child;
 
 use anyhow::Result;
 
@@ -29,6 +30,12 @@ pub trait Adapter: Sync {
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>>;
     fn stream(&self, worktree: &Path, prompt: &str) -> Box<dyn Stream>;
+
+    /// Stop the session and its descendants, including commands that made
+    /// their own process group or session, with this Harness's stop signals.
+    fn stop(&self, child: &mut Child) {
+        super::process_tree::stop(child, self.stop_signals());
+    }
 
     /// Fixed overrides, also used by the adapter's Model and Effort check.
     fn environment(&self) -> &'static [(&'static str, &'static str)] {

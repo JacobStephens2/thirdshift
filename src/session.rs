@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -272,7 +272,7 @@ fn ending_with(killed: &[&str]) -> String {
 /// `log` and condensing it through `stream` to progress lines on stderr,
 /// each labelled `kind`. Returns what the stream showed once the CLI has
 /// exited cleanly, its turn not failed. Otherwise fails with the error the
-/// stream gave, if any. An interrupt stops the session, as [`stop`] does,
+/// stream gave, if any. An interrupt stops the session, as [`Adapter::stop`] does,
 /// and fails with `interrupted`.
 fn run(
     kind: &str,
@@ -332,13 +332,13 @@ fn run(
         && let Some(mut stdin) = child.stdin.take()
         && let Err(error) = stdin.write_all(input.as_bytes())
     {
-        stop(&mut child, adapter);
+        adapter.stop(&mut child);
         let _ = follower.join();
         return Err(error).with_context(|| format!("could not write the prompt to {cli}"));
     }
     let status = loop {
         if interrupt::requested() {
-            stop(&mut child, adapter);
+            adapter.stop(&mut child);
             bail!("interrupted");
         }
         if let Some(status) = child
@@ -385,30 +385,6 @@ fn run(
 }
 
 const POLL: Duration = Duration::from_millis(100);
-
-/// How long a session gets to exit after each signal that asks it to stop.
-const STOP_GRACE: Duration = Duration::from_secs(10);
-
-/// Stop `child`, a session on `adapter`, by its process group: with the
-/// signals that ask it to stop, in turn, each given `STOP_GRACE`,
-/// then SIGKILL.
-fn stop(child: &mut Child, adapter: &dyn Adapter) {
-    let group = -(child.id() as libc::pid_t);
-    for &signal in adapter.stop_signals() {
-        // SAFETY: kill has no memory-safety preconditions.
-        unsafe { libc::kill(group, signal) };
-        let deadline = Instant::now() + STOP_GRACE;
-        while Instant::now() < deadline {
-            if let Ok(Some(_)) = child.try_wait() {
-                return;
-            }
-            thread::sleep(POLL);
-        }
-    }
-    // SAFETY: as above.
-    unsafe { libc::kill(group, libc::SIGKILL) };
-    let _ = child.wait();
-}
 
 /// Copy every line of `stream` to `log_file` and print the progress lines it
 /// condenses to, until the stream ends.

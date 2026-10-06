@@ -13,6 +13,7 @@ mod adapter;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod muse;
+mod process_tree;
 
 pub use adapter::{Adapter, Invocation};
 pub use codex::Catalog;
