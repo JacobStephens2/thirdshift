@@ -59,9 +59,9 @@ fn opencode_runs_standalone_with_stdin_skills_and_usage_despite_a_dropped_last_s
         );
     }
     assert!(
-        result
-            .stderr
-            .contains("2400 input tokens (400 cached), 600 output tokens"),
+        result.stderr.contains(
+            "2800 input tokens (400 cache read, 0 cache write), 800 output tokens (200 reasoning)"
+        ),
         "{}",
         result.stderr
     );
@@ -298,7 +298,7 @@ printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
             "https://github.com/acme/widgets/issues/8"
         );
         assert_eq!(
-            result.stderr.contains("2400 input tokens"),
+            result.stderr.contains("2800 input tokens"),
             setting.is_none()
         );
     }

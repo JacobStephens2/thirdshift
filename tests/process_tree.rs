@@ -37,40 +37,56 @@ impl Drop for DetachedCommand {
 
 #[test]
 fn interrupting_a_claude_run_stops_a_command_in_its_own_session() {
-    assert_detached_command_stopped("claude");
+    assert_detached_command_stopped("claude", false);
 }
 
 #[test]
 fn interrupting_a_codex_run_stops_a_command_in_its_own_session() {
-    assert_detached_command_stopped("codex");
+    assert_detached_command_stopped("codex", false);
 }
 
 #[test]
 fn interrupting_an_agy_run_stops_a_command_in_its_own_session() {
-    assert_detached_command_stopped("agy");
+    assert_detached_command_stopped("agy", false);
 }
 
 #[test]
 fn interrupting_an_opencode_run_stops_a_command_in_its_own_session() {
-    assert_detached_command_stopped("opencode");
+    assert_detached_command_stopped("opencode", false);
 }
 
-fn assert_detached_command_stopped(harness: &str) {
+#[test]
+fn interrupting_an_opencode_check_stops_its_whole_process_tree_before_work() {
+    assert_detached_command_stopped("opencode", true);
+}
+
+fn assert_detached_command_stopped(harness: &str, checking: bool) {
     let scenario = Scenario::new();
     let pid = scenario.path("detached-pid");
+    let ending = if checking {
+        "sleep 9"
+    } else {
+        "while :; do sleep 0.1; done"
+    };
     scenario.agent_does(&format!(
         r#"detached-command bash -c 'trap "" INT TERM; echo $$ > "{pid}"; exec sleep 120' >/dev/null 2>&1 &
 while ! test -s "{pid}"; do sleep 0.01; done
 touch "{started}"
-while :; do sleep 0.1; done
+{ending}
 "#,
         pid = pid.display(),
         started = scenario.path("agent-started").display(),
     ));
 
+    let script = scenario.path("claude-script.sh");
+    let env = if checking {
+        vec![("FAKE_OPENCODE_CHECK_SCRIPT", script.to_str().unwrap())]
+    } else {
+        Vec::new()
+    };
     let mut held = scenario.run_until(
         &["harness", harness, &scenario.issue_url(7)],
-        &[],
+        &env,
         "agent-started",
     );
     let command = DetachedCommand(fs::read_to_string(pid).unwrap().trim().parse().unwrap());
@@ -80,6 +96,10 @@ while :; do sleep 0.1; done
     let result = held.finish();
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    if checking {
+        assert!(scenario.issue_labels(7).is_empty());
+        assert_eq!(scenario.entries("work"), ["widgets"]);
+    }
     assert!(
         interrupted_at.elapsed() < Duration::from_secs(8),
         "a session that exited on its first signal incurred another grace period"

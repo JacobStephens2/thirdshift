@@ -1,4 +1,5 @@
 //! OpenCode's JSONL progress; final usage is deliberately left to session export.
+use crate::harness::skill_load::SkillLoad;
 use crate::progress::{Stream, bash, shorten};
 use serde_json::Value;
 
@@ -8,19 +9,14 @@ pub struct OpenCodeProgress {
     started: bool,
     message: Option<String>,
     failure: Option<String>,
-    expected_skill: Option<String>,
-    skill_loaded: bool,
+    skill_load: SkillLoad,
     killed: Vec<String>,
 }
 
 impl OpenCodeProgress {
     pub fn for_prompt(prompt: &str) -> Self {
         Self {
-            expected_skill: prompt
-                .strip_prefix('/')
-                .and_then(|rest| rest.split_whitespace().next())
-                .filter(|name| name.starts_with("thirdshift-"))
-                .map(String::from),
+            skill_load: SkillLoad::for_prompt(prompt),
             ..Self::default()
         }
     }
@@ -62,10 +58,8 @@ impl Stream for OpenCodeProgress {
                 }
                 if tool == "skill" {
                     let skill = state["input"]["id"].as_str().unwrap_or("");
-                    if state["status"] == "completed"
-                        && self.expected_skill.as_deref() == Some(skill)
-                    {
-                        self.skill_loaded = true;
+                    if state["status"] == "completed" {
+                        self.skill_load.observed(skill);
                     }
                     vec![format!("skill {skill}")]
                 } else if tool == "bash" {
@@ -119,15 +113,7 @@ impl Stream for OpenCodeProgress {
         self.failure.as_deref()
     }
     fn warnings(&self) -> Vec<String> {
-        self.expected_skill
-            .as_ref()
-            .filter(|_| !self.skill_loaded)
-            .map(|skill| {
-                vec![format!(
-                    "warning: the session never loaded {skill} with its skill tool"
-                )]
-            })
-            .unwrap_or_default()
+        self.skill_load.warnings()
     }
 }
 

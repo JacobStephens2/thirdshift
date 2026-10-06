@@ -6,10 +6,13 @@ use super::adapter::{Adapter, Invocation, SkillLoading};
 use super::{Choice, Harness, ModelAndEffort, Settings, said};
 use crate::progress::Stream;
 use crate::setup::{Outside, questions::ask_setting};
-use anyhow::{Context, Result, bail};
-use std::io::Write;
+use anyhow::{Context, Result, anyhow, bail};
+use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::Duration;
 
 pub struct OpenCode;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::OpenCode, &OpenCode);
@@ -119,6 +122,7 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
     let mut child = Command::new(OpenCode.name())
         .args(invocation.args)
         .envs(OpenCode.environment().iter().copied())
+        .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -130,13 +134,10 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
         .context("no stdin from opencode")?
         .write_all(invocation.stdin.as_deref().unwrap_or("").as_bytes());
     if let Err(error) = written {
-        let _ = child.kill();
-        let _ = child.wait();
+        OpenCode.stop(&mut child);
         return Err(error).context("could not write the check prompt to opencode");
     }
-    let output = child
-        .wait_with_output()
-        .context("could not wait for opencode's test call")?;
+    let output = check_output(&mut child)?;
     let mut stream = OpenCode.stream(Path::new("."), "Reply with OK.");
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         stream.condense(line);
@@ -157,4 +158,42 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
 /// OpenCode errors appear as strings or typed objects in its event/export formats.
 fn error_text(error: &serde_json::Value) -> Option<&str> {
     error.as_str().or_else(|| error["message"].as_str())
+}
+
+/// Drain both pipes while watching for interruption, so a slow check cannot
+/// strand its private server or commands before a Run has even started work.
+fn check_output(child: &mut Child) -> Result<Output> {
+    fn read(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<std::io::Result<Vec<u8>>> {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        })
+    }
+    let stdout = read(child.stdout.take().context("no stdout from opencode")?);
+    let stderr = read(child.stderr.take().context("no stderr from opencode")?);
+    let status = loop {
+        if crate::interrupt::requested() {
+            OpenCode.stop(child);
+            let _ = stdout.join();
+            let _ = stderr.join();
+            bail!("interrupted");
+        }
+        if let Some(status) = child
+            .try_wait()
+            .context("could not wait for opencode's test call")?
+        {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    Ok(Output {
+        status,
+        stdout: stdout
+            .join()
+            .map_err(|_| anyhow!("OpenCode's check stdout reader panicked"))??,
+        stderr: stderr
+            .join()
+            .map_err(|_| anyhow!("OpenCode's check stderr reader panicked"))??,
+    })
 }

@@ -17,6 +17,7 @@ mod instructions;
 pub(crate) mod muse;
 pub(crate) mod opencode;
 mod process_tree;
+mod skill_load;
 
 pub use adapter::{Adapter, Invocation};
 pub use codex::Catalog;

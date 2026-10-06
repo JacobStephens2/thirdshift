@@ -1,5 +1,6 @@
 //! Muse's JSONL event envelopes. Usage is read from its session log after exit.
 
+use crate::harness::skill_load::SkillLoad;
 use crate::progress::{Stream, bash, shorten};
 use serde_json::Value;
 
@@ -9,8 +10,7 @@ pub struct MuseProgress {
     started: bool,
     final_message: Option<String>,
     failure: Option<String>,
-    expected_skill: Option<String>,
-    skill_loaded: bool,
+    skill_load: SkillLoad,
     tasks: Vec<(String, String)>,
     killed: Vec<String>,
 }
@@ -18,11 +18,7 @@ pub struct MuseProgress {
 impl MuseProgress {
     pub fn for_prompt(prompt: &str) -> Self {
         Self {
-            expected_skill: prompt
-                .strip_prefix('/')
-                .and_then(|rest| rest.split_whitespace().next())
-                .filter(|name| name.starts_with("thirdshift-"))
-                .map(String::from),
+            skill_load: SkillLoad::for_prompt(prompt),
             ..Self::default()
         }
     }
@@ -38,11 +34,8 @@ impl MuseProgress {
                 .and_then(|rest| rest.split_once('"'))
                 .map(|(name, _)| name)
                 .unwrap_or("");
-            if facts["outcome"] == "success"
-                && header.contains("status=\"ok\"")
-                && self.expected_skill.as_deref() == Some(skill)
-            {
-                self.skill_loaded = true;
+            if facts["outcome"] == "success" && header.contains("status=\"ok\"") {
+                self.skill_load.observed(skill);
             }
             return vec![format!("skill {skill}")];
         }
@@ -158,15 +151,7 @@ impl Stream for MuseProgress {
         self.failure.as_deref()
     }
     fn warnings(&self) -> Vec<String> {
-        self.expected_skill
-            .as_ref()
-            .filter(|_| !self.skill_loaded)
-            .map(|skill| {
-                vec![format!(
-                    "warning: the session never loaded {skill} with its skill tool"
-                )]
-            })
-            .unwrap_or_default()
+        self.skill_load.warnings()
     }
 }
 

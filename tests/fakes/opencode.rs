@@ -63,6 +63,12 @@ pub fn main(argv: Vec<String>) {
             ]));
             crate::exit(1);
         }
+        if let Ok(script) = std::env::var("FAKE_OPENCODE_CHECK_SCRIPT") {
+            let status = Command::new("bash").arg("-e").arg(script).status().unwrap();
+            if !status.success() {
+                crate::exit(exit_code(status));
+            }
+        }
         event("check-session", "text", object([("text", string("OK"))]));
         fs::write(
             export_path("check-session"),
@@ -207,7 +213,7 @@ pub fn main(argv: Vec<String>) {
     )
     .unwrap();
     // Alternate complete and dropped closing events, as real OpenCode does.
-    if session % 2 == 0 {
+    if session.is_multiple_of(2) {
         event(
             &id,
             "step_finish",

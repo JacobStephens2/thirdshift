@@ -14,6 +14,44 @@ pub struct SessionExport {
     failure: Option<String>,
 }
 
+/// OpenCode records uncached input and visible output separately from cache
+/// and reasoning. Combine them into totals while retaining each subtotal.
+#[derive(Default)]
+struct Usage {
+    input: u64,
+    cache_read: u64,
+    cache_write: u64,
+    output: u64,
+    reasoning: u64,
+    cost: Option<f64>,
+}
+
+impl Usage {
+    fn add(&mut self, message: &Value) {
+        let tokens = &message["tokens"];
+        self.input += tokens["input"].as_u64().unwrap_or(0);
+        self.cache_read += tokens["cache"]["read"].as_u64().unwrap_or(0);
+        self.cache_write += tokens["cache"]["write"].as_u64().unwrap_or(0);
+        self.output += tokens["output"].as_u64().unwrap_or(0);
+        self.reasoning += tokens["reasoning"].as_u64().unwrap_or(0);
+        if let Some(cost) = message["cost"].as_f64() {
+            *self.cost.get_or_insert(0.0) += cost;
+        }
+    }
+    fn summary(&self) -> String {
+        let input = self.input + self.cache_read + self.cache_write;
+        let output = self.output + self.reasoning;
+        let cost = self
+            .cost
+            .map(|cost| format!(", ${cost:.4}"))
+            .unwrap_or_default();
+        format!(
+            "{input} input tokens ({} cache read, {} cache write), {output} output tokens ({} reasoning){cost}",
+            self.cache_read, self.cache_write, self.reasoning
+        )
+    }
+}
+
 impl SessionExport {
     pub fn parse(text: &str) -> Result<Self> {
         let export: Value = serde_json::from_str(text)?;
@@ -28,8 +66,7 @@ impl SessionExport {
             summary: None,
             failure: None,
         };
-        let (mut input, mut cached, mut output) = (0, 0, 0);
-        let mut usage = false;
+        let mut usage: Option<Usage> = None;
         for message in messages
             .iter()
             .filter(|message| message["type"] == "assistant")
@@ -39,21 +76,14 @@ impl SessionExport {
                 .and_then(|parts| parts.iter().rev().find(|part| part["type"] == "text"))
                 .and_then(|part| part["text"].as_str())
                 .map(String::from);
-            if let Some(tokens) = message["tokens"].as_object() {
-                usage = true;
-                input += tokens.get("input").and_then(Value::as_u64).unwrap_or(0);
-                cached += message["tokens"]["cache"]["read"].as_u64().unwrap_or(0);
-                output += tokens.get("output").and_then(Value::as_u64).unwrap_or(0);
+            if message["tokens"].is_object() {
+                usage.get_or_insert_default().add(message);
             }
             if let Some(error) = super::error_text(&message["error"]) {
                 result.failure = Some(error.into());
             }
         }
-        if usage {
-            result.summary = Some(format!(
-                "{input} input tokens ({cached} cached), {output} output tokens"
-            ));
-        }
+        result.summary = usage.as_ref().map(Usage::summary);
         if outcome == "failed" {
             result.failure = Some(
                 super::error_text(&export["info"]["error"])
@@ -144,8 +174,8 @@ mod tests {
             "info":{"outcome":"succeeded","tokens":{"input":999999},"cost":9},
             "messages":[
                 {"type":"user","text":"prompt","tokens":{"input":999999}},
-                {"type":"assistant","tokens":{"input":31,"output":37,"reasoning":158,"cache":{"read":7840,"write":0}},"content":[{"type":"text","text":"earlier reply"}]},
-                {"type":"assistant","tokens":{"input":39,"output":11,"reasoning":42,"cache":{"read":496,"write":0}},"content":[{"type":"text","text":"first part"},{"type":"reasoning","text":"private reasoning"},{"type":"text","text":"Architecture review idea: https://github.com/acme/widgets/issues/8"}]},
+                {"type":"assistant","tokens":{"input":31,"output":37,"reasoning":158,"cache":{"read":7840,"write":20}},"cost":0.004,"content":[{"type":"text","text":"earlier reply"}]},
+                {"type":"assistant","tokens":{"input":39,"output":11,"reasoning":42,"cache":{"read":496,"write":7}},"cost":0.002,"content":[{"type":"text","text":"first part"},{"type":"reasoning","text":"private reasoning"},{"type":"text","text":"Architecture review idea: https://github.com/acme/widgets/issues/8"}]},
                 {"type":"idle","outcome":"succeeded"}
             ]
         }"#).unwrap();
@@ -155,7 +185,9 @@ mod tests {
         );
         assert_eq!(
             export.summary.as_deref(),
-            Some("70 input tokens (8336 cached), 48 output tokens")
+            Some(
+                "8433 input tokens (8336 cache read, 27 cache write), 248 output tokens (200 reasoning), $0.0060"
+            )
         );
         assert!(export.failure.is_none());
     }
