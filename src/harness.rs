@@ -12,6 +12,7 @@ use anyhow::{Result, bail};
 mod adapter;
 pub(crate) mod claude;
 pub(crate) mod codex;
+mod process_tree;
 
 pub use adapter::{Adapter, Invocation};
 pub use codex::Catalog;
