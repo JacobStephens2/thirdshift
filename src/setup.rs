@@ -10,7 +10,7 @@
 //! the Harnesses' CLIs, `gh`, `git`, Resend and the files under the home
 //! folder; `Scripted`, in tests, from a script, recording each call.
 
-mod questions;
+pub(crate) mod questions;
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
@@ -351,7 +351,7 @@ fn set_email_to(document: &mut DocumentMut, to: &str) {
 /// What Setup does outside itself: the terminal it asks on, the Harnesses'
 /// CLIs, the Credentials, the lookups behind the suggested address, the User
 /// config file, the test email, and where its progress lines go.
-trait Outside {
+pub(crate) trait Outside {
     /// Whether there is someone to ask: stdin and stderr are both terminals.
     fn has_terminal(&mut self) -> bool;
     /// Show `prompt` and read one answer, trimmed, or `None` if stdin closed.
@@ -367,6 +367,14 @@ trait Outside {
     fn test_call(&mut self, chosen: &ModelAndEffort) -> Result<()>;
     /// Read Codex's catalog of Models.
     fn codex_catalog(&mut self) -> Result<Catalog>;
+    /// Read Antigravity CLI's free Model catalog.
+    fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog>;
+    /// Read Grok Build's catalog, refreshed by grok models.
+    fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog>;
+    /// Check Muse's settings against its cache, or with its minimal test call.
+    fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort>;
+    /// Check OpenCode with its minimal standalone test call.
+    fn opencode_check(&mut self, chosen: &ModelAndEffort) -> Result<()>;
     /// Read the Credentials, as strictly as a Run does: where a Resend API
     /// key is found, if anywhere.
     fn find_key(&mut self) -> Result<Option<Source>>;
@@ -447,17 +455,32 @@ impl Outside for OnMachine<'_> {
     }
 
     fn test_call(&mut self, chosen: &ModelAndEffort) -> Result<()> {
-        Choice {
+        crate::harness::claude::test_call(&Choice {
             harness: Harness::Claude,
             model: chosen.model.clone(),
             effort: chosen.effort.clone(),
             chosen_by: ChosenBy::UserConfig,
-        }
-        .test_call()
+        })
     }
 
     fn codex_catalog(&mut self) -> Result<Catalog> {
         Catalog::read()
+    }
+
+    fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog> {
+        crate::harness::agy::Catalog::read()
+    }
+
+    fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog> {
+        crate::harness::grok::Catalog::read()
+    }
+
+    fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort> {
+        crate::harness::muse::check_model_and_effort(chosen)
+    }
+
+    fn opencode_check(&mut self, chosen: &ModelAndEffort) -> Result<()> {
+        crate::harness::opencode::check_model_and_effort(chosen)
     }
 
     fn find_key(&mut self) -> Result<Option<Source>> {
@@ -610,6 +633,7 @@ mod scripted {
         Say(String),
         /// It made Claude's test call on this Model and Effort.
         Tested(ModelAndEffort),
+        MuseChecked(ModelAndEffort),
         /// It wrote this new User config.
         WriteNew(String),
         /// It replaced the User config with this.
@@ -650,6 +674,10 @@ mod scripted {
         pub test_calls: VecDeque<Option<&'static str>>,
         /// The catalog's JSON, or what reading it fails with.
         pub catalog: Result<&'static str, &'static str>,
+        pub agy_catalog: Result<&'static str, &'static str>,
+        /// Grok's text model list and refreshed effort cache, or a read failure.
+        pub grok_catalog: Result<(&'static str, &'static str), &'static str>,
+        pub muse_checks: VecDeque<Result<ModelAndEffort, &'static str>>,
         /// Where a key is found, or what reading the Credentials fails with.
         pub key: Result<Option<Source>, &'static str>,
         pub github_email: Result<Option<&'static str>, &'static str>,
@@ -663,7 +691,7 @@ mod scripted {
 
     impl Scripted {
         /// A terminal answering `answers` in order, then closing stdin,
-        /// with both Harnesses installed, no key, no email to suggest and no
+        /// with every Harness installed, no key, no email to suggest and no
         /// User config.
         pub fn answering(answers: &[(&'static str, &'static str)]) -> Self {
             Scripted {
@@ -672,6 +700,14 @@ mod scripted {
                 installed: Harness::ALL.to_vec(),
                 test_calls: VecDeque::new(),
                 catalog: Ok(CATALOG),
+                agy_catalog: Ok(
+                    "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n",
+                ),
+                grok_catalog: Ok((
+                    include_str!("../tests/fixtures/grok-models.txt"),
+                    include_str!("../tests/fixtures/grok-models.json"),
+                )),
+                muse_checks: VecDeque::new(),
                 key: Ok(None),
                 github_email: Ok(None),
                 git_email: Err("git config --global user.email: exit status 1"),
@@ -792,6 +828,32 @@ mod scripted {
                 Ok(json) => Catalog::parse(json),
                 Err(error) => bail!("{error}"),
             }
+        }
+
+        fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog> {
+            match self.agy_catalog {
+                Ok(text) => crate::harness::agy::Catalog::parse(text),
+                Err(error) => bail!("{error}"),
+            }
+        }
+
+        fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog> {
+            match self.grok_catalog {
+                Ok((list, cache)) => crate::harness::grok::Catalog::parse(list, cache),
+                Err(error) => bail!("{error}"),
+            }
+        }
+
+        fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort> {
+            self.calls.push(Call::MuseChecked(chosen.clone()));
+            self.muse_checks
+                .pop_front()
+                .unwrap_or_else(|| Ok(chosen.clone()))
+                .map_err(|error| anyhow!("{error}"))
+        }
+
+        fn opencode_check(&mut self, _chosen: &ModelAndEffort) -> Result<()> {
+            Ok(())
         }
 
         fn find_key(&mut self) -> Result<Option<Source>> {
@@ -1108,7 +1170,7 @@ to = \"me@example.com\"  # my inbox
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex [claude]: ",
+                "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
                 "Model for claude [claude's own default]: ",
                 "Effort for claude [claude's own default]: ",
                 "Every Run a Merge run? [y/N] ",
@@ -1207,6 +1269,22 @@ effort = \"high\"
 [harness.codex]
 model = \"gpt-6.1-sol\"
 effort = \"max\"
+
+[harness.agy]
+model = \"\"
+effort = \"\"
+
+[harness.grok]
+model = \"\"
+effort = \"\"
+
+[harness.muse]
+model = \"\"
+effort = \"\"
+
+[harness.opencode]
+model = \"\"
+effort = \"\"
 ";
         let mut outside = Scripted {
             user_config: Some(mine.to_string()),
@@ -1236,7 +1314,7 @@ effort = \"max\"
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex [claude]: ",
+                "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
                 "Model for claude, - for claude's own default [opus]: ",
                 "Effort for claude, - for claude's own default [high]: ",
                 "Every Run a Merge run? [Y/n] ",
@@ -1693,21 +1771,56 @@ always = false # quiet, please
         }
     }
 
+    #[test]
+    fn muse_setup_proposes_its_non_contributor_model_and_retries_a_refused_check() {
+        let mut outside = Scripted {
+            installed: vec![Harness::Muse],
+            muse_checks: [
+                Err("Muse refused the Model"),
+                Ok(ModelAndEffort {
+                    model: Some("muse-spark-1.3".to_string()),
+                    effort: Some("high".to_string()),
+                }),
+            ]
+            .into(),
+            ..Scripted::answering(&then_nothing_else(&[
+                (HARNESS, "muse"),
+                ("Model for muse", "bad-model"),
+                ("Effort for muse", "low"),
+                ("Model for muse", ""),
+                ("Effort for muse", "High"),
+            ]))
+        };
+        setup(&mut outside).unwrap();
+        assert_eq!(
+            outside.prompts()[1],
+            "Model for muse, - for muse's own default [muse-spark-1.3]: "
+        );
+        assert!(outside.said().contains(&"Muse refused the Model"));
+        let config = table(&outside);
+        assert_eq!(config["harness"]["default"].as_str(), Some("muse"));
+        assert_eq!(
+            config["harness"]["muse"]["model"].as_str(),
+            Some("muse-spark-1.3")
+        );
+        assert_eq!(config["harness"]["muse"]["effort"].as_str(), Some("high"));
+    }
+
     // The Harness, Model and Effort.
 
     #[test]
-    fn the_harness_question_lists_both_harnesses_and_defaults_to_claude() {
+    fn the_harness_question_lists_installed_harnesses_and_defaults_to_claude() {
         let mut outside = Scripted::answering(&ENTER_THROUGHOUT);
 
         setup(&mut outside).unwrap();
 
         assert_eq!(
             outside.prompts()[0],
-            "Harness for every Run's sessions, claude or codex [claude]: "
+            "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: "
         );
         let config = table(&outside);
         assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-        for harness in ["claude", "codex"] {
+        for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
             for key in ["model", "effort"] {
                 assert_eq!(config["harness"][harness][key].as_str(), Some(""));
             }
@@ -1732,13 +1845,13 @@ always = false # quiet, please
 
         assert_eq!(
             outside.prompts()[0],
-            "Harness for every Run's sessions, claude (not installed) or codex [codex]: "
+            "Harness for every Run's sessions, codex [codex]: "
         );
         assert_eq!(
             outside.said()[..2],
             [
                 "claude is not installed: it isn't on PATH.",
-                "Choose claude or codex."
+                "Choose codex."
             ]
         );
         assert_eq!(
@@ -1748,7 +1861,7 @@ always = false # quiet, please
     }
 
     #[test]
-    fn with_neither_harness_installed_the_harness_settings_are_left_as_they_are() {
+    fn with_no_harness_installed_the_harness_settings_are_left_as_they_are() {
         let mut outside = Scripted {
             installed: Vec::new(),
             user_config: Some("[harness.claude]\nmodel = \"opus\"\n".to_string()),
@@ -1760,9 +1873,8 @@ always = false # quiet, please
         assert_eq!(
             outside.said(),
             [
-                "Harness for every Run's sessions: claude (not installed) or codex (not \
-                 installed). Sessions can run on neither here, so the harness settings stay as \
-                 they are; install claude or codex, then rerun `thirdshift setup`."
+                "No Harness is installed here, so the harness settings stay as they are; \
+                 install claude or codex or agy or grok or muse or opencode, then rerun `thirdshift setup`."
             ]
         );
         let config = table(&outside);
@@ -1790,6 +1902,65 @@ always = false # quiet, please
                 outside.prompts()
             );
         }
+    }
+
+    #[test]
+    fn agy_setup_checks_names_without_a_turn_and_lists_only_installed_harnesses() {
+        let mut outside = Scripted {
+            installed: vec![Harness::Agy],
+            ..Scripted::answering(&then_nothing_else(&[
+                (HARNESS, ""),
+                ("Model for agy", "gemini-99"),
+                ("Model for agy", "Gemini-3.8-Flash"),
+                ("Effort for agy", "Max"),
+                ("Effort for agy", "Medium"),
+            ]))
+        };
+        setup(&mut outside).unwrap();
+        assert_eq!(
+            outside.prompts()[0],
+            "Harness for every Run's sessions, agy [agy]: "
+        );
+        let config = table(&outside);
+        assert_eq!(config["harness"]["default"].as_str(), Some("agy"));
+        assert_eq!(
+            config["harness"]["agy"]["model"].as_str(),
+            Some("gemini-3.8-flash")
+        );
+        assert_eq!(config["harness"]["agy"]["effort"].as_str(), Some("medium"));
+        assert!(
+            outside
+                .said()
+                .iter()
+                .any(|line| line.contains("the Model gemini-99 is not in"))
+        );
+        assert!(
+            outside
+                .said()
+                .iter()
+                .any(|line| line.contains("the Effort Max is not one"))
+        );
+        assert!(outside.test_calls().is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_agy_catalog_keeps_existing_harness_settings() {
+        let mut outside = Scripted {
+            installed: vec![Harness::Agy],
+            agy_catalog: Err("not signed in"),
+            user_config: Some(
+                "[harness]\ndefault = \"agy\"\n[harness.agy]\nmodel = \"gemini-3.8-flash-high\"\n"
+                    .to_string(),
+            ),
+            ..Scripted::answering(&then_nothing_else(&[(HARNESS, "")]))
+        };
+        setup(&mut outside).unwrap();
+        assert_eq!(
+            table(&outside)["harness"]["agy"]["model"].as_str(),
+            Some("gemini-3.8-flash-high")
+        );
+        assert!(outside.said()[0].contains("not signed in"));
+        assert!(outside.said()[0].contains("once agy models works"));
     }
 
     #[test]
@@ -1887,6 +2058,55 @@ always = false # quiet, please
                 &model_and_effort(Some("opus"), None)
             ]
         );
+    }
+
+    #[test]
+    fn setup_offers_grok_when_it_is_the_only_installed_harness_and_checks_its_model_and_effort() {
+        let mut outside = Scripted {
+            installed: vec![Harness::Grok],
+            ..Scripted::answering(&then_nothing_else(&[
+                (HARNESS, ""),
+                ("Model for grok", "bogus"),
+                ("Model for grok", "GROK-4.5"),
+                ("Effort for grok", "xhigh"),
+                ("Effort for grok", "High"),
+            ]))
+        };
+
+        setup(&mut outside).unwrap();
+
+        let config = table(&outside);
+        assert_eq!(config["harness"]["default"].as_str(), Some("grok"));
+        assert_eq!(
+            config["harness"]["grok"]["model"].as_str(),
+            Some("grok-4.5")
+        );
+        assert_eq!(config["harness"]["grok"]["effort"].as_str(), Some("high"));
+        let said = outside.said().join("\n");
+        assert!(
+            said.contains("choose one of grok-4.7, grok-4.7-build-fast, grok-4.6, grok-4.5"),
+            "{said}"
+        );
+        assert!(said.contains("choose one of high, medium, low"), "{said}");
+        assert!(outside.test_calls().is_empty());
+    }
+
+    #[test]
+    fn when_groks_catalog_cannot_be_read_setup_preserves_the_harness_settings() {
+        let mut outside = Scripted {
+            grok_catalog: Err("catalog unavailable"),
+            user_config: Some("[harness]\ndefault = \"codex\"\n[harness.grok]\nmodel = \"grok-4.5\"\neffort = \"medium\"\n".to_string()),
+            ..Scripted::answering(&then_nothing_else(&[(HARNESS, "grok")]))
+        };
+        setup(&mut outside).unwrap();
+        let config = table(&outside);
+        assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
+        assert_eq!(
+            config["harness"]["grok"]["model"].as_str(),
+            Some("grok-4.5")
+        );
+        assert_eq!(config["harness"]["grok"]["effort"].as_str(), Some("medium"));
+        assert!(outside.said().join("\n").contains("once grok models works"));
     }
 
     #[test]

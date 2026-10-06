@@ -262,6 +262,7 @@ mod tests {
                 default: Some(Harness::Codex),
                 claude: model_and_effort("opus", "high"),
                 codex: model_and_effort("gpt-6.1-sol", "max"),
+                ..harness::Settings::default()
             },
             ..no_settings()
         }

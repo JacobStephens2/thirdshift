@@ -1,4 +1,4 @@
-//! The fake `gh`, `claude` and `codex` the end-to-end tests put first on
+//! The fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode` the end-to-end tests put first on
 //! PATH: one executable, which acts as whichever its name says. See
 //! `fakes/gh.rs`, `fakes/claude.rs` and `fakes/codex.rs` for what each does,
 //! and `support/fakes.rs` for how the harness builds it.
@@ -13,21 +13,61 @@
 
 #![cfg_attr(test, allow(dead_code))]
 
+#[path = "fakes/agy.rs"]
+mod agy;
 #[path = "fakes/claude.rs"]
 mod claude;
 #[path = "fakes/codex.rs"]
 mod codex;
 #[path = "fakes/gh.rs"]
 mod gh;
+#[path = "fakes/grok.rs"]
+mod grok;
 #[path = "fakes/json.rs"]
 mod json;
+#[path = "fakes/muse.rs"]
+mod muse;
+#[path = "fakes/opencode.rs"]
+mod opencode;
 
 use std::fs::{self, File};
 use std::io::Write;
+use std::os::fd::AsFd;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use json::{Array, Json};
+
+/// Whether stdin is `/dev/null`, by `fstat` on it, as macOS has no `/proc`.
+fn stdin_is_null() -> bool {
+    let stdin = std::io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .map(fs::File::from)
+        .and_then(|file| file.metadata());
+    let (Ok(stdin), Ok(null)) = (stdin, fs::metadata("/dev/null")) else {
+        return false;
+    };
+    stdin.rdev() == null.rdev() && stdin.ino() == null.ino()
+}
+
+/// Catch SIGINT and SIGTERM, doing nothing on either, so the fake outlasts
+/// them until its script ends. A caught signal, unlike an ignored one, is
+/// back to its default in the script, which can trap it.
+fn outlast_interrupts() {
+    // From the C library, which the standard library links: SIGINT and
+    // SIGTERM are 2 and 15 on Linux and macOS alike.
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
+    }
+    extern "C" fn caught(_: i32) {}
+    for signum in [2, 15] {
+        // SAFETY: the handler does nothing, so it is async-signal-safe.
+        unsafe { signal(signum, caught) };
+    }
+}
 
 /// Print `message` to stderr and exit with `code`, as the fakes fail.
 fn die(message: &str, code: i32) -> ! {
@@ -110,6 +150,29 @@ fn main() {
         "gh" => gh::main(args.collect()),
         "claude" => claude::main(args.collect()),
         "codex" => codex::main(args.collect()),
+        "agy" => agy::main(args.collect()),
+        "grok" => grok::main(args.collect()),
+        "muse" => muse::main(args.collect()),
+        "opencode" => opencode::main(args.collect()),
+        "detached-command" => {
+            let command = args.next().expect("no detached command");
+            let mut command = Command::new(command);
+            command.args(args);
+            // SAFETY: setsid is async-signal-safe and accesses no Rust state.
+            unsafe {
+                command.pre_exec(|| {
+                    unsafe extern "C" {
+                        fn setsid() -> i32;
+                    }
+                    if setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let error = command.exec();
+            die(&format!("could not start detached command: {error}"), 1);
+        }
         _ => die(&format!("fake: no fake is called {name}"), 2),
     }
     exit(0);

@@ -1,0 +1,6 @@
+{"models": {
+  "grok-4.7": {"info": {"id": "grok-4.7", "reasoning_efforts": [{"id": "xhigh", "value": "xhigh"}, {"id": "high", "value": "high"}, {"id": "medium", "value": "medium"}, {"id": "low", "value": "low"}]}},
+  "grok-4.7-build-fast": {"info": {"id": "grok-4.7-build-fast", "reasoning_efforts": [{"id": "xhigh", "value": "xhigh"}, {"id": "high", "value": "high"}, {"id": "medium", "value": "medium"}, {"id": "low", "value": "low"}]}},
+  "grok-4.6": {"info": {"id": "grok-4.6", "reasoning_efforts": [{"id": "xhigh", "value": "xhigh"}, {"id": "high", "value": "high"}, {"id": "medium", "value": "medium"}, {"id": "low", "value": "low"}]}},
+  "grok-4.5": {"info": {"id": "grok-4.5", "reasoning_efforts": [{"id": "high", "value": "high"}, {"id": "medium", "value": "medium"}, {"id": "low", "value": "low"}]}}
+}}
