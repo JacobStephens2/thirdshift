@@ -16,7 +16,9 @@ pub(crate) mod codex;
 pub(crate) mod grok;
 mod instructions;
 pub(crate) mod muse;
+pub(crate) mod opencode;
 mod process_tree;
+mod skill_load;
 
 pub use adapter::{Adapter, Invocation};
 pub use codex::Catalog;
@@ -29,6 +31,7 @@ pub enum Harness {
     Agy,
     Grok,
     Muse,
+    OpenCode,
 }
 
 impl Harness {
@@ -104,6 +107,8 @@ pub struct Settings {
     pub grok: ModelAndEffort,
     /// `[harness.muse]`.
     pub muse: ModelAndEffort,
+    /// `[harness.opencode]`.
+    pub opencode: ModelAndEffort,
 }
 
 impl Settings {

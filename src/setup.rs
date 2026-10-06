@@ -373,6 +373,8 @@ pub(crate) trait Outside {
     fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog>;
     /// Check Muse's settings against its cache, or with its minimal test call.
     fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort>;
+    /// Check OpenCode with its minimal standalone test call.
+    fn opencode_check(&mut self, chosen: &ModelAndEffort) -> Result<()>;
     /// Read the Credentials, as strictly as a Run does: where a Resend API
     /// key is found, if anywhere.
     fn find_key(&mut self) -> Result<Option<Source>>;
@@ -475,6 +477,10 @@ impl Outside for OnMachine<'_> {
 
     fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort> {
         crate::harness::muse::check_model_and_effort(chosen)
+    }
+
+    fn opencode_check(&mut self, chosen: &ModelAndEffort) -> Result<()> {
+        crate::harness::opencode::check_model_and_effort(chosen)
     }
 
     fn find_key(&mut self) -> Result<Option<Source>> {
@@ -846,6 +852,10 @@ mod scripted {
                 .map_err(|error| anyhow!("{error}"))
         }
 
+        fn opencode_check(&mut self, _chosen: &ModelAndEffort) -> Result<()> {
+            Ok(())
+        }
+
         fn find_key(&mut self) -> Result<Option<Source>> {
             self.key.clone().map_err(|error| anyhow!("{error}"))
         }
@@ -1160,7 +1170,7 @@ to = \"me@example.com\"  # my inbox
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex or agy or grok or muse [claude]: ",
+                "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
                 "Model for claude [claude's own default]: ",
                 "Effort for claude [claude's own default]: ",
                 "Every Run a Merge run? [y/N] ",
@@ -1271,6 +1281,10 @@ effort = \"\"
 [harness.muse]
 model = \"\"
 effort = \"\"
+
+[harness.opencode]
+model = \"\"
+effort = \"\"
 ";
         let mut outside = Scripted {
             user_config: Some(mine.to_string()),
@@ -1300,7 +1314,7 @@ effort = \"\"
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex or agy or grok or muse [claude]: ",
+                "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
                 "Model for claude, - for claude's own default [opus]: ",
                 "Effort for claude, - for claude's own default [high]: ",
                 "Every Run a Merge run? [Y/n] ",
@@ -1802,11 +1816,11 @@ always = false # quiet, please
 
         assert_eq!(
             outside.prompts()[0],
-            "Harness for every Run's sessions, claude or codex or agy or grok or muse [claude]: "
+            "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: "
         );
         let config = table(&outside);
         assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-        for harness in ["claude", "codex", "agy", "grok", "muse"] {
+        for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
             for key in ["model", "effort"] {
                 assert_eq!(config["harness"][harness][key].as_str(), Some(""));
             }
@@ -1860,7 +1874,7 @@ always = false # quiet, please
             outside.said(),
             [
                 "No Harness is installed here, so the harness settings stay as they are; \
-                 install claude or codex or agy or grok or muse, then rerun `thirdshift setup`."
+                 install claude or codex or agy or grok or muse or opencode, then rerun `thirdshift setup`."
             ]
         );
         let config = table(&outside);

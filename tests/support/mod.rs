@@ -607,6 +607,7 @@ test -f {root}/{COPY_REPLACED}
             .env("FAKE_AGY_CHECK_RECORD", self.path("agy-checks.json"))
             .env("FAKE_GROK_RECORD", self.path("grok-calls.json"))
             .env("FAKE_MUSE_RECORD", self.path("muse-calls.json"))
+            .env("FAKE_OPENCODE_RECORD", self.path("opencode-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
             // Seconds of waiting for CI become milliseconds. Each poll starts
             // the fake gh; at 100ms the grace period holds about three reads,

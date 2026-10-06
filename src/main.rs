@@ -73,7 +73,7 @@ merge, --no-merge, --email, --no-email, base-fix, --no-base-fix, parallel <n> (o
 --parallel <n>), harness <name>, model <name> and effort <level> (or --harness, --model and
 --effort) go before or after the Issue URL, in any order.
 
-harness (claude, codex, agy, grok or muse), model and effort choose the Harness every session runs on, and its
+harness (claude, codex, agy, grok, muse or opencode), model and effort choose the Harness every session runs on, and its
 Model and Effort, for each Ticket's Run and a Base fix too. For each, the command wins, then
 the User config, then the default: claude, with its own Model and Effort. A Model and Effort
 in the User config come from the chosen Harness's own section, so harness claude over a codex
@@ -103,6 +103,13 @@ session and Resume uses -p --dangerously-skip-permissions --output-format stream
 null stdin and AGY_CLI_DISABLE_AUTO_UPDATE=true; a Resume uses --conversation <id>.
 agy reads AGENTS.md and GEMINI.md, falling back through an excluded GEMINI.md link to
 root CLAUDE.md when neither exists. It does not read ~/.claude/.
+On opencode (OpenCode), the Model id comes from your providers as provider/model;
+Effort is its #variant suffix and needs a Model. A minimal standalone call checks both.
+Every session, check and Resume uses run --standalone --format json --auto with the prompt
+on stdin and OPENCODE_DISABLE_AUTOUPDATE=1; a Resume adds -s <stream session id>.
+Skills load through the skill tool. OpenCode reads AGENTS.md, never CLAUDE.md or ~/.claude/;
+thirdshift supplies an excluded AGENTS.md link to root CLAUDE.md when needed. Session export
+supplies the last assistant text, usage and outcome even when the last stream event is lost.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word

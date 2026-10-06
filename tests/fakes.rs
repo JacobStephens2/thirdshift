@@ -1,4 +1,4 @@
-//! The fake `gh`, `claude`, `codex`, `agy`, `grok` and `muse` the end-to-end tests put first on
+//! The fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode` the end-to-end tests put first on
 //! PATH: one executable, which acts as whichever its name says. See
 //! `fakes/gh.rs`, `fakes/claude.rs` and `fakes/codex.rs` for what each does,
 //! and `support/fakes.rs` for how the harness builds it.
@@ -27,6 +27,8 @@ mod grok;
 mod json;
 #[path = "fakes/muse.rs"]
 mod muse;
+#[path = "fakes/opencode.rs"]
+mod opencode;
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -120,6 +122,7 @@ fn main() {
         "agy" => agy::main(args.collect()),
         "grok" => grok::main(args.collect()),
         "muse" => muse::main(args.collect()),
+        "opencode" => opencode::main(args.collect()),
         "detached-command" => {
             let command = args.next().expect("no detached command");
             let mut command = Command::new(command);

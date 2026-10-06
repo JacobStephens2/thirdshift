@@ -387,7 +387,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 
 [harness]
-default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok or muse; default claude
+default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -408,6 +408,10 @@ effort = ""   # how hard that Model reasons; default blank, for Grok Build's own
 [harness.muse]
 model = ""    # the Model Muse Code's sessions run on; default blank, for Muse Code's own
 effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
+
+[harness.opencode]
+model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
+effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -545,7 +549,9 @@ mod tests {
                 "harness.grok.model",
                 "harness.grok.effort",
                 "harness.muse.model",
-                "harness.muse.effort"
+                "harness.muse.effort",
+                "harness.opencode.model",
+                "harness.opencode.effort"
             ]
         );
         let commented_out: Vec<&str> = DEFAULTS
@@ -606,7 +612,7 @@ mod tests {
         for (text, error) in [
             (
                 "[harness]\ndefault = \"gemini\"\n",
-                "harness.default must be claude or codex or agy or grok or muse, not \"gemini\"",
+                "harness.default must be claude or codex or agy or grok or muse or opencode, not \"gemini\"",
             ),
             (
                 "[harness]\ndefault = true\n",
