@@ -279,6 +279,7 @@ pub fn replace(path: &Path, text: &str) -> std::io::Result<()> {
 /// gets no comment, as TOML has no place for one there.
 fn complete(text: &str) -> Result<String> {
     let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
+    let has_email_example = email_example(&document).is_some();
     let defaults: DocumentMut = DEFAULTS.parse().expect("DEFAULTS is valid TOML");
     let mut missing = DocumentMut::new();
     complete_table(
@@ -290,7 +291,7 @@ fn complete(text: &str) -> Result<String> {
         && !email.is_dotted()
     {
         let defaults = defaults["email"].as_table().expect("DEFAULTS has [email]");
-        note_email_to(email, defaults, text);
+        note_email_to(email, defaults, has_email_example);
     }
     let mut completed = document.to_string();
     let missing = missing.to_string();
@@ -356,11 +357,11 @@ fn set_email_to(document: &mut DocumentMut, to: &str) {
         set(document, "email", "to", to);
         return;
     }
-    let Some(email) = email.as_table_mut().filter(|email| !email.is_dotted()) else {
+    if email.as_table().is_none_or(|email| email.is_dotted()) {
         let settings = email.as_table_like_mut().expect("[email] is a section");
         settings.insert("to", Item::Value(to.into()));
         return;
-    };
+    }
     let example: DocumentMut = with_email_to(Some(to.to_string()))
         .parse()
         .expect("DEFAULTS is valid TOML");
@@ -370,25 +371,41 @@ fn set_email_to(document: &mut DocumentMut, to: &str) {
         .expect("the example sets email.to");
     let mut key = key.clone();
     key.leaf_decor_mut().set_prefix("");
+    let email = document["email"].as_table().expect("[email] is a section");
     let keys: Vec<String> = email.iter().map(|(key, _)| key.to_string()).collect();
     let mut place = keys.len();
-    for (at, name) in keys.iter().enumerate() {
-        let mut next = email.key_mut(name).expect("the key is in [email]");
-        let prefix = decor_prefix(next.leaf_decor());
-        let mut end = 0;
-        let found = prefix.split_inclusive('\n').find_map(|line| {
-            let start = end;
-            end += line.len();
-            is_commented_out_email_to(line).then_some((start, end))
-        });
-        let Some((start, end)) = found else {
-            continue;
-        };
-        next.leaf_decor_mut().set_prefix(&prefix[end..]);
-        key.leaf_decor_mut().set_prefix(&prefix[..start]);
-        place = at;
-        break;
-    }
+    let prefix = match email_example(document) {
+        Some(EmailExample::BeforeKey(name)) => {
+            place = keys
+                .iter()
+                .position(|key| *key == name)
+                .expect("the key is in [email]");
+            let mut next = document["email"]
+                .as_table_mut()
+                .unwrap()
+                .key_mut(&name)
+                .unwrap();
+            take_email_example(next.leaf_decor_mut())
+        }
+        Some(EmailExample::BeforeSection(position)) => {
+            let next = section_at(document.as_table_mut(), position)
+                .expect("the section is in the document");
+            take_email_example(next.decor_mut())
+        }
+        Some(EmailExample::Trailing) => {
+            let prefix = document.trailing().as_str().unwrap_or("");
+            let (before, after) = split_email_example(prefix);
+            let before = before.to_string();
+            let after = after.to_string();
+            document.set_trailing(after);
+            before
+        }
+        None => String::new(),
+    };
+    key.leaf_decor_mut().set_prefix(prefix);
+    let email = document["email"]
+        .as_table_mut()
+        .expect("[email] is a section");
     email.insert_formatted(&key, item.clone());
     // Each key keeps its place, and `to` goes just before the key at `place`,
     // or last: odd ranks for the keys that were there, an even one for `to`.
@@ -397,6 +414,90 @@ fn set_email_to(document: &mut DocumentMut, to: &str) {
         None => 2 * place,
     };
     email.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
+}
+
+/// A comment after the last email key belongs to the following section's
+/// prefix, or the document's trailing text. It still describes email.to.
+enum EmailExample {
+    BeforeKey(String),
+    BeforeSection(isize),
+    Trailing,
+}
+
+fn email_example(document: &DocumentMut) -> Option<EmailExample> {
+    let email = document.get("email")?.as_table()?;
+    if email.is_dotted() || email.is_implicit() {
+        return None;
+    }
+    for (name, _) in email.iter() {
+        let prefix = decor_prefix(email.key(name)?.leaf_decor());
+        if prefix.lines().any(is_commented_out_email_to) {
+            return Some(EmailExample::BeforeKey(name.to_string()));
+        }
+    }
+    let position = email
+        .position()
+        .expect("an explicit section has a position");
+    if let Some(next) = following_section(document.as_table(), position) {
+        decor_prefix(next.decor())
+            .lines()
+            .any(is_commented_out_email_to)
+            .then(|| EmailExample::BeforeSection(next.position().unwrap()))
+    } else {
+        document
+            .trailing()
+            .as_str()
+            .unwrap_or("")
+            .lines()
+            .any(is_commented_out_email_to)
+            .then_some(EmailExample::Trailing)
+    }
+}
+
+/// Find the next written section, including nested Harness sections whose
+/// headers can precede their parent's explicit header.
+fn following_section(table: &toml_edit::Table, position: isize) -> Option<&toml_edit::Table> {
+    let current = table
+        .position()
+        .filter(|at| *at > position && !table.is_implicit() && !table.is_dotted())
+        .map(|_| table);
+    table
+        .iter()
+        .filter_map(|(_, item)| item.as_table())
+        .filter_map(|section| following_section(section, position))
+        .chain(current)
+        .min_by_key(|section| section.position().unwrap())
+}
+
+fn section_at(table: &mut toml_edit::Table, position: isize) -> Option<&mut toml_edit::Table> {
+    if table.position() == Some(position) && !table.is_implicit() && !table.is_dotted() {
+        return Some(table);
+    }
+    table
+        .iter_mut()
+        .filter_map(|(_, item)| item.as_table_mut())
+        .find_map(|section| section_at(section, position))
+}
+
+fn take_email_example(decor: &mut toml_edit::Decor) -> String {
+    let prefix = decor_prefix(decor);
+    let (before, after) = split_email_example(&prefix);
+    decor.set_prefix(after);
+    before.to_string()
+}
+
+/// Remove only the example's line, retaining the adjacent comments on
+/// either side for the inserted recipient and the next key or section.
+fn split_email_example(prefix: &str) -> (&str, &str) {
+    let mut end = 0;
+    for line in prefix.split_inclusive('\n') {
+        let start = end;
+        end += line.len();
+        if is_commented_out_email_to(line) {
+            return (&prefix[..start], &prefix[end..]);
+        }
+    }
+    unreachable!("the decoration contains the email example")
 }
 
 /// Add to `settings`, a table of a User config, each key of `defaults`, the
@@ -471,12 +572,12 @@ fn complete_inline(settings: &mut toml_edit::InlineTable, defaults: &toml_edit::
     }
 }
 
-/// With no `email.to` in `email`, the `[email]` section of `text`, and no
-/// commented-out one either, add the commented-out example line from
+/// With no `email.to` in `email`, and no commented-out one either, add the
+/// commented-out example line from
 /// `defaults`, the `[email]` section of `DEFAULTS`, just before `email.from`:
 /// `email.to` has no default to write.
-fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, text: &str) {
-    if email.contains_key("to") || has_commented_out_email_to(text) {
+fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, has_example: bool) {
+    if email.contains_key("to") || has_example {
         return;
     }
     let example = decor_prefix(
@@ -510,20 +611,6 @@ fn decor_suffix(decor: &toml_edit::Decor) -> String {
         .and_then(|suffix| suffix.as_str())
         .unwrap_or("")
         .to_string()
-}
-
-/// Whether the `[email]` section of `text` holds a commented-out `to` line.
-fn has_commented_out_email_to(text: &str) -> bool {
-    let mut in_email = false;
-    for line in text.lines().map(str::trim) {
-        if let Some(header) = line.strip_prefix('[') {
-            let header = header.split('#').next().unwrap_or("").trim_end();
-            in_email = header.strip_suffix(']').map(str::trim) == Some("email");
-        } else if in_email && is_commented_out_email_to(line) {
-            return true;
-        }
-    }
-    false
 }
 
 /// Whether `line`, in the `[email]` section, is a commented-out `to` line.
@@ -1479,5 +1566,66 @@ mod tests {
         );
         assert!(!rendered.contains("# to ="), "{rendered}");
         assert_eq!(document(&rendered).render(None), rendered);
+    }
+    #[test]
+    fn enabling_notifications_replaces_examples_at_section_and_document_boundaries() {
+        let email_start = DEFAULTS.find("[email]\n").unwrap();
+        let email_end = DEFAULTS.find("[logs]\n").unwrap();
+        let email_last = format!(
+            "{}{}\n[email]\nalways = false\nfrom = 'onboarding@resend.dev'\n# mine\n# to = 'saved@example.com'\n# more\n",
+            &DEFAULTS[..email_start],
+            &DEFAULTS[email_end..]
+        );
+        for text in [
+            "[email]\nalways = false\nfrom = 'onboarding@resend.dev'\n# mine\n# to = 'saved@example.com'\n# more\n",
+            "[email]\nalways = false\nfrom = 'onboarding@resend.dev'\n# mine\n# to = 'saved@example.com'\n# more\n[merge]\nalways = false\n",
+            "[email]\nalways = false\nfrom = 'onboarding@resend.dev'\n# mine\n# to = 'saved@example.com'\n# more\n[harness.codex]\nmodel = 'saved'\n",
+            "[email]\n# mine\n# to = 'saved@example.com'\n# more\n",
+            "[email]\n# mine\n# to = 'saved@example.com'\n# more\n[merge]\nalways = false\n",
+            &email_last,
+        ] {
+            let completed = document(text).render(None);
+            assert_eq!(completed.matches("# to =").count(), 1, "{completed}");
+            let rendered = document(text).render(Some(notifications_to("me@example.com")));
+            let lines: Vec<_> = rendered.lines().collect();
+            let to = lines
+                .iter()
+                .position(|line| line.starts_with("to = "))
+                .unwrap();
+            assert_eq!(lines[to - 1], "# mine", "{rendered}");
+            assert_eq!(lines[to + 1], "# more", "{rendered}");
+            assert!(!rendered.contains("# to ="), "{rendered}");
+            let settings = parse(&rendered).unwrap();
+            assert!(settings.email.always);
+            assert_eq!(settings.email.to.as_deref(), Some("me@example.com"));
+            assert_eq!(document(&rendered).render(None), rendered);
+        }
+    }
+    #[test]
+    fn quoted_email_headers_keep_one_example_and_render_idempotently() {
+        for header in [r#"["email"]"#, "['email']", r#"["em\u0061il"]"#] {
+            let text = format!(
+                "{header}\nalways = false\n# mine\n# to = 'saved@example.com'\n# more\nfrom = 'onboarding@resend.dev'\n"
+            );
+            let completed = document(&text).render(None);
+            assert_eq!(completed.matches("# to =").count(), 1, "{completed}");
+            assert!(completed.starts_with(&text), "{completed}");
+            assert_eq!(document(&completed).render(None), completed);
+
+            let rendered = document(&text).render(Some(notifications_to("me@example.com")));
+            assert!(rendered.starts_with(header), "{rendered}");
+            assert!(!rendered.contains("# to ="), "{rendered}");
+            let lines: Vec<_> = rendered.lines().collect();
+            let to = lines
+                .iter()
+                .position(|line| line.starts_with("to = "))
+                .unwrap();
+            assert_eq!(lines[to - 1], "# mine", "{rendered}");
+            assert_eq!(lines[to + 1], "# more", "{rendered}");
+            let settings = parse(&rendered).unwrap();
+            assert!(settings.email.always);
+            assert_eq!(settings.email.to.as_deref(), Some("me@example.com"));
+            assert_eq!(document(&rendered).render(None), rendered);
+        }
     }
 }
