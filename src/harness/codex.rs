@@ -11,7 +11,7 @@ use anyhow::Result;
 use super::adapter::{Adapter, Invocation, SkillLoading};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 use crate::progress::{self, Stream};
-use crate::setup::{Outside, questions::ask_setting};
+use crate::setup::{Outside, questions::ask_checked_setting};
 
 pub struct Codex;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Codex, &Codex);
@@ -135,13 +135,13 @@ fn ask_codex(
         Codex.product_name(),
         catalog.listed().join(", ")
     ));
-    let model = loop {
-        let model = ask_setting(outside, "Model", Harness::Codex, current.model.as_deref())?;
-        match catalog.settle(model.as_deref(), None) {
-            Ok(settled) => break settled.model,
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    };
+    let model = ask_checked_setting(
+        outside,
+        "Model",
+        Harness::Codex,
+        current.model.as_deref(),
+        |model| catalog.settle(model, None).map(|settled| settled.model),
+    )?;
     let efforts = catalog.efforts(model.as_deref()).join(", ");
     outside.say(match &model {
         Some(model) => format!("Efforts {model} supports: {efforts}"),
@@ -150,13 +150,18 @@ fn ask_codex(
             Codex.product_name()
         ),
     });
-    loop {
-        let effort = ask_setting(outside, "Effort", Harness::Codex, current.effort.as_deref())?;
-        match catalog.settle(model.as_deref(), effort.as_deref()) {
-            Ok(settled) => return Ok(settled),
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    }
+    let effort = ask_checked_setting(
+        outside,
+        "Effort",
+        Harness::Codex,
+        current.effort.as_deref(),
+        |effort| {
+            catalog
+                .settle(model.as_deref(), effort)
+                .map(|settled| settled.effort)
+        },
+    )?;
+    Ok(ModelAndEffort { model, effort })
 }
 
 /// `prompt` as Codex takes it: a first line that loads a Factory skill,

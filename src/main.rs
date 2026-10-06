@@ -90,7 +90,7 @@ Before any work, the Harness's CLI must be on PATH. On claude, a named Model get
 test call with its Effort, which must succeed. On codex, a named Model and Effort must be in
 codex debug models, matched regardless of case, a Model by slug or display name, and are
 passed on as Codex names them. Grok Build checks grok models and its refreshed effort cache,
-then runs grok -p --always-approve --output-format streaming-messages-json with null stdin,
+then runs grok -p <prompt> --always-approve --sandbox off --output-format streaming-messages-json with null stdin,
 GROK_DISABLE_AUTOUPDATER=1 and GROK_FOLDER_TRUST=0. Resume uses -r <session id>.
 A failure stops the command naming what to fix, before the
 Claim, the worktree and any Command log. Codex sessions run codex exec --json

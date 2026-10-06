@@ -87,6 +87,7 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"ru
         &[
             ("GROK_DISABLE_AUTOUPDATER", "0"),
             ("GROK_FOLDER_TRUST", "1"),
+            ("GROK_SANDBOX", "workspace"),
         ],
     );
     assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -112,14 +113,16 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"ru
     assert_eq!(
         session["argv"],
         serde_json::json!([
-            "-p",
             "--always-approve",
+            "--sandbox",
+            "off",
             "--output-format",
             "streaming-messages-json",
             "-m",
             "grok-4.7",
             "--reasoning-effort",
             "high",
+            "-p",
             prompt
         ])
     );
@@ -198,8 +201,9 @@ echo '{{"type":"system","subtype":"task_notification","task_id":"task-1","status
     assert_eq!(
         calls[2]["argv"],
         serde_json::json!([
-            "-p",
             "--always-approve",
+            "--sandbox",
+            "off",
             "--output-format",
             "streaming-messages-json",
             "-m",
@@ -208,6 +212,7 @@ echo '{{"type":"system","subtype":"task_notification","task_id":"task-1","status
             "low",
             "-r",
             "fake-grok-1",
+            "-p",
             prompt
         ])
     );

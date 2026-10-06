@@ -17,6 +17,15 @@ pub fn main(argv: Vec<String>) {
     if !catalog && !argv.iter().any(|arg| arg == "-p") {
         crate::die("fake grok: expected models or -p", 2);
     }
+    if !catalog {
+        let prompt = argv
+            .iter()
+            .position(|arg| arg == "-p")
+            .and_then(|at| argv.get(at + 1));
+        if prompt.is_none_or(|prompt| prompt.starts_with('-')) {
+            crate::die("a value is required for --single <PROMPT>", 2);
+        }
+    }
     let record_path = crate::env_path("FAKE_GROK_RECORD");
     let lock = crate::lock_beside(&record_path);
     let (branch, _) = git_here(&["branch", "--show-current"]);

@@ -11,7 +11,7 @@ use anyhow::Result;
 use super::adapter::{Adapter, Invocation, SkillLoading};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 use crate::progress::Stream;
-use crate::setup::{Outside, questions::ask_setting};
+use crate::setup::{Outside, questions::ask_checked_setting};
 
 pub struct Grok;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Grok, &Grok);
@@ -46,8 +46,9 @@ impl Adapter for Grok {
     }
     fn session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
         let mut args: Vec<String> = [
-            "-p",
             "--always-approve",
+            "--sandbox",
+            "off",
             "--output-format",
             "streaming-messages-json",
         ]
@@ -62,7 +63,7 @@ impl Adapter for Grok {
         if let Some(id) = resume {
             args.extend(["-r".to_string(), id.to_string()]);
         }
-        args.push(self.skill_loading().prompt(prompt));
+        args.extend(["-p".to_string(), self.skill_loading().prompt(prompt)]);
         Invocation { args, stdin: None }
     }
     fn check(&self, choice: &mut Choice) -> Result<()> {
@@ -89,25 +90,30 @@ impl Adapter for Grok {
             self.product_name(),
             catalog.listed().join(", ")
         ));
-        let model = loop {
-            let model = ask_setting(outside, "Model", Harness::Grok, current.model.as_deref())?;
-            match catalog.settle(model.as_deref(), None) {
-                Ok(settled) => break settled.model,
-                Err(error) => outside.say(format!("{error:#}")),
-            }
-        };
+        let model = ask_checked_setting(
+            outside,
+            "Model",
+            Harness::Grok,
+            current.model.as_deref(),
+            |model| catalog.settle(model, None).map(|settled| settled.model),
+        )?;
         outside.say(format!(
             "Efforts {} supports: {}",
             model.as_deref().unwrap_or("Grok Build's default Model"),
             catalog.efforts(model.as_deref()).join(", ")
         ));
-        loop {
-            let effort = ask_setting(outside, "Effort", Harness::Grok, current.effort.as_deref())?;
-            match catalog.settle(model.as_deref(), effort.as_deref()) {
-                Ok(settled) => return Ok(Some(settled)),
-                Err(error) => outside.say(format!("{error:#}")),
-            }
-        }
+        let effort = ask_checked_setting(
+            outside,
+            "Effort",
+            Harness::Grok,
+            current.effort.as_deref(),
+            |effort| {
+                catalog
+                    .settle(model.as_deref(), effort)
+                    .map(|settled| settled.effort)
+            },
+        )?;
+        Ok(Some(ModelAndEffort { model, effort }))
     }
     fn stream(&self, _worktree: &Path) -> Box<dyn Stream> {
         Box::new(stream::GrokProgress::default())

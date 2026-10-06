@@ -12,6 +12,7 @@ pub struct GrokProgress {
     error: Option<String>,
     session_id: Option<String>,
     usage: Option<String>,
+    cost_known: bool,
 }
 
 impl Stream for GrokProgress {
@@ -28,6 +29,11 @@ impl Stream for GrokProgress {
                 self.error = event["message"].as_str().map(String::from);
             }
             Some("result") => {
+                // Messages streams use zero as a placeholder for unknown cost.
+                self.cost_known = event["total_cost_usd"]
+                    .as_f64()
+                    .is_some_and(|cost| cost > 0.0);
+                self.usage = None;
                 self.failed = event["is_error"] == true || event["subtype"] != "success";
                 let errors: Vec<_> = event["errors"]
                     .as_array()
@@ -82,7 +88,11 @@ impl Stream for GrokProgress {
         self.claude.condense(&event.to_string())
     }
     fn summary(&self) -> Option<String> {
-        self.claude.summary().or_else(|| self.usage.clone())
+        if self.cost_known {
+            self.claude.summary().or_else(|| self.usage.clone())
+        } else {
+            self.usage.clone()
+        }
     }
     fn final_message(&self) -> Option<&str> {
         self.claude.final_message()
@@ -124,7 +134,7 @@ mod tests {
     #[test]
     fn usage_without_a_complete_cost_and_a_result_without_init_are_still_read() {
         let mut stream = GrokProgress::default();
-        stream.condense(r#"{"type":"result","subtype":"success","result":"done","usage":{"input_tokens":812,"output_tokens":210,"cache_read_input_tokens":45,"cache_creation_input_tokens":12},"session_id":"abc123"}"#);
+        stream.condense(r#"{"type":"result","subtype":"success","result":"done","num_turns":1,"total_cost_usd":0,"usage":{"input_tokens":812,"output_tokens":210,"cache_read_input_tokens":45,"cache_creation_input_tokens":12},"session_id":"abc123"}"#);
         assert_eq!(stream.session_id(), Some("abc123"));
         assert_eq!(
             stream.summary().as_deref(),
