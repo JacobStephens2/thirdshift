@@ -1,4 +1,4 @@
-//! The fake `gh`, `claude`, `codex`, `agy` and `muse` the end-to-end tests put first on
+//! The fake `gh`, `claude`, `codex`, `agy`, `grok` and `muse` the end-to-end tests put first on
 //! PATH: one executable, which acts as whichever its name says. See
 //! `fakes/gh.rs`, `fakes/claude.rs` and `fakes/codex.rs` for what each does,
 //! and `support/fakes.rs` for how the harness builds it.
@@ -21,6 +21,8 @@ mod claude;
 mod codex;
 #[path = "fakes/gh.rs"]
 mod gh;
+#[path = "fakes/grok.rs"]
+mod grok;
 #[path = "fakes/json.rs"]
 mod json;
 #[path = "fakes/muse.rs"]
@@ -116,6 +118,7 @@ fn main() {
         "claude" => claude::main(args.collect()),
         "codex" => codex::main(args.collect()),
         "agy" => agy::main(args.collect()),
+        "grok" => grok::main(args.collect()),
         "muse" => muse::main(args.collect()),
         "detached-command" => {
             let command = args.next().expect("no detached command");

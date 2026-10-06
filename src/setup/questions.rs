@@ -229,6 +229,24 @@ pub(crate) fn ask_setting(
     Ok(Some(answer).filter(|answer| !answer.is_empty() && answer != "-"))
 }
 
+/// Ask one catalog-backed setting, retrying refusals with the catalog's
+/// valid choices and returning the name the Harness takes.
+pub(crate) fn ask_checked_setting(
+    outside: &mut (impl Outside + ?Sized),
+    setting: &str,
+    harness: Harness,
+    current: Option<&str>,
+    settle: impl Fn(Option<&str>) -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    loop {
+        let answer = ask_setting(outside, setting, harness, current)?;
+        match settle(answer.as_deref()) {
+            Ok(settled) => return Ok(settled),
+            Err(error) => outside.say(format!("{error:#}")),
+        }
+    }
+}
+
 /// Ask `question` until the answer is yes, no or nothing, which is `default`.
 fn yes_or_no(outside: &mut impl Outside, question: &str, default: bool) -> Result<bool> {
     let choices = if default { "[Y/n]" } else { "[y/N]" };

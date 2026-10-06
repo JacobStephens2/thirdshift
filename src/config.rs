@@ -387,7 +387,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 
 [harness]
-default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy or muse; default claude
+default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok or muse; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -400,6 +400,10 @@ effort = ""   # how hard that Model reasons; default blank, for Codex's own
 [harness.agy]
 model = ""    # the Model Antigravity CLI's sessions run on; default blank, for agy's own
 effort = ""   # how hard that Model reasons; default blank, for agy's own
+
+[harness.grok]
+model = ""    # the Model Grok Build's sessions run on; default blank, for Grok Build's own
+effort = ""   # how hard that Model reasons; default blank, for Grok Build's own
 
 [harness.muse]
 model = ""    # the Model Muse Code's sessions run on; default blank, for Muse Code's own
@@ -538,6 +542,8 @@ mod tests {
                 "harness.codex.effort",
                 "harness.agy.model",
                 "harness.agy.effort",
+                "harness.grok.model",
+                "harness.grok.effort",
                 "harness.muse.model",
                 "harness.muse.effort"
             ]
@@ -589,7 +595,7 @@ mod tests {
                     model: Some("gpt-6.1-sol".to_string()),
                     effort: Some("max".to_string()),
                 },
-                ..Default::default()
+                ..harness::Settings::default()
             }
         );
         assert_eq!(parse("").unwrap().harness, harness::Settings::default());
@@ -600,7 +606,7 @@ mod tests {
         for (text, error) in [
             (
                 "[harness]\ndefault = \"gemini\"\n",
-                "harness.default must be claude or codex or agy or muse, not \"gemini\"",
+                "harness.default must be claude or codex or agy or grok or muse, not \"gemini\"",
             ),
             (
                 "[harness]\ndefault = true\n",
@@ -881,7 +887,7 @@ mod tests {
             let config: toml::Table = completed.parse().unwrap();
             let harness = config["harness"].as_table().unwrap();
             assert!(harness.contains_key("default"), "{text:?}:\n{completed}");
-            for name in ["claude", "codex"] {
+            for name in ["claude", "codex", "agy", "grok"] {
                 let settings = harness[name].as_table().unwrap();
                 for key in ["model", "effort"] {
                     assert!(settings.contains_key(key), "{text:?}:\n{completed}");

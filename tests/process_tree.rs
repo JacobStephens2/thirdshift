@@ -50,6 +50,16 @@ fn interrupting_an_agy_run_stops_a_command_in_its_own_session() {
     assert_detached_command_stopped("agy");
 }
 
+#[test]
+fn interrupting_a_grok_run_stops_a_command_in_its_own_session() {
+    assert_detached_command_stopped("grok");
+}
+
+#[test]
+fn interrupting_a_muse_run_stops_a_command_in_its_own_session() {
+    assert_detached_command_stopped("muse");
+}
+
 fn assert_detached_command_stopped(harness: &str) {
     let scenario = Scenario::new();
     let pid = scenario.path("detached-pid");
