@@ -10,9 +10,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings, said};
 use crate::progress::Stream;
-use crate::setup::{Outside, questions::ask_setting};
 
 pub struct Muse;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Muse, &Muse);
@@ -67,7 +67,7 @@ impl Adapter for Muse {
     }
     fn ask_settings(
         &self,
-        outside: &mut dyn Outside,
+        outside: &mut dyn Terminal,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>> {
         loop {
@@ -87,7 +87,7 @@ impl Adapter for Muse {
                     continue;
                 }
             };
-            match outside.muse_check(&chosen) {
+            match check_model_and_effort(&chosen) {
                 Ok(settled) => return Ok(Some(settled)),
                 Err(error) => {
                     crate::interrupt::check()?;

@@ -71,7 +71,10 @@ pub fn main(argv: Vec<String>) {
         let cache = home.join(".grok/models_cache.json");
         fs::create_dir_all(cache.parent().unwrap()).unwrap();
         fs::write(cache, CACHE).unwrap();
-        println!("{MODELS}");
+        let models = std::env::var_os("FAKE_GROK_MODELS")
+            .map(|path| fs::read_to_string(path).unwrap())
+            .unwrap_or_else(|| MODELS.to_string());
+        println!("{models}");
         crate::exit(0);
     }
     outlast_interrupts();

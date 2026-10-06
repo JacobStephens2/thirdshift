@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use super::{Outside, suggested_address};
 use crate::config::{NotificationAddresses, UserConfig, UserConfigChanges};
 use crate::email::DEFAULT_FROM;
-use crate::harness::{self, Harness, ModelAndEffort};
+use crate::harness::{Harness, ModelAndEffort};
 use crate::resend_key::{self, Source};
 
 /// What the user chose.
@@ -91,8 +91,9 @@ pub fn offer(outside: &mut impl Outside, path: &Path) -> Result<bool> {
 
 /// Ask the Setup questions, with the settings in `current` as the default
 /// answers, and the suggested address for `email.to` when `current` has
-/// none. The Harness, Model and Effort come first, as [`ask_harness`] asks
-/// them. Base fixes are asked about only with every Run a Merge run;
+/// none. The Harness, Model and Effort come first, through one complete
+/// Harness settings interaction. Base fixes are asked about only with every
+/// Run a Merge run;
 /// otherwise the answer is `base.fix`'s default, no.
 /// The address is re-asked until it has an `@`. With Run notifications on,
 /// the Resend API key is asked for too, unless `found`, where the key was
@@ -104,7 +105,7 @@ pub fn ask(
     current: &UserConfig,
     found: Option<Source>,
 ) -> Result<Answers> {
-    let harness = ask_harness(outside, &current.harness)?;
+    let harness = outside.ask_harness_settings(&current.harness)?;
     let merge_always = yes_or_no(outside, "Every Run a Merge run?", current.merge_always)?;
     let base_fix = merge_always
         && yes_or_no(
@@ -175,93 +176,6 @@ pub fn ask(
             send_test,
         }),
     })
-}
-
-/// Ask which installed Harness every Run's sessions run on, then its
-/// Model and Effort through the chosen adapter. Keep the configured default
-/// when installed, otherwise prefer Claude, then the first installed.
-/// With no Harness installed, leave the Harness settings as they are.
-fn ask_harness(
-    outside: &mut impl Outside,
-    current: &harness::Settings,
-) -> Result<Option<(Harness, ModelAndEffort)>> {
-    let installed: Vec<Harness> = Harness::ALL
-        .into_iter()
-        .filter(|harness| outside.installed(*harness))
-        .collect();
-    let harnesses = installed
-        .iter()
-        .map(|harness| harness.name())
-        .collect::<Vec<_>>()
-        .join(" or ");
-    let default = current
-        .default
-        .filter(|harness| installed.contains(harness))
-        .or_else(|| installed.first().copied());
-    let Some(default) = default else {
-        let names = harness::names();
-        outside.say(format!(
-            "No Harness is installed here, so the harness settings stay as they are; \
-             install {names}, then rerun `thirdshift setup`."
-        ));
-        return Ok(None);
-    };
-    let harness = loop {
-        let name = answer(
-            outside,
-            &format!("Harness for every Run's sessions, {harnesses}"),
-            Some(default.name()),
-        )?;
-        match Harness::named(&name) {
-            None => outside.say(format!("Choose {harnesses}.")),
-            Some(harness) if !installed.contains(&harness) => {
-                outside.say(format!("{name} is not installed: it isn't on PATH."))
-            }
-            Some(harness) => break harness,
-        }
-    };
-    let adapter = harness.adapter();
-    let chosen = adapter.ask_settings(outside, adapter.settings(current))?;
-    Ok(chosen.map(|chosen| (harness, chosen)))
-}
-
-/// Ask for the `setting`, the Model or the Effort, of `harness`, with
-/// `current` as the default; `-` is none, the Harness's own default.
-pub(crate) fn ask_setting(
-    outside: &mut (impl Outside + ?Sized),
-    setting: &str,
-    harness: Harness,
-    current: Option<&str>,
-) -> Result<Option<String>> {
-    let name = harness.name();
-    let own = format!("{name}'s own default");
-    let answer = match current {
-        Some(current) => answer(
-            outside,
-            &format!("{setting} for {name}, - for {own}"),
-            Some(current),
-        )?,
-        None => read(outside, &format!("{setting} for {name} [{own}]: "))?,
-    };
-    Ok(Some(answer).filter(|answer| !answer.is_empty() && answer != "-"))
-}
-
-/// Ask one catalog-backed setting, retrying refusals with the catalog's
-/// valid choices and returning the name the Harness takes.
-pub(crate) fn ask_checked_setting(
-    outside: &mut (impl Outside + ?Sized),
-    setting: &str,
-    harness: Harness,
-    current: Option<&str>,
-    settle: impl Fn(Option<&str>) -> Result<Option<String>>,
-) -> Result<Option<String>> {
-    loop {
-        let answer = ask_setting(outside, setting, harness, current)?;
-        match settle(answer.as_deref()) {
-            Ok(settled) => return Ok(settled),
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    }
 }
 
 /// Ask `question` until the answer is yes, no or nothing, which is `default`.

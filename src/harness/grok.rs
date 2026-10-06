@@ -9,9 +9,9 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::settings::{Terminal, ask_checked_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 use crate::progress::Stream;
-use crate::setup::{Outside, questions::ask_checked_setting};
 
 pub struct Grok;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Grok, &Grok);
@@ -75,10 +75,10 @@ impl Adapter for Grok {
     }
     fn ask_settings(
         &self,
-        outside: &mut dyn Outside,
+        outside: &mut dyn Terminal,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>> {
-        let catalog = match outside.grok_catalog() {
+        let catalog = match Catalog::read() {
             Ok(catalog) => catalog,
             Err(error) => {
                 crate::interrupt::check()?;

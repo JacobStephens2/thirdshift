@@ -4,9 +4,9 @@ pub(crate) mod stream;
 pub use catalog::Catalog;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 use crate::progress::{self, Stream};
-use crate::setup::{Outside, questions::ask_setting};
 use anyhow::Result;
 use std::path::Path;
 
@@ -71,10 +71,10 @@ impl Adapter for Agy {
     }
     fn ask_settings(
         &self,
-        outside: &mut dyn Outside,
+        outside: &mut dyn Terminal,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>> {
-        let catalog = match outside.agy_catalog() {
+        let catalog = match Catalog::read() {
             Ok(catalog) => catalog,
             Err(error) => {
                 crate::interrupt::check()?;

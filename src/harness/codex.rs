@@ -9,9 +9,9 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::settings::{Terminal, ask_checked_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 use crate::progress::{self, Stream};
-use crate::setup::{Outside, questions::ask_checked_setting};
 
 pub struct Codex;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Codex, &Codex);
@@ -49,10 +49,10 @@ impl Adapter for Codex {
     }
     fn ask_settings(
         &self,
-        outside: &mut dyn Outside,
+        outside: &mut dyn Terminal,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>> {
-        match outside.codex_catalog() {
+        match Catalog::read() {
             Ok(catalog) => ask_codex(outside, &catalog, current).map(Some),
             Err(error) => {
                 crate::interrupt::check()?;
@@ -127,7 +127,7 @@ fn check_model_and_effort(choice: &mut Choice) -> Result<()> {
 /// Codex names it; one the catalog doesn't have is asked again, with the
 /// valid choices.
 fn ask_codex(
-    outside: &mut dyn Outside,
+    outside: &mut dyn Terminal,
     catalog: &Catalog,
     current: &ModelAndEffort,
 ) -> Result<ModelAndEffort> {

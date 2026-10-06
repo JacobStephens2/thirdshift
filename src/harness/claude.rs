@@ -8,9 +8,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings, said};
 use crate::progress::{self, Stream};
-use crate::setup::{Outside, questions::ask_setting};
 
 pub struct Claude;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Claude, &Claude);
@@ -52,7 +52,7 @@ impl Adapter for Claude {
     }
     fn ask_settings(
         &self,
-        outside: &mut dyn Outside,
+        outside: &mut dyn Terminal,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>> {
         ask_claude(outside, current).map(Some)
@@ -128,7 +128,7 @@ const TEST_PROMPT: &str = "Reply with OK.";
 /// Ask Claude's Model and Effort, with `current` as the defaults. A Model is
 /// checked with a test call, as a Run checks it, and on a refusal the Model
 /// and Effort are asked again.
-fn ask_claude(outside: &mut dyn Outside, current: &ModelAndEffort) -> Result<ModelAndEffort> {
+fn ask_claude(outside: &mut dyn Terminal, current: &ModelAndEffort) -> Result<ModelAndEffort> {
     loop {
         let chosen = ModelAndEffort {
             model: ask_setting(outside, "Model", Harness::Claude, current.model.as_deref())?,
@@ -142,7 +142,12 @@ fn ask_claude(outside: &mut dyn Outside, current: &ModelAndEffort) -> Result<Mod
         if chosen.model.is_none() {
             return Ok(chosen);
         }
-        match outside.test_call(&chosen) {
+        match test_call(&Choice {
+            harness: Harness::Claude,
+            model: chosen.model.clone(),
+            effort: chosen.effort.clone(),
+            chosen_by: super::ChosenBy::UserConfig,
+        }) {
             Ok(()) => return Ok(chosen),
             Err(error) => {
                 crate::interrupt::check()?;
