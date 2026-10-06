@@ -423,8 +423,9 @@ fn a_partial_final_terminal_answer_is_trimmed_and_accepted_before_eof() {
             TerminalStep::line(EFFORT, ""),
             TerminalStep::line(MERGE, ""),
             TerminalStep::line(PULL, ""),
-            TerminalStep::bytes(NOTIFY, b"  y  \x04\x04"),
-            TerminalStep::bytes(TO, b"\x04"),
+            // Queue EOF for both the partial answer and the next question.
+            // macOS can finish both reads before another input action runs.
+            TerminalStep::bytes(NOTIFY, b"  y  \x04\x04\x04"),
         ],
     );
     assert_eq!(result.code, Some(1), "{}", result.stderr);
