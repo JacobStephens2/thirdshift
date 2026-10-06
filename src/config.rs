@@ -155,7 +155,7 @@ impl UserConfig {
                         Some(harness) => config.harness.default = Some(harness),
                         None => bail!(
                             "harness.default must be {}, not {name:?}, in {file}",
-                            harness::NAMES
+                            harness::names()
                         ),
                     },
                     ("harness", "default", _) => {

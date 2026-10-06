@@ -1,0 +1,87 @@
+//! Everything that varies between Harnesses, behind one interface.
+
+use std::path::Path;
+
+use anyhow::Result;
+
+use super::{Choice, Harness, ModelAndEffort, Settings, claude, codex};
+use crate::progress::Stream;
+use crate::setup::Outside;
+
+/// One Harness's session protocol and its Model and Effort rules. Callers
+/// select it once, then use the same adapter for a session and its Resume.
+pub trait Adapter: Sync {
+    fn name(&self) -> &'static str;
+    fn product_name(&self) -> &'static str;
+    fn project_skills(&self) -> &'static str;
+    fn skill_loading(&self) -> SkillLoading;
+    fn stop_signals(&self) -> &'static [libc::c_int];
+    fn settings<'a>(&self, settings: &'a Settings) -> &'a ModelAndEffort;
+    fn settings_mut<'a>(&self, settings: &'a mut Settings) -> &'a mut ModelAndEffort;
+
+    /// Arguments for a new session or Resume, and how its prompt reaches
+    /// the CLI. The adapter applies its skill-loading style here.
+    fn session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation;
+    fn check(&self, choice: &mut Choice) -> Result<()>;
+    fn ask_settings(
+        &self,
+        outside: &mut dyn Outside,
+        current: &ModelAndEffort,
+    ) -> Result<Option<ModelAndEffort>>;
+    fn stream(&self, worktree: &Path) -> Box<dyn Stream>;
+
+    /// Fixed overrides, also used by the adapter's Model and Effort check.
+    fn environment(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
+    /// Make and exclude an instruction-file fallback link where the CLI
+    /// needs one. Native and config-based fallbacks stay in the adapter.
+    fn link_instruction_fallback(&self, _worktree: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    /// Optionally reconcile final text, usage and outcome with the CLI's
+    /// own session log or export after exit, before reporting the ending.
+    /// Returning the stream unchanged is the fallback when no read is needed.
+    fn read_after_exit(&self, _worktree: &Path, stream: Box<dyn Stream>) -> Box<dyn Stream> {
+        stream
+    }
+}
+
+/// A session's arguments and optional prompt on stdin. `None` keeps stdin
+/// null; `Some` is written once and closed before following the stream.
+pub struct Invocation {
+    pub args: Vec<String>,
+    pub stdin: Option<String>,
+}
+
+/// How a Session prompt's first line loads its Factory skill. Prompts are
+/// authored in Claude's form so the generated Prompts and skills page stays
+/// independent of the selected Harness.
+pub enum SkillLoading {
+    Slash,
+    Dollar,
+    #[expect(dead_code, reason = "reserved by #434 for skill-tool Harness adapters")]
+    Tool,
+}
+
+impl SkillLoading {
+    pub fn prompt(&self, prompt: &str) -> String {
+        let Some(rest) = prompt.strip_prefix("/thirdshift-") else {
+            return prompt.to_string();
+        };
+        match self {
+            Self::Slash => prompt.to_string(),
+            Self::Dollar => format!("$thirdshift-{rest}"),
+            Self::Tool => {
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                let (skill, remaining) = rest.split_at(end);
+                format!("Load thirdshift-{skill} with your skill tool.{remaining}")
+            }
+        }
+    }
+}
+
+/// Registration comes from the adapters, including Setup's order.
+pub const REGISTERED: [(Harness, &dyn Adapter); 2] = [claude::REGISTRATION, codex::REGISTRATION];

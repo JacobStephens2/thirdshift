@@ -13,32 +13,24 @@ use include_dir::{Dir, include_dir};
 use tempfile::TempDir;
 
 use crate::git::Git;
-use crate::harness::Harness;
+use crate::harness::Adapter;
 
 /// The Factory skills, as they are written out and the Prompts and skills
 /// page shows them, each in its `thirdshift-<skill>` directory.
 pub static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
-/// Where in a worktree `harness` finds its project skills.
-fn project_skills(harness: Harness) -> &'static str {
-    match harness {
-        Harness::Claude => ".claude/skills",
-        Harness::Codex => ".agents/skills",
-    }
-}
-
 /// The temp directory the Command wrote the Factory skills out to, once it
 /// has.
 static WRITTEN: Mutex<Option<TempDir>> = Mutex::new(None);
 
-/// Link every Factory skill into `worktree`'s project skills for `harness`,
+/// Link every Factory skill into `worktree`'s project skills for `adapter`,
 /// `.claude/skills/` or `.agents/skills/`, writing them out first if the
 /// Command has not yet, and make sure the repository's `.git/info/exclude`
 /// keeps them out of git. The links are left in place: they go with the
 /// worktree.
-pub fn link_into(worktree: &Path, harness: Harness) -> Result<()> {
+pub fn link_into(worktree: &Path, adapter: &dyn Adapter) -> Result<()> {
     let written = written_out()?;
-    let dir = project_skills(harness);
+    let dir = adapter.project_skills();
     exclude(&Git::new(worktree), &format!("/{dir}/thirdshift-*"))?;
     let project_skills = worktree.join(dir);
     fs::create_dir_all(&project_skills)

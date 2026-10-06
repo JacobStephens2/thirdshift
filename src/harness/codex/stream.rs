@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{Stream, bash, shorten};
+use crate::progress::{Stream, bash, shorten};
 
 /// Condenses one Codex session's JSONL stream, a line at a time.
 ///
