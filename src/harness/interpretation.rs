@@ -167,7 +167,7 @@ impl Interpretation {
 
     /// Captured checks use exactly the same validation and retained policy,
     /// but keep their own refusal context and raw-output fallback.
-    pub(super) fn check_output(mut self, output: &Output) -> Result<()> {
+    pub(super) fn check_output(mut self, output: &Output, refusal: &str) -> Result<()> {
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             self.condense(line);
         }
@@ -175,7 +175,7 @@ impl Interpretation {
         outcome.map(drop).map_err(|failure| match failure {
             Failure::Execution(error) => error,
             Failure::Rejected { diagnostic, .. } => {
-                anyhow!(diagnostic.unwrap_or_else(|| said(output)))
+                anyhow!("{refusal}: {}", diagnostic.unwrap_or_else(|| said(output)))
             }
         })
     }

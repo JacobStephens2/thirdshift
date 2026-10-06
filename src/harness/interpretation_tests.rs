@@ -225,3 +225,48 @@ fn a_transport_failure_preserves_recovered_usage_and_warnings_ahead_of_turn_fail
         },
     );
 }
+
+#[test]
+fn an_interrupted_opencode_check_export_returns_interrupted_without_refusal_context() {
+    use std::os::unix::fs::PermissionsExt;
+    if std::env::var_os("THIRDSHIFT_TEST_CHECK_EXPORT_INTERRUPT").is_some() {
+        crate::interrupt::install().unwrap();
+        let error = opencode::check_model_and_effort(&ModelAndEffort::default()).unwrap_err();
+        assert_eq!(format!("{error:#}"), "interrupted");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let cli = dir.path().join("opencode");
+    // A local CLI records a session, then interrupts its exact owner during
+    // export. The process owner must stop and join it before the check returns.
+    std::fs::write(
+        &cli,
+        r#"#!/bin/bash
+if test "$1" = run; then
+    cat >/dev/null
+    echo '{"type":"text","sessionID":"s1","part":{"text":"OK"}}'
+else
+    kill -INT "$PPID"
+    sleep 30
+fi
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(dir.path().to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "harness::interpretation_tests::an_interrupted_opencode_check_export_returns_interrupted_without_refusal_context"])
+        .env("THIRDSHIFT_TEST_CHECK_EXPORT_INTERRUPT", "1")
+        .env("PATH", path)
+        .output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

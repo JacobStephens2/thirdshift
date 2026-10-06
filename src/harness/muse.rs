@@ -146,8 +146,10 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
                 Box::new(stream::MuseProgress::for_prompt("Reply with OK.")),
                 Retained::None,
             )
-            .check_output(&output)
-            .with_context(|| format!("muse refused a test call on the Model {model}"))?;
+            .check_output(
+                &output,
+                &format!("muse refused a test call on the Model {model}"),
+            )?;
         }
     }
     Ok(settled)

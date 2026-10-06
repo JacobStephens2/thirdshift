@@ -127,8 +127,10 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
     .context("could not run opencode to check the Model and Effort")?;
     OpenCode
         .interpretation(Path::new("."), "Reply with OK.")
-        .check_output(&output)
-        .context("opencode refused the Model or Effort in its test call")?;
+        .check_output(
+            &output,
+            "opencode refused the Model or Effort in its test call",
+        )?;
     Ok(())
 }
 
