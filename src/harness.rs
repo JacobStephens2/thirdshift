@@ -13,6 +13,7 @@ mod adapter;
 pub(crate) mod agy;
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod grok;
 mod instructions;
 pub(crate) mod muse;
 pub(crate) mod opencode;
@@ -28,6 +29,7 @@ pub enum Harness {
     Claude,
     Codex,
     Agy,
+    Grok,
     Muse,
     OpenCode,
 }
@@ -101,6 +103,8 @@ pub struct Settings {
     pub codex: ModelAndEffort,
     /// `[harness.agy]`.
     pub agy: ModelAndEffort,
+    /// `[harness.grok]`.
+    pub grok: ModelAndEffort,
     /// `[harness.muse]`.
     pub muse: ModelAndEffort,
     /// `[harness.opencode]`.
@@ -291,7 +295,7 @@ mod tests {
             default: Some(Harness::Codex),
             claude: set("opus", "high"),
             codex: set("gpt-6.1-sol", "max"),
-            ..Default::default()
+            ..Settings::default()
         }
     }
 

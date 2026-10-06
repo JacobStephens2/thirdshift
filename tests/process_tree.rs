@@ -60,6 +60,16 @@ fn interrupting_an_opencode_check_stops_its_whole_process_tree_before_work() {
     assert_detached_command_stopped("opencode", true);
 }
 
+#[test]
+fn interrupting_a_grok_run_stops_a_command_in_its_own_session() {
+    assert_detached_command_stopped("grok", false);
+}
+
+#[test]
+fn interrupting_a_muse_run_stops_a_command_in_its_own_session() {
+    assert_detached_command_stopped("muse", false);
+}
+
 fn assert_detached_command_stopped(harness: &str, checking: bool) {
     let scenario = Scenario::new();
     let pid = scenario.path("detached-pid");
