@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-use support::{CTRL_C, Keystrokes, Scenario, TerminalResult};
+use support::{CTRL_C, Keystrokes, Scenario, TerminalResult, TerminalStep};
 
 /// The agent commits its work and opens a PR that closes issue #7, into
 /// `main`.
@@ -206,14 +206,14 @@ fn cancelling_a_claude_setup_check_cleans_up_without_writing_or_retrying() {
     scenario.credentials_are(credentials);
     let check = OwnedCheck::new(&scenario, DuringCheck::Live);
     let started = Instant::now();
-    let result = scenario.run_on_terminal(
+    let result = scenario.run_terminal(
         &["setup"],
         &check.env(),
         &[
-            (HARNESS, "claude"),
-            (MODEL, ""),
-            (EFFORT, ""),
-            (support::CHECK_READY, CTRL_C),
+            TerminalStep::line(HARNESS, "claude"),
+            TerminalStep::line(MODEL, ""),
+            TerminalStep::line(EFFORT, ""),
+            TerminalStep::interrupt_check(libc::SIGINT),
         ],
     );
 
@@ -232,10 +232,13 @@ fn cancelling_a_codex_setup_catalog_does_not_keep_settings_as_a_fallback() {
     use support::check::{DuringCheck, OwnedCheck};
     let scenario = Scenario::new();
     let check = OwnedCheck::new(&scenario, DuringCheck::Live);
-    let result = scenario.run_on_terminal(
+    let result = scenario.run_terminal(
         &["setup"],
         &check.env(),
-        &[(HARNESS, "codex"), (support::CHECK_READY, support::SIGTERM)],
+        &[
+            TerminalStep::line(HARNESS, "codex"),
+            TerminalStep::interrupt_check(libc::SIGTERM),
+        ],
     );
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
@@ -254,10 +257,10 @@ fn cancelling_a_codex_setup_catalog_does_not_keep_settings_as_a_fallback() {
 fn cancelling_the_other_setup_checks_neither_retries_nor_keeps_settings() {
     use support::check::{DuringCheck, OwnedCheck};
     for (harness, model, signal) in [
-        ("agy", None, support::SIGHUP),
-        ("grok", None, CTRL_C),
-        ("muse", Some("muse-spark-1.3"), support::SIGTERM),
-        ("opencode", Some("provider/model"), support::SIGHUP),
+        ("agy", None, libc::SIGHUP),
+        ("grok", None, libc::SIGINT),
+        ("muse", Some("muse-spark-1.3"), libc::SIGTERM),
+        ("opencode", Some("provider/model"), libc::SIGHUP),
     ] {
         let scenario = Scenario::new();
         let saved = "# keep my answers\n[harness]\ndefault = \"claude\"\n";
@@ -267,12 +270,15 @@ fn cancelling_the_other_setup_checks_neither_retries_nor_keeps_settings() {
         let check = OwnedCheck::new(&scenario, DuringCheck::Detached);
         let model_prompt = format!("Model for {harness}");
         let effort_prompt = format!("Effort for {harness}");
-        let mut keys = vec![(HARNESS, harness)];
+        let mut keys = vec![TerminalStep::line(HARNESS, harness)];
         if let Some(model) = model {
-            keys.extend([(model_prompt.as_str(), model), (effort_prompt.as_str(), "")]);
+            keys.extend([
+                TerminalStep::line(&model_prompt, model),
+                TerminalStep::line(&effort_prompt, ""),
+            ]);
         }
-        keys.push((support::CHECK_READY, signal));
-        let result = scenario.run_on_terminal(&["setup"], &check.env(), &keys);
+        keys.push(TerminalStep::interrupt_check(signal));
+        let result = scenario.run_terminal(&["setup"], &check.env(), &keys);
 
         assert_eq!(result.code, Some(1), "{harness}: {}", result.stderr);
         assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
@@ -320,30 +326,44 @@ fn cancelling_later_questions_after_successful_or_repeated_checks_restores_echo_
             if repeated {
                 scenario.agent_does_in_session(1, "echo 'model refused' >&2; exit 1");
             }
-            let mut keys = vec![(HARNESS, "claude"), (MODEL, ""), (EFFORT, "")];
+            let mut keys = vec![
+                TerminalStep::line(HARNESS, "claude"),
+                TerminalStep::line(MODEL, ""),
+                TerminalStep::line(EFFORT, ""),
+            ];
             if repeated {
-                keys.extend([(MODEL, "opus"), (EFFORT, "")]);
+                keys.extend([
+                    TerminalStep::line(MODEL, "opus"),
+                    TerminalStep::line(EFFORT, ""),
+                ]);
             }
             if hidden {
                 keys.extend([
-                    (MERGE, ""),
-                    (PULL, ""),
-                    (NOTIFY, "y"),
-                    (TO, "me@example.com"),
-                    (FROM, ""),
-                    (
+                    TerminalStep::line(MERGE, ""),
+                    TerminalStep::line(PULL, ""),
+                    TerminalStep::line(NOTIFY, "y"),
+                    TerminalStep::line(TO, "me@example.com"),
+                    TerminalStep::line(FROM, ""),
+                    TerminalStep::signal(
                         KEPT,
                         if repeated {
-                            support::SIGHUP
+                            libc::SIGHUP
                         } else {
-                            support::SIGTERM
+                            libc::SIGTERM
                         },
                     ),
                 ]);
             } else {
-                keys.push((MERGE, if repeated { support::SIGTERM } else { CTRL_C }));
+                keys.push(TerminalStep::signal(
+                    MERGE,
+                    if repeated {
+                        libc::SIGTERM
+                    } else {
+                        libc::SIGINT
+                    },
+                ));
             }
-            let result = scenario.run_on_terminal(&["setup"], &[], &keys);
+            let result = scenario.run_terminal(&["setup"], &[], &keys);
 
             assert_eq!(result.code, Some(1), "{}", result.stderr);
             assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
@@ -359,27 +379,63 @@ fn cancelling_later_questions_after_successful_or_repeated_checks_restores_echo_
 #[test]
 fn pasted_answers_are_left_available_to_later_terminal_questions() {
     let scenario = Scenario::new();
-    let result = setup_on_terminal(&scenario, &[], &[(HARNESS, "  claude  \n\n\n\n\n")]);
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &[(HARNESS, "  claude  \n\n\n\n\ny\n  café@example.com  \n\n")],
+    );
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
     assert_eq!(config["merge"]["always"].as_bool(), Some(false));
-    assert_eq!(config["email"]["always"].as_bool(), Some(false));
+    assert_eq!(config["email"]["always"].as_bool(), Some(true));
+    assert_eq!(config["email"]["to"].as_str(), Some("café@example.com"));
 }
 
 #[test]
 fn hidden_input_restores_terminal_attributes_on_eof_and_invalid_utf8() {
-    for ending in ["\x04", support::INVALID_UTF8] {
+    for bytes in [b"\x04".as_slice(), &[0xff, b'\n']] {
         let scenario = Scenario::new();
-        let result =
-            scenario.run_on_terminal(&["setup"], &[], &notifications_on(&[(KEY_PROMPT, ending)]));
+        let mut steps: Vec<_> = notifications_on(&[])
+            .into_iter()
+            .map(TerminalStep::from)
+            .collect();
+        steps.push(TerminalStep::bytes(KEY_PROMPT, bytes));
+        let result = scenario.run_terminal(&["setup"], &[], &steps);
         assert_eq!(result.code, Some(1), "{}", result.stderr);
         assert!(result.terminal_restored);
         assert_eq!(result.user_config, None);
         assert_eq!(scenario.credentials(), None);
-        if ending == support::INVALID_UTF8 {
+        if bytes[0] == 0xff {
             assert!(result.stderr.contains("terminal input is not UTF-8"));
         }
     }
+}
+
+#[test]
+fn a_partial_final_terminal_answer_is_trimmed_and_accepted_before_eof() {
+    let scenario = Scenario::new();
+    let result = scenario.run_terminal(
+        &["setup"],
+        &[],
+        &[
+            TerminalStep::line(HARNESS, ""),
+            TerminalStep::line(MODEL, ""),
+            TerminalStep::line(EFFORT, ""),
+            TerminalStep::line(MERGE, ""),
+            TerminalStep::line(PULL, ""),
+            TerminalStep::bytes(NOTIFY, b"  y  \x04\x04"),
+            TerminalStep::bytes(TO, b"\x04"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(TO),
+        "the partial answer was lost: {}",
+        result.stderr
+    );
+    assert!(result.terminal_restored);
+    assert_eq!(result.user_config, None);
+    assert_eq!(scenario.credentials(), None);
 }
 
 /// Run `thirdshift setup` on a terminal, typing `keystrokes`, and check it

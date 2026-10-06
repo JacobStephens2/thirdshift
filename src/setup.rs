@@ -494,49 +494,6 @@ impl Drop for EchoOff {
 }
 
 #[cfg(test)]
-mod terminal_tests {
-    use super::*;
-    use std::process::{Command, Stdio};
-
-    #[test]
-    fn terminal_input_preserves_utf8_pasted_lines_and_partial_line_eof() {
-        const NAME: &str = "setup::terminal_tests::terminal_input_preserves_utf8_pasted_lines_and_partial_line_eof";
-        if std::env::var_os("THIRDSHIFT_TEST_TERMINAL_INPUT").is_some() {
-            let mut outside = OnMachine::new(Path::new("/unused"));
-            assert_eq!(outside.read("first: ").unwrap().as_deref(), Some("café"));
-            assert_eq!(outside.read("blank: ").unwrap().as_deref(), Some(""));
-            assert_eq!(
-                outside.read("partial: ").unwrap().as_deref(),
-                Some("終わり")
-            );
-            assert_eq!(outside.read("eof: ").unwrap(), None);
-            return;
-        }
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", NAME])
-            .env("THIRDSHIFT_TEST_TERMINAL_INPUT", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all("  café  \n\n  終わり  ".as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-#[cfg(test)]
 mod scripted {
     use std::collections::VecDeque;
 

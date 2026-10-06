@@ -8,7 +8,7 @@
 mod support;
 
 use support::resend::ResendStandIn;
-use support::{CTRL_C, Scenario, TerminalResult};
+use support::{CTRL_C, Scenario, TerminalResult, TerminalStep};
 
 /// The agent commits its work and opens a PR that closes issue #7, into
 /// `main`.
@@ -181,12 +181,12 @@ fn cancelling_offered_setup_catalogs_and_minimal_calls_stops_before_factory_work
     use std::time::{Duration, Instant};
     use support::check::{DuringCheck, OwnedCheck};
     for (harness, model, signal) in [
-        ("claude", Some("opus"), CTRL_C),
-        ("codex", None, support::SIGTERM),
-        ("agy", None, support::SIGHUP),
-        ("grok", None, CTRL_C),
-        ("muse", Some("muse-spark-1.3"), support::SIGTERM),
-        ("opencode", Some("provider/model"), support::SIGHUP),
+        ("claude", Some("opus"), libc::SIGINT),
+        ("codex", None, libc::SIGTERM),
+        ("agy", None, libc::SIGHUP),
+        ("grok", None, libc::SIGINT),
+        ("muse", Some("muse-spark-1.3"), libc::SIGTERM),
+        ("opencode", Some("provider/model"), libc::SIGHUP),
     ] {
         let scenario = Scenario::new();
         let credentials = "[resend]\nkey = \"re_saved\"\n";
@@ -195,15 +195,21 @@ fn cancelling_offered_setup_catalogs_and_minimal_calls_stops_before_factory_work
         let check = OwnedCheck::new(&scenario, DuringCheck::AfterExit);
         let model_prompt = format!("Model for {harness}");
         let effort_prompt = format!("Effort for {harness}");
-        let mut keys = vec![(OFFER, "y"), (HARNESS, harness)];
+        let mut keys = vec![
+            TerminalStep::line(OFFER, "y"),
+            TerminalStep::line(HARNESS, harness),
+        ];
         if let Some(model) = model {
-            keys.extend([(model_prompt.as_str(), model), (effort_prompt.as_str(), "")]);
+            keys.extend([
+                TerminalStep::line(&model_prompt, model),
+                TerminalStep::line(&effort_prompt, ""),
+            ]);
         }
-        keys.push((support::CHECK_READY, signal));
+        keys.push(TerminalStep::interrupt_check(signal));
         let mut env = check.env();
         env.push(("THIRDSHIFT_RESEND_URL", resend.url()));
         let started = Instant::now();
-        let result = scenario.run_on_terminal(
+        let result = scenario.run_terminal(
             &["--email", "me@example.com", &scenario.issue_url(7)],
             &env,
             &keys,

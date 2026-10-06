@@ -119,11 +119,62 @@ pub type Keystrokes<'a> = (&'a str, &'a str);
 
 /// A `line` of [`Keystrokes`] that presses Ctrl-C.
 pub const CTRL_C: &str = "\x03";
-pub const SIGTERM: &str = "<SIGTERM>";
-pub const SIGHUP: &str = "<SIGHUP>";
-/// Wait for the finite fake check's readiness file rather than captured output.
-pub const CHECK_READY: &str = "<check-started>";
-pub const INVALID_UTF8: &str = "<invalid-utf8>";
+
+pub enum TerminalWait<'a> {
+    Prompt(&'a str),
+    CheckReady,
+}
+
+pub enum TerminalInput<'a> {
+    Line(&'a str),
+    Bytes(&'a [u8]),
+    Signal(libc::c_int),
+}
+
+pub struct TerminalStep<'a> {
+    wait: TerminalWait<'a>,
+    input: TerminalInput<'a>,
+}
+
+impl<'a> TerminalStep<'a> {
+    pub fn line(prompt: &'a str, line: &'a str) -> Self {
+        Self {
+            wait: TerminalWait::Prompt(prompt),
+            input: TerminalInput::Line(line),
+        }
+    }
+
+    pub fn bytes(prompt: &'a str, bytes: &'a [u8]) -> Self {
+        Self {
+            wait: TerminalWait::Prompt(prompt),
+            input: TerminalInput::Bytes(bytes),
+        }
+    }
+
+    pub fn signal(prompt: &'a str, signal: libc::c_int) -> Self {
+        Self {
+            wait: TerminalWait::Prompt(prompt),
+            input: TerminalInput::Signal(signal),
+        }
+    }
+
+    pub fn interrupt_check(signal: libc::c_int) -> Self {
+        Self {
+            wait: TerminalWait::CheckReady,
+            input: TerminalInput::Signal(signal),
+        }
+    }
+}
+
+impl<'a> From<Keystrokes<'a>> for TerminalStep<'a> {
+    fn from((prompt, line): Keystrokes<'a>) -> Self {
+        if line == CTRL_C {
+            Self::bytes(prompt, line.as_bytes())
+        } else {
+            Self::line(prompt, line)
+        }
+    }
+}
 
 /// How a command run on a terminal ended.
 pub struct TerminalResult {
@@ -529,6 +580,24 @@ test -f {root}/{COPY_REPLACED}
         env: &[(&str, &str)],
         keystrokes: &[Keystrokes],
     ) -> TerminalResult {
+        self.run_terminal(
+            args,
+            env,
+            &keystrokes
+                .iter()
+                .copied()
+                .map(TerminalStep::from)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// Drive terminal questions or a captured check using explicit input actions.
+    pub fn run_terminal(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+        steps: &[TerminalStep],
+    ) -> TerminalResult {
         use std::io::{Read, Write};
         use std::os::fd::{FromRawFd, OwnedFd};
         use std::os::unix::process::CommandExt;
@@ -602,7 +671,11 @@ test -f {root}/{COPY_REPLACED}
         let shown_text = || String::from_utf8_lossy(&shown.lock().unwrap()).replace("\r\n", "\n");
         let mut reader = Some(reader);
         let mut seen = 0;
-        for (prompt, line) in keystrokes {
+        for step in steps {
+            let pending = match step.wait {
+                TerminalWait::Prompt(prompt) => format!("the terminal never showed {prompt:?}"),
+                TerminalWait::CheckReady => "the check never started".to_string(),
+            };
             let deadline = Instant::now() + WAIT_BOUND;
             loop {
                 // Once the Run has exited, the terminal is read to its end
@@ -618,37 +691,34 @@ test -f {root}/{COPY_REPLACED}
                     reader.join().unwrap();
                 }
                 let text = shown_text();
-                if *prompt == CHECK_READY && self.path("check-started").exists() {
-                    break;
-                }
-                if let Some(at) = text[seen..].find(prompt) {
-                    seen += at + prompt.len();
-                    break;
+                match step.wait {
+                    TerminalWait::CheckReady if !exited && self.path("check-started").exists() => {
+                        break;
+                    }
+                    TerminalWait::Prompt(prompt) => {
+                        if let Some(at) = text[seen..].find(prompt) {
+                            seen += at + prompt.len();
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
                 assert!(
                     !exited,
-                    "the terminal never showed {prompt:?}: the Run exited first; it shows:\n{text}"
+                    "{pending}: the Run exited first; it shows:\n{text}"
                 );
-                assert!(
-                    Instant::now() < deadline,
-                    "the terminal never showed {prompt:?}; it shows:\n{text}"
-                );
+                assert!(Instant::now() < deadline, "{pending}; it shows:\n{text}");
                 std::thread::sleep(Duration::from_millis(10));
             }
-            if matches!(*line, SIGTERM | SIGHUP) {
-                let signal = if *line == SIGTERM {
-                    libc::SIGTERM
-                } else {
-                    libc::SIGHUP
-                };
-                // SAFETY: signal only this test's exact running child.
-                assert_eq!(unsafe { libc::kill(child.id() as _, signal) }, 0);
-            } else if *line == INVALID_UTF8 {
-                master.write_all(&[0xff, b'\n']).unwrap();
-            } else if *line == CTRL_C || line.contains('\x04') {
-                master.write_all(line.as_bytes()).unwrap();
-            } else {
-                master.write_all(format!("{line}\n").as_bytes()).unwrap();
+            match step.input {
+                TerminalInput::Signal(signal) => {
+                    // SAFETY: signal only this test's exact running child.
+                    assert_eq!(unsafe { libc::kill(child.id() as _, signal) }, 0);
+                }
+                TerminalInput::Bytes(bytes) => master.write_all(bytes).unwrap(),
+                TerminalInput::Line(line) => {
+                    master.write_all(format!("{line}\n").as_bytes()).unwrap()
+                }
             }
         }
         let deadline = Instant::now() + WAIT_BOUND;
