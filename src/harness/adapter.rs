@@ -50,9 +50,13 @@ pub trait Adapter: Sync {
 
     /// Optionally reconcile final text, usage and outcome with the CLI's
     /// own session log or export after exit, before reporting the ending.
-    /// Returning the stream unchanged is the fallback when no read is needed.
-    fn read_after_exit(&self, _worktree: &Path, stream: Box<dyn Stream>) -> Box<dyn Stream> {
-        stream
+    /// Missing or unreadable data falls back to the stream; interruption fails.
+    fn read_after_exit(
+        &self,
+        _worktree: &Path,
+        stream: Box<dyn Stream>,
+    ) -> Result<Box<dyn Stream>> {
+        Ok(stream)
     }
 }
 

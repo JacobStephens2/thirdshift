@@ -32,11 +32,42 @@ mod opencode;
 
 use std::fs::{self, File};
 use std::io::Write;
+use std::os::fd::AsFd;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use json::{Array, Json};
+
+/// Whether stdin is `/dev/null`, by `fstat` on it, as macOS has no `/proc`.
+fn stdin_is_null() -> bool {
+    let stdin = std::io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .map(fs::File::from)
+        .and_then(|file| file.metadata());
+    let (Ok(stdin), Ok(null)) = (stdin, fs::metadata("/dev/null")) else {
+        return false;
+    };
+    stdin.rdev() == null.rdev() && stdin.ino() == null.ino()
+}
+
+/// Catch SIGINT and SIGTERM, doing nothing on either, so the fake outlasts
+/// them until its script ends. A caught signal, unlike an ignored one, is
+/// back to its default in the script, which can trap it.
+fn outlast_interrupts() {
+    // From the C library, which the standard library links: SIGINT and
+    // SIGTERM are 2 and 15 on Linux and macOS alike.
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
+    }
+    extern "C" fn caught(_: i32) {}
+    for signum in [2, 15] {
+        // SAFETY: the handler does nothing, so it is async-signal-safe.
+        unsafe { signal(signum, caught) };
+    }
+}
 
 /// Print `message` to stderr and exit with `code`, as the fakes fail.
 fn die(message: &str, code: i32) -> ! {

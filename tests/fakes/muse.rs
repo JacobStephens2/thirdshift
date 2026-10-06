@@ -2,44 +2,14 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::fd::AsFd;
-use std::os::unix::fs::MetadataExt;
 use std::process::Command;
 
 use crate::claude::{beside_skills_snapshot, exit_code, git_here, script_for, skills_snapshot};
 use crate::json::{Array, Bool, Json, Null, object, string};
+use crate::{outlast_interrupts, stdin_is_null};
 
 /// Where Muse finds a worktree's project skills.
 const SKILLS: &str = ".agents/skills";
-
-/// Whether stdin is `/dev/null`, by `fstat` on it, as macOS has no `/proc`.
-pub(crate) fn stdin_is_null() -> bool {
-    let stdin = std::io::stdin()
-        .as_fd()
-        .try_clone_to_owned()
-        .map(fs::File::from)
-        .and_then(|file| file.metadata());
-    let (Ok(stdin), Ok(null)) = (stdin, fs::metadata("/dev/null")) else {
-        return false;
-    };
-    stdin.rdev() == null.rdev() && stdin.ino() == null.ino()
-}
-
-/// Catch SIGINT and SIGTERM, doing nothing on either, so the fake outlasts
-/// them until its script ends. A caught signal, unlike an ignored one, is
-/// back to its default in the script, which can trap it.
-pub(crate) fn outlast_interrupts() {
-    // From the C library, which the standard library links: SIGINT and
-    // SIGTERM are 2 and 15 on Linux and macOS alike.
-    unsafe extern "C" {
-        fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
-    }
-    extern "C" fn caught(_: i32) {}
-    for signum in [2, 15] {
-        // SAFETY: the handler does nothing, so it is async-signal-safe.
-        unsafe { signal(signum, caught) };
-    }
-}
 
 /// Print one line of the stream.
 pub(crate) fn emit(event: Json) {
@@ -81,6 +51,22 @@ pub fn main(argv: Vec<String>) {
                 object([("reason", string("model does not exist or you lack access"))]),
             );
             crate::exit(1);
+        }
+        if let Ok(script) = std::env::var("FAKE_MUSE_CHECK_SCRIPT") {
+            outlast_interrupts();
+            let mut child = Command::new("bash")
+                .arg("-e")
+                .arg(script)
+                .env("FAKE_MUSE_CHECK_PID", std::process::id().to_string())
+                .spawn()
+                .unwrap();
+            if std::env::var("FAKE_MUSE_CHECK_EXIT_EARLY").is_ok() {
+                crate::exit(0);
+            }
+            let status = child.wait().unwrap();
+            if !status.success() {
+                crate::exit(exit_code(status));
+            }
         }
         emit_event(
             "fake-check",

@@ -6,7 +6,7 @@ use crate::progress::Stream;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 pub struct SessionExport {
     message: Option<String>,
@@ -98,21 +98,26 @@ impl SessionExport {
     }
 }
 
-pub fn read_after_exit(worktree: &Path, stream: Box<dyn Stream>) -> Box<dyn Stream> {
-    let export = stream.session_id().and_then(|id| {
-        let output = Command::new(OpenCode.name())
-            .args(["session", "export", "--standalone", id])
-            .envs(OpenCode.environment().iter().copied())
-            .current_dir(worktree)
-            .stdin(Stdio::null())
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
+pub fn read_after_exit(worktree: &Path, stream: Box<dyn Stream>) -> Result<Box<dyn Stream>> {
+    let export = if let Some(id) = stream.session_id() {
+        let output = super::super::process_output::output(
+            &OpenCode,
+            Command::new(OpenCode.name())
+                .args(["session", "export", "--standalone", id])
+                .current_dir(worktree),
+            None,
+        );
+        match output {
+            Ok(output) if output.status.success() => {
+                SessionExport::parse(&String::from_utf8_lossy(&output.stdout)).ok()
+            }
+            Err(error) if crate::interrupt::requested() => return Err(error),
+            _ => None,
         }
-        SessionExport::parse(&String::from_utf8_lossy(&output.stdout)).ok()
-    });
-    Box::new(AfterExit { stream, export })
+    } else {
+        None
+    };
+    Ok(Box::new(AfterExit { stream, export }))
 }
 
 struct AfterExit {

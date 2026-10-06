@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::harness::claude::stream::ClaudeProgress;
-use crate::progress::Stream;
+use crate::progress::{Stream, shorten};
 
 #[derive(Default)]
 pub struct GrokProgress {
@@ -85,7 +85,14 @@ impl Stream for GrokProgress {
                 }
             }
         }
-        self.claude.condense(&event.to_string())
+        let mut lines = self.claude.condense(&event.to_string());
+        if self.failed && matches!(event["type"].as_str(), Some("error" | "result")) {
+            lines.push(format!(
+                "error: {}",
+                shorten(self.error.as_deref().unwrap_or("Grok's turn failed"))
+            ));
+        }
+        lines
     }
     fn summary(&self) -> Option<String> {
         if self.cost_known {
@@ -139,6 +146,25 @@ mod tests {
                 "812 input tokens, 45 cache read tokens, 12 cache creation tokens, 210 output tokens"
             )
         );
+    }
+
+    #[test]
+    fn error_events_are_condensed_to_progress_with_groks_failure_text() {
+        for (raw, message) in [
+            (
+                r#"{"type":"error","message":"backend unavailable"}"#,
+                "backend unavailable",
+            ),
+            (
+                r#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}"#,
+                "quota exceeded",
+            ),
+        ] {
+            let mut stream = GrokProgress::default();
+            assert_eq!(stream.condense(raw), [format!("error: {message}")]);
+            assert!(stream.failed());
+            assert_eq!(stream.error(), Some(message));
+        }
     }
 
     #[test]

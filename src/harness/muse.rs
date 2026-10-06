@@ -5,7 +5,7 @@ mod log;
 mod stream;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
@@ -96,8 +96,12 @@ impl Adapter for Muse {
     fn stream(&self, _worktree: &Path, prompt: &str) -> Box<dyn Stream> {
         Box::new(stream::MuseProgress::for_prompt(prompt))
     }
-    fn read_after_exit(&self, _worktree: &Path, stream: Box<dyn Stream>) -> Box<dyn Stream> {
-        log::read_after_exit(stream)
+    fn read_after_exit(
+        &self,
+        _worktree: &Path,
+        stream: Box<dyn Stream>,
+    ) -> Result<Box<dyn Stream>> {
+        Ok(log::read_after_exit(stream))
     }
 }
 
@@ -131,12 +135,12 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
                 "checking the Model {model} with a test call to muse"
             ));
             let invocation = Muse.session(&choice, None, "Reply with OK.");
-            let output = Command::new(Muse.name())
-                .args(invocation.args)
-                .envs(Muse.environment().iter().copied())
-                .stdin(Stdio::null())
-                .output()
-                .context("could not run muse to check the Model")?;
+            let output = super::process_output::output(
+                &Muse,
+                Command::new(Muse.name()).args(invocation.args),
+                None,
+            )
+            .context("could not run muse to check the Model")?;
             let mut stream = Muse.stream(Path::new("."), "Reply with OK.");
             for line in String::from_utf8_lossy(&output.stdout).lines() {
                 stream.condense(line);

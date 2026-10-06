@@ -5,8 +5,8 @@ use std::io::Write;
 use std::process::Command;
 
 use crate::claude::{exit_code, git_here, script_for, skills_snapshot};
-use crate::codex::stdin_is_null;
 use crate::json::{Array, Bool, Json, Null, number, object, string};
+use crate::stdin_is_null;
 
 const CATALOG: &str = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\ngemini-3.1-pro-high\tGemini 3.1 Pro (High)\ngemini-3.1-pro-low\tGemini 3.1 Pro (Low)\n";
 

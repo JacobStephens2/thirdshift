@@ -353,7 +353,7 @@ fn run(
         .join()
         .map_err(|_| anyhow!("the session stream reader panicked"))?;
 
-    let stream = adapter.read_after_exit(worktree, stream);
+    let stream = adapter.read_after_exit(worktree, stream)?;
     for warning in stream.warnings() {
         progress::step(format_args!("{kind}: {warning}"));
     }

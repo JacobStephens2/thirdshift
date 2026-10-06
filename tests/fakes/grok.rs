@@ -5,8 +5,8 @@ use std::io::Write;
 use std::process::Command;
 
 use crate::claude::{beside_skills_snapshot, exit_code, git_here, script_for, skills_snapshot};
-use crate::codex::{outlast_interrupts, stdin_is_null};
 use crate::json::{Array, Bool, Null, object, string};
+use crate::{outlast_interrupts, stdin_is_null};
 
 pub const MODELS: &str = include_str!("../fixtures/grok-models.txt");
 const CACHE: &str = include_str!("../fixtures/grok-models.json");

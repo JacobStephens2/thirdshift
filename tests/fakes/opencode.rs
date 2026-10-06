@@ -1,7 +1,8 @@
 //! OpenCode's JSONL stream and standalone session export, with stdin prompts.
 use crate::claude::{beside_skills_snapshot, exit_code, git_here, script_for, skills_snapshot};
 use crate::json::{Array, Json, Null, number, object, string};
-use crate::muse::{emit, outlast_interrupts};
+use crate::muse::emit;
+use crate::outlast_interrupts;
 use std::fs;
 use std::io::Read;
 use std::process::Command;
@@ -26,6 +27,15 @@ pub fn main(argv: Vec<String>) {
         if std::env::var("FAKE_OPENCODE_CORRUPT_EXPORT").is_ok() {
             println!("truncated {{");
             crate::exit(0);
+        }
+        if argv.last().is_some_and(|id| id != "check-session")
+            && let Ok(script) = std::env::var("FAKE_OPENCODE_EXPORT_SCRIPT")
+        {
+            outlast_interrupts();
+            let status = Command::new("bash").arg("-e").arg(script).status().unwrap();
+            if !status.success() {
+                crate::exit(exit_code(status));
+            }
         }
         println!(
             "{}",
