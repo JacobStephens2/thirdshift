@@ -54,7 +54,8 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.claude]",
             "[harness.codex]",
             "[harness.agy]",
-            "[harness.muse]"
+            "[harness.muse]",
+            "[harness.opencode]"
         ],
         "{text}"
     );
