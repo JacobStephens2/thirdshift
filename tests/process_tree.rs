@@ -16,6 +16,14 @@ impl DetachedCommand {
         // SAFETY: kill has no memory-safety preconditions; signal 0 only probes.
         unsafe { libc::kill(self.0, 0) == 0 }
     }
+
+    fn assert_stopped(&self, message: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!self.exists(), "{message}");
+    }
 }
 
 impl Drop for DetachedCommand {
@@ -66,14 +74,7 @@ while :; do sleep 0.1; done
         interrupted_at.elapsed() < Duration::from_secs(8),
         "a session that exited on its first signal incurred another grace period"
     );
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while command.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        !command.exists(),
-        "the detached command survived interruption"
-    );
+    command.assert_stopped("the detached command survived interruption");
 }
 
 #[test]
@@ -105,12 +106,5 @@ while :; do sleep 0.1 || :; done
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(fs::read_to_string(signals).unwrap(), "INT\nTERM\n");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while command.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        !command.exists(),
-        "the command started during the grace period survived"
-    );
+    command.assert_stopped("the command started during the grace period survived");
 }
