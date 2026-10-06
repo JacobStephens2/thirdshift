@@ -39,6 +39,18 @@ pub(crate) fn finish(stream: interpretation::Interpretation) -> interpretation::
     stream.finish(Ok(std::process::ExitStatus::from_raw(0)))
 }
 
+pub(crate) fn lines(
+    harness: Harness,
+    events: &[serde_json::Value],
+) -> (interpretation::Completion, Vec<Vec<String>>) {
+    let mut interpretation = stream(harness, "");
+    let lines = events
+        .iter()
+        .map(|event| interpretation.condense(&event.to_string()))
+        .collect();
+    (finish(interpretation), lines)
+}
+
 #[test]
 fn every_harness_accepts_missing_final_data_without_inventing_usage_or_a_session_id() {
     for harness in Harness::ALL {

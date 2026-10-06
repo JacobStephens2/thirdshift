@@ -174,18 +174,9 @@ impl ClaudeProgress {
 mod tests {
     use crate::harness::{
         Harness,
-        interpretation::Completion,
-        interpretation_tests::{finish, stream},
+        interpretation_tests::{finish, lines, stream},
     };
     use serde_json::{Value, json};
-    fn lines(events: &[Value]) -> (Completion, Vec<Vec<String>>) {
-        let mut progress = stream(Harness::Claude, "");
-        let lines = events
-            .iter()
-            .map(|event| progress.condense(&event.to_string()))
-            .collect();
-        (finish(progress), lines)
-    }
 
     fn tool_use(name: &str, input: Value) -> Value {
         json!({
@@ -199,7 +190,7 @@ mod tests {
     }
 
     fn line_for(event: Value) -> Option<String> {
-        let mut lines = lines(&[init("/work/widgets-issue-7"), event])
+        let mut lines = lines(Harness::Claude, &[init("/work/widgets-issue-7"), event])
             .1
             .pop()
             .unwrap();
@@ -213,7 +204,7 @@ mod tests {
 
     #[test]
     fn only_the_first_init_starts_the_session() {
-        let (_, lines) = lines(&[init("/a"), init("/a")]);
+        let (_, lines) = lines(Harness::Claude, &[init("/a"), init("/a")]);
         assert_eq!(lines, [vec!["session started".to_string()], vec![]]);
     }
 
@@ -313,7 +304,7 @@ mod tests {
                 { "type": "tool_use", "name": "Read", "input": { "file_path": "b.rs" } }
             ] }
         });
-        let (_, lines) = lines(&[event]);
+        let (_, lines) = lines(Harness::Claude, &[event]);
         assert_eq!(
             lines,
             [vec!["Read a.rs".to_string(), "Read b.rs".to_string()]]
@@ -322,21 +313,27 @@ mod tests {
 
     #[test]
     fn text_tool_results_and_results_give_no_line() {
-        let (_, lines) = lines(&[
-            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "hi" }] } }),
-            json!({ "type": "user", "message": { "content": [{ "type": "tool_result" }] } }),
-            json!({ "type": "result", "num_turns": 3, "total_cost_usd": 0.1 }),
-        ]);
+        let (_, lines) = lines(
+            Harness::Claude,
+            &[
+                json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "hi" }] } }),
+                json!({ "type": "user", "message": { "content": [{ "type": "tool_result" }] } }),
+                json!({ "type": "result", "num_turns": 3, "total_cost_usd": 0.1 }),
+            ],
+        );
         assert_eq!(lines, [vec![], vec![], vec![]] as [Vec<String>; 3]);
     }
 
     #[test]
     fn the_summary_is_the_last_result_with_totals() {
-        let (progress, _) = lines(&[
-            result(10, 0.5),
-            result(34, 1.8249),
-            json!({ "type": "result", "subtype": "success" }),
-        ]);
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                result(10, 0.5),
+                result(34, 1.8249),
+                json!({ "type": "result", "subtype": "success" }),
+            ],
+        );
         assert_eq!(
             progress.report.as_ref().unwrap().summary.clone().as_deref(),
             Some("34 turns, $1.82")
@@ -346,13 +343,16 @@ mod tests {
     #[test]
     fn the_final_message_is_the_text_of_the_last_result() {
         let said = |text: &str| json!({ "type": "result", "subtype": "success", "result": text });
-        let (progress, _) = lines(&[said("Waiting on the tests."), said("Done.")]);
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[said("Waiting on the tests."), said("Done.")],
+        );
         assert_eq!(
             progress.outcome.as_ref().unwrap().final_message.as_deref(),
             Some("Done.")
         );
 
-        let (progress, _) = lines(&[said("Done."), result(3, 0.1)]);
+        let (progress, _) = lines(Harness::Claude, &[said("Done."), result(3, 0.1)]);
         assert_eq!(
             progress.outcome.as_ref().unwrap().final_message.as_deref(),
             None
@@ -361,10 +361,13 @@ mod tests {
 
     #[test]
     fn on_a_subscription_the_cost_is_marked_as_at_api_prices() {
-        let (progress, _) = lines(&[
-            json!({ "type": "system", "subtype": "init", "apiKeySource": "none" }),
-            result(34, 1.82),
-        ]);
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                json!({ "type": "system", "subtype": "init", "apiKeySource": "none" }),
+                result(34, 1.82),
+            ],
+        );
         assert_eq!(
             progress.report.as_ref().unwrap().summary.clone().as_deref(),
             Some("34 turns, $1.82 at API prices")
@@ -373,7 +376,7 @@ mod tests {
 
     #[test]
     fn no_result_means_no_summary() {
-        assert_eq!(lines(&[]).0.report.unwrap().summary, None);
+        assert_eq!(lines(Harness::Claude, &[]).0.report.unwrap().summary, None);
     }
 
     fn task_started(id: &str, description: &str) -> Value {
@@ -390,12 +393,15 @@ mod tests {
 
     #[test]
     fn a_task_killed_after_the_last_result_is_killed_background_work() {
-        let (progress, _) = lines(&[
-            json!({ "type": "system", "subtype": "init", "session_id": "s-1" }),
-            task_started("b1", "./mvnw test -Dtest='GamesPageTest'"),
-            result(12, 0.4),
-            task_updated("b1", "killed"),
-        ]);
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                json!({ "type": "system", "subtype": "init", "session_id": "s-1" }),
+                task_started("b1", "./mvnw test -Dtest='GamesPageTest'"),
+                result(12, 0.4),
+                task_updated("b1", "killed"),
+            ],
+        );
         assert_eq!(
             progress.outcome.as_ref().unwrap().session_id.as_deref(),
             Some("s-1")
@@ -408,13 +414,16 @@ mod tests {
 
     #[test]
     fn a_stopped_task_notification_is_killed_background_work_once() {
-        let (progress, _) = lines(&[
-            task_started("b1", "cargo test"),
-            result(12, 0.4),
-            task_updated("b1", "killed"),
-            task_notification("b1", "stopped", "cargo test"),
-            task_notification("b2", "stopped", "npm run build"),
-        ]);
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                task_started("b1", "cargo test"),
+                result(12, 0.4),
+                task_updated("b1", "killed"),
+                task_notification("b1", "stopped", "cargo test"),
+                task_notification("b2", "stopped", "npm run build"),
+            ],
+        );
         assert_eq!(
             progress.outcome.as_ref().unwrap().killed_work(),
             ["cargo test", "npm run build"]
@@ -423,37 +432,46 @@ mod tests {
 
     #[test]
     fn no_killed_tasks_means_no_killed_background_work() {
-        let (progress, _) = lines(&[
-            task_started("b1", "cargo test"),
-            task_notification("b1", "completed", "cargo test"),
-            result(12, 0.4),
-        ]);
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                task_started("b1", "cargo test"),
+                task_notification("b1", "completed", "cargo test"),
+                result(12, 0.4),
+            ],
+        );
         assert!(progress.outcome.as_ref().unwrap().killed_work().is_empty());
     }
 
     #[test]
     fn background_sub_agents_that_resumed_the_session_are_not_killed_background_work() {
-        let (progress, _) = lines(&[
-            task_started("a1", "Standards review"),
-            result(12, 0.4),
-            task_updated("a1", "completed"),
-            task_notification("a1", "completed", "Standards review"),
-            init("/work/widgets-issue-7"),
-            result(20, 0.9),
-        ]);
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                task_started("a1", "Standards review"),
+                result(12, 0.4),
+                task_updated("a1", "completed"),
+                task_notification("a1", "completed", "Standards review"),
+                init("/work/widgets-issue-7"),
+                result(20, 0.9),
+            ],
+        );
         assert!(progress.outcome.as_ref().unwrap().killed_work().is_empty());
     }
 
     #[test]
     fn a_task_killed_before_a_later_result_is_not_killed_background_work() {
-        let (progress, _) = lines(&[
-            task_started("b1", "cargo watch"),
-            task_updated("b1", "killed"),
-            result(12, 0.4),
-            init("/work/widgets-issue-7"),
-            task_notification("b1", "stopped", "cargo watch"),
-            result(20, 0.9),
-        ]);
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                task_started("b1", "cargo watch"),
+                task_updated("b1", "killed"),
+                result(12, 0.4),
+                init("/work/widgets-issue-7"),
+                task_notification("b1", "stopped", "cargo watch"),
+                result(20, 0.9),
+            ],
+        );
         assert!(progress.outcome.as_ref().unwrap().killed_work().is_empty());
     }
 
@@ -463,18 +481,21 @@ mod tests {
             json!({ "type": "result", "subtype": "error_max_turns", "is_error": true }),
             json!({ "type": "result", "subtype": "success", "is_error": true }),
         ] {
-            let (progress, _) = lines(&[
-                task_started("b1", "cargo test"),
-                last,
-                task_updated("b1", "killed"),
-            ]);
+            let (progress, _) = lines(
+                Harness::Claude,
+                &[
+                    task_started("b1", "cargo test"),
+                    last,
+                    task_updated("b1", "killed"),
+                ],
+            );
             assert!(progress.outcome.is_err());
         }
     }
 
     #[test]
     fn an_init_without_a_session_id_gives_none() {
-        let (progress, _) = lines(&[init("/a")]);
+        let (progress, _) = lines(Harness::Claude, &[init("/a")]);
         assert_eq!(
             progress.outcome.as_ref().unwrap().session_id.as_deref(),
             None

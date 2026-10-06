@@ -261,19 +261,9 @@ mod tests {
     use super::*;
     use crate::harness::{
         Harness,
-        interpretation::Completion,
-        interpretation_tests::{finish, stream},
+        interpretation_tests::{finish, lines, stream},
     };
     use serde_json::json;
-
-    fn lines(events: &[Value]) -> (Completion, Vec<Vec<String>>) {
-        let mut progress = stream(Harness::Codex, "");
-        let lines = events
-            .iter()
-            .map(|event| progress.condense(&event.to_string()))
-            .collect();
-        (finish(progress), lines)
-    }
 
     fn item(kind: &str, id: &str, item: Value) -> Value {
         let mut item = item;
@@ -297,10 +287,13 @@ mod tests {
 
     #[test]
     fn the_first_thread_started_starts_the_session_and_gives_its_id() {
-        let (progress, lines) = lines(&[
-            json!({ "type": "thread.started", "thread_id": "019a-thread" }),
-            json!({ "type": "turn.started" }),
-        ]);
+        let (progress, lines) = lines(
+            Harness::Codex,
+            &[
+                json!({ "type": "thread.started", "thread_id": "019a-thread" }),
+                json!({ "type": "turn.started" }),
+            ],
+        );
 
         assert_eq!(lines, [vec!["session started".to_string()], vec![]]);
         assert_eq!(
@@ -311,27 +304,30 @@ mod tests {
 
     #[test]
     fn a_command_gets_one_line_without_its_shell_naming_commits_and_pushes() {
-        let (_, lines) = lines(&[
-            command(
-                "item.started",
-                "item_1",
-                "/bin/bash -lc 'cargo test'",
-                "in_progress",
-            ),
-            command(
-                "item.completed",
-                "item_1",
-                "/bin/bash -lc 'cargo test'",
-                "completed",
-            ),
-            command(
-                "item.started",
-                "item_2",
-                "bash -lc 'git add -A && git commit -m '\\''x'\\'' && git push'",
-                "in_progress",
-            ),
-            command("item.completed", "item_3", "git push", "completed"),
-        ]);
+        let (_, lines) = lines(
+            Harness::Codex,
+            &[
+                command(
+                    "item.started",
+                    "item_1",
+                    "/bin/bash -lc 'cargo test'",
+                    "in_progress",
+                ),
+                command(
+                    "item.completed",
+                    "item_1",
+                    "/bin/bash -lc 'cargo test'",
+                    "completed",
+                ),
+                command(
+                    "item.started",
+                    "item_2",
+                    "bash -lc 'git add -A && git commit -m '\\''x'\\'' && git push'",
+                    "in_progress",
+                ),
+                command("item.completed", "item_3", "git push", "completed"),
+            ],
+        );
 
         assert_eq!(
             lines,
@@ -346,32 +342,35 @@ mod tests {
 
     #[test]
     fn file_changes_tool_calls_and_searches_get_a_line_each() {
-        let (_, lines) = lines(&[
-            item(
-                "item.completed",
-                "item_1",
-                json!({ "type": "file_change", "status": "completed", "changes": [
+        let (_, lines) = lines(
+            Harness::Codex,
+            &[
+                item(
+                    "item.completed",
+                    "item_1",
+                    json!({ "type": "file_change", "status": "completed", "changes": [
                     { "path": "/work/widgets-issue-7/src/run.rs", "kind": "update" },
                     { "path": "/work/widgets-issue-7/NOTES.md", "kind": "add" },
                     { "path": "/etc/hosts", "kind": "delete" }
                 ] }),
-            ),
-            item(
-                "item.started",
-                "item_2",
-                json!({ "type": "mcp_tool_call", "server": "github", "tool": "get_issue" }),
-            ),
-            item(
-                "item.started",
-                "item_3",
-                json!({ "type": "web_search", "query": "codex exec json" }),
-            ),
-            item(
-                "item.started",
-                "item_4",
-                json!({ "type": "collab_tool_call", "tool": "spawn_agent" }),
-            ),
-        ]);
+                ),
+                item(
+                    "item.started",
+                    "item_2",
+                    json!({ "type": "mcp_tool_call", "server": "github", "tool": "get_issue" }),
+                ),
+                item(
+                    "item.started",
+                    "item_3",
+                    json!({ "type": "web_search", "query": "codex exec json" }),
+                ),
+                item(
+                    "item.started",
+                    "item_4",
+                    json!({ "type": "collab_tool_call", "tool": "spawn_agent" }),
+                ),
+            ],
+        );
 
         assert_eq!(
             lines,
@@ -390,20 +389,23 @@ mod tests {
 
     #[test]
     fn messages_reasoning_and_turn_events_give_no_line() {
-        let (_, lines) = lines(&[
-            item(
-                "item.completed",
-                "item_1",
-                json!({ "type": "reasoning", "text": "Thinking." }),
-            ),
-            item(
-                "item.completed",
-                "item_2",
-                json!({ "type": "agent_message", "text": "Done." }),
-            ),
-            json!({ "type": "turn.started" }),
-            completed(10, 2),
-        ]);
+        let (_, lines) = lines(
+            Harness::Codex,
+            &[
+                item(
+                    "item.completed",
+                    "item_1",
+                    json!({ "type": "reasoning", "text": "Thinking." }),
+                ),
+                item(
+                    "item.completed",
+                    "item_2",
+                    json!({ "type": "agent_message", "text": "Done." }),
+                ),
+                json!({ "type": "turn.started" }),
+                completed(10, 2),
+            ],
+        );
 
         assert_eq!(lines, [vec![], vec![], vec![], vec![]] as [Vec<String>; 4]);
     }
@@ -417,7 +419,10 @@ mod tests {
                 json!({ "type": "agent_message", "text": text }),
             )
         };
-        let (progress, _) = lines(&[said("item_1", "Running tests."), said("item_5", "Done.")]);
+        let (progress, _) = lines(
+            Harness::Codex,
+            &[said("item_1", "Running tests."), said("item_5", "Done.")],
+        );
 
         assert_eq!(
             progress.outcome.as_ref().unwrap().final_message.as_deref(),
@@ -427,28 +432,31 @@ mod tests {
 
     #[test]
     fn the_summary_is_the_token_totals() {
-        let (progress, _) = lines(&[completed(12000, 345)]);
+        let (progress, _) = lines(Harness::Codex, &[completed(12000, 345)]);
 
         assert_eq!(
             progress.report.as_ref().unwrap().summary.clone().as_deref(),
             Some("12000 input tokens (100 cached), 345 output tokens")
         );
-        assert_eq!(lines(&[]).0.report.unwrap().summary, None);
+        assert_eq!(lines(Harness::Codex, &[]).0.report.unwrap().summary, None);
     }
 
     #[test]
     fn a_command_still_running_when_the_turn_completes_is_killed_background_work() {
-        let (progress, _) = lines(&[
-            command(
-                "item.started",
-                "item_1",
-                "/bin/bash -lc 'sleep 188'",
-                "in_progress",
-            ),
-            command("item.started", "item_2", "cargo build", "in_progress"),
-            command("item.completed", "item_2", "cargo build", "completed"),
-            completed(10, 2),
-        ]);
+        let (progress, _) = lines(
+            Harness::Codex,
+            &[
+                command(
+                    "item.started",
+                    "item_1",
+                    "/bin/bash -lc 'sleep 188'",
+                    "in_progress",
+                ),
+                command("item.started", "item_2", "cargo build", "in_progress"),
+                command("item.completed", "item_2", "cargo build", "completed"),
+                completed(10, 2),
+            ],
+        );
 
         assert_eq!(
             progress.outcome.as_ref().unwrap().killed_work(),
@@ -459,11 +467,14 @@ mod tests {
 
     #[test]
     fn a_command_reconciled_as_in_progress_at_turn_end_is_killed_background_work() {
-        let (progress, _) = lines(&[
-            command("item.started", "item_1", "npm run dev", "in_progress"),
-            command("item.completed", "item_1", "npm run dev", "in_progress"),
-            completed(10, 2),
-        ]);
+        let (progress, _) = lines(
+            Harness::Codex,
+            &[
+                command("item.started", "item_1", "npm run dev", "in_progress"),
+                command("item.completed", "item_1", "npm run dev", "in_progress"),
+                completed(10, 2),
+            ],
+        );
 
         assert_eq!(
             progress.outcome.as_ref().unwrap().killed_work(),
@@ -480,19 +491,22 @@ mod tests {
                 json!({ "type": "collab_tool_call", "tool": tool, "prompt": prompt, "status": status }),
             )
         };
-        let (progress, _) = lines(&[
-            call(
-                "item.started",
-                "item_1",
-                "spawn_agent",
-                "Review the diff\nThen report.",
-                "in_progress",
-            ),
-            call("item.started", "item_2", "wait", "", "in_progress"),
-            call("item.completed", "item_2", "wait", "", "completed"),
-            call("item.started", "item_3", "spawn_agent", "", "in_progress"),
-            completed(10, 2),
-        ]);
+        let (progress, _) = lines(
+            Harness::Codex,
+            &[
+                call(
+                    "item.started",
+                    "item_1",
+                    "spawn_agent",
+                    "Review the diff\nThen report.",
+                    "in_progress",
+                ),
+                call("item.started", "item_2", "wait", "", "in_progress"),
+                call("item.completed", "item_2", "wait", "", "completed"),
+                call("item.started", "item_3", "spawn_agent", "", "in_progress"),
+                completed(10, 2),
+            ],
+        );
 
         assert_eq!(
             progress.outcome.as_ref().unwrap().killed_work(),
@@ -502,11 +516,14 @@ mod tests {
 
     #[test]
     fn a_failed_turn_fails_with_its_error_and_kills_no_background_work() {
-        let (progress, _) = lines(&[
-            command("item.started", "item_1", "sleep 188", "in_progress"),
-            json!({ "type": "error", "message": "Reconnecting... 1/5" }),
-            json!({ "type": "turn.failed", "error": { "message": "The 'GPT-6.1-Sol' model is not supported." } }),
-        ]);
+        let (progress, _) = lines(
+            Harness::Codex,
+            &[
+                command("item.started", "item_1", "sleep 188", "in_progress"),
+                json!({ "type": "error", "message": "Reconnecting... 1/5" }),
+                json!({ "type": "turn.failed", "error": { "message": "The 'GPT-6.1-Sol' model is not supported." } }),
+            ],
+        );
 
         assert!(progress.outcome.is_err());
         assert_eq!(
