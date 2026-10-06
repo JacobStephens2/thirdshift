@@ -1,7 +1,6 @@
 //! Grok Build: unattended sessions and its Claude-shaped Messages stream.
 
 mod catalog;
-mod stream;
 pub use catalog::Catalog;
 
 use std::path::Path;
@@ -9,7 +8,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
-use super::interpretation::{Interpretation, Retained};
+use super::interpretation::{Interpretation, Retained, Stream};
 use super::settings::{Terminal, ask_checked_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 
@@ -117,11 +116,7 @@ impl Adapter for Grok {
         Ok(Some(ModelAndEffort { model, effort }))
     }
     fn interpretation(&self, _worktree: &Path, _prompt: &str) -> Interpretation {
-        Interpretation::new(
-            self.name(),
-            Box::new(stream::GrokProgress::default()),
-            Retained::None,
-        )
+        Interpretation::new(self.name(), Box::new(Stream::grok()), Retained::None)
     }
 }
 
