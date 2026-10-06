@@ -3,6 +3,7 @@
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdout, Command, ExitStatus, Output, Stdio};
+use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -31,16 +32,39 @@ pub(super) fn output(
     })
 }
 
-/// Consume stdout concurrently with prompt I/O, inheriting stderr. Return the
-/// consumer's opaque result only after the child and every I/O worker finish.
+/// Recovered consumer state accompanies an independent execution result.
+#[derive(Debug)]
+pub(crate) struct Streamed<T> {
+    pub execution: Result<ExitStatus>,
+    pub state: T,
+}
+
+/// Consume stdout concurrently with prompt I/O, inheriting stderr. Preserve
+/// state after any normal consumer return, even when execution fails. Return
+/// only after completion or whole-tree cleanup and every worker is joined.
+/// A consumer panic or failure before it starts returns no state. Recorded
+/// interruption suppresses recovery even after a normal consumer return.
 pub(crate) fn streaming<T: Send + 'static>(
     adapter: &dyn Adapter,
     command: &mut Command,
     input: Option<&str>,
-    consume: impl FnOnce(ChildStdout) -> Result<T> + Send + 'static,
-) -> Result<(ExitStatus, T)> {
-    let (status, consumed, _) = execute(adapter, command, input, false, consume)?;
-    Ok((status, consumed))
+    mut state: T,
+    consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
+) -> Result<Streamed<T>> {
+    // One send fits without waiting for the caller, which must first finish
+    // supervising and joining all workers, including on transport failure.
+    let (completed, recovered) = mpsc::sync_channel(1);
+    let execution = execute(adapter, command, input, false, move |pipe| {
+        let result = consume(pipe, &mut state);
+        let _ = completed.send(state);
+        result
+    })
+    .map(|(status, (), _)| status);
+    interrupt::check()?;
+    match recovered.try_recv() {
+        Ok(state) => Ok(Streamed { execution, state }),
+        Err(_) => Err(execution.expect_err("a successful consumer always returns its state")),
+    }
 }
 
 fn read(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
