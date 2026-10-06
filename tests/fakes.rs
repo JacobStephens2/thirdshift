@@ -13,6 +13,8 @@
 
 #![cfg_attr(test, allow(dead_code))]
 
+#[path = "fakes/agy.rs"]
+mod agy;
 #[path = "fakes/claude.rs"]
 mod claude;
 #[path = "fakes/codex.rs"]
@@ -111,6 +113,7 @@ fn main() {
         "gh" => gh::main(args.collect()),
         "claude" => claude::main(args.collect()),
         "codex" => codex::main(args.collect()),
+        "agy" => agy::main(args.collect()),
         "detached-command" => {
             let command = args.next().expect("no detached command");
             let mut command = Command::new(command);

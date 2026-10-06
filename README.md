@@ -98,6 +98,7 @@ The user account that runs thirdshift needs:
 
 - **`claude`** (Claude Code), logged in.
 - **`codex`** (Codex CLI), logged in, only for `harness codex`.
+- **`agy`** (Google Antigravity CLI), logged in, only for `harness agy`.
 - **`gh`** (GitHub CLI), logged in.
 - **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
 
@@ -213,6 +214,10 @@ effort = "high"  # how hard that Model reasons; blank for Claude Code's own defa
 [harness.codex]
 model = ""
 effort = ""
+
+[harness.agy]
+model = "gemini-3.8-flash"
+effort = "medium"
 ```
 
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
@@ -245,7 +250,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 
 [harness]
-default = "claude"   # the Harness every Run's sessions run on, claude or codex; default claude
+default = "claude"   # the Harness every Run's sessions run on, claude, codex or agy; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -254,11 +259,15 @@ effort = ""   # how hard that Model reasons; default blank, for Claude Code's ow
 [harness.codex]
 model = ""    # the Model Codex's sessions run on; default blank, for Codex's own
 effort = ""   # how hard that Model reasons; default blank, for Codex's own
+
+[harness.agy]
+model = ""    # the Model Antigravity CLI's sessions run on; default blank, for agy's own
+effort = ""   # how hard that Model reasons; default blank, for agy's own
 ```
 
 Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
 
-1. The Harness for every Run's sessions (`harness.default`), listing both, each marked `(not installed)` where its CLI isn't on `PATH`. A marked Harness, or a name that isn't one, is refused and asked again. The default is the first one installed, `claude` when both are, and `codex` when only it is. Then the Model (`harness.<name>.model`) and the Effort (`harness.<name>.effort`) for the Harness chosen only, each defaulting to the User config's, where Enter on none keeps the Harness's own default and `-` clears one. They're checked as a Run checks them (see [Harness, Model and Effort](#harness-model-and-effort)). For Claude, a named Model gets the test call; if Claude refuses it, Setup shows what Claude said and asks the Model and Effort again. For Codex, Setup lists the Models `codex debug models` offers, by slug and display name, then the Efforts the Model chosen supports; each answer is matched regardless of case and written as Codex names it, so `GPT-6.1-Sol` and `Max` are written as `gpt-6.1-sol` and `max`, and a Model or Effort the catalog doesn't have is asked again, with the valid choices. The other Harness's section is left as it is. With no Harness installed here, Setup says so, asks none of this, and leaves the harness settings as they are.
+1. The Harness for every Run's sessions (`harness.default`), listing only those whose CLI is installed on `PATH`. An unavailable Harness, or a name that isn't one, is refused and asked again. The default is the configured one when installed, otherwise the first installed in `claude`, `codex`, `agy` order, so `claude` when it is installed. Then the Model (`harness.<name>.model`) and the Effort (`harness.<name>.effort`) for the Harness chosen only, each defaulting to the User config's, where Enter on none keeps the Harness's own default and `-` clears one. They're checked as a Run checks them (see [Harness, Model and Effort](#harness-model-and-effort)). For Claude, a named Model gets the test call; if Claude refuses it, Setup shows what Claude said and asks the Model and Effort again. For Codex, Setup lists the Models `codex debug models` offers, by slug and display name, then the Efforts the Model chosen supports; each answer is matched regardless of case and written as Codex names it, so `GPT-6.1-Sol` and `Max` are written as `gpt-6.1-sol` and `max`, and a Model or Effort the catalog doesn't have is asked again, with the valid choices. For agy, Setup lists `agy models` and its supported Efforts, checks each answer without a model turn, and writes the canonical names regardless of case. The other Harnesses' sections are left as they are. With no Harness installed here, Setup says so, asks none of this, and leaves the harness settings as they are.
 2. Every Run a Merge run? (`merge.always`)
 3. With that on, every Run may start a Base fix when the Base branch's CI is red? (`base.fix`). With it off, this is not asked, and `base.fix` is written at its default, `false`.
 4. Every Run first fast-forwards your checkout of the Base branch? (`launch.pull`)
@@ -298,6 +307,12 @@ thirdshift https://github.com/<owner>/<repo>/issues/<n> model claude-opus-5-5 ef
 For each of the three, the command wins, then the [User config](#user-config), then the default. The Harness's default is `claude`; the Model's and the Effort's are nothing, which leaves them to the Harness, so with no flag and no `[harness]` section sessions run exactly as `claude -p` would. A Model and Effort set in the User config come from the chosen Harness's own section, so `harness claude` over a `codex` default takes `[harness.claude]`, while `model` and `effort` on the command apply to whichever Harness is chosen. Names are passed to Claude Code as given: `--model` and `--effort` when set. Codex takes them as it names them, which the check below settles: `-m <model>` and `-c model_reasoning_effort="<effort>"` when set.
 
 With `harness codex`, every session runs `codex exec --json --dangerously-bypass-approvals-and-sandbox` in the Run's worktree, with stdin set to null, and with `-c project_doc_fallback_filenames=["CLAUDE.md"]`, so Codex reads `CLAUDE.md` where a repository has no `AGENTS.md`. Codex's sandbox is off: on a stock Ubuntu machine it can't start, and commits and pushes from a worktree write outside it, so the worktree is the only boundary, as with Claude's auto mode ([ADR-0012](docs/adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)). The Factory skills are linked into the worktree's `.agents/skills/`, kept out of git with `/.agents/skills/thirdshift-*` in `.git/info/exclude`, and each prompt's first line loads its skill as `$thirdshift-<skill>`. `codex exec` kills what the agent left running as it exits, so a session whose turn ends with a command or a sub-agent call still running (started, never completed) gets a Resume, as on Claude: `codex exec … resume <session id>`, with the Model, Effort, bypass flag and `CLAUDE.md` fallback given again, as Codex keeps none of them. An interrupt sends a Codex session SIGINT, the only signal Codex stops cleanly on, before the SIGTERM and SIGKILL every session gets, each 10 seconds apart. Progress lines come from Codex's `item.*` events, the session-ended line gives its token totals, as Codex reports no turns or cost, and the final message is the last `agent_message`. A session whose turn fails (`turn.failed`), or that exits non-zero, fails the Run with Codex's error in the cause; an `error` event Codex retries does not. Each Codex session adds a `trust_level = "trusted"` entry for the repository to `~/.codex/config.toml`, and your `~/.claude/` instructions and hooks don't reach it.
+
+With `harness agy`, every session runs Google **Antigravity CLI** as `agy -p --dangerously-skip-permissions --output-format stream-json`, with `--model` and `--effort` when set, stdin null, and `AGY_CLI_DISABLE_AUTO_UPDATE=true` (agy ignores `=1`). The sandbox is opt-in and is never enabled, so unattended sessions can write the shared `.git` ([ADR-0013](docs/adr/0013-every-harness-runs-unattended-and-fully-trusted.md)). Factory skills are linked into `.agents/skills/`, excluded from git, and loaded by the `/thirdshift-<skill>` first line. agy reads project `AGENTS.md`, `GEMINI.md` and `.agents/rules/`, and user instructions under `~/.gemini/`; it does not read `~/.claude/`. When root `CLAUDE.md` exists and neither `AGENTS.md` nor `GEMINI.md` does, thirdshift adds a `GEMINI.md` link to `CLAUDE.md` and excludes it through `.git/info/exclude`; existing instruction files always win.
+
+agy's `init` supplies the conversation id and `step_update` supplies tool progress. The final `result` supplies the final message, success/error status, error and cumulative usage (including on Resume). `ERROR` or a nonzero exit fails the session with agy's error. A Resume uses `--conversation <id>` with the same flags, Model, Effort and environment; an interrupt sends SIGTERM, then SIGKILL after the grace period. Its start-up can be slow and variable: the research measured 8–95 seconds. No speed assumption or backend retry is made.
+
+Before any work on agy, a named Model or Effort is checked against the free `agy models` catalog, which lists IDs, labels and effort-suffixed variants. IDs, display labels and bare aliases are matched regardless of case, as are Efforts. `model Gemini-3.8-Flash effort Medium` becomes `--model gemini-3.8-flash --effort medium`; `model gemini-3.8-flash-medium` already carries its Effort. A bare alias requires an Effort; a Model or Effort the catalog lacks fails naming valid choices. This check uses null stdin and disables self-update too, without a model turn.
 
 Interrupting a Command stops every session's process tree on every Harness, including commands that started their own process group or session. thirdshift snapshots the descendants with `ps` on Linux and macOS, sends each process group the Harness's stop signals with a 10-second grace period each, then takes another snapshot before SIGKILL to catch commands started in the meantime. If the CLI exits on an earlier signal, thirdshift kills the remaining commands immediately without another grace period.
 

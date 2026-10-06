@@ -160,14 +160,10 @@ pub fn ask(
     })
 }
 
-/// Ask which Harness every Run's sessions run on, listing each, marked where
-/// it isn't installed, and refusing that one; then its Model and Effort,
-/// with those `current` sets for it as the defaults, checked as a Run
-/// checks them, through the chosen adapter. The Harness's
-/// default is the `current` one if it's installed, else the first one
-/// installed, so `claude` when both are. With no
-/// Harness to choose, or Codex chosen and its catalog unreadable, the answer
-/// is `None`.
+/// Ask which installed Harness every Run's sessions run on, then its
+/// Model and Effort through the chosen adapter. Keep the configured default
+/// when installed, otherwise prefer Claude, then the first installed.
+/// With no Harness installed, leave the Harness settings as they are.
 fn ask_harness(
     outside: &mut impl Outside,
     current: &harness::Settings,
@@ -176,17 +172,11 @@ fn ask_harness(
         .into_iter()
         .filter(|harness| outside.installed(*harness))
         .collect();
-    let harnesses: Vec<String> = Harness::ALL
+    let harnesses = installed
         .iter()
-        .map(|harness| {
-            if installed.contains(harness) {
-                harness.name().to_string()
-            } else {
-                format!("{} (not installed)", harness.name())
-            }
-        })
-        .collect();
-    let harnesses = harnesses.join(" or ");
+        .map(|harness| harness.name())
+        .collect::<Vec<_>>()
+        .join(" or ");
     let default = current
         .default
         .filter(|harness| installed.contains(harness))
@@ -194,9 +184,8 @@ fn ask_harness(
     let Some(default) = default else {
         let names = harness::names();
         outside.say(format!(
-            "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \
-             the harness settings stay as they are; install {names}, then rerun \
-             `thirdshift setup`."
+            "No Harness is installed here, so the harness settings stay as they are; \
+             install {names}, then rerun `thirdshift setup`."
         ));
         return Ok(None);
     };
@@ -207,7 +196,7 @@ fn ask_harness(
             Some(default.name()),
         )?;
         match Harness::named(&name) {
-            None => outside.say(format!("Choose {}.", harness::names())),
+            None => outside.say(format!("Choose {harnesses}.")),
             Some(harness) if !installed.contains(&harness) => {
                 outside.say(format!("{name} is not installed: it isn't on PATH."))
             }
