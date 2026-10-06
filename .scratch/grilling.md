@@ -1272,3 +1272,55 @@ that looks right, file them as sub-issues with dependencies where appropriate
 
 ## 12
 Yes, and will the thirdshift pickup crontab entry pick this spec up? if so when?
+
+
+# Oct 5 2026, multi-family review
+/grill-with-docs I want a way to be able to run multi-family review in the process of a run, such as for the /thirdshift-code-review step of a /thirdshift-implement process for example, or maybe even just either the spec or the standards review. Something - maybe there could be a way for the user to configure this in their User config, what harness / model / effort they want for various steps for example. /research for some best practices here of multi-family review. I think there was a July 2026 study which suggested that multi-family model review in code development can improve the code, so ultimately I want to make this change in an evidenced way.
+
+## 2
+/research online looking for the July 2026 or other related studies about pros and cons of multi-model family coding processes
+
+## 3
+I'm interested in these models in these harnesses as well being options noted in
+  https://github.com/JacobStephens2/thirdshift/issues/428 - I have all of them setup
+  to run on this server, which you can test out and check out
+
+## 4
+I think I'm talking about the July 2026 LiveCodeBench experiment (116 hard/medium
+  tasks, reviewer cannot run tests, accepted at Agentic SE @ KDD 2026) study
+
+## 5
+Or this: On real pull requests, models are worse at the bug classes they themselves tend to plant. Greptile's July 2026 "model inversion" study reviewed 1,000 PRs (500 Claude Code-authored, 500 Codex-authored) against about 1,500 verified high-severity comments, three times each. P0/P1 recall was about 60–62% when the reviewer was the other family and about 50–54% when it was the same family, roughly +9 percentage points. Claude-authored PRs were richer in missing-behavior bugs, which GPT caught more often; Codex-authored PRs skewed toward semantic-intent and error-handling bugs, which Claude caught more often. Secondary write-ups sometimes swap which same-model cell is 50.5% versus 53.7%; the aggregate crossover is the stable result. It is a vendor study, matched by an LLM judge, and the feature is marked experimental.
+A controlled rewrite experiment on 116 hard and medium LiveCodeBench tasks (reviewer sees the problem and the draft, cannot run tests) is sharper and asymmetric. Accepted at Agentic SE @ KDD 2026:
+
+WriterReviewerPass rateCodex GPT-5.5 solo—71.6%CodexCodex (same family)84.5%CodexClaude Opus 4.789.7%Claude Opus 4.7 solo—91.4%ClaudeClaude (same family)91.4% (no change)ClaudeCodex82.8% (regression)
+
+## 6
+but I want the research agents to continue to search broadly and even challenge
+  what I'm sharing here
+
+## 7
+does the research include the most up to date research? Such as even things
+  published as recently in October 2026? If not, maybe even /research more looking
+  for even more up to date research, though maybe it hasn't changed much
+  alternatively since the research this covers
+
+## 8
+I curious even about Opus 5.5 and GPT 6.1 Sol for example, but maybe we can
+  extrapolate for them or test ourselves eventually
+
+## 9
+I'm thinking about using artificial analysis' intelligence index at
+  https://artificialanalysis.ai/leaderboards/models for example to measure model
+  strength, but perhaps there's another better way to measure or consider their
+  strength. /research may be helpful here too.
+
+## 10
+Though overall I wonder if my efforts on thirdshift are better spent now on adding
+  the capability for multi-family work, or better to do something like adding in the
+  ability to do something like `thirdshift security` runs, like the `thirdshift
+  architect` runs, but more security oriented for example, maybe following popular
+  github repos for ideas about security agent passes or something if the matt pocock
+  skills don't have a lot about that, such as the alibaba or cloudflare ones I think,
+  or maybe other would be good. Though I at least want ot make sure these thirdshift
+  security ideas are filed in a thirdshift issue
