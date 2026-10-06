@@ -1,14 +1,12 @@
 //! Claude Code: its launch protocol, Setup and Model check.
 
-pub(crate) mod stream;
-
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
-use super::interpretation::{Interpretation, Retained};
+use super::interpretation::{Interpretation, Retained, Stream};
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings, said};
 use crate::progress;
@@ -59,11 +57,7 @@ impl Adapter for Claude {
         ask_claude(outside, current).map(Some)
     }
     fn interpretation(&self, _worktree: &Path, _prompt: &str) -> Interpretation {
-        Interpretation::new(
-            self.name(),
-            Box::new(stream::ClaudeProgress::default()),
-            Retained::None,
-        )
+        Interpretation::new(self.name(), Box::new(Stream::claude()), Retained::None)
     }
 }
 

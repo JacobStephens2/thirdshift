@@ -8,6 +8,9 @@ use anyhow::{Result, anyhow};
 use super::{muse, opencode, said};
 use crate::interrupt;
 
+mod stream;
+pub(super) use stream::Stream;
+
 /// Live interpretation has only line condensation. Consume it after the
 /// process owner has stopped or waited for the child and joined its workers.
 pub struct Interpretation {
