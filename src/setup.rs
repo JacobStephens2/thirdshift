@@ -4,8 +4,8 @@
 //!
 //! Its rules are here: whether to ask, the questions and their defaults, the
 //! suggested address, what is written and in what order, and which failures
-//! the offer carries on through. Parsing, the defaults and completing a User
-//! config are the User config module's. Everything Setup does outside
+//! the offer carries on through. Preparing and editing a User config are
+//! the User config module's. Everything Setup does outside
 //! itself goes through [`Outside`]: [`OnMachine`] does each on the terminal,
 //! the Harnesses' CLIs, `gh`, `git`, Resend and the files under the home
 //! folder; `Scripted`, in tests, from a script, recording each call.
@@ -19,9 +19,8 @@ use anyhow::{Context, Result};
 use signal_hook::SigId;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::low_level;
-use toml_edit::{DocumentMut, Item};
 
-use crate::config::{self, EmailSettings, UserConfig};
+use crate::config::{self, EmailSettings, UserConfig, UserConfigDocument};
 use crate::git::Git;
 use crate::harness::{Catalog, Choice, ChosenBy, Harness, ModelAndEffort};
 use crate::resend_key::{Credentials, Source};
@@ -68,15 +67,12 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
     let existing = outside
         .read_user_config(path)
         .with_context(|| format!("can't read {}", path.display()))?;
-    let text = match &existing {
-        Some(text) => {
-            UserConfig::parse(text, path, home)?;
-            config::complete(text)?
-        }
-        None => config::with_email_to(suggested_address(outside)),
+    let document = match &existing {
+        Some(text) => UserConfigDocument::existing(text, path, home)?,
+        None => UserConfigDocument::defaults(path, home, suggested_address(outside))?,
     };
     let asking = outside.has_terminal();
-    let (text, answered) = ask_if(asking, outside, text, path, home)?;
+    let (text, answered) = ask_if(asking, outside, document)?;
     let asked = answered.is_some();
     let mut written = match &existing {
         None => {
@@ -126,8 +122,8 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
         return Ok(());
     }
     let accepted = questions::offer(outside, path)?;
-    let text = config::with_email_to(suggested_address(outside));
-    let (text, answered) = ask_if(accepted, outside, text, path, home)?;
+    let document = UserConfigDocument::defaults(path, home, suggested_address(outside))?;
+    let (text, answered) = ask_if(accepted, outside, document)?;
     if let Err(error) = write_new(outside, path, &text) {
         outside.step(format!("warning: {error:#}; carrying on with the defaults"));
         return Ok(());
@@ -158,37 +154,22 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
     Ok(())
 }
 
-/// `text` with the answers to the Setup questions, and the answers, if
-/// `asking`, as [`ask`] asks them; otherwise `text` as it is.
+/// Ask using the prepared document's settings as question defaults, then
+/// render the semantic answers. Credentials a Run would refuse are refused
+/// before any Setup question. With no questions, render completed defaults.
 fn ask_if(
     asking: bool,
     outside: &mut impl Outside,
-    text: String,
-    path: &Path,
-    home: &Path,
+    document: UserConfigDocument,
 ) -> Result<(String, Option<Answers>)> {
-    if !asking {
-        return Ok((text, None));
-    }
-    let (text, answers) = ask(outside, &text, path, home)?;
-    Ok((text, Some(answers)))
-}
-
-/// Ask the Setup questions, with the settings in `text`, the User config at
-/// `path` under `home`, and the key in the Credentials as the default
-/// answers. Credentials a Run would refuse are refused before any question.
-/// Returns `text` with the answers, and the answers.
-fn ask(
-    outside: &mut impl Outside,
-    text: &str,
-    path: &Path,
-    home: &Path,
-) -> Result<(String, Answers)> {
-    let current = UserConfig::parse(text, path, home)?;
-    let found = outside.find_key()?;
-    let answers = questions::ask(outside, &current, found)?;
-    let text = with_answers(text, &answers)?;
-    Ok((text, answers))
+    let answers = if asking {
+        let found = outside.find_key()?;
+        Some(questions::ask(outside, document.settings(), found)?)
+    } else {
+        None
+    };
+    let changes = answers.as_ref().map(Answers::changes);
+    Ok((document.render(changes), answers))
 }
 
 /// Write `text` as the User config at `path`, where there is none yet.
@@ -224,128 +205,6 @@ fn suggested_address(outside: &mut impl Outside) -> Option<String> {
                     .ends_with("@users.noreply.github.com")
         })
     })
-}
-
-/// `text`, a User config with every key, or a commented-out `email.to`, with
-/// the values `answers` gives. Only those values change: the spacing and
-/// comments around each stay, as does everything else in `text`.
-fn with_answers(text: &str, answers: &Answers) -> Result<String> {
-    let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
-    set(&mut document, "merge", "always", answers.merge_always);
-    set(&mut document, "base", "fix", answers.base_fix);
-    set(&mut document, "launch", "pull", answers.launch_pull);
-    set(
-        &mut document,
-        "email",
-        "always",
-        answers.notifications.is_some(),
-    );
-    if let Some(notifications) = &answers.notifications {
-        set(&mut document, "email", "from", notifications.from.as_str());
-        set_email_to(&mut document, &notifications.to);
-    }
-    if let Some((harness, chosen)) = &answers.harness {
-        set(&mut document, "harness", "default", harness.name());
-        let section = format!("harness.{}", harness.name());
-        for (key, value) in [("model", &chosen.model), ("effort", &chosen.effort)] {
-            set(&mut document, &section, key, value.as_deref().unwrap_or(""));
-        }
-    }
-    Ok(document.to_string())
-}
-
-/// Set `section.key`, which `document` holds, to `value`, keeping the
-/// spacing and comment around the old value, and the comment in the same
-/// column where the spaces before it allow. An equal value is left as it was
-/// written. `section` may be a subsection, as `harness.claude`.
-fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<toml_edit::Value>) {
-    let value = value.into();
-    let old = section
-        .split('.')
-        .try_fold(document.as_item_mut(), |item, name| {
-            item.as_table_like_mut()?.get_mut(name)
-        })
-        .and_then(Item::as_table_like_mut)
-        .and_then(|settings| settings.get_mut(key))
-        .and_then(Item::as_value_mut)
-        .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
-    let same = match (old.as_bool(), old.as_str()) {
-        (Some(old), _) => value.as_bool() == Some(old),
-        (_, Some(old)) => value.as_str() == Some(old),
-        _ => false,
-    };
-    if same {
-        return;
-    }
-    let mut decor = old.decor().clone();
-    let suffix = config::decor_suffix(&decor);
-    let spaces = suffix.len() - suffix.trim_start_matches(' ').len();
-    if spaces > 0 && suffix[spaces..].starts_with('#') {
-        let width = |value: &toml_edit::Value| value.clone().decorated("", "").to_string().len();
-        let spaces = (spaces + width(old)).saturating_sub(width(&value)).max(1);
-        decor.set_suffix(format!(
-            "{}{}",
-            " ".repeat(spaces),
-            suffix.trim_start_matches(' ')
-        ));
-    }
-    *old = value;
-    *old.decor_mut() = decor;
-}
-
-/// Set `email.to` in `document` to `to`. With no `email.to` there yet, it
-/// takes the place of the commented-out one, if there is one, written as
-/// the defaults would write it, with its comment.
-fn set_email_to(document: &mut DocumentMut, to: &str) {
-    let email = &mut document["email"];
-    let has_to = email
-        .as_table_like()
-        .is_some_and(|settings| settings.contains_key("to"));
-    if has_to {
-        set(document, "email", "to", to);
-        return;
-    }
-    let Some(email) = email.as_table_mut().filter(|email| !email.is_dotted()) else {
-        let settings = email.as_table_like_mut().expect("[email] is a section");
-        settings.insert("to", Item::Value(to.into()));
-        return;
-    };
-    let example: DocumentMut = config::with_email_to(Some(to.to_string()))
-        .parse()
-        .expect("DEFAULTS is valid TOML");
-    let (key, item) = example["email"]
-        .as_table()
-        .and_then(|example| example.get_key_value("to"))
-        .expect("the example sets email.to");
-    let mut key = key.clone();
-    key.leaf_decor_mut().set_prefix("");
-    let keys: Vec<String> = email.iter().map(|(key, _)| key.to_string()).collect();
-    let mut place = keys.len();
-    for (at, name) in keys.iter().enumerate() {
-        let mut next = email.key_mut(name).expect("the key is in [email]");
-        let prefix = config::decor_prefix(next.leaf_decor());
-        let mut end = 0;
-        let found = prefix.split_inclusive('\n').find_map(|line| {
-            let start = end;
-            end += line.len();
-            config::is_commented_out_email_to(line).then_some((start, end))
-        });
-        let Some((start, end)) = found else {
-            continue;
-        };
-        next.leaf_decor_mut().set_prefix(&prefix[end..]);
-        key.leaf_decor_mut().set_prefix(&prefix[..start]);
-        place = at;
-        break;
-    }
-    email.insert_formatted(&key, item.clone());
-    // Each key keeps its place, and `to` goes just before the key at `place`,
-    // or last: odd ranks for the keys that were there, an even one for `to`.
-    let rank = |name: &str| match keys.iter().position(|key| key == name) {
-        Some(at) => 2 * at + 1,
-        None => 2 * place,
-    };
-    email.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
 }
 
 /// What Setup does outside itself: the terminal it asks on, the Harnesses'
@@ -1085,7 +944,9 @@ to = \"me@example.com\"  # my inbox
             done,
             format!("added the missing settings to the User config {PATH}")
         );
-        let completed = config::complete(partial).unwrap();
+        let completed = UserConfigDocument::existing(partial, Path::new(PATH), Path::new(HOME))
+            .unwrap()
+            .render(None);
         assert_eq!(outside.effects(), [&Call::Replace(completed.clone())]);
         assert!(
             completed.starts_with(
@@ -1132,6 +993,11 @@ to = \"me@example.com\"  # my inbox
         for (broken, named) in [
             ("[merge]\nalway = true\n", "unknown key merge.alway"),
             ("[merge\nalways = true\n", "can't parse the User config"),
+            ("merge = true\n", "merge must be the section [merge]"),
+            (
+                "[harness]\nclaude = true\n",
+                "harness.claude must be the section [harness.claude]",
+            ),
             (
                 "# mine\n[launch]\npull = \"yes\"\n",
                 "launch.pull must be true or false",
@@ -2347,7 +2213,15 @@ always = false # quiet, please
 
         assert_eq!(
             outside.user_config,
-            Some(config::with_email_to(Some("octo@example.com".to_string())))
+            Some(
+                UserConfigDocument::defaults(
+                    Path::new(PATH),
+                    Path::new(HOME),
+                    Some("octo@example.com".to_string())
+                )
+                .unwrap()
+                .render(None)
+            )
         );
     }
 
@@ -2459,7 +2333,15 @@ always = false # quiet, please
 
         assert_eq!(
             outside.user_config,
-            Some(config::with_email_to(Some("octo@example.com".to_string())))
+            Some(
+                UserConfigDocument::defaults(
+                    Path::new(PATH),
+                    Path::new(HOME),
+                    Some("octo@example.com".to_string())
+                )
+                .unwrap()
+                .render(None)
+            )
         );
     }
 
@@ -2606,58 +2488,5 @@ always = false # quiet, please
             assert_eq!(error.to_string(), ENDED, "{answers:?}");
             assert!(!wrote_anything(&outside), "{answers:?}");
         }
-    }
-
-    // Writing the answers into the text.
-
-    fn notifications_to(to: &str) -> Answers {
-        Answers {
-            harness: None,
-            merge_always: false,
-            base_fix: false,
-            launch_pull: false,
-            notifications: Some(questions::Notifications {
-                to: to.to_string(),
-                from: crate::email::DEFAULT_FROM.to_string(),
-                key: None,
-                send_test: false,
-            }),
-        }
-    }
-
-    #[test]
-    fn an_answered_address_takes_the_place_of_the_commented_out_line() {
-        let answered = with_answers(DEFAULTS, &notifications_to("me@example.com")).unwrap();
-        let expected = config::with_email_to(Some("me@example.com".to_string())).replace(
-            "always = false                  #",
-            "always = true                   #",
-        );
-        assert_eq!(answered, expected);
-    }
-
-    #[test]
-    fn an_answered_address_keeps_the_lines_around_the_commented_out_one() {
-        let text =
-            "[email]\nalways = false\n\n# mine\n# to = \"x@y.z\"\n# more\nfrom = \"a@b.c\"\n";
-        let answered = with_answers(
-            &config::complete(text).unwrap(),
-            &notifications_to("me@example.com"),
-        )
-        .unwrap();
-        let lines: Vec<&str> = answered.lines().collect();
-        assert_eq!(
-            lines[..4],
-            ["[email]", "always = true", "", "# mine"],
-            "{answered}"
-        );
-        assert!(
-            lines[4].starts_with("to = \"me@example.com\""),
-            "{answered}"
-        );
-        assert_eq!(
-            lines[5..7],
-            ["# more", "from = \"onboarding@resend.dev\""],
-            "{answered}"
-        );
     }
 }
