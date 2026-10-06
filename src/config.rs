@@ -531,7 +531,9 @@ mod tests {
                 "harness.claude.model",
                 "harness.claude.effort",
                 "harness.codex.model",
-                "harness.codex.effort"
+                "harness.codex.effort",
+                "harness.agy.model",
+                "harness.agy.effort"
             ]
         );
         let commented_out: Vec<&str> = DEFAULTS
