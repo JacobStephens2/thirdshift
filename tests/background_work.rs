@@ -133,3 +133,25 @@ fn a_session_that_ends_in_an_error_with_killed_background_work_is_not_resumed_or
         result.stderr
     );
 }
+
+#[test]
+fn a_zero_exit_failed_claude_turn_leaves_the_pr_draft_without_a_resume() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_COMMITS_AND_OPENS_PR}{}\n\
+         echo '{{\"type\":\"result\",\"subtype\":\"error_max_turns\",\"is_error\":true}}' >> \"$FAKE_CLAUDE_AFTER_RESULT\"\n",
+        leaves_running(TESTS)
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("claude's turn failed"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+    scenario.assert_cleaned_up("issue-7");
+}

@@ -275,6 +275,18 @@ touch "{started}"
         assert!(scenario.issue_labels(7).is_empty());
         assert_eq!(scenario.entries("work"), ["widgets"]);
     }
+    if matches!(during, During::Export) {
+        assert!(
+            !result.stderr.contains("session ended after"),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            !result.stderr.contains("warning: the session never loaded"),
+            "{}",
+            result.stderr
+        );
+    }
     let limit = if matches!(during, During::CheckAfterExit) {
         Duration::from_secs(2)
     } else {

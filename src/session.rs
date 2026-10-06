@@ -8,17 +8,20 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+#[cfg(test)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 
 #[cfg(test)]
 pub(crate) use crate::harness::claude::claude_args;
 #[cfg(test)]
 pub(crate) use crate::harness::codex::{codex_args, codex_prompt};
+use crate::harness::interpretation::{Ended, Interpretation};
 use crate::harness::{Adapter, Choice, Invocation, process};
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
-use crate::progress::{self, Stream};
+use crate::progress;
 use crate::prompt;
 use crate::skills;
 
@@ -202,23 +205,6 @@ trait Outside {
     fn step(&mut self, line: String);
 }
 
-/// What a session ended with, as its stream showed it.
-struct Ended {
-    /// Its id, which a Resume continues.
-    session_id: Option<String>,
-    /// Descriptions of the background work killed as it ended.
-    killed: Vec<String>,
-    /// What the agent said as it ended its last turn, if anything.
-    final_message: Option<String>,
-}
-
-impl Ended {
-    /// The descriptions of the killed background work, borrowed.
-    fn killed_work(&self) -> Vec<&str> {
-        self.killed.iter().map(String::as_str).collect()
-    }
-}
-
 /// Sessions run by the Command's `harness`'s CLI in `worktree`, where it
 /// finds the Factory skills, and progress lines printed on stderr.
 struct OnMachine {
@@ -236,17 +222,15 @@ impl Outside for OnMachine {
         log: &Path,
     ) -> Result<Ended> {
         let invocation = self.adapter.session(&self.harness, resume, prompt);
-        let stream = self.adapter.stream(&self.worktree, prompt);
-        let stream = run(kind, self.adapter, &self.worktree, invocation, log, stream)?;
-        Ok(Ended {
-            session_id: stream.session_id().map(String::from),
-            killed: stream
-                .killed_background_work()
-                .into_iter()
-                .map(String::from)
-                .collect(),
-            final_message: stream.final_message().map(String::from),
-        })
+        let interpretation = self.adapter.interpretation(&self.worktree, prompt);
+        run(
+            kind,
+            self.adapter,
+            &self.worktree,
+            invocation,
+            log,
+            interpretation,
+        )
     }
 
     fn step(&mut self, line: String) {
@@ -279,8 +263,8 @@ fn run(
     worktree: &Path,
     invocation: Invocation,
     log: &Path,
-    mut stream: Box<dyn Stream>,
-) -> Result<Box<dyn Stream>> {
+    mut stream: Interpretation,
+) -> Result<Ended> {
     let cli = adapter.name();
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
@@ -299,13 +283,7 @@ fn run(
             .args(&invocation.args)
             .current_dir(worktree),
         invocation.stdin.as_deref(),
-        move |output| match follow(
-            &kind_owned,
-            output,
-            &mut log_file,
-            &log_owned,
-            stream.as_mut(),
-        ) {
+        move |output| match follow(&kind_owned, output, &mut log_file, &log_owned, &mut stream) {
             Ok(()) => Ok(stream),
             Err(error) => {
                 let _ = failed_stream.send(stream);
@@ -326,43 +304,20 @@ fn run(
         }
     };
 
-    let stream = match adapter.read_after_exit(worktree, stream) {
-        Ok(stream) => stream,
-        Err(error) => {
-            if interrupt::requested() {
-                return Err(error);
-            }
-            return Err(status.err().unwrap_or(error));
+    let completion = stream.finish(status);
+    if let Some(report) = completion.report {
+        for warning in report.warnings {
+            progress::step(format_args!("{kind}: {warning}"));
         }
-    };
-    for warning in stream.warnings() {
-        progress::step(format_args!("{kind}: {warning}"));
+        let elapsed = minutes_and_seconds(started.elapsed());
+        let summary = report
+            .summary
+            .map_or(String::new(), |summary| format!(": {summary}"));
+        progress::step(format_args!(
+            "{kind}: session ended after {elapsed}{summary}"
+        ));
     }
-    let elapsed = minutes_and_seconds(started.elapsed());
-    let summary = stream
-        .summary()
-        .map_or(String::new(), |summary| format!(": {summary}"));
-    progress::step(format_args!(
-        "{kind}: session ended after {elapsed}{summary}"
-    ));
-    let status = status?;
-    if status.success() && !stream.failed() {
-        return Ok(stream);
-    }
-    let ended = if status.success() {
-        "'s turn failed".to_string()
-    } else {
-        format!(
-            " exited {}",
-            status
-                .code()
-                .map_or("by signal".to_string(), |code| code.to_string())
-        )
-    };
-    match stream.error() {
-        Some(error) => bail!("{cli}{ended}: {error}"),
-        None => bail!("{cli}{ended}"),
-    }
+    completion.outcome
 }
 
 /// Copy every line of `stream` to `log_file` and print the progress lines it
@@ -372,7 +327,7 @@ fn follow(
     stream: impl Read,
     log_file: &mut File,
     log: &Path,
-    progress: &mut dyn Stream,
+    progress: &mut Interpretation,
 ) -> Result<()> {
     let mut stream = BufReader::new(stream);
     let mut line = Vec::new();

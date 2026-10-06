@@ -1,6 +1,7 @@
 //! OpenCode's JSONL progress; final usage is deliberately left to session export.
+use crate::harness::interpretation::{Decoder, Ended, Facts, Report, TurnOutcome};
 use crate::harness::skill_load::SkillLoad;
-use crate::progress::{Stream, bash, shorten};
+use crate::progress::{bash, shorten};
 use serde_json::Value;
 
 #[derive(Default)]
@@ -21,7 +22,7 @@ impl OpenCodeProgress {
     }
 }
 
-impl Stream for OpenCodeProgress {
+impl Decoder for OpenCodeProgress {
     fn condense(&mut self, raw: &str) -> Vec<String> {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
             return Vec::new();
@@ -78,38 +79,35 @@ impl Stream for OpenCodeProgress {
             _ => Vec::new(),
         }
     }
-    fn summary(&self) -> Option<String> {
-        None
-    }
-    fn final_message(&self) -> Option<&str> {
-        self.message.as_deref()
-    }
-    fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-    fn killed_background_work(&self) -> Vec<&str> {
-        // OpenCode's stream has no documented event proving background work
-        // was killed at session end. Tool cancellation alone is not evidence.
-        Vec::new()
-    }
-    fn failed(&self) -> bool {
-        self.failure.is_some()
-    }
-    fn error(&self) -> Option<&str> {
-        self.failure.as_deref()
-    }
-    fn warnings(&self) -> Vec<String> {
-        self.skill_load.warnings()
+    fn complete(self: Box<Self>) -> Facts {
+        let outcome = TurnOutcome::from_failed(self.failure.is_some());
+        Facts {
+            report: Report {
+                warnings: self.skill_load.warnings(),
+                summary: None,
+            },
+            ended: Ended {
+                session_id: self.session_id,
+                // Tool cancellation alone is not killed-work evidence.
+                killed: Vec::new(),
+                final_message: self.message,
+            },
+            outcome,
+            diagnostic: self.failure,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::harness::{
+        Harness,
+        interpretation_tests::{finish, stream},
+    };
 
     #[test]
     fn a_dropped_last_step_keeps_the_last_text_without_trusting_stream_usage() {
-        let mut stream = OpenCodeProgress::for_prompt("/thirdshift-implement issue-url");
+        let mut stream = stream(Harness::OpenCode, "/thirdshift-implement issue-url");
         for line in [
             r#"{"type":"step_start","sessionID":"s1","part":{}}"#,
             r#"{"type":"tool_use","sessionID":"s1","part":{"tool":"skill","state":{"status":"completed","input":{"id":"thirdshift-implement"}}}}"#,
@@ -120,36 +118,53 @@ mod tests {
         ] {
             stream.condense(line);
         }
-        assert_eq!(stream.final_message(), Some("last reply"));
-        assert_eq!(stream.session_id(), Some("s1"));
-        assert!(stream.warnings().is_empty());
-        assert!(stream.summary().is_none());
+        let stream = finish(stream);
+        assert_eq!(
+            stream.outcome.as_ref().unwrap().final_message.as_deref(),
+            Some("last reply")
+        );
+        assert_eq!(
+            stream.outcome.as_ref().unwrap().session_id.as_deref(),
+            Some("s1")
+        );
+        assert!(stream.report.as_ref().unwrap().warnings.clone().is_empty());
+        assert!(stream.report.as_ref().unwrap().summary.clone().is_none());
     }
 
     #[test]
     fn a_wrong_or_failed_skill_load_still_warns() {
-        let mut stream = OpenCodeProgress::for_prompt("/thirdshift-implement issue-url");
+        let mut stream = stream(Harness::OpenCode, "/thirdshift-implement issue-url");
         for line in [
             r#"{"type":"tool_use","part":{"tool":"skill","state":{"status":"completed","input":{"id":"thirdshift-tdd"}}}}"#,
             r#"{"type":"tool_use","part":{"tool":"skill","state":{"status":"error","input":{"id":"thirdshift-implement"}}}}"#,
         ] {
             stream.condense(line);
         }
+        let stream = finish(stream);
         assert_eq!(
-            stream.warnings(),
+            stream.report.as_ref().unwrap().warnings.clone(),
             ["warning: the session never loaded thirdshift-implement with its skill tool"]
         );
-        assert!(stream.session_id().is_none());
+        assert!(
+            stream
+                .outcome
+                .as_ref()
+                .unwrap()
+                .session_id
+                .as_deref()
+                .is_none()
+        );
     }
 
     #[test]
     fn a_recorded_no_route_error_fails_and_names_the_model_or_effort_problem() {
-        let mut stream = OpenCodeProgress::default();
+        let mut stream = stream(Harness::OpenCode, "");
         stream.condense(r#"{"type":"error","sessionID":"s1","error":{"type":"provider.no-route","message":"Model unavailable: thirdshift-invalid-provider/invalid"}}"#);
-        assert!(stream.failed());
+        let stream = finish(stream);
+        assert!(stream.outcome.is_err());
         assert_eq!(
-            stream.error(),
-            Some("provider.no-route: Model unavailable: thirdshift-invalid-provider/invalid")
+            stream.outcome.as_ref().unwrap_err().to_string(),
+            "opencode's turn failed: provider.no-route: Model unavailable: thirdshift-invalid-provider/invalid"
         );
     }
 }

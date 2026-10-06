@@ -5,19 +5,20 @@
 //! error the session failed with. See
 //! `docs/research/codex-headless-harness.md`.
 
+use crate::harness::interpretation::{Decoder, Ended, Facts, Report, TurnOutcome};
 use std::collections::HashSet;
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::progress::{Stream, bash, shorten};
+use crate::progress::{bash, shorten};
 
 /// Condenses one Codex session's JSONL stream, a line at a time.
 ///
 /// `codex exec` runs one turn per process. A command or sub-agent call the
 /// agent left running shows as a `command_execution` or `collab_tool_call`
 /// item still `in_progress` when the turn completes, and it is killed as
-/// Codex exits: see [`Stream::killed_background_work`].
+/// Codex exits: the completed interpretation records that evidence.
 #[derive(Default)]
 pub struct CodexProgress {
     /// The worktree the session runs in, which Codex's stream doesn't name.
@@ -134,7 +135,7 @@ impl CodexProgress {
     }
 }
 
-impl Stream for CodexProgress {
+impl Decoder for CodexProgress {
     fn condense(&mut self, raw: &str) -> Vec<String> {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
             return Vec::new();
@@ -179,6 +180,26 @@ impl Stream for CodexProgress {
         }
     }
 
+    fn complete(self: Box<Self>) -> Facts {
+        let summary = self.summary();
+        let outcome = TurnOutcome::from_failed(self.failure.is_some());
+        Facts {
+            report: Report {
+                warnings: Vec::new(),
+                summary,
+            },
+            ended: Ended {
+                session_id: self.session_id,
+                killed: self.killed,
+                final_message: self.final_message,
+            },
+            outcome,
+            diagnostic: self.failure.or(self.last_error),
+        }
+    }
+}
+
+impl CodexProgress {
     /// The token totals from `turn.completed`: Codex reports no turns and no
     /// cost.
     fn summary(&self) -> Option<String> {
@@ -190,33 +211,6 @@ impl Stream for CodexProgress {
         Some(format!(
             "{input} input tokens ({cached} cached), {output} output tokens"
         ))
-    }
-
-    /// The text of the last `agent_message` item.
-    fn final_message(&self) -> Option<&str> {
-        self.final_message.as_deref()
-    }
-
-    /// The thread id from `thread.started`, which `codex exec resume` takes.
-    fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-
-    /// The commands and sub-agent calls still running when the turn
-    /// completed.
-    fn killed_background_work(&self) -> Vec<&str> {
-        if self.failure.is_some() {
-            return Vec::new();
-        }
-        self.killed.iter().map(String::as_str).collect()
-    }
-
-    fn failed(&self) -> bool {
-        self.failure.is_some()
-    }
-
-    fn error(&self) -> Option<&str> {
-        self.failure.as_deref().or(self.last_error.as_deref())
     }
 }
 
@@ -265,15 +259,20 @@ fn unwrapped(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::{
+        Harness,
+        interpretation::Completion,
+        interpretation_tests::{finish, stream},
+    };
     use serde_json::json;
 
-    fn lines(events: &[Value]) -> (CodexProgress, Vec<Vec<String>>) {
-        let mut progress = CodexProgress::in_worktree(Path::new("/work/widgets-issue-7"));
+    fn lines(events: &[Value]) -> (Completion, Vec<Vec<String>>) {
+        let mut progress = stream(Harness::Codex, "");
         let lines = events
             .iter()
             .map(|event| progress.condense(&event.to_string()))
             .collect();
-        (progress, lines)
+        (finish(progress), lines)
     }
 
     fn item(kind: &str, id: &str, item: Value) -> Value {
@@ -304,7 +303,10 @@ mod tests {
         ]);
 
         assert_eq!(lines, [vec!["session started".to_string()], vec![]]);
-        assert_eq!(progress.session_id(), Some("019a-thread"));
+        assert_eq!(
+            progress.outcome.as_ref().unwrap().session_id.as_deref(),
+            Some("019a-thread")
+        );
     }
 
     #[test]
@@ -417,7 +419,10 @@ mod tests {
         };
         let (progress, _) = lines(&[said("item_1", "Running tests."), said("item_5", "Done.")]);
 
-        assert_eq!(progress.final_message(), Some("Done."));
+        assert_eq!(
+            progress.outcome.as_ref().unwrap().final_message.as_deref(),
+            Some("Done.")
+        );
     }
 
     #[test]
@@ -425,10 +430,10 @@ mod tests {
         let (progress, _) = lines(&[completed(12000, 345)]);
 
         assert_eq!(
-            progress.summary().as_deref(),
+            progress.report.as_ref().unwrap().summary.clone().as_deref(),
             Some("12000 input tokens (100 cached), 345 output tokens")
         );
-        assert_eq!(lines(&[]).0.summary(), None);
+        assert_eq!(lines(&[]).0.report.unwrap().summary, None);
     }
 
     #[test]
@@ -445,8 +450,11 @@ mod tests {
             completed(10, 2),
         ]);
 
-        assert_eq!(progress.killed_background_work(), ["sleep 188"]);
-        assert!(!progress.failed());
+        assert_eq!(
+            progress.outcome.as_ref().unwrap().killed_work(),
+            ["sleep 188"]
+        );
+        assert!(progress.outcome.is_ok());
     }
 
     #[test]
@@ -457,7 +465,10 @@ mod tests {
             completed(10, 2),
         ]);
 
-        assert_eq!(progress.killed_background_work(), ["npm run dev"]);
+        assert_eq!(
+            progress.outcome.as_ref().unwrap().killed_work(),
+            ["npm run dev"]
+        );
     }
 
     #[test]
@@ -484,7 +495,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            progress.killed_background_work(),
+            progress.outcome.as_ref().unwrap().killed_work(),
             ["agent spawn_agent: Review the diff", "agent spawn_agent"]
         );
     }
@@ -497,28 +508,35 @@ mod tests {
             json!({ "type": "turn.failed", "error": { "message": "The 'GPT-6.1-Sol' model is not supported." } }),
         ]);
 
-        assert!(progress.failed());
+        assert!(progress.outcome.is_err());
         assert_eq!(
-            progress.error(),
-            Some("The 'GPT-6.1-Sol' model is not supported.")
+            progress.outcome.as_ref().unwrap_err().to_string(),
+            "codex's turn failed: The 'GPT-6.1-Sol' model is not supported."
         );
-        assert!(progress.killed_background_work().is_empty());
     }
 
     #[test]
-    fn an_error_event_alone_does_not_fail_the_session_but_is_its_last_error() {
-        let (progress, _) = lines(&[
-            json!({ "type": "error", "message": "Reconnecting... 1/5" }),
-            completed(10, 2),
-        ]);
-
-        assert!(!progress.failed());
-        assert_eq!(progress.error(), Some("Reconnecting... 1/5"));
+    fn a_retried_diagnostic_does_not_fail_a_turn_but_explains_a_nonzero_exit() {
+        use std::os::unix::process::ExitStatusExt;
+        for code in [0, 3] {
+            let mut progress = stream(Harness::Codex, "");
+            progress.condense(r#"{"type":"error","message":"Reconnecting... 1/5"}"#);
+            progress.condense(&completed(10, 2).to_string());
+            let completion = progress.finish(Ok(std::process::ExitStatus::from_raw(code << 8)));
+            if code == 0 {
+                assert!(completion.outcome.is_ok());
+            } else {
+                assert_eq!(
+                    completion.outcome.unwrap_err().to_string(),
+                    "codex exited 3: Reconnecting... 1/5"
+                );
+            }
+        }
     }
 
     #[test]
     fn unknown_and_malformed_lines_are_skipped() {
-        let mut progress = CodexProgress::default();
+        let mut progress = stream(Harness::Codex, "");
         for raw in [
             "",
             "not json",
@@ -531,7 +549,7 @@ mod tests {
             let lines = progress.condense(raw);
             assert!(lines.len() <= 1, "{raw}: {lines:?}");
         }
-        assert_eq!(progress.summary(), None);
+        assert_eq!(finish(progress).report.unwrap().summary, None);
     }
 
     #[test]

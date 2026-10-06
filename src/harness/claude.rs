@@ -8,9 +8,10 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings, said};
-use crate::progress::{self, Stream};
+use crate::progress;
 
 pub struct Claude;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Claude, &Claude);
@@ -57,8 +58,12 @@ impl Adapter for Claude {
     ) -> Result<Option<ModelAndEffort>> {
         ask_claude(outside, current).map(Some)
     }
-    fn stream(&self, _worktree: &Path, _prompt: &str) -> Box<dyn Stream> {
-        Box::new(stream::ClaudeProgress::default())
+    fn interpretation(&self, _worktree: &Path, _prompt: &str) -> Interpretation {
+        Interpretation::new(
+            self.name(),
+            Box::new(stream::ClaudeProgress::default()),
+            Retained::None,
+        )
     }
 }
 

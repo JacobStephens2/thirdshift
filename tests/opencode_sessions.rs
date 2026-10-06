@@ -16,6 +16,111 @@ fn records(scenario: &Scenario, extension: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Replace the fake CLI's persisted export at its external acquisition seam.
+fn export_script(scenario: &Scenario, text: &str) -> std::path::PathBuf {
+    let script = scenario.path("replace-export.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "cat > '{}' <<'EXPORT'\n{text}\nEXPORT\n",
+            scenario
+                .path("opencode-calls.fake-opencode-1.export.json")
+                .display()
+        ),
+    )
+    .unwrap();
+    script
+}
+
+fn architecture_review(scenario: &Scenario) {
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent", "architecture"]);
+    scenario.agent_does_in_session(
+        1,
+        r#"
+url=$(gh issue create --title 'An idea' --body 'The idea' --label needs-triage)
+printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+}
+
+#[test]
+fn a_readable_export_owns_final_text_and_assistant_usage_without_counting_the_title_call() {
+    let scenario = Scenario::new();
+    architecture_review(&scenario);
+    let script = export_script(
+        &scenario,
+        r#"{
+        "info":{"outcome":"succeeded","tokens":{"input":999999},"cost":9},
+        "messages":[
+            {"type":"user","text":"prompt","tokens":{"input":999999}},
+            {"type":"assistant","tokens":{"input":31,"output":37,"reasoning":158,"cache":{"read":7840,"write":20}},"cost":0.004,"content":[{"type":"text","text":"earlier reply"}]},
+            {"type":"assistant","tokens":{"input":39,"output":11,"reasoning":42,"cache":{"read":496,"write":7}},"cost":0.002,"content":[{"type":"text","text":"first part"},{"type":"reasoning","text":"private reasoning"},{"type":"text","text":"Architecture review already filed: https://github.com/acme/widgets/issues/8"}]},
+            {"type":"idle","outcome":"succeeded"}
+        ]
+    }"#,
+    );
+    let result = scenario.run_with_env(
+        &["architect", "harness", "opencode"],
+        &[("FAKE_OPENCODE_EXPORT_SCRIPT", script.to_str().unwrap())],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("so it filed nothing"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("8433 input tokens (8336 cache read, 27 cache write), 248 output tokens (200 reasoning), $0.0060"), "{}", result.stderr);
+}
+
+#[test]
+fn readable_exports_without_final_assistant_text_do_not_reuse_the_stream_reply() {
+    for text in [
+        r#"{"info":{"outcome":"succeeded"},"messages":[]}"#,
+        r#"{"info":{"outcome":"succeeded"},"messages":[{"type":"assistant","content":[{"type":"text","text":"Architecture review idea: https://github.com/acme/widgets/issues/8"}]},{"type":"assistant","content":[{"type":"tool","name":"bash"}]}]}"#,
+    ] {
+        let scenario = Scenario::new();
+        architecture_review(&scenario);
+        let script = export_script(&scenario, text);
+        let result = scenario.run_with_env(
+            &["architect", "harness", "opencode"],
+            &[("FAKE_OPENCODE_EXPORT_SCRIPT", script.to_str().unwrap())],
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("ended without the final line"),
+            "{}",
+            result.stderr
+        );
+        assert!(!result.stderr.contains("input tokens"), "{}", result.stderr);
+    }
+}
+
+#[test]
+fn an_exported_failure_uses_the_assistant_diagnostic_unless_the_stream_reported_one() {
+    for streamed in [None, Some("stream failure")] {
+        let scenario = Scenario::new();
+        scenario.agent_does_for(7, &streamed.map(|error| format!(r#"echo '{{"type":"error","sessionID":"fake-opencode-1","error":{{"message":"{error}"}}}}'"#)).unwrap_or_else(|| "true".into()));
+        let script = export_script(
+            &scenario,
+            r#"{"info":{"outcome":"failed"},"messages":[{"type":"assistant","content":[],"error":{"type":"provider.no-route","message":"Variant unavailable"}}]}"#,
+        );
+        let result = scenario.run_with_env(
+            &["harness", "opencode", &scenario.issue_url(7)],
+            &[("FAKE_OPENCODE_EXPORT_SCRIPT", script.to_str().unwrap())],
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains(&format!(
+                "opencode's turn failed: {}",
+                streamed.unwrap_or("Variant unavailable")
+            )),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(records(&scenario, "json").len(), 1);
+    }
+}
+
 #[test]
 fn opencode_runs_standalone_with_stdin_skills_and_usage_despite_a_dropped_last_step() {
     let scenario = Scenario::new();

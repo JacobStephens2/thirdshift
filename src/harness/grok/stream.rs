@@ -1,9 +1,10 @@
 //! Grok's Messages stream shares Claude's framing, with different tool names.
 
+use crate::harness::interpretation::{Decoder, Ended, Facts, Report, TurnOutcome};
 use serde_json::Value;
 
 use crate::harness::claude::stream::ClaudeProgress;
-use crate::progress::{Stream, shorten};
+use crate::progress::shorten;
 
 #[derive(Default)]
 pub struct GrokProgress {
@@ -15,7 +16,7 @@ pub struct GrokProgress {
     cost_known: bool,
 }
 
-impl Stream for GrokProgress {
+impl Decoder for GrokProgress {
     fn condense(&mut self, raw: &str) -> Vec<String> {
         let Ok(mut event) = serde_json::from_str::<Value>(raw) else {
             return Vec::new();
@@ -94,54 +95,70 @@ impl Stream for GrokProgress {
         }
         lines
     }
-    fn summary(&self) -> Option<String> {
-        if self.cost_known {
-            self.claude.summary().or_else(|| self.usage.clone())
+    fn complete(self: Box<Self>) -> Facts {
+        let claude = Box::new(self.claude).complete();
+        let summary = if self.cost_known {
+            claude.report.summary.or(self.usage)
         } else {
-            self.usage.clone()
+            self.usage
+        };
+        Facts {
+            report: Report {
+                warnings: Vec::new(),
+                summary,
+            },
+            ended: Ended {
+                session_id: claude.ended.session_id.or(self.session_id),
+                // No Messages frame documents killed work at exit.
+                killed: Vec::new(),
+                final_message: claude.ended.final_message,
+            },
+            outcome: TurnOutcome::from_failed(self.failed),
+            diagnostic: self.error,
         }
-    }
-    fn final_message(&self) -> Option<&str> {
-        self.claude.final_message()
-    }
-    fn session_id(&self) -> Option<&str> {
-        self.claude.session_id().or(self.session_id.as_deref())
-    }
-    fn killed_background_work(&self) -> Vec<&str> {
-        // Grok documents no Messages frame proving work was killed at exit.
-        Vec::new()
-    }
-    fn failed(&self) -> bool {
-        self.failed
-    }
-    fn error(&self) -> Option<&str> {
-        self.error.as_deref()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::harness::{
+        Harness,
+        interpretation_tests::{finish, stream},
+    };
 
     #[test]
     fn messages_frames_reuse_claude_progress_and_keep_groks_id_final_text_and_spend() {
-        let mut stream = GrokProgress::default();
+        let mut stream = stream(Harness::Grok, "");
         assert_eq!(stream.condense(r#"{"type":"system","subtype":"init","session_id":"abc123","apiKeySource":"oauth","cwd":"/repo"}"#), ["session started"]);
         assert_eq!(stream.condense(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"read_file","input":{"path":"/repo/src/main.rs"}},{"type":"tool_use","name":"bash","input":{"command":"cargo test"}}]}}"#), ["read_file src/main.rs", "$ cargo test"]);
         stream.condense(r#"{"type":"result","subtype":"success","is_error":false,"num_turns":7,"result":"Here's a summary...","total_cost_usd":0.0127,"usage":{"input_tokens":812,"output_tokens":210,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"session_id":"abc123"}"#);
-        assert_eq!(stream.session_id(), Some("abc123"));
-        assert_eq!(stream.final_message(), Some("Here's a summary..."));
-        assert_eq!(stream.summary().as_deref(), Some("7 turns, $0.01"));
-        assert!(!stream.failed());
+        let stream = finish(stream);
+        assert_eq!(
+            stream.outcome.as_ref().unwrap().session_id.as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            stream.outcome.as_ref().unwrap().final_message.as_deref(),
+            Some("Here's a summary...")
+        );
+        assert_eq!(
+            stream.report.as_ref().unwrap().summary.clone().as_deref(),
+            Some("7 turns, $0.01")
+        );
+        assert!(stream.outcome.is_ok());
     }
 
     #[test]
     fn usage_without_a_complete_cost_and_a_result_without_init_are_still_read() {
-        let mut stream = GrokProgress::default();
+        let mut stream = stream(Harness::Grok, "");
         stream.condense(r#"{"type":"result","subtype":"success","result":"done","num_turns":1,"total_cost_usd":0,"usage":{"input_tokens":812,"output_tokens":210,"cache_read_input_tokens":45,"cache_creation_input_tokens":12},"session_id":"abc123"}"#);
-        assert_eq!(stream.session_id(), Some("abc123"));
+        let stream = finish(stream);
         assert_eq!(
-            stream.summary().as_deref(),
+            stream.outcome.as_ref().unwrap().session_id.as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            stream.report.as_ref().unwrap().summary.clone().as_deref(),
             Some(
                 "812 input tokens, 45 cache read tokens, 12 cache creation tokens, 210 output tokens"
             )
@@ -160,16 +177,20 @@ mod tests {
                 "quota exceeded",
             ),
         ] {
-            let mut stream = GrokProgress::default();
+            let mut stream = stream(Harness::Grok, "");
             assert_eq!(stream.condense(raw), [format!("error: {message}")]);
-            assert!(stream.failed());
-            assert_eq!(stream.error(), Some(message));
+            let stream = finish(stream);
+            assert!(stream.outcome.is_err());
+            assert_eq!(
+                stream.outcome.as_ref().unwrap_err().to_string(),
+                format!("grok's turn failed: {message}")
+            );
         }
     }
 
     #[test]
     fn malformed_and_unrelated_lines_are_ignored_and_error_frames_report_the_failure() {
-        let mut stream = GrokProgress::default();
+        let mut stream = stream(Harness::Grok, "");
         for line in [
             "not json",
             "null",
@@ -180,10 +201,12 @@ mod tests {
             assert!(stream.condense(line).is_empty());
         }
         stream.condense(r#"{"type":"error","message":"backend unavailable"}"#);
-        assert!(stream.failed());
-        assert_eq!(stream.error(), Some("backend unavailable"));
         stream.condense(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}"#);
-        assert!(stream.failed());
-        assert_eq!(stream.error(), Some("quota exceeded"));
+        let stream = finish(stream);
+        assert!(stream.outcome.is_err());
+        assert_eq!(
+            stream.outcome.as_ref().unwrap_err().to_string(),
+            "grok's turn failed: quota exceeded"
+        );
     }
 }
