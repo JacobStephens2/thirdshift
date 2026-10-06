@@ -176,6 +176,23 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn the_stream_fallback_keeps_the_last_reply_instead_of_muses_joined_terminal_text() {
+        // Muse's recorded two-reply sequence, with irrelevant envelope fields removed.
+        let lines = [
+            r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.output.delta","payload":{"text":"MANGO"}}"#,
+            r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"task.lifecycle.proposed","payload":{"event":{"task_kind":"model.meta.response"}}}"#,
+            r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.output.delta","payload":{"text":"OK MANGO"}}"#,
+            r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.terminal.completed","payload":{"text":"MANGOOK MANGO"}}"#,
+        ];
+        let mut stream = MuseProgress::default();
+        for line in lines {
+            stream.condense(line);
+        }
+        assert_eq!(stream.final_message(), Some("OK MANGO"));
+        assert_eq!(stream.summary(), None);
+    }
+
+    #[test]
     fn a_successful_read_skill_result_loads_only_the_named_skill() {
         let mut stream = MuseProgress::for_prompt(
             "/thirdshift-implement https://github.com/acme/widgets/issues/7",

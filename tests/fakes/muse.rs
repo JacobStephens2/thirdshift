@@ -165,6 +165,22 @@ pub fn main(argv: Vec<String>) {
     emit_event(
         &id,
         "run.output.delta",
+        object([("text", string("earlier reply"))]),
+    );
+    emit_event(
+        &id,
+        "task.lifecycle.proposed",
+        object([(
+            "event",
+            object([
+                ("task_id", string("model-final")),
+                ("task_kind", string("model.meta.response")),
+            ]),
+        )]),
+    );
+    emit_event(
+        &id,
+        "run.output.delta",
         object([("text", string(&message))]),
     );
     if std::env::var("FAKE_MUSE_NO_LOG").is_err() {
