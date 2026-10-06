@@ -1,7 +1,8 @@
 //! Muse's JSONL event envelopes. Usage is read from its session log after exit.
 
+use crate::harness::interpretation::{Decoder, Ended, Facts, Report, TurnOutcome};
 use crate::harness::skill_load::SkillLoad;
-use crate::progress::{Stream, bash, shorten};
+use crate::progress::{bash, shorten};
 use serde_json::Value;
 
 #[derive(Default)]
@@ -54,7 +55,7 @@ impl MuseProgress {
     }
 }
 
-impl Stream for MuseProgress {
+impl Decoder for MuseProgress {
     fn condense(&mut self, raw: &str) -> Vec<String> {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
             return Vec::new();
@@ -128,36 +129,30 @@ impl Stream for MuseProgress {
             _ => Vec::new(),
         }
     }
-    fn summary(&self) -> Option<String> {
-        None
-    }
-    fn final_message(&self) -> Option<&str> {
-        self.final_message.as_deref()
-    }
-    fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-    fn killed_background_work(&self) -> Vec<&str> {
-        if self.failed() {
-            Vec::new()
-        } else {
-            self.killed.iter().map(String::as_str).collect()
+    fn complete(self: Box<Self>) -> Facts {
+        let outcome = TurnOutcome::from_failed(self.failure.is_some());
+        Facts {
+            report: Report {
+                warnings: self.skill_load.warnings(),
+                summary: None,
+            },
+            ended: Ended {
+                session_id: self.session_id,
+                killed: self.killed,
+                final_message: self.final_message,
+            },
+            outcome,
+            diagnostic: self.failure,
         }
-    }
-    fn failed(&self) -> bool {
-        self.failure.is_some()
-    }
-    fn error(&self) -> Option<&str> {
-        self.failure.as_deref()
-    }
-    fn warnings(&self) -> Vec<String> {
-        self.skill_load.warnings()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::harness::{
+        Harness,
+        interpretation_tests::{finish, stream},
+    };
     use serde_json::json;
 
     #[test]
@@ -169,17 +164,22 @@ mod tests {
             r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.output.delta","payload":{"text":"OK MANGO"}}"#,
             r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.terminal.completed","payload":{"text":"MANGOOK MANGO"}}"#,
         ];
-        let mut stream = MuseProgress::default();
+        let mut stream = stream(Harness::Muse, "");
         for line in lines {
             stream.condense(line);
         }
-        assert_eq!(stream.final_message(), Some("OK MANGO"));
-        assert_eq!(stream.summary(), None);
+        let stream = finish(stream);
+        assert_eq!(
+            stream.outcome.as_ref().unwrap().final_message.as_deref(),
+            Some("OK MANGO")
+        );
+        assert_eq!(stream.report.as_ref().unwrap().summary.clone(), None);
     }
 
     #[test]
     fn a_successful_read_skill_result_loads_only_the_named_skill() {
-        let mut stream = MuseProgress::for_prompt(
+        let mut stream = stream(
+            Harness::Muse,
             "/thirdshift-implement https://github.com/acme/widgets/issues/7",
         );
         let result = |name: &str| {
@@ -189,12 +189,16 @@ mod tests {
         }}).to_string()
         };
         stream.condense(&result("thirdshift-tdd"));
-        assert_eq!(stream.warnings().len(), 1);
+
         assert_eq!(
             stream.condense(&result("thirdshift-implement")),
             ["skill thirdshift-implement"]
         );
-        assert!(stream.warnings().is_empty());
-        assert_eq!(stream.session_id(), Some("s1"));
+        let stream = finish(stream);
+        assert!(stream.report.as_ref().unwrap().warnings.clone().is_empty());
+        assert_eq!(
+            stream.outcome.as_ref().unwrap().session_id.as_deref(),
+            Some("s1")
+        );
     }
 }

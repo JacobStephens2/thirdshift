@@ -5,9 +5,9 @@ use std::process::Child;
 
 use anyhow::Result;
 
+use super::interpretation::Interpretation;
 use super::settings::Terminal;
 use super::{Choice, Harness, ModelAndEffort, Settings, agy, claude, codex, grok, muse, opencode};
-use crate::progress::Stream;
 
 /// One Harness's session protocol and its Model and Effort rules. Callers
 /// select it once, then use the same adapter for a session and its Resume.
@@ -29,7 +29,7 @@ pub trait Adapter: Sync {
         outside: &mut dyn Terminal,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>>;
-    fn stream(&self, worktree: &Path, prompt: &str) -> Box<dyn Stream>;
+    fn interpretation(&self, worktree: &Path, prompt: &str) -> Interpretation;
 
     /// Stop the session and its descendants, including commands that made
     /// their own process group or session, with this Harness's stop signals.
@@ -46,17 +46,6 @@ pub trait Adapter: Sync {
     /// needs one. Native and config-based fallbacks stay in the adapter.
     fn link_instruction_fallback(&self, _worktree: &Path) -> Result<()> {
         Ok(())
-    }
-
-    /// Optionally reconcile final text, usage and outcome with the CLI's
-    /// own session log or export after exit, before reporting the ending.
-    /// Missing or unreadable data falls back to the stream; interruption fails.
-    fn read_after_exit(
-        &self,
-        _worktree: &Path,
-        stream: Box<dyn Stream>,
-    ) -> Result<Box<dyn Stream>> {
-        Ok(stream)
     }
 }
 

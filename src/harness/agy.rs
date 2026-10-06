@@ -4,9 +4,10 @@ pub(crate) mod stream;
 pub use catalog::Catalog;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
-use crate::progress::{self, Stream};
+use crate::progress;
 use anyhow::Result;
 use std::path::Path;
 
@@ -110,8 +111,12 @@ impl Adapter for Agy {
     fn link_instruction_fallback(&self, worktree: &Path) -> Result<()> {
         super::instructions::link_fallback(worktree, "GEMINI.md", &["AGENTS.md"])
     }
-    fn stream(&self, _worktree: &Path, _prompt: &str) -> Box<dyn Stream> {
-        Box::new(stream::AgyProgress::default())
+    fn interpretation(&self, _worktree: &Path, _prompt: &str) -> Interpretation {
+        Interpretation::new(
+            self.name(),
+            Box::new(stream::AgyProgress::default()),
+            Retained::None,
+        )
     }
 }
 

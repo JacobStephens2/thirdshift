@@ -9,9 +9,9 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_checked_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
-use crate::progress::Stream;
 
 pub struct Grok;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Grok, &Grok);
@@ -116,8 +116,12 @@ impl Adapter for Grok {
         )?;
         Ok(Some(ModelAndEffort { model, effort }))
     }
-    fn stream(&self, _worktree: &Path, _prompt: &str) -> Box<dyn Stream> {
-        Box::new(stream::GrokProgress::default())
+    fn interpretation(&self, _worktree: &Path, _prompt: &str) -> Interpretation {
+        Interpretation::new(
+            self.name(),
+            Box::new(stream::GrokProgress::default()),
+            Retained::None,
+        )
     }
 }
 
@@ -128,7 +132,7 @@ mod tests {
 
     #[test]
     fn a_resume_uses_a_streamed_id_with_the_same_flags_null_stdin_and_fixed_environment() {
-        let mut progress = stream::GrokProgress::default();
+        let mut progress = Grok.interpretation(Path::new("/repo"), "");
         progress
             .condense(r#"{"type":"system","subtype":"init","session_id":"abc123","cwd":"/repo"}"#);
         let choice = Choice {
@@ -138,7 +142,10 @@ mod tests {
             chosen_by: ChosenBy::Command,
         };
         let adapter = choice.harness.adapter();
-        let resume = adapter.session(&choice, progress.session_id(), "Continue.");
+        let ended = crate::harness::interpretation_tests::finish(progress)
+            .outcome
+            .unwrap();
+        let resume = adapter.session(&choice, ended.session_id.as_deref(), "Continue.");
         assert_eq!(
             resume.args,
             [

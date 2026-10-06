@@ -1,18 +1,18 @@
 //! Muse Code: unattended sessions, skill-tool loading and the read after exit.
 
 mod catalog;
-mod log;
+pub(super) mod log;
 mod stream;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_setting};
-use super::{Choice, Harness, ModelAndEffort, Settings, said};
-use crate::progress::Stream;
+use super::{Choice, Harness, ModelAndEffort, Settings};
 
 pub struct Muse;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Muse, &Muse);
@@ -96,15 +96,12 @@ impl Adapter for Muse {
             }
         }
     }
-    fn stream(&self, _worktree: &Path, prompt: &str) -> Box<dyn Stream> {
-        Box::new(stream::MuseProgress::for_prompt(prompt))
-    }
-    fn read_after_exit(
-        &self,
-        _worktree: &Path,
-        stream: Box<dyn Stream>,
-    ) -> Result<Box<dyn Stream>> {
-        Ok(log::read_after_exit(stream))
+    fn interpretation(&self, _worktree: &Path, prompt: &str) -> Interpretation {
+        Interpretation::new(
+            self.name(),
+            Box::new(stream::MuseProgress::for_prompt(prompt)),
+            Retained::Muse(data_dir()),
+        )
     }
 }
 
@@ -144,19 +141,15 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
                 None,
             )
             .context("could not run muse to check the Model")?;
-            let mut stream = Muse.stream(Path::new("."), "Reply with OK.");
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                stream.condense(line);
-            }
-            if !output.status.success() || stream.failed() {
-                bail!(
-                    "muse refused a test call on the Model {model}: {}",
-                    stream
-                        .error()
-                        .map(String::from)
-                        .unwrap_or_else(|| said(&output))
-                );
-            }
+            Interpretation::new(
+                Muse.name(),
+                Box::new(stream::MuseProgress::for_prompt("Reply with OK.")),
+                Retained::None,
+            )
+            .check_output(
+                &output,
+                &format!("muse refused a test call on the Model {model}"),
+            )?;
         }
     }
     Ok(settled)

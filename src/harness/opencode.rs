@@ -1,11 +1,11 @@
 //! OpenCode: private standalone sessions, stdin prompts and an authoritative export.
-mod export;
+pub(super) mod export;
 mod stream;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_setting};
-use super::{Choice, Harness, ModelAndEffort, Settings, said};
-use crate::progress::Stream;
+use super::{Choice, Harness, ModelAndEffort, Settings};
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::Command;
@@ -93,14 +93,15 @@ impl Adapter for OpenCode {
             }
         }
     }
-    fn stream(&self, _worktree: &Path, prompt: &str) -> Box<dyn Stream> {
-        Box::new(stream::OpenCodeProgress::for_prompt(prompt))
+    fn interpretation(&self, worktree: &Path, prompt: &str) -> Interpretation {
+        Interpretation::new(
+            self.name(),
+            Box::new(stream::OpenCodeProgress::for_prompt(prompt)),
+            Retained::OpenCode(worktree.to_path_buf()),
+        )
     }
     fn link_instruction_fallback(&self, worktree: &Path) -> Result<()> {
         super::instructions::link_fallback(worktree, "AGENTS.md", &[])
-    }
-    fn read_after_exit(&self, worktree: &Path, stream: Box<dyn Stream>) -> Result<Box<dyn Stream>> {
-        export::read_after_exit(worktree, stream)
     }
 }
 
@@ -124,20 +125,12 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
         invocation.stdin.as_deref(),
     )
     .context("could not run opencode to check the Model and Effort")?;
-    let mut stream = OpenCode.stream(Path::new("."), "Reply with OK.");
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        stream.condense(line);
-    }
-    let stream = OpenCode.read_after_exit(Path::new("."), stream)?;
-    if !output.status.success() || stream.failed() {
-        bail!(
-            "opencode refused the Model or Effort in its test call: {}",
-            stream
-                .error()
-                .map(String::from)
-                .unwrap_or_else(|| said(&output))
-        );
-    }
+    OpenCode
+        .interpretation(Path::new("."), "Reply with OK.")
+        .check_output(
+            &output,
+            "opencode refused the Model or Effort in its test call",
+        )?;
     Ok(())
 }
 
@@ -159,9 +152,13 @@ mod tests {
             chosen_by: super::super::ChosenBy::Command,
         };
         let prompt = "/thirdshift-implement issue-url";
-        let mut stream = OpenCode.stream(Path::new("."), prompt);
+        let mut stream =
+            OpenCode.interpretation(Path::new("/missing-thirdshift-test-worktree"), prompt);
         stream.condense(r#"{"type":"step_start","sessionID":"ses_eedb9657fffec0RAa52IqAvyM1","part":{"type":"step-start"}}"#);
-        let invocation = OpenCode.session(&choice, stream.session_id(), prompt);
+        let ended = crate::harness::interpretation_tests::finish(stream)
+            .outcome
+            .unwrap();
+        let invocation = OpenCode.session(&choice, ended.session_id.as_deref(), prompt);
         assert_eq!(
             invocation.args,
             [
@@ -184,6 +181,6 @@ mod tests {
             OpenCode.environment(),
             [("OPENCODE_DISABLE_AUTOUPDATE", "1")]
         );
-        assert!(stream.killed_background_work().is_empty());
+        assert!(ended.killed.is_empty());
     }
 }

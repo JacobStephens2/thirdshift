@@ -28,9 +28,12 @@ pub fn main(argv: Vec<String>) {
             println!("truncated {{");
             crate::exit(0);
         }
-        if argv.last().is_some_and(|id| id != "check-session")
-            && let Ok(script) = std::env::var("FAKE_OPENCODE_EXPORT_SCRIPT")
-        {
+        let export_script = if argv.last().is_some_and(|id| id == "check-session") {
+            "FAKE_OPENCODE_CHECK_EXPORT_SCRIPT"
+        } else {
+            "FAKE_OPENCODE_EXPORT_SCRIPT"
+        };
+        if let Ok(script) = std::env::var(export_script) {
             outlast_interrupts();
             let status = Command::new("bash").arg("-e").arg(script).status().unwrap();
             if !status.success() {

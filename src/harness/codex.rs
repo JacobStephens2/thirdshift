@@ -9,9 +9,10 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_checked_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
-use crate::progress::{self, Stream};
+use crate::progress;
 
 pub struct Codex;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Codex, &Codex);
@@ -61,8 +62,12 @@ impl Adapter for Codex {
             }
         }
     }
-    fn stream(&self, worktree: &Path, _prompt: &str) -> Box<dyn Stream> {
-        Box::new(stream::CodexProgress::in_worktree(worktree))
+    fn interpretation(&self, worktree: &Path, _prompt: &str) -> Interpretation {
+        Interpretation::new(
+            self.name(),
+            Box::new(stream::CodexProgress::in_worktree(worktree)),
+            Retained::None,
+        )
     }
 }
 

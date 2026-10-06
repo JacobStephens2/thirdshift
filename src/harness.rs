@@ -15,6 +15,9 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod grok;
 mod instructions;
+pub(crate) mod interpretation;
+#[cfg(test)]
+pub(crate) mod interpretation_tests;
 pub(crate) mod muse;
 pub(crate) mod opencode;
 pub(crate) mod process;

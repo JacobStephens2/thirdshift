@@ -89,6 +89,7 @@ enum During {
     Session,
     Check,
     CheckAfterExit,
+    CheckExport,
     Export,
 }
 
@@ -190,6 +191,11 @@ fn interrupting_an_opencode_export_stops_its_whole_process_tree() {
 }
 
 #[test]
+fn interrupting_an_opencode_check_export_stops_its_tree_without_a_model_refusal() {
+    assert_session_command_stopped("opencode", During::CheckExport);
+}
+
+#[test]
 fn interrupting_a_grok_run_stops_a_command_in_its_own_session() {
     assert_session_command_stopped("grok", During::Session);
 }
@@ -202,7 +208,10 @@ fn interrupting_a_muse_run_stops_a_command_in_its_own_session() {
 fn assert_session_command_stopped(harness: &str, during: During) {
     let scenario = Scenario::new();
     let pid = scenario.path("detached-pid");
-    let checking = matches!(during, During::Check | During::CheckAfterExit);
+    let checking = matches!(
+        during,
+        During::Check | During::CheckAfterExit | During::CheckExport
+    );
     let ending = if matches!(during, During::Session) {
         "while :; do sleep 0.1; done"
     } else {
@@ -251,9 +260,14 @@ touch "{started}"
             }
             env
         }
-        During::Export => {
+        During::Export | During::CheckExport => {
             scenario.agent_does("true");
-            vec![("FAKE_OPENCODE_EXPORT_SCRIPT", script.to_str().unwrap())]
+            let name = if matches!(during, During::CheckExport) {
+                "FAKE_OPENCODE_CHECK_EXPORT_SCRIPT"
+            } else {
+                "FAKE_OPENCODE_EXPORT_SCRIPT"
+            };
+            vec![(name, script.to_str().unwrap())]
         }
     };
     let url = scenario.issue_url(7);
@@ -274,6 +288,26 @@ touch "{started}"
     if checking {
         assert!(scenario.issue_labels(7).is_empty());
         assert_eq!(scenario.entries("work"), ["widgets"]);
+    }
+    if matches!(during, During::CheckExport) {
+        assert!(
+            result.stderr.ends_with("thirdshift: interrupted\n"),
+            "{}",
+            result.stderr
+        );
+        assert!(!result.stderr.contains("refused"), "{}", result.stderr);
+    }
+    if matches!(during, During::Export) {
+        assert!(
+            !result.stderr.contains("session ended after"),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            !result.stderr.contains("warning: the session never loaded"),
+            "{}",
+            result.stderr
+        );
     }
     let limit = if matches!(during, During::CheckAfterExit) {
         Duration::from_secs(2)
