@@ -1,4 +1,4 @@
-//! The fake `gh`, `claude`, `codex` and `muse`, built from `tests/fakes.rs` with plain
+//! The fake `gh`, `claude`, `codex`, `agy` and `muse`, built from `tests/fakes.rs` with plain
 //! `rustc` the first time a test needs them and kept in Cargo's scratch
 //! directory for tests. They aren't a binary target, so neither the crate nor
 //! a release ships them.
@@ -11,18 +11,19 @@ use std::sync::OnceLock;
 
 /// The fakes' sources. They name the built executable, and including them
 /// makes Cargo rebuild the tests when they change.
-const SOURCES: [&str; 6] = [
+const SOURCES: [&str; 7] = [
     include_str!("../fakes.rs"),
     include_str!("../fakes/gh.rs"),
     include_str!("../fakes/claude.rs"),
     include_str!("../fakes/codex.rs"),
+    include_str!("../fakes/agy.rs"),
     include_str!("../fakes/muse.rs"),
     include_str!("../fakes/json.rs"),
 ];
 
-/// Put the fake `gh`, `claude`, `codex` and `muse` in `bin`.
+/// Put the fake `gh`, `claude`, `codex`, `agy` and `muse` in `bin`.
 pub fn install(bin: &Path) {
-    for name in ["gh", "claude", "codex", "muse", "detached-command"] {
+    for name in ["gh", "claude", "codex", "agy", "muse", "detached-command"] {
         std::os::unix::fs::symlink(executable(), bin.join(name)).unwrap();
     }
 }

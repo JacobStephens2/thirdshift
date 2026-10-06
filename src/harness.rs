@@ -10,8 +10,10 @@ use std::process::Output;
 use anyhow::{Result, bail};
 
 mod adapter;
+pub(crate) mod agy;
 pub(crate) mod claude;
 pub(crate) mod codex;
+mod instructions;
 pub(crate) mod muse;
 mod process_tree;
 
@@ -23,6 +25,7 @@ pub use codex::Catalog;
 pub enum Harness {
     Claude,
     Codex,
+    Agy,
     Muse,
 }
 
@@ -93,6 +96,8 @@ pub struct Settings {
     pub claude: ModelAndEffort,
     /// `[harness.codex]`.
     pub codex: ModelAndEffort,
+    /// `[harness.agy]`.
+    pub agy: ModelAndEffort,
     /// `[harness.muse]`.
     pub muse: ModelAndEffort,
 }
@@ -281,7 +286,7 @@ mod tests {
             default: Some(Harness::Codex),
             claude: set("opus", "high"),
             codex: set("gpt-6.1-sol", "max"),
-            muse: ModelAndEffort::default(),
+            ..Default::default()
         }
     }
 

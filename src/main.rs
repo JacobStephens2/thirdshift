@@ -94,6 +94,12 @@ Claim, the worktree and any Command log. Codex sessions run codex exec --json
 --dangerously-bypass-approvals-and-sandbox, with the skills in .agents/skills/. The Command
 log, the Activity log's start line, the pull request's body, as in Built with claude · opus ·
 high, and the Run notification each name all three.
+On agy (Antigravity CLI), agy models checks names without a turn, regardless of case;
+a bare model alias needs an Effort, and effort-suffixed model IDs are accepted. Every
+session and Resume uses -p --dangerously-skip-permissions --output-format stream-json,
+null stdin and AGY_CLI_DISABLE_AUTO_UPDATE=true; a Resume uses --conversation <id>.
+agy reads AGENTS.md and GEMINI.md, falling back through an excluded GEMINI.md link to
+root CLAUDE.md when neither exists. It does not read ~/.claude/.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word

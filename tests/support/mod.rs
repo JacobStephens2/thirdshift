@@ -603,6 +603,8 @@ test -f {root}/{COPY_REPLACED}
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
             .env("FAKE_CODEX_RECORD", self.path("codex-calls.json"))
+            .env("FAKE_AGY_RECORD", self.path("agy-calls.json"))
+            .env("FAKE_AGY_CHECK_RECORD", self.path("agy-checks.json"))
             .env("FAKE_MUSE_RECORD", self.path("muse-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
             // Seconds of waiting for CI become milliseconds. Each poll starts
@@ -819,6 +821,21 @@ test -f {root}/{COPY_REPLACED}
     /// Every call the fake Muse received.
     pub fn muse_calls(&self) -> Vec<Value> {
         fs::read_to_string(self.path("muse-calls.json"))
+            .map(|text| serde_json::from_str(&text).unwrap())
+            .unwrap_or_default()
+    }
+
+    pub fn agy_calls(&self) -> Vec<Value> {
+        self.agy_records("agy-calls.json")
+    }
+
+    pub fn agy_checks(&self) -> Vec<Value> {
+        self.agy_records("agy-checks.json")
+    }
+
+    fn agy_records(&self, file: &str) -> Vec<Value> {
+        fs::read_to_string(self.path(file))
+            .ok()
             .map(|text| serde_json::from_str(&text).unwrap())
             .unwrap_or_default()
     }
