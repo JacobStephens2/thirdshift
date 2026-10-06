@@ -177,54 +177,6 @@ fn groks_error_is_in_the_failure_cause_even_when_the_cli_exits_zero() {
 }
 
 #[test]
-fn a_resume_uses_the_streams_id_and_repeats_the_unattended_flags_and_environment() {
-    let scenario = Scenario::new();
-    scenario.agent_does_for_in_session(7, 1, &format!(r#"
-{AGENT_OPENS_PR}
-echo '{{"type":"system","subtype":"task_started","task_id":"task-1","description":"cargo test"}}'
-echo '{{"type":"system","subtype":"task_notification","task_id":"task-1","status":"stopped"}}' > "$FAKE_CLAUDE_AFTER_RESULT"
-"#));
-    let result = scenario.run(&[
-        "harness",
-        "grok",
-        "model",
-        "grok-4.7",
-        "effort",
-        "low",
-        &scenario.issue_url(7),
-    ]);
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    let calls = scenario.grok_calls();
-    assert_eq!(calls.len(), 3);
-    let prompt = calls[2]["prompt"].as_str().unwrap();
-    assert!(prompt.starts_with("Your background work (cargo test) was killed"));
-    assert_eq!(
-        calls[2]["argv"],
-        serde_json::json!([
-            "--always-approve",
-            "--sandbox",
-            "off",
-            "--output-format",
-            "streaming-messages-json",
-            "-m",
-            "grok-4.7",
-            "--reasoning-effort",
-            "low",
-            "-r",
-            "fake-grok-1",
-            "-p",
-            prompt
-        ])
-    );
-    for call in &calls {
-        assert_eq!(call["stdin_null"], true);
-        assert_eq!(call["GROK_DISABLE_AUTOUPDATER"], "1");
-        assert_eq!(call["GROK_FOLDER_TRUST"], "0");
-    }
-    scenario.assert_every_grok_session_found_the_factory_skills();
-}
-
-#[test]
 fn the_user_config_can_choose_grok_and_its_own_model_and_effort() {
     let scenario = Scenario::new();
     scenario.user_config_is("[harness]\ndefault = \"grok\"\n[harness.grok]\nmodel = \"grok-4.5\"\neffort = \"medium\"\n");

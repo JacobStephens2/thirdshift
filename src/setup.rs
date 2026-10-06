@@ -367,6 +367,8 @@ pub(crate) trait Outside {
     fn test_call(&mut self, chosen: &ModelAndEffort) -> Result<()>;
     /// Read Codex's catalog of Models.
     fn codex_catalog(&mut self) -> Result<Catalog>;
+    /// Read Antigravity CLI's free Model catalog.
+    fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog>;
     /// Read Grok Build's catalog, refreshed by grok models.
     fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog>;
     /// Read the Credentials, as strictly as a Run does: where a Resend API
@@ -459,6 +461,10 @@ impl Outside for OnMachine<'_> {
 
     fn codex_catalog(&mut self) -> Result<Catalog> {
         Catalog::read()
+    }
+
+    fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog> {
+        crate::harness::agy::Catalog::read()
     }
 
     fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog> {
@@ -655,6 +661,7 @@ mod scripted {
         pub test_calls: VecDeque<Option<&'static str>>,
         /// The catalog's JSON, or what reading it fails with.
         pub catalog: Result<&'static str, &'static str>,
+        pub agy_catalog: Result<&'static str, &'static str>,
         /// Grok's text model list and refreshed effort cache, or a read failure.
         pub grok_catalog: Result<(&'static str, &'static str), &'static str>,
         /// Where a key is found, or what reading the Credentials fails with.
@@ -679,6 +686,9 @@ mod scripted {
                 installed: Harness::ALL.to_vec(),
                 test_calls: VecDeque::new(),
                 catalog: Ok(CATALOG),
+                agy_catalog: Ok(
+                    "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n",
+                ),
                 grok_catalog: Ok((
                     include_str!("../tests/fixtures/grok-models.txt"),
                     include_str!("../tests/fixtures/grok-models.json"),
@@ -801,6 +811,13 @@ mod scripted {
         fn codex_catalog(&mut self) -> Result<Catalog> {
             match self.catalog {
                 Ok(json) => Catalog::parse(json),
+                Err(error) => bail!("{error}"),
+            }
+        }
+
+        fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog> {
+            match self.agy_catalog {
+                Ok(text) => crate::harness::agy::Catalog::parse(text),
                 Err(error) => bail!("{error}"),
             }
         }
@@ -1126,7 +1143,7 @@ to = \"me@example.com\"  # my inbox
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex or grok [claude]: ",
+                "Harness for every Run's sessions, claude or codex or agy or grok [claude]: ",
                 "Model for claude [claude's own default]: ",
                 "Effort for claude [claude's own default]: ",
                 "Every Run a Merge run? [y/N] ",
@@ -1226,6 +1243,10 @@ effort = \"high\"
 model = \"gpt-6.1-sol\"
 effort = \"max\"
 
+[harness.agy]
+model = \"\"
+effort = \"\"
+
 [harness.grok]
 model = \"\"
 effort = \"\"
@@ -1258,7 +1279,7 @@ effort = \"\"
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex or grok [claude]: ",
+                "Harness for every Run's sessions, claude or codex or agy or grok [claude]: ",
                 "Model for claude, - for claude's own default [opus]: ",
                 "Effort for claude, - for claude's own default [high]: ",
                 "Every Run a Merge run? [Y/n] ",
@@ -1718,18 +1739,18 @@ always = false # quiet, please
     // The Harness, Model and Effort.
 
     #[test]
-    fn the_harness_question_lists_every_harness_and_defaults_to_claude() {
+    fn the_harness_question_lists_installed_harnesses_and_defaults_to_claude() {
         let mut outside = Scripted::answering(&ENTER_THROUGHOUT);
 
         setup(&mut outside).unwrap();
 
         assert_eq!(
             outside.prompts()[0],
-            "Harness for every Run's sessions, claude or codex or grok [claude]: "
+            "Harness for every Run's sessions, claude or codex or agy or grok [claude]: "
         );
         let config = table(&outside);
         assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-        for harness in ["claude", "codex"] {
+        for harness in ["claude", "codex", "agy"] {
             for key in ["model", "effort"] {
                 assert_eq!(config["harness"][harness][key].as_str(), Some(""));
             }
@@ -1754,13 +1775,13 @@ always = false # quiet, please
 
         assert_eq!(
             outside.prompts()[0],
-            "Harness for every Run's sessions, claude (not installed) or codex or grok (not installed) [codex]: "
+            "Harness for every Run's sessions, codex [codex]: "
         );
         assert_eq!(
             outside.said()[..2],
             [
                 "claude is not installed: it isn't on PATH.",
-                "Choose claude or codex or grok."
+                "Choose codex."
             ]
         );
         assert_eq!(
@@ -1782,9 +1803,8 @@ always = false # quiet, please
         assert_eq!(
             outside.said(),
             [
-                "Harness for every Run's sessions: claude (not installed) or codex (not \
-                 installed) or grok (not installed). Sessions can run on none here, so the harness \
-                 settings stay as they are; install claude or codex or grok, then rerun `thirdshift setup`."
+                "No Harness is installed here, so the harness settings stay as they are; \
+                 install claude or codex or agy or grok, then rerun `thirdshift setup`."
             ]
         );
         let config = table(&outside);
@@ -1812,6 +1832,65 @@ always = false # quiet, please
                 outside.prompts()
             );
         }
+    }
+
+    #[test]
+    fn agy_setup_checks_names_without_a_turn_and_lists_only_installed_harnesses() {
+        let mut outside = Scripted {
+            installed: vec![Harness::Agy],
+            ..Scripted::answering(&then_nothing_else(&[
+                (HARNESS, ""),
+                ("Model for agy", "gemini-99"),
+                ("Model for agy", "Gemini-3.8-Flash"),
+                ("Effort for agy", "Max"),
+                ("Effort for agy", "Medium"),
+            ]))
+        };
+        setup(&mut outside).unwrap();
+        assert_eq!(
+            outside.prompts()[0],
+            "Harness for every Run's sessions, agy [agy]: "
+        );
+        let config = table(&outside);
+        assert_eq!(config["harness"]["default"].as_str(), Some("agy"));
+        assert_eq!(
+            config["harness"]["agy"]["model"].as_str(),
+            Some("gemini-3.8-flash")
+        );
+        assert_eq!(config["harness"]["agy"]["effort"].as_str(), Some("medium"));
+        assert!(
+            outside
+                .said()
+                .iter()
+                .any(|line| line.contains("the Model gemini-99 is not in"))
+        );
+        assert!(
+            outside
+                .said()
+                .iter()
+                .any(|line| line.contains("the Effort Max is not one"))
+        );
+        assert!(outside.test_calls().is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_agy_catalog_keeps_existing_harness_settings() {
+        let mut outside = Scripted {
+            installed: vec![Harness::Agy],
+            agy_catalog: Err("not signed in"),
+            user_config: Some(
+                "[harness]\ndefault = \"agy\"\n[harness.agy]\nmodel = \"gemini-3.8-flash-high\"\n"
+                    .to_string(),
+            ),
+            ..Scripted::answering(&then_nothing_else(&[(HARNESS, "")]))
+        };
+        setup(&mut outside).unwrap();
+        assert_eq!(
+            table(&outside)["harness"]["agy"]["model"].as_str(),
+            Some("gemini-3.8-flash-high")
+        );
+        assert!(outside.said()[0].contains("not signed in"));
+        assert!(outside.said()[0].contains("once agy models works"));
     }
 
     #[test]

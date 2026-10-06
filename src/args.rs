@@ -995,11 +995,11 @@ mod tests {
         for (args, error) in [
             (
                 vec![URL, "harness"],
-                "harness must be followed by claude or codex or grok",
+                "harness must be followed by claude or codex or agy or grok",
             ),
             (
                 vec![URL, "harness", "gemini"],
-                "harness must be followed by claude or codex or grok, not gemini",
+                "harness must be followed by claude or codex or agy or grok, not gemini",
             ),
             (
                 vec!["--harness", "claude", URL, "harness", "codex"],

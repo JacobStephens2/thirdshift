@@ -98,6 +98,7 @@ The user account that runs thirdshift needs:
 
 - **`claude`** (Claude Code), logged in.
 - **`codex`** (Codex CLI), logged in, only for `harness codex`.
+- **`agy`** (Google Antigravity CLI), logged in, only for `harness agy`.
 - **`gh`** (GitHub CLI), logged in.
 - **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
 
@@ -213,6 +214,10 @@ effort = "high"  # how hard that Model reasons; blank for Claude Code's own defa
 [harness.codex]
 model = ""
 effort = ""
+
+[harness.agy]
+model = "gemini-3.8-flash"
+effort = "medium"
 ```
 
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
@@ -245,7 +250,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 
 [harness]
-default = "claude"   # the Harness every Run's sessions run on, claude, codex or grok; default claude
+default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy or grok; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -255,6 +260,10 @@ effort = ""   # how hard that Model reasons; default blank, for Claude Code's ow
 model = ""    # the Model Codex's sessions run on; default blank, for Codex's own
 effort = ""   # how hard that Model reasons; default blank, for Codex's own
 
+[harness.agy]
+model = ""    # the Model Antigravity CLI's sessions run on; default blank, for agy's own
+effort = ""   # how hard that Model reasons; default blank, for agy's own
+
 [harness.grok]
 model = ""    # the Model Grok Build's sessions run on; default blank, for Grok Build's own
 effort = ""   # how hard that Model reasons; default blank, for Grok Build's own
@@ -262,7 +271,7 @@ effort = ""   # how hard that Model reasons; default blank, for Grok Build's own
 
 Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
 
-1. The Harness for every Run's sessions (`harness.default`), listing Claude Code, Codex and Grok Build, each marked `(not installed)` where its CLI isn't on `PATH`. A marked Harness, or a name that isn't one, is refused and asked again. The default is the first one installed, `claude`, then `codex`, then `grok`. Then the Model (`harness.<name>.model`) and the Effort (`harness.<name>.effort`) for the Harness chosen only, each defaulting to the User config's, where Enter on none keeps the Harness's own default and `-` clears one. They're checked as a Run checks them (see [Harness, Model and Effort](#harness-model-and-effort)). For Claude, a named Model gets the test call; if Claude refuses it, Setup shows what Claude said and asks the Model and Effort again. For Codex, Setup lists the Models `codex debug models` offers, by slug and display name, then the Efforts the Model chosen supports; each answer is matched regardless of case and written as Codex names it, so `GPT-6.1-Sol` and `Max` are written as `gpt-6.1-sol` and `max`, and a Model or Effort the catalog doesn't have is asked again, with the valid choices. For Grok Build, Setup lists `grok models` and the chosen Model's Efforts from its refreshed cache, and checks each answer against them. The other Harnesses' sections are left as they are. With no Harness installed here, Setup says so, asks none of this, and leaves the harness settings as they are.
+1. The Harness for every Run's sessions (`harness.default`), listing only those whose CLI is installed on `PATH`. An unavailable Harness, or a name that isn't one, is refused and asked again. The default is the configured one when installed, otherwise the first installed in `claude`, `codex`, `agy`, `grok` order, so `claude` when it is installed. Then the Model (`harness.<name>.model`) and the Effort (`harness.<name>.effort`) for the Harness chosen only, each defaulting to the User config's, where Enter on none keeps the Harness's own default and `-` clears one. They're checked as a Run checks them (see [Harness, Model and Effort](#harness-model-and-effort)). For Claude, a named Model gets the test call; if Claude refuses it, Setup shows what Claude said and asks the Model and Effort again. For Codex, Setup lists the Models `codex debug models` offers, by slug and display name, then the Efforts the Model chosen supports; each answer is matched regardless of case and written as Codex names it, so `GPT-6.1-Sol` and `Max` are written as `gpt-6.1-sol` and `max`, and a Model or Effort the catalog doesn't have is asked again, with the valid choices. For agy, Setup lists `agy models` and its supported Efforts, checks each answer without a model turn, and writes the canonical names regardless of case. For Grok Build, Setup lists `grok models` and the chosen Model's Efforts from its refreshed cache, and checks each answer against them. The other Harnesses' sections are left as they are. With no Harness installed here, Setup says so, asks none of this, and leaves the harness settings as they are.
 2. Every Run a Merge run? (`merge.always`)
 3. With that on, every Run may start a Base fix when the Base branch's CI is red? (`base.fix`). With it off, this is not asked, and `base.fix` is written at its default, `false`.
 4. Every Run first fast-forwards your checkout of the Base branch? (`launch.pull`)
@@ -293,7 +302,7 @@ A Run reads the file before any work. One that isn't valid TOML, or that has a k
 
 ### Harness, Model and Effort
 
-The available Harnesses are Claude Code (`claude`), Codex (`codex`) and Grok Build (`grok`).
+The available Harnesses are Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`) and Grok Build (`grok`).
 
 Every session of a command, its implement session, each Repair and Resume, a Spec review, an Architecture review, each Ticket's Run and a Base fix, runs on one **Harness**, with one **Model** and one **Effort**. `harness <name>`, `model <name>` and `effort <level>` (or `--harness`, `--model` and `--effort`) choose them for one command, before or after the Issue URL, and on `architect` (but not with `--plan-only`) and `pickup` too:
 
@@ -305,7 +314,13 @@ For each of the three, the command wins, then the [User config](#user-config), t
 
 With `harness codex`, every session runs `codex exec --json --dangerously-bypass-approvals-and-sandbox` in the Run's worktree, with stdin set to null, and with `-c project_doc_fallback_filenames=["CLAUDE.md"]`, so Codex reads `CLAUDE.md` where a repository has no `AGENTS.md`. Codex's sandbox is off: on a stock Ubuntu machine it can't start, and commits and pushes from a worktree write outside it, so the worktree is the only boundary, as with Claude's auto mode ([ADR-0012](docs/adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)). The Factory skills are linked into the worktree's `.agents/skills/`, kept out of git with `/.agents/skills/thirdshift-*` in `.git/info/exclude`, and each prompt's first line loads its skill as `$thirdshift-<skill>`. `codex exec` kills what the agent left running as it exits, so a session whose turn ends with a command or a sub-agent call still running (started, never completed) gets a Resume, as on Claude: `codex exec … resume <session id>`, with the Model, Effort, bypass flag and `CLAUDE.md` fallback given again, as Codex keeps none of them. An interrupt sends a Codex session SIGINT, the only signal Codex stops cleanly on, before the SIGTERM and SIGKILL every session gets, each 10 seconds apart. Progress lines come from Codex's `item.*` events, the session-ended line gives its token totals, as Codex reports no turns or cost, and the final message is the last `agent_message`. A session whose turn fails (`turn.failed`), or that exits non-zero, fails the Run with Codex's error in the cause; an `error` event Codex retries does not. Each Codex session adds a `trust_level = "trusted"` entry for the repository to `~/.codex/config.toml`, and your `~/.claude/` instructions and hooks don't reach it.
 
-With `harness grok`, every session runs `grok -p <prompt> --always-approve --sandbox off --output-format streaming-messages-json` with stdin set to null and with `GROK_DISABLE_AUTOUPDATER=1` and `GROK_FOLDER_TRUST=0`. The approval flag and disabled sandbox are always explicit, overriding the CLI’s own config and `GROK_SANDBOX`. No repository needs a one-time `grok --trust`: the trust environment override allows its project instructions and skills to load in the Run's worktree. The Factory skills are linked into `.agents/skills/`, excluded from git, and the prompt loads its skill as `/thirdshift-<skill>` on its first line. A Resume repeats the flags and environment with `-r <session id>`. Grok's Messages stream shares Claude's event shapes, with Grok's tool names and errors; it supplies progress, the session id, final message, turns and cost, or token usage when cost is unavailable. Grok starts shell commands in their own process groups, which thirdshift's tree-stop also stops; the CLI gets SIGTERM before SIGKILL.
+With `harness agy`, every session runs Google **Antigravity CLI** as `agy -p --dangerously-skip-permissions --output-format stream-json`, with `--model` and `--effort` when set, stdin null, and `AGY_CLI_DISABLE_AUTO_UPDATE=true` (agy ignores `=1`). The sandbox is opt-in and is never enabled, so unattended sessions can write the shared `.git` ([ADR-0013](docs/adr/0013-every-harness-runs-unattended-and-fully-trusted.md)). Factory skills are linked into `.agents/skills/`, excluded from git, and loaded by the `/thirdshift-<skill>` first line. agy reads project `AGENTS.md`, `GEMINI.md` and `.agents/rules/`, and user instructions under `~/.gemini/`; it does not read `~/.claude/`. When root `CLAUDE.md` exists and neither `AGENTS.md` nor `GEMINI.md` does, thirdshift adds a `GEMINI.md` link to `CLAUDE.md` and excludes it through `.git/info/exclude`; existing instruction files always win.
+
+agy's `init` supplies the conversation id and `step_update` supplies tool progress. The final `result` supplies the final message, success/error status, error and cumulative usage (including on Resume). `ERROR` or a nonzero exit fails the session with agy's error. A Resume uses `--conversation <id>` with the same flags, Model, Effort and environment; an interrupt sends SIGTERM, then SIGKILL after the grace period. Its start-up can be slow and variable: the research measured 8–95 seconds. No speed assumption or backend retry is made.
+
+Before any work on agy, a named Model or Effort is checked against the free `agy models` catalog, which lists IDs, labels and effort-suffixed variants. IDs, display labels and bare aliases are matched regardless of case, as are Efforts. `model Gemini-3.8-Flash effort Medium` becomes `--model gemini-3.8-flash --effort medium`; `model gemini-3.8-flash-medium` already carries its Effort. A bare alias requires an Effort; a Model or Effort the catalog lacks fails naming valid choices. This check uses null stdin and disables self-update too, without a model turn.
+
+With `harness grok`, every session runs `grok -p <prompt> --always-approve --sandbox off --output-format streaming-messages-json` with stdin set to null and with `GROK_DISABLE_AUTOUPDATER=1` and `GROK_FOLDER_TRUST=0`. The approval flag and disabled sandbox are always explicit, overriding the CLI’s own config and `GROK_SANDBOX`. No repository needs a one-time `grok --trust`: the trust environment override allows its project instructions and skills to load in the Run's worktree. The Factory skills are linked into `.agents/skills/`, excluded from git, and the prompt loads its skill as `/thirdshift-<skill>` on its first line. A Resume repeats the flags and environment with `-r <session id>`. Grok documents no stream notification proving that background work was killed at exit, so thirdshift does not infer an automatic Resume from its tool activity. Grok's Messages stream shares Claude's event shapes, with Grok's tool names and errors; it supplies progress, the session id, final message, turns and cost, or token usage when cost is unavailable. Grok starts shell commands in their own process groups, which thirdshift's tree-stop also stops; the CLI gets SIGTERM before SIGKILL.
 
 Grok reads both `AGENTS.md` and `CLAUDE.md` when both exist, along with `AGENT.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` and project rules under `.grok`, `.claude` and `.cursor`. It also reads `~/.grok/rules`, `~/.claude/CLAUDE.md` and `~/.claude/rules`; thirdshift writes none of these user-level files. Grok Build uses `~/.grok` for sign-in and sessions (or `GROK_HOME` when set).
 

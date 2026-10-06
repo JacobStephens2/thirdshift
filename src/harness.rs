@@ -10,9 +10,11 @@ use std::process::Output;
 use anyhow::{Result, bail};
 
 mod adapter;
+pub(crate) mod agy;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod grok;
+mod instructions;
 mod process_tree;
 
 pub use adapter::{Adapter, Invocation};
@@ -23,6 +25,7 @@ pub use codex::Catalog;
 pub enum Harness {
     Claude,
     Codex,
+    Agy,
     Grok,
 }
 
@@ -93,6 +96,8 @@ pub struct Settings {
     pub claude: ModelAndEffort,
     /// `[harness.codex]`.
     pub codex: ModelAndEffort,
+    /// `[harness.agy]`.
+    pub agy: ModelAndEffort,
     /// `[harness.grok]`.
     pub grok: ModelAndEffort,
 }

@@ -119,3 +119,50 @@ impl Adapter for Grok {
         Box::new(stream::GrokProgress::default())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness::ChosenBy;
+
+    #[test]
+    fn a_resume_uses_a_streamed_id_with_the_same_flags_null_stdin_and_fixed_environment() {
+        let mut progress = stream::GrokProgress::default();
+        progress
+            .condense(r#"{"type":"system","subtype":"init","session_id":"abc123","cwd":"/repo"}"#);
+        let choice = Choice {
+            harness: Harness::Grok,
+            model: Some("grok-4.7".to_string()),
+            effort: Some("low".to_string()),
+            chosen_by: ChosenBy::Command,
+        };
+        let adapter = choice.harness.adapter();
+        let resume = adapter.session(&choice, progress.session_id(), "Continue.");
+        assert_eq!(
+            resume.args,
+            [
+                "--always-approve",
+                "--sandbox",
+                "off",
+                "--output-format",
+                "streaming-messages-json",
+                "-m",
+                "grok-4.7",
+                "--reasoning-effort",
+                "low",
+                "-r",
+                "abc123",
+                "-p",
+                "Continue."
+            ]
+        );
+        assert_eq!(resume.stdin, None);
+        assert_eq!(
+            adapter.environment(),
+            [
+                ("GROK_DISABLE_AUTOUPDATER", "1"),
+                ("GROK_FOLDER_TRUST", "0")
+            ]
+        );
+    }
+}

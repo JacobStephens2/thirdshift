@@ -101,11 +101,8 @@ impl Stream for GrokProgress {
         self.claude.session_id().or(self.session_id.as_deref())
     }
     fn killed_background_work(&self) -> Vec<&str> {
-        if self.failed {
-            Vec::new()
-        } else {
-            self.claude.killed_background_work()
-        }
+        // Grok documents no Messages frame proving work was killed at exit.
+        Vec::new()
     }
     fn failed(&self) -> bool {
         self.failed

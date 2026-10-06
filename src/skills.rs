@@ -81,7 +81,7 @@ fn written_out() -> Result<PathBuf> {
 /// `git` works in, unless it is there already. The file is shared by every
 /// worktree, so the entry is left there, under a lock other Runs from the
 /// same Launch directory take too.
-fn exclude(git: &Git, exclude: &str) -> Result<()> {
+pub(crate) fn exclude(git: &Git, exclude: &str) -> Result<()> {
     let _lock = git.lock("thirdshift-exclude.lock")?;
     let info = git.common_dir()?.join("info");
     let path = info.join("exclude");
@@ -106,5 +106,5 @@ fn exclude(git: &Git, exclude: &str) -> Result<()> {
         .append(true)
         .open(&path)
         .and_then(|mut file| writeln!(file, "{separator}{exclude}"))
-        .with_context(|| format!("could not add the Factory skills to {}", path.display()))
+        .with_context(|| format!("could not add an exclude pattern to {}", path.display()))
 }
