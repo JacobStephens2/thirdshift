@@ -58,7 +58,7 @@ impl Adapter for Claude {
     ) -> Result<Option<ModelAndEffort>> {
         ask_claude(outside, current).map(Some)
     }
-    fn stream(&self, _worktree: &Path) -> Box<dyn Stream> {
+    fn stream(&self, _worktree: &Path, _prompt: &str) -> Box<dyn Stream> {
         Box::new(stream::ClaudeProgress::default())
     }
 }

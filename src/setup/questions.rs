@@ -165,7 +165,7 @@ pub fn ask(
 /// with those `current` sets for it as the defaults, checked as a Run
 /// checks them, through the chosen adapter. The Harness's
 /// default is the `current` one if it's installed, else the first one
-/// installed, so `claude` when both are. With no
+/// installed, starting with `claude`. With no
 /// Harness to choose, or Codex chosen and its catalog unreadable, the answer
 /// is `None`.
 fn ask_harness(
@@ -176,17 +176,11 @@ fn ask_harness(
         .into_iter()
         .filter(|harness| outside.installed(*harness))
         .collect();
-    let harnesses: Vec<String> = Harness::ALL
+    let harnesses = installed
         .iter()
-        .map(|harness| {
-            if installed.contains(harness) {
-                harness.name().to_string()
-            } else {
-                format!("{} (not installed)", harness.name())
-            }
-        })
-        .collect();
-    let harnesses = harnesses.join(" or ");
+        .map(|harness| harness.name())
+        .collect::<Vec<_>>()
+        .join(" or ");
     let default = current
         .default
         .filter(|harness| installed.contains(harness))
@@ -194,9 +188,7 @@ fn ask_harness(
     let Some(default) = default else {
         let names = harness::names();
         outside.say(format!(
-            "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \
-             the harness settings stay as they are; install {names}, then rerun \
-             `thirdshift setup`."
+            "No Harness is installed here, so the harness settings stay as they are; install {names}, then rerun `thirdshift setup`."
         ));
         return Ok(None);
     };
