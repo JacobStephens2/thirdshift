@@ -603,6 +603,7 @@ test -f {root}/{COPY_REPLACED}
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
             .env("FAKE_CODEX_RECORD", self.path("codex-calls.json"))
+            .env("FAKE_GROK_RECORD", self.path("grok-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
             // Seconds of waiting for CI become milliseconds. Each poll starts
             // the fake gh; at 100ms the grace period holds about three reads,
@@ -813,6 +814,23 @@ test -f {root}/{COPY_REPLACED}
             Ok(text) => serde_json::from_str(&text).unwrap(),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// Every call the fake received on Grok, including its catalog check.
+    pub fn grok_calls(&self) -> Vec<Value> {
+        match fs::read_to_string(self.path("grok-calls.json")) {
+            Ok(text) => serde_json::from_str(&text).unwrap(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn assert_every_grok_session_found_the_factory_skills(&self) {
+        assert_found_the_factory_skills(
+            self.grok_calls()
+                .into_iter()
+                .filter(|call| call["prompt"].is_string())
+                .collect(),
+        );
     }
 
     /// Assert every `claude` call found every Factory skill, by its

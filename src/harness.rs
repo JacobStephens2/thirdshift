@@ -12,6 +12,7 @@ use anyhow::{Result, bail};
 mod adapter;
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod grok;
 mod process_tree;
 
 pub use adapter::{Adapter, Invocation};
@@ -22,6 +23,7 @@ pub use codex::Catalog;
 pub enum Harness {
     Claude,
     Codex,
+    Grok,
 }
 
 impl Harness {
@@ -91,6 +93,8 @@ pub struct Settings {
     pub claude: ModelAndEffort,
     /// `[harness.codex]`.
     pub codex: ModelAndEffort,
+    /// `[harness.grok]`.
+    pub grok: ModelAndEffort,
 }
 
 impl Settings {
@@ -194,7 +198,8 @@ impl Choice {
     /// minimal test call, with the Effort, if any. A Model or Effort named
     /// for Codex must be in its catalog, which costs no tokens to read: each
     /// is matched regardless of case, a Model by its slug or display name,
-    /// and becomes the name Codex takes. Each failure says what to change.
+    /// and becomes the name Codex takes. Grok Build checks its free model
+    /// list and refreshed effort cache. Each failure says what to change.
     pub fn check(&mut self) -> Result<()> {
         let adapter = self.harness.adapter();
         let cli = adapter.name();
@@ -281,6 +286,7 @@ mod tests {
             default: Some(Harness::Codex),
             claude: set("opus", "high"),
             codex: set("gpt-6.1-sol", "max"),
+            ..Settings::default()
         }
     }
 

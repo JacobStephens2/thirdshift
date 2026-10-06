@@ -19,6 +19,8 @@ mod claude;
 mod codex;
 #[path = "fakes/gh.rs"]
 mod gh;
+#[path = "fakes/grok.rs"]
+mod grok;
 #[path = "fakes/json.rs"]
 mod json;
 
@@ -111,6 +113,7 @@ fn main() {
         "gh" => gh::main(args.collect()),
         "claude" => claude::main(args.collect()),
         "codex" => codex::main(args.collect()),
+        "grok" => grok::main(args.collect()),
         "detached-command" => {
             let command = args.next().expect("no detached command");
             let mut command = Command::new(command);

@@ -1,4 +1,4 @@
-//! Headless agent sessions, on Claude Code or Codex, and their logs.
+//! Headless agent sessions on the chosen Harness, and their logs.
 
 use std::cell::RefCell;
 use std::fs::{self, File};

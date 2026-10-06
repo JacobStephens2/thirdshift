@@ -1,5 +1,5 @@
 //! Progress lines on stderr: thirdshift's own steps, and a session's
-//! stream, Claude's stream-json or Codex's JSONL, condensed to one short
+//! stream, parsed by its Harness adapter, condensed to one short
 //! line per notable event. Each line is stamped with the local time it was
 //! printed, so a stalled Run can be told from a busy one. Each is kept in the
 //! Command log too, if the command keeps one.

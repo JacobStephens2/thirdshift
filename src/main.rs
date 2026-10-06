@@ -73,7 +73,7 @@ merge, --no-merge, --email, --no-email, base-fix, --no-base-fix, parallel <n> (o
 --parallel <n>), harness <name>, model <name> and effort <level> (or --harness, --model and
 --effort) go before or after the Issue URL, in any order.
 
-harness, model and effort choose the Harness every session of the command runs on, and its
+harness (claude, codex or grok), model and effort choose the Harness every session runs on, and its
 Model and Effort, for each Ticket's Run and a Base fix too. For each, the command wins, then
 the User config, then the default: claude, with its own Model and Effort. A Model and Effort
 in the User config come from the chosen Harness's own section, so harness claude over a codex
@@ -89,7 +89,10 @@ default takes [harness.claude]:
 Before any work, the Harness's CLI must be on PATH. On claude, a named Model gets a minimal
 test call with its Effort, which must succeed. On codex, a named Model and Effort must be in
 codex debug models, matched regardless of case, a Model by slug or display name, and are
-passed on as Codex names them. A failure stops the command naming what to fix, before the
+passed on as Codex names them. Grok Build checks grok models and its refreshed effort cache,
+then runs grok -p --always-approve --output-format streaming-messages-json with null stdin,
+GROK_DISABLE_AUTOUPDATER=1 and GROK_FOLDER_TRUST=0. Resume uses -r <session id>.
+A failure stops the command naming what to fix, before the
 Claim, the worktree and any Command log. Codex sessions run codex exec --json
 --dangerously-bypass-approvals-and-sandbox, with the skills in .agents/skills/. The Command
 log, the Activity log's start line, the pull request's body, as in Built with claude · opus ·

@@ -52,7 +52,8 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[pickup]",
             "[harness]",
             "[harness.claude]",
-            "[harness.codex]"
+            "[harness.codex]",
+            "[harness.grok]"
         ],
         "{text}"
     );
@@ -70,7 +71,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-    for harness in ["claude", "codex"] {
+    for harness in ["claude", "codex", "grok"] {
         for key in ["model", "effort"] {
             assert_eq!(config["harness"][harness][key].as_str(), Some(""), "{text}");
         }

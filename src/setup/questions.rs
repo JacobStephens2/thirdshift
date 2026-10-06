@@ -165,7 +165,7 @@ pub fn ask(
 /// with those `current` sets for it as the defaults, checked as a Run
 /// checks them, through the chosen adapter. The Harness's
 /// default is the `current` one if it's installed, else the first one
-/// installed, so `claude` when both are. With no
+/// installed, so `claude` when it is. With no
 /// Harness to choose, or Codex chosen and its catalog unreadable, the answer
 /// is `None`.
 fn ask_harness(
@@ -194,7 +194,7 @@ fn ask_harness(
     let Some(default) = default else {
         let names = harness::names();
         outside.say(format!(
-            "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \
+            "Harness for every Run's sessions: {harnesses}. Sessions can run on none here, so \
              the harness settings stay as they are; install {names}, then rerun \
              `thirdshift setup`."
         ));

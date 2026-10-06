@@ -49,7 +49,7 @@ const CATALOG: &str = r#"{"models": [
 ]}"#;
 
 /// Whether stdin is `/dev/null`, by `fstat` on it, as macOS has no `/proc`.
-fn stdin_is_null() -> bool {
+pub fn stdin_is_null() -> bool {
     let stdin = std::io::stdin()
         .as_fd()
         .try_clone_to_owned()
@@ -64,7 +64,7 @@ fn stdin_is_null() -> bool {
 /// Catch SIGINT and SIGTERM, doing nothing on either, so the fake outlasts
 /// them until its script ends. A caught signal, unlike an ignored one, is
 /// back to its default in the script, which can trap it.
-fn outlast_interrupts() {
+pub fn outlast_interrupts() {
     // From the C library, which the standard library links: SIGINT and
     // SIGTERM are 2 and 15 on Linux and macOS alike.
     unsafe extern "C" {
