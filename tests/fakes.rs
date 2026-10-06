@@ -26,6 +26,7 @@ mod json;
 
 use std::fs::{self, File};
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -113,6 +114,25 @@ fn main() {
         "claude" => claude::main(args.collect()),
         "codex" => codex::main(args.collect()),
         "agy" => agy::main(args.collect()),
+        "detached-command" => {
+            let command = args.next().expect("no detached command");
+            let mut command = Command::new(command);
+            command.args(args);
+            // SAFETY: setsid is async-signal-safe and accesses no Rust state.
+            unsafe {
+                command.pre_exec(|| {
+                    unsafe extern "C" {
+                        fn setsid() -> i32;
+                    }
+                    if setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let error = command.exec();
+            die(&format!("could not start detached command: {error}"), 1);
+        }
         _ => die(&format!("fake: no fake is called {name}"), 2),
     }
     exit(0);

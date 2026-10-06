@@ -14,6 +14,7 @@ pub(crate) mod agy;
 pub(crate) mod claude;
 pub(crate) mod codex;
 mod instructions;
+mod process_tree;
 
 pub use adapter::{Adapter, Invocation};
 pub use codex::Catalog;
