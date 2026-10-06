@@ -54,7 +54,9 @@ fn terminal_attributes(fd: &impl std::os::fd::AsRawFd) -> libc::termios {
     let mut attributes = unsafe { std::mem::zeroed() };
     assert_eq!(
         unsafe { libc::tcgetattr(fd.as_raw_fd(), &mut attributes) },
-        0
+        0,
+        "tcgetattr: {}",
+        std::io::Error::last_os_error()
     );
     attributes
 }
@@ -682,10 +684,13 @@ test -f {root}/{COPY_REPLACED}
                 // before it is searched, so nothing the Run showed is missed.
                 let exited = child.try_wait().unwrap().is_some();
                 if exited && let Some(terminal) = terminal.take() {
+                    // macOS revokes the slave when its session leader exits;
+                    // the master still exposes the terminal's saved settings.
                     terminal_restored = Some(same_terminal_attributes(
                         &saved,
-                        &terminal_attributes(&terminal),
+                        &terminal_attributes(&master),
                     ));
+                    drop(terminal);
                 }
                 if exited && let Some(reader) = reader.take() {
                     reader.join().unwrap();
@@ -741,9 +746,8 @@ test -f {root}/{COPY_REPLACED}
             }
             std::thread::sleep(Duration::from_millis(10));
         };
-        let terminal_restored = terminal_restored.unwrap_or_else(|| {
-            same_terminal_attributes(&saved, &terminal_attributes(terminal.as_ref().unwrap()))
-        });
+        let terminal_restored = terminal_restored
+            .unwrap_or_else(|| same_terminal_attributes(&saved, &terminal_attributes(&master)));
         drop(terminal);
         let stdout = stdout.join().unwrap();
         if let Some(reader) = reader {
