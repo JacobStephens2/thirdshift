@@ -13,6 +13,8 @@
 
 #![cfg_attr(test, allow(dead_code))]
 
+#[path = "fakes/agy.rs"]
+mod agy;
 #[path = "fakes/claude.rs"]
 mod claude;
 #[path = "fakes/codex.rs"]
@@ -110,6 +112,7 @@ fn main() {
         "gh" => gh::main(args.collect()),
         "claude" => claude::main(args.collect()),
         "codex" => codex::main(args.collect()),
+        "agy" => agy::main(args.collect()),
         _ => die(&format!("fake: no fake is called {name}"), 2),
     }
     exit(0);

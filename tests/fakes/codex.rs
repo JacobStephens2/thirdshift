@@ -49,7 +49,7 @@ const CATALOG: &str = r#"{"models": [
 ]}"#;
 
 /// Whether stdin is `/dev/null`, by `fstat` on it, as macOS has no `/proc`.
-fn stdin_is_null() -> bool {
+pub fn stdin_is_null() -> bool {
     let stdin = std::io::stdin()
         .as_fd()
         .try_clone_to_owned()
