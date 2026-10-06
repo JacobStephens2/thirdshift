@@ -81,6 +81,7 @@ impl Adapter for Grok {
         let catalog = match outside.grok_catalog() {
             Ok(catalog) => catalog,
             Err(error) => {
+                crate::interrupt::check()?;
                 outside.say(format!("{error:#}\nThe harness settings stay as they are; rerun `thirdshift setup` once grok models works."));
                 return Ok(None);
             }

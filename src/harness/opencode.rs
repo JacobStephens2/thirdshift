@@ -86,7 +86,10 @@ impl Adapter for OpenCode {
             };
             match outside.opencode_check(&chosen) {
                 Ok(()) => return Ok(Some(chosen)),
-                Err(error) => outside.say(format!("{error:#}")),
+                Err(error) => {
+                    crate::interrupt::check()?;
+                    outside.say(format!("{error:#}"));
+                }
             }
         }
     }

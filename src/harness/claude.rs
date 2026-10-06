@@ -2,9 +2,8 @@
 
 pub(crate) mod stream;
 
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
@@ -104,22 +103,12 @@ pub fn test_call(choice: &Choice) -> Result<()> {
     progress::step(format_args!(
         "checking the Model {model} with a test call to {cli}"
     ));
-    let mut child = Command::new(cli)
-        .arg("-p")
-        .envs(Claude.environment().iter().copied())
-        .args(model_args(choice))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("could not run {cli} to check the Model {model}"))?;
-    // Dropped once written, closing stdin, so the call can end.
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(TEST_PROMPT.as_bytes());
-    }
-    let output = child
-        .wait_with_output()
-        .with_context(|| format!("could not run {cli} to check the Model {model}"))?;
+    let output = super::process::output(
+        &Claude,
+        Command::new(cli).arg("-p").args(model_args(choice)),
+        Some(TEST_PROMPT),
+    )
+    .with_context(|| format!("could not run {cli} to check the Model {model}"))?;
     if output.status.success() {
         return Ok(());
     }
@@ -155,7 +144,10 @@ fn ask_claude(outside: &mut dyn Outside, current: &ModelAndEffort) -> Result<Mod
         }
         match outside.test_call(&chosen) {
             Ok(()) => return Ok(chosen),
-            Err(error) => outside.say(format!("{error:#}")),
+            Err(error) => {
+                crate::interrupt::check()?;
+                outside.say(format!("{error:#}"));
+            }
         }
     }
 }

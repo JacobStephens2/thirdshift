@@ -177,6 +177,63 @@ fn ctrl_c_during_the_questions_writes_no_file_and_does_no_work() {
 }
 
 #[test]
+fn cancelling_offered_setup_catalogs_and_minimal_calls_stops_before_factory_work() {
+    use std::time::{Duration, Instant};
+    use support::check::{DuringCheck, OwnedCheck};
+    for (harness, model, signal) in [
+        ("claude", Some("opus"), CTRL_C),
+        ("codex", None, support::SIGTERM),
+        ("agy", None, support::SIGHUP),
+        ("grok", None, CTRL_C),
+        ("muse", Some("muse-spark-1.3"), support::SIGTERM),
+        ("opencode", Some("provider/model"), support::SIGHUP),
+    ] {
+        let scenario = Scenario::new();
+        let credentials = "[resend]\nkey = \"re_saved\"\n";
+        scenario.credentials_are(credentials);
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let check = OwnedCheck::new(&scenario, DuringCheck::AfterExit);
+        let model_prompt = format!("Model for {harness}");
+        let effort_prompt = format!("Effort for {harness}");
+        let mut keys = vec![(OFFER, "y"), (HARNESS, harness)];
+        if let Some(model) = model {
+            keys.extend([(model_prompt.as_str(), model), (effort_prompt.as_str(), "")]);
+        }
+        keys.push((support::CHECK_READY, signal));
+        let mut env = check.env();
+        env.push(("THIRDSHIFT_RESEND_URL", resend.url()));
+        let started = Instant::now();
+        let result = scenario.run_on_terminal(
+            &["--email", "me@example.com", &scenario.issue_url(7)],
+            &env,
+            &keys,
+        );
+
+        assert_eq!(result.code, Some(1), "{harness}: {}", result.stderr);
+        assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+        assert_eq!(
+            result.stderr.matches("interrupted").count(),
+            1,
+            "{}",
+            result.stderr
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+        check.assert_stopped();
+        assert_eq!(result.user_config, None);
+        assert_eq!(scenario.credentials().as_deref(), Some(credentials));
+        assert!(result.terminal_restored);
+        assert!(scenario.issue_labels(7).is_empty(), "the Claim was made");
+        assert_eq!(scenario.entries("work"), ["widgets"]);
+        assert!(
+            !scenario
+                .path("home/.thirdshift/logs/acme/widgets/commands")
+                .exists()
+        );
+        assert!(resend.requests().is_empty(), "a Run notification went");
+    }
+}
+
+#[test]
 fn help_version_update_and_email_test_never_offer_setup() {
     let scenario = Scenario::new();
 

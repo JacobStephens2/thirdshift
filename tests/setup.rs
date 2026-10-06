@@ -194,6 +194,194 @@ const KEPT: &str = "Resend API key (input hidden, Enter keeps the saved one):";
 const WROTE_CREDENTIALS: &str = "wrote the Credentials";
 const KEY: &str = "re_secret_123";
 
+#[test]
+fn cancelling_a_claude_setup_check_cleans_up_without_writing_or_retrying() {
+    use std::time::{Duration, Instant};
+    use support::check::{DuringCheck, OwnedCheck};
+
+    let scenario = Scenario::new();
+    let saved = "[harness.claude]\nmodel = \"opus\"\n";
+    scenario.user_config_is(saved);
+    let credentials = "[resend]\nkey = \"re_saved\"\n";
+    scenario.credentials_are(credentials);
+    let check = OwnedCheck::new(&scenario, DuringCheck::Live);
+    let started = Instant::now();
+    let result = scenario.run_on_terminal(
+        &["setup"],
+        &check.env(),
+        &[
+            (HARNESS, "claude"),
+            (MODEL, ""),
+            (EFFORT, ""),
+            (support::CHECK_READY, CTRL_C),
+        ],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    check.assert_stopped();
+    assert_eq!(result.stderr.matches(MODEL).count(), 1, "{}", result.stderr);
+    assert_eq!(result.user_config.as_deref(), Some(saved));
+    assert_eq!(scenario.credentials().as_deref(), Some(credentials));
+    assert!(result.terminal_restored);
+}
+
+#[test]
+fn cancelling_a_codex_setup_catalog_does_not_keep_settings_as_a_fallback() {
+    use support::check::{DuringCheck, OwnedCheck};
+    let scenario = Scenario::new();
+    let check = OwnedCheck::new(&scenario, DuringCheck::Live);
+    let result = scenario.run_on_terminal(
+        &["setup"],
+        &check.env(),
+        &[(HARNESS, "codex"), (support::CHECK_READY, support::SIGTERM)],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("harness settings stay"),
+        "{}",
+        result.stderr
+    );
+    check.assert_stopped();
+    assert_eq!(result.user_config, None);
+    assert!(result.terminal_restored);
+}
+
+#[test]
+fn cancelling_the_other_setup_checks_neither_retries_nor_keeps_settings() {
+    use support::check::{DuringCheck, OwnedCheck};
+    for (harness, model, signal) in [
+        ("agy", None, support::SIGHUP),
+        ("grok", None, CTRL_C),
+        ("muse", Some("muse-spark-1.3"), support::SIGTERM),
+        ("opencode", Some("provider/model"), support::SIGHUP),
+    ] {
+        let scenario = Scenario::new();
+        let saved = "# keep my answers\n[harness]\ndefault = \"claude\"\n";
+        scenario.user_config_is(saved);
+        let credentials = "[resend]\nkey = \"re_saved\"\n";
+        scenario.credentials_are(credentials);
+        let check = OwnedCheck::new(&scenario, DuringCheck::Detached);
+        let model_prompt = format!("Model for {harness}");
+        let effort_prompt = format!("Effort for {harness}");
+        let mut keys = vec![(HARNESS, harness)];
+        if let Some(model) = model {
+            keys.extend([(model_prompt.as_str(), model), (effort_prompt.as_str(), "")]);
+        }
+        keys.push((support::CHECK_READY, signal));
+        let result = scenario.run_on_terminal(&["setup"], &check.env(), &keys);
+
+        assert_eq!(result.code, Some(1), "{harness}: {}", result.stderr);
+        assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+        assert_eq!(
+            result.stderr.matches("interrupted").count(),
+            1,
+            "{}",
+            result.stderr
+        );
+        assert!(
+            !result.stderr.contains("harness settings stay"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            result.stderr.matches(&model_prompt).count(),
+            usize::from(model.is_some()),
+            "{}",
+            result.stderr
+        );
+        check.assert_stopped();
+        assert_eq!(result.user_config.as_deref(), Some(saved));
+        assert_eq!(scenario.credentials().as_deref(), Some(credentials));
+        assert!(result.terminal_restored);
+        assert!(scenario.issue_labels(7).is_empty());
+        assert_eq!(scenario.entries("work"), ["widgets"]);
+        assert!(
+            !scenario
+                .path("home/.thirdshift/logs/acme/widgets/commands")
+                .exists()
+        );
+    }
+}
+
+#[test]
+fn cancelling_later_questions_after_successful_or_repeated_checks_restores_echo_and_preserves_files()
+ {
+    for repeated in [false, true] {
+        for hidden in [false, true] {
+            let scenario = Scenario::new();
+            let saved = "# keep this\n[harness.claude]\nmodel = \"opus\"\n";
+            scenario.user_config_is(saved);
+            let credentials = "[resend]\nkey = \"re_saved\"\n";
+            scenario.credentials_are(credentials);
+            if repeated {
+                scenario.agent_does_in_session(1, "echo 'model refused' >&2; exit 1");
+            }
+            let mut keys = vec![(HARNESS, "claude"), (MODEL, ""), (EFFORT, "")];
+            if repeated {
+                keys.extend([(MODEL, "opus"), (EFFORT, "")]);
+            }
+            if hidden {
+                keys.extend([
+                    (MERGE, ""),
+                    (PULL, ""),
+                    (NOTIFY, "y"),
+                    (TO, "me@example.com"),
+                    (FROM, ""),
+                    (
+                        KEPT,
+                        if repeated {
+                            support::SIGHUP
+                        } else {
+                            support::SIGTERM
+                        },
+                    ),
+                ]);
+            } else {
+                keys.push((MERGE, if repeated { support::SIGTERM } else { CTRL_C }));
+            }
+            let result = scenario.run_on_terminal(&["setup"], &[], &keys);
+
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+            assert!(result.terminal_restored);
+            assert_eq!(result.stdout, "");
+            assert_eq!(result.user_config.as_deref(), Some(saved));
+            assert_eq!(scenario.credentials().as_deref(), Some(credentials));
+            assert_eq!(scenario.claude_calls().len(), if repeated { 2 } else { 1 });
+        }
+    }
+}
+
+#[test]
+fn pasted_answers_are_left_available_to_later_terminal_questions() {
+    let scenario = Scenario::new();
+    let result = setup_on_terminal(&scenario, &[], &[(HARNESS, "  claude  \n\n\n\n\n")]);
+    let config: toml::Table = result.user_config.unwrap().parse().unwrap();
+    assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
+    assert_eq!(config["merge"]["always"].as_bool(), Some(false));
+    assert_eq!(config["email"]["always"].as_bool(), Some(false));
+}
+
+#[test]
+fn hidden_input_restores_terminal_attributes_on_eof_and_invalid_utf8() {
+    for ending in ["\x04", support::INVALID_UTF8] {
+        let scenario = Scenario::new();
+        let result =
+            scenario.run_on_terminal(&["setup"], &[], &notifications_on(&[(KEY_PROMPT, ending)]));
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.terminal_restored);
+        assert_eq!(result.user_config, None);
+        assert_eq!(scenario.credentials(), None);
+        if ending == support::INVALID_UTF8 {
+            assert!(result.stderr.contains("terminal input is not UTF-8"));
+        }
+    }
+}
+
 /// Run `thirdshift setup` on a terminal, typing `keystrokes`, and check it
 /// succeeded with nothing on stdout.
 fn setup_on_terminal(
@@ -204,6 +392,7 @@ fn setup_on_terminal(
     let result = scenario.run_on_terminal(&["setup"], env, keystrokes);
     assert_eq!(result.code, Some(0), "terminal: {}", result.stderr);
     assert_eq!(result.stdout, "");
+    assert!(result.terminal_restored, "{}", result.stderr);
     result
 }
 
@@ -290,7 +479,9 @@ fn ctrl_c_at_the_key_prompt_writes_neither_file() {
     let result =
         scenario.run_on_terminal(&["setup"], &[], &notifications_on(&[(KEY_PROMPT, CTRL_C)]));
 
-    assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.code, Some(1), "terminal: {}", result.stderr);
+    assert!(result.stderr.contains("interrupted"));
+    assert!(result.terminal_restored);
     assert_eq!(result.stdout, "");
     assert_eq!(result.user_config, None);
     assert_eq!(scenario.credentials(), None);
@@ -304,7 +495,8 @@ fn ctrl_c_at_the_key_prompt_leaves_saved_credentials_unchanged() {
 
     let result = scenario.run_on_terminal(&["setup"], &[], &notifications_on(&[(KEPT, CTRL_C)]));
 
-    assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.code, Some(1), "terminal: {}", result.stderr);
+    assert!(result.terminal_restored);
     assert_eq!(result.user_config, None);
     assert_eq!(scenario.credentials().as_deref(), Some(saved));
 }
@@ -326,7 +518,8 @@ fn ctrl_c_during_the_questions_writes_no_user_config() {
         ],
     );
 
-    assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.code, Some(1), "terminal: {}", result.stderr);
+    assert!(result.terminal_restored);
     assert_eq!(result.stdout, "");
     assert_eq!(result.user_config, None);
 }
@@ -351,6 +544,7 @@ fn ctrl_c_during_the_questions_leaves_an_existing_user_config_unchanged() {
         ],
     );
 
-    assert_ne!(result.code, Some(0), "terminal: {}", result.stderr);
+    assert_eq!(result.code, Some(1), "terminal: {}", result.stderr);
+    assert!(result.terminal_restored);
     assert_eq!(result.user_config.as_deref(), Some(mine));
 }

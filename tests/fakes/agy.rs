@@ -77,6 +77,7 @@ pub fn main(argv: Vec<String>) {
         if let Ok(error) = std::env::var("FAKE_AGY_CATALOG_ERROR") {
             crate::die(&error, 1);
         }
+        crate::check_script();
         print!("{CATALOG}");
         crate::exit(0);
     }

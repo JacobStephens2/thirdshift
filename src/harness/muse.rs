@@ -89,7 +89,10 @@ impl Adapter for Muse {
             };
             match outside.muse_check(&chosen) {
                 Ok(settled) => return Ok(Some(settled)),
-                Err(error) => outside.say(format!("{error:#}")),
+                Err(error) => {
+                    crate::interrupt::check()?;
+                    outside.say(format!("{error:#}"));
+                }
             }
         }
     }
