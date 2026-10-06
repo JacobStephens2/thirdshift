@@ -53,6 +53,14 @@ impl Fixture {
         self.start_using(Handle::start_readers)
     }
 
+    fn start_with_fault(&self, fault: Fault) -> Result<Handle> {
+        self.start_using(|owned| {
+            self.await_file("ready");
+            owned.fault = Some(fault);
+            owned.start_readers()
+        })
+    }
+
     fn start_using(&self, startup: impl FnOnce(&mut Handle) -> Result<()>) -> Result<Handle> {
         super::start_using(
             &self.0.path().join("run"),
@@ -263,11 +271,7 @@ open(ROOT + '/ready', 'w').close()
 while True: time.sleep(.01)
 "#,
         );
-        let result = fixture.start_using(|owned| {
-            fixture.await_file("ready");
-            owned.fault = Some(fault);
-            owned.start_readers()
-        });
+        let result = fixture.start_with_fault(fault);
         let error = match result {
             Err(error) => error,
             Ok(_) => panic!("{fault:?} did not fail startup"),
@@ -300,13 +304,7 @@ fn reader_failures_panics_and_wait_failure_keep_their_first_cause_after_cleanup(
         Fault::Wait,
     ] {
         let fixture = Fixture::new(QUIET_SAVES_ON_STOP);
-        let handle = fixture
-            .start_using(|owned| {
-                fixture.await_file("ready");
-                owned.fault = Some(fault);
-                owned.start_readers()
-            })
-            .unwrap();
+        let handle = fixture.start_with_fault(fault).unwrap();
         let started = Instant::now();
         let cause = format!("{:#}", handle.wait().unwrap_err());
         assert!(cause.contains("#248"), "{fault:?}: {cause}");
@@ -354,13 +352,7 @@ fn poll_until_stopping(handle: &mut Handle, fixture: &Fixture) {
 #[test]
 fn a_transport_failure_stays_pending_while_the_child_saves_work() {
     let fixture = Fixture::new(GATED_STOP);
-    let mut handle = fixture
-        .start_using(|owned| {
-            fixture.await_file("ready");
-            owned.fault = Some(Fault::StderrRead);
-            owned.start_readers()
-        })
-        .unwrap();
+    let mut handle = fixture.start_with_fault(Fault::StderrRead).unwrap();
     poll_until_stopping(&mut handle, &fixture);
     fs::write(fixture.0.path().join("finish"), "").unwrap();
     let cause = format!("{:#}", handle.wait().unwrap_err());
@@ -402,13 +394,7 @@ fn interruption_during_transport_cleanup_takes_precedence() {
     }
     interrupt::install().unwrap();
     let fixture = Fixture::new(GATED_STOP);
-    let mut handle = fixture
-        .start_using(|owned| {
-            fixture.await_file("ready");
-            owned.fault = Some(Fault::StdoutRead);
-            owned.start_readers()
-        })
-        .unwrap();
+    let mut handle = fixture.start_with_fault(Fault::StdoutRead).unwrap();
     poll_until_stopping(&mut handle, &fixture);
     signal_hook::low_level::raise(libc::SIGTERM).unwrap();
     assert!(handle.try_wait().is_none());
