@@ -109,7 +109,7 @@ impl Adapter for Agy {
     fn link_instruction_fallback(&self, worktree: &Path) -> Result<()> {
         super::instructions::link_fallback(worktree, "GEMINI.md", &["AGENTS.md"])
     }
-    fn stream(&self, _worktree: &Path) -> Box<dyn Stream> {
+    fn stream(&self, _worktree: &Path, _prompt: &str) -> Box<dyn Stream> {
         Box::new(stream::AgyProgress::default())
     }
 }

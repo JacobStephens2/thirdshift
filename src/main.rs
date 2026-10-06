@@ -73,7 +73,7 @@ merge, --no-merge, --email, --no-email, base-fix, --no-base-fix, parallel <n> (o
 --parallel <n>), harness <name>, model <name> and effort <level> (or --harness, --model and
 --effort) go before or after the Issue URL, in any order.
 
-harness (claude, codex, agy or grok), model and effort choose the Harness every session runs on, and its
+harness (claude, codex, agy, grok or muse), model and effort choose the Harness every session runs on, and its
 Model and Effort, for each Ticket's Run and a Base fix too. For each, the command wins, then
 the User config, then the default: claude, with its own Model and Effort. A Model and Effort
 in the User config come from the chosen Harness's own section, so harness claude over a codex

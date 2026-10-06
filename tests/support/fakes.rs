@@ -1,7 +1,7 @@
-//! The fake `gh`, `claude` and `codex`, built from `tests/fakes.rs` with plain
-//! `rustc` the first time a test needs them and kept in Cargo's scratch
-//! directory for tests. They aren't a binary target, so neither the crate nor
-//! a release ships them.
+//! The fake `gh`, `claude`, `codex`, `agy`, `grok` and `muse`, built from
+//! `tests/fakes.rs` with plain `rustc` the first time a test needs them and
+//! kept in Cargo's scratch directory for tests. They aren't a binary target,
+//! so neither the crate nor a release ships them.
 
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -11,21 +11,30 @@ use std::sync::OnceLock;
 
 /// The fakes' sources. They name the built executable, and including them
 /// makes Cargo rebuild the tests when they change.
-const SOURCES: [&str; 9] = [
+const SOURCES: [&str; 10] = [
     include_str!("../fakes.rs"),
     include_str!("../fakes/gh.rs"),
     include_str!("../fakes/claude.rs"),
     include_str!("../fakes/codex.rs"),
     include_str!("../fakes/agy.rs"),
+    include_str!("../fakes/muse.rs"),
     include_str!("../fakes/json.rs"),
     include_str!("../fakes/grok.rs"),
     include_str!("../fixtures/grok-models.json"),
     include_str!("../fixtures/grok-models.txt"),
 ];
 
-/// Put the fake `gh`, `claude` and `codex` in `bin`.
+/// Put the fake `gh`, `claude`, `codex`, `agy`, `grok` and `muse` in `bin`.
 pub fn install(bin: &Path) {
-    for name in ["gh", "claude", "codex", "agy", "grok", "detached-command"] {
+    for name in [
+        "gh",
+        "claude",
+        "codex",
+        "agy",
+        "grok",
+        "muse",
+        "detached-command",
+    ] {
         std::os::unix::fs::symlink(executable(), bin.join(name)).unwrap();
     }
 }

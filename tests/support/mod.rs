@@ -606,6 +606,7 @@ test -f {root}/{COPY_REPLACED}
             .env("FAKE_AGY_RECORD", self.path("agy-calls.json"))
             .env("FAKE_AGY_CHECK_RECORD", self.path("agy-checks.json"))
             .env("FAKE_GROK_RECORD", self.path("grok-calls.json"))
+            .env("FAKE_MUSE_RECORD", self.path("muse-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
             // Seconds of waiting for CI become milliseconds. Each poll starts
             // the fake gh; at 100ms the grace period holds about three reads,
@@ -818,6 +819,13 @@ test -f {root}/{COPY_REPLACED}
         }
     }
 
+    /// Every call the fake Muse received.
+    pub fn muse_calls(&self) -> Vec<Value> {
+        fs::read_to_string(self.path("muse-calls.json"))
+            .map(|text| serde_json::from_str(&text).unwrap())
+            .unwrap_or_default()
+    }
+
     pub fn agy_calls(&self) -> Vec<Value> {
         self.agy_records("agy-calls.json")
     }
@@ -848,6 +856,10 @@ test -f {root}/{COPY_REPLACED}
                 .filter(|call| call["prompt"].is_string())
                 .collect(),
         );
+    }
+
+    pub fn assert_every_muse_session_found_the_factory_skills(&self) {
+        assert_found_the_factory_skills(self.muse_calls());
     }
 
     /// Assert every `claude` call found every Factory skill, by its

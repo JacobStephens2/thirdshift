@@ -115,7 +115,7 @@ impl Adapter for Grok {
         )?;
         Ok(Some(ModelAndEffort { model, effort }))
     }
-    fn stream(&self, _worktree: &Path) -> Box<dyn Stream> {
+    fn stream(&self, _worktree: &Path, _prompt: &str) -> Box<dyn Stream> {
         Box::new(stream::GrokProgress::default())
     }
 }

@@ -15,6 +15,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod grok;
 mod instructions;
+pub(crate) mod muse;
 mod process_tree;
 
 pub use adapter::{Adapter, Invocation};
@@ -27,6 +28,7 @@ pub enum Harness {
     Codex,
     Agy,
     Grok,
+    Muse,
 }
 
 impl Harness {
@@ -100,6 +102,8 @@ pub struct Settings {
     pub agy: ModelAndEffort,
     /// `[harness.grok]`.
     pub grok: ModelAndEffort,
+    /// `[harness.muse]`.
+    pub muse: ModelAndEffort,
 }
 
 impl Settings {
@@ -197,14 +201,9 @@ impl Choice {
         codex::model_args(self)
     }
 
-    /// Check, before any work, that sessions can run on this, and settle the
-    /// Model and Effort on the names the Harness knows them by. The
-    /// Harness's CLI must be on `PATH`. A Model named for Claude must take a
-    /// minimal test call, with the Effort, if any. A Model or Effort named
-    /// for Codex must be in its catalog, which costs no tokens to read: each
-    /// is matched regardless of case, a Model by its slug or display name,
-    /// and becomes the name Codex takes. Grok Build checks its free model
-    /// list and refreshed effort cache. Each failure says what to change.
+    /// Check, before any work, that the CLI is on `PATH`, then settle the
+    /// Model and Effort through its adapter's catalog or minimal test call.
+    /// Each failure says what to change.
     pub fn check(&mut self) -> Result<()> {
         let adapter = self.harness.adapter();
         let cli = adapter.name();

@@ -237,7 +237,7 @@ impl Outside for OnMachine {
         log: &Path,
     ) -> Result<Ended> {
         let invocation = self.adapter.session(&self.harness, resume, prompt);
-        let stream = self.adapter.stream(&self.worktree);
+        let stream = self.adapter.stream(&self.worktree, prompt);
         let stream = run(kind, self.adapter, &self.worktree, invocation, log, stream)?;
         Ok(Ended {
             session_id: stream.session_id().map(String::from),
@@ -354,6 +354,9 @@ fn run(
         .map_err(|_| anyhow!("the session stream reader panicked"))?;
 
     let stream = adapter.read_after_exit(worktree, stream);
+    for warning in stream.warnings() {
+        progress::step(format_args!("{kind}: {warning}"));
+    }
     let elapsed = minutes_and_seconds(started.elapsed());
     let summary = stream
         .summary()

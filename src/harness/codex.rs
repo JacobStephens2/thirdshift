@@ -60,7 +60,7 @@ impl Adapter for Codex {
             }
         }
     }
-    fn stream(&self, worktree: &Path) -> Box<dyn Stream> {
+    fn stream(&self, worktree: &Path, _prompt: &str) -> Box<dyn Stream> {
         Box::new(stream::CodexProgress::in_worktree(worktree))
     }
 }
