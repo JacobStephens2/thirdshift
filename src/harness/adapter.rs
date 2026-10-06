@@ -61,7 +61,7 @@ pub trait Adapter: Sync {
 }
 
 /// A session's arguments and optional prompt on stdin. `None` keeps stdin
-/// null; `Some` is written once and closed before following the stream.
+/// null; `Some` is written once and closed while output is drained concurrently.
 pub struct Invocation {
     pub args: Vec<String>,
     pub stdin: Option<String>,

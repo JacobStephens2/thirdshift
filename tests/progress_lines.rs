@@ -178,20 +178,27 @@ fn skips_unknown_and_malformed_stream_events_and_keeps_stdout_to_the_pr_url() {
 fn still_logs_the_whole_stream() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
-        "echo 'not json at all'\n{AGENT_COMMITS_AND_OPENS_PR}"
+        "echo 'not json at all'\nprintf '\\377unknown\\000\\n'\necho '{{\"type\":'\n{AGENT_COMMITS_AND_OPENS_PR}"
     ));
 
-    scenario.run(&[&scenario.issue_url(7)]);
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
 
     let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
-    let log = std::fs::read_to_string(
+    let log = std::fs::read(
         scenario
             .path("home/.thirdshift/logs/acme/widgets/sessions")
             .join(&logs[0]),
     )
     .unwrap();
-    assert!(log.contains("not json at all\n"), "log: {log}");
-    assert!(log.contains(r#""type": "result""#), "log: {log}");
+    let raw = b"not json at all\n\xffunknown\0\n{\"type\":\n";
+    assert!(log.windows(raw.len()).any(|bytes| bytes == raw), "{log:?}");
+    let result_event = br#""type": "result""#;
+    assert!(
+        log.windows(result_event.len())
+            .any(|bytes| bytes == result_event),
+        "{log:?}"
+    );
 }
 
 #[test]

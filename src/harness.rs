@@ -17,7 +17,7 @@ pub(crate) mod grok;
 mod instructions;
 pub(crate) mod muse;
 pub(crate) mod opencode;
-mod process_output;
+pub(crate) mod process;
 mod process_tree;
 mod skill_load;
 

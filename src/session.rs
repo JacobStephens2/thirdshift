@@ -3,20 +3,17 @@
 use std::cell::RefCell;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 
 #[cfg(test)]
 pub(crate) use crate::harness::claude::claude_args;
 #[cfg(test)]
 pub(crate) use crate::harness::codex::{codex_args, codex_prompt};
-use crate::harness::{Adapter, Choice, Invocation};
-use crate::interrupt;
+use crate::harness::{Adapter, Choice, Invocation, process};
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
 use crate::progress::{self, Stream};
@@ -289,69 +286,24 @@ fn run(
     let mut log_file =
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
-    let mut child = Command::new(cli)
-        .args(&invocation.args)
-        .envs(adapter.environment().iter().copied())
-        .current_dir(worktree)
-        .stdin(if invocation.stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        // Its own process group, so thirdshift decides how it is stopped and
-        // can stop everything it started.
-        .process_group(0)
-        .spawn()
-        .with_context(|| format!("could not run {cli}"))?;
-
-    // Follow the stream on its own thread, so this one can watch for an
-    // interrupt while the session runs.
-    let output = child
-        .stdout
-        .take()
-        .with_context(|| format!("no stdout from {cli}"))?;
-    let group = -(child.id() as libc::pid_t);
     let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
-    let follower = thread::spawn(move || {
-        let followed = follow(
-            &kind_owned,
-            output,
-            &mut log_file,
-            &log_owned,
-            stream.as_mut(),
-        );
-        if followed.is_err() {
-            // Nothing reads its output any more, so it could block forever.
-            // SAFETY: kill has no memory-safety preconditions.
-            unsafe { libc::kill(group, libc::SIGKILL) };
-        }
-        (followed, stream)
-    });
-    if let Some(input) = invocation.stdin
-        && let Some(mut stdin) = child.stdin.take()
-        && let Err(error) = stdin.write_all(input.as_bytes())
-    {
-        adapter.stop(&mut child);
-        let _ = follower.join();
-        return Err(error).with_context(|| format!("could not write the prompt to {cli}"));
-    }
-    let status = loop {
-        if interrupt::requested() {
-            adapter.stop(&mut child);
-            bail!("interrupted");
-        }
-        if let Some(status) = child
-            .try_wait()
-            .with_context(|| format!("could not wait for {cli}"))?
-        {
-            break status;
-        }
-        thread::sleep(POLL);
-    };
-    let (followed, stream) = follower
-        .join()
-        .map_err(|_| anyhow!("the session stream reader panicked"))?;
+    let (status, stream) = process::streaming(
+        adapter,
+        Command::new(cli)
+            .args(&invocation.args)
+            .current_dir(worktree),
+        invocation.stdin.as_deref(),
+        move |output| {
+            follow(
+                &kind_owned,
+                output,
+                &mut log_file,
+                &log_owned,
+                stream.as_mut(),
+            )?;
+            Ok(stream)
+        },
+    )?;
 
     let stream = adapter.read_after_exit(worktree, stream)?;
     for warning in stream.warnings() {
@@ -364,7 +316,6 @@ fn run(
     progress::step(format_args!(
         "{kind}: session ended after {elapsed}{summary}"
     ));
-    followed?;
     if status.success() && !stream.failed() {
         return Ok(stream);
     }
@@ -383,8 +334,6 @@ fn run(
         None => bail!("{cli}{ended}"),
     }
 }
-
-const POLL: Duration = Duration::from_millis(100);
 
 /// Copy every line of `stream` to `log_file` and print the progress lines it
 /// condenses to, until the stream ends.
@@ -428,6 +377,8 @@ fn minutes_and_seconds(duration: Duration) -> String {
 mod tests {
     use std::collections::VecDeque;
     use std::rc::Rc;
+
+    use anyhow::anyhow;
 
     use super::*;
 
