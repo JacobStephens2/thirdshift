@@ -3,9 +3,9 @@ mod export;
 mod stream;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings, said};
 use crate::progress::Stream;
-use crate::setup::{Outside, questions::ask_setting};
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::Command;
@@ -66,7 +66,7 @@ impl Adapter for OpenCode {
     }
     fn ask_settings(
         &self,
-        outside: &mut dyn Outside,
+        outside: &mut dyn Terminal,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>> {
         loop {
@@ -84,7 +84,7 @@ impl Adapter for OpenCode {
                     current.effort.as_deref(),
                 )?,
             };
-            match outside.opencode_check(&chosen) {
+            match check_model_and_effort(&chosen) {
                 Ok(()) => return Ok(Some(chosen)),
                 Err(error) => {
                     crate::interrupt::check()?;

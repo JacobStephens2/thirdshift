@@ -27,16 +27,24 @@ const SOURCES: [&str; 11] = [
 
 /// Put the fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode` in `bin`.
 pub fn install(bin: &Path) {
-    for name in [
-        "gh",
-        "claude",
-        "codex",
-        "agy",
-        "grok",
-        "muse",
-        "opencode",
-        "detached-command",
-    ] {
+    install_named(
+        bin,
+        &[
+            "gh",
+            "claude",
+            "codex",
+            "agy",
+            "grok",
+            "muse",
+            "opencode",
+            "detached-command",
+        ],
+    );
+}
+
+/// Install only the named stand-ins, for controlled installation tests.
+pub fn install_named(bin: &Path, names: &[&str]) {
+    for name in names {
         std::os::unix::fs::symlink(executable(), bin.join(name)).unwrap();
     }
 }
@@ -50,7 +58,9 @@ fn executable() -> &'static Path {
 fn build() -> PathBuf {
     let mut hasher = DefaultHasher::new();
     SOURCES.hash(&mut hasher);
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = option_env!("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
     let built = dir.join(format!("fakes-{:016x}", hasher.finish()));
     if built.exists() {
         return built;

@@ -19,10 +19,10 @@ pub(crate) mod muse;
 pub(crate) mod opencode;
 pub(crate) mod process;
 mod process_tree;
+pub(crate) mod settings;
 mod skill_load;
 
 pub use adapter::{Adapter, Invocation};
-pub use codex::Catalog;
 
 /// The headless agent CLI a Command's sessions run on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,6 +279,7 @@ fn on_path(cli: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::codex::Catalog;
     use super::*;
 
     fn set(model: &str, effort: &str) -> ModelAndEffort {

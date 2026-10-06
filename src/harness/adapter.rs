@@ -5,9 +5,9 @@ use std::process::Child;
 
 use anyhow::Result;
 
+use super::settings::Terminal;
 use super::{Choice, Harness, ModelAndEffort, Settings, agy, claude, codex, grok, muse, opencode};
 use crate::progress::Stream;
-use crate::setup::Outside;
 
 /// One Harness's session protocol and its Model and Effort rules. Callers
 /// select it once, then use the same adapter for a session and its Resume.
@@ -26,7 +26,7 @@ pub trait Adapter: Sync {
     fn check(&self, choice: &mut Choice) -> Result<()>;
     fn ask_settings(
         &self,
-        outside: &mut dyn Outside,
+        outside: &mut dyn Terminal,
         current: &ModelAndEffort,
     ) -> Result<Option<ModelAndEffort>>;
     fn stream(&self, worktree: &Path, prompt: &str) -> Box<dyn Stream>;

@@ -7,7 +7,7 @@
 //! the offer carries on through. Preparing and editing a User config are
 //! the User config module's. Everything Setup does outside
 //! itself goes through [`Outside`]: [`OnMachine`] does each on the terminal,
-//! the Harnesses' CLIs, `gh`, `git`, Resend and the files under the home
+//! through the complete Harness interaction, `gh`, `git`, Resend and the files under the home
 //! folder; `Scripted`, in tests, from a script, recording each call.
 
 pub(crate) mod questions;
@@ -19,7 +19,10 @@ use anyhow::{Context, Result};
 
 use crate::config::{self, EmailSettings, UserConfig, UserConfigDocument};
 use crate::git::Git;
-use crate::harness::{Catalog, Choice, ChosenBy, Harness, ModelAndEffort};
+use crate::harness::{
+    Harness, ModelAndEffort, Settings,
+    settings::{self, Terminal},
+};
 use crate::resend_key::{Credentials, Source};
 use crate::{email, github, interrupt, progress};
 
@@ -206,33 +209,19 @@ fn suggested_address(outside: &mut impl Outside) -> Option<String> {
     })
 }
 
-/// What Setup does outside itself: the terminal it asks on, the Harnesses'
-/// CLIs, the Credentials, the lookups behind the suggested address, the User
+/// What Setup does outside itself: ordinary and hidden terminal input, the
+/// complete Harness interaction, Credentials, suggested-address lookups, the User
 /// config file, the test email, and where its progress lines go.
-pub(crate) trait Outside {
+pub(crate) trait Outside: Terminal {
     /// Whether there is someone to ask: stdin and stderr are both terminals.
     fn has_terminal(&mut self) -> bool;
-    /// Show `prompt` and read one answer, trimmed, or `None` if stdin closed.
-    fn read(&mut self, prompt: &str) -> Result<Option<String>>;
-    /// [`Outside::read`], with what is typed never shown.
+    /// Ordinary input, hidden for Credentials.
     fn read_hidden(&mut self, prompt: &str) -> Result<Option<String>>;
-    /// Show `line` on the terminal.
-    fn say(&mut self, line: String);
-    /// Whether sessions can run on `harness` here.
-    fn installed(&mut self, harness: Harness) -> bool;
-    /// Make Claude's test call on the Model and Effort `chosen`, as a Run
-    /// checks them.
-    fn test_call(&mut self, chosen: &ModelAndEffort) -> Result<()>;
-    /// Read Codex's catalog of Models.
-    fn codex_catalog(&mut self) -> Result<Catalog>;
-    /// Read Antigravity CLI's free Model catalog.
-    fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog>;
-    /// Read Grok Build's catalog, refreshed by grok models.
-    fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog>;
-    /// Check Muse's settings against its cache, or with its minimal test call.
-    fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort>;
-    /// Check OpenCode with its minimal standalone test call.
-    fn opencode_check(&mut self, chosen: &ModelAndEffort) -> Result<()>;
+    /// One complete settled Harness answer, retention, or an error.
+    fn ask_harness_settings(
+        &mut self,
+        current: &Settings,
+    ) -> Result<Option<(Harness, ModelAndEffort)>>;
     /// Read the Credentials, as strictly as a Run does: where a Resend API
     /// key is found, if anywhere.
     fn find_key(&mut self) -> Result<Option<Source>>;
@@ -276,11 +265,7 @@ impl<'a> OnMachine<'a> {
     }
 }
 
-impl Outside for OnMachine<'_> {
-    fn has_terminal(&mut self) -> bool {
-        std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
-    }
-
+impl Terminal for OnMachine<'_> {
     fn read(&mut self, prompt: &str) -> Result<Option<String>> {
         interrupt::install()?;
         interrupt::check()?;
@@ -292,6 +277,16 @@ impl Outside for OnMachine<'_> {
             let _ = writeln!(stderr);
         }
         Ok(line)
+    }
+
+    fn say(&mut self, line: String) {
+        let _ = writeln!(std::io::stderr(), "{line}");
+    }
+}
+
+impl Outside for OnMachine<'_> {
+    fn has_terminal(&mut self) -> bool {
+        std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
     }
 
     /// With the terminal's echo off, so what is typed never shows.
@@ -307,41 +302,11 @@ impl Outside for OnMachine<'_> {
         Ok(line)
     }
 
-    fn say(&mut self, line: String) {
-        let _ = writeln!(std::io::stderr(), "{line}");
-    }
-
-    fn installed(&mut self, harness: Harness) -> bool {
-        harness.installed()
-    }
-
-    fn test_call(&mut self, chosen: &ModelAndEffort) -> Result<()> {
-        crate::harness::claude::test_call(&Choice {
-            harness: Harness::Claude,
-            model: chosen.model.clone(),
-            effort: chosen.effort.clone(),
-            chosen_by: ChosenBy::UserConfig,
-        })
-    }
-
-    fn codex_catalog(&mut self) -> Result<Catalog> {
-        Catalog::read()
-    }
-
-    fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog> {
-        crate::harness::agy::Catalog::read()
-    }
-
-    fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog> {
-        crate::harness::grok::Catalog::read()
-    }
-
-    fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort> {
-        crate::harness::muse::check_model_and_effort(chosen)
-    }
-
-    fn opencode_check(&mut self, chosen: &ModelAndEffort) -> Result<()> {
-        crate::harness::opencode::check_model_and_effort(chosen)
+    fn ask_harness_settings(
+        &mut self,
+        current: &Settings,
+    ) -> Result<Option<(Harness, ModelAndEffort)>> {
+        settings::ask(self, current)
     }
 
     fn find_key(&mut self) -> Result<Option<Source>> {
@@ -501,17 +466,6 @@ mod scripted {
 
     use super::*;
 
-    /// What `codex debug models` prints: a few Models, each with its display
-    /// name and the Efforts it supports.
-    pub const CATALOG: &str = r#"{"models": [
-      {"slug": "gpt-6.1-sol", "display_name": "GPT-6.1-Sol", "visibility": "list",
-       "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}, {"effort": "max"}, {"effort": "ultra"}]},
-      {"slug": "gpt-6-luna", "display_name": "GPT-6-Luna", "visibility": "list",
-       "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}, {"effort": "max"}]},
-      {"slug": "gpt-5.5", "display_name": "GPT-5.5", "visibility": "list",
-       "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}]}
-    ]}"#;
-
     /// Where the Credentials are.
     pub const CREDENTIALS: &str = "/home/me/.thirdshift/credentials.toml";
 
@@ -527,9 +481,8 @@ mod scripted {
         AskHidden(String),
         /// It showed this line on the terminal.
         Say(String),
-        /// It made Claude's test call on this Model and Effort.
-        Tested(ModelAndEffort),
-        MuseChecked(ModelAndEffort),
+        /// It requested one complete interaction with these current settings.
+        HarnessSettings(Settings),
         /// It wrote this new User config.
         WriteNew(String),
         /// It replaced the User config with this.
@@ -556,24 +509,14 @@ mod scripted {
 
     /// The outside world from a script: the answers to give, in order, to
     /// plain and hidden prompts alike, each with part of the prompt it
-    /// answers; which Harnesses are installed, and Claude's test calls'
-    /// results in turn; Codex's catalog; where a key is found; the two
+    /// answers; the complete Harness interaction outcome; where a key is found; the two
     /// emails; the User config, if any; and what fails.
     pub struct Scripted {
         pub terminal: bool,
         /// Each answer, with part of the prompt it is for. Once they run
         /// out, stdin is closed.
         pub answers: VecDeque<(&'static str, &'static str)>,
-        pub installed: Vec<Harness>,
-        /// Claude's refusal of each test call in turn, if it refuses it;
-        /// once they run out, it takes each.
-        pub test_calls: VecDeque<Option<&'static str>>,
-        /// The catalog's JSON, or what reading it fails with.
-        pub catalog: Result<&'static str, &'static str>,
-        pub agy_catalog: Result<&'static str, &'static str>,
-        /// Grok's text model list and refreshed effort cache, or a read failure.
-        pub grok_catalog: Result<(&'static str, &'static str), &'static str>,
-        pub muse_checks: VecDeque<Result<ModelAndEffort, &'static str>>,
+        pub harness: Result<Option<(Harness, ModelAndEffort)>, &'static str>,
         /// Where a key is found, or what reading the Credentials fails with.
         pub key: Result<Option<Source>, &'static str>,
         pub github_email: Result<Option<&'static str>, &'static str>,
@@ -587,23 +530,13 @@ mod scripted {
 
     impl Scripted {
         /// A terminal answering `answers` in order, then closing stdin,
-        /// with every Harness installed, no key, no email to suggest and no
+        /// retaining Harness settings, with no key, no email to suggest and no
         /// User config.
         pub fn answering(answers: &[(&'static str, &'static str)]) -> Self {
             Scripted {
                 terminal: true,
                 answers: answers.iter().copied().collect(),
-                installed: Harness::ALL.to_vec(),
-                test_calls: VecDeque::new(),
-                catalog: Ok(CATALOG),
-                agy_catalog: Ok(
-                    "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n",
-                ),
-                grok_catalog: Ok((
-                    include_str!("../tests/fixtures/grok-models.txt"),
-                    include_str!("../tests/fixtures/grok-models.json"),
-                )),
-                muse_checks: VecDeque::new(),
+                harness: Ok(None),
                 key: Ok(None),
                 github_email: Ok(None),
                 git_email: Err("git config --global user.email: exit status 1"),
@@ -650,19 +583,8 @@ mod scripted {
                 .filter(|call| {
                     !matches!(
                         call,
-                        Call::Ask(_) | Call::AskHidden(_) | Call::Say(_) | Call::Tested(_)
+                        Call::Ask(_) | Call::AskHidden(_) | Call::Say(_) | Call::HarnessSettings(_)
                     )
-                })
-                .collect()
-        }
-
-        /// Every test call Claude was given, in order.
-        pub fn test_calls(&self) -> Vec<&ModelAndEffort> {
-            self.calls
-                .iter()
-                .filter_map(|call| match call {
-                    Call::Tested(chosen) => Some(chosen),
-                    _ => None,
                 })
                 .collect()
         }
@@ -688,14 +610,20 @@ mod scripted {
         }
     }
 
-    impl Outside for Scripted {
-        fn has_terminal(&mut self) -> bool {
-            self.terminal
-        }
-
+    impl Terminal for Scripted {
         fn read(&mut self, prompt: &str) -> Result<Option<String>> {
             self.calls.push(Call::Ask(prompt.to_string()));
             Ok(self.answer(prompt))
+        }
+
+        fn say(&mut self, line: String) {
+            self.calls.push(Call::Say(line));
+        }
+    }
+
+    impl Outside for Scripted {
+        fn has_terminal(&mut self) -> bool {
+            self.terminal
         }
 
         fn read_hidden(&mut self, prompt: &str) -> Result<Option<String>> {
@@ -703,53 +631,12 @@ mod scripted {
             Ok(self.answer(prompt))
         }
 
-        fn say(&mut self, line: String) {
-            self.calls.push(Call::Say(line));
-        }
-
-        fn installed(&mut self, harness: Harness) -> bool {
-            self.installed.contains(&harness)
-        }
-
-        fn test_call(&mut self, chosen: &ModelAndEffort) -> Result<()> {
-            self.calls.push(Call::Tested(chosen.clone()));
-            match self.test_calls.pop_front().flatten() {
-                Some(refusal) => Err(anyhow!("{refusal}")),
-                None => Ok(()),
-            }
-        }
-
-        fn codex_catalog(&mut self) -> Result<Catalog> {
-            match self.catalog {
-                Ok(json) => Catalog::parse(json),
-                Err(error) => bail!("{error}"),
-            }
-        }
-
-        fn agy_catalog(&mut self) -> Result<crate::harness::agy::Catalog> {
-            match self.agy_catalog {
-                Ok(text) => crate::harness::agy::Catalog::parse(text),
-                Err(error) => bail!("{error}"),
-            }
-        }
-
-        fn grok_catalog(&mut self) -> Result<crate::harness::grok::Catalog> {
-            match self.grok_catalog {
-                Ok((list, cache)) => crate::harness::grok::Catalog::parse(list, cache),
-                Err(error) => bail!("{error}"),
-            }
-        }
-
-        fn muse_check(&mut self, chosen: &ModelAndEffort) -> Result<ModelAndEffort> {
-            self.calls.push(Call::MuseChecked(chosen.clone()));
-            self.muse_checks
-                .pop_front()
-                .unwrap_or_else(|| Ok(chosen.clone()))
-                .map_err(|error| anyhow!("{error}"))
-        }
-
-        fn opencode_check(&mut self, _chosen: &ModelAndEffort) -> Result<()> {
-            Ok(())
+        fn ask_harness_settings(
+            &mut self,
+            current: &Settings,
+        ) -> Result<Option<(Harness, ModelAndEffort)>> {
+            self.calls.push(Call::HarnessSettings(current.clone()));
+            self.harness.clone().map_err(|error| anyhow!("{error}"))
         }
 
         fn find_key(&mut self) -> Result<Option<Source>> {
@@ -827,11 +714,6 @@ mod tests {
 
     const OFFER: &str =
         "No User config at /home/me/.thirdshift/config.toml. Set your defaults now? [Y/n] ";
-    const HARNESS: &str = "Harness for every Run's sessions";
-    const MODEL: &str = "Model for claude";
-    const EFFORT: &str = "Effort for claude";
-    const CODEX_MODEL: &str = "Model for codex";
-    const CODEX_EFFORT: &str = "Effort for codex";
     const MERGE: &str = "Every Run a Merge run?";
     const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
     const PULL: &str = "fast-forward";
@@ -849,17 +731,7 @@ mod tests {
     const KEY: &str = "re_secret_123";
 
     /// The answers that take every default and turn nothing on.
-    const ENTER_THROUGHOUT: [(&str, &str); 6] = [
-        (HARNESS, ""),
-        (MODEL, ""),
-        (EFFORT, ""),
-        (MERGE, ""),
-        (PULL, ""),
-        (NOTIFY, ""),
-    ];
-
-    /// The answers after the Harness's that leave every setting as it is.
-    const NOTHING_ELSE: [(&str, &str); 3] = [(MERGE, ""), (PULL, ""), (NOTIFY, "")];
+    const ENTER_THROUGHOUT: [(&str, &str); 3] = [(MERGE, ""), (PULL, ""), (NOTIFY, "")];
 
     /// The answers that turn Run notifications on, to `me@example.com` from
     /// the default sender, then `rest`.
@@ -867,9 +739,6 @@ mod tests {
         rest: &[(&'static str, &'static str)],
     ) -> Vec<(&'static str, &'static str)> {
         let mut answers = vec![
-            (HARNESS, ""),
-            (MODEL, ""),
-            (EFFORT, ""),
             (MERGE, ""),
             (PULL, ""),
             (NOTIFY, "y"),
@@ -877,15 +746,6 @@ mod tests {
             (FROM, ""),
         ];
         answers.extend_from_slice(rest);
-        answers
-    }
-
-    /// `harness` answers, then [`NOTHING_ELSE`].
-    fn then_nothing_else(
-        harness: &[(&'static str, &'static str)],
-    ) -> Vec<(&'static str, &'static str)> {
-        let mut answers = harness.to_vec();
-        answers.extend(NOTHING_ELSE);
         answers
     }
 
@@ -928,14 +788,118 @@ mod tests {
         Call::Step(line.to_string())
     }
 
-    fn model_and_effort(model: Option<&str>, effort: Option<&str>) -> ModelAndEffort {
-        ModelAndEffort {
-            model: model.map(String::from),
-            effort: effort.map(String::from),
+    // What Setup writes.
+
+    #[test]
+    fn the_harness_interaction_receives_every_current_setting_once_before_other_questions() {
+        let mine = "[harness]\ndefault = 'codex'\n[harness.claude]\nmodel = 'opus'\neffort = 'high'\n[harness.codex]\nmodel = 'GPT-6-Luna'\neffort = 'High'\n[harness.agy]\nmodel = 'gemini-3.8-flash'\neffort = 'medium'\n[harness.grok]\nmodel = 'grok-4.5'\neffort = 'low'\n[harness.muse]\nmodel = 'muse-spark-1.3'\neffort = 'high'\n[harness.opencode]\nmodel = 'provider/model'\neffort = 'high'\n";
+        for existing in [None, Some(mine)] {
+            let mut outside = Scripted {
+                user_config: existing.map(String::from),
+                ..Scripted::answering(&ENTER_THROUGHOUT)
+            };
+            let expected = match existing {
+                Some(text) => UserConfig::parse(text, Path::new(PATH), Path::new(HOME)).unwrap(),
+                None => UserConfig::parse(DEFAULTS, Path::new(PATH), Path::new(HOME)).unwrap(),
+            };
+
+            setup(&mut outside).unwrap();
+
+            assert_eq!(outside.calls[0], Call::HarnessSettings(expected.harness));
+            assert!(matches!(&outside.calls[1], Call::Ask(prompt) if prompt.contains(MERGE)));
+            assert_eq!(
+                outside
+                    .calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::HarnessSettings(_)))
+                    .count(),
+                1
+            );
         }
     }
 
-    // What Setup writes.
+    #[test]
+    fn an_accepted_harness_answer_persists_the_complete_choice_and_preserves_other_harnesses() {
+        for harness in Harness::ALL {
+            let mut outside = Scripted {
+                user_config: Some(DEFAULTS.to_string()),
+                harness: Ok(Some((
+                    harness,
+                    ModelAndEffort {
+                        model: Some("settled-model".into()),
+                        effort: Some("high".into()),
+                    },
+                ))),
+                ..Scripted::answering(&ENTER_THROUGHOUT)
+            };
+
+            setup(&mut outside).unwrap();
+
+            let config = table(&outside);
+            assert_eq!(config["harness"]["default"].as_str(), Some(harness.name()));
+            for other in Harness::ALL {
+                let selected = other == harness;
+                assert_eq!(
+                    config["harness"][other.name()]["model"].as_str(),
+                    Some(if selected { "settled-model" } else { "" })
+                );
+                assert_eq!(
+                    config["harness"][other.name()]["effort"].as_str(),
+                    Some(if selected { "high" } else { "" })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retention_preserves_the_default_and_every_harness_setting() {
+        let mine = DEFAULTS
+            .replace("default = \"claude\"", "default = \"codex\"")
+            .replace("model = \"\"", "model = \"my-model\"")
+            .replace("effort = \"\"", "effort = \"high\"");
+        let mut outside = Scripted {
+            user_config: Some(mine.clone()),
+            harness: Ok(None),
+            ..Scripted::answering(&ENTER_THROUGHOUT)
+        };
+
+        setup(&mut outside).unwrap();
+
+        assert_eq!(outside.user_config, Some(mine));
+        assert!(!wrote_anything(&outside));
+    }
+
+    #[test]
+    fn harness_interaction_errors_abort_setup_and_the_first_offer_before_any_write() {
+        for error in [ENDED, "terminal read failed", "interrupted"] {
+            for first_offer in [false, true] {
+                let existing = (!first_offer).then(|| DEFAULTS.to_string());
+                let mut outside = Scripted {
+                    user_config: existing.clone(),
+                    harness: Err(error),
+                    ..Scripted::answering(if first_offer { &[(OFFER, "y")] } else { &[] })
+                };
+
+                let failed = if first_offer {
+                    offer(&mut outside).map(|_| String::new())
+                } else {
+                    setup(&mut outside)
+                };
+
+                assert_eq!(failed.unwrap_err().to_string(), error);
+                assert!(!wrote_anything(&outside));
+                assert_eq!(outside.user_config, existing);
+                assert_eq!(
+                    outside.prompts(),
+                    if first_offer { vec![OFFER] } else { vec![] }
+                );
+                assert!(matches!(
+                    outside.calls.last(),
+                    Some(Call::HarnessSettings(_))
+                ));
+            }
+        }
+    }
 
     #[test]
     fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
@@ -1073,9 +1037,6 @@ to = \"me@example.com\"  # my inbox
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
-                "Model for claude [claude's own default]: ",
-                "Effort for claude [claude's own default]: ",
                 "Every Run a Merge run? [y/N] ",
                 "Every Run first fast-forwards your checkout of the Base branch? [y/N] ",
                 "Run notifications, an email as each Run ends? [y/N] ",
@@ -1088,9 +1049,6 @@ to = \"me@example.com\"  # my inbox
         let mut outside = Scripted {
             key: Ok(Some(Source::Environment)),
             ..Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
                 (MERGE, "y"),
                 (BASE_FIX, "y"),
                 (PULL, "yes"),
@@ -1194,9 +1152,6 @@ effort = \"\"
             key: Ok(Some(Source::Environment)),
             github_email: Ok(Some("octo@example.com")),
             ..Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
@@ -1217,9 +1172,6 @@ effort = \"\"
         assert_eq!(
             outside.prompts(),
             [
-                "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
-                "Model for claude, - for claude's own default [opus]: ",
-                "Effort for claude, - for claude's own default [high]: ",
                 "Every Run a Merge run? [Y/n] ",
                 "Every Run may start a Base fix when the Base branch's CI is red? [Y/n] ",
                 "Every Run first fast-forwards your checkout of the Base branch? [Y/n] ",
@@ -1235,14 +1187,7 @@ effort = \"\"
     fn on_a_terminal_changed_answers_are_written_over_the_user_config() {
         let mut outside = Scripted {
             user_config: Some(DEFAULTS.to_string()),
-            ..Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, ""),
-                (PULL, "y"),
-                (NOTIFY, ""),
-            ])
+            ..Scripted::answering(&[(MERGE, ""), (PULL, "y"), (NOTIFY, "")])
         };
 
         let done = setup(&mut outside).unwrap();
@@ -1270,9 +1215,6 @@ always = false # quiet, please
         let mut outside = Scripted {
             user_config: Some(mine.to_string()),
             ..Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
                 (MERGE, "y"),
                 (BASE_FIX, ""),
                 (PULL, ""),
@@ -1336,13 +1278,7 @@ always = false # quiet, please
     fn stdin_closing_before_the_last_answer_writes_nothing() {
         for answers in [
             vec![],
-            vec![
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, "y"),
-                (BASE_FIX, ""),
-            ],
+            vec![(MERGE, "y"), (BASE_FIX, "")],
             notifications_on(&[]),
             notifications_on(&[(KEY_PROMPT, KEY)]),
         ] {
@@ -1383,15 +1319,8 @@ always = false # quiet, please
     #[test]
     fn with_merging_on_setup_asks_about_base_fixes_and_writes_the_answer() {
         for (answer, allowed) in [("y", true), ("", false), ("n", false)] {
-            let mut outside = Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, "y"),
-                (BASE_FIX, answer),
-                (PULL, ""),
-                (NOTIFY, ""),
-            ]);
+            let mut outside =
+                Scripted::answering(&[(MERGE, "y"), (BASE_FIX, answer), (PULL, ""), (NOTIFY, "")]);
 
             setup(&mut outside).unwrap();
 
@@ -1411,14 +1340,7 @@ always = false # quiet, please
     #[test]
     fn with_merging_off_setup_asks_nothing_about_base_fixes_and_writes_the_default() {
         for answer in ["", "n"] {
-            let mut outside = Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, answer),
-                (PULL, ""),
-                (NOTIFY, ""),
-            ]);
+            let mut outside = Scripted::answering(&[(MERGE, answer), (PULL, ""), (NOTIFY, "")]);
 
             setup(&mut outside).unwrap();
 
@@ -1432,15 +1354,7 @@ always = false # quiet, please
     fn the_base_fix_question_defaults_to_the_user_configs_base_fix() {
         let mut outside = Scripted {
             user_config: Some("[merge]\nalways = true\n\n[base]\nfix = true # mine\n".to_string()),
-            ..Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, ""),
-                (BASE_FIX, ""),
-                (PULL, ""),
-                (NOTIFY, ""),
-            ])
+            ..Scripted::answering(&[(MERGE, ""), (BASE_FIX, ""), (PULL, ""), (NOTIFY, "")])
         };
 
         setup(&mut outside).unwrap();
@@ -1460,14 +1374,7 @@ always = false # quiet, please
     fn turning_merging_off_writes_base_fix_at_its_default() {
         let mut outside = Scripted {
             user_config: Some("[merge]\nalways = true\n\n[base]\nfix = true  # mine\n".to_string()),
-            ..Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, "n"),
-                (PULL, ""),
-                (NOTIFY, ""),
-            ])
+            ..Scripted::answering(&[(MERGE, "n"), (PULL, ""), (NOTIFY, "")])
         };
 
         setup(&mut outside).unwrap();
@@ -1480,9 +1387,6 @@ always = false # quiet, please
     #[test]
     fn a_yes_or_no_question_is_asked_again_until_the_answer_is_one() {
         let mut outside = Scripted::answering(&[
-            (HARNESS, ""),
-            (MODEL, ""),
-            (EFFORT, ""),
             (MERGE, "maybe"),
             (MERGE, "YES"),
             (BASE_FIX, "No"),
@@ -1498,9 +1402,6 @@ always = false # quiet, please
     #[test]
     fn an_address_without_an_at_is_asked_again() {
         let mut outside = Scripted::answering(&[
-            (HARNESS, ""),
-            (MODEL, ""),
-            (EFFORT, ""),
             (MERGE, ""),
             (PULL, ""),
             (NOTIFY, "y"),
@@ -1531,14 +1432,7 @@ always = false # quiet, please
         let mut outside = Scripted {
             key: Ok(Some(Source::Credentials(CREDENTIALS.into()))),
             github_email: Ok(Some("octo@example.com")),
-            ..Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, ""),
-                (PULL, ""),
-                (NOTIFY, "n"),
-            ])
+            ..Scripted::answering(&[(MERGE, ""), (PULL, ""), (NOTIFY, "n")])
         };
 
         setup(&mut outside).unwrap();
@@ -1674,512 +1568,6 @@ always = false # quiet, please
         }
     }
 
-    #[test]
-    fn muse_setup_proposes_its_non_contributor_model_and_retries_a_refused_check() {
-        let mut outside = Scripted {
-            installed: vec![Harness::Muse],
-            muse_checks: [
-                Err("Muse refused the Model"),
-                Ok(ModelAndEffort {
-                    model: Some("muse-spark-1.3".to_string()),
-                    effort: Some("high".to_string()),
-                }),
-            ]
-            .into(),
-            ..Scripted::answering(&then_nothing_else(&[
-                (HARNESS, "muse"),
-                ("Model for muse", "bad-model"),
-                ("Effort for muse", "low"),
-                ("Model for muse", ""),
-                ("Effort for muse", "High"),
-            ]))
-        };
-        setup(&mut outside).unwrap();
-        assert_eq!(
-            outside.prompts()[1],
-            "Model for muse, - for muse's own default [muse-spark-1.3]: "
-        );
-        assert!(outside.said().contains(&"Muse refused the Model"));
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("muse"));
-        assert_eq!(
-            config["harness"]["muse"]["model"].as_str(),
-            Some("muse-spark-1.3")
-        );
-        assert_eq!(config["harness"]["muse"]["effort"].as_str(), Some("high"));
-    }
-
-    // The Harness, Model and Effort.
-
-    #[test]
-    fn the_harness_question_lists_installed_harnesses_and_defaults_to_claude() {
-        let mut outside = Scripted::answering(&ENTER_THROUGHOUT);
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(
-            outside.prompts()[0],
-            "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: "
-        );
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-        for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
-            for key in ["model", "effort"] {
-                assert_eq!(config["harness"][harness][key].as_str(), Some(""));
-            }
-        }
-        assert!(outside.test_calls().is_empty());
-    }
-
-    #[test]
-    fn a_harness_not_installed_or_unknown_is_refused_and_asked_again() {
-        let mut outside = Scripted {
-            installed: vec![Harness::Codex],
-            ..Scripted::answering(&then_nothing_else(&[
-                (HARNESS, "claude"),
-                (HARNESS, "gemini"),
-                (HARNESS, "codex"),
-                (CODEX_MODEL, ""),
-                (CODEX_EFFORT, ""),
-            ]))
-        };
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(
-            outside.prompts()[0],
-            "Harness for every Run's sessions, codex [codex]: "
-        );
-        assert_eq!(
-            outside.said()[..2],
-            [
-                "claude is not installed: it isn't on PATH.",
-                "Choose codex."
-            ]
-        );
-        assert_eq!(
-            table(&outside)["harness"]["default"].as_str(),
-            Some("codex")
-        );
-    }
-
-    #[test]
-    fn with_no_harness_installed_the_harness_settings_are_left_as_they_are() {
-        let mut outside = Scripted {
-            installed: Vec::new(),
-            user_config: Some("[harness.claude]\nmodel = \"opus\"\n".to_string()),
-            ..Scripted::answering(&NOTHING_ELSE)
-        };
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(
-            outside.said(),
-            [
-                "No Harness is installed here, so the harness settings stay as they are; \
-                 install claude or codex or agy or grok or muse or opencode, then rerun `thirdshift setup`."
-            ]
-        );
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-        assert_eq!(config["harness"]["claude"]["model"].as_str(), Some("opus"));
-    }
-
-    #[test]
-    fn the_harness_default_is_the_configured_one_if_installed_else_the_first_installed() {
-        for (installed, default) in [
-            (vec![Harness::Claude, Harness::Codex], "codex"),
-            (vec![Harness::Claude], "claude"),
-        ] {
-            let mut outside = Scripted {
-                installed,
-                user_config: Some("[harness]\ndefault = \"codex\"\n".to_string()),
-                ..Scripted::answering(&[(HARNESS, "")])
-            };
-
-            setup(&mut outside).unwrap_err();
-
-            assert!(
-                outside.prompts()[0].ends_with(&format!(" [{default}]: ")),
-                "{:?}",
-                outside.prompts()
-            );
-        }
-    }
-
-    #[test]
-    fn agy_setup_checks_names_without_a_turn_and_lists_only_installed_harnesses() {
-        let mut outside = Scripted {
-            installed: vec![Harness::Agy],
-            ..Scripted::answering(&then_nothing_else(&[
-                (HARNESS, ""),
-                ("Model for agy", "gemini-99"),
-                ("Model for agy", "Gemini-3.8-Flash"),
-                ("Effort for agy", "Max"),
-                ("Effort for agy", "Medium"),
-            ]))
-        };
-        setup(&mut outside).unwrap();
-        assert_eq!(
-            outside.prompts()[0],
-            "Harness for every Run's sessions, agy [agy]: "
-        );
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("agy"));
-        assert_eq!(
-            config["harness"]["agy"]["model"].as_str(),
-            Some("gemini-3.8-flash")
-        );
-        assert_eq!(config["harness"]["agy"]["effort"].as_str(), Some("medium"));
-        assert!(
-            outside
-                .said()
-                .iter()
-                .any(|line| line.contains("the Model gemini-99 is not in"))
-        );
-        assert!(
-            outside
-                .said()
-                .iter()
-                .any(|line| line.contains("the Effort Max is not one"))
-        );
-        assert!(outside.test_calls().is_empty());
-    }
-
-    #[test]
-    fn an_unreadable_agy_catalog_keeps_existing_harness_settings() {
-        let mut outside = Scripted {
-            installed: vec![Harness::Agy],
-            agy_catalog: Err("not signed in"),
-            user_config: Some(
-                "[harness]\ndefault = \"agy\"\n[harness.agy]\nmodel = \"gemini-3.8-flash-high\"\n"
-                    .to_string(),
-            ),
-            ..Scripted::answering(&then_nothing_else(&[(HARNESS, "")]))
-        };
-        setup(&mut outside).unwrap();
-        assert_eq!(
-            table(&outside)["harness"]["agy"]["model"].as_str(),
-            Some("gemini-3.8-flash-high")
-        );
-        assert!(outside.said()[0].contains("not signed in"));
-        assert!(outside.said()[0].contains("once agy models works"));
-    }
-
-    #[test]
-    fn claudes_model_and_effort_are_written_after_a_test_call_with_them() {
-        let mut outside = Scripted::answering(&then_nothing_else(&[
-            (HARNESS, ""),
-            (MODEL, "claude-opus-5-5"),
-            (EFFORT, "high"),
-        ]));
-
-        setup(&mut outside).unwrap();
-
-        let config = table(&outside);
-        assert_eq!(
-            config["harness"]["claude"]["model"].as_str(),
-            Some("claude-opus-5-5")
-        );
-        assert_eq!(config["harness"]["claude"]["effort"].as_str(), Some("high"));
-        assert_eq!(config["harness"]["codex"]["model"].as_str(), Some(""));
-        let text = outside.user_config.clone().unwrap();
-        assert!(
-            text.contains("model = \"claude-opus-5-5\" # the Model Claude Code's sessions run on"),
-            "{text}"
-        );
-        assert_eq!(
-            outside.test_calls(),
-            [&model_and_effort(Some("claude-opus-5-5"), Some("high"))]
-        );
-    }
-
-    #[test]
-    fn the_model_and_effort_default_to_the_current_ones_and_a_dash_clears_one() {
-        let mut outside = Scripted {
-            user_config: Some(
-                "[harness.claude]\nmodel = \"opus\"   # mine\neffort = \"high\"\n\n\
-                 [harness.codex]\nmodel = \"gpt-6.1-sol\"\n"
-                    .to_string(),
-            ),
-            ..Scripted::answering(&then_nothing_else(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, "-"),
-            ]))
-        };
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(
-            outside.prompts()[1..3],
-            [
-                "Model for claude, - for claude's own default [opus]: ",
-                "Effort for claude, - for claude's own default [high]: ",
-            ]
-        );
-        let text = outside.user_config.clone().unwrap();
-        assert!(text.contains("model = \"opus\"   # mine\n"), "{text}");
-        let config = table(&outside);
-        assert_eq!(config["harness"]["claude"]["effort"].as_str(), Some(""));
-        assert_eq!(
-            config["harness"]["codex"]["model"].as_str(),
-            Some("gpt-6.1-sol")
-        );
-        assert_eq!(
-            outside.test_calls(),
-            [&model_and_effort(Some("opus"), None)]
-        );
-    }
-
-    #[test]
-    fn a_model_claude_refuses_is_asked_again_with_claudes_error() {
-        let refusal = "claude refused a test call on the Model Opus 5.5: There's an issue with \
-                       the selected model (Opus 5.5).";
-        let mut outside = Scripted {
-            test_calls: [Some(refusal)].into(),
-            ..Scripted::answering(&then_nothing_else(&[
-                (HARNESS, ""),
-                (MODEL, "Opus 5.5"),
-                (EFFORT, ""),
-                (MODEL, "opus"),
-                (EFFORT, ""),
-            ]))
-        };
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(outside.said(), [refusal]);
-        assert_eq!(
-            table(&outside)["harness"]["claude"]["model"].as_str(),
-            Some("opus")
-        );
-        assert_eq!(
-            outside.test_calls(),
-            [
-                &model_and_effort(Some("Opus 5.5"), None),
-                &model_and_effort(Some("opus"), None)
-            ]
-        );
-    }
-
-    #[test]
-    fn setup_offers_grok_when_it_is_the_only_installed_harness_and_checks_its_model_and_effort() {
-        let mut outside = Scripted {
-            installed: vec![Harness::Grok],
-            ..Scripted::answering(&then_nothing_else(&[
-                (HARNESS, ""),
-                ("Model for grok", "bogus"),
-                ("Model for grok", "GROK-4.5"),
-                ("Effort for grok", "xhigh"),
-                ("Effort for grok", "High"),
-            ]))
-        };
-
-        setup(&mut outside).unwrap();
-
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("grok"));
-        assert_eq!(
-            config["harness"]["grok"]["model"].as_str(),
-            Some("grok-4.5")
-        );
-        assert_eq!(config["harness"]["grok"]["effort"].as_str(), Some("high"));
-        let said = outside.said().join("\n");
-        assert!(
-            said.contains("choose one of grok-4.7, grok-4.7-build-fast, grok-4.6, grok-4.5"),
-            "{said}"
-        );
-        assert!(said.contains("choose one of high, medium, low"), "{said}");
-        assert!(outside.test_calls().is_empty());
-    }
-
-    #[test]
-    fn when_groks_catalog_cannot_be_read_setup_preserves_the_harness_settings() {
-        let mut outside = Scripted {
-            grok_catalog: Err("catalog unavailable"),
-            user_config: Some("[harness]\ndefault = \"codex\"\n[harness.grok]\nmodel = \"grok-4.5\"\neffort = \"medium\"\n".to_string()),
-            ..Scripted::answering(&then_nothing_else(&[(HARNESS, "grok")]))
-        };
-        setup(&mut outside).unwrap();
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
-        assert_eq!(
-            config["harness"]["grok"]["model"].as_str(),
-            Some("grok-4.5")
-        );
-        assert_eq!(config["harness"]["grok"]["effort"].as_str(), Some("medium"));
-        assert!(outside.said().join("\n").contains("once grok models works"));
-    }
-
-    #[test]
-    fn codex_is_offered_with_its_models_and_the_chosen_models_efforts() {
-        let mut outside = Scripted::answering(&then_nothing_else(&[
-            (HARNESS, "codex"),
-            (CODEX_MODEL, "gpt-5.5"),
-            (CODEX_EFFORT, "high"),
-        ]));
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(
-            outside.said(),
-            [
-                "Codex's Models: gpt-6.1-sol (GPT-6.1-Sol), gpt-6-luna (GPT-6-Luna), gpt-5.5 \
-                 (GPT-5.5)",
-                "Efforts gpt-5.5 supports: low, medium, high, xhigh",
-            ]
-        );
-        assert_eq!(
-            outside.prompts()[1..3],
-            [
-                "Model for codex [codex's own default]: ",
-                "Effort for codex [codex's own default]: ",
-            ]
-        );
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
-        assert_eq!(
-            config["harness"]["codex"]["model"].as_str(),
-            Some("gpt-5.5")
-        );
-        assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("high"));
-        assert_eq!(config["harness"]["claude"]["model"].as_str(), Some(""));
-        assert!(outside.test_calls().is_empty());
-    }
-
-    #[test]
-    fn with_no_codex_model_the_efforts_any_model_supports_are_listed() {
-        let mut outside = Scripted {
-            installed: vec![Harness::Codex],
-            ..Scripted::answering(&then_nothing_else(&[
-                (HARNESS, ""),
-                (CODEX_MODEL, ""),
-                (CODEX_EFFORT, ""),
-            ]))
-        };
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(
-            outside.said()[1],
-            "Efforts Codex's Models support: low, medium, high, xhigh, max, ultra"
-        );
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
-        assert_eq!(config["harness"]["codex"]["model"].as_str(), Some(""));
-        assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some(""));
-    }
-
-    #[test]
-    fn a_codex_display_name_and_capitalised_effort_are_written_as_codex_names_them() {
-        let mut outside = Scripted::answering(&then_nothing_else(&[
-            (HARNESS, "codex"),
-            (CODEX_MODEL, "GPT-6.1-Sol"),
-            (CODEX_EFFORT, "Max"),
-        ]));
-
-        setup(&mut outside).unwrap();
-
-        let config = table(&outside);
-        assert_eq!(
-            config["harness"]["codex"]["model"].as_str(),
-            Some("gpt-6.1-sol")
-        );
-        assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("max"));
-    }
-
-    #[test]
-    fn an_unknown_codex_model_or_unsupported_effort_is_asked_again_with_the_choices() {
-        let mut outside = Scripted::answering(&then_nothing_else(&[
-            (HARNESS, "codex"),
-            (CODEX_MODEL, "gpt-7"),
-            (CODEX_MODEL, "GPT-5.5"),
-            (CODEX_EFFORT, "max"),
-            (CODEX_EFFORT, "XHigh"),
-        ]));
-
-        setup(&mut outside).unwrap();
-
-        let said = outside.said();
-        for refusal in [
-            "the Model gpt-7 is not in Codex's catalog: choose one of gpt-6.1-sol, gpt-6-luna, \
-             gpt-5.5",
-            "the Effort max is not one the Codex Model gpt-5.5 supports: choose one of low, \
-             medium, high, xhigh",
-        ] {
-            assert!(said.contains(&refusal), "{said:#?}");
-        }
-        let config = table(&outside);
-        assert_eq!(
-            config["harness"]["codex"]["model"].as_str(),
-            Some("gpt-5.5")
-        );
-        assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("xhigh"));
-    }
-
-    #[test]
-    fn the_codex_model_and_effort_default_to_the_current_ones_as_codex_names_them() {
-        let mut outside = Scripted {
-            user_config: Some(
-                "[harness.codex]\nmodel = \"GPT-6-Luna\"\neffort = \"High\"\n".to_string(),
-            ),
-            ..Scripted::answering(&then_nothing_else(&[
-                (HARNESS, "codex"),
-                (CODEX_MODEL, ""),
-                (CODEX_EFFORT, ""),
-            ]))
-        };
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(
-            outside.prompts()[1..3],
-            [
-                "Model for codex, - for codex's own default [GPT-6-Luna]: ",
-                "Effort for codex, - for codex's own default [High]: ",
-            ]
-        );
-        assert_eq!(
-            outside.said()[1],
-            "Efforts gpt-6-luna supports: low, medium, high, xhigh, max"
-        );
-        let config = table(&outside);
-        assert_eq!(
-            config["harness"]["codex"]["model"].as_str(),
-            Some("gpt-6-luna")
-        );
-        assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("high"));
-    }
-
-    #[test]
-    fn when_codexs_catalog_cant_be_read_the_harness_settings_are_left_as_they_are() {
-        let mut outside = Scripted {
-            catalog: Err(
-                "codex debug models failed, so Codex's Models can't be read: not logged in",
-            ),
-            user_config: Some("[harness.codex]\nmodel = \"gpt-5.5\"\n".to_string()),
-            ..Scripted::answering(&then_nothing_else(&[(HARNESS, "codex")]))
-        };
-
-        setup(&mut outside).unwrap();
-
-        assert_eq!(
-            outside.said(),
-            [
-                "codex debug models failed, so Codex's Models can't be read: not logged in\n\
-                 The harness settings stay as they are; rerun `thirdshift setup` once codex \
-                 debug models works."
-            ]
-        );
-        let config = table(&outside);
-        assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-        assert_eq!(
-            config["harness"]["codex"]["model"].as_str(),
-            Some("gpt-5.5")
-        );
-    }
-
     // The suggested address.
 
     /// The `email.to` Setup with no terminal writes, with `github` and `git`
@@ -2284,9 +1672,6 @@ always = false # quiet, please
         let mut outside = Scripted {
             github_email: Ok(Some("octo@example.com")),
             ..Scripted::answering(&[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
                 (MERGE, ""),
                 (PULL, ""),
                 (NOTIFY, "y"),
@@ -2386,9 +1771,6 @@ always = false # quiet, please
     fn accepting_asks_the_setup_questions_and_writes_the_answers() {
         let mut outside = Scripted::answering(&[
             (OFFER, ""),
-            (HARNESS, ""),
-            (MODEL, ""),
-            (EFFORT, ""),
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
@@ -2408,9 +1790,6 @@ always = false # quiet, please
     fn accepting_saves_the_key_after_the_user_config_and_sends_the_test_email_last() {
         let mut outside = Scripted::answering(&[
             (OFFER, "y"),
-            (HARNESS, ""),
-            (MODEL, ""),
-            (EFFORT, ""),
             (MERGE, ""),
             (PULL, ""),
             (NOTIFY, "y"),
@@ -2505,12 +1884,9 @@ always = false # quiet, please
     fn stdin_closing_at_the_offer_or_during_the_questions_writes_nothing() {
         for answers in [
             vec![],
-            vec![(OFFER, "y"), (HARNESS, ""), (MODEL, ""), (EFFORT, "")],
+            vec![(OFFER, "y")],
             vec![
                 (OFFER, "y"),
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
                 (MERGE, ""),
                 (PULL, ""),
                 (NOTIFY, "y"),
