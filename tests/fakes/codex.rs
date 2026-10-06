@@ -56,6 +56,7 @@ fn emit(event: Json) {
 pub fn main(argv: Vec<String>) {
     match argv.first().map(String::as_str) {
         Some("debug") if argv.get(1).map(String::as_str) == Some("models") => {
+            crate::check_script();
             println!("{CATALOG}");
             crate::exit(0);
         }

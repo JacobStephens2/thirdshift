@@ -3,7 +3,7 @@
 use super::Agy;
 use crate::harness::{Adapter, ModelAndEffort, said};
 use anyhow::{Context, Result, bail};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 #[derive(Debug)]
 struct Model {
@@ -27,12 +27,9 @@ fn alias(id: &str) -> (&str, Option<&str>) {
 
 impl Catalog {
     pub fn read() -> Result<Self> {
-        let output = Command::new(Agy.name())
-            .arg("models")
-            .envs(Agy.environment().iter().copied())
-            .stdin(Stdio::null())
-            .output()
-            .context("could not run agy models to read Antigravity CLI's Models")?;
+        let output =
+            crate::harness::process::output(&Agy, Command::new(Agy.name()).arg("models"), None)
+                .context("could not run agy models to read Antigravity CLI's Models")?;
         if !output.status.success() {
             bail!(
                 "agy models failed, so Antigravity CLI's Models can't be read: {}",

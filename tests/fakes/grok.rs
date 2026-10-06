@@ -66,6 +66,7 @@ pub fn main(argv: Vec<String>) {
         .collect();
     drop(lock);
     if catalog {
+        crate::check_script();
         let home = crate::env_path("HOME");
         let cache = home.join(".grok/models_cache.json");
         fs::create_dir_all(cache.parent().unwrap()).unwrap();

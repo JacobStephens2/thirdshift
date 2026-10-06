@@ -77,6 +77,7 @@ impl Adapter for Agy {
         let catalog = match outside.agy_catalog() {
             Ok(catalog) => catalog,
             Err(error) => {
+                crate::interrupt::check()?;
                 outside.say(format!("{error:#}\nThe harness settings stay as they are; rerun `thirdshift setup` once agy models works."));
                 return Ok(None);
             }

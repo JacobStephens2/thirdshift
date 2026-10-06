@@ -7,6 +7,80 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use support::Scenario;
+use support::check::{DuringCheck, OwnedCheck};
+
+#[test]
+fn interrupting_a_live_claude_model_check_stops_before_work() {
+    assert_owned_check_stopped("claude", "opus", DuringCheck::Live, "INT");
+}
+
+#[test]
+fn interrupting_a_live_codex_catalog_stops_before_work() {
+    assert_owned_check_stopped("codex", "gpt-6.1-sol", DuringCheck::Live, "TERM");
+}
+
+#[test]
+fn interrupting_a_live_agy_catalog_stops_before_work() {
+    assert_owned_check_stopped("agy", "gemini-3.8-flash-high", DuringCheck::Live, "HUP");
+}
+
+#[test]
+fn interrupting_a_live_grok_catalog_stops_before_work() {
+    assert_owned_check_stopped("grok", "grok-4.7", DuringCheck::Live, "INT");
+}
+
+#[test]
+fn interrupting_each_migrated_check_stops_its_owned_detached_descendant() {
+    for (harness, model, signal) in [
+        ("claude", "opus", "TERM"),
+        ("codex", "gpt-6.1-sol", "HUP"),
+        ("agy", "gemini-3.8-flash-high", "INT"),
+        ("grok", "grok-4.7", "TERM"),
+    ] {
+        assert_owned_check_stopped(harness, model, DuringCheck::Detached, signal);
+    }
+}
+
+#[test]
+fn interrupting_each_migrated_check_after_cli_exit_stops_its_pipe_holder() {
+    for (harness, model, signal) in [
+        ("claude", "opus", "HUP"),
+        ("codex", "gpt-6.1-sol", "INT"),
+        ("agy", "gemini-3.8-flash-high", "TERM"),
+        ("grok", "grok-4.7", "HUP"),
+    ] {
+        assert_owned_check_stopped(harness, model, DuringCheck::AfterExit, signal);
+    }
+}
+
+fn assert_owned_check_stopped(harness: &str, model: &str, during: DuringCheck, signal: &str) {
+    let scenario = Scenario::new();
+    let check = OwnedCheck::new(&scenario, during);
+    let mut held = scenario.run_until(
+        &["harness", harness, "model", model, &scenario.issue_url(7)],
+        &check.env(),
+        "check-started",
+    );
+    let started = Instant::now();
+    held.signal(signal);
+    let result = held.finish();
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{}",
+        result.stderr
+    );
+    check.assert_stopped();
+    assert!(scenario.issue_labels(7).is_empty(), "the Claim was made");
+    assert_eq!(scenario.entries("work"), ["widgets"]);
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/commands")
+            .exists()
+    );
+}
 
 /// Clean up by the recorded pid even when the regression assertion fails.
 struct SessionCommand(libc::pid_t);

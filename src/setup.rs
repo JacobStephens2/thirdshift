@@ -12,19 +12,16 @@
 
 pub(crate) mod questions;
 
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use signal_hook::SigId;
-use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-use signal_hook::low_level;
 
 use crate::config::{self, EmailSettings, UserConfig, UserConfigDocument};
 use crate::git::Git;
 use crate::harness::{Catalog, Choice, ChosenBy, Harness, ModelAndEffort};
 use crate::resend_key::{Credentials, Source};
-use crate::{email, github, progress};
+use crate::{email, github, interrupt, progress};
 
 use questions::Answers;
 
@@ -55,8 +52,8 @@ pub fn setup() -> Result<String> {
 /// and leaves the Credentials alone. Either way the Run then loads what was
 /// written. A User config or Credentials that can't be written, or a test
 /// email that can't go, is a warning, so the Run carries on; Credentials a
-/// Run would refuse, or stdin closing before the last answer, end the command
-/// before any work, with nothing written.
+/// Run would refuse, stdin closing, or recorded interruption during questions
+/// or checks end the command before any work, with nothing written.
 pub fn offer() -> Result<()> {
     let (home, path) = config::home_and_path()?;
     run_offer(&mut OnMachine::new(&home), &home, &path)
@@ -74,6 +71,7 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
     let asking = outside.has_terminal();
     let (text, answered) = ask_if(asking, outside, document)?;
     let asked = answered.is_some();
+    interrupt::check()?;
     let mut written = match &existing {
         None => {
             write_new(outside, path, &text)?;
@@ -124,6 +122,7 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
     let accepted = questions::offer(outside, path)?;
     let document = UserConfigDocument::defaults(path, home, suggested_address(outside))?;
     let (text, answered) = ask_if(accepted, outside, document)?;
+    interrupt::check()?;
     if let Err(error) = write_new(outside, path, &text) {
         outside.step(format!("warning: {error:#}; carrying on with the defaults"));
         return Ok(());
@@ -283,19 +282,22 @@ impl Outside for OnMachine<'_> {
     }
 
     fn read(&mut self, prompt: &str) -> Result<Option<String>> {
+        interrupt::install()?;
+        interrupt::check()?;
         let mut stderr = std::io::stderr();
         let _ = write!(stderr, "{prompt}");
         let _ = stderr.flush();
-        let mut line = String::new();
-        if std::io::stdin().lock().read_line(&mut line)? == 0 {
+        let line = terminal_line()?;
+        if line.is_none() {
             let _ = writeln!(stderr);
-            return Ok(None);
         }
-        Ok(Some(line.trim().to_string()))
+        Ok(line)
     }
 
     /// With the terminal's echo off, so what is typed never shows.
     fn read_hidden(&mut self, prompt: &str) -> Result<Option<String>> {
+        interrupt::install()?;
+        interrupt::check()?;
         let echo_off = EchoOff::new()?;
         let line = self.read(prompt)?;
         drop(echo_off);
@@ -402,12 +404,65 @@ impl Outside for OnMachine<'_> {
     }
 }
 
-/// The terminal on stdin with its echo off, until this is dropped. Ctrl-C,
-/// SIGTERM or SIGHUP meanwhile turn echo back on, then end the command as
-/// they would anywhere else in Setup, so it never leaves the shell blind.
+/// Read through the descriptor without stdin read-ahead, leaving pasted later
+/// answers available to the next question. Polling lets recorded signals end
+/// ordinary and hidden input even when there is no next line.
+fn terminal_line() -> Result<Option<String>> {
+    let mut line = Vec::new();
+    loop {
+        interrupt::check()?;
+        let mut stdin = libc::pollfd {
+            fd: 0,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: stdin points to one valid pollfd; polling does not own fd 0.
+        let ready = unsafe { libc::poll(&mut stdin, 1, 100) };
+        interrupt::check()?;
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if ready == 0 {
+            continue;
+        }
+        if stdin.revents & libc::POLLNVAL != 0 {
+            return Err(std::io::Error::from_raw_os_error(libc::EBADF).into());
+        }
+        let mut byte = 0u8;
+        // SAFETY: byte is writable for the one byte requested from fd 0.
+        let read = unsafe { libc::read(0, (&mut byte as *mut u8).cast(), 1) };
+        interrupt::check()?;
+        if read < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if read == 0 {
+            if line.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        line.push(byte);
+        if byte == b'\n' {
+            break;
+        }
+    }
+    let line = String::from_utf8(line).context("terminal input is not UTF-8")?;
+    interrupt::check()?;
+    Ok(Some(line.trim().to_string()))
+}
+
+/// Own the exact saved terminal settings while echo is suppressed. Every
+/// return path, including recorded interruption, restores them by dropping.
 struct EchoOff {
     saved: libc::termios,
-    handlers: Vec<SigId>,
 }
 
 impl EchoOff {
@@ -419,22 +474,7 @@ impl EchoOff {
             return Err(std::io::Error::last_os_error())
                 .context("can't read the terminal's settings");
         }
-        let mut echo_off = EchoOff {
-            saved,
-            handlers: Vec::new(),
-        };
-        for signal in [SIGINT, SIGTERM, SIGHUP] {
-            // SAFETY: the handler only calls tcsetattr and signal-hook's
-            // emulate_default_handler, both async-signal-safe.
-            let handler = unsafe {
-                low_level::register(signal, move || {
-                    libc::tcsetattr(0, libc::TCSANOW, &saved);
-                    let _ = low_level::emulate_default_handler(signal);
-                })
-            }
-            .context("could not install the signal handler")?;
-            echo_off.handlers.push(handler);
-        }
+        let echo_off = EchoOff { saved };
         let mut hidden = saved;
         hidden.c_lflag &= !libc::ECHO;
         // SAFETY: fd 0 is open, and `hidden` is a valid termios.
@@ -450,9 +490,6 @@ impl Drop for EchoOff {
     fn drop(&mut self) {
         // SAFETY: fd 0 is open, and `saved` is the termios read from it.
         unsafe { libc::tcsetattr(0, libc::TCSANOW, &self.saved) };
-        for handler in self.handlers.drain(..) {
-            low_level::unregister(handler);
-        }
     }
 }
 

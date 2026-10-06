@@ -69,6 +69,37 @@ fn outlast_interrupts() {
     }
 }
 
+/// A finite check fixture, optionally leaving its captured pipes open after
+/// the CLI exits. Tests record every owned PID rather than finding by name.
+fn check_script() {
+    let Ok(script) = std::env::var("FAKE_CHECK_SCRIPT") else {
+        return;
+    };
+    writeln!(
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(env_path("FAKE_CHECK_PIDS"))
+            .unwrap(),
+        "{}",
+        std::process::id()
+    )
+    .unwrap();
+    let mut child = Command::new("bash")
+        .arg("-e")
+        .arg(script)
+        .env("FAKE_CHECK_CLI_PID", std::process::id().to_string())
+        .spawn()
+        .unwrap();
+    if std::env::var_os("FAKE_CHECK_EXIT_EARLY").is_some() {
+        exit(0);
+    }
+    let status = child.wait().unwrap();
+    if !status.success() {
+        exit(claude::exit_code(status));
+    }
+}
+
 /// Print `message` to stderr and exit with `code`, as the fakes fail.
 fn die(message: &str, code: i32) -> ! {
     eprintln!("{message}");

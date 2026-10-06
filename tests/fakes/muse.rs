@@ -29,6 +29,7 @@ pub fn main(argv: Vec<String>) {
         ),
     }
     if argv.last().is_some_and(|prompt| prompt == "Reply with OK.") {
+        crate::check_script();
         let path = crate::env_path("FAKE_MUSE_RECORD").with_extension("checks.json");
         crate::append_record(
             &path,

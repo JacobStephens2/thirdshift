@@ -1,6 +1,6 @@
 //! Codex's free Model and Effort catalog.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
@@ -31,12 +31,12 @@ impl Catalog {
     /// The catalog `codex debug models` prints, which costs no tokens to
     /// read.
     pub fn read() -> Result<Catalog> {
-        let output = Command::new(Codex.name())
-            .args(["debug", "models"])
-            .envs(Codex.environment().iter().copied())
-            .stdin(Stdio::null())
-            .output()
-            .context("could not run codex debug models to read Codex's Models")?;
+        let output = crate::harness::process::output(
+            &Codex,
+            Command::new(Codex.name()).args(["debug", "models"]),
+            None,
+        )
+        .context("could not run codex debug models to read Codex's Models")?;
         if !output.status.success() {
             bail!(
                 "codex debug models failed, so Codex's Models can't be read: {}",

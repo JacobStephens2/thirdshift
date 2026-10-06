@@ -55,6 +55,7 @@ impl Adapter for Codex {
         match outside.codex_catalog() {
             Ok(catalog) => ask_codex(outside, &catalog, current).map(Some),
             Err(error) => {
+                crate::interrupt::check()?;
                 outside.say(format!("{error:#}\nThe harness settings stay as they are; rerun `thirdshift setup` once codex debug models works."));
                 Ok(None)
             }

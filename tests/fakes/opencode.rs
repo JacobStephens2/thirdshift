@@ -73,6 +73,7 @@ pub fn main(argv: Vec<String>) {
             ]));
             crate::exit(1);
         }
+        crate::check_script();
         if let Ok(script) = std::env::var("FAKE_OPENCODE_CHECK_SCRIPT") {
             let status = Command::new("bash").arg("-e").arg(script).status().unwrap();
             if !status.success() {

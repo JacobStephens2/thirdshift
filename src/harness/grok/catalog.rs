@@ -1,7 +1,7 @@
 //! Grok's free model list and per-model Efforts from the cache it refreshes.
 
 use std::fs;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -23,12 +23,9 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn read() -> Result<Self> {
-        let output = Command::new(Grok.name())
-            .arg("models")
-            .envs(Grok.environment().iter().copied())
-            .stdin(Stdio::null())
-            .output()
-            .context("could not run grok models to read Grok Build's Models")?;
+        let output =
+            crate::harness::process::output(&Grok, Command::new(Grok.name()).arg("models"), None)
+                .context("could not run grok models to read Grok Build's Models")?;
         if !output.status.success() {
             bail!(
                 "grok models failed, so Grok Build's Models can't be read: {}",
