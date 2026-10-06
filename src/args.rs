@@ -307,7 +307,7 @@ fn ask_harness(harness: &mut Option<Harness>, arg: &str, name: Option<&String>) 
     }
     let Some(named) = name.and_then(|name| Harness::named(name)) else {
         let given = name.map(|name| format!(", not {name}")).unwrap_or_default();
-        bail!("{arg} must be followed by {}{given}", harness::NAMES);
+        bail!("{arg} must be followed by {}{given}", harness::names());
     };
     *harness = Some(named);
     Ok(())

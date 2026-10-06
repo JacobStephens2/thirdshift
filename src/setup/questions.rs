@@ -163,7 +163,7 @@ pub fn ask(
 /// Ask which Harness every Run's sessions run on, listing each, marked where
 /// it isn't installed, and refusing that one; then its Model and Effort,
 /// with those `current` sets for it as the defaults, checked as a Run
-/// checks them, as [`ask_claude`] and [`ask_codex`] ask them. The Harness's
+/// checks them, through the chosen adapter. The Harness's
 /// default is the `current` one if it's installed, else the first one
 /// installed, so `claude` when both are. With no
 /// Harness to choose, or Codex chosen and its catalog unreadable, the answer
@@ -192,9 +192,10 @@ fn ask_harness(
         .filter(|harness| installed.contains(harness))
         .or_else(|| installed.first().copied());
     let Some(default) = default else {
+        let names = harness::names();
         outside.say(format!(
             "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \
-             the harness settings stay as they are; install claude or codex, then rerun \
+             the harness settings stay as they are; install {names}, then rerun \
              `thirdshift setup`."
         ));
         return Ok(None);
@@ -206,90 +207,22 @@ fn ask_harness(
             Some(default.name()),
         )?;
         match Harness::named(&name) {
-            None => outside.say(format!("Choose {}.", harness::NAMES)),
+            None => outside.say(format!("Choose {}.", harness::names())),
             Some(harness) if !installed.contains(&harness) => {
                 outside.say(format!("{name} is not installed: it isn't on PATH."))
             }
             Some(harness) => break harness,
         }
     };
-    let set = current.of(harness);
-    let chosen = match harness {
-        Harness::Claude => ask_claude(outside, set)?,
-        Harness::Codex => match outside.codex_catalog() {
-            Ok(catalog) => ask_codex(outside, &catalog, set)?,
-            Err(error) => {
-                outside.say(format!(
-                    "{error:#}\nThe harness settings stay as they are; rerun `thirdshift \
-                     setup` once codex debug models works."
-                ));
-                return Ok(None);
-            }
-        },
-    };
-    Ok(Some((harness, chosen)))
-}
-
-/// Ask Claude's Model and Effort, with `current` as the defaults. A Model is
-/// checked with a test call, as a Run checks it, and on a refusal the Model
-/// and Effort are asked again.
-fn ask_claude(outside: &mut impl Outside, current: &ModelAndEffort) -> Result<ModelAndEffort> {
-    loop {
-        let chosen = ModelAndEffort {
-            model: ask_setting(outside, "Model", Harness::Claude, current.model.as_deref())?,
-            effort: ask_setting(
-                outside,
-                "Effort",
-                Harness::Claude,
-                current.effort.as_deref(),
-            )?,
-        };
-        if chosen.model.is_none() {
-            return Ok(chosen);
-        }
-        match outside.test_call(&chosen) {
-            Ok(()) => return Ok(chosen),
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    }
-}
-
-/// Ask Codex's Model, listing those in its `catalog`, then its Effort,
-/// listing those the Model chosen supports, with `current` as the defaults.
-/// Each is matched against the catalog as a Run matches it, and written as
-/// Codex names it; one the catalog doesn't have is asked again, with the
-/// valid choices.
-fn ask_codex(
-    outside: &mut impl Outside,
-    catalog: &harness::Catalog,
-    current: &ModelAndEffort,
-) -> Result<ModelAndEffort> {
-    outside.say(format!("Codex's Models: {}", catalog.listed().join(", ")));
-    let model = loop {
-        let model = ask_setting(outside, "Model", Harness::Codex, current.model.as_deref())?;
-        match catalog.settle(model.as_deref(), None) {
-            Ok(settled) => break settled.model,
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    };
-    let efforts = catalog.efforts(model.as_deref()).join(", ");
-    outside.say(match &model {
-        Some(model) => format!("Efforts {model} supports: {efforts}"),
-        None => format!("Efforts Codex's Models support: {efforts}"),
-    });
-    loop {
-        let effort = ask_setting(outside, "Effort", Harness::Codex, current.effort.as_deref())?;
-        match catalog.settle(model.as_deref(), effort.as_deref()) {
-            Ok(settled) => return Ok(settled),
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    }
+    let adapter = harness.adapter();
+    let chosen = adapter.ask_settings(outside, adapter.settings(current))?;
+    Ok(chosen.map(|chosen| (harness, chosen)))
 }
 
 /// Ask for the `setting`, the Model or the Effort, of `harness`, with
 /// `current` as the default; `-` is none, the Harness's own default.
-fn ask_setting(
-    outside: &mut impl Outside,
+pub(crate) fn ask_setting(
+    outside: &mut (impl Outside + ?Sized),
     setting: &str,
     harness: Harness,
     current: Option<&str>,
@@ -325,7 +258,11 @@ fn yes_or_no(outside: &mut impl Outside, question: &str, default: bool) -> Resul
 
 /// Ask `question` for a word, showing `default`, which nothing takes, if
 /// there is one. With no default, nothing is asked again.
-fn answer(outside: &mut impl Outside, question: &str, default: Option<&str>) -> Result<String> {
+fn answer(
+    outside: &mut (impl Outside + ?Sized),
+    question: &str,
+    default: Option<&str>,
+) -> Result<String> {
     let prompt = match default {
         Some(default) => format!("{question} [{default}]: "),
         None => format!("{question}: "),
@@ -356,7 +293,7 @@ fn ask_key(outside: &mut impl Outside, on_enter: &str) -> Result<Option<String>>
 }
 
 /// Show `prompt` and read one answer, trimmed, or end Setup if stdin closes.
-fn read(outside: &mut impl Outside, prompt: &str) -> Result<String> {
+fn read(outside: &mut (impl Outside + ?Sized), prompt: &str) -> Result<String> {
     match outside.read(prompt)? {
         Some(line) => Ok(line),
         None => bail!(ENDED),

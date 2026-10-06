@@ -11,7 +11,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::harness::{Choice, Harness};
+#[cfg(test)]
+pub(crate) use crate::harness::claude::claude_args;
+#[cfg(test)]
+pub(crate) use crate::harness::codex::{codex_args, codex_prompt};
+use crate::harness::{Adapter, Choice, Invocation};
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
@@ -88,12 +92,16 @@ impl<'a> Sessions<'a> {
         harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        if let Err(error) = skills::link_into(worktree, harness.harness) {
+        let adapter = harness.harness.adapter();
+        if let Err(error) = skills::link_into(worktree, adapter)
+            .and_then(|()| adapter.link_instruction_fallback(worktree))
+        {
             return (Err(error), None);
         }
         let on_machine = OnMachine {
             worktree: worktree.to_path_buf(),
             harness: harness.clone(),
+            adapter,
         };
         let (taken, log) = Sessions::taking(logs, Box::new(on_machine), steps);
         (taken, log.filter(|log| log.exists()))
@@ -217,6 +225,7 @@ impl Ended {
 struct OnMachine {
     worktree: PathBuf,
     harness: Choice,
+    adapter: &'static dyn Adapter,
 }
 
 impl Outside for OnMachine {
@@ -227,10 +236,9 @@ impl Outside for OnMachine {
         prompt: &str,
         log: &Path,
     ) -> Result<Ended> {
-        let harness = self.harness.harness;
-        let args = session_args(&self.harness, resume, prompt);
-        let stream = progress::for_harness(harness, &self.worktree);
-        let stream = run(kind, harness, &self.worktree, &args, log, stream)?;
+        let invocation = self.adapter.session(&self.harness, resume, prompt);
+        let stream = self.adapter.stream(&self.worktree);
+        let stream = run(kind, self.adapter, &self.worktree, invocation, log, stream)?;
         Ok(Ended {
             session_id: stream.session_id().map(String::from),
             killed: stream
@@ -259,7 +267,7 @@ fn ending_with(killed: &[&str]) -> String {
     }
 }
 
-/// Run `harness`'s CLI with `args`, as [`session_args`] gives them, in
+/// Run the adapter's CLI with its invocation in
 /// `worktree`, where it finds the Factory skills, streaming its output to
 /// `log` and condensing it through `stream` to progress lines on stderr,
 /// each labelled `kind`. Returns what the stream showed once the CLI has
@@ -268,13 +276,13 @@ fn ending_with(killed: &[&str]) -> String {
 /// and fails with `interrupted`.
 fn run(
     kind: &str,
-    harness: Harness,
+    adapter: &'static dyn Adapter,
     worktree: &Path,
-    args: &[String],
+    invocation: Invocation,
     log: &Path,
     mut stream: Box<dyn Stream>,
 ) -> Result<Box<dyn Stream>> {
-    let cli = harness.name();
+    let cli = adapter.name();
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
@@ -282,9 +290,14 @@ fn run(
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
     let mut child = Command::new(cli)
-        .args(args)
+        .args(&invocation.args)
+        .envs(adapter.environment().iter().copied())
         .current_dir(worktree)
-        .stdin(Stdio::null())
+        .stdin(if invocation.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         // Its own process group, so thirdshift decides how it is stopped and
         // can stop everything it started.
@@ -315,9 +328,17 @@ fn run(
         }
         (followed, stream)
     });
+    if let Some(input) = invocation.stdin
+        && let Some(mut stdin) = child.stdin.take()
+        && let Err(error) = stdin.write_all(input.as_bytes())
+    {
+        stop(&mut child, adapter);
+        let _ = follower.join();
+        return Err(error).with_context(|| format!("could not write the prompt to {cli}"));
+    }
     let status = loop {
         if interrupt::requested() {
-            stop(&mut child, harness);
+            stop(&mut child, adapter);
             bail!("interrupted");
         }
         if let Some(status) = child
@@ -332,6 +353,7 @@ fn run(
         .join()
         .map_err(|_| anyhow!("the session stream reader panicked"))?;
 
+    let stream = adapter.read_after_exit(worktree, stream);
     let elapsed = minutes_and_seconds(started.elapsed());
     let summary = stream
         .summary()
@@ -359,85 +381,17 @@ fn run(
     }
 }
 
-/// The arguments a session runs `harness`'s CLI with, as [`claude_args`] or
-/// [`codex_args`] give them, its prompt loading its skill with that
-/// Harness's sigil.
-fn session_args(harness: &Choice, resume: Option<&str>, prompt: &str) -> Vec<String> {
-    match harness.harness {
-        Harness::Claude => claude_args(harness, resume, prompt)
-            .into_iter()
-            .map(String::from)
-            .collect(),
-        Harness::Codex => codex_args(harness, resume, &codex_prompt(prompt)),
-    }
-}
-
-/// `prompt` as Codex takes it: a first line that loads a Factory skill,
-/// `/thirdshift-<skill>` as Claude's prompts write it, loads it as
-/// `$thirdshift-<skill>`.
-pub fn codex_prompt(prompt: &str) -> String {
-    match prompt.strip_prefix("/thirdshift-") {
-        Some(rest) => format!("$thirdshift-{rest}"),
-        None => prompt.to_string(),
-    }
-}
-
-/// The arguments every session runs `claude` with: headless in auto mode,
-/// on the Model and Effort `harness` sets, if any, streaming JSON. With
-/// `resume`, the session with that id continues. The prompt comes last.
-pub fn claude_args<'a>(
-    harness: &'a Choice,
-    resume: Option<&'a str>,
-    prompt: &'a str,
-) -> Vec<&'a str> {
-    let mut args = vec!["-p", "--permission-mode", "auto"];
-    args.extend(harness.claude_args());
-    args.extend(["--output-format", "stream-json", "--verbose"]);
-    if let Some(session_id) = resume {
-        args.extend(["--resume", session_id]);
-    }
-    args.push(prompt);
-    args
-}
-
-/// The arguments every session runs `codex` with: `exec`, streaming JSONL,
-/// with no approvals and no sandbox (ADR-0012), on the Model and Effort
-/// `harness` sets, if any, reading `CLAUDE.md` where a directory has no
-/// `AGENTS.md`. With `resume`, the session with that id continues, given
-/// every one of those again, as Codex keeps none of them. The prompt comes
-/// last.
-pub fn codex_args(harness: &Choice, resume: Option<&str>, prompt: &str) -> Vec<String> {
-    let mut args: Vec<String> = [
-        "exec",
-        "--json",
-        "--dangerously-bypass-approvals-and-sandbox",
-    ]
-    .map(String::from)
-    .to_vec();
-    args.extend(harness.codex_args());
-    args.extend(["-c".to_string(), CLAUDE_MD_FALLBACK.to_string()]);
-    if let Some(session_id) = resume {
-        args.extend(["resume".to_string(), session_id.to_string()]);
-    }
-    args.push(prompt.to_string());
-    args
-}
-
-/// The config setting that has Codex read `CLAUDE.md` where a directory has
-/// no `AGENTS.md`.
-const CLAUDE_MD_FALLBACK: &str = r#"project_doc_fallback_filenames=["CLAUDE.md"]"#;
-
 const POLL: Duration = Duration::from_millis(100);
 
 /// How long a session gets to exit after each signal that asks it to stop.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
-/// Stop `child`, a session on `harness`, by its process group: with the
-/// signals that ask `harness` to stop, in turn, each given `STOP_GRACE`,
+/// Stop `child`, a session on `adapter`, by its process group: with the
+/// signals that ask it to stop, in turn, each given `STOP_GRACE`,
 /// then SIGKILL.
-fn stop(child: &mut Child, harness: Harness) {
+fn stop(child: &mut Child, adapter: &dyn Adapter) {
     let group = -(child.id() as libc::pid_t);
-    for &signal in harness.stop_signals() {
+    for &signal in adapter.stop_signals() {
         // SAFETY: kill has no memory-safety preconditions.
         unsafe { libc::kill(group, signal) };
         let deadline = Instant::now() + STOP_GRACE;

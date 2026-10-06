@@ -4,14 +4,17 @@
 //! child Run, and recorded with what the Command did.
 
 use std::fmt;
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
-use anyhow::{Context, Result, bail};
-use serde_json::Value;
+use anyhow::{Result, bail};
 
-use crate::progress;
+mod adapter;
+pub(crate) mod claude;
+pub(crate) mod codex;
+
+pub use adapter::{Adapter, Invocation};
+pub use codex::Catalog;
 
 /// The headless agent CLI a Command's sessions run on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,33 +27,36 @@ impl Harness {
     /// The Harness named `name`, as the command line and the User config
     /// write it, if it is one.
     pub fn named(name: &str) -> Option<Harness> {
-        match name {
-            "claude" => Some(Harness::Claude),
-            "codex" => Some(Harness::Codex),
-            _ => None,
-        }
+        adapter::REGISTERED
+            .iter()
+            .find(|(_, adapter)| adapter.name() == name)
+            .map(|(harness, _)| *harness)
     }
 
     /// Its name, which is also its CLI's.
     pub fn name(self) -> &'static str {
-        match self {
-            Harness::Claude => "claude",
-            Harness::Codex => "codex",
-        }
+        self.adapter().name()
     }
 
-    /// The signals that ask a session on it to stop, in the order they are
-    /// sent: SIGTERM, after SIGINT for Codex, which stops cleanly only on
-    /// SIGINT, interrupting its turn.
-    pub fn stop_signals(self) -> &'static [libc::c_int] {
-        match self {
-            Harness::Claude => &[libc::SIGTERM],
-            Harness::Codex => &[libc::SIGINT, libc::SIGTERM],
-        }
+    /// Select the adapter once; session callers retain it for their lifetime.
+    pub fn adapter(self) -> &'static dyn Adapter {
+        adapter::REGISTERED
+            .iter()
+            .find(|(harness, _)| *harness == self)
+            .map(|(_, adapter)| *adapter)
+            .expect("every Harness has an adapter")
     }
 
-    /// Every Harness, in the order Setup lists them.
-    pub const ALL: [Harness; 2] = [Harness::Claude, Harness::Codex];
+    /// Every Harness, in the order its adapters register for Setup.
+    pub const ALL: [Harness; adapter::REGISTERED.len()] = {
+        let mut all = [adapter::REGISTERED[0].0; adapter::REGISTERED.len()];
+        let mut at = 0;
+        while at < all.len() {
+            all[at] = adapter::REGISTERED[at].0;
+            at += 1;
+        }
+        all
+    };
 
     /// Whether sessions can run on it here: its CLI is on `PATH`.
     pub fn installed(self) -> bool {
@@ -59,7 +65,13 @@ impl Harness {
 }
 
 /// The names a Harness is chosen by, for the messages that list them.
-pub const NAMES: &str = "claude or codex";
+pub fn names() -> String {
+    adapter::REGISTERED
+        .iter()
+        .map(|(_, adapter)| adapter.name())
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
 
 /// A Model and an Effort, each none where it is left to the Harness.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -83,18 +95,12 @@ pub struct Settings {
 impl Settings {
     /// The Model and Effort set for `harness`.
     pub fn of(&self, harness: Harness) -> &ModelAndEffort {
-        match harness {
-            Harness::Claude => &self.claude,
-            Harness::Codex => &self.codex,
-        }
+        harness.adapter().settings(self)
     }
 
     /// The Model and Effort set for `harness`, to set them.
     pub fn of_mut(&mut self, harness: Harness) -> &mut ModelAndEffort {
-        match harness {
-            Harness::Claude => &mut self.claude,
-            Harness::Codex => &mut self.codex,
-        }
+        harness.adapter().settings_mut(self)
     }
 }
 
@@ -170,33 +176,15 @@ impl Choice {
         format!("Built with {self}")
     }
 
-    /// The arguments that run a Claude session on its Model and Effort,
-    /// where they are set.
+    // Compatibility for the existing argument tests; production callers
+    // use the adapter's complete session invocation.
+    #[cfg(test)]
     pub fn claude_args(&self) -> Vec<&str> {
-        let mut args = Vec::new();
-        if let Some(model) = &self.model {
-            args.extend(["--model", model]);
-        }
-        if let Some(effort) = &self.effort {
-            args.extend(["--effort", effort]);
-        }
-        args
+        claude::model_args(self)
     }
-
-    /// The arguments that run a Codex session on its Model and Effort, where
-    /// they are set.
+    #[cfg(test)]
     pub fn codex_args(&self) -> Vec<String> {
-        let mut args = Vec::new();
-        if let Some(model) = &self.model {
-            args.extend(["-m".to_string(), model.clone()]);
-        }
-        if let Some(effort) = &self.effort {
-            args.extend([
-                "-c".to_string(),
-                format!("model_reasoning_effort=\"{effort}\""),
-            ]);
-        }
-        args
+        codex::model_args(self)
     }
 
     /// Check, before any work, that sessions can run on this, and settle the
@@ -207,7 +195,8 @@ impl Choice {
     /// is matched regardless of case, a Model by its slug or display name,
     /// and becomes the name Codex takes. Each failure says what to change.
     pub fn check(&mut self) -> Result<()> {
-        let cli = self.harness.name();
+        let adapter = self.harness.adapter();
+        let cli = adapter.name();
         if !on_path(cli) {
             bail!(
                 "{cli} is not on PATH, and the Harness {cli} is chosen by {}: install it, \
@@ -215,61 +204,7 @@ impl Choice {
                 self.chosen_by
             );
         }
-        match self.harness {
-            Harness::Claude => self.test_call(),
-            Harness::Codex => self.check_codex(),
-        }
-    }
-
-    /// Check that Claude takes a minimal test call on the Model, if one is
-    /// named, with the Effort, if any. A refusal says what Claude said.
-    pub fn test_call(&self) -> Result<()> {
-        let cli = self.harness.name();
-        let Some(model) = &self.model else {
-            return Ok(());
-        };
-        progress::step(format_args!(
-            "checking the Model {model} with a test call to {cli}"
-        ));
-        let mut child = Command::new(cli)
-            .arg("-p")
-            .args(self.claude_args())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("could not run {cli} to check the Model {model}"))?;
-        // Dropped once written, closing stdin, so the call can end.
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(TEST_PROMPT.as_bytes());
-        }
-        let output = child
-            .wait_with_output()
-            .with_context(|| format!("could not run {cli} to check the Model {model}"))?;
-        if output.status.success() {
-            return Ok(());
-        }
-        let effort = match &self.effort {
-            Some(effort) => format!(" with the Effort {effort}"),
-            None => String::new(),
-        };
-        bail!(
-            "{cli} refused a test call on the Model {model}{effort}: {}",
-            said(&output)
-        )
-    }
-
-    /// Settle the Model and Effort, if either is named, on Codex's names for
-    /// them, from its catalog.
-    fn check_codex(&mut self) -> Result<()> {
-        if self.model.is_none() && self.effort.is_none() {
-            return Ok(());
-        }
-        progress::step("checking the Model and Effort against codex debug models");
-        let settled = Catalog::read()?.settle(self.model.as_deref(), self.effort.as_deref())?;
-        self.model = settled.model;
-        self.effort = settled.effort;
-        Ok(())
+        adapter.check(self)
     }
 }
 
@@ -282,160 +217,6 @@ fn said(output: &Output) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-
-/// One Model in Codex's catalog.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CatalogModel {
-    /// The name Codex takes.
-    slug: String,
-    display_name: Option<String>,
-    /// The Efforts it supports.
-    efforts: Vec<String>,
-    /// Whether the catalog lists it to choose from.
-    listed: bool,
-}
-
-/// The Models Codex can run, as `codex debug models` prints them.
-#[derive(Debug)]
-pub struct Catalog {
-    models: Vec<CatalogModel>,
-}
-
-impl Catalog {
-    /// The catalog `codex debug models` prints, which costs no tokens to
-    /// read.
-    pub fn read() -> Result<Catalog> {
-        let output = Command::new("codex")
-            .args(["debug", "models"])
-            .stdin(Stdio::null())
-            .output()
-            .context("could not run codex debug models to read Codex's Models")?;
-        if !output.status.success() {
-            bail!(
-                "codex debug models failed, so Codex's Models can't be read: {}",
-                said(&output)
-            );
-        }
-        Catalog::parse(&String::from_utf8_lossy(&output.stdout))
-    }
-
-    /// The catalog `codex debug models` printed as `json`.
-    pub fn parse(json: &str) -> Result<Catalog> {
-        let parsed: Value = serde_json::from_str(json)
-            .context("codex debug models printed no JSON catalog of Models")?;
-        let models = parsed["models"]
-            .as_array()
-            .context("codex debug models printed no list of Models")?
-            .iter()
-            .filter_map(|model| {
-                Some(CatalogModel {
-                    slug: model["slug"].as_str()?.to_string(),
-                    display_name: model["display_name"].as_str().map(String::from),
-                    efforts: model["supported_reasoning_levels"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|level| level["effort"].as_str().map(String::from))
-                        .collect(),
-                    listed: model["visibility"] != "hide",
-                })
-            })
-            .collect();
-        Ok(Catalog { models })
-    }
-
-    /// The Models it lists to choose from, each as its slug and, where it
-    /// has one, its display name, as in `gpt-6.1-sol (GPT-6.1-Sol)`.
-    pub fn listed(&self) -> Vec<String> {
-        self.models
-            .iter()
-            .filter(|model| model.listed)
-            .map(|model| match &model.display_name {
-                Some(display) => format!("{} ({display})", model.slug),
-                None => model.slug.clone(),
-            })
-            .collect()
-    }
-
-    /// The Efforts the Model `slug` supports, or with no Model, those any
-    /// Model supports, each once, in the catalog's order.
-    pub fn efforts(&self, slug: Option<&str>) -> Vec<&str> {
-        let mut efforts = Vec::new();
-        let models = self
-            .models
-            .iter()
-            .filter(|model| slug.is_none_or(|slug| model.slug == slug));
-        for each in models.flat_map(|model| &model.efforts) {
-            if !efforts.contains(&each.as_str()) {
-                efforts.push(each.as_str());
-            }
-        }
-        efforts
-    }
-
-    /// `model` and `effort` as Codex names them: the slug of the Model whose
-    /// slug or display name is `model`, regardless of case, and the Effort,
-    /// of those that Model supports, or with no Model of those any Model
-    /// supports, that is `effort`, regardless of case. Fails naming the
-    /// valid choices for a Model or Effort the catalog doesn't have.
-    pub fn settle(&self, model: Option<&str>, effort: Option<&str>) -> Result<ModelAndEffort> {
-        let found = match model {
-            Some(model) => Some(self.model(model)?),
-            None => None,
-        };
-        let Some(effort) = effort else {
-            return Ok(ModelAndEffort {
-                model: found.map(|found| found.slug.clone()),
-                effort: None,
-            });
-        };
-        let efforts = self.efforts(found.map(|found| found.slug.as_str()));
-        let Some(settled) = efforts
-            .iter()
-            .find(|supported| supported.eq_ignore_ascii_case(effort))
-        else {
-            let of = match found {
-                Some(found) => format!("the Codex Model {}", found.slug),
-                None => "any Codex Model".to_string(),
-            };
-            bail!(
-                "the Effort {effort} is not one {of} supports: choose one of {}",
-                efforts.join(", ")
-            );
-        };
-        Ok(ModelAndEffort {
-            model: found.map(|found| found.slug.clone()),
-            effort: Some(settled.to_string()),
-        })
-    }
-
-    /// The Model whose slug or display name is `name`, regardless of case.
-    fn model(&self, name: &str) -> Result<&CatalogModel> {
-        let named = |candidate: &&CatalogModel| {
-            candidate.slug.eq_ignore_ascii_case(name)
-                || candidate
-                    .display_name
-                    .as_deref()
-                    .is_some_and(|display| display.eq_ignore_ascii_case(name))
-        };
-        if let Some(found) = self.models.iter().find(named) {
-            return Ok(found);
-        }
-        let listed: Vec<&str> = self
-            .models
-            .iter()
-            .filter(|model| model.listed)
-            .map(|model| model.slug.as_str())
-            .collect();
-        bail!(
-            "the Model {name} is not in Codex's catalog: choose one of {}",
-            listed.join(", ")
-        )
-    }
-}
-
-/// What the test call that checks a Model asks.
-const TEST_PROMPT: &str = "Reply with OK.";
 
 impl fmt::Display for Choice {
     /// `<harness> · <model> · <effort>`, as in `claude · claude-opus-5-5 ·

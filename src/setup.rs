@@ -10,7 +10,7 @@
 //! the Harnesses' CLIs, `gh`, `git`, Resend and the files under the home
 //! folder; `Scripted`, in tests, from a script, recording each call.
 
-mod questions;
+pub(crate) mod questions;
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
@@ -351,7 +351,7 @@ fn set_email_to(document: &mut DocumentMut, to: &str) {
 /// What Setup does outside itself: the terminal it asks on, the Harnesses'
 /// CLIs, the Credentials, the lookups behind the suggested address, the User
 /// config file, the test email, and where its progress lines go.
-trait Outside {
+pub(crate) trait Outside {
     /// Whether there is someone to ask: stdin and stderr are both terminals.
     fn has_terminal(&mut self) -> bool;
     /// Show `prompt` and read one answer, trimmed, or `None` if stdin closed.
@@ -447,13 +447,12 @@ impl Outside for OnMachine<'_> {
     }
 
     fn test_call(&mut self, chosen: &ModelAndEffort) -> Result<()> {
-        Choice {
+        crate::harness::claude::test_call(&Choice {
             harness: Harness::Claude,
             model: chosen.model.clone(),
             effort: chosen.effort.clone(),
             chosen_by: ChosenBy::UserConfig,
-        }
-        .test_call()
+        })
     }
 
     fn codex_catalog(&mut self) -> Result<Catalog> {
