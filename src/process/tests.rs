@@ -19,9 +19,11 @@ fn captured_completion_preserves_both_byte_streams_and_nonzero_status() {
     let result = output(
         &mut shell("printf '\\377out\\000\\n'; printf '\\376err\\000\\n' >&2; exit 7"),
         None,
-        "fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control {
+            name: "fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
     )
     .unwrap();
 
@@ -35,9 +37,11 @@ fn streamed_completion_preserves_raw_bytes_and_nonzero_status_in_consumer_state(
     let consumed = streaming(
         &mut shell("printf 'unknown\\n\\377malformed\\n'; exit 9"),
         None,
-        "fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control {
+            name: "fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
         (Vec::new(), "initial"),
         |pipe, state| {
             state.0 = read(pipe)?;
@@ -64,9 +68,11 @@ fn captured_prompt_is_null_when_absent_and_written_once_then_closed_when_present
         let result = output(
             &mut shell("if [ /dev/fd/0 -ef /dev/null ]; then printf null; fi; cat; printf closed"),
             input.map(str::as_bytes),
-            "fixture",
-            Interruption::Ordinary,
-            &stop_fixture,
+            Control {
+                name: "fixture",
+                interruption: Interruption::Ordinary,
+                stop: &stop_fixture,
+            },
         )
         .unwrap();
         assert!(result.status.success());
@@ -125,9 +131,11 @@ fn broken_prompt_stops_and_reaps_the_child_with_the_original_stdin_error() {
     let result = output(
         &mut child.command("echo $$ > \"$PID_FILE\"; exec 0<&-; exec sleep 5"),
         Some("p".repeat(1024 * 1024).as_bytes()),
-        "fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control {
+            name: "fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
     );
 
     let error = result.unwrap_err();
@@ -169,9 +177,11 @@ fn consumer_log_failure_cleans_up_even_with_a_blocked_prompt_writer() {
     let result = streaming(
         &mut command,
         Some("p".repeat(1024 * 1024).as_bytes()),
-        "fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control {
+            name: "fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
         b"initial".to_vec(),
         |mut pipe, state| {
             let mut bytes = [0; 5];
@@ -200,9 +210,11 @@ fn prompt_failure_retains_state_and_precedes_a_consumer_failure_during_cleanup()
     let result = streaming(
         &mut child.command("echo $$ > \"$PID_FILE\"; printf ready; exec 0<&-; exec sleep 5"),
         Some("p".repeat(1024 * 1024).as_bytes()),
-        "fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control {
+            name: "fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
         b"initial".to_vec(),
         |mut pipe, state| {
             pipe.read_to_end(state)?;
@@ -228,9 +240,11 @@ fn consumer_panic_stops_and_reaps_the_child_and_reports_its_cause() {
     let result = streaming::<()>(
         &mut child.command("echo $$ > \"$PID_FILE\"; printf ready; exec sleep 5"),
         None,
-        "fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control {
+            name: "fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
         (),
         |mut pipe, _state| {
             pipe.read_exact(&mut [0; 5])?;
@@ -271,9 +285,11 @@ fn eof_does_not_finish_either_operation_before_the_child_exits() {
             output(
                 &mut command,
                 None,
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
             )
             .unwrap()
             .status
@@ -281,9 +297,11 @@ fn eof_does_not_finish_either_operation_before_the_child_exits() {
             streaming(
                 &mut command,
                 None,
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
                 Vec::new(),
                 |pipe, state| {
                     *state = read(pipe)?;
@@ -307,9 +325,11 @@ fn both_operations_wait_for_output_held_after_child_exit() {
             let result = output(
                 &mut command,
                 None,
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
             )
             .unwrap();
             (result.status, result.stdout)
@@ -317,9 +337,11 @@ fn both_operations_wait_for_output_held_after_child_exit() {
             let result = streaming(
                 &mut command,
                 None,
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
                 Vec::new(),
                 |pipe, state| {
                     *state = read(pipe)?;
@@ -344,9 +366,11 @@ fn normal_completion_leaves_background_work_without_owned_io_running() {
             output(
                 &mut command,
                 None,
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
             )
             .unwrap()
             .status
@@ -354,9 +378,11 @@ fn normal_completion_leaves_background_work_without_owned_io_running() {
             streaming(
                 &mut command,
                 None,
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
                 (),
                 |pipe, _state| {
                     read(pipe)?;
@@ -381,9 +407,11 @@ fn captured_completion_waits_for_stderr_after_stdout_and_child_exit() {
     let result = output(
         &mut shell("(exec 1>&-; sleep 0.3; printf late-diagnostic >&2) & exit 7"),
         None,
-        "fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control {
+            name: "fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
     )
     .unwrap();
 
@@ -407,18 +435,22 @@ fn assert_unread_prompt_interruptible(test_name: &str, captured: bool) {
             output(
                 &mut command,
                 Some(prompt.as_bytes()),
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
             )
             .map(|_| ())
         } else {
             streaming(
                 &mut command,
                 Some(prompt.as_bytes()),
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
                 Vec::new(),
                 |pipe, state| {
                     *state = read(pipe)?;
@@ -479,9 +511,11 @@ fn completion_ignores_recorded_signals_without_permitting_ordinary_work() {
         let result = output(
             &mut shell("cat; printf diagnostic >&2; exit 7"),
             Some(b"\xffonce\0"),
-            "fixture",
-            Interruption::Completion,
-            &stop_fixture,
+            Control {
+                name: "fixture",
+                interruption: Interruption::Completion,
+                stop: &stop_fixture,
+            },
         )
         .unwrap();
         assert_eq!(result.status.code(), Some(7));
@@ -492,9 +526,11 @@ fn completion_ignores_recorded_signals_without_permitting_ordinary_work() {
         let streamed = streaming(
             &mut shell("printf retained; exec 0<&-; exec sleep 0.2"),
             Some(&vec![b'p'; 1024 * 1024]),
-            "fixture",
-            Interruption::Completion,
-            &stop_fixture,
+            Control {
+                name: "fixture",
+                interruption: Interruption::Completion,
+                stop: &stop_fixture,
+            },
             Vec::new(),
             |mut pipe, state| {
                 pipe.read_to_end(state)?;
@@ -515,9 +551,11 @@ fn completion_ignores_recorded_signals_without_permitting_ordinary_work() {
         let panicked = streaming(
             &mut shell("printf ready; exec sleep 0.2"),
             None,
-            "fixture",
-            Interruption::Completion,
-            &stop_fixture,
+            Control {
+                name: "fixture",
+                interruption: Interruption::Completion,
+                stop: &stop_fixture,
+            },
             (),
             |mut pipe, _| {
                 pipe.read_exact(&mut [0; 5])?;
@@ -536,9 +574,11 @@ fn completion_ignores_recorded_signals_without_permitting_ordinary_work() {
         let result = output(
             &mut refused.command("echo $$ > \"$PID_FILE\""),
             None,
-            "fixture",
-            Interruption::Ordinary,
-            &stop_fixture,
+            Control {
+                name: "fixture",
+                interruption: Interruption::Ordinary,
+                stop: &stop_fixture,
+            },
         );
         assert_eq!(result.unwrap_err().to_string(), "interrupted");
         assert!(!refused.0.path().join("pid").exists());
@@ -571,9 +611,11 @@ fn representative_short_captures() {
             let result = output(
                 &mut command,
                 None,
-                executable,
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: executable,
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
             )
             .unwrap();
             assert!(result.status.success());
@@ -603,9 +645,11 @@ fn startup_failure_returns_no_state_even_when_the_consumer_has_returned() {
     let result = streaming(
         &mut command,
         Some(b"prompt"),
-        "fixture",
-        Interruption::Ordinary,
-        &stop,
+        Control {
+            name: "fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop,
+        },
         Vec::new(),
         move |mut pipe, state| {
             let mut bytes = [0; 5];
@@ -652,9 +696,11 @@ fn active_ordinary_cancellation_does_not_cancel_concurrent_completion() {
                 output(
                     &mut completion,
                     None,
-                    "completion fixture",
-                    Interruption::Completion,
-                    &stop_fixture,
+                    Control {
+                        name: "completion fixture",
+                        interruption: Interruption::Completion,
+                        stop: &stop_fixture,
+                    },
                 )
             });
             let mut ordinary = owned.command("while ! test -f \"$READY\"; do sleep 0.01; done; echo $$ > \"$PID_FILE\"; kill -\"$SIGNAL\" \"$SUPERVISOR\"; exec sleep 5");
@@ -666,9 +712,11 @@ fn active_ordinary_cancellation_does_not_cancel_concurrent_completion() {
             let result = output(
                 &mut ordinary,
                 Some(&vec![b'p'; 1024 * 1024]),
-                "ordinary fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "ordinary fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
             );
             // Join this exact concurrent operation before any assertion can unwind.
             let completed = finishing.join().unwrap().unwrap();
@@ -695,7 +743,15 @@ fn interruption_after_cli_exit_stops_ordinary_pipe_holders_but_completion_drains
                 command
                     .env("SIGNAL", signal.to_string())
                     .env("SUPERVISOR", std::process::id().to_string());
-                let result = output(&mut command, None, "fixture", policy, &stop_fixture);
+                let result = output(
+                    &mut command,
+                    None,
+                    Control {
+                        name: "fixture",
+                        interruption: policy,
+                        stop: &stop_fixture,
+                    },
+                );
                 if matches!(policy, Interruption::Completion) {
                     let result = result.unwrap();
                     assert_eq!(result.status.code(), Some(7));
@@ -724,9 +780,11 @@ fn active_ordinary_cancellation_stops_output_held_after_cli_exit() {
             let result = output(
                 &mut command,
                 None,
-                "fixture",
-                Interruption::Ordinary,
-                &stop_fixture,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
             );
             assert_eq!(result.unwrap_err().to_string(), "interrupted");
             assert!(started.elapsed() < Duration::from_secs(2));
@@ -740,9 +798,7 @@ fn captured_execution_drains_full_pipes_concurrently_with_binary_stdin() {
     let result = output(
         &mut shell("head -c 262144 /dev/zero & head -c 262144 /dev/zero >&2 & cat >/dev/null; wait; printf drained"),
         Some(&vec![0xff; 262144]),
-        "fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control { name: "fixture", interruption: Interruption::Ordinary, stop: &stop_fixture },
     ).unwrap();
     assert!(result.status.success());
     let mut stdout = vec![0; 262144];
@@ -780,9 +836,11 @@ fn captured_setup_and_worker_faults_stop_reap_and_join_before_return() {
             output(
                 &mut command,
                 Some(b"prompt"),
-                "fixture",
-                Interruption::Ordinary,
-                &stop,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop,
+                },
             )
         }));
         assert!(
@@ -807,9 +865,11 @@ fn interruption_during_cleanup_suppresses_retained_state_and_transport_failure()
                 &mut owned
                     .command("echo $$ > \"$PID_FILE\"; printf ready; exec 0<&-; exec sleep 5"),
                 Some(&vec![b'p'; 1024 * 1024]),
-                "fixture",
-                Interruption::Ordinary,
-                &stop,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop,
+                },
                 Vec::new(),
                 |mut pipe, state| {
                     pipe.read_to_end(state)?;
@@ -827,9 +887,11 @@ fn spawn_failure_returns_no_streamed_state_and_names_the_command() {
     let result = streaming(
         &mut Command::new("/thirdshift-no-such-command-fixture"),
         None,
-        "missing fixture",
-        Interruption::Ordinary,
-        &stop_fixture,
+        Control {
+            name: "missing fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
         "initial",
         |_, _| panic!("consumer must not run after spawn failure"),
     );

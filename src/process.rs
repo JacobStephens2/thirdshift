@@ -43,24 +43,26 @@ impl Interruption {
     }
 }
 
+/// Caller-supplied diagnostics and interruption behavior for one execution.
+/// This immutable value owns no child or worker and grants no other execution
+/// permission to ignore the Command's recorded interruption.
+#[derive(Clone, Copy)]
+pub(crate) struct Control<'a> {
+    pub name: &'a str,
+    pub interruption: Interruption,
+    pub stop: &'a dyn Fn(&mut Child),
+}
+
 /// Capture both output pipes without interpreting the child's exit status.
 pub(crate) fn output(
     command: &mut Command,
     input: Option<&[u8]>,
-    name: &str,
-    interruption: Interruption,
-    stop: &dyn Fn(&mut Child),
+    control: Control<'_>,
 ) -> Result<Output> {
-    let cli = name.to_owned();
-    let (execution, _) = execute(
-        command,
-        input,
-        name,
-        interruption,
-        stop,
-        true,
-        move |pipe| read(pipe).with_context(|| format!("could not read {cli}'s stdout")),
-    );
+    let cli = control.name.to_owned();
+    let (execution, _) = execute(command, input, control, true, move |pipe| {
+        read(pipe).with_context(|| format!("could not read {cli}'s stdout"))
+    });
     let (status, stdout, stderr) = execution?;
     Ok(Output {
         status,
@@ -79,35 +81,25 @@ pub(crate) struct Streamed<T> {
 /// Consume stdout concurrently with prompt I/O, inheriting stderr. Preserve
 /// state after any normal consumer return, even when execution fails. Return
 /// only after completion or whole-tree cleanup and every worker is joined.
-/// A consumer panic or failure before it starts returns no state. Recorded
+/// A consumer panic or any startup failure returns no state. Recorded ordinary
 /// interruption suppresses recovery even after a normal consumer return.
 pub(crate) fn streaming<T: Send + 'static>(
     command: &mut Command,
     input: Option<&[u8]>,
-    name: &str,
-    interruption: Interruption,
-    stop: &dyn Fn(&mut Child),
+    control: Control<'_>,
     mut state: T,
     consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
 ) -> Result<Streamed<T>> {
     // One send fits without waiting for the caller, which must first finish
     // supervising and joining all workers, including on transport failure.
     let (completed, recovered) = mpsc::sync_channel(1);
-    let (execution, started) = execute(
-        command,
-        input,
-        name,
-        interruption,
-        stop,
-        false,
-        move |pipe| {
-            let result = consume(pipe, &mut state);
-            let _ = completed.send(state);
-            result
-        },
-    );
+    let (execution, started) = execute(command, input, control, false, move |pipe| {
+        let result = consume(pipe, &mut state);
+        let _ = completed.send(state);
+        result
+    });
     let execution = execution.map(|(status, (), _)| status);
-    interruption.check()?;
+    control.interruption.check()?;
     if !started {
         return Err(execution.expect_err("startup failure cannot execute successfully"));
     }
@@ -126,12 +118,15 @@ fn read(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
 fn execute<T: Send + 'static>(
     command: &mut Command,
     input: Option<&[u8]>,
-    name: &str,
-    interruption: Interruption,
-    stop: &dyn Fn(&mut Child),
+    control: Control<'_>,
     capture_stderr: bool,
     consume: impl FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 ) -> (Result<(ExitStatus, T, Vec<u8>)>, bool) {
+    let Control {
+        name,
+        interruption,
+        stop: _,
+    } = control;
     let mut started = false;
     let result = (|| {
         if interruption.requested() {
@@ -159,9 +154,7 @@ fn execute<T: Send + 'static>(
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {
-            name,
-            interruption,
-            stop,
+            control,
             child,
             awakened,
             stdout: None,
@@ -261,9 +254,7 @@ fn execute<T: Send + 'static>(
 }
 
 struct Execution<'a, T> {
-    name: &'a str,
-    interruption: Interruption,
-    stop: &'a dyn Fn(&mut Child),
+    control: Control<'a>,
     child: Child,
     awakened: mpsc::Receiver<()>,
     stdout: Option<Worker<T>>,
@@ -276,14 +267,14 @@ impl<T> Execution<'_, T> {
     fn wait(&mut self) -> Result<ExitStatus> {
         let mut status = None;
         loop {
-            if self.interruption.requested() {
+            if self.control.interruption.requested() {
                 bail!("interrupted");
             }
             if status.is_none() {
                 status = self
                     .child
                     .try_wait()
-                    .with_context(|| format!("could not wait for {}", self.name))?;
+                    .with_context(|| format!("could not wait for {}", self.control.name))?;
             }
             let stdin_done = self
                 .stdin
@@ -303,7 +294,7 @@ impl<T> Execution<'_, T> {
                 && stdout_done
                 && stderr_done
             {
-                if self.interruption.requested() {
+                if self.control.interruption.requested() {
                     bail!("interrupted");
                 }
                 return Ok(status);
@@ -324,7 +315,7 @@ impl<T> Execution<'_, T> {
         if self.completed {
             return;
         }
-        (self.stop)(&mut self.child);
+        (self.control.stop)(&mut self.child);
         let _ = self.child.wait();
         // Pipes may still be attached if worker startup failed.
         drop(self.child.stdin.take());

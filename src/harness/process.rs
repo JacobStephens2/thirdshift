@@ -5,7 +5,7 @@ use std::process::{ChildStdout, Command, Output};
 use anyhow::Result;
 
 use super::Adapter;
-use crate::process::{self, Interruption, Streamed};
+use crate::process::{self, Control, Interruption, Streamed};
 
 pub(super) fn output(
     adapter: &dyn Adapter,
@@ -15,9 +15,11 @@ pub(super) fn output(
     process::output(
         command.envs(adapter.environment().iter().copied()),
         input.map(str::as_bytes),
-        adapter.name(),
-        Interruption::Ordinary,
-        &|child| adapter.stop(child),
+        Control {
+            name: adapter.name(),
+            interruption: Interruption::Ordinary,
+            stop: &|child| adapter.stop(child),
+        },
     )
 }
 
@@ -31,9 +33,11 @@ pub(crate) fn streaming<T: Send + 'static>(
     process::streaming(
         command.envs(adapter.environment().iter().copied()),
         input.map(str::as_bytes),
-        adapter.name(),
-        Interruption::Ordinary,
-        &|child| adapter.stop(child),
+        Control {
+            name: adapter.name(),
+            interruption: Interruption::Ordinary,
+            stop: &|child| adapter.stop(child),
+        },
         state,
         consume,
     )
