@@ -13,7 +13,7 @@ use crate::child_run::Kind;
 use crate::claim::{self, Claim};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::FailedRun;
-use crate::github::{self, Ticket};
+use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -234,10 +234,7 @@ fn start<O: Outside>(
     let named = selection
         .pr_base(given, checked_out, |line| outside.step(line))
         .or(given);
-    let base = outside.base_branch(named)?;
-    if asks.launch_pull {
-        outside.pull(&base);
-    }
+    let base = outside.prepare_base_branch(named, asks.launch_pull)?;
 
     if outside.interrupted() {
         return Err(FailedRun {
@@ -318,11 +315,9 @@ trait Outside {
     fn select(&mut self) -> Result<Selection>;
     /// Settle the Base branch from `named`, the branch named for the Run, if
     /// any, else the branch checked out in the Launch directory: see
-    /// [`LaunchDirectory::base_branch`].
-    fn base_branch(&mut self, named: Option<&str>) -> Result<String>;
-    /// Bring the Launch directory's checkout of the Base branch `base` up to
-    /// date with origin, if it is checked out there.
-    fn pull(&mut self, base: &str);
+    /// [`LaunchDirectory::prepare_base_branch`], including its optional
+    /// checkout update when `pull` is requested.
+    fn prepare_base_branch(&mut self, named: Option<&str>, pull: bool) -> Result<String>;
     /// Whether the Run was interrupted.
     fn interrupted(&mut self) -> bool;
     /// Make the Claim on the issue.
@@ -385,7 +380,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     type Worktree = Worktree;
 
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
-        github::tickets(self.issue)
+        GitHub::new().tickets(self.issue)
     }
 
     fn started(&mut self, work: Work) {
@@ -393,15 +388,15 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn select(&mut self) -> Result<Selection> {
-        branch::select(self.directory.git(), self.issue)
+        branch::select(self.directory.git(), &GitHub::new(), self.issue)
     }
 
-    fn base_branch(&mut self, named: Option<&str>) -> Result<String> {
-        self.directory.base_branch(named)
-    }
-
-    fn pull(&mut self, base: &str) {
-        self.directory.pull(base);
+    fn prepare_base_branch(&mut self, named: Option<&str>, pull: bool) -> Result<String> {
+        let base = self.directory.prepare_base_branch(named)?;
+        if pull {
+            base.pull();
+        }
+        Ok(base.name().to_string())
     }
 
     fn interrupted(&mut self) -> bool {
@@ -443,7 +438,14 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         base: &str,
         opening: Opening,
     ) -> Result<Reached, FailedRun> {
-        self.delivery(base).deliver(worktree, opening, || Ok(()))
+        let mut pull_request = crate::pull_request::PullRequest::new(
+            self.issue,
+            worktree.branch(),
+            base,
+            GitHub::new(),
+        );
+        self.delivery(base)
+            .deliver(worktree, opening, &mut pull_request, None)
     }
 
     fn step(&mut self, line: String) {
@@ -470,10 +472,8 @@ mod tests {
         Started { spec_run: bool },
         /// Selected the Issue branch.
         Select,
-        /// Settled the Base branch from this branch named, if any.
-        BaseBranch(Option<String>),
-        /// Pulled this Base branch.
-        Pull(String),
+        /// Prepared the named Base branch with this checkout update policy.
+        PrepareBaseBranch { named: Option<String>, pull: bool },
         /// Asked whether the Run was interrupted.
         Interrupted,
         /// Made the Claim.
@@ -571,16 +571,15 @@ mod tests {
             Ok(self.script.selection.take().unwrap_or_else(fresh))
         }
 
-        fn base_branch(&mut self, named: Option<&str>) -> Result<String> {
-            self.calls.push(Call::BaseBranch(named.map(String::from)));
+        fn prepare_base_branch(&mut self, named: Option<&str>, pull: bool) -> Result<String> {
+            self.calls.push(Call::PrepareBaseBranch {
+                named: named.map(String::from),
+                pull,
+            });
             if self.script.base_fails {
                 bail!("base branch gone does not exist on origin; push it first");
             }
             Ok(named.unwrap_or(CHECKED_OUT).to_string())
-        }
-
-        fn pull(&mut self, base: &str) {
-            self.calls.push(Call::Pull(base.to_string()));
         }
 
         fn interrupted(&mut self) -> bool {
@@ -731,7 +730,10 @@ mod tests {
     }
 
     fn base_branch(named: Option<&str>) -> Call {
-        Call::BaseBranch(named.map(String::from))
+        Call::PrepareBaseBranch {
+            named: named.map(String::from),
+            pull: false,
+        }
     }
 
     fn worktree(checkout: Checkout, base: &str) -> Call {
@@ -1029,10 +1031,42 @@ mod tests {
         assert_in_turn(
             &outside.calls,
             &[
-                base_branch(Some("develop")),
-                Call::Pull("develop".to_string()),
+                Call::PrepareBaseBranch {
+                    named: Some("develop".to_string()),
+                    pull: true,
+                },
                 Call::Interrupted,
                 Call::MakeClaim,
+            ],
+        );
+    }
+
+    #[test]
+    fn a_continuing_spec_prepares_its_open_prs_base_with_pull_before_the_claim() {
+        let asks = Asks {
+            launch_pull: true,
+            ..asks()
+        };
+        let mut outside = Scripted::new(Script {
+            tickets: vec![true],
+            selection: Some(continued(Some("release"))),
+            ..Script::default()
+        });
+
+        let ended = start_by(&mut outside, &asks, StartedBy::Dispatch { base: "develop" });
+
+        assert!(ended.is_ok());
+        assert_in_turn(
+            &outside.calls,
+            &[
+                Call::PrepareBaseBranch {
+                    named: Some("release".to_string()),
+                    pull: true,
+                },
+                Call::Interrupted,
+                Call::MakeClaim,
+                worktree(Checkout::Continuation, "release"),
+                Call::SpecRun(Checkout::Continuation, 1, "release".to_string(), 1),
             ],
         );
     }
@@ -1041,7 +1075,7 @@ mod tests {
     fn without_the_pull_nothing_is_pulled() {
         let (calls, _) = run_on(Script::default());
 
-        assert!(!calls.iter().any(|call| matches!(call, Call::Pull(_))));
+        assert!(calls.contains(&base_branch(None)));
     }
 
     // The interrupt.

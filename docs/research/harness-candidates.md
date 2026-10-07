@@ -22,7 +22,7 @@ What does each candidate offer for these, and where are the gaps? [codex-headles
 **Method.**
 
 - Each CLI was run on one Ubuntu 24.04 machine where it was installed and signed in. Each run was inside a throwaway git repository with a linked worktree, using one-line prompts ("Reply with OK.") and at most six model calls per CLI.
-- Versions: `muse` 1.4.2-R4684.1, `grok` 1.0.46, `mimo` 0.1.15 and `agy` 1.2.17.
+- Versions: `muse` 1.4.2-R4684.1, `grok` 1.0.46, `mimo` 0.1.15 and `agy` 1.2.17. §6 adds `opencode` 2.0.24 and `claude` 2.1.291, and notes that agy is now 1.3.0.
 - Facts also come from `--help`, the docs bundled with each install (Grok's `~/.grok/docs/user-guide/`), the changelog (agy) and the installed package's source (mimo).
 - Each fact says how it was confirmed: **test** (a run on this machine), **help**, **docs** or **source**.
 - No user config was changed. The trust experiments used scratch config directories.
@@ -203,6 +203,52 @@ mimo run --format json -m <provider>/<model> --dangerously-skip-permissions "<pr
 | Found on cron's PATH | yes | yes | yes | **no** |
 | Needs turning off for unattended use | self-update | self-update (`GROK_DISABLE_AUTOUPDATER=1`) | self-update (`MUSE_NO_AUTO_UPDATE=1`) | scheduled prompts (`MIMOCODE_DISABLE_CRON`) |
 | Per-repository setup | none seen | one-time `grok --trust` in the main checkout | none (trust flag on every run) | none seen |
+
+## 6. Follow-up, 2026-10-06: OpenCode for MiMo-V2.6-Pro, and corrections
+
+Grilling #428 raised these questions. The answers come from test runs on the same machine, using throwaway repositories with a linked worktree.
+
+**Corrections to §1–§5.**
+
+- **agy's self-update can be turned off.** The binary reads `AGY_CLI_DISABLE_AUTO_UPDATE`. With `=true` the log says "Auto-update disabled via environment variable". **`=1` is not honoured**, and the background updater ran. That run upgraded agy on the test machine from 1.2.17 to 1.3.0, so §1 describes 1.2.17. (test; strings in the binary)
+- **Claude Code reads `AGENTS.md` when there is no `CLAUDE.md`.** In a repository whose only instruction file was an `AGENTS.md` holding a codeword, `claude -p` (2.1.291) answered with that codeword. (test)
+- **MiMo Code can get Effort on the PrimaLabs route** by overriding the model entry per run through `MIMOCODE_CONFIG_CONTENT`, e.g. `{"provider":{"primalabs-ai":{"models":{"primalabs-ai/MiMo-V2.6-Pro":{"reasoning":true}}}}}`. With it, `mimo models --verbose` lists low, medium and high. An unknown variant is still ignored without a word. MiMo Code also has `MIMOCODE_DISABLE_AUTOUPDATE`. (test, catalog only)
+
+**OpenCode 2.0.24 (`~/.opencode/bin/opencode`), MiMo-V2.6-Pro.** It reaches the model through the same PrimaLabs provider as MiMo Code, configured in `~/.config/opencode/opencode.json` as `primalabs/primalabs-ai/MiMo-V2.6-Pro`. By default each command is a client of a shared background service (`opencode serve --service`). `--standalone` starts a private server in the run's own process group instead.
+
+Working command (exit 0; committed in a linked worktree; prompt on stdin):
+
+```
+OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --standalone --format json -m 'primalabs/primalabs-ai/MiMo-V2.6-Pro#high' --auto <<< "<prompt>"
+```
+
+| Need | Finding | Confirmed by |
+|---|---|---|
+| Headless run | `opencode run`. Stdin is appended to the prompt, so the prompt goes on stdin and is stored exactly as sent. A prompt passed as an argument is stored inside literal quotes when it contains a space. Success exits 0; a bad model, a bad variant or a failed step exits 1. A run that fails still creates a session. | test; source |
+| Model | `-m <provider>/<model>`. A wrong model exits 1 after about 2.5 s with `{"type":"error","error":{"type":"provider.no-route",...}}` and no model call. **No free catalog works without the service:** `models --standalone` and `api --standalone GET /api/model` returned nothing on every try. Through the service, `opencode api GET /api/model` lists each model with its variants. | test |
+| Effort | A `#<variant>` suffix on the model. The PrimaLabs entry gets low, medium and high (`reasoningEffort`) with no config change. An unknown variant exits 1 before any turn: "Variant unavailable for …". Whether PrimaLabs honours the effort was not measured. | test |
+| Unattended | `--auto` approves every permission that is not explicitly denied. A commit in a linked worktree worked. | help; test |
+| Stream | JSONL `{type, timestamp, sessionID, part\|error}`: `step_start`, `text` (whole parts), `tool_use` (on completion), `step_finish` (tokens, cost, reason) and `error`. There is no final event, and **the last `step_finish` was missing in 4 of 7 successful runs**. `opencode session export --standalone <id>` works offline in about 1 s. It gives `info.outcome` (`succeeded`/`failed`), `info.tokens` and `info.cost` (which include the automatic title call), `info.model.variant`, and `messages[]`, where the final text is the last assistant message's last `text` part. | test; source |
+| Resume | `run -s <id>` recalled turn 1, in standalone, for sessions made both in standalone and through the service. If the id doesn't exist, `-s` creates a new session. | test; help |
+| Skills | Found in `.claude/`, `.agents/` and `.opencode/` from the working directory up, plus `~/.claude/` and `~/.agents/`. Symlinked skill directories are followed. **`run` does not expand `/name`.** The model loaded the skill by calling its `skill` tool, which shows in the stream as a `tool_use` event with `part.tool == "skill"` and `state.input.id` set to the skill's name. No flag injects a skill. | test; help |
+| Instruction files | `AGENTS.md` from the working directory up to the project root, plus `~/.config/opencode/AGENTS.md`. **It never reads `CLAUDE.md`, and never reads `~/.claude/CLAUDE.md`.** | test; source |
+| Stopping | **Through the service:** a group SIGTERM ends the client, but the turn and its shell command keep running in the service. SIGINT, or `POST /api/session/<id>/interrupt`, stops both. **Standalone:** a group SIGTERM exits 130 in 0.4 s and kills the command, and no process is left behind. | test |
+| PATH under cron | A standalone binary that only `~/.bashrc` puts on PATH. Called by its absolute path under `env -i HOME=$HOME PATH=/usr/bin:/bin`, it works in standalone, and the credential loads with no service running. | test |
+| Start-up | Standalone adds about 2–3 s. While it runs, the private server watches `/`, `/tmp`, the cwd and its ancestors, and `$HOME`, and stops every watcher on exit. | test |
+| Needs turning off | `OPENCODE_DISABLE_AUTOUPDATE=1`. A snapshot of the working tree is taken into its own git store at every step (`~/.local/share/opencode/snapshot`). | source; logs |
+
+**OpenCode compared with MiMo Code for MiMo-V2.6-Pro.** OpenCode fixes four of MiMo Code's gaps:
+
+- Its exit codes are meaningful.
+- The Model and the Effort both fail before any turn.
+- Effort works on PrimaLabs without a config change.
+- It runs from a minimal environment.
+
+What it adds instead:
+
+- It has no free catalog without the service.
+- It doesn't expand `/name`.
+- Its stream isn't reliable for usage, which `session export` covers.
 
 ## Sources
 

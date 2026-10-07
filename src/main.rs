@@ -24,10 +24,12 @@ mod notification;
 mod pass;
 mod pickup;
 mod poll;
+mod process;
 mod progress;
 mod prompt;
 #[cfg(test)]
 mod prompts_page;
+mod pull_request;
 mod ready;
 mod resend_key;
 mod run;
@@ -36,6 +38,8 @@ mod session;
 mod setup;
 mod skills;
 mod spec_run;
+#[cfg(test)]
+mod test_support;
 mod update;
 mod worktree;
 
@@ -73,7 +77,7 @@ merge, --no-merge, --email, --no-email, base-fix, --no-base-fix, parallel <n> (o
 --parallel <n>), harness <name>, model <name> and effort <level> (or --harness, --model and
 --effort) go before or after the Issue URL, in any order.
 
-harness, model and effort choose the Harness every session of the command runs on, and its
+harness (claude, codex, agy, grok, muse or opencode), model and effort choose the Harness every session runs on, and its
 Model and Effort, for each Ticket's Run and a Base fix too. For each, the command wins, then
 the User config, then the default: claude, with its own Model and Effort. A Model and Effort
 in the User config come from the chosen Harness's own section, so harness claude over a codex
@@ -89,11 +93,27 @@ default takes [harness.claude]:
 Before any work, the Harness's CLI must be on PATH. On claude, a named Model gets a minimal
 test call with its Effort, which must succeed. On codex, a named Model and Effort must be in
 codex debug models, matched regardless of case, a Model by slug or display name, and are
-passed on as Codex names them. A failure stops the command naming what to fix, before the
+passed on as Codex names them. Grok Build checks grok models and its refreshed effort cache,
+then runs grok -p <prompt> --always-approve --sandbox off --output-format streaming-messages-json with null stdin,
+GROK_DISABLE_AUTOUPDATER=1 and GROK_FOLDER_TRUST=0. Resume uses -r <session id>.
+A failure stops the command naming what to fix, before the
 Claim, the worktree and any Command log. Codex sessions run codex exec --json
 --dangerously-bypass-approvals-and-sandbox, with the skills in .agents/skills/. The Command
 log, the Activity log's start line, the pull request's body, as in Built with claude · opus ·
 high, and the Run notification each name all three.
+On agy (Antigravity CLI), agy models checks names without a turn, regardless of case;
+a bare model alias needs an Effort, and effort-suffixed model IDs are accepted. Every
+session and Resume uses -p --dangerously-skip-permissions --output-format stream-json,
+null stdin and AGY_CLI_DISABLE_AUTO_UPDATE=true; a Resume uses --conversation <id>.
+agy reads AGENTS.md and GEMINI.md, falling back through an excluded GEMINI.md link to
+root CLAUDE.md when neither exists. It does not read ~/.claude/.
+On opencode (OpenCode), the Model id comes from your providers as provider/model;
+Effort is its #variant suffix and needs a Model. A minimal standalone call checks both.
+Every session, check and Resume uses run --standalone --format json --auto with the prompt
+on stdin and OPENCODE_DISABLE_AUTOUPDATE=1; a Resume adds -s <stream session id>.
+Skills load through the skill tool. OpenCode reads AGENTS.md, never CLAUDE.md or ~/.claude/;
+thirdshift supplies an excluded AGENTS.md link to root CLAUDE.md when needed. Session export
+supplies the last assistant text, usage and outcome even when the last stream event is lost.
 
 --email sends one Run notification when the Run ends, whatever the outcome: ready for
 review, merged, failed or interrupted. --email <address> sends it to <address>; a word

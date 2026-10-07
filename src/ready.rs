@@ -10,7 +10,7 @@ use crate::base_fix;
 use crate::branch::{self, Started};
 use crate::claim;
 use crate::git::Git;
-use crate::github::{self, Candidate, ListedIssue, Shaping};
+use crate::github::{Candidate, GitHub, ListedIssue, Shaping};
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, READY_FOR_AGENT};
 use crate::progress;
@@ -29,8 +29,13 @@ pub struct ReadyIssue {
 /// issue labelled `ready-for-agent` passed over before it, with why.
 /// Nothing is changed, on GitHub or in `launch`.
 pub fn first(launch: &Git, repo: &Repo) -> Result<Option<ReadyIssue>> {
-    let candidates = github::open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
-    let reads = GitHubAndOrigin { launch };
+    let reads = GitHubAndOrigin {
+        launch,
+        github: GitHub::new(),
+    };
+    let candidates = reads
+        .github
+        .open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
     Search::new(&reads, candidates, Utc::now(), progress::step).first_ready()
 }
 
@@ -47,15 +52,16 @@ trait Reads {
 /// The reads of GitHub and of the Launch directory `launch`'s origin.
 struct GitHubAndOrigin<'a> {
     launch: &'a Git,
+    github: GitHub,
 }
 
 impl Reads for GitHubAndOrigin<'_> {
     fn candidate(&self, issue: &IssueUrl) -> Result<Candidate> {
-        github::candidate(issue, READY_FOR_AGENT)
+        self.github.candidate(issue, READY_FOR_AGENT)
     }
 
     fn started(&self, issue: &IssueUrl) -> Result<Option<Started>> {
-        branch::started(self.launch, issue)
+        branch::started(self.launch, &self.github, issue)
     }
 }
 

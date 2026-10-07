@@ -8,22 +8,25 @@
 //! skipped pass shows. Everything it prints goes through [`print`] and
 //! [`eprint`], which keep it in the Command log too.
 //!
-//! The state is process-wide, as a command is one process: the stamp, the
-//! lines held so far, the logs directory and the work started.
+//! One owned recording implementation holds the complete lifecycle. The
+//! process-wide interface serializes its operations, including emitted output.
 
 mod activity;
 mod command_log;
+mod effects;
+mod recording;
 
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 use crate::config::UserConfig;
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
-use crate::progress;
 
 use activity::Kind;
+use effects::OnMachine;
+use recording::Record;
 
 /// How a command begins.
 pub enum Begin<'a> {
@@ -59,22 +62,9 @@ pub enum Pass {
     PickupRun,
 }
 
-/// What this command has recorded so far, beyond its Command log.
-struct Record {
-    /// The User config's `logs.dir`, once [`configured`].
-    logs_dir: Option<PathBuf>,
-    /// Whether this is a child Run, which records no work.
-    child: bool,
-    /// Whether [`started`] has been called.
-    started: bool,
-}
-
-/// This command's [`Record`].
-static RECORD: Mutex<Record> = Mutex::new(Record {
-    logs_dir: None,
-    child: false,
-    started: false,
-});
+/// The production command's complete record, shared with reader threads.
+static RECORD: LazyLock<Mutex<Record<OnMachine>>> =
+    LazyLock::new(|| Mutex::new(Record::new(OnMachine)));
 
 /// Begin the command as `begin` says. A Run or a pass makes its stamp now
 /// and prints its first line, dated, as in `starting on <Issue URL>,
@@ -83,15 +73,7 @@ static RECORD: Mutex<Record> = Mutex::new(Record {
 /// shows them, so a skipped pass may print nothing. A child Run prints no
 /// such line, and takes the stamp it was given.
 pub fn begin(begin: Begin) {
-    match begin {
-        Begin::Run(issue) => command_log::begin(format_args!("starting on {}", issue.url), false),
-        Begin::ChildRun(stamp) => {
-            record().child = true;
-            command_log::begin_child(stamp);
-        }
-        Begin::ArchitectRun => command_log::begin("Architect run starting", true),
-        Begin::PickupRun => command_log::begin("Pickup run starting", true),
-    }
+    record().begin(begin);
 }
 
 /// Take `config`'s `logs.dir` as the root of the logs, and, unless its
@@ -100,10 +82,7 @@ pub fn begin(begin: Begin) {
 /// held until it starts work, ends or fails, so a skipped pass prints
 /// nothing.
 pub fn configured(config: &UserConfig) {
-    record().logs_dir = Some(config.logs_dir.clone());
-    if !config.quiet_skips {
-        command_log::show_held();
-    }
+    record().configured(config);
 }
 
 /// Record that the command starts `work`, its sessions on `harness`: keep its
@@ -114,13 +93,7 @@ pub fn configured(config: &UserConfig) {
 /// covers the Run it dispatches, and a child Run records nothing, as the
 /// command that started it does.
 pub fn started(work: Work, harness: &Choice) {
-    if !record().take_start() {
-        return;
-    }
-    let root = work.root();
-    command_log::keep(work.command_log(&root, command_log::stamp()));
-    progress::step(format_args!("sessions run on {harness}"));
-    activity::start(&root, work.kind(), work.issue(), harness);
+    record().started(work, harness);
 }
 
 /// Record that `pass` was skipped on `repo` for `reason`, unless the last
@@ -128,11 +101,7 @@ pub fn started(work: Work, harness: &Choice) {
 /// under `activity.quiet_skips`, whatever the pass prints about its skip
 /// stays held, and is dropped with the Command log it never kept.
 pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
-    let kind = match pass {
-        Pass::ArchitectRun => Kind::ArchitectRun,
-        Pass::PickupRun => Kind::PickupRun,
-    };
-    activity::skip(&root(repo), kind, reason);
+    record().skipped(pass, repo, reason);
 }
 
 /// Record how the command ended, `outcome` in short: show any lines held
@@ -140,14 +109,13 @@ pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
 /// work. A skipped pass never calls it, so that under
 /// `activity.quiet_skips` its lines stay held.
 pub fn ended(outcome: impl Display) {
-    command_log::show_held();
-    activity::end(outcome);
+    record().ended(outcome);
 }
 
 /// Print the lines held from the terminal, as before a failure, and print
 /// every line from here on.
 pub fn show_held() {
-    command_log::show_held();
+    record().show_held();
 }
 
 /// The root of `repo`'s logs: `<logs.dir>/<owner>/<repo>/`, named for the
@@ -159,33 +127,28 @@ pub fn show_held() {
 ///
 /// Before [`configured`], which is a programming error.
 pub fn root(repo: &Repo) -> PathBuf {
-    let record = record();
-    let logs_dir = record
-        .logs_dir
-        .as_deref()
-        .expect("the root of a repository's logs is asked for before the User config is loaded");
-    root_under(logs_dir, repo)
+    record().root(repo)
 }
 
 /// The command's start stamp, as in `20261003T120000-0400`, which names its
 /// Command log and its Session logs.
-pub fn stamp() -> &'static str {
-    command_log::stamp()
+pub fn stamp() -> String {
+    record().stamp()
 }
 
 /// Where the Command log is, if this command created one.
 pub fn command_log_path() -> Option<PathBuf> {
-    command_log::path()
+    record().command_log_path()
 }
 
 /// Print `line` on stderr, and keep it in the Command log.
 pub fn eprint(line: &str) {
-    command_log::eprint(line);
+    record().eprint(line);
 }
 
 /// Print `line` on stdout, and keep it in the Command log.
 pub fn print(line: &str) {
-    command_log::print(line);
+    record().print(line);
 }
 
 /// [`root`], under `logs_dir`.
@@ -193,22 +156,12 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
     logs_dir.join(&repo.owner).join(&repo.name)
 }
 
-impl Record {
-    /// Take note that work started, and say whether it is the work to
-    /// record: the first, and not in a child Run.
-    fn take_start(&mut self) -> bool {
-        let first = !self.started;
-        self.started = true;
-        first && !self.child
-    }
-}
-
 impl Work<'_> {
-    /// The root of its repository's logs.
-    fn root(self) -> PathBuf {
+    /// The repository whose work it records.
+    fn repo(self) -> Repo {
         match self {
-            Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => root(&issue.repo()),
-            Work::ArchitectRun(repo) => root(repo),
+            Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => issue.repo(),
+            Work::ArchitectRun(repo) => repo.clone(),
         }
     }
 
@@ -250,74 +203,6 @@ impl Work<'_> {
 }
 
 /// The [`Record`], locked, even if a thread panicked holding it.
-fn record() -> MutexGuard<'static, Record> {
+fn record() -> MutexGuard<'static, Record<OnMachine>> {
     RECORD.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const STAMP: &str = "20261003T120000-0400";
-
-    fn issue(number: u64) -> IssueUrl {
-        IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}")).unwrap()
-    }
-
-    #[test]
-    fn each_kind_of_works_command_log_is_in_its_commands_folder_with_the_stamp() {
-        let root = Path::new("/logs/acme/widgets");
-        let issue = issue(7);
-        let repo = issue.repo();
-        for (work, path) in [
-            (
-                Work::Run(&issue),
-                "commands/issue/7-20261003T120000-0400.log",
-            ),
-            (
-                Work::SpecRun(&issue),
-                "commands/issue/7-20261003T120000-0400.log",
-            ),
-            (
-                Work::PickupRun(&issue),
-                "commands/pickup/7-20261003T120000-0400.log",
-            ),
-            (
-                Work::ArchitectRun(&repo),
-                "commands/architect/20261003T120000-0400.log",
-            ),
-        ] {
-            assert_eq!(work.command_log(root, STAMP), root.join(path));
-        }
-    }
-
-    #[test]
-    fn the_root_of_a_repositorys_logs_is_named_for_its_owner_and_name() {
-        assert_eq!(
-            root_under(Path::new("/logs"), &issue(7).repo()),
-            Path::new("/logs/acme/widgets")
-        );
-    }
-
-    #[test]
-    fn only_the_first_work_started_is_recorded() {
-        let mut record = Record {
-            logs_dir: None,
-            child: false,
-            started: false,
-        };
-        assert!(record.take_start());
-        assert!(!record.take_start());
-    }
-
-    #[test]
-    fn a_child_run_records_no_work_it_take_start() {
-        let mut record = Record {
-            logs_dir: None,
-            child: true,
-            started: false,
-        };
-        assert!(!record.take_start());
-        assert!(!record.take_start());
-    }
 }

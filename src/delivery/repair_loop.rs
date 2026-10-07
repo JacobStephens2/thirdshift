@@ -7,9 +7,12 @@
 
 use anyhow::{Result, bail};
 
+use crate::pull_request::MergeAttempt;
+
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::PolicyRefusal;
 use crate::run::Goal;
+use crate::worktree::{ForeignCommits, Merge};
 
 /// Which upstream a conflict Repair resolves a merge of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,27 +40,22 @@ pub(super) trait Outside {
     type Pending;
 
     /// Merge the Base branch, fetched from origin, into the Issue branch,
-    /// returning the merge left pending if it conflicted.
-    fn merge_base_branch(&mut self) -> Result<Option<Self::Pending>>;
-    /// Merge the new commits on origin, as last fetched, into the Issue
-    /// branch, returning the merge left pending if it conflicted.
-    fn merge_new_commits(&mut self) -> Result<Option<Self::Pending>>;
+    /// returning the selected commit or the merge left pending if it conflicted.
+    fn merge_base_branch(&mut self) -> Result<Merge<Self::Pending>>;
+    /// Consume a Foreign commit observation, merging its sampled origin head.
+    fn merge_new_commits(&mut self, observed: ForeignCommits) -> Result<Merge<Self::Pending>>;
     /// Fail unless the merge `pending` was finished.
     fn ensure_merged(&mut self, pending: &Self::Pending) -> Result<()>;
     /// Push the Issue branch.
     fn push(&mut self) -> Result<()>;
     /// The Issue branch's head commit.
     fn head(&mut self) -> Result<String>;
-    /// The Base branch commit the Issue branch last merged in.
-    fn merged_base_commit(&mut self) -> Result<String>;
     /// Whether the Base branch on origin has commits the Issue branch has
     /// not merged yet.
     fn base_branch_moved(&mut self) -> Result<bool>;
-    /// The commits on the Issue branch on origin, oldest first, that the
-    /// local one does not have yet.
-    fn new_commits_on_origin(&mut self) -> Result<Vec<String>>;
-    /// The name of the Issue branch on origin, as in `origin/issue-7`.
-    fn upstream(&mut self) -> String;
+    /// Observe the sampled origin and local heads and the oldest-first
+    /// Foreign commits between them, without merging.
+    fn new_commits_on_origin(&mut self) -> Result<ForeignCommits>;
 
     /// Watch CI on `head`, comparing its failed checks with those on
     /// `base_commit`, if given.
@@ -85,7 +83,7 @@ pub(super) trait Outside {
     /// Fail unless the pull request is open, ready for review and mergeable.
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()>;
     /// Merge the pull request at `head`.
-    fn merge(&mut self, head: &str) -> Result<()>;
+    fn merge(&mut self, head: &str) -> Result<MergeAttempt>;
 
     /// Whether an interrupt was requested.
     fn interrupt_requested(&mut self) -> bool;
@@ -120,8 +118,9 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
             return Ok(());
         }
         outside.progress(format!("merging the PR into {base}"));
-        let Err(error) = outside.merge(&watched) else {
-            return Ok(());
+        let error = match outside.merge(&watched)? {
+            MergeAttempt::Merged => return Ok(()),
+            MergeAttempt::Refused(error) => error,
         };
         outside.progress(format!("the merge failed: {error:#}"));
         match repair_loop.round_after_failed_merge(&watched)? {
@@ -255,14 +254,16 @@ impl<O: Outside> RepairLoop<'_, O> {
             if self.goal == Goal::Merged {
                 self.take_in_foreign_commits()?;
             }
-            if let Some(pending) = self.outside.merge_base_branch()? {
-                self.repair("conflict", Repair::Conflict(Upstream::BaseBranch))?;
-                self.outside.ensure_merged(&pending)?;
-                continue;
-            }
+            let base_commit = match self.outside.merge_base_branch()? {
+                Merge::Clean { commit } => commit,
+                Merge::Conflicted(pending) => {
+                    self.repair("conflict", Repair::Conflict(Upstream::BaseBranch))?;
+                    self.outside.ensure_merged(&pending)?;
+                    continue;
+                }
+            };
             self.outside.push()?;
             let head = self.outside.head()?;
-            let base_commit = self.outside.merged_base_commit()?;
             let compared_with = self
                 .outside
                 .sees_inherited_failures()
@@ -287,7 +288,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                     if self.outside.base_branch_moved()? {
                         self.count_base_move("while CI ran")?;
                     } else if self.goal == Goal::ReadyForReview
-                        || self.outside.new_commits_on_origin()?.is_empty()
+                        || self.outside.new_commits_on_origin()?.commits().is_empty()
                     {
                         return Ok(head);
                     }
@@ -323,20 +324,20 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// again until origin has nothing new, since more may land during either
     /// Repair, and the push after them would be rejected.
     fn take_in_foreign_commits(&mut self) -> Result<()> {
-        let upstream = self.outside.upstream();
         loop {
             let foreign = self.outside.new_commits_on_origin()?;
-            if foreign.is_empty() {
+            if foreign.commits().is_empty() {
                 return Ok(());
             }
-            let own_head = self.outside.head()?;
+            let upstream = foreign.upstream().to_string();
+            let own_head = foreign.local_head().to_string();
             let line = self.budgets.count_foreign_commits(&upstream)?;
             self.outside.progress(line);
-            for sha in &foreign {
+            for sha in foreign.commits() {
                 self.outside
                     .progress(format!("merging new commit {sha} from {upstream}"));
             }
-            if let Some(pending) = self.outside.merge_new_commits()? {
+            if let Merge::Conflicted(pending) = self.outside.merge_new_commits(foreign)? {
                 self.repair(
                     &format!("conflict with new commits on {upstream}"),
                     Repair::Conflict(Upstream::IssueBranch),
@@ -382,14 +383,14 @@ mod tests {
         /// Merged the Base branch in.
         MergeBase,
         /// Merged the new commits on origin in.
-        MergeNewCommits,
+        MergeNewCommits(String),
         /// Checked the pending merge of this upstream was finished.
         CheckMerged(&'static str),
         Push,
         /// Watched CI on this head, compared with this Base branch commit.
         Watch(String, Option<String>),
         /// Gave this head its Check re-run of these checks of its own.
-        Rerun(String, Vec<String>),
+        Rerun(String, Option<String>, Vec<String>),
         /// Started the Repair session of this kind for this Repair.
         Repair(String, Started),
         /// Took the Base fix for these Inherited failures, at this Base
@@ -462,13 +463,14 @@ mod tests {
         /// For each merge of new commits on origin, whether it conflicts.
         new_commit_conflicts: VecDeque<bool>,
         base_moved: VecDeque<bool>,
-        new_commits: VecDeque<&'static [&'static str]>,
+        new_commits: VecDeque<ForeignCommits>,
         watches: VecDeque<Is>,
         reruns: VecDeque<Option<Is>>,
         /// For each Base fix, the cause it fails with, if it does.
         base_fixes: VecDeque<Option<&'static str>>,
         /// For each merge, the error it fails with, if it does.
         merges: VecDeque<Option<&'static str>>,
+        merge_gate_error: Option<&'static str>,
         sees_no_inherited_failures: bool,
         interrupted: bool,
     }
@@ -501,20 +503,35 @@ mod tests {
         /// The upstream whose merge is pending.
         type Pending = &'static str;
 
-        fn merge_base_branch(&mut self) -> Result<Option<&'static str>> {
+        fn merge_base_branch(&mut self) -> Result<Merge<&'static str>> {
             self.did.push(Did::MergeBase);
             let conflicted = self.script.base_conflicts.pop_front().unwrap_or(false);
-            Ok(conflicted.then_some("origin/main"))
+            if conflicted {
+                return Ok(Merge::Conflicted("origin/main"));
+            }
+            let commit = if self.script.base_commits.is_empty() {
+                "b1".to_string()
+            } else {
+                sticky(&mut self.script.base_commits, "Base branch commit")
+            };
+            Ok(Merge::Clean { commit })
         }
 
-        fn merge_new_commits(&mut self) -> Result<Option<&'static str>> {
-            self.did.push(Did::MergeNewCommits);
+        fn merge_new_commits(&mut self, observed: ForeignCommits) -> Result<Merge<&'static str>> {
+            self.did
+                .push(Did::MergeNewCommits(observed.origin_head().to_string()));
             let conflicted = self
                 .script
                 .new_commit_conflicts
                 .pop_front()
                 .unwrap_or(false);
-            Ok(conflicted.then_some("origin/issue-7"))
+            Ok(if conflicted {
+                Merge::Conflicted("origin/issue-7")
+            } else {
+                Merge::Clean {
+                    commit: observed.origin_head().to_string(),
+                }
+            })
         }
 
         fn ensure_merged(&mut self, pending: &&'static str) -> Result<()> {
@@ -531,24 +548,16 @@ mod tests {
             Ok(sticky(&mut self.script.heads, "head"))
         }
 
-        fn merged_base_commit(&mut self) -> Result<String> {
-            if self.script.base_commits.is_empty() {
-                return Ok("b1".to_string());
-            }
-            Ok(sticky(&mut self.script.base_commits, "Base branch commit"))
-        }
-
         fn base_branch_moved(&mut self) -> Result<bool> {
             Ok(self.script.base_moved.pop_front().unwrap_or(false))
         }
 
-        fn new_commits_on_origin(&mut self) -> Result<Vec<String>> {
-            let commits = self.script.new_commits.pop_front().unwrap_or_default();
-            Ok(commits.iter().map(|sha| sha.to_string()).collect())
-        }
-
-        fn upstream(&mut self) -> String {
-            "origin/issue-7".to_string()
+        fn new_commits_on_origin(&mut self) -> Result<ForeignCommits> {
+            Ok(self
+                .script
+                .new_commits
+                .pop_front()
+                .unwrap_or_else(|| ForeignCommits::fixture("h1", &[])))
         }
 
         fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
@@ -561,11 +570,14 @@ mod tests {
         fn rerun(
             &mut self,
             head: &str,
-            _base_commit: Option<&str>,
+            base_commit: Option<&str>,
             failed: &FailedChecks,
         ) -> Result<Option<Ci>> {
-            self.did
-                .push(Did::Rerun(head.to_string(), names(&failed.own)));
+            self.did.push(Did::Rerun(
+                head.to_string(),
+                base_commit.map(String::from),
+                names(&failed.own),
+            ));
             let is = self.script.reruns.pop_front().expect("no re-run scripted");
             Ok(is.map(|is| is.ci()))
         }
@@ -602,11 +614,14 @@ mod tests {
             Ok(())
         }
 
-        fn merge(&mut self, head: &str) -> Result<()> {
+        fn merge(&mut self, head: &str) -> Result<MergeAttempt> {
+            if let Some(error) = self.script.merge_gate_error {
+                bail!(error);
+            }
             self.did.push(Did::Merge(head.to_string()));
             match self.script.merges.pop_front().expect("no merge scripted") {
-                Some(error) => Err(anyhow!(error)),
-                None => Ok(()),
+                Some(error) => Ok(MergeAttempt::Refused(anyhow!(error))),
+                None => Ok(MergeAttempt::Merged),
             }
         }
 
@@ -710,7 +725,10 @@ mod tests {
             Goal::ReadyForReview,
             Script {
                 heads: script(["h1"]),
-                new_commits: script([&["f1"][..], &["f1"]]),
+                new_commits: script([
+                    ForeignCommits::fixture("h1", &["f1"]),
+                    ForeignCommits::fixture("h1", &["f1"]),
+                ]),
                 watches: script([Is::Passed]),
                 ..Script::default()
             },
@@ -787,7 +805,11 @@ mod tests {
                 repair(1, ci_fix(&["test"], &[])),
                 Did::MergeBase,
                 Did::Push,
-                Did::Rerun("h1".to_string(), vec!["test".to_string()]),
+                Did::Rerun(
+                    "h1".to_string(),
+                    Some("b1".to_string()),
+                    vec!["test".to_string()],
+                ),
             ],
         ]
         .concat()
@@ -808,6 +830,33 @@ mod tests {
 
         delivered.unwrap();
         assert_eq!(did, [up_to_the_rerun(), merge("h1").into()].concat());
+    }
+
+    #[test]
+    fn watch_and_check_re_run_use_the_commit_returned_by_their_base_merge() {
+        for rerun_base in ["sampled-base", "rewound-base"] {
+            let (delivered, did) = deliver(
+                Goal::ReadyForReview,
+                Script {
+                    heads: script(["unchanged-head"]),
+                    base_commits: script(["sampled-base", rerun_base]),
+                    watches: script([Is::Failed(&["test"], &[])]),
+                    reruns: script([Some(Is::Passed)]),
+                    ..Script::default()
+                },
+            );
+
+            delivered.unwrap();
+            assert!(did.contains(&Did::Watch(
+                "unchanged-head".to_string(),
+                Some("sampled-base".to_string())
+            )));
+            assert!(did.contains(&Did::Rerun(
+                "unchanged-head".to_string(),
+                Some(rerun_base.to_string()),
+                vec!["test".to_string()]
+            )));
+        }
     }
 
     #[test]
@@ -1004,7 +1053,7 @@ mod tests {
         vec![
             line("origin/issue-7 has new commits; merging them in"),
             line(&format!("merging new commit {sha} from origin/issue-7")),
-            Did::MergeNewCommits,
+            Did::MergeNewCommits(sha.to_string()),
             line(&format!(
                 "new commits on origin/issue-7 to review; starting Repair {n} of 5"
             )),
@@ -1017,8 +1066,11 @@ mod tests {
         let (delivered, did) = deliver(
             Goal::Merged,
             Script {
-                heads: script(["h1", "h2", "h3"]),
-                new_commits: script([&["f1", "f2"][..], &["f3"]]),
+                heads: script(["h3"]),
+                new_commits: script([
+                    ForeignCommits::fixture("h1", &["f1", "f2"]),
+                    ForeignCommits::fixture("h2", &["f3"]),
+                ]),
                 watches: script([Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
@@ -1033,7 +1085,7 @@ mod tests {
                     line("origin/issue-7 has new commits; merging them in"),
                     line("merging new commit f1 from origin/issue-7"),
                     line("merging new commit f2 from origin/issue-7"),
-                    Did::MergeNewCommits,
+                    Did::MergeNewCommits("f2".to_string()),
                     line("new commits on origin/issue-7 to review; starting Repair 1 of 5"),
                     repair(1, Started::Review("h1".to_string())),
                 ],
@@ -1050,8 +1102,12 @@ mod tests {
         let (delivered, did) = deliver(
             Goal::Merged,
             Script {
-                heads: script(["h1", "h1", "h2"]),
-                new_commits: script([&[][..], &["f1"], &["f1"]]),
+                heads: script(["h1", "h2"]),
+                new_commits: script([
+                    ForeignCommits::fixture("h1", &[]),
+                    ForeignCommits::fixture("h1", &["f1"]),
+                    ForeignCommits::fixture("h1", &["f1"]),
+                ]),
                 watches: script([Is::Passed, Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
@@ -1076,8 +1132,8 @@ mod tests {
         let (delivered, did) = deliver(
             Goal::Merged,
             Script {
-                heads: script(["h1", "h2"]),
-                new_commits: script([&["f1"][..]]),
+                heads: script(["h2"]),
+                new_commits: script([ForeignCommits::fixture("h1", &["f1"])]),
                 new_commit_conflicts: script([true]),
                 watches: script([Is::Passed]),
                 merges: script([None]),
@@ -1092,7 +1148,7 @@ mod tests {
                 vec![
                     line("origin/issue-7 has new commits; merging them in"),
                     line("merging new commit f1 from origin/issue-7"),
-                    Did::MergeNewCommits,
+                    Did::MergeNewCommits("f1".to_string()),
                     line("conflict with new commits on origin/issue-7; starting Repair 1 of 5"),
                     repair(1, Started::Conflict(Upstream::IssueBranch)),
                     Did::CheckMerged("origin/issue-7"),
@@ -1111,8 +1167,8 @@ mod tests {
         let (delivered, did) = deliver(
             Goal::Merged,
             Script {
-                heads: script(["h0", "h1", "h2", "h3", "h4"]),
-                new_commits: script([&["f1"][..]]),
+                heads: script(["h1", "h2", "h3", "h4"]),
+                new_commits: script([ForeignCommits::fixture("h0", &["f1"])]),
                 base_conflicts: script([true]),
                 watches: script([
                     Is::Failed(&["test"], &[]),
@@ -1145,8 +1201,8 @@ mod tests {
         let (delivered, did) = deliver(
             Goal::Merged,
             Script {
-                heads: script(["h0", "h1"]),
-                new_commits: script([&["f1"][..]]),
+                heads: script(["h1"]),
+                new_commits: script([ForeignCommits::fixture("h0", &["f1"])]),
                 base_moved: script([true; 5]),
                 watches: script((0..5).map(|_| Is::Passed)),
                 ..Script::default()
@@ -1168,6 +1224,85 @@ mod tests {
                 "origin/main moved while CI ran; merging it again",
                 "origin/main moved while CI ran; merging it again",
             ]
+        );
+    }
+
+    #[test]
+    fn a_sixth_foreign_batch_is_refused_before_its_merge() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                new_commits: script(
+                    (1..=6).map(|n| ForeignCommits::fixture(&format!("h{n}"), &[&format!("f{n}")])),
+                ),
+                ..Script::default()
+            },
+        );
+
+        assert_eq!(
+            cause(delivered),
+            "origin/issue-7 kept moving: merged it again 5 times"
+        );
+        let merged: Vec<_> = did
+            .iter()
+            .filter_map(|did| match did {
+                Did::MergeNewCommits(head) => Some(head.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(merged, ["f1", "f2", "f3", "f4", "f5"]);
+    }
+
+    #[test]
+    fn review_budget_refusal_still_follows_the_allowed_foreign_merge() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["h1", "h2", "h3", "h4", "h5"]),
+                watches: script((0..5).map(|_| Is::Failed(&["test"], &[]))),
+                new_commits: script(
+                    (0..5)
+                        .map(|_| ForeignCommits::fixture("own", &[]))
+                        .chain([ForeignCommits::fixture("h6", &["f1"])]),
+                ),
+                ..Script::default()
+            },
+        );
+
+        assert_eq!(
+            cause(delivered),
+            "repairs exhausted: new commits on origin/issue-7 to review"
+        );
+        assert_eq!(did.last(), Some(&Did::MergeNewCommits("f1".to_string())));
+        assert!(
+            !did.iter()
+                .any(|did| matches!(did, Did::Repair(_, Started::Review(_))))
+        );
+    }
+
+    #[test]
+    fn a_terminal_pre_merge_gate_error_never_enters_another_round_or_policy_refusal() {
+        let (ended, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["h1"]),
+                watches: script([Is::Passed]),
+                merge_gate_error: Some("PR targets develop, not main"),
+                ..Script::default()
+            },
+        );
+        let error = ended.unwrap_err();
+        assert_eq!(error.to_string(), "PR targets develop, not main");
+        assert!(!error.is::<PolicyRefusal>());
+        assert_eq!(
+            did.iter()
+                .filter(|call| matches!(call, Did::Watch(..)))
+                .count(),
+            1
+        );
+        assert!(
+            !did.iter()
+                .any(|call| matches!(call, Did::Merge(..) | Did::Repair(..)))
         );
     }
 

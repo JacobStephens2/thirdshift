@@ -9,29 +9,26 @@
 //! [`ChildRunsAndGitHub`] does that for real; `Scripted`, in tests, from a
 //! script, recording each call.
 
-mod spec_pr;
 mod ticket_board;
 
 use std::num::NonZeroUsize;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
 
 use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::{self, Ended, Handle, Kind};
+use crate::child_run::{Ended, Kind, Runs};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::{FailedRun, interrupted_or};
-use crate::github::{self, Ticket};
+use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
 use crate::prompt;
+use crate::pull_request::PullRequest;
 use crate::run::Reached;
 use crate::worktree::Worktree;
 
-use spec_pr::SpecPr;
 use ticket_board::TicketBoard;
 
 /// The Spec review session's kind, in its progress lines and log name.
@@ -59,7 +56,8 @@ pub fn run(
 ) -> Result<Reached, FailedRun> {
     let (spec, base) = (delivery.issue, delivery.base);
     let branch = worktree.branch().to_string();
-    let spec_pr = SpecPr::resume(spec, &branch, base)?;
+    let mut spec_pr = PullRequest::new(spec, &branch, base, GitHub::new());
+    spec_pr.resume_spec()?;
     let mut outside = ChildRunsAndGitHub::new(worktree, delivery, spec_pr);
     run_through(&mut outside, spec, base, &branch, tickets, parallel)
 }
@@ -132,13 +130,20 @@ fn review_and_deliver(
     checklist: &str,
     spec_pr_url: &str,
 ) -> Result<Reached, FailedRun> {
+    if outside.interrupted() {
+        return Err(FailedRun {
+            interrupted: true,
+            pr_url: Some(spec_pr_url.to_string()),
+            ..FailedRun::from(anyhow::anyhow!("interrupted"))
+        });
+    }
     let opening = Opening {
         kind: SPEC_REVIEW,
         prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
         catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
-    let delivered = outside.deliver(opening, |outside| outside.put_back(checklist));
+    let delivered = outside.deliver(opening, checklist);
     if delivered.is_err() {
         outside.show(checklist);
     }
@@ -165,16 +170,9 @@ trait Outside {
     fn landed(&mut self, checklist: &str) -> Result<String>;
     /// The Spec PR's URL, if it is open.
     fn spec_pr_url(&mut self) -> Option<String>;
-    /// Put `checklist` back in the Spec PR's body.
-    fn put_back(&mut self, checklist: &str) -> Result<()>;
-    /// Take the Spec PR to its goal by the Delivery, opening with `opening`,
-    /// running `before_ready` before the Spec PR is marked ready. Called at
-    /// most once, after the Ticket loop.
-    fn deliver(
-        &mut self,
-        opening: Opening,
-        before_ready: impl FnOnce(&mut Self) -> Result<()>,
-    ) -> Result<Reached, FailedRun>;
+    /// Take the Spec PR to its goal, restoring `checklist` before readiness.
+    /// Called at most once, after the Ticket loop.
+    fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun>;
     /// Whether the Spec run was interrupted.
     fn interrupted(&mut self) -> bool;
     /// Write the progress line `line`.
@@ -184,36 +182,35 @@ trait Outside {
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
 /// branch checked out in `worktree`: child `thirdshift` Runs, each of which
 /// may start a Base fix if `base_fix` allows one, and runs its sessions on
-/// `harness`, whose threads send how each ended on `ended`, received from
-/// `endings`, GitHub, the Spec PR `spec_pr`, and `delivery`, which takes the
+/// `harness`, owned together in `children`, GitHub, the Spec PR
+/// `spec_pr`, and `delivery`, which takes the
 /// worktree when it starts.
 struct ChildRunsAndGitHub<'a> {
     spec: &'a IssueUrl,
+    /// Fields drop in declaration order: stop and drain child salvage before
+    /// Worktree cleanup, including when the Spec run owner unwinds.
+    children: Runs,
     /// Held until the Delivery starts, which takes it.
     worktree: Option<Worktree>,
     /// Held until it starts.
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
     harness: &'a Choice,
-    spec_pr: SpecPr<'a>,
-    ended: Sender<(u64, Result<Ended>)>,
-    endings: Receiver<(u64, Result<Ended>)>,
+    spec_pr: PullRequest,
 }
 
 impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
-    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: SpecPr<'a>) -> Self {
-        let (ended, endings) = mpsc::channel();
+    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
         Self {
             spec: delivery.issue,
+            children: Runs::default(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
             harness: delivery.harness,
             delivery: Some(delivery),
             spec_pr,
-            ended,
-            endings,
         }
     }
 
@@ -230,57 +227,50 @@ impl Outside for ChildRunsAndGitHub<'_> {
         self.worktree().push()
     }
 
-    /// A child `thirdshift` from the same Launch directory, and a thread
-    /// that waits for it, relaying its stderr, and sends how it ended.
     fn start_ticket(&mut self, number: u64) -> Result<()> {
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
         };
         let ticket = self.spec.sibling(number);
-        let child = child_run::start(&ticket, kind, self.base_fix.clone(), self.harness)?;
-        let ended = self.ended.clone();
-        thread::spawn(move || {
-            let _ = ended.send((number, finish_ticket(number, child)));
-        });
-        Ok(())
+        self.children
+            .start(&ticket, kind, self.base_fix.clone(), self.harness)
     }
 
     fn next_ending(&mut self) -> (u64, Result<Ended>) {
-        self.endings
-            .recv()
-            .expect("a running Ticket's thread holds a sender")
+        let (number, ending) = self
+            .children
+            .next_ending()
+            .expect("the Ticket board has an outstanding Run");
+        if let Ok(ended) = &ending {
+            progress::step(match ended {
+                Ended::Reached { .. } => format!("#{number} landed"),
+                Ended::Interrupted => format!("#{number} interrupted"),
+                Ended::Failed { .. } => format!("#{number} failed"),
+            });
+        }
+        (number, ending)
     }
 
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
-        github::tickets(self.spec)
+        GitHub::new().completion().tickets(self.spec)
     }
 
     fn show(&mut self, checklist: &str) {
-        self.spec_pr.show(checklist);
+        self.spec_pr.show_checklist(checklist);
     }
 
     fn landed(&mut self, checklist: &str) -> Result<String> {
-        self.spec_pr.landed(checklist).map(str::to_string)
+        self.spec_pr.land_spec(checklist)
     }
 
     fn spec_pr_url(&mut self) -> Option<String> {
-        self.spec_pr.url().map(str::to_string)
+        self.spec_pr.info().map(|pr| pr.url)
     }
 
-    fn put_back(&mut self, checklist: &str) -> Result<()> {
-        self.spec_pr.put_back(checklist)
-    }
-
-    /// Hands the worktree and the Delivery over, then lends `self` to
-    /// `before_ready`, as the Delivery no longer borrows it.
-    fn deliver(
-        &mut self,
-        opening: Opening,
-        before_ready: impl FnOnce(&mut Self) -> Result<()>,
-    ) -> Result<Reached, FailedRun> {
+    fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
         let worktree = self.worktree.take().expect("the Delivery starts once");
         let delivery = self.delivery.take().expect("the Delivery starts once");
-        delivery.deliver(worktree, opening, || before_ready(self))
+        delivery.deliver(worktree, opening, &mut self.spec_pr, Some(checklist))
     }
 
     fn interrupted(&mut self) -> bool {
@@ -290,18 +280,6 @@ impl Outside for ChildRunsAndGitHub<'_> {
     fn step(&mut self, line: String) {
         progress::step(line);
     }
-}
-
-/// Wait for Ticket `number`'s Run `child`, relaying its stderr, and say how
-/// it ended.
-fn finish_ticket(number: u64, child: Handle) -> Result<Ended> {
-    let ended = child.wait()?;
-    progress::step(match ended {
-        Ended::Reached { .. } => format!("#{number} landed"),
-        Ended::Interrupted => format!("#{number} interrupted"),
-        Ended::Failed { .. } => format!("#{number} failed"),
-    });
-    Ok(ended)
 }
 
 /// Push the Spec branch, then keep up to `parallel` of the Tickets, last
@@ -633,21 +611,7 @@ mod tests {
             self.spec_pr_open.then(|| SPEC_PR.to_string())
         }
 
-        fn put_back(&mut self, checklist: &str) -> Result<()> {
-            self.did.push(Did::PutBack(checklist.to_string()));
-            if self.script.put_back_fails {
-                bail!("could not put the Tickets checklist back");
-            }
-            Ok(())
-        }
-
-        /// Runs `before_ready`, then marks the Spec PR ready, as the
-        /// Delivery does, failing as the Failed run path would.
-        fn deliver(
-            &mut self,
-            opening: Opening,
-            before_ready: impl FnOnce(&mut Self) -> Result<()>,
-        ) -> Result<Reached, FailedRun> {
+        fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
                 kind: opening.kind.to_string(),
                 prompt: opening.prompt,
@@ -656,7 +620,12 @@ mod tests {
             let delivered = if self.script.review_fails {
                 Err(anyhow!("the spec-review session failed"))
             } else {
-                before_ready(self)
+                self.did.push(Did::PutBack(checklist.to_string()));
+                if self.script.put_back_fails {
+                    Err(anyhow!("could not put the Tickets checklist back"))
+                } else {
+                    Ok(())
+                }
             };
             let delivered = delivered.and_then(|()| {
                 self.did.push(Did::Ready);

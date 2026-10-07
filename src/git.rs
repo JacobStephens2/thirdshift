@@ -1,25 +1,44 @@
 //! Running `git` in a directory.
 
-use std::fs::File;
+use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
+use crate::process::{self, Control, Interruption};
+use crate::progress;
+
+#[cfg(test)]
+mod execution_tests;
+
 /// `git` bound to a working directory. Output is captured, never passed
 /// through, so stdout stays reserved for the PR URL.
 pub struct Git {
     dir: PathBuf,
+    interruption: Interruption,
 }
 
 impl Git {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Git { dir: dir.into() }
+        Git {
+            dir: dir.into(),
+            interruption: Interruption::Ordinary,
+        }
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// An independent view for finishing work in the same directory. It
+    /// ignores recorded interruption without changing this or other views.
+    pub fn completion(&self) -> Self {
+        Git {
+            dir: self.dir.clone(),
+            interruption: Interruption::Completion,
+        }
     }
 
     /// Run `git <args>` and return its trimmed stdout. If it exits non-zero,
@@ -30,12 +49,7 @@ impl Git {
     /// Tickets fetch or create worktrees from one Launch directory at once,
     /// it is run again, for up to [`LOCK_WAIT`].
     pub fn run(&self, args: &[&str]) -> Result<String> {
-        let deadline = Instant::now() + LOCK_WAIT;
-        let mut output = self.output(args)?;
-        while !output.status.success() && held_lock(&output.stderr) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(100));
-            output = self.output(args)?;
-        }
+        let output = self.retried_output(args)?;
         if !output.status.success() {
             let tail = [error_first(&output.stderr), last_lines(&output.stdout)].concat();
             let mut message = format!("git {} failed", args.join(" "));
@@ -47,6 +61,26 @@ impl Git {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// A probe's trimmed stdout, or no answer for a completed nonzero exit.
+    /// Interruption and transport failures remain errors, never absence.
+    pub fn run_optional(&self, args: &[&str]) -> Result<Option<String>> {
+        let output = self.retried_output(args)?;
+        Ok(output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string()))
+    }
+
+    fn retried_output(&self, args: &[&str]) -> Result<Output> {
+        let deadline = Instant::now() + LOCK_WAIT;
+        let mut output = self.output(args)?;
+        while !output.status.success() && held_lock(&output.stderr) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+            output = self.output(args)?;
+        }
+        Ok(output)
+    }
+
     /// The repository's common git directory, the one its worktrees share.
     pub fn common_dir(&self) -> Result<PathBuf> {
         Ok(self.dir.join(self.run(&["rev-parse", "--git-common-dir"])?))
@@ -54,13 +88,35 @@ impl Git {
 
     /// Wait for, then hold until the file returned is dropped, a lock on the
     /// file `name` in the repository's common git directory, which every Run
-    /// from one Launch directory shares.
+    /// from one Launch directory shares. Ordinary acquisition stops for a
+    /// recorded interruption; completion acquisition keeps waiting. Contention
+    /// is polled every 100 ms without a deadline, and the file is never removed.
     pub fn lock(&self, name: &str) -> Result<File> {
         let path = self.common_dir()?.join(name);
+        self.interruption.check()?;
         let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
-        file.lock()
-            .with_context(|| format!("can't lock {}", path.display()))?;
-        Ok(file)
+        loop {
+            self.interruption.check()?;
+            match file.try_lock() {
+                Ok(()) => {
+                    self.interruption.check()?;
+                    return Ok(file);
+                }
+                Err(TryLockError::WouldBlock) => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(TryLockError::Error(error)) => {
+                    return Err(error).with_context(|| format!("can't lock {}", path.display()));
+                }
+            }
+        }
+    }
+
+    /// Keep fetch's local connectivity check away from incomplete or
+    /// disappearing Worktree heads. Acquisition and disposal take this
+    /// after the worktree ownership lock; fetch takes only this lock.
+    pub fn lock_worktree_refs(&self) -> Result<File> {
+        self.lock("thirdshift-worktree-refs.lock")
     }
 
     /// Whether origin has the branch `branch`, as origin itself answers.
@@ -70,18 +126,46 @@ impl Git {
         Ok(!found.is_empty())
     }
 
+    /// Fetch origin without automatic maintenance: worktree disposal must
+    /// pass ownership inspection, never a fetch's implicit pruning.
+    pub fn fetch(&self, branches: &[&str]) -> Result<()> {
+        let _lock = self.lock_worktree_refs()?;
+        let mut args = vec!["fetch", "--no-auto-maintenance", "origin"];
+        args.extend_from_slice(branches);
+        self.run(&args)?;
+        Ok(())
+    }
+
+    /// Push `branch` to origin without local hooks: sessions and CI check
+    /// the work, and a rejecting hook must not strand Failed run salvage.
+    pub fn push(&self, branch: &str) -> Result<()> {
+        progress::step(format_args!("pushing {branch}"));
+        self.run(&["push", "--no-verify", "origin", branch])?;
+        Ok(())
+    }
+
+    /// Whether a merge is in progress in this directory.
+    pub fn merge_in_progress(&self) -> Result<bool> {
+        self.succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+    }
+
     /// Run `git <args>` and report whether it exited zero, for commands whose
-    /// exit status is the answer.
+    /// exit status is the answer. Only a completed nonzero exit is false;
+    /// interruption and transport failures remain errors.
     pub fn succeeds(&self, args: &[&str]) -> Result<bool> {
         Ok(self.output(args)?.status.success())
     }
 
     fn output(&self, args: &[&str]) -> Result<Output> {
-        Command::new("git")
-            .args(args)
-            .current_dir(&self.dir)
-            .output()
-            .with_context(|| format!("could not run git {}", args.join(" ")))
+        process::output(
+            Command::new("git").args(args).current_dir(&self.dir),
+            None,
+            Control {
+                name: &format!("git {}", args.join(" ")),
+                interruption: self.interruption,
+                stop: &|child| process::stop(child, &[libc::SIGTERM]),
+            },
+        )
     }
 }
 
@@ -139,14 +223,13 @@ fn non_empty_lines(stream: &[u8]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
 
     /// A repository in a temp directory, with an identity and one commit, and
     /// a bare repository beside it as its `origin`. No global or system
     /// config is read.
-    fn repo_with_origin() -> (tempfile::TempDir, Git) {
+    pub(super) fn repo_with_origin() -> (tempfile::TempDir, Git) {
         let temp = tempfile::TempDir::new().unwrap();
         let isolated = |dir: &Path, args: &[&str]| {
             let status = Command::new("git")
@@ -176,8 +259,7 @@ mod tests {
     fn a_failure_includes_a_hooks_output_and_gits_own_error() {
         let (_temp, git) = repo_with_origin();
         let hook = git.dir().join(".git/hooks/pre-push");
-        std::fs::write(&hook, "#!/bin/sh\necho 'hook says no'\nexit 1\n").unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_executable(&hook, "#!/bin/sh\necho 'hook says no'\nexit 1\n");
 
         let error = git
             .run(&["push", "origin", "main"])
@@ -308,6 +390,55 @@ mod tests {
 
             git.run(&["-c", &alias, "race"]).unwrap();
         }
+    }
+
+    #[test]
+    fn a_fetch_still_reports_a_missing_required_ref() {
+        let (_temp, git) = repo_with_origin();
+        git.push("main").unwrap();
+
+        let error = git.fetch(&["absent"]).unwrap_err().to_string();
+
+        assert!(error.contains("couldn't find remote ref absent"), "{error}");
+    }
+
+    #[test]
+    fn a_fetch_still_reports_a_transport_failure() {
+        let (_temp, git) = repo_with_origin();
+        git.run(&["config", "remote.origin.url", "../absent.git"])
+            .unwrap();
+
+        let error = git.fetch(&["main"]).unwrap_err().to_string();
+
+        assert!(
+            error.contains("does not appear to be a git repository"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_fetch_still_reports_a_missing_required_object() {
+        let (temp, git) = repo_with_origin();
+        let initial = git.run(&["rev-parse", "HEAD"]).unwrap();
+        git.run(&["commit", "-q", "--allow-empty", "-m", "Required commit"])
+            .unwrap();
+        let required = git.run(&["rev-parse", "HEAD"]).unwrap();
+        git.push("main").unwrap();
+        git.run(&["reset", "--hard", &initial]).unwrap();
+        for objects in [
+            git.dir().join(".git/objects"),
+            temp.path().join("origin.git/objects"),
+        ] {
+            std::fs::remove_file(objects.join(&required[..2]).join(&required[2..])).unwrap();
+        }
+
+        let error = git.fetch(&["main"]).unwrap_err().to_string();
+
+        assert!(
+            error.contains("git fetch") && error.contains("failed"),
+            "{error}"
+        );
+        assert!(error.contains(&required), "{error}");
     }
 
     #[test]

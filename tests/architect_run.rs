@@ -1810,7 +1810,9 @@ fn once_the_first_architect_run_has_ended_a_new_one_runs() {
 #[test]
 fn once_the_first_architect_run_is_killed_a_new_one_runs_with_nothing_to_clean_up() {
     let scenario = scenario();
-    scenario.agent_does_in_session(1, AGENT_WAITS_FOR_RELEASE);
+    scenario.agent_does_in_session(1, &format!(
+        "printf 'detached experiment\\n' > experiment.txt\ngit add -A\ngit commit -q -m 'Detached review experiment'\nprintf 'review scratch\\n' > scratch.txt\n{AGENT_WAITS_FOR_RELEASE}"
+    ));
     scenario.agent_does_in_session(2, AGENT_PUBLISHES_A_TICKET);
     let mut first = scenario.run_until(&["architect", "--plan-only"], &[], "started");
     first.kill();
@@ -2399,5 +2401,98 @@ fn the_review_and_the_run_it_dispatches_run_on_the_model_checked_once() {
                 .any(|window| window == ["--model", "opus", "--effort", "max"]),
             "{args:?}"
         );
+    }
+}
+
+#[test]
+fn a_review_retry_refuses_failed_checkout_work_before_starting_an_agent_session() {
+    let scenario = scenario();
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    scenario.repo_has_hook(
+        &scenario.launch_dir(),
+        "post-checkout",
+        "#!/bin/sh\nprintf 'failed review work\\n' > retained.txt\necho 'review checkout refused' >&2\nexit 1\n",
+    );
+    let first = scenario.run(&["architect", "--plan-only"]);
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    assert!(
+        first.stderr.contains("retaining checkout"),
+        "{}",
+        first.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    fs::remove_file(scenario.launch_dir().join(".git/hooks/post-checkout")).unwrap();
+    let path = scenario.path("work/widgets-architect");
+    let registrations = scenario.launch_git(&["worktree", "list", "--porcelain"]);
+
+    let retry = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(retry.code, Some(1), "{}", retry.stderr);
+    assert!(
+        retry.stderr.contains(path.to_str().unwrap())
+            && retry.stderr.contains("retaining checkout"),
+        "{}",
+        retry.stderr
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("retained.txt")).unwrap(),
+        "failed review work\n"
+    );
+    assert_eq!(
+        scenario.launch_git(&["worktree", "list", "--porcelain"]),
+        registrations
+    );
+    assert!(
+        scenario.claude_calls().is_empty(),
+        "a retry started an agent session"
+    );
+}
+
+#[test]
+fn an_architect_run_retains_damaged_review_registration_through_launch_preflight() {
+    for pull in [false, true] {
+        let scenario = scenario();
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+        scenario.origin_has_commit("main", "upstream.txt", "upstream\n", "Upstream work");
+        scenario.user_config_is(&format!("[launch]\npull = {pull}\n"));
+        // Git 2.55 can prune a registration with a missing backlink on fetch.
+        // Keep maintenance in the foreground so the regression is deterministic.
+        scenario.launch_git(&["config", "maintenance.auto", "true"]);
+        scenario.launch_git(&["config", "maintenance.autoDetach", "false"]);
+        let path = scenario.path("work/widgets-architect");
+        scenario.launch_git(&[
+            "worktree",
+            "add",
+            "--detach",
+            path.to_str().unwrap(),
+            "HEAD",
+        ]);
+        let admin = scenario
+            .launch_dir()
+            .join(".git/worktrees/widgets-architect");
+        fs::write(path.join("retained.txt"), "uncertain review work\n").unwrap();
+        fs::remove_file(admin.join("gitdir")).unwrap();
+        let head = fs::read(admin.join("HEAD")).unwrap();
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("retaining checkout"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("retained.txt")).unwrap(),
+            "uncertain review work\n"
+        );
+        assert_eq!(fs::read(admin.join("HEAD")).unwrap(), head);
+        assert!(scenario.claude_calls().is_empty());
+        if pull {
+            assert_eq!(
+                scenario.launch_git(&["rev-parse", "HEAD"]),
+                scenario.origin_git(&["rev-parse", "main"])
+            );
+        }
     }
 }

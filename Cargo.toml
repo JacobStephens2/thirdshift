@@ -1,6 +1,6 @@
 [package]
 name = "thirdshift"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
 license = "MIT"
@@ -23,6 +23,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 include_dir = "0.7.4"
 libc = "0.2.189"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "json"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 signal-hook = "0.4.4"
 tempfile = "3.27.0"

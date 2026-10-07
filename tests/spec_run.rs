@@ -1201,6 +1201,159 @@ fn a_spec_pr_closed_during_the_spec_review_fails_the_spec_run() {
 }
 
 #[test]
+fn a_failed_ticket_that_retargets_the_spec_pr_leaves_its_body_untouched() {
+    let scenario = linear_spec();
+    scenario.origin_has_branch("develop", "main", &[]);
+    scenario.agent_does_for(
+        22,
+        r#"gh fake pr issue-20 base '"develop"'
+gh fake pr issue-20 body '"untouched"'
+exit 1
+"#,
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(spec_pr(&scenario)["body"], "untouched");
+    assert_contains(&result.stderr, "PR targets develop, not main");
+    assert_contains(&result.stderr, "#22 failed");
+    assert!(!sessions_by_issue(&scenario).contains(&SPEC.to_string()));
+}
+
+#[test]
+fn successful_ticket_completion_with_an_invalid_spec_pr_starts_no_review() {
+    for replacement in [false, true] {
+        let scenario = linear_spec();
+        scenario.origin_has_branch("develop", "main", &[]);
+        let change = if replacement {
+            r#"gh fake pr issue-20 state '"CLOSED"'
+gh pr create --base main --head issue-20 --title Replacement --body untouched"#
+        } else {
+            r#"gh fake pr issue-20 base '"develop"'
+gh fake pr issue-20 body '"untouched"'"#
+        };
+        scenario.agent_does_for(
+            22,
+            &format!("{}\n{change}\n", agent_lands(22, "second.txt")),
+        );
+
+        let result = scenario.run(&[&spec_url(&scenario)]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(!sessions_by_issue(&scenario).contains(&SPEC.to_string()));
+        assert_eq!(spec_pr(&scenario)["body"], "untouched");
+        assert_contains(
+            &result.stderr,
+            if replacement {
+                "is closed, not open"
+            } else {
+                "PR targets develop, not main"
+            },
+        );
+        assert_contains(&result.stderr, "#22 landed");
+        assert_eq!(scenario.gh_state()["issues"]["22"], "CLOSED");
+        if replacement {
+            assert_eq!(spec_pr(&scenario)["isDraft"], false);
+        }
+    }
+}
+
+#[test]
+fn a_spec_pr_replaced_during_review_gets_its_checklist_on_the_delivered_identity() {
+    for failing_review in [false, true] {
+        let scenario = linear_spec();
+        scenario.agent_does_for(
+            SPEC,
+            &format!(
+                r#"
+gh fake pr issue-20 state '"CLOSED"'
+gh pr create --base main --head issue-20 --title Replacement --body 'Closes #20'
+{}
+"#,
+                if failing_review { "exit 1" } else { "true" }
+            ),
+        );
+
+        let result = scenario.run(&[&spec_url(&scenario)]);
+
+        assert_eq!(
+            result.code,
+            Some(i32::from(failing_review)),
+            "{}",
+            result.stderr
+        );
+        let prs = prs_from(&scenario, "issue-20");
+        assert_eq!(prs[0]["state"], "CLOSED");
+        assert_eq!(
+            result.stdout,
+            format!("{}\n", prs[1]["url"].as_str().unwrap())
+        );
+        assert_eq!(prs[1]["isDraft"], failing_review);
+        let body = prs[1]["body"].as_str().unwrap();
+        assert_contains(checklist_in(body), "- [x] #21");
+        assert_contains(checklist_in(body), "- [x] #22");
+        if !failing_review {
+            assert_contains(body, "Built with claude");
+        }
+    }
+}
+
+#[test]
+fn spec_delivery_rejects_late_retargeting_and_keeps_the_original_identity() {
+    for merge in [false, true] {
+        for replacement in [false, true] {
+            let scenario = linear_spec();
+            scenario.origin_has_branch("develop", "main", &[]);
+            let change = if replacement {
+                r#"gh fake pr issue-20 state '"CLOSED"'
+gh pr create --base main --head issue-20 --title Replacement --body untouched"#
+            } else {
+                r#"gh fake pr issue-20 base '"develop"'"#
+            };
+            scenario.agent_does_for(
+                SPEC,
+                &format!("gh fake on-ci-read 1 '{}'\n", change.replace('\'', r"'\''")),
+            );
+            let issue = spec_url(&scenario);
+            let args = if merge {
+                vec!["merge", &issue]
+            } else {
+                vec![&*issue]
+            };
+
+            let result = scenario.run(&args);
+
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            let prs = prs_from(&scenario, "issue-20");
+            if replacement {
+                assert_contains(&result.stderr, "is closed, not open");
+                assert_eq!(prs[0]["state"], "CLOSED");
+                assert_eq!(prs[1]["isDraft"], false);
+                assert_eq!(prs[1]["body"], "untouched");
+            } else {
+                assert_contains(&result.stderr, "PR targets develop, not main");
+                assert_eq!(prs[0]["isDraft"], true);
+            }
+            let number = prs[0]["number"].as_u64().unwrap().to_string();
+            assert!(
+                scenario
+                    .gh_calls_of("pr", "merge")
+                    .iter()
+                    .all(|call| call[2] != number)
+            );
+            assert_eq!(scenario.gh_state()["issues"][SPEC.to_string()], "OPEN");
+            assert!(scenario.origin_log("issue-20").is_some());
+            assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
+            assert_eq!(
+                scenario.origin_log("develop").unwrap(),
+                vec!["Initial commit"]
+            );
+        }
+    }
+}
+
+#[test]
 fn help_does_not_mention_the_ticket_runs_hidden_argument() {
     let scenario = Scenario::new();
 
@@ -1571,6 +1724,172 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
             .all(|pr| pr["head"] != "issue-20"),
         "a Spec PR was opened: {}",
         gh["prs"]
+    );
+}
+
+#[test]
+fn the_first_landing_opens_its_spec_pr_when_accounting_is_interrupted() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}gh fake on-issue-view 20 'touch {}; sleep 1'\n",
+            agent_lands(21, "first.txt"),
+            scenario.path("reading-spec-title").display()
+        ),
+    );
+
+    // The Ticket has landed; interruption arrives while accounting reads
+    // the title, before opening the Spec PR. No subsequent work may start.
+    let result = scenario.run_and_signal(&[&spec_url(&scenario)], "reading-spec-title", "TERM");
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21"]);
+    let pr = spec_pr(&scenario);
+    let pr_url = pr["url"].as_str().unwrap();
+    assert_eq!(result.stdout, format!("{pr_url}\n"));
+    assert_eq!(pr["isDraft"], true);
+    let checklist = checklist_in(pr["body"].as_str().unwrap());
+    assert_contains(
+        checklist,
+        "- [x] #21 landed with https://github.com/acme/widgets/pull/1\n",
+    );
+    assert_contains(checklist, "- [ ] #22 not started\n");
+    assert_contains(&result.stderr, "thirdshift: #21 landed\n");
+    assert_eq!(
+        support::before_command_log(&result.stderr).last(),
+        Some(&"thirdshift: interrupted")
+    );
+    scenario.assert_cleaned_up("issue-20");
+}
+
+#[test]
+fn an_existing_spec_pr_accounts_for_every_drained_ticket_after_interruption() {
+    let scenario = diamond_spec();
+    scenario.origin_has_branch("issue-20", "main", &[]);
+    let pr_url = scenario.github_has_pr("issue-20", "main", "OPEN");
+    for (ticket, other) in [(21, 22), (22, 21)] {
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                "echo 'half done {ticket}' > wip.txt\n{}touch {root}/both-started\nsleep 30\n",
+                waits_for_other_session(&scenario, ticket, other),
+                root = scenario.path("").display()
+            ),
+        );
+    }
+
+    let result = scenario.run_and_signal(
+        &[&spec_url(&scenario), "parallel", "2"],
+        "both-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{pr_url}\n"));
+    let mut sessions = sessions_by_issue(&scenario);
+    sessions.sort();
+    assert_eq!(
+        sessions,
+        ["21", "22"],
+        "no new Ticket or Spec review may start"
+    );
+    let pr = spec_pr(&scenario);
+    assert_eq!(pr["url"], pr_url);
+    assert_eq!(pr["isDraft"], true);
+    assert_eq!(
+        checklist_in(pr["body"].as_str().unwrap()),
+        "<!-- thirdshift:tickets -->\n## Tickets\n\n- [ ] #21 interrupted\n- [ ] #22 interrupted\n- [ ] #23 blocked by #21, #22\n<!-- /thirdshift:tickets -->"
+    );
+    for ticket in [21, 22] {
+        assert_contains(
+            &result.stderr,
+            &format!("thirdshift: #{ticket} interrupted\n"),
+        );
+        assert_eq!(
+            scenario.origin_log(&format!("issue-{ticket}")).unwrap()[0],
+            "thirdshift: failed run (interrupted)"
+        );
+        scenario.assert_cleaned_up(&format!("issue-{ticket}"));
+    }
+    assert_eq!(
+        support::before_command_log(&result.stderr).last(),
+        Some(&"thirdshift: interrupted")
+    );
+    assert!(
+        !result.stderr.contains("could not update the Spec PR"),
+        "{}",
+        result.stderr
+    );
+    scenario.assert_cleaned_up("issue-20");
+}
+
+#[test]
+fn parent_only_interruption_reaches_all_active_tickets_before_waiting_and_saves_their_work() {
+    let scenario = diamond_spec();
+    let root = scenario.path("");
+    // Each Failed run's push must meet its sibling's push before it can
+    // finish. Waiting on one Ticket before signalling the other cannot pass.
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        &format!(
+            r#"#!/bin/sh
+while read old new ref; do
+  case "$ref" in
+    refs/heads/issue-21) ticket=21; other=22 ;;
+    refs/heads/issue-22) ticket=22; other=21 ;;
+    *) continue ;;
+  esac
+  touch {root}/cleanup-$ticket
+  for attempt in $(seq 80); do
+    test -f {root}/cleanup-$other && break
+    sleep 0.05
+  done
+  test -f {root}/cleanup-$other || exit 1
+done
+"#,
+            root = root.display()
+        ),
+    );
+    for (ticket, other) in [(21, 22), (22, 21)] {
+        scenario.agent_does_for(ticket, &format!(
+            "echo 'half done {ticket}' > wip.txt\n{}touch {root}/both-started\nsleep 30\ntouch {root}/outlived-{ticket}\n",
+            waits_for_other_session(&scenario, ticket, other), root = root.display()
+        ));
+    }
+
+    let result = scenario.run_and_signal(
+        &[&spec_url(&scenario), "parallel", "2"],
+        "both-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
+    let mut sessions = sessions_by_issue(&scenario);
+    sessions.sort();
+    assert_eq!(sessions, ["21", "22"]);
+    for ticket in [21, 22] {
+        assert!(!scenario.path(&format!("outlived-{ticket}")).exists());
+        assert_eq!(
+            scenario.origin_file(&format!("issue-{ticket}"), "wip.txt"),
+            Some(format!("half done {ticket}\n"))
+        );
+        assert_eq!(
+            scenario.origin_log(&format!("issue-{ticket}")).unwrap()[0],
+            "thirdshift: failed run (interrupted)"
+        );
+        assert_contains(
+            &result.stderr,
+            &format!("thirdshift: #{ticket} interrupted\n"),
+        );
+        scenario.assert_cleaned_up(&format!("issue-{ticket}"));
+    }
+    assert!(!result.stderr.contains("starting #23"), "{}", result.stderr);
+    assert_eq!(
+        support::before_command_log(&result.stderr).last(),
+        Some(&"thirdshift: interrupted")
     );
 }
 

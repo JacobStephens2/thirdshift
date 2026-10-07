@@ -234,6 +234,7 @@ pub fn run(
     };
     let mut outside = LaunchAndGitHub {
         launch: &directory,
+        base: &base,
         repo: &repo,
         harness,
         flags,
@@ -241,7 +242,7 @@ pub fn run(
     };
     let architect_run = ArchitectRun {
         repo: &repo,
-        base: &base,
+        base: base.name(),
         origin: directory.origin(),
         focus,
         started,
@@ -334,7 +335,7 @@ fn up_to_the_dispatch(
     outside.check_harness()?;
     outside.started(Work::ArchitectRun(repo));
     if pull {
-        outside.pull(base);
+        outside.pull();
     }
     if outside.interrupted() {
         return Err(FailedRun {
@@ -1174,7 +1175,7 @@ mod tests {
                 Call::Started(None),
             ];
             if pull {
-                expected.push(Call::Pull("main".to_string()));
+                expected.push(Call::Pull);
             }
             expected.extend(reviewing_main());
             assert_eq!(calls[..expected.len()], expected, "pull: {pull}");
@@ -1205,7 +1206,7 @@ mod tests {
                 Call::ReadySearch,
                 Call::HarnessCheck,
                 Call::Started(None),
-                Call::Pull("main".to_string()),
+                Call::Pull,
             ]
         );
     }

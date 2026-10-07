@@ -49,6 +49,31 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+fn terminal_attributes(fd: &impl std::os::fd::AsRawFd) -> libc::termios {
+    // SAFETY: tcgetattr fills a valid termios using the open terminal descriptor.
+    let mut attributes = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { libc::tcgetattr(fd.as_raw_fd(), &mut attributes) },
+        0,
+        "tcgetattr: {}",
+        std::io::Error::last_os_error()
+    );
+    attributes
+}
+
+fn same_terminal_attributes(saved: &libc::termios, restored: &libc::termios) -> bool {
+    saved.c_iflag == restored.c_iflag
+        && saved.c_oflag == restored.c_oflag
+        && saved.c_cflag == restored.c_cflag
+        && saved.c_lflag == restored.c_lflag
+        && saved.c_cc == restored.c_cc
+        // SAFETY: both termios values came from tcgetattr.
+        && unsafe {
+            libc::cfgetispeed(saved) == libc::cfgetispeed(restored)
+                && libc::cfgetospeed(saved) == libc::cfgetospeed(restored)
+        }
+}
+
 pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
 
@@ -79,6 +104,8 @@ const COPY_IN_USE: &str = "copy-in-use";
 /// The file in a scenario's root that says the copy has been replaced.
 const COPY_REPLACED: &str = "copy-replaced";
 
+pub mod check;
+
 pub struct Scenario {
     /// Deletes the temp root when the scenario is dropped.
     _temp_dir: TempDir,
@@ -95,6 +122,62 @@ pub type Keystrokes<'a> = (&'a str, &'a str);
 /// A `line` of [`Keystrokes`] that presses Ctrl-C.
 pub const CTRL_C: &str = "\x03";
 
+pub enum TerminalWait<'a> {
+    Prompt(&'a str),
+    CheckReady,
+}
+
+pub enum TerminalInput<'a> {
+    Line(&'a str),
+    Bytes(&'a [u8]),
+    Signal(libc::c_int),
+}
+
+pub struct TerminalStep<'a> {
+    wait: TerminalWait<'a>,
+    input: TerminalInput<'a>,
+}
+
+impl<'a> TerminalStep<'a> {
+    pub fn line(prompt: &'a str, line: &'a str) -> Self {
+        Self {
+            wait: TerminalWait::Prompt(prompt),
+            input: TerminalInput::Line(line),
+        }
+    }
+
+    pub fn bytes(prompt: &'a str, bytes: &'a [u8]) -> Self {
+        Self {
+            wait: TerminalWait::Prompt(prompt),
+            input: TerminalInput::Bytes(bytes),
+        }
+    }
+
+    pub fn signal(prompt: &'a str, signal: libc::c_int) -> Self {
+        Self {
+            wait: TerminalWait::Prompt(prompt),
+            input: TerminalInput::Signal(signal),
+        }
+    }
+
+    pub fn interrupt_check(signal: libc::c_int) -> Self {
+        Self {
+            wait: TerminalWait::CheckReady,
+            input: TerminalInput::Signal(signal),
+        }
+    }
+}
+
+impl<'a> From<Keystrokes<'a>> for TerminalStep<'a> {
+    fn from((prompt, line): Keystrokes<'a>) -> Self {
+        if line == CTRL_C {
+            Self::bytes(prompt, line.as_bytes())
+        } else {
+            Self::line(prompt, line)
+        }
+    }
+}
+
 /// How a command run on a terminal ended.
 pub struct TerminalResult {
     /// What it wrote to stdout, which is not the terminal.
@@ -106,6 +189,33 @@ pub struct TerminalResult {
     pub code: Option<i32>,
     /// The User config it left, if any.
     pub user_config: Option<String>,
+    /// Every saved terminal attribute was restored, including echo.
+    pub terminal_restored: bool,
+}
+
+/// Never leave a terminal command waiting for input after an assertion fails.
+struct TerminalCommand(Child);
+
+impl std::ops::Deref for TerminalCommand {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for TerminalCommand {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for TerminalCommand {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
 }
 
 /// An event on an issue's timeline that a Pickup run reads to tell whether
@@ -472,6 +582,24 @@ test -f {root}/{COPY_REPLACED}
         env: &[(&str, &str)],
         keystrokes: &[Keystrokes],
     ) -> TerminalResult {
+        self.run_terminal(
+            args,
+            env,
+            &keystrokes
+                .iter()
+                .copied()
+                .map(TerminalStep::from)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// Drive terminal questions or a captured check using explicit input actions.
+    pub fn run_terminal(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+        steps: &[TerminalStep],
+    ) -> TerminalResult {
         use std::io::{Read, Write};
         use std::os::fd::{FromRawFd, OwnedFd};
         use std::os::unix::process::CommandExt;
@@ -489,8 +617,18 @@ test -f {root}/{COPY_REPLACED}
                 )
             };
             assert_eq!(opened, 0, "openpty: {}", std::io::Error::last_os_error());
+            for fd in [master, slave] {
+                // SAFETY: mark only the open descriptors owned by this fixture.
+                assert_eq!(
+                    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                    0
+                );
+            }
             unsafe { (fs::File::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) }
         };
+        let saved = terminal_attributes(&master);
+        let mut terminal = Some(slave.try_clone().unwrap());
+        let mut terminal_restored = None;
         let mut command = self.command(args);
         command
             .envs(env.iter().copied())
@@ -507,7 +645,7 @@ test -f {root}/{COPY_REPLACED}
                 Ok(())
             });
         }
-        let mut child = command.spawn().unwrap();
+        let mut child = TerminalCommand(command.spawn().unwrap());
         // Dropping the command closes this process's copies of the terminal,
         // so reading it ends once the child has gone.
         drop(command);
@@ -535,37 +673,82 @@ test -f {root}/{COPY_REPLACED}
         let shown_text = || String::from_utf8_lossy(&shown.lock().unwrap()).replace("\r\n", "\n");
         let mut reader = Some(reader);
         let mut seen = 0;
-        for (prompt, line) in keystrokes {
+        for step in steps {
+            let pending = match step.wait {
+                TerminalWait::Prompt(prompt) => format!("the terminal never showed {prompt:?}"),
+                TerminalWait::CheckReady => "the check never started".to_string(),
+            };
             let deadline = Instant::now() + WAIT_BOUND;
             loop {
                 // Once the Run has exited, the terminal is read to its end
                 // before it is searched, so nothing the Run showed is missed.
                 let exited = child.try_wait().unwrap().is_some();
+                if exited && let Some(terminal) = terminal.take() {
+                    // macOS revokes the slave when its session leader exits;
+                    // the master still exposes the terminal's saved settings.
+                    terminal_restored = Some(same_terminal_attributes(
+                        &saved,
+                        &terminal_attributes(&master),
+                    ));
+                    drop(terminal);
+                }
                 if exited && let Some(reader) = reader.take() {
                     reader.join().unwrap();
                 }
                 let text = shown_text();
-                if let Some(at) = text[seen..].find(prompt) {
-                    seen += at + prompt.len();
-                    break;
+                match step.wait {
+                    TerminalWait::CheckReady if !exited && self.path("check-started").exists() => {
+                        break;
+                    }
+                    TerminalWait::Prompt(prompt) => {
+                        if let Some(at) = text[seen..].find(prompt) {
+                            seen += at + prompt.len();
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
                 assert!(
                     !exited,
-                    "the terminal never showed {prompt:?}: the Run exited first; it shows:\n{text}"
+                    "{pending}: the Run exited first; it shows:\n{text}"
                 );
-                assert!(
-                    Instant::now() < deadline,
-                    "the terminal never showed {prompt:?}; it shows:\n{text}"
-                );
+                assert!(Instant::now() < deadline, "{pending}; it shows:\n{text}");
                 std::thread::sleep(Duration::from_millis(10));
             }
-            if *line == CTRL_C {
-                master.write_all(line.as_bytes()).unwrap();
-            } else {
-                master.write_all(format!("{line}\n").as_bytes()).unwrap();
+            match step.input {
+                TerminalInput::Signal(signal) => {
+                    // SAFETY: signal only this test's exact running child.
+                    assert_eq!(unsafe { libc::kill(child.id() as _, signal) }, 0);
+                }
+                TerminalInput::Bytes(bytes) => master.write_all(bytes).unwrap(),
+                TerminalInput::Line(line) => {
+                    master.write_all(format!("{line}\n").as_bytes()).unwrap()
+                }
             }
         }
-        let status = child.wait().unwrap();
+        let deadline = Instant::now() + WAIT_BOUND;
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                drop(terminal);
+                stdout.join().unwrap();
+                if let Some(reader) = reader {
+                    reader.join().unwrap();
+                }
+                panic!(
+                    "the terminal command did not exit; it shows:\n{}",
+                    shown_text()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let terminal_restored = terminal_restored
+            .unwrap_or_else(|| same_terminal_attributes(&saved, &terminal_attributes(&master)));
+        drop(terminal);
         let stdout = stdout.join().unwrap();
         if let Some(reader) = reader {
             reader.join().unwrap();
@@ -575,6 +758,7 @@ test -f {root}/{COPY_REPLACED}
             stderr: unstamped(&shown_text()),
             code: status.code(),
             user_config: fs::read_to_string(self.path("home/.thirdshift/config.toml")).ok(),
+            terminal_restored,
         }
     }
 
@@ -603,6 +787,11 @@ test -f {root}/{COPY_REPLACED}
             .env("FAKE_CLAUDE_SCRIPT", self.path("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.path("claude-calls.json"))
             .env("FAKE_CODEX_RECORD", self.path("codex-calls.json"))
+            .env("FAKE_AGY_RECORD", self.path("agy-calls.json"))
+            .env("FAKE_AGY_CHECK_RECORD", self.path("agy-checks.json"))
+            .env("FAKE_GROK_RECORD", self.path("grok-calls.json"))
+            .env("FAKE_MUSE_RECORD", self.path("muse-calls.json"))
+            .env("FAKE_OPENCODE_RECORD", self.path("opencode-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
             // Seconds of waiting for CI become milliseconds. Each poll starts
             // the fake gh; at 100ms the grace period holds about three reads,
@@ -813,6 +1002,49 @@ test -f {root}/{COPY_REPLACED}
             Ok(text) => serde_json::from_str(&text).unwrap(),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// Every call the fake Muse received.
+    pub fn muse_calls(&self) -> Vec<Value> {
+        fs::read_to_string(self.path("muse-calls.json"))
+            .map(|text| serde_json::from_str(&text).unwrap())
+            .unwrap_or_default()
+    }
+
+    pub fn agy_calls(&self) -> Vec<Value> {
+        self.agy_records("agy-calls.json")
+    }
+
+    pub fn agy_checks(&self) -> Vec<Value> {
+        self.agy_records("agy-checks.json")
+    }
+
+    fn agy_records(&self, file: &str) -> Vec<Value> {
+        fs::read_to_string(self.path(file))
+            .ok()
+            .map(|text| serde_json::from_str(&text).unwrap())
+            .unwrap_or_default()
+    }
+
+    /// Every call the fake received on Grok, including its catalog check.
+    pub fn grok_calls(&self) -> Vec<Value> {
+        match fs::read_to_string(self.path("grok-calls.json")) {
+            Ok(text) => serde_json::from_str(&text).unwrap(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn assert_every_grok_session_found_the_factory_skills(&self) {
+        assert_found_the_factory_skills(
+            self.grok_calls()
+                .into_iter()
+                .filter(|call| call["prompt"].is_string())
+                .collect(),
+        );
+    }
+
+    pub fn assert_every_muse_session_found_the_factory_skills(&self) {
+        assert_found_the_factory_skills(self.muse_calls());
     }
 
     /// Assert every `claude` call found every Factory skill, by its

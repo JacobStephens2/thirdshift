@@ -210,6 +210,7 @@ pub fn main(argv: Vec<String>) {
         bash
     };
     if text_mode {
+        crate::check_script();
         crate::exit(exit_code(bash().status().unwrap()));
     }
 

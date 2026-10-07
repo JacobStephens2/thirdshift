@@ -13,7 +13,7 @@ The GitHub issue link the factory is given to implement, e.g. `https://github.co
 _Avoid_: ticket, spec link
 
 **Launch directory**:
-The directory a **Run** is started from. It must pass **Origin match**, and its checked-out branch is normally the **Base branch**. A Run works in its own worktree, never in the Launch directory.
+The directory a **Run** is started from. It must pass **Origin match**, and its checked-out branch is normally the **Base branch**. Base branch validation and optional pulling share one sampled origin commit; **Worktree** acquisition samples independently. A Run works in its own worktree, never in the Launch directory.
 _Avoid_: originating workspace, launch repo
 
 **Origin match**:
@@ -31,7 +31,7 @@ The message thirdshift starts or resumes an agent session with. It carries the *
 _Avoid_: instructions, system prompt
 
 **Harness**:
-The headless agent CLI that runs every agent session of a **Command**: Claude Code (`claude`) or Codex (`codex`). One per Command, its child Runs and every **Resume** and **Repair** included. Chosen by the command, else the **User config**, else Claude Code.
+The headless agent CLI that runs every agent session of a **Command**, named as its CLI is: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) or OpenCode (`opencode`). One per Command, its child Runs and every **Resume** and **Repair** included. Chosen by the command, else the **User config**, else Claude Code.
 _Avoid_: agent, provider, backend
 
 **Model**:
@@ -61,8 +61,11 @@ _Avoid_: task, sub-task
 **Run**:
 One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, or by a **Pickup run** for the **Ready issue** it took.
 
+**Worktree**:
+A factory-owned checkout, on an **Issue branch** for a **Run** or detached for an **Architecture review**. Acquisition accounts for partial local effects, removing only attempt-owned clean artifacts on failure and retaining and naming work or uncertain artifacts. Failed-acquisition retention survives later Architecture review attempts. Successful acquisition carries checkout and registration identity through its lifetime; cleanup removes only that acquired instance, retaining and naming replaced or uncertain resources. Stale Architecture review scratch is disposable only with evidence of successful detached acquisition and unchanged ownership; unmarked or uncertain checkouts are retained.
+
 **Claim**:
-The mark that the factory has taken an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Run** or a **Spec run** starts on it, whether started on its **Issue URL** or by an **Architect run** or a **Pickup run**. A **Ticket**'s Run in a Spec run and a **Base fix** make none. A Claim is released, `ready-for-agent` put back, only when the Run ends with nothing on `origin` to take over: no **Issue branch** and no pull request. Otherwise it stays while the issue is open, whether its pull request is ready for review or the Run failed, until the **Day shift** relabels it, and thirdshift takes the label off once the issue is closed.
+The mark that the factory has taken an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Run** or a **Spec run** starts on it, whether started on its **Issue URL** or by an **Architect run** or a **Pickup run**. A **Ticket**'s Run in a Spec run and a **Base fix** make none. Ending a Claim finishes even after Command interruption. A Claim is released, `ready-for-agent` put back, only when the Run ends with nothing on `origin` to take over: no **Issue branch** and no pull request. Otherwise it stays while the issue is open, whether its pull request is ready for review or the Run failed, until the **Day shift** relabels it, and thirdshift takes the label off once the issue is closed.
 _Avoid_: lock (a lock is per machine and ends with its process), assignment
 
 **Spec run**:
@@ -114,7 +117,7 @@ The **Issue branch** of the **Spec** in a **Spec run**, branched off the **Base 
 _Avoid_: integration branch, feature branch
 
 **Spec PR**:
-The pull request from the **Spec branch** into the **Base branch** that closes the **Spec**. It is left ready for review once every **Ticket** is done, or merged by a **Self-merge** when the **Spec run** was asked to merge; a draft listing what is missing otherwise. It opens as a draft once the first Ticket lands, with the **Tickets checklist** in its body.
+The pull request from the **Spec branch** into the **Base branch** that closes the **Spec**. It is left ready for review once every **Ticket** is done, or merged by a **Self-merge** when the **Spec run** was asked to merge; a draft listing what is missing otherwise. It opens as a draft once the first Ticket lands, with the **Tickets checklist** in its body. Ticket accounting captures the resumed or created PR by number in the Spec's repository. Every draft or checklist operation reobserves that number and checks its open state, Spec branch, Base branch and repository ownership; an invalid or missing PR is never replaced during accounting. A landing must pass those checks before the Spec review can start. Delivery explicitly ends this accounting capture before the Spec review and captures its own PR afterward.
 
 **Tickets checklist**:
 The part of the **Spec PR**'s body, between fixed markers, that thirdshift writes: one line per **Ticket**, ticked once it is done, with its pull request, or saying whether it is not started, running, failed, interrupted, blocked, in a cycle or unready. It is rewritten as each Ticket starts and ends, and put back after the **Spec review** rewrites the body.
@@ -126,7 +129,7 @@ An open **Ticket** labelled with a triage role that says it is not agent work: `
 The agent session a **Spec run** starts once every **Ticket** is done: it reviews the whole **Spec branch** against the **Base branch** and the **Spec**, fixes what it agrees with, and writes the **Spec PR**'s description, listing the rest as **Unaddressed findings**.
 
 **Failed spec run**:
-A **Spec run** that ends, including by interruption, with any of its **Tickets** not done, or with its **Spec PR** not ready, mergeable and green (or, when asked to merge, not merged). It still takes every Ticket it can reach, and a failed Ticket stops only the Tickets it blocks.
+A **Spec run** that ends, including by interruption, with any of its **Tickets** not done, or with its **Spec PR** not ready, mergeable and green (or, when asked to merge, not merged). It still takes every Ticket it can reach, and a failed Ticket stops only the Tickets it blocks. After Command interruption it starts no new Ticket or Spec review, drains its active Tickets, and finishes publishing their final Tickets checklist and outcome lines.
 
 **Merge run**:
 A **Run** asked to end with its pull request merged rather than left for review, by the command it was started with or by the **User config**. It does everything a **Run** does, then a **Self-merge**. A **Ticket**'s Run in a **Spec run** is always a Merge run into the **Spec branch**; the command's ask applies to the **Spec PR**.
@@ -148,16 +151,16 @@ Writing the **User config** by answering a few questions, one per setting that m
 _Avoid_: init, onboarding, configure
 
 **Self-merge**:
-The step at the end of a **Merge run** in which thirdshift itself merges the pull request into the **Base branch** with a merge commit, once it is open, ready for review, mergeable and green on the head commit it merges. No human reviews it first. It ends with the **Issue branch** deleted, the issue closed by thirdshift, unless it is already closed, and the issue's **Claim** removed.
+The step at the end of a **Merge run** in which thirdshift itself merges Delivery's captured pull request by number in its repository, with a merge commit at the exact head whose CI it watched. A fresh observation validates its expected **Issue branch** and **Base branch**, open state, readiness and mergeability immediately before the request. GitHub guards the requested head, but offers no atomic expected-base guard against a retarget between that observation and the server merge. No human reviews it first. A failed or interrupted request counts as merged only when a completion observation of the same number confirms the requested head and expected branches. Completion then continues even after Command interruption. It ends with the **Issue branch** deleted, the issue closed by thirdshift, unless it is already closed, and the issue's **Claim** removed.
 
 **Policy refusal**:
 A merge the **Self-merge** tried that failed, where the round of the Repair loop that followed found nothing to fix: the **Base branch** unchanged, no conflict, CI green or absent, the pull request mergeable. The cause is a repository setting or rule, such as merge commits disallowed or a review required. thirdshift never reads GitHub's error text to decide it. The **Merge run** is a **Failed run** that leaves the pull request ready for review.
 
 **Declined CI fix**:
-A CI-fix **Repair** that found nothing on the branch to fix, for example because the failure is not the branch's but was not recognised as an **Inherited failure**, since the **Base branch** commit had no finished result for that check: once the Repair ends and the **Base branch** is merged in again, the head of the **Issue branch** is still the commit whose CI just failed. That head gets its **Check re-run**; if CI is red again, or there can be no Check re-run, the **Run** is a **Failed run** with the cause `CI red on <short sha> and the Repair found nothing to fix on the branch`, rather than spending its remaining Repairs.
+A CI-fix **Repair** that found nothing on the branch to fix, for example because the failure is not the branch's but was not recognised as an **Inherited failure**, since the **Base branch** commit had no finished result for that check: once the Repair ends and the **Base branch** is merged in again, the head of the **Issue branch** is still the commit whose CI just failed. That head gets its **Check re-run**; if its own checks are red again, or they cannot be re-run, the **Run** is a **Failed run** with the cause `CI red on <short sha> and the Repair found nothing to fix on the branch`, rather than spending its remaining Repairs.
 
 **Check re-run**:
-The one time per head commit that thirdshift asks GitHub to re-run the branch's own failed checks and watches CI on that head again: when a CI-fix **Repair** has left the head unchanged, and before the **Run** fails as a **Declined CI fix**. It lets a check that failed for a reason that does not repeat, such as a flaky test, pass. What the Repair concluded is never read. It needs every one of those checks to be a GitHub Actions job, starts no Repair and counts against no budget, and never re-runs a check for being an **Inherited failure**.
+The one time per head commit that thirdshift asks GitHub to re-run the branch's own failed checks and watches CI on that head again: when a CI-fix **Repair** has left the head unchanged, and before the **Run** fails as a **Declined CI fix**. It lets a check that failed for a reason that does not repeat, such as a flaky test, pass. If GitHub refuses a request, the outcome comes from fresh checks on that same head: green continues the Run, pending is watched, and its own checks still red mean a **Declined CI fix**. Checks that cannot be read or disappear after known failures cannot establish success. What the Repair concluded is never read. It needs every one of those checks to be a GitHub Actions job, starts no Repair and counts against no budget, and never re-runs a check for being an **Inherited failure**.
 _Avoid_: retry, re-trigger, CI re-run
 
 **Inherited failure**:
@@ -169,7 +172,7 @@ A **Merge run** into a **Run**'s **Base branch** that thirdshift starts when tha
 _Avoid_: hotfix, base repair (a **Repair** works on the Issue branch)
 
 **Failed run**:
-A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI. For a **Merge run**, it is also a Run that ends without its pull request merged. Its work is still pushed so nothing is lost (or, if the push fails, its worktree and local **Issue branch** are kept), and its open pull request, if any, is converted back to a draft, unless the pull request is ready, mergeable and green and only the **Self-merge** could not happen.
+A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI. For a **Merge run**, it is also a Run that ends without its pull request merged. Even after Command interruption, any unfinished merge is aborted and its work is still pushed so nothing is lost (or, if the push fails, its worktree and local **Issue branch** are kept), and its open pull request, if any, is converted back to a draft through the same finishing path, unless the pull request is ready, mergeable and green and only the **Self-merge** could not happen.
 
 **Issue branch**:
 A branch a **Run** works on for one issue: `issue-<n>` (the first), then `issue-<n>-branch-<k>` for k ≥ 2. A number counts as used once its pull request is merged or closed, even if the branch itself was deleted.
@@ -181,7 +184,7 @@ A **Run** that picks up an existing **Issue branch**, one with no pull request o
 A follow-up agent session a **Run** starts after the pull request exists, or a **Spec run** starts on its **Spec PR** after the **Spec review**: to resolve a merge conflict with the **Base branch** or the **Issue branch** on `origin`, to fix failing CI checks, or, in a **Merge run**, to review and fix **Foreign commits**.
 
 **Delivery**:
-What a **Run**, or a **Spec run** for its **Spec PR**, does from its worktree once its work begins. It runs the opening session (the implement session, or the **Spec review**), pushes, marks the pull request ready, keeps it mergeable and green through the **Repair loop**, and, in a **Merge run**, does the **Self-merge**. A Delivery that fails takes the **Failed run** path.
+What a **Run**, or a **Spec run** for its **Spec PR**, does from its worktree once its work begins. It runs the opening session (the implement session, or the **Spec review**), pushes, marks the pull request ready, keeps it mergeable and green through the **Repair loop**, and, in a **Merge run**, does the **Self-merge**. For a Spec PR, Delivery ends Ticket accounting's capture before the Spec review, allowing that session to replace the PR. The first successful observation after the opening session, or during Failed run completion after an opening failure, captures one pull request number and URL in the issue's repository; all later observations and transitions use that identity. Readiness and every mergeability poll validate its expected **Issue branch** and **Base branch**, open state and readiness where required. A missing, closed or retargeted captured PR fails Delivery; a replacement from the same branch is never substituted. A Delivery that fails takes the **Failed run** path, drafting that same captured open PR after preserving work. Spec PR checklist restoration uses that Delivery capture before readiness and for final accounting after failure.
 
 **Repair loop**:
 The rounds a **Delivery** goes through until the pull request's head is mergeable with the **Base branch** and its CI is green or absent. Each round merges the Base branch in (and, in a **Merge run**, any **Foreign commits**), pushes, watches CI, and starts a **Repair** for a conflict or for the branch's own red checks. Repairs and upstream moves have fixed budgets.
@@ -197,7 +200,7 @@ The full transcript of one agent session, one per session, a **Resume** and each
 _Avoid_: transcript, session file
 
 **Command**:
-One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, or a **Pickup run**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own.
+One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, or a **Pickup run**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
 _Avoid_: invocation, job
 
 **Command log**:

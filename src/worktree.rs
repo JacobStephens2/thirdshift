@@ -1,24 +1,41 @@
 //! The Run's worktree: a sibling of the launch repository, on the Issue
 //! branch, removed together with the local Issue branch when dropped unless
-//! it is kept. And the Architecture review's: a sibling too, on no branch,
-//! always removed when dropped.
+//! Failed run preservation fails or ownership is uncertain. And the
+//! Architecture review's: a sibling too, on no branch, disposable when owned.
+//! Both retain the acquired instance's identity and leave replacements alone.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use chrono::{SecondsFormat, Utc};
 
 use crate::git::Git;
+use crate::host;
 use crate::progress;
+
+mod acquisition;
+#[cfg(test)]
+mod acquisition_tests;
+#[cfg(test)]
+mod cleanup_tests;
+mod ownership;
+#[cfg(test)]
+mod preservation_tests;
+#[cfg(test)]
+mod review_recovery_tests;
+#[cfg(test)]
+mod synchronization_tests;
 
 /// How merging the Base branch, or new commits on origin, into the Issue
 /// branch went.
 #[derive(Debug)]
-pub enum Merge {
-    /// Merged, or nothing to merge.
-    Clean,
+pub enum Merge<P = PendingMerge> {
+    /// Merged, or nothing to merge, with the selected origin commit.
+    Clean { commit: String },
     /// Conflicted; the merge is left in progress for a conflict Repair.
-    Conflicted(PendingMerge),
+    Conflicted(P),
 }
 
 /// A conflicted merge left for a conflict Repair: `upstream` as it was when
@@ -26,66 +43,113 @@ pub enum Merge {
 /// the shared remote-tracking ref before the Repair finishes.
 #[derive(Debug)]
 pub struct PendingMerge {
+    origin: OriginCommit,
+}
+
+/// One remote-tracking ref sample, with its readable label kept beside the ID.
+#[derive(Debug)]
+struct OriginCommit {
     upstream: String,
     commit: String,
 }
 
+/// A read-only observation of Foreign commits. Its facts share one origin
+/// sample and one local head. It can be consumed once, by the Worktree that
+/// produced it, while that local head is unchanged.
+#[derive(Debug)]
+pub struct ForeignCommits {
+    owner: Arc<()>,
+    origin: OriginCommit,
+    local_head: String,
+    commits: Vec<String>,
+}
+
+impl ForeignCommits {
+    pub fn origin_head(&self) -> &str {
+        &self.origin.commit
+    }
+
+    pub fn local_head(&self) -> &str {
+        &self.local_head
+    }
+
+    pub fn upstream(&self) -> &str {
+        &self.origin.upstream
+    }
+
+    /// Oldest first, the commits missing from the observed local head.
+    pub fn commits(&self) -> &[String] {
+        &self.commits
+    }
+
+    /// A coherent linear batch for the scripted Delivery adapter only.
+    #[cfg(test)]
+    pub(crate) fn fixture(local_head: &str, commits: &[&str]) -> Self {
+        Self {
+            owner: Arc::new(()),
+            origin: OriginCommit {
+                commit: commits.last().copied().unwrap_or(local_head).to_string(),
+                upstream: "origin/issue-7".to_string(),
+            },
+            local_head: local_head.to_string(),
+            commits: commits.iter().map(|sha| sha.to_string()).collect(),
+        }
+    }
+}
+
 pub struct Worktree {
+    checkout: ownership::Checkout,
     launch: Git,
     branch: String,
     git: Git,
+    /// Per-instance identity: a later worktree at the same path must not
+    /// consume this one's observations. No lock is held by an observation.
+    synchronization_owner: Arc<()>,
     /// Leave the worktree and local Issue branch in place when dropped.
     kept: bool,
 }
 
 impl Worktree {
     /// Create `branch` fresh from `origin/<base>` in a new worktree next to the
-    /// launch repository's root, named `<repo>-<branch>`.
+    /// launch repository's root, named `<repo>-<branch>`. Under the worktree
+    /// lock, pin the fetched Base branch commit, refuse any existing local
+    /// Issue branch and create without force. No selection preflight is required.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base])?;
-        Self::add(
-            launch,
-            repo,
-            branch,
-            &["-b", branch],
-            &format!("origin/{base}"),
-        )
+        launch.fetch(&[base])?;
+        let origin = fetched_origin(launch, base)?;
+        check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
+        Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
     /// Check out the existing `branch` from origin in a new worktree next to
     /// the launch repository's root, named `<repo>-<branch>`. `origin/<base>`
-    /// is fetched too, for the review fixed point. A local `branch`, if any, is
-    /// reset to origin's: `branch::select` has checked they already match.
+    /// is fetched too, for the review fixed point. Under the worktree lock,
+    /// pin the fetched head and refuse any different local head. An equal
+    /// branch is attached without resetting it; an absent one is created
+    /// without force at the pinned commit. No selection preflight is required.
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base, branch])?;
-        Self::add(
-            launch,
-            repo,
-            branch,
-            &["-B", branch],
-            &format!("origin/{branch}"),
-        )
+        launch.fetch(&[base, branch])?;
+        let origin = fetched_origin(launch, branch)?;
+        let local = local_head(launch, branch)?;
+        check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
+        Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
-    fn add(
-        launch: &Git,
-        repo: &str,
-        branch: &str,
-        branch_args: &[&str],
-        start: &str,
-    ) -> Result<Self> {
+    fn add(launch: &Git, repo: &str, branch: &str, start: &str, source: &str) -> Result<Self> {
         let (root, path) = sibling(launch, &format!("{repo}-{branch}"))?;
         progress::step(format_args!(
-            "creating worktree {} on {branch} from {start}",
+            "creating worktree {} on {branch} from {source}",
             path.display()
         ));
-        add_worktree(launch, branch_args, &path, start)?;
+        let checkout = acquisition::add(launch, Some(branch), &path, start)?;
         Ok(Worktree {
+            checkout,
             launch: Git::new(root),
             branch: branch.to_string(),
             git: Git::new(path),
+            synchronization_owner: Arc::new(()),
             kept: false,
         })
     }
@@ -98,10 +162,6 @@ impl Worktree {
         &self.branch
     }
 
-    pub fn git(&self) -> &Git {
-        &self.git
-    }
-
     /// The Launch directory the worktree was added from.
     pub fn launch(&self) -> &Git {
         &self.launch
@@ -112,34 +172,60 @@ impl Worktree {
     /// gates the PR, so a local hook doesn't decide whether work reaches
     /// origin.
     pub fn push(&self) -> Result<()> {
-        progress::step(format_args!("pushing {}", self.branch));
-        self.git
-            .run(&["push", "--no-verify", "origin", &self.branch])?;
+        self.git.push(&self.branch)
+    }
+
+    /// Preserve all work from a Failed run against the last-fetched Base
+    /// branch, even after Command interruption. An unfinished merge is
+    /// aborted first; changes are committed as the failure marker and pushed
+    /// without local hooks. With no changes, nothing is committed or pushed.
+    /// Retention is armed before salvage: any error or unwinding leaves the
+    /// worktree and local Issue branch in place. Success allows normal cleanup.
+    pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<()> {
+        self.kept = true;
+        let git = self.git.completion();
+        if git.merge_in_progress()? {
+            git.run(&["merge", "--abort"])?;
+        }
+        git.run(&["add", "-A"])?;
+        let base = format!("origin/{base}");
+        if !git.succeeds(&["diff", "--cached", "--quiet", &base])? {
+            let message = format!(
+                "thirdshift: failed run ({reason})\n\n\
+                 {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
+                timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                host = host::name().as_deref().unwrap_or("unknown"),
+            );
+            // No hooks: a hook that rejects the commit would strand the work.
+            git.run(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "--no-verify",
+                "-m",
+                &message,
+            ])?;
+            git.push(&self.branch)?;
+        }
+        self.kept = false;
         Ok(())
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone
     /// there, e.g. deleted by GitHub after a merge. Hooks are skipped, as for
-    /// [`Worktree::push`].
+    /// [`Worktree::push`]. This finishes a confirmed Self-merge, including
+    /// the origin read that reconciles a failed deletion.
     pub fn delete_from_origin(&self) -> Result<()> {
         progress::step(format_args!("deleting {} on origin", self.branch));
-        let Err(error) = self
-            .git
-            .run(&["push", "--no-verify", "origin", "--delete", &self.branch])
+        let git = self.git.completion();
+        let Err(error) = git.run(&["push", "--no-verify", "origin", "--delete", &self.branch])
         else {
             return Ok(());
         };
-        match self.git.on_origin(&self.branch) {
+        match git.on_origin(&self.branch) {
             Ok(false) => Ok(()),
             _ => Err(error),
         }
-    }
-
-    /// Keep the worktree and the local Issue branch once it is dropped, for
-    /// work that may exist nowhere else. Dropping it then says where they
-    /// are and the branch's head commit, rather than removing them.
-    pub fn keep(&mut self) {
-        self.kept = true;
     }
 
     /// The Issue branch's head commit.
@@ -147,62 +233,93 @@ impl Worktree {
         self.git.run(&["rev-parse", "HEAD"])
     }
 
-    /// Fetch `origin/<base>` and merge it into the Issue branch.
+    /// Fetch and sample `origin/<base>`, then merge that commit into the
+    /// Issue branch. A clean outcome includes the selected commit for CI
+    /// comparison, including when the merge had nothing to do.
     pub fn merge_base_branch(&self, base: &str) -> Result<Merge> {
         progress::step(format_args!("merging origin/{base} into {}", self.branch));
-        self.git.run(&["fetch", "origin", base])?;
-        self.merge(&format!("origin/{base}"))
-    }
-
-    /// The Base branch commit the Issue branch last merged in: the newest
-    /// commit of `origin/<base>`, as last fetched, that its head contains.
-    /// Another Run's fetch may have moved the shared remote-tracking ref on
-    /// since the merge, which this is unaffected by.
-    pub fn merged_base_commit(&self, base: &str) -> Result<String> {
-        self.git
-            .run(&["merge-base", "HEAD", &format!("origin/{base}")])
-    }
-
-    /// The Issue branch on origin, as fetched: `origin/<branch>`.
-    pub fn upstream(&self) -> String {
-        format!("origin/{}", self.branch)
+        self.merge(self.sample_origin(base)?)
     }
 
     /// Fetch the Issue branch from origin and list, oldest first, the commits
-    /// there that the local Issue branch does not have yet.
-    pub fn new_commits_on_origin(&self) -> Result<Vec<String>> {
-        self.git.run(&["fetch", "origin", &self.branch])?;
-        let range = format!("HEAD..{}", self.upstream());
-        let commits = self.git.run(&["rev-list", "--reverse", &range])?;
-        Ok(commits.lines().map(String::from).collect())
+    /// there that the local Issue branch does not have yet, together with
+    /// the exact heads and readable upstream label. Does not change the
+    /// local head; a caller may refuse the batch before merging it.
+    pub fn new_commits_on_origin(&self) -> Result<ForeignCommits> {
+        let origin = self.sample_origin(&self.branch)?;
+        let local_head = self.head()?;
+        let mut observed = ForeignCommits {
+            owner: Arc::clone(&self.synchronization_owner),
+            origin,
+            local_head,
+            commits: Vec::new(),
+        };
+        let range = format!("{}..{}", observed.local_head(), observed.origin_head());
+        observed.commits = self
+            .git
+            .run(&["rev-list", "--reverse", &range])?
+            .lines()
+            .map(String::from)
+            .collect();
+        Ok(observed)
     }
 
     /// Fetch the Issue branch from origin and fast-forward the local one to
     /// it, failing if the two have diverged.
     pub fn fast_forward_to_origin(&self) -> Result<()> {
-        let upstream = self.upstream();
-        progress::step(format_args!("updating {} from {upstream}", self.branch));
-        self.git.run(&["fetch", "origin", &self.branch])?;
+        progress::step(format_args!(
+            "updating {} from origin/{}",
+            self.branch, self.branch
+        ));
+        let origin = self.sample_origin(&self.branch)?;
         self.git
-            .run(&["merge", "--ff-only", "--quiet", &upstream])?;
+            .run(&["merge", "--ff-only", "--quiet", &origin.commit])?;
         Ok(())
     }
 
-    /// Merge the Issue branch as last fetched from origin into the local one.
-    pub fn merge_new_commits(&self) -> Result<Merge> {
-        self.merge(&self.upstream())
+    /// Consume this Worktree's observation, merging its sampled origin head.
+    /// Refuse before mutation if it belongs to another worktree or the local
+    /// head has changed since observation.
+    pub fn merge_new_commits(&self, observed: ForeignCommits) -> Result<Merge> {
+        if !Arc::ptr_eq(&observed.owner, &self.synchronization_owner) {
+            bail!("the Foreign commit observation belongs to another worktree");
+        }
+        if self.head()? != observed.local_head() {
+            bail!(
+                "the local head changed since observing {}",
+                observed.upstream()
+            );
+        }
+        self.merge(observed.origin)
     }
 
-    /// Merge `upstream` into the Issue branch: a merge, never a rebase, so
+    /// Fetch, then resolve a fully qualified remote-tracking ref once. Every
+    /// calculation and mutation after this sample uses the commit ID, so
+    /// sibling fetches and shadowing local names cannot change its meaning.
+    fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
+        self.git.fetch(&[branch])?;
+        fetched_origin(&self.git, branch)
+    }
+
+    /// Merge the sampled origin commit into the Issue branch, never rebase, so
     /// pushing it is always a fast-forward. `--ff` keeps a user's
     /// `merge.ff = only` from turning a clean merge into an error.
-    fn merge(&self, upstream: &str) -> Result<Merge> {
-        match self.git.run(&["merge", "--no-edit", "--ff", upstream]) {
-            Ok(_) => Ok(Merge::Clean),
-            Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge {
-                upstream: upstream.to_string(),
-                commit: self.git.run(&["rev-parse", "MERGE_HEAD"])?,
-            })),
+    fn merge(&self, origin: OriginCommit) -> Result<Merge> {
+        let upstream = &origin.upstream;
+        let message = format!(
+            "Merge remote-tracking branch '{upstream}' into {}",
+            self.branch
+        );
+        match self
+            .git
+            .run(&["merge", "--no-edit", "--ff", "-m", &message, &origin.commit])
+        {
+            Ok(_) => Ok(Merge::Clean {
+                commit: origin.commit,
+            }),
+            Err(_) if self.git.merge_in_progress()? => {
+                Ok(Merge::Conflicted(PendingMerge { origin }))
+            }
             Err(error) => Err(error),
         }
     }
@@ -212,11 +329,11 @@ impl Worktree {
     /// aborted it. The upstream may have moved on since; merging that is the
     /// next round's work.
     pub fn ensure_merged(&self, pending: &PendingMerge) -> Result<()> {
-        let upstream = &pending.upstream;
-        if self.merge_in_progress()? {
+        let upstream = &pending.origin.upstream;
+        if self.git.merge_in_progress()? {
             bail!("the merge of {upstream} is still in progress");
         }
-        if !self.merged(&pending.commit)? {
+        if !self.merged(&pending.origin.commit)? {
             bail!("{upstream} is not merged into {}", self.branch);
         }
         Ok(())
@@ -225,8 +342,8 @@ impl Worktree {
     /// Fetch `origin/<base>` and say whether it has commits the Issue branch
     /// has not merged yet.
     pub fn base_branch_moved(&self, base: &str) -> Result<bool> {
-        self.git.run(&["fetch", "origin", base])?;
-        Ok(!self.merged(&format!("origin/{base}"))?)
+        let origin = self.sample_origin(base)?;
+        Ok(!self.merged(&origin.commit)?)
     }
 
     /// Whether `rev` is fully merged into the Issue branch.
@@ -234,100 +351,98 @@ impl Worktree {
         self.git
             .succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"])
     }
+}
 
-    /// Whether a merge is in progress in the worktree.
-    pub fn merge_in_progress(&self) -> Result<bool> {
-        self.git
-            .succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+/// The local Issue branch head sampled for acquisition or advisory preflight.
+pub(crate) fn local_head(launch: &Git, branch: &str) -> Result<Option<String>> {
+    let reference = format!("refs/heads/{branch}");
+    let refs = launch.run(&[
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)%00%(symref)",
+        &reference,
+    ])?;
+    for line in refs.lines() {
+        let fields: Vec<_> = line.split('\0').collect();
+        if fields.first() == Some(&reference.as_str()) {
+            if fields.len() != 3 || !fields[2].is_empty() {
+                bail!("cannot establish the local branch {branch}: unexpected ref identity");
+            }
+            return Ok(Some(fields[1].to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// Refuse local work acquisition would replace. A fresh checkout requires
+/// absence; a Continuation permits absence or exact equality with its
+/// sampled origin head. Selection shares this rule for advisory preflight;
+/// acquisition checks it again under the worktree lock after fetching.
+pub(crate) fn check_local_branch(
+    branch: &str,
+    local_head: Option<&str>,
+    origin_head: Option<&str>,
+) -> Result<()> {
+    let Some(local_head) = local_head else {
+        return Ok(());
+    };
+    match origin_head {
+        Some(origin_head) if origin_head == local_head => Ok(()),
+        Some(_) => bail!(
+            "the local branch {branch} differs from origin/{branch}; push, reset or delete it first"
+        ),
+        None => {
+            bail!("the local branch {branch} is not on origin; push, rename or delete it first")
+        }
     }
 }
 
 impl Drop for Worktree {
     fn drop(&mut self) {
-        let path = self.path().to_string_lossy().into_owned();
-        if self.kept {
-            let head = self
-                .head()
-                .unwrap_or_else(|error| format!("an unknown commit ({error:#})"));
-            progress::step(format_args!(
-                "keeping the worktree {path} and local branch {} at {head}",
-                self.branch
-            ));
-            return;
-        }
-        progress::step(format_args!(
-            "cleaning up the worktree and local branch {}",
-            self.branch
-        ));
-        let _lock = lock_launch(&self.launch).inspect_err(|error| {
-            progress::step(format_args!("cleaning up without the lock: {error:#}"))
-        });
-        // Each step is attempted even if the one before it failed.
-        let steps: [&[&str]; 2] = [
-            &["worktree", "remove", "--force", &path],
-            &["branch", "-D", &self.branch],
-        ];
-        for step in steps {
-            if let Err(error) = self.launch.run(step) {
-                progress::step(format_args!("cleanup incomplete: {error:#}"));
-            }
-        }
+        self.checkout.cleanup(&self.launch, self.kept);
     }
 }
 
 /// The worktree an Architecture review runs in: detached at the head of the
 /// Base branch on origin, with no Issue branch, and removed when dropped,
-/// whatever the session left in it. Nothing in it is committed or pushed.
+/// whatever the session left in the owned instance. Replaced or uncertain
+/// resources are retained. Nothing in it is committed or pushed by cleanup.
 pub struct ReviewWorktree {
     launch: Git,
-    path: PathBuf,
+    checkout: ownership::Checkout,
 }
 
 impl ReviewWorktree {
     /// Check out `origin/<base>`, detached, in a new worktree next to the
     /// launch repository's root, named `<repo>-architect`. A worktree left
-    /// there by a process that ended before it could remove it is removed
-    /// first, so the caller sees that no Architecture review is still running
-    /// in it.
+    /// there by a process that ended before cleanup is removed only with
+    /// evidence of successful acquisition and unchanged instance ownership.
+    /// Failed, unmarked and uncertain acquisitions are retained and named.
     pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base])?;
         let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
-        if path.exists() {
-            let stale = path.to_str().context("worktree path is not UTF-8")?;
-            // Anything else at the path is left for `git worktree add` to
-            // refuse.
-            if launch.succeeds(&["worktree", "remove", "--force", stale])? {
-                progress::step(format_args!("removed the leftover worktree {stale}"));
-            }
-        }
-        let start = format!("origin/{base}");
+        ownership::recover_review(launch, &path)?;
+        launch.fetch(&[base])?;
+        let origin = fetched_origin(launch, base)?;
         progress::step(format_args!(
-            "creating worktree {} detached at {start}",
-            path.display()
+            "creating worktree {} detached at {}",
+            path.display(),
+            origin.upstream,
         ));
-        add_worktree(launch, &["--detach"], &path, &start)?;
+        let checkout = acquisition::add(launch, None, &path, &origin.commit)?;
         Ok(ReviewWorktree {
             launch: Git::new(root),
-            path,
+            checkout,
         })
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        self.checkout.path()
     }
 }
 
 impl Drop for ReviewWorktree {
     fn drop(&mut self) {
-        progress::step("cleaning up the worktree");
-        let _lock = lock_launch(&self.launch).inspect_err(|error| {
-            progress::step(format_args!("cleaning up without the lock: {error:#}"))
-        });
-        let path = self.path.to_string_lossy();
-        if let Err(error) = self.launch.run(&["worktree", "remove", "--force", &path]) {
-            progress::step(format_args!("cleanup incomplete: {error:#}"));
-        }
+        self.checkout.cleanup(&self.launch, false);
     }
 }
 
@@ -342,21 +457,21 @@ fn sibling(launch: &Git, name: &str) -> Result<(PathBuf, PathBuf)> {
     Ok((root, path))
 }
 
-/// `git worktree add <checkout> <path> <start>` in the launch repository,
-/// where `checkout` says what the worktree is on: a branch, or nothing.
-fn add_worktree(launch: &Git, checkout: &[&str], path: &Path, start: &str) -> Result<()> {
-    let path = path.to_str().context("worktree path is not UTF-8")?;
-    let mut args = vec!["worktree", "add"];
-    args.extend_from_slice(checkout);
-    args.extend([path, start]);
-    launch.run(&args)?;
-    Ok(())
+/// Pin an already-fetched origin branch, avoiding ambiguous local names.
+fn fetched_origin(git: &Git, branch: &str) -> Result<OriginCommit> {
+    let upstream = format!("origin/{branch}");
+    let commit = git.run(&[
+        "rev-parse",
+        "--verify",
+        &format!("refs/remotes/{upstream}^{{commit}}"),
+    ])?;
+    Ok(OriginCommit { upstream, commit })
 }
 
 /// Wait for, then hold until the file is dropped, the Launch directory's
 /// worktree lock, so the Runs of a Spec run's Tickets add and remove their
-/// worktrees and local Issue branches one at a time: `git worktree add -b`
-/// and `git branch -D` can fail partway on a lock file another holds.
+/// worktrees and local Issue branches one at a time. Acquisition and verified
+/// cleanup hold it through their filesystem, registration and ref effects.
 fn lock_launch(launch: &Git) -> Result<File> {
     launch.lock("thirdshift-worktrees.lock")
 }
@@ -370,7 +485,7 @@ mod tests {
 
     /// A clone `work` of a bare `origin.git` with one commit on `main`, both
     /// in a temp directory. No global or system config is read.
-    fn launch_directory() -> (tempfile::TempDir, Git) {
+    pub(super) fn launch_directory() -> (tempfile::TempDir, Git) {
         let temp = tempfile::TempDir::new().unwrap();
         let git = |dir: &Path, args: &[&str]| {
             let status = Command::new("git")
@@ -388,6 +503,24 @@ mod tests {
         );
         git(temp.path(), &["clone", "-q", "origin.git", "work"]);
         let work = temp.path().join("work");
+        let hooks = temp.path().join("hooks");
+        std::fs::create_dir(&hooks).unwrap();
+        git(
+            &temp.path().join("origin.git"),
+            &[
+                "config",
+                "core.hooksPath",
+                temp.path().join("origin.git/hooks").to_str().unwrap(),
+            ],
+        );
+        for (key, value) in [
+            ("user.name", "Test Runner"),
+            ("user.email", "runner@example.com"),
+            ("commit.gpgSign", "false"),
+            ("core.hooksPath", hooks.to_str().unwrap()),
+        ] {
+            git(&work, &["config", key, value]);
+        }
         git(
             &work,
             &[

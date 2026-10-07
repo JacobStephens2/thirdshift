@@ -1470,6 +1470,30 @@ fn a_bump_pr_closed_without_merging_is_refused() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn a_bump_pr_closed_without_merging_and_its_branch_deleted_starts_over() {
+    let release = Release::new();
+    let stale = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.gh(&["fake", "pr", "release-0.2.0", "state", "\"CLOSED\""]);
+    // GitHub keeps a closed PR's head once its branch is deleted.
+    let head = format!("\"{stale}\"");
+    release.gh(&["fake", "pr", "release-0.2.0", "headRefOid", &head]);
+    release.origin(&["branch", "-D", "release-0.2.0"]);
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let prs = release.prs_from("release-0.2.0");
+    assert_eq!(prs.len(), 2);
+    assert_eq!(prs[0]["state"], "CLOSED");
+    assert_eq!(prs[1]["state"], "MERGED");
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn review_no_on_a_rerun_after_the_branch_was_pushed_stops_with_no_pr_opened() {
     let release = Release::new();
     release.push_bump("0.2.0");
