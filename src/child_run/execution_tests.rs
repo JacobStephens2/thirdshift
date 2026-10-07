@@ -2,7 +2,6 @@
 
 use super::*;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::time::Instant;
 use tempfile::TempDir;
 
@@ -101,15 +100,14 @@ impl Fixture {
     fn new(script: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let executable = dir.path().join("run");
-        fs::write(
+        crate::test_support::write_executable(
             &executable,
-            format!(
+            &format!(
                 "#!/usr/bin/env python3\nimport os, signal, time\nsignal.alarm(8)\nROOT = {:?}\nwith open(ROOT + '/pid', 'w') as f: f.write(str(os.getpid()))\n{}\n",
-                dir.path(), script
+                dir.path(),
+                script
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         Self(dir)
     }
 
