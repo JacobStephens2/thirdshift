@@ -5,7 +5,6 @@ use super::*;
 use crate::interrupt;
 use crate::test_support::with_recorded_signal;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::sync::mpsc;
 
 /// Observe whether acquisition finishes while an independent open still
@@ -236,12 +235,10 @@ impl Fixture {
     fn new(git: &Git, script: &str) -> Self {
         let pid = git.dir().join("fixture.pid");
         let path = git.dir().join("fixture.sh");
-        fs::write(
+        crate::test_support::write_executable(
             &path,
-            format!("#!/bin/sh\necho $$ > fixture.pid\n{script}\n"),
-        )
-        .unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            &format!("#!/bin/sh\necho $$ > fixture.pid\n{script}\n"),
+        );
         Self { pid }
     }
 

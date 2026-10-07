@@ -18,9 +18,9 @@ impl Fixture {
         fs::create_dir(fixture.path("bin")).unwrap();
         fs::create_dir(fixture.path("logs")).unwrap();
         let cli = fixture.path("bin/opencode");
-        fs::write(
+        crate::test_support::write_executable(
             &cli,
-            format!(
+            &format!(
                 r#"#!/bin/bash
 if test "$1" = session; then
     echo export >> "$THIRDSHIFT_SESSION_TEST_DIR/calls"
@@ -33,9 +33,7 @@ echo '{{"type":"step_start","sessionID":"s1","part":{{}}}}'
 {script}
 "#
             ),
-        )
-        .unwrap();
-        fs::set_permissions(cli, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         // Retained failure and usage must not replace the transport error.
         fs::write(
             fixture.path("export.json"),

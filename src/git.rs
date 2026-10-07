@@ -112,6 +112,13 @@ impl Git {
         }
     }
 
+    /// Keep fetch's local connectivity check away from incomplete or
+    /// disappearing Worktree heads. Acquisition and disposal take this
+    /// after the worktree ownership lock; fetch takes only this lock.
+    pub fn lock_worktree_refs(&self) -> Result<File> {
+        self.lock("thirdshift-worktree-refs.lock")
+    }
+
     /// Whether origin has the branch `branch`, as origin itself answers.
     pub fn on_origin(&self, branch: &str) -> Result<bool> {
         let reference = format!("refs/heads/{branch}");
@@ -122,6 +129,7 @@ impl Git {
     /// Fetch origin without automatic maintenance: worktree disposal must
     /// pass ownership inspection, never a fetch's implicit pruning.
     pub fn fetch(&self, branches: &[&str]) -> Result<()> {
+        let _lock = self.lock_worktree_refs()?;
         let mut args = vec!["fetch", "--no-auto-maintenance", "origin"];
         args.extend_from_slice(branches);
         self.run(&args)?;
@@ -215,7 +223,6 @@ fn non_empty_lines(stream: &[u8]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
 
@@ -252,8 +259,7 @@ mod tests {
     fn a_failure_includes_a_hooks_output_and_gits_own_error() {
         let (_temp, git) = repo_with_origin();
         let hook = git.dir().join(".git/hooks/pre-push");
-        std::fs::write(&hook, "#!/bin/sh\necho 'hook says no'\nexit 1\n").unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_executable(&hook, "#!/bin/sh\necho 'hook says no'\nexit 1\n");
 
         let error = git
             .run(&["push", "origin", "main"])
@@ -384,6 +390,55 @@ mod tests {
 
             git.run(&["-c", &alias, "race"]).unwrap();
         }
+    }
+
+    #[test]
+    fn a_fetch_still_reports_a_missing_required_ref() {
+        let (_temp, git) = repo_with_origin();
+        git.push("main").unwrap();
+
+        let error = git.fetch(&["absent"]).unwrap_err().to_string();
+
+        assert!(error.contains("couldn't find remote ref absent"), "{error}");
+    }
+
+    #[test]
+    fn a_fetch_still_reports_a_transport_failure() {
+        let (_temp, git) = repo_with_origin();
+        git.run(&["config", "remote.origin.url", "../absent.git"])
+            .unwrap();
+
+        let error = git.fetch(&["main"]).unwrap_err().to_string();
+
+        assert!(
+            error.contains("does not appear to be a git repository"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_fetch_still_reports_a_missing_required_object() {
+        let (temp, git) = repo_with_origin();
+        let initial = git.run(&["rev-parse", "HEAD"]).unwrap();
+        git.run(&["commit", "-q", "--allow-empty", "-m", "Required commit"])
+            .unwrap();
+        let required = git.run(&["rev-parse", "HEAD"]).unwrap();
+        git.push("main").unwrap();
+        git.run(&["reset", "--hard", &initial]).unwrap();
+        for objects in [
+            git.dir().join(".git/objects"),
+            temp.path().join("origin.git/objects"),
+        ] {
+            std::fs::remove_file(objects.join(&required[..2]).join(&required[2..])).unwrap();
+        }
+
+        let error = git.fetch(&["main"]).unwrap_err().to_string();
+
+        assert!(
+            error.contains("git fetch") && error.contains("failed"),
+            "{error}"
+        );
+        assert!(error.contains(&required), "{error}");
     }
 
     #[test]
