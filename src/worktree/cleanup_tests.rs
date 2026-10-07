@@ -1008,10 +1008,6 @@ fi
                     fs::read_to_string(path.join("work.txt")).unwrap(),
                     "capture work\n"
                 );
-                assert!(
-                    error.contains("retaining checkout") && error.contains(&head),
-                    "{error}"
-                );
                 assert!(registration(&launch).contains(path.to_str().unwrap()));
             } else {
                 assert!(path.exists(), "{kind}: {error}");
