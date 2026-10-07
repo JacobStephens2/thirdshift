@@ -111,9 +111,11 @@ fn assert_nothing_created(scenario: &Scenario, local_branch: &str) {
 #[test]
 fn a_local_issue_branch_that_differs_from_origin_stops_the_run() {
     let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
     scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
     scenario.launch_checks_out("issue-7");
     scenario.launch_git(&["commit", "-q", "--allow-empty", "-m", "Local only"]);
+    let local_head = scenario.launch_git(&["rev-parse", "HEAD"]);
     scenario.launch_checks_out("main");
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
@@ -129,11 +131,71 @@ fn a_local_issue_branch_that_differs_from_origin_stops_the_run() {
         result.stderr
     );
     assert_nothing_created(&scenario, "issue-7");
+    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    assert_eq!(scenario.launch_git(&["rev-parse", "issue-7"]), local_head);
     assert_eq!(
         scenario.launch_git(&["log", "-1", "--format=%s", "issue-7"]),
         "Local only\n"
     );
     assert_eq!(scenario.origin_log("issue-7").map(|log| log.len()), Some(2));
+}
+
+#[test]
+fn a_local_branch_added_after_selection_fails_acquisition_and_ends_the_claim() {
+    for continuing in [false, true] {
+        let scenario = Scenario::new();
+        scenario.issue_labelled(7, &["ready-for-agent"]);
+        if continuing {
+            scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+        }
+        let mut state = scenario.gh_state();
+        // The preflight issue read installs a callback for the Claim's read,
+        // which happens after selection. This deterministically changes the
+        // branch before acquisition without changing the Run's ordering.
+        state["on_issue_view"]["7"] =
+            serde_json::json!("gh fake on-issue-view 7 'bash \"$FAKE_GH_STATE.after-selection\"'");
+        scenario.write_gh_state(&state);
+        std::fs::write(
+            scenario.path("gh-state.json.after-selection"),
+            r#"
+git checkout -q -b issue-7
+git commit -q --allow-empty -m 'After selection'
+git rev-parse HEAD > "$FAKE_GH_STATE.local-head"
+git checkout -q main
+"#,
+        )
+        .unwrap();
+        scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+        assert_eq!(result.stdout, "");
+        let message = if continuing {
+            "the local branch issue-7 differs from origin/issue-7; push, reset or delete it first"
+        } else {
+            "the local branch issue-7 is not on origin; push, rename or delete it first"
+        };
+        assert!(result.stderr.contains(message), "stderr: {}", result.stderr);
+        assert_nothing_created(&scenario, "issue-7");
+        assert_eq!(
+            scenario.launch_git(&["rev-parse", "issue-7"]),
+            std::fs::read_to_string(scenario.path("gh-state.json.local-head")).unwrap()
+        );
+        assert_eq!(
+            scenario.issue_labels(7),
+            if continuing {
+                ["in-progress"]
+            } else {
+                ["ready-for-agent"]
+            }
+        );
+        assert_eq!(scenario.gh_state()["prs"], serde_json::json!([]));
+        assert_eq!(
+            scenario.origin_log("issue-7").map(|log| log.len()),
+            if continuing { Some(2) } else { None }
+        );
+    }
 }
 
 #[test]
