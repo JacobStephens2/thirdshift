@@ -479,7 +479,7 @@ if test -e "$THIRDSHIFT_FAULT_MARKER.armed"; then
     touch "$THIRDSHIFT_FAULT_MARKER.pushed"
     exit 0
   fi
-  if test "$1" = worktree && test "$2" = list && test -e "$THIRDSHIFT_FAULT_MARKER.pushed"; then
+  if test "$1" = worktree && test "$2" = list && test -e "$THIRDSHIFT_FAULT_MARKER.pushed" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
     touch "$THIRDSHIFT_FAULT_MARKER"
     for _ in $(seq 500); do
       test -e "$THIRDSHIFT_FAULT_MARKER.release" && break
@@ -494,6 +494,11 @@ fi
     }
     let (temp, launch, mut worktree) = fixture();
     let reader = Worktree::create_fresh(&launch, "work", "issue-8", "main").unwrap();
+    // Unmarked review scratch refuses acquisition before any fetch. Its
+    // refusal therefore observes ownership coordination independently of refs.
+    let review_path = temp.path().join("work-architect");
+    fs::create_dir(&review_path).unwrap();
+    fs::write(review_path.join("manual.txt"), "manual review work\n").unwrap();
     let path = worktree.path().to_path_buf();
     let git = Git::new(&path);
     git.run(&["branch", "manual"]).unwrap();
@@ -517,7 +522,7 @@ fi
         let launch_view = &launch;
         let acquirer = scope.spawn(move || {
             let _ = acquiring.send(());
-            let result = Worktree::create_fresh(launch_view, "work", "issue-9", "main");
+            let result = ReviewWorktree::create(launch_view, "work", "main");
             let _ = acquired.send(());
             result
         });
@@ -546,7 +551,13 @@ fi
         let merged = fetcher.join();
         released.unwrap();
         // Every worker has finished before an assertion can unwind.
-        let acquired = acquired.unwrap().unwrap();
+        let refusal = acquired
+            .unwrap()
+            .err()
+            .expect("unmarked scratch was acquired");
+        let refusal = format!("{refusal:#}");
+        assert!(refusal.contains("retaining checkout"), "{refusal}");
+        assert!(refusal.contains(review_path.to_str().unwrap()), "{refusal}");
         assert!(matches!(merged.unwrap().unwrap(), Merge::Clean { .. }));
         assert!(
             acquisition_started && fetch_started,
@@ -560,8 +571,10 @@ fi
             !fetch_bypassed,
             "sibling fetch overlapped final ownership inspection"
         );
-        assert!(acquired.path().exists());
-        drop(acquired);
+        assert_eq!(
+            fs::read_to_string(review_path.join("manual.txt")).unwrap(),
+            "manual review work\n"
+        );
         preserved.unwrap()
     });
 
