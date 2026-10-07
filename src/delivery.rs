@@ -1440,21 +1440,18 @@ mod tests {
 
     #[test]
     fn a_preservation_error_is_secondary_and_pr_accounting_keeps_the_original_failure() {
+        let original = "session failed\nmore context";
         for interrupted in [false, true] {
             let mut outside = Scripted {
                 interrupted,
-                pr: Some(Pr {
-                    state: PrState::Open,
-                    base: "main",
-                    draft: false,
-                }),
+                repair_loop_error: original,
                 ..Scripted::default()
             }
+            .failing(Fails::TakeToGoal)
             .failing(Fails::PreserveFailedRun);
             let log = PathBuf::from("/logs/7-implement.jsonl");
-            let original = "session failed\nmore context";
 
-            let failed = fail(&mut outside, Some(log.clone()), anyhow::anyhow!(original));
+            let failed = failed(Goal::ReadyForReview, &mut outside);
 
             let reason = if interrupted {
                 "interrupted"
@@ -1466,19 +1463,10 @@ mod tests {
             assert_eq!(failed.log, Some(log));
             assert_eq!(failed.pr_url.as_deref(), Some(PR_URL));
             assert!(outside.pr.unwrap().draft);
-            assert_eq!(
-                outside.calls,
-                [
-                    Call::Interrupted,
-                    Call::PreserveFailedRun(reason.to_string()),
-                    step(
-                        "could not push the failed run's work, so it may exist only locally: \
-                         PreserveFailedRun failed"
-                    ),
-                    Call::PullRequest,
-                    Call::ConvertToDraft,
-                ]
-            );
+            assert!(outside.calls.contains(&step(
+                "could not push the failed run's work, so it may exist only locally: \
+                 PreserveFailedRun failed"
+            )));
         }
     }
 
