@@ -299,3 +299,34 @@ fn a_branch_in_another_worktree_is_refused_without_touching_its_edits() {
         "{error}"
     );
 }
+
+#[test]
+fn acquisition_pins_origin_even_when_local_branches_shadow_remote_tracking_names() {
+    let (temp, launch, issue_head) = continuation();
+    let base_head = launch.run(&["rev-parse", "main"]).unwrap();
+    launch.run(&["branch", "origin/issue-7", "main"]).unwrap();
+    launch.run(&["branch", "origin/main", BRANCH]).unwrap();
+
+    let continued = Worktree::continue_existing(&launch, "work", BRANCH, "main").unwrap();
+    assert_eq!(continued.head().unwrap(), issue_head);
+    drop(continued);
+
+    let fresh = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
+    assert_eq!(fresh.head().unwrap(), base_head);
+    drop(fresh);
+
+    assert_eq!(
+        launch
+            .run(&["rev-parse", "refs/heads/origin/issue-7"])
+            .unwrap(),
+        base_head
+    );
+    assert_eq!(
+        launch
+            .run(&["rev-parse", "refs/heads/origin/main"])
+            .unwrap(),
+        issue_head
+    );
+    assert!(!temp.path().join("work-issue-7").exists());
+    assert!(local_head(&launch, BRANCH).unwrap().is_none());
+}

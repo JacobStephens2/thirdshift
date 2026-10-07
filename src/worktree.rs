@@ -54,7 +54,7 @@ impl Worktree {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;
         let source = format!("origin/{base}");
-        let commit = launch.run(&["rev-parse", &source])?;
+        let commit = launch.run(&["rev-parse", &format!("refs/remotes/{source}")])?;
         check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
         Self::add(launch, repo, branch, &["-b", branch], &commit, &source)
     }
@@ -69,7 +69,7 @@ impl Worktree {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base, branch])?;
         let source = format!("origin/{branch}");
-        let commit = launch.run(&["rev-parse", &source])?;
+        let commit = launch.run(&["rev-parse", &format!("refs/remotes/{source}")])?;
         let local = local_head(launch, branch)?;
         check_local_branch(branch, local.as_deref(), Some(&commit))?;
         if local.is_some() {
