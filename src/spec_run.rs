@@ -12,15 +12,12 @@
 mod spec_pr;
 mod ticket_board;
 
-use std::collections::{BTreeMap, VecDeque};
 use std::num::NonZeroUsize;
-use std::thread;
-use std::time::Duration;
 
 use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::{self, Ended, Handle, Kind};
+use crate::child_run::{Ended, Kind, Runs};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
@@ -192,11 +189,14 @@ trait Outside {
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
 /// branch checked out in `worktree`: child `thirdshift` Runs, each of which
 /// may start a Base fix if `base_fix` allows one, and runs its sessions on
-/// `harness`, their owned handles in `running`, GitHub, the Spec PR
+/// `harness`, owned together in `children`, GitHub, the Spec PR
 /// `spec_pr`, and `delivery`, which takes the
 /// worktree when it starts.
 struct ChildRunsAndGitHub<'a> {
     spec: &'a IssueUrl,
+    /// Fields drop in declaration order: stop and drain child salvage before
+    /// Worktree cleanup, including when the Spec run owner unwinds.
+    children: Runs,
     /// Held until the Delivery starts, which takes it.
     worktree: Option<Worktree>,
     /// Held until it starts.
@@ -204,8 +204,6 @@ struct ChildRunsAndGitHub<'a> {
     base_fix: BaseFixAsk,
     harness: &'a Choice,
     spec_pr: SpecPr<'a>,
-    running: BTreeMap<u64, Handle>,
-    endings: VecDeque<(u64, Result<Ended>)>,
 }
 
 impl<'a> ChildRunsAndGitHub<'a> {
@@ -214,13 +212,12 @@ impl<'a> ChildRunsAndGitHub<'a> {
     fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: SpecPr<'a>) -> Self {
         Self {
             spec: delivery.issue,
+            children: Runs::default(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
             harness: delivery.harness,
             delivery: Some(delivery),
             spec_pr,
-            running: BTreeMap::new(),
-            endings: VecDeque::new(),
         }
     }
 
@@ -237,43 +234,28 @@ impl Outside for ChildRunsAndGitHub<'_> {
         self.worktree().push()
     }
 
-    /// Retain the child Run's ownership until polling delivers its ending.
     fn start_ticket(&mut self, number: u64) -> Result<()> {
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
         };
         let ticket = self.spec.sibling(number);
-        let child = child_run::start(&ticket, kind, self.base_fix.clone(), self.harness)?;
-        self.running.insert(number, child);
-        Ok(())
+        self.children
+            .start(&ticket, kind, self.base_fix.clone(), self.harness)
     }
 
     fn next_ending(&mut self) -> (u64, Result<Ended>) {
-        loop {
-            // Scan every child before returning an ending. In particular,
-            // interruption reaches all active Tickets before waiting on any.
-            for (&number, child) in &mut self.running {
-                if let Some(ending) = child.try_wait() {
-                    self.endings.push_back((number, ending));
-                }
-            }
-            for (number, _) in &self.endings {
-                self.running.remove(number);
-            }
-            if let Some((number, ending)) = self.endings.pop_front() {
-                if let Ok(ended) = &ending {
-                    progress::step(match ended {
-                        Ended::Reached { .. } => format!("#{number} landed"),
-                        Ended::Interrupted => format!("#{number} interrupted"),
-                        Ended::Failed { .. } => format!("#{number} failed"),
-                    });
-                }
-                return (number, ending);
-            }
-            // GitHub's polling helper returns early on interruption; child
-            // supervision must keep its cadence while graceful cleanup runs.
-            thread::sleep(Duration::from_millis(100));
+        let (number, ending) = self
+            .children
+            .next_ending()
+            .expect("the Ticket board has an outstanding Run");
+        if let Ok(ended) = &ending {
+            progress::step(match ended {
+                Ended::Reached { .. } => format!("#{number} landed"),
+                Ended::Interrupted => format!("#{number} interrupted"),
+                Ended::Failed { .. } => format!("#{number} failed"),
+            });
         }
+        (number, ending)
     }
 
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
