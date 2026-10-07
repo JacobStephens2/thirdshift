@@ -118,9 +118,29 @@ impl Fixture {
     }
 
     fn start_in(&self, runs: &mut Runs, number: u64) -> Result<()> {
-        runs.start_using(number, || {
-            self.start_number_using(number, Handle::start_readers)
+        self.start_in_using(runs, number, Handle::start_readers)
+    }
+
+    fn start_completed_in(&self, runs: &mut Runs, number: u64) -> Result<()> {
+        // Arrange a real, completed child at the private launch seam without
+        // consuming its ending. Queue tests need both process and readers
+        // finished; process exit alone cannot guarantee reader readiness.
+        self.start_in_using(runs, number, |owned| {
+            owned.start_readers()?;
+            while !owned.poll_completion() {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(())
         })
+    }
+
+    fn start_in_using(
+        &self,
+        runs: &mut Runs,
+        number: u64,
+        startup: impl FnOnce(&mut Handle) -> Result<()>,
+    ) -> Result<()> {
+        runs.start_using(number, || self.start_number_using(number, startup))
     }
 
     fn start_with_fault(&self, fault: Fault) -> Result<Handle> {
@@ -167,25 +187,10 @@ impl Fixture {
         fs::read_to_string(self.0.path().join(name)).unwrap()
     }
 
-    fn await_exit(&self) {
-        self.await_file("pid");
-        let pid = self.read("pid").parse::<libc::id_t>().unwrap();
-        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
-        // SAFETY: wait only for this fixture's PID, filling a valid buffer.
-        // WNOWAIT leaves the child owned and unreaped for the collection.
-        assert_eq!(
-            unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    pid,
-                    status.as_mut_ptr(),
-                    libc::WEXITED | libc::WNOWAIT,
-                )
-            },
-            0,
-            "could not await fixture exit: {}",
-            std::io::Error::last_os_error()
-        );
+    fn assert_saved_on_stop(&self) {
+        assert!(self.0.path().join("saved").exists());
+        assert_eq!(self.read("terms"), "TERM\n");
+        self.assert_stopped();
     }
 
     fn assert_stopped(&self) {
@@ -329,9 +334,7 @@ fn dropping_a_live_handle_gracefully_saves_work_and_reaps_the_child() {
     let handle = fixture.start().unwrap();
     fixture.await_file("ready");
     drop(handle);
-    assert!(fixture.0.path().join("saved").exists());
-    assert_eq!(fixture.read("terms"), "TERM\n");
-    fixture.assert_stopped();
+    fixture.assert_saved_on_stop();
 }
 
 #[test]
@@ -348,9 +351,7 @@ fn duplicate_start_is_refused_before_launch_and_keeps_the_original_child_owned()
     assert!(!original.0.path().join("terms").exists());
 
     drop(runs);
-    assert!(original.0.path().join("saved").exists());
-    assert_eq!(original.read("terms"), "TERM\n");
-    original.assert_stopped();
+    original.assert_saved_on_stop();
 }
 
 #[test]
@@ -368,15 +369,11 @@ fn launch_failure_leaves_existing_children_running_and_owned_for_cleanup() {
     assert!(!original.0.path().join("terms").exists());
 
     drop(runs);
-    assert!(original.0.path().join("saved").exists());
-    assert_eq!(original.read("terms"), "TERM\n");
-    original.assert_stopped();
+    original.assert_saved_on_stop();
 }
 
 fn finished_fixture() -> Fixture {
-    Fixture::new(&format!(
-        "os.write(1, b'{PR}\\n')\nos.close(1)\nos.close(2)\ntime.sleep(.1)"
-    ))
+    Fixture::new(&format!("os.write(1, b'{PR}\\n')"))
 }
 
 #[test]
@@ -385,10 +382,8 @@ fn simultaneous_endings_are_retired_once_and_queued_identity_is_reserved_until_d
     let second = finished_fixture();
     let replacement = finished_fixture();
     let mut runs = Runs::default();
-    second.start_in(&mut runs, 22).unwrap();
-    first.start_in(&mut runs, 21).unwrap();
-    first.await_exit();
-    second.await_exit();
+    second.start_completed_in(&mut runs, 22).unwrap();
+    first.start_completed_in(&mut runs, 21).unwrap();
 
     let (number, ending) = runs.next_ending().unwrap();
     assert_eq!(number, 21);
@@ -587,10 +582,8 @@ fn interruption_reaches_every_active_child_before_a_queued_ending_is_delivered()
     let third = Fixture::new(GATED_STOP);
     let fourth = Fixture::new(GATED_STOP);
     let mut runs = Runs::default();
-    first.start_in(&mut runs, 21).unwrap();
-    second.start_in(&mut runs, 22).unwrap();
-    first.await_exit();
-    second.await_exit();
+    first.start_completed_in(&mut runs, 21).unwrap();
+    second.start_completed_in(&mut runs, 22).unwrap();
     third.start_in(&mut runs, 23).unwrap();
     fourth.start_in(&mut runs, 24).unwrap();
     third.await_file("ready");
