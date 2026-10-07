@@ -117,12 +117,13 @@ pub fn run(
     };
     let mut outside = LaunchAndGitHub {
         launch: &directory,
+        base: &base,
         repo: &repo,
         harness,
         flags,
         config,
     };
-    run_through(&mut outside, &repo, &base, config.pickup_limit)
+    run_through(&mut outside, &repo, base.name(), config.pickup_limit)
 }
 
 /// [`run`], once it holds its repository's lock, on `repo` with the Base

@@ -13,7 +13,7 @@ The GitHub issue link the factory is given to implement, e.g. `https://github.co
 _Avoid_: ticket, spec link
 
 **Launch directory**:
-The directory a **Run** is started from. It must pass **Origin match**, and its checked-out branch is normally the **Base branch**. A Run works in its own worktree, never in the Launch directory.
+The directory a **Run** is started from. It must pass **Origin match**, and its checked-out branch is normally the **Base branch**. Base branch validation and optional pulling share one sampled origin commit; **Worktree** acquisition samples independently. A Run works in its own worktree, never in the Launch directory.
 _Avoid_: originating workspace, launch repo
 
 **Origin match**:
