@@ -98,7 +98,8 @@ fn gives_the_agent_the_fresh_prompt() {
          If you decline a finding because a Spec or the Day shift must decide, \
          file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. \
          The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. \
-         Give a new issue only the `needs-triage` label so it pauses nothing.\n\
+         Give a new issue only the `needs-triage` label so it pauses nothing. \
+         Name in the pull request body any changed file the review left unread.\n\
          Include \"Closes #7\" in the PR body.\n\
          You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
     );
