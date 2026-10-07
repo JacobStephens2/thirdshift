@@ -392,7 +392,7 @@ impl Operation<'_> {
     }
 
     pub(super) fn run(&self, args: &[&str]) -> Result<String> {
-        self.execute(|git| git.run_checked(args, || self.inspect().map(|_| ())))
+        self.git.run_checked(args, || self.inspect().map(|_| ()))
     }
 
     pub(super) fn head(&self) -> Result<String> {
@@ -400,11 +400,12 @@ impl Operation<'_> {
     }
 
     pub(super) fn push(&self, branch: &str) -> Result<()> {
-        self.execute(|git| git.push_checked(branch, || self.inspect().map(|_| ())))
+        self.git.push_checked(branch, || self.inspect().map(|_| ()))
     }
 
     pub(super) fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
-        self.execute(|git| git.fetch_checked(&[branch], || self.inspect().map(|_| ())))?;
+        self.git
+            .fetch_checked(&[branch], || self.inspect().map(|_| ()))?;
         super::fetched_origin(branch, |args| self.run(args))
     }
 
