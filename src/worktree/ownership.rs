@@ -173,6 +173,7 @@ impl Checkout {
     }
 
     fn retain(&self, launch: &Git, reason: &str, kept: bool) {
+        let reason = reason.replace('\n', "; ");
         let head = Git::new(self.path())
             .completion()
             .run(&["rev-parse", "--verify", "HEAD"])
@@ -200,80 +201,23 @@ impl Checkout {
     }
 
     fn remove(&self, launch: &Git) -> Result<()> {
-        self.common.verify()?;
+        self.verify_repository(launch)?;
         let _lock = lock_launch(launch).context("cannot establish cleanup worktree lock")?;
-        self.remove_locked(launch)
+        self.remove_locked(launch, || Ok(()))
     }
 
-    /// Acquisition and stale recovery already hold the same repository lock.
-    fn remove_locked(&self, launch: &Git) -> Result<()> {
+    /// Stale recovery already holds the worktree lock. Its durable evidence
+    /// supplies additional authority; live disposal uses lifetime identity.
+    fn remove_locked(&self, launch: &Git, evidence: impl Fn() -> Result<()>) -> Result<()> {
+        self.verify_repository(launch)?;
         let _refs_lock = launch.lock_worktree_refs()?;
-        let head = self.inspect(launch)?;
-        let config = self
-            .branch
-            .as_deref()
-            .map(|branch| branch_config(launch, branch))
-            .transpose()?;
-        launch
-            .run(&[
-                "worktree",
-                "remove",
-                "--force",
-                self.path().to_str().context("worktree path is not UTF-8")?,
-            ])
-            .context("owned checkout removal failed; local branch retained")?;
-        if let Some(branch) = &self.branch
-            && let Err(error) =
-                self.remove_branch(launch, branch, &head, config.as_deref().unwrap_or_default())
-        {
-            let current = local_head(launch, branch).ok().flatten();
-            progress::step(format_args!(
-                "warning: retaining local branch {branch} or its configuration for checkout {} at {}: {error:#}",
-                self.path().display(),
-                current.as_deref().unwrap_or(&head),
-            ));
-        }
-        Ok(())
-    }
-
-    fn remove_branch(
-        &self,
-        launch: &Git,
-        branch: &str,
-        head: &str,
-        config: &[String],
-    ) -> Result<()> {
-        let reference = format!("refs/heads/{branch}");
-        if let Some(entry) = registrations(launch)?
-            .iter()
-            .find(|entry| entry.branch.as_deref() == Some(&reference))
-        {
-            bail!("local branch still registered at {}", entry.path.display());
-        }
-        launch
-            .run(&["update-ref", "--no-deref", "-d", &reference, head])
-            .with_context(|| format!("conditional removal failed; last observed head {head}"))?;
-        // Snapshot equality preserves subsection case, duplicate order,
-        // embedded newlines, and valueless versus empty configuration.
-        if local_head(launch, branch)?.is_some() {
-            bail!("local ref was recreated; branch configuration retained");
-        }
-        if branch_config(launch, branch)? != config {
-            bail!("branch configuration changed since cleanup snapshot; configuration retained");
-        }
-        if local_head(launch, branch)?.is_some() {
-            bail!("local ref was recreated; branch configuration retained");
-        }
-        if !config.is_empty() {
-            launch.run(&[
-                "config",
-                "--local",
-                "--no-includes",
-                "--remove-section",
-                &format!("branch.{branch}"),
-            ])?;
-        }
-        Ok(())
+        let disposal = Disposal::capture(self, launch, &evidence)?;
+        disposal.remove().with_context(|| {
+            format!(
+                "disposal stopped at captured cleanup head {}",
+                disposal.head
+            )
+        })
     }
 
     /// Directory handles distinguish recreation even at the same paths and HEAD.
@@ -338,8 +282,188 @@ impl Checkout {
         // Recheck after Git observations, before permitting a destructive step.
         self.root.verify()?;
         self.admin.verify()?;
-        self.common.verify()?;
+        self.verify_repository(launch)?;
         Ok(head)
+    }
+}
+
+/// One acquired disposal owns the head and exact configuration snapshot
+/// through checkout, ref and configuration removal, under both caller locks.
+struct Disposal<'a> {
+    checkout: &'a Checkout,
+    launch: &'a Git,
+    evidence: &'a dyn Fn() -> Result<()>,
+    head: String,
+    config: Vec<String>,
+}
+
+impl<'a> Disposal<'a> {
+    fn capture(
+        checkout: &'a Checkout,
+        launch: &'a Git,
+        evidence: &'a dyn Fn() -> Result<()>,
+    ) -> Result<Self> {
+        let head = checkout.inspect(launch)?;
+        let config = checkout
+            .branch
+            .as_deref()
+            .map(|branch| branch_config(launch, branch))
+            .transpose()?
+            .unwrap_or_default();
+        let disposal = Self {
+            checkout,
+            launch,
+            evidence,
+            head,
+            config,
+        };
+        disposal.verify_checkout()?;
+        Ok(disposal)
+    }
+
+    fn remove(&self) -> Result<()> {
+        self.launch
+            .run_transition(
+                &[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    self.checkout
+                        .path()
+                        .to_str()
+                        .context("worktree path is not UTF-8")?,
+                ],
+                || self.verify_checkout(),
+                |result| {
+                    if result.as_ref().is_ok_and(|output| output.status.success()) {
+                        self.verify_removed().map(|_| ())
+                    } else {
+                        self.verify_checkout()
+                    }
+                },
+            )
+            .context("owned checkout removal failed; local branch retained")?;
+        if let Some(branch) = &self.checkout.branch {
+            self.remove_branch(branch)?;
+        }
+        Ok(())
+    }
+
+    fn verify_checkout(&self) -> Result<()> {
+        if self.checkout.inspect(self.launch)? != self.head {
+            bail!("checkout head changed since cleanup snapshot");
+        }
+        (self.evidence)()?;
+        self.checkout.verify_repository(self.launch)
+    }
+
+    fn verify_removed(&self) -> Result<Vec<super::acquisition::Registration>> {
+        self.checkout.verify_repository(self.launch)?;
+        for path in [&self.checkout.root.path, &self.checkout.admin.path] {
+            match fs::symlink_metadata(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("cannot inspect removed path {}", path.display())
+                    });
+                }
+                Ok(_) => bail!(
+                    "removed path {} exists; remaining resources retained",
+                    path.display()
+                ),
+            }
+        }
+        let entries = registrations(self.launch)?;
+        if entries
+            .iter()
+            .any(|entry| entry.path == self.checkout.root.path)
+        {
+            bail!("removed checkout registration still exists");
+        }
+        self.checkout.verify_repository(self.launch)?;
+        Ok(entries)
+    }
+
+    fn verify_branch(&self, branch: &str, expected: Option<&str>) -> Result<()> {
+        let entries = self.verify_removed()?;
+        let reference = format!("refs/heads/{branch}");
+        if let Some(entry) = entries
+            .iter()
+            .find(|entry| entry.branch.as_deref() == Some(&reference))
+        {
+            bail!("local branch still registered at {}", entry.path.display());
+        }
+        let head = local_head(self.launch, branch)?;
+        if head.as_deref() != expected {
+            if expected.is_none() {
+                bail!("local ref was recreated; branch configuration retained");
+            }
+            bail!(
+                "local branch head changed since cleanup snapshot (expected {}, observed {})",
+                self.head,
+                head.as_deref().unwrap_or("absent")
+            );
+        }
+        self.checkout.verify_repository(self.launch)
+    }
+
+    fn remove_branch(&self, branch: &str) -> Result<()> {
+        let launch = self.launch;
+        let head = &self.head;
+        let reference = format!("refs/heads/{branch}");
+        launch
+            .run_transition(
+                &["update-ref", "--no-deref", "-d", &reference, head],
+                || self.verify_branch(branch, Some(head)),
+                |result| {
+                    let expected = if result.as_ref().is_ok_and(|output| output.status.success()) {
+                        None
+                    } else {
+                        Some(head.as_str())
+                    };
+                    self.verify_branch(branch, expected)
+                },
+            )
+            .with_context(|| format!("conditional removal failed; last observed head {head}"))?;
+        self.remove_configuration(branch)
+    }
+
+    fn verify_configuration(&self, branch: &str, removed: bool) -> Result<()> {
+        self.verify_branch(branch, None)?;
+        // Exact records preserve subsection case, duplicate order, embedded
+        // newlines, and valueless versus empty configuration.
+        let config = branch_config(self.launch, branch)?;
+        if if removed {
+            !config.is_empty()
+        } else {
+            config != self.config
+        } {
+            bail!("branch configuration changed since cleanup snapshot; configuration retained");
+        }
+        self.verify_branch(branch, None)
+    }
+
+    fn remove_configuration(&self, branch: &str) -> Result<()> {
+        if self.config.is_empty() {
+            return self.verify_configuration(branch, false);
+        }
+        self.launch.run_transition(
+            &[
+                "config",
+                "--local",
+                "--no-includes",
+                "--remove-section",
+                &format!("branch.{branch}"),
+            ],
+            || self.verify_configuration(branch, false),
+            |result| {
+                self.verify_configuration(
+                    branch,
+                    result.as_ref().is_ok_and(|output| output.status.success()),
+                )
+            },
+        )?;
+        Ok(())
     }
 }
 

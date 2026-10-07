@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 const BRANCH: &str = "issue-7";
 
+mod disposal_tests;
+
 /// Hold the selected Git transition open while a sibling asks to merge its
 /// Base branch. Release and join both workers before any assertion can unwind.
 fn merge_during_worktree_change<T: Send>(
