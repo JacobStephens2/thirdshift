@@ -153,7 +153,7 @@ impl LaunchDirectory {
         if !self.git.on_origin(base)? {
             bail!("base branch {base} does not exist on origin; push it first");
         }
-        self.git.run(&["fetch", "origin", base])?;
+        self.git.fetch(&[base])?;
         let origin_commit = self.git.run(&[
             "rev-parse",
             "--verify",
@@ -218,10 +218,18 @@ impl BaseBranch {
         progress::step(format_args!(
             "updating {base} in the Launch directory from {origin_base}"
         ));
-        if let Err(error) = self
-            .git
-            .run(&["merge", "--ff-only", "--quiet", &self.origin_commit])
-        {
+        // Preparation precedes review ownership inspection. A fast-forward
+        // must not let Git's maintenance prune retained registrations either.
+        if let Err(error) = self.git.run(&[
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
+            "merge",
+            "--ff-only",
+            "--quiet",
+            &self.origin_commit,
+        ]) {
             progress::warn(
                 &error,
                 format_args!(

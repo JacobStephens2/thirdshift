@@ -239,7 +239,10 @@ fn replaced_directories_or_changed_registration_identity_do_not_inherit_disposal
                     && error.contains(fixture.path.to_str().unwrap()),
                 "{change}: {error}"
             );
-            assert!(fixture.admin.symlink_metadata().is_ok());
+            assert!(
+                fixture.admin.symlink_metadata().is_ok(),
+                "{change}: {error}"
+            );
             let preserved = if change == "missing-root" {
                 &saved
             } else {

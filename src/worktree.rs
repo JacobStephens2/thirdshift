@@ -116,7 +116,7 @@ impl Worktree {
     /// Issue branch and create without force. No selection preflight is required.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base])?;
+        launch.fetch(&[base])?;
         let origin = fetched_origin(launch, base)?;
         check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
@@ -130,7 +130,7 @@ impl Worktree {
     /// without force at the pinned commit. No selection preflight is required.
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base, branch])?;
+        launch.fetch(&[base, branch])?;
         let origin = fetched_origin(launch, branch)?;
         let local = local_head(launch, branch)?;
         check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
@@ -297,7 +297,7 @@ impl Worktree {
     /// calculation and mutation after this sample uses the commit ID, so
     /// sibling fetches and shadowing local names cannot change its meaning.
     fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
-        self.git.run(&["fetch", "origin", branch])?;
+        self.git.fetch(&[branch])?;
         fetched_origin(&self.git, branch)
     }
 
@@ -419,9 +419,9 @@ impl ReviewWorktree {
     /// Failed, unmarked and uncertain acquisitions are retained and named.
     pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base])?;
         let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
         ownership::recover_review(launch, &path)?;
+        launch.fetch(&[base])?;
         let origin = fetched_origin(launch, base)?;
         progress::step(format_args!(
             "creating worktree {} detached at {}",

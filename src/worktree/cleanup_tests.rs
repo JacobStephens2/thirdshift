@@ -1629,3 +1629,53 @@ fi
         );
     });
 }
+
+#[test]
+fn damaged_review_registration_is_retained_before_a_fetch_can_prune_it() {
+    if isolated(
+        "damaged_review_registration_is_retained_before_a_fetch_can_prune_it",
+        r#"
+if test "$1" = fetch; then
+  common=$("$THIRDSHIFT_REAL_GIT" rev-parse --git-common-dir)
+  if test -d "$common/worktrees/work-architect" && test ! -e "$common/worktrees/work-architect/gitdir"; then
+    "$THIRDSHIFT_REAL_GIT" worktree prune
+    touch "$THIRDSHIFT_FAULT_MARKER"
+  fi
+fi
+"#,
+    ) {
+        return;
+    }
+    let (_temp, launch) = super::tests::launch_directory();
+    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let path = owner.path().to_path_buf();
+    let admin = PathBuf::from(
+        Git::new(&path)
+            .run(&["rev-parse", "--absolute-git-dir"])
+            .unwrap(),
+    );
+    let record = fs::read(admin.join("thirdshift-review.json")).unwrap();
+    fs::write(path.join("retained.txt"), "uncertain review work\n").unwrap();
+    std::mem::forget(owner);
+    fs::remove_file(admin.join("gitdir")).unwrap();
+
+    let error = ReviewWorktree::create(&launch, "work", "main")
+        .err()
+        .unwrap()
+        .to_string();
+
+    assert!(error.contains("retaining checkout"), "{error}");
+    assert_eq!(
+        fs::read_to_string(path.join("retained.txt")).unwrap(),
+        "uncertain review work\n"
+    );
+    assert!(
+        admin.exists(),
+        "fetch pruned the retained registration: {error}"
+    );
+    assert_eq!(
+        fs::read(admin.join("thirdshift-review.json")).unwrap(),
+        record
+    );
+    assert!(!PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap()).exists());
+}

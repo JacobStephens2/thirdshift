@@ -2447,3 +2447,52 @@ fn a_review_retry_refuses_failed_checkout_work_before_starting_an_agent_session(
         "a retry started an agent session"
     );
 }
+
+#[test]
+fn an_architect_run_retains_damaged_review_registration_through_launch_preflight() {
+    for pull in [false, true] {
+        let scenario = scenario();
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+        scenario.origin_has_commit("main", "upstream.txt", "upstream\n", "Upstream work");
+        scenario.user_config_is(&format!("[launch]\npull = {pull}\n"));
+        // Git 2.55 can prune a registration with a missing backlink on fetch.
+        // Keep maintenance in the foreground so the regression is deterministic.
+        scenario.launch_git(&["config", "maintenance.auto", "true"]);
+        scenario.launch_git(&["config", "maintenance.autoDetach", "false"]);
+        let path = scenario.path("work/widgets-architect");
+        scenario.launch_git(&[
+            "worktree",
+            "add",
+            "--detach",
+            path.to_str().unwrap(),
+            "HEAD",
+        ]);
+        let admin = scenario
+            .launch_dir()
+            .join(".git/worktrees/widgets-architect");
+        fs::write(path.join("retained.txt"), "uncertain review work\n").unwrap();
+        fs::remove_file(admin.join("gitdir")).unwrap();
+        let head = fs::read(admin.join("HEAD")).unwrap();
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("retaining checkout"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("retained.txt")).unwrap(),
+            "uncertain review work\n"
+        );
+        assert_eq!(fs::read(admin.join("HEAD")).unwrap(), head);
+        assert!(scenario.claude_calls().is_empty());
+        if pull {
+            assert_eq!(
+                scenario.launch_git(&["rev-parse", "HEAD"]),
+                scenario.origin_git(&["rev-parse", "main"])
+            );
+        }
+    }
+}

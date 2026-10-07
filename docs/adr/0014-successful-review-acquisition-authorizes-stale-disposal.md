@@ -4,6 +4,8 @@ An Architecture review may leave disposable scratch when its factory process die
 
 Eligibility uses a private versioned administrative record paired with an excluded checkout token. Both share a fresh acquisition nonce and the record identifies the captured directory instances. It records ownership rather than the acquisition commit, so detached commits and edits remain disposable. Parsing rejects ambiguous or unsupported evidence. The repository worktree lock covers stale inspection, verified removal and the next acquisition, using the same pinned ownership inspection as live cleanup.
 
+Stale inspection precedes acquisition's fetch. Thirdshift's origin fetches and the optional Launch directory fast-forward disable automatic maintenance, including Base branch preparation before review acquisition: Git 2.55's maintenance can otherwise prune a damaged Worktree registration without the ownership inspector's authority.
+
 Atomic publication of the complete record without replacement is the final fallible acquisition step, after ownership capture, content synchronization and the last interruption check. Until then, failed-acquisition recovery remains armed and removes only positively identified attempt-owned markers before checking whether the checkout is clean and unchanged. Process death before publication leaves an ineligible checkout. This guarantees the publication point for process death, not durability across whole-machine power loss.
 
 ## Consequences
