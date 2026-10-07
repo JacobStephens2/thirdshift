@@ -1,4 +1,4 @@
-//! The shared stop path for every Harness, including escaped process groups.
+//! The shared CLI stop path, including escaped process groups.
 
 use std::collections::{BTreeSet, HashMap};
 use std::process::{Child, Command};
@@ -14,7 +14,7 @@ const STOP_GRACE: Duration = Duration::from_secs(10);
 
 /// Give each of the Harness's stop signals the existing grace period. Once
 /// the CLI exits, skip the remaining grace periods but still kill its work.
-pub(super) fn stop(child: &mut Child, signals: &[libc::c_int]) {
+pub(crate) fn stop(child: &mut Child, signals: &[libc::c_int]) {
     let pid = child.id() as libc::pid_t;
     let mut tree = ProcessTree {
         pids: BTreeSet::from([pid]),
