@@ -20,24 +20,65 @@ const HEADLESS: &str = "You run headless: nobody is watching, and ending your tu
     Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): \
     a task still running when your turn ends is taken as work you were waiting on.\n";
 
+/// The shared review instruction, with each Session prompt's variations.
+enum ReviewInstruction {
+    Implement,
+    SpecReview,
+    ForeignCommits,
+}
+
+impl ReviewInstruction {
+    fn address_findings(&self) -> String {
+        let ending = match self {
+            Self::SpecReview => ", using the `thirdshift-tdd` skill where it fits, and commit.",
+            _ => ".",
+        };
+        format!("Address the Standards and Spec findings you agree with{ending}")
+    }
+
+    fn unaddressed_findings(&self) -> String {
+        let (opening, listing, source, ending) = match self {
+            Self::ForeignCommits => (
+                "Add each skipped finding to the",
+                "of the pull request body,",
+                " marked as coming from their commits,",
+                " Keep the rest of the body as it is.",
+            ),
+            _ => (
+                "In the PR body, add an",
+                "listing each skipped finding",
+                "",
+                "",
+            ),
+        };
+        format!(
+            "{opening} \"Unaddressed findings\" section {listing} under Standards or Spec,{source} with at least a one-line reason.{ending}"
+        )
+    }
+}
+
 /// The fresh prompt, for a run that starts a new Issue branch.
 pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
+    let review = ReviewInstruction::Implement;
     format!(
         "/thirdshift-implement {url}\n\
          The base branch is {base}. Review with the `thirdshift-code-review` skill using {base} as the fixed point.\n\
-         Address the Standards and Spec findings you agree with.\n\
+         {address_findings}\n\
          Push branch {branch} and create a pull request against {base} using the `thirdshift-pr` skill, marked ready for review.\n\
-         In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
+         {unaddressed_findings}\n\
          Include \"Closes #{number}\" in the PR body.\n\
          {HEADLESS}",
         url = issue.url,
         number = issue.number,
+        address_findings = review.address_findings(),
+        unaddressed_findings = review.unaddressed_findings(),
     )
 }
 
 /// The continuation prompt, for a run that picks up an existing Issue branch.
 /// With `pr_url`, the agent updates that PR; otherwise it creates one.
 pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&str>) -> String {
+    let review = ReviewInstruction::Implement;
     let pr = match pr_url {
         Some(url) => format!(
             "Update PR {url} using the `thirdshift-pr` skill, rewriting its body to cover the whole branch, marked ready for review."
@@ -53,25 +94,28 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
          \n\
          The base branch is {base}. Review with the `thirdshift-code-review` skill using {base} as the fixed point.\n\
          \n\
-         Address the Standards and Spec findings you agree with.\n\
+         {address_findings}\n\
          \n\
          Push branch {branch}.\n\
          \n\
          {pr}\n\
          \n\
-         In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
+         {unaddressed_findings}\n\
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
          \n\
          {HEADLESS}",
         url = issue.url,
         number = issue.number,
+        address_findings = review.address_findings(),
+        unaddressed_findings = review.unaddressed_findings(),
     )
 }
 
 /// The Spec review prompt, for the Spec branch `branch` of `spec` once every
 /// Ticket has landed on it, with the draft Spec PR `pr_url` into `base`.
 pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> String {
+    let review = ReviewInstruction::SpecReview;
     format!(
         "/thirdshift-code-review {base}, with the Spec {url} as the spec\n\
          \n\
@@ -79,19 +123,21 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          \n\
          Review with the `thirdshift-code-review` skill using {base} as the fixed point and {url} as the spec.\n\
          \n\
-         Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.\n\
+         {address_findings}\n\
          \n\
          Push branch {branch}. Do not rebase or force-push.\n\
          \n\
          Update PR {pr_url} using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.\n\
          \n\
-         In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
+         {unaddressed_findings}\n\
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
          \n\
          {HEADLESS}",
         url = spec.url,
         number = spec.number,
+        address_findings = review.address_findings(),
+        unaddressed_findings = review.unaddressed_findings(),
     )
 }
 
@@ -191,6 +237,7 @@ pub fn ci_fix_repair(
 /// The review Repair prompt, for Foreign commits a Merge run has merged into
 /// the Issue branch on top of `own_head`, the head it last knew as its own.
 pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &str) -> String {
+    let review = ReviewInstruction::ForeignCommits;
     format!(
         "/thirdshift-code-review {own_head}\n\
          \n\
@@ -198,14 +245,16 @@ pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &st
          \n\
          Review with the `thirdshift-code-review` skill using {own_head} as the fixed point: {branch}'s head before their commits were merged in.\n\
          \n\
-         Address the Standards and Spec findings you agree with.\n\
+         {address_findings}\n\
          \n\
-         Add each skipped finding to the \"Unaddressed findings\" section of the pull request body, under Standards or Spec, marked as coming from their commits, with at least a one-line reason. Keep the rest of the body as it is.\n\
+         {unaddressed_findings}\n\
          \n\
          Commit and push {branch}. Do not rebase or force-push.\n\
          \n\
          {HEADLESS}",
         url = issue.url,
+        address_findings = review.address_findings(),
+        unaddressed_findings = review.unaddressed_findings(),
     )
 }
 
