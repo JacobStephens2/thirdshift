@@ -48,7 +48,7 @@ A finding from the Standards axis of a code review: the change breaks a document
 A finding from the Spec axis of a code review: the change is missing, gets wrong, or goes beyond what the issue asked for.
 
 **Security finding**:
-A vulnerability a **Security review** or a **Security audit** found. One the **Run**'s own change introduced, left unaddressed, holds a **Self-merge** into the **Base branch**. One already on the Base branch is never written up in public before it is fixed: it is recorded privately for the **Day shift**, as a draft security advisory on a public repository or a labelled issue on a private one.
+A vulnerability a **Security review** or a **Security audit** found. One the **Run**'s own change introduced, left unaddressed, holds a **Self-merge** into the **Base branch**. One already on the Base branch is never written up in public before it is fixed: it is recorded privately for the **Day shift**, as a draft security advisory on a public repository or a labelled issue on a private one. Once recorded, it waits for the Day shift, unless it is reproduced and fixing is allowed, until the Day shift triages it: by closing its draft advisory, publishing it or giving it a severity, or by taking `needs-triage` off its issue. That decision is also its grade, real or not.
 _Avoid_: vulnerability report, security issue
 
 **Unaddressed finding**:
@@ -84,12 +84,16 @@ _Avoid_: improve run, architecture run
 The factory clearing the detritus that features leave in a repository's codebase as they land, with no human starting it: **Architect runs** started often enough that each follows the last as soon as its **Architect plan** is merged. It yields to work a human shaped, and pauses for the **Day shift** whenever a plan fails or an **Architect idea** waits for triage.
 _Avoid_: upkeep, continuous architect, daemon, loop
 
+**Fencing**:
+The factory finding and fixing vulnerabilities in a repository's codebase with no human starting it: **Security runs** started often enough that each follows the last, with fixing allowed. Like **Weeding**, it yields to work a human shaped, and pauses for the **Day shift** while a **Security finding** waits for triage.
+_Avoid_: patrol, continuous security, security loop
+
 **Pickup run**:
 One invocation of the factory with no **Issue URL**: it takes the lowest-numbered **Ready issue** in the repository and starts a **Spec run** or a **Run** on it, as the command on that issue's URL would. One issue per invocation, and thirdshift never schedules itself: the operating system's scheduler starts each one. It is skipped, doing nothing, when another **Pass** on the same repository is still running on the machine, its Spec run or Run included, when there is no Ready issue, or when the repository is at its **Claim limit**. Skipped is not a failure, and sends no **Run notification**.
 _Avoid_: watch, daemon, queue run, poll
 
 **Security run**:
-One invocation of the factory with no **Issue URL**: a **Security audit** of the **Base branch**, then, when a flag or the **User config** allows it, a **Run** that fixes each **Security finding** a proof-of-concept test reproduces. A finding nothing reproduces waits for the **Day shift**, and is never fixed unattended. It is skipped, like an **Architect run**, when another **Pass** on the same repository is still running on the machine, when the repository has a **Ready issue**, or when one of its findings still waits for the Day shift.
+One invocation of the factory with no **Issue URL**: a **Security audit** of the **Base branch**, then, for each **Security finding**, a session that tries to reproduce it with a proof-of-concept test in a throwaway worktree, and scores the severity of each one it reproduces. When a flag or the **User config** allows it, each reproduced finding is fixed by a **Run**, or by a **Spec run** when one session isn't enough, on issues that say only what the fix changes. Every other finding waits for the **Day shift**, and one nothing reproduces is never fixed unattended. It is skipped, like an **Architect run**, when another **Pass** on the same repository is still running on the machine, when the repository has a **Ready issue**, or when one of its findings still waits for the Day shift.
 _Avoid_: Secure run (it reads as a run that is secure), audit run, security pass
 
 **Pass**:
