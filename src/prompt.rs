@@ -33,7 +33,13 @@ impl ReviewInstruction {
             Self::SpecReview => ", using the `thirdshift-tdd` skill where it fits, and commit.",
             _ => ".",
         };
-        format!("Address the Standards and Spec findings you agree with{ending}")
+        format!(
+            "For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. \
+             If it fails as the finding says, fix the code and keep the test. \
+             If it passes, you may decline the finding, citing the run. \
+             A passing run counts only when it exercises that finding; a green suite does not. \
+             Address the Standards and Spec findings you agree with{ending}"
+        )
     }
 
     fn unaddressed_findings(&self) -> String {
@@ -52,7 +58,12 @@ impl ReviewInstruction {
             ),
         };
         format!(
-            "{opening} \"Unaddressed findings\" section {listing} under Standards or Spec,{source} with at least a one-line reason.{ending}"
+            "{opening} \"Unaddressed findings\" section {listing} under Standards or Spec,{source} \
+             with the line of code, plan decision, ADR or run that refutes each finding. \
+             If you decline a finding because a Spec or the Day shift must decide, \
+             file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. \
+             The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. \
+             Give a new issue only the `needs-triage` label so it pauses nothing.{ending}"
         )
     }
 }
