@@ -33,7 +33,7 @@ impl Interruption {
         matches!(self, Self::Ordinary) && interrupt::requested()
     }
 
-    fn check(self) -> Result<()> {
+    pub(crate) fn check(self) -> Result<()> {
         if self.requested() {
             bail!("interrupted");
         }
