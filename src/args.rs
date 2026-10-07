@@ -307,7 +307,7 @@ fn ask_harness(harness: &mut Option<Harness>, arg: &str, name: Option<&String>) 
     }
     let Some(named) = name.and_then(|name| Harness::named(name)) else {
         let given = name.map(|name| format!(", not {name}")).unwrap_or_default();
-        bail!("{arg} must be followed by {}{given}", harness::NAMES);
+        bail!("{arg} must be followed by {}{given}", harness::names());
     };
     *harness = Some(named);
     Ok(())
@@ -995,11 +995,11 @@ mod tests {
         for (args, error) in [
             (
                 vec![URL, "harness"],
-                "harness must be followed by claude or codex",
+                "harness must be followed by claude or codex or agy or grok or muse or opencode",
             ),
             (
                 vec![URL, "harness", "gemini"],
-                "harness must be followed by claude or codex, not gemini",
+                "harness must be followed by claude or codex or agy or grok or muse or opencode, not gemini",
             ),
             (
                 vec!["--harness", "claude", URL, "harness", "codex"],

@@ -1,13 +1,18 @@
 //! A Run in a child `thirdshift`, started from the same Launch directory by a
 //! Spec run for one of its Tickets (ADR-0006) or by a Run for its Base fix
-//! (ADR-0008).
+//! (ADR-0008). [`Runs`] owns concurrent children and their collective cleanup;
+//! standalone [`start`] and [`Handle::wait`] serve Base fix.
+
+mod runs;
+
+pub use runs::Runs;
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::thread;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -19,6 +24,9 @@ use crate::issue::IssueUrl;
 use crate::logs;
 use crate::progress;
 use crate::run_ending;
+
+#[cfg(test)]
+use execution_tests::Fault;
 
 /// How often to check whether a child Run has ended, or been interrupted.
 const POLL: Duration = Duration::from_millis(100);
@@ -250,6 +258,7 @@ fn not_yet_given<T>(given: &Option<T>, arg: &str) -> Result<()> {
 }
 
 /// How a child Run ended.
+#[derive(Debug)]
 pub enum Ended {
     /// It reached its goal, with its PR as it printed it, and what became
     /// of the Base fix it took, if any, as it reported it.
@@ -263,11 +272,23 @@ pub enum Ended {
     Interrupted,
 }
 
-/// A child Run that has started, on its issue.
+/// Own a child Run and both readers from spawn through reaping and joining.
+/// A terminal result is delivered once; callers remove the handle then.
+/// Dropping a live handle gracefully stops it and waits for cleanup.
 pub struct Handle {
     /// Its issue's number.
     number: u64,
     child: Child,
+    stdout: Option<Worker<String>>,
+    stderr: Option<Worker<run_ending::Reader>>,
+    status: Option<ExitStatus>,
+    reaped: bool,
+    stop_sent: bool,
+    interrupted: bool,
+    error: Option<anyhow::Error>,
+    completed: bool,
+    #[cfg(test)]
+    fault: Option<Fault>,
 }
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
@@ -307,6 +328,16 @@ fn own_executable() -> Result<PathBuf> {
 
 /// [`start`], with the `thirdshift` at `executable` as the child.
 fn start_from(executable: &Path, issue: &IssueUrl, given: &Given) -> Result<Handle> {
+    start_using(executable, issue, given, Handle::start_readers)
+}
+
+/// Keep the post-spawn setup under ownership, including failures and unwinding.
+fn start_using(
+    executable: &Path,
+    issue: &IssueUrl,
+    given: &Given,
+    startup: impl FnOnce(&mut Handle) -> Result<()>,
+) -> Result<Handle> {
     let mut command = Command::new(executable);
     // On Linux `executable` is a link, and the child goes by this process's
     // command instead.
@@ -334,10 +365,28 @@ fn start_from(executable: &Path, issue: &IssueUrl, given: &Given) -> Result<Hand
                 executable.display()
             )
         })?;
-    Ok(Handle {
+    let mut owned = Handle {
         number: issue.number,
         child,
-    })
+        stdout: None,
+        stderr: None,
+        status: None,
+        reaped: false,
+        stop_sent: false,
+        interrupted: false,
+        error: None,
+        completed: false,
+        #[cfg(test)]
+        fault: None,
+    };
+    if let Err(error) = startup(&mut owned) {
+        owned.fail(error);
+        return match owned.wait() {
+            Err(error) => Err(error),
+            Ok(_) => Err(anyhow!("interrupted")),
+        };
+    }
+    Ok(owned)
 }
 
 /// The command this process was started as, its `argv[0]`.
@@ -363,54 +412,194 @@ pub fn name_this_process() {
 }
 
 impl Handle {
-    /// Relay the stderr of the child Run with a `#<number>: ` prefix, its
-    /// issue's number, until it exits. An interrupt is passed on to the
-    /// child, which is waited for as it goes down its Failed run path, and it
-    /// ended `Interrupted`. Otherwise it reached its goal if it exits 0, with
-    /// the Base fix it reported, and failed otherwise, with the cause and
-    /// session log it showed, or with its exit status as the cause if it showed
-    /// none.
-    pub fn wait(self) -> Result<Ended> {
-        let Handle { number, mut child } = self;
-        // Relay on its own thread, so this one can watch for an interrupt.
-        let stderr = child.stderr.take().context("no stderr from the Run")?;
-        let relay = thread::spawn(move || -> std::io::Result<_> {
-            let mut reader = run_ending::Reader::default();
-            for line in BufReader::new(stderr).lines() {
-                reader.read(progress::relay(number, &line?));
-            }
-            Ok(reader)
-        });
-        let mut passed_on = false;
-        let status = loop {
-            // The child shares the process group, so a Ctrl-C or a closed
-            // terminal reaches it too, but a signal sent to this process alone
-            // doesn't. A second one is harmless: it only records the interrupt.
-            if !passed_on && interrupt::requested() {
-                // SAFETY: kill has no memory-safety preconditions, and the child
-                // is not yet reaped, so its pid is still its own.
-                unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-                passed_on = true;
-            }
-            if let Some(status) = child
-                .try_wait()
-                .with_context(|| format!("could not wait for the Run for #{number}"))?
-            {
-                break status;
-            }
-            thread::sleep(POLL);
-        };
-        let reader = relay
-            .join()
-            .map_err(|_| anyhow!("the relay of the Run for #{number} panicked"))?
-            .with_context(|| format!("could not read the Run for #{number}"))?;
-        let mut stdout = String::new();
-        child
+    fn start_readers(&mut self) -> Result<()> {
+        let number = self.number;
+        #[cfg(test)]
+        self.inject_fault(Fault::StdoutPipe)?;
+        let mut stdout = self
+            .child
             .stdout
             .take()
-            .context("no stdout from the Run")?
-            .read_to_string(&mut stdout)
-            .with_context(|| format!("could not read the Run for #{number}"))?;
+            .with_context(|| format!("no stdout from the Run for #{number}"))?;
+        #[cfg(test)]
+        self.inject_fault(Fault::StdoutStart)?;
+        #[cfg(test)]
+        let fault = self
+            .fault
+            .take_if(|fault| matches!(fault, Fault::StdoutRead | Fault::StdoutPanic));
+        self.stdout = Some(Worker::start(
+            format!("stdout reader of the Run for #{number}"),
+            move || {
+                #[cfg(test)]
+                if let Some(fault) = fault {
+                    fault
+                        .fire()
+                        .with_context(|| format!("could not read the Run for #{number}"))?;
+                }
+                let mut text = String::new();
+                stdout
+                    .read_to_string(&mut text)
+                    .with_context(|| format!("could not read the Run for #{number}"))?;
+                Ok(text)
+            },
+        )?);
+        #[cfg(test)]
+        self.inject_fault(Fault::StderrPipe)?;
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .with_context(|| format!("no stderr from the Run for #{number}"))?;
+        #[cfg(test)]
+        self.inject_fault(Fault::StderrStart)?;
+        #[cfg(test)]
+        let fault = self
+            .fault
+            .take_if(|fault| matches!(fault, Fault::StderrRead | Fault::StderrPanic));
+        self.stderr = Some(Worker::start(
+            format!("relay of the Run for #{number}"),
+            move || {
+                #[cfg(test)]
+                if let Some(fault) = fault {
+                    fault
+                        .fire()
+                        .with_context(|| format!("could not read the Run for #{number}"))?;
+                }
+                let mut reader = run_ending::Reader::default();
+                let mut stderr = BufReader::new(stderr);
+                let mut bytes = Vec::new();
+                while stderr
+                    .read_until(b'\n', &mut bytes)
+                    .with_context(|| format!("could not read the Run for #{number}"))?
+                    != 0
+                {
+                    if bytes.last() == Some(&b'\n') {
+                        bytes.pop();
+                        if bytes.last() == Some(&b'\r') {
+                            bytes.pop();
+                        }
+                    }
+                    let line = String::from_utf8_lossy(&bytes);
+                    reader.read(progress::relay(number, &line));
+                    bytes.clear();
+                }
+                Ok(reader)
+            },
+        )?);
+        Ok(())
+    }
+
+    /// Poll the process and finished readers without waiting for unfinished
+    /// work. Pending and stopping return None. A failure is returned only
+    /// after graceful shutdown, reaping, and joining both readers.
+    fn try_wait(&mut self) -> Option<Result<Ended>> {
+        if self.completed || !self.poll_completion() {
+            return None;
+        }
+        self.completed = true;
+        Some(self.ending())
+    }
+
+    /// Drive the same supervision synchronously. An interrupt is forwarded
+    /// once as SIGTERM; the child has unbounded time to save unfinished work.
+    pub fn wait(mut self) -> Result<Ended> {
+        loop {
+            if let Some(ended) = self.try_wait() {
+                return ended;
+            }
+            thread::sleep(POLL);
+        }
+    }
+
+    fn poll_completion(&mut self) -> bool {
+        if interrupt::requested() && !self.reaped {
+            self.interrupted = true;
+            self.stop();
+        }
+        if !self.reaped {
+            #[cfg(test)]
+            if let Err(error) = self.inject_fault(Fault::Wait) {
+                self.fail(
+                    error.context(format!("could not wait for the Run for #{}", self.number)),
+                );
+                return false;
+            }
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    self.status = Some(status);
+                    self.reaped = true;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    // ECHILD means ownership of the PID has already ended.
+                    // Never signal a PID after the OS says it isn't our child.
+                    self.reaped = error.raw_os_error() == Some(libc::ECHILD);
+                    self.fail(
+                        anyhow!(error)
+                            .context(format!("could not wait for the Run for #{}", self.number)),
+                    );
+                }
+            }
+        }
+        if let Some(worker) = &mut self.stdout
+            && let Err(error) = worker.poll()
+        {
+            self.fail(error);
+        }
+        if let Some(worker) = &mut self.stderr
+            && let Err(error) = worker.poll()
+        {
+            self.fail(error);
+        }
+        self.reaped
+            && self.stdout.as_ref().is_none_or(Worker::finished)
+            && self.stderr.as_ref().is_none_or(Worker::finished)
+    }
+
+    /// Preserve the first transport cause, even if stopping uncovers another.
+    fn fail(&mut self, error: anyhow::Error) {
+        self.error.get_or_insert(error);
+        self.stop();
+    }
+
+    #[cfg(test)]
+    fn inject_fault(&mut self, at: Fault) -> Result<()> {
+        if self.fault == Some(at) {
+            self.fault
+                .take()
+                .unwrap()
+                .fire()
+                .with_context(|| format!("could not prepare the Run for #{}", self.number))?;
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        if !self.reaped && !self.stop_sent {
+            // The process group is shared. Signal only this unreaped child,
+            // allowing its Failed run path to finish before reaping it.
+            // SAFETY: kill has no memory-safety preconditions; this PID is
+            // still owned and has not been reaped.
+            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+            self.stop_sent = true;
+        }
+        // Setup may have failed before either pipe got its reader.
+        drop(self.child.stdout.take());
+        drop(self.child.stderr.take());
+    }
+
+    fn ending(&mut self) -> Result<Ended> {
+        if self.interrupted || (self.error.is_some() && interrupt::requested()) {
+            return Ok(Ended::Interrupted);
+        }
+        if let Some(error) = self.error.take() {
+            return Err(error);
+        }
+        let status = self
+            .status
+            .expect("a reaped Run without a wait error has a status");
+        let stdout = self.stdout.as_mut().unwrap().value.take().unwrap();
+        let reader = self.stderr.as_mut().unwrap().value.take().unwrap();
         let ending = reader.finish(&stdout, status.success());
         Ok(match ending.outcome {
             Ok(pr_url) => Ended::Reached {
@@ -425,6 +614,61 @@ impl Handle {
         })
     }
 }
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.stop();
+            while !self.poll_completion() {
+                thread::sleep(POLL);
+            }
+            self.completed = true;
+        }
+    }
+}
+
+/// A reader's result stays owned after its finished thread is joined.
+struct Worker<T> {
+    thread: Option<JoinHandle<Result<T>>>,
+    value: Option<T>,
+    name: String,
+}
+
+impl<T: Send + 'static> Worker<T> {
+    fn start(name: String, read: impl FnOnce() -> Result<T> + Send + 'static) -> Result<Self> {
+        let thread = thread::Builder::new()
+            .spawn(read)
+            .with_context(|| format!("could not start the {name}"))?;
+        Ok(Self {
+            thread: Some(thread),
+            value: None,
+            name,
+        })
+    }
+}
+
+impl<T> Worker<T> {
+    fn poll(&mut self) -> Result<()> {
+        if self.thread.as_ref().is_some_and(JoinHandle::is_finished) {
+            self.value = Some(self.thread.take().unwrap().join().map_err(|panic| {
+                let cause = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("unknown panic");
+                anyhow!("the {} panicked: {cause}", self.name)
+            })??);
+        }
+        Ok(())
+    }
+
+    fn finished(&self) -> bool {
+        self.thread.is_none()
+    }
+}
+
+#[cfg(test)]
+mod execution_tests;
 
 #[cfg(test)]
 mod tests {

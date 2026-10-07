@@ -8,9 +8,9 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::{Outside, suggested_address};
-use crate::config::UserConfig;
+use crate::config::{NotificationAddresses, UserConfig, UserConfigChanges};
 use crate::email::DEFAULT_FROM;
-use crate::harness::{self, Harness, ModelAndEffort};
+use crate::harness::{Harness, ModelAndEffort};
 use crate::resend_key::{self, Source};
 
 /// What the user chose.
@@ -32,6 +32,23 @@ pub struct Answers {
 }
 
 impl Answers {
+    /// The User config changes, without Credentials or email effects.
+    pub fn changes(&self) -> UserConfigChanges {
+        UserConfigChanges {
+            merge_always: self.merge_always,
+            base_fix: self.base_fix,
+            launch_pull: self.launch_pull,
+            notifications: self
+                .notifications
+                .as_ref()
+                .map(|notifications| NotificationAddresses {
+                    to: notifications.to.clone(),
+                    from: notifications.from.clone(),
+                }),
+            harness: self.harness.clone(),
+        }
+    }
+
     /// Whether the user asked for a test email.
     pub fn send_test(&self) -> bool {
         self.notifications
@@ -74,8 +91,9 @@ pub fn offer(outside: &mut impl Outside, path: &Path) -> Result<bool> {
 
 /// Ask the Setup questions, with the settings in `current` as the default
 /// answers, and the suggested address for `email.to` when `current` has
-/// none. The Harness, Model and Effort come first, as [`ask_harness`] asks
-/// them. Base fixes are asked about only with every Run a Merge run;
+/// none. The Harness, Model and Effort come first, through one complete
+/// Harness settings interaction. Base fixes are asked about only with every
+/// Run a Merge run;
 /// otherwise the answer is `base.fix`'s default, no.
 /// The address is re-asked until it has an `@`. With Run notifications on,
 /// the Resend API key is asked for too, unless `found`, where the key was
@@ -87,7 +105,7 @@ pub fn ask(
     current: &UserConfig,
     found: Option<Source>,
 ) -> Result<Answers> {
-    let harness = ask_harness(outside, &current.harness)?;
+    let harness = outside.ask_harness_settings(&current.harness)?;
     let merge_always = yes_or_no(outside, "Every Run a Merge run?", current.merge_always)?;
     let base_fix = merge_always
         && yes_or_no(
@@ -160,153 +178,6 @@ pub fn ask(
     })
 }
 
-/// Ask which Harness every Run's sessions run on, listing each, marked where
-/// it isn't installed, and refusing that one; then its Model and Effort,
-/// with those `current` sets for it as the defaults, checked as a Run
-/// checks them, as [`ask_claude`] and [`ask_codex`] ask them. The Harness's
-/// default is the `current` one if it's installed, else the first one
-/// installed, so `claude` when both are. With no
-/// Harness to choose, or Codex chosen and its catalog unreadable, the answer
-/// is `None`.
-fn ask_harness(
-    outside: &mut impl Outside,
-    current: &harness::Settings,
-) -> Result<Option<(Harness, ModelAndEffort)>> {
-    let installed: Vec<Harness> = Harness::ALL
-        .into_iter()
-        .filter(|harness| outside.installed(*harness))
-        .collect();
-    let harnesses: Vec<String> = Harness::ALL
-        .iter()
-        .map(|harness| {
-            if installed.contains(harness) {
-                harness.name().to_string()
-            } else {
-                format!("{} (not installed)", harness.name())
-            }
-        })
-        .collect();
-    let harnesses = harnesses.join(" or ");
-    let default = current
-        .default
-        .filter(|harness| installed.contains(harness))
-        .or_else(|| installed.first().copied());
-    let Some(default) = default else {
-        outside.say(format!(
-            "Harness for every Run's sessions: {harnesses}. Sessions can run on neither here, so \
-             the harness settings stay as they are; install claude or codex, then rerun \
-             `thirdshift setup`."
-        ));
-        return Ok(None);
-    };
-    let harness = loop {
-        let name = answer(
-            outside,
-            &format!("Harness for every Run's sessions, {harnesses}"),
-            Some(default.name()),
-        )?;
-        match Harness::named(&name) {
-            None => outside.say(format!("Choose {}.", harness::NAMES)),
-            Some(harness) if !installed.contains(&harness) => {
-                outside.say(format!("{name} is not installed: it isn't on PATH."))
-            }
-            Some(harness) => break harness,
-        }
-    };
-    let set = current.of(harness);
-    let chosen = match harness {
-        Harness::Claude => ask_claude(outside, set)?,
-        Harness::Codex => match outside.codex_catalog() {
-            Ok(catalog) => ask_codex(outside, &catalog, set)?,
-            Err(error) => {
-                outside.say(format!(
-                    "{error:#}\nThe harness settings stay as they are; rerun `thirdshift \
-                     setup` once codex debug models works."
-                ));
-                return Ok(None);
-            }
-        },
-    };
-    Ok(Some((harness, chosen)))
-}
-
-/// Ask Claude's Model and Effort, with `current` as the defaults. A Model is
-/// checked with a test call, as a Run checks it, and on a refusal the Model
-/// and Effort are asked again.
-fn ask_claude(outside: &mut impl Outside, current: &ModelAndEffort) -> Result<ModelAndEffort> {
-    loop {
-        let chosen = ModelAndEffort {
-            model: ask_setting(outside, "Model", Harness::Claude, current.model.as_deref())?,
-            effort: ask_setting(
-                outside,
-                "Effort",
-                Harness::Claude,
-                current.effort.as_deref(),
-            )?,
-        };
-        if chosen.model.is_none() {
-            return Ok(chosen);
-        }
-        match outside.test_call(&chosen) {
-            Ok(()) => return Ok(chosen),
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    }
-}
-
-/// Ask Codex's Model, listing those in its `catalog`, then its Effort,
-/// listing those the Model chosen supports, with `current` as the defaults.
-/// Each is matched against the catalog as a Run matches it, and written as
-/// Codex names it; one the catalog doesn't have is asked again, with the
-/// valid choices.
-fn ask_codex(
-    outside: &mut impl Outside,
-    catalog: &harness::Catalog,
-    current: &ModelAndEffort,
-) -> Result<ModelAndEffort> {
-    outside.say(format!("Codex's Models: {}", catalog.listed().join(", ")));
-    let model = loop {
-        let model = ask_setting(outside, "Model", Harness::Codex, current.model.as_deref())?;
-        match catalog.settle(model.as_deref(), None) {
-            Ok(settled) => break settled.model,
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    };
-    let efforts = catalog.efforts(model.as_deref()).join(", ");
-    outside.say(match &model {
-        Some(model) => format!("Efforts {model} supports: {efforts}"),
-        None => format!("Efforts Codex's Models support: {efforts}"),
-    });
-    loop {
-        let effort = ask_setting(outside, "Effort", Harness::Codex, current.effort.as_deref())?;
-        match catalog.settle(model.as_deref(), effort.as_deref()) {
-            Ok(settled) => return Ok(settled),
-            Err(error) => outside.say(format!("{error:#}")),
-        }
-    }
-}
-
-/// Ask for the `setting`, the Model or the Effort, of `harness`, with
-/// `current` as the default; `-` is none, the Harness's own default.
-fn ask_setting(
-    outside: &mut impl Outside,
-    setting: &str,
-    harness: Harness,
-    current: Option<&str>,
-) -> Result<Option<String>> {
-    let name = harness.name();
-    let own = format!("{name}'s own default");
-    let answer = match current {
-        Some(current) => answer(
-            outside,
-            &format!("{setting} for {name}, - for {own}"),
-            Some(current),
-        )?,
-        None => read(outside, &format!("{setting} for {name} [{own}]: "))?,
-    };
-    Ok(Some(answer).filter(|answer| !answer.is_empty() && answer != "-"))
-}
-
 /// Ask `question` until the answer is yes, no or nothing, which is `default`.
 fn yes_or_no(outside: &mut impl Outside, question: &str, default: bool) -> Result<bool> {
     let choices = if default { "[Y/n]" } else { "[y/N]" };
@@ -325,7 +196,11 @@ fn yes_or_no(outside: &mut impl Outside, question: &str, default: bool) -> Resul
 
 /// Ask `question` for a word, showing `default`, which nothing takes, if
 /// there is one. With no default, nothing is asked again.
-fn answer(outside: &mut impl Outside, question: &str, default: Option<&str>) -> Result<String> {
+fn answer(
+    outside: &mut (impl Outside + ?Sized),
+    question: &str,
+    default: Option<&str>,
+) -> Result<String> {
     let prompt = match default {
         Some(default) => format!("{question} [{default}]: "),
         None => format!("{question}: "),
@@ -356,7 +231,7 @@ fn ask_key(outside: &mut impl Outside, on_enter: &str) -> Result<Option<String>>
 }
 
 /// Show `prompt` and read one answer, trimmed, or end Setup if stdin closes.
-fn read(outside: &mut impl Outside, prompt: &str) -> Result<String> {
+fn read(outside: &mut (impl Outside + ?Sized), prompt: &str) -> Result<String> {
     match outside.read(prompt)? {
         Some(line) => Ok(line),
         None => bail!(ENDED),

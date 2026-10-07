@@ -13,7 +13,7 @@ use crate::child_run::Kind;
 use crate::claim::{self, Claim};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::FailedRun;
-use crate::github::{self, Ticket};
+use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -385,7 +385,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     type Worktree = Worktree;
 
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
-        github::tickets(self.issue)
+        GitHub::new().tickets(self.issue)
     }
 
     fn started(&mut self, work: Work) {
@@ -393,7 +393,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn select(&mut self) -> Result<Selection> {
-        branch::select(self.directory.git(), self.issue)
+        branch::select(self.directory.git(), &GitHub::new(), self.issue)
     }
 
     fn base_branch(&mut self, named: Option<&str>) -> Result<String> {

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::github::{self, ActionsJob, Check, CheckState};
+use crate::github::{ActionsJob, Check, CheckState, GitHub};
 use crate::issue::IssueUrl;
 use crate::poll;
 use crate::progress;
@@ -109,11 +109,11 @@ impl Outside for OnGitHub<'_> {
     type Deadline = Instant;
 
     fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>> {
-        github::checks_on(self.issue, sha)
+        GitHub::new().checks_on(self.issue, sha)
     }
 
     fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
-        github::rerun_failed_jobs(self.issue, workflow_run)
+        GitHub::new().rerun_failed_jobs(self.issue, workflow_run)
     }
 
     fn pause(&mut self) -> Result<()> {

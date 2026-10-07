@@ -1,7 +1,7 @@
-//! The fake `gh`, `claude` and `codex`, built from `tests/fakes.rs` with plain
-//! `rustc` the first time a test needs them and kept in Cargo's scratch
-//! directory for tests. They aren't a binary target, so neither the crate nor
-//! a release ships them.
+//! The fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode`, built from
+//! `tests/fakes.rs` with plain `rustc` the first time a test needs them and
+//! kept in Cargo's scratch directory for tests. They aren't a binary target,
+//! so neither the crate nor a release ships them.
 
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -11,17 +11,40 @@ use std::sync::OnceLock;
 
 /// The fakes' sources. They name the built executable, and including them
 /// makes Cargo rebuild the tests when they change.
-const SOURCES: [&str; 5] = [
+const SOURCES: [&str; 11] = [
     include_str!("../fakes.rs"),
     include_str!("../fakes/gh.rs"),
     include_str!("../fakes/claude.rs"),
     include_str!("../fakes/codex.rs"),
+    include_str!("../fakes/agy.rs"),
+    include_str!("../fakes/muse.rs"),
+    include_str!("../fakes/opencode.rs"),
     include_str!("../fakes/json.rs"),
+    include_str!("../fakes/grok.rs"),
+    include_str!("../fixtures/grok-models.json"),
+    include_str!("../fixtures/grok-models.txt"),
 ];
 
-/// Put the fake `gh`, `claude` and `codex` in `bin`.
+/// Put the fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode` in `bin`.
 pub fn install(bin: &Path) {
-    for name in ["gh", "claude", "codex"] {
+    install_named(
+        bin,
+        &[
+            "gh",
+            "claude",
+            "codex",
+            "agy",
+            "grok",
+            "muse",
+            "opencode",
+            "detached-command",
+        ],
+    );
+}
+
+/// Install only the named stand-ins, for controlled installation tests.
+pub fn install_named(bin: &Path, names: &[&str]) {
+    for name in names {
         std::os::unix::fs::symlink(executable(), bin.join(name)).unwrap();
     }
 }
@@ -35,7 +58,9 @@ fn executable() -> &'static Path {
 fn build() -> PathBuf {
     let mut hasher = DefaultHasher::new();
     SOURCES.hash(&mut hasher);
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = option_env!("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
     let built = dir.join(format!("fakes-{:016x}", hasher.finish()));
     if built.exists() {
         return built;

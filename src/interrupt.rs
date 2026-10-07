@@ -1,5 +1,5 @@
 //! SIGINT, SIGTERM and SIGHUP: recorded rather than fatal, so an interrupted
-//! Run can still go through the Failed run path and clean up.
+//! Command or terminal Setup can return through normal cleanup.
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -9,18 +9,34 @@ use anyhow::{Context, Result};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
 static REQUESTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+static INSTALLED: OnceLock<std::io::Result<()>> = OnceLock::new();
 
-/// Start recording SIGINT, SIGTERM and SIGHUP instead of dying on them.
+/// Start recording SIGINT, SIGTERM and SIGHUP once for the process. Reusing
+/// the installation neither clears a request nor adds duplicate actions.
 pub fn install() -> Result<()> {
-    let flag = REQUESTED.get_or_init(|| Arc::new(AtomicBool::new(false)));
-    for signal in [SIGINT, SIGTERM, SIGHUP] {
-        signal_hook::flag::register(signal, Arc::clone(flag))
-            .context("could not install the signal handler")?;
+    INSTALLED
+        .get_or_init(|| {
+            let flag = REQUESTED.get_or_init(|| Arc::new(AtomicBool::new(false)));
+            for signal in [SIGINT, SIGTERM, SIGHUP] {
+                signal_hook::flag::register(signal, Arc::clone(flag))?;
+            }
+            Ok(())
+        })
+        .as_ref()
+        .copied()
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("could not install the signal handler")
+}
+
+/// Propagate an observed request before retrying or committing settings.
+pub fn check() -> Result<()> {
+    if requested() {
+        anyhow::bail!("interrupted");
     }
     Ok(())
 }
 
-/// Has the Run been interrupted?
+/// Has the Command or terminal Setup been interrupted?
 pub fn requested() -> bool {
     REQUESTED
         .get()
@@ -33,15 +49,25 @@ mod tests {
 
     #[test]
     fn sigint_sigterm_and_sighup_are_each_recorded_as_an_interrupt() {
-        install().unwrap();
-        let flag = REQUESTED.get().unwrap();
-        for signal in [SIGINT, SIGTERM, SIGHUP] {
-            flag.store(false, Ordering::SeqCst);
-
-            signal_hook::low_level::raise(signal).unwrap();
-
-            assert!(requested(), "signal {signal}");
+        if let Ok(signal) = std::env::var("THIRDSHIFT_TEST_INTERRUPT") {
+            install().unwrap();
+            signal_hook::low_level::raise(signal.parse().unwrap()).unwrap();
+            assert!(requested());
+            install().unwrap();
+            assert!(requested(), "reusing installation cleared interruption");
+            assert_eq!(check().unwrap_err().to_string(), "interrupted");
+            return;
         }
-        flag.store(false, Ordering::SeqCst);
+        for signal in [SIGINT, SIGTERM, SIGHUP] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "interrupt::tests::sigint_sigterm_and_sighup_are_each_recorded_as_an_interrupt",
+                ])
+                .env("THIRDSHIFT_TEST_INTERRUPT", signal.to_string())
+                .status()
+                .unwrap();
+            assert!(status.success(), "signal {signal}");
+        }
     }
 }

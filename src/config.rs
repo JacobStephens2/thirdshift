@@ -155,7 +155,7 @@ impl UserConfig {
                         Some(harness) => config.harness.default = Some(harness),
                         None => bail!(
                             "harness.default must be {}, not {name:?}, in {file}",
-                            harness::NAMES
+                            harness::names()
                         ),
                     },
                     ("harness", "default", _) => {
@@ -173,6 +173,89 @@ impl UserConfig {
             }
         }
         Ok(config)
+    }
+}
+
+/// A validated User config with every setting present, ready for Setup.
+/// Preparation and edits preserve the user's TOML spelling and comments.
+pub struct UserConfigDocument {
+    document: DocumentMut,
+    settings: UserConfig,
+}
+
+/// The Setup settings to change. Other settings keep their current values.
+/// Credentials and the decision to send a test email stay with Setup.
+pub struct UserConfigChanges {
+    pub merge_always: bool,
+    pub base_fix: bool,
+    pub launch_pull: bool,
+    /// None disables Run notifications while retaining their addresses.
+    pub notifications: Option<NotificationAddresses>,
+    /// None retains every Harness setting. Unset Model/Effort writes blank.
+    pub harness: Option<(Harness, ModelAndEffort)>,
+}
+
+/// Recipient and sender for enabled Run notifications.
+pub struct NotificationAddresses {
+    pub to: String,
+    pub from: String,
+}
+
+impl UserConfigDocument {
+    /// Prepare existing text at `path`, rejecting anything a Run rejects
+    /// before adding defaults. Paths in the completed settings use `home`.
+    pub fn existing(text: &str, path: &Path, home: &Path) -> Result<Self> {
+        Self::prepare(text, path, home)
+    }
+
+    /// Prepare a new User config at its defaults, with a suggested recipient
+    /// if Setup found one. This never reads or writes a file.
+    pub fn defaults(path: &Path, home: &Path, suggested_to: Option<String>) -> Result<Self> {
+        Self::prepare(&with_email_to(suggested_to), path, home)
+    }
+
+    fn prepare(text: &str, path: &Path, home: &Path) -> Result<Self> {
+        UserConfig::parse(text, path, home)?;
+        let completed = complete(text)?;
+        let settings = UserConfig::parse(&completed, path, home)?;
+        // Completion appends missing implicit sections after the original
+        // text. Reparse that text so subsequent edits keep their placement.
+        let document = completed.parse().context("can't parse the User config")?;
+        Ok(Self { document, settings })
+    }
+
+    /// Completed settings, used as Setup's question defaults.
+    pub fn settings(&self) -> &UserConfig {
+        &self.settings
+    }
+
+    /// Return the completed text, applying only the supplied semantic
+    /// changes. Consumes preparation so its settings cannot become stale.
+    pub fn render(self, changes: Option<UserConfigChanges>) -> String {
+        let mut document = self.document;
+        if let Some(changes) = changes {
+            set(&mut document, "merge", "always", changes.merge_always);
+            set(&mut document, "base", "fix", changes.base_fix);
+            set(&mut document, "launch", "pull", changes.launch_pull);
+            set(
+                &mut document,
+                "email",
+                "always",
+                changes.notifications.is_some(),
+            );
+            if let Some(notifications) = &changes.notifications {
+                set(&mut document, "email", "from", notifications.from.as_str());
+                set_email_to(&mut document, &notifications.to);
+            }
+            if let Some((harness, chosen)) = &changes.harness {
+                set(&mut document, "harness", "default", harness.name());
+                let section = format!("harness.{}", harness.name());
+                for (key, value) in [("model", &chosen.model), ("effort", &chosen.effort)] {
+                    set(&mut document, &section, key, value.as_deref().unwrap_or(""));
+                }
+            }
+        }
+        document.to_string()
     }
 }
 
@@ -194,8 +277,9 @@ pub fn replace(path: &Path, text: &str) -> std::io::Result<()> {
 /// section, or a key of a section `text` names only in its subsections'
 /// headers, after the last line of `text`. A key added to an inline table
 /// gets no comment, as TOML has no place for one there.
-pub fn complete(text: &str) -> Result<String> {
+fn complete(text: &str) -> Result<String> {
     let mut document: DocumentMut = text.parse().context("can't parse the User config")?;
+    let has_email_example = email_example(&document).is_some();
     let defaults: DocumentMut = DEFAULTS.parse().expect("DEFAULTS is valid TOML");
     let mut missing = DocumentMut::new();
     complete_table(
@@ -207,7 +291,7 @@ pub fn complete(text: &str) -> Result<String> {
         && !email.is_dotted()
     {
         let defaults = defaults["email"].as_table().expect("DEFAULTS has [email]");
-        note_email_to(email, defaults, text);
+        note_email_to(email, defaults, has_email_example);
     }
     let mut completed = document.to_string();
     let missing = missing.to_string();
@@ -220,6 +304,200 @@ pub fn complete(text: &str) -> Result<String> {
     }
     completed.push_str(missing);
     Ok(completed)
+}
+
+/// Set `section.key`, which `document` holds, to `value`, keeping the
+/// spacing and comment around the old value, and the comment in the same
+/// column where the spaces before it allow. An equal value is left as it was
+/// written. `section` may be a subsection, as `harness.claude`.
+fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<toml_edit::Value>) {
+    let value = value.into();
+    let old = section
+        .split('.')
+        .try_fold(document.as_item_mut(), |item, name| {
+            item.as_table_like_mut()?.get_mut(name)
+        })
+        .and_then(Item::as_table_like_mut)
+        .and_then(|settings| settings.get_mut(key))
+        .and_then(Item::as_value_mut)
+        .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
+    let same = match (old.as_bool(), old.as_str()) {
+        (Some(old), _) => value.as_bool() == Some(old),
+        (_, Some(old)) => value.as_str() == Some(old),
+        _ => false,
+    };
+    if same {
+        return;
+    }
+    let mut decor = old.decor().clone();
+    let suffix = decor_suffix(&decor);
+    let spaces = suffix.len() - suffix.trim_start_matches(' ').len();
+    if spaces > 0 && suffix[spaces..].starts_with('#') {
+        let width = |value: &toml_edit::Value| value.clone().decorated("", "").to_string().len();
+        let spaces = (spaces + width(old)).saturating_sub(width(&value)).max(1);
+        decor.set_suffix(format!(
+            "{}{}",
+            " ".repeat(spaces),
+            suffix.trim_start_matches(' ')
+        ));
+    }
+    *old = value;
+    *old.decor_mut() = decor;
+}
+
+/// Set `email.to` in `document` to `to`. With no `email.to` there yet, it
+/// takes the place of the commented-out one, if there is one, written as
+/// the defaults would write it, with its comment.
+fn set_email_to(document: &mut DocumentMut, to: &str) {
+    let email = &mut document["email"];
+    let has_to = email
+        .as_table_like()
+        .is_some_and(|settings| settings.contains_key("to"));
+    if has_to {
+        set(document, "email", "to", to);
+        return;
+    }
+    if email.as_table().is_none_or(|email| email.is_dotted()) {
+        let settings = email.as_table_like_mut().expect("[email] is a section");
+        settings.insert("to", Item::Value(to.into()));
+        return;
+    }
+    let example: DocumentMut = with_email_to(Some(to.to_string()))
+        .parse()
+        .expect("DEFAULTS is valid TOML");
+    let (key, item) = example["email"]
+        .as_table()
+        .and_then(|example| example.get_key_value("to"))
+        .expect("the example sets email.to");
+    let mut key = key.clone();
+    key.leaf_decor_mut().set_prefix("");
+    let email = document["email"].as_table().expect("[email] is a section");
+    let keys: Vec<String> = email.iter().map(|(key, _)| key.to_string()).collect();
+    let mut place = keys.len();
+    let prefix = match email_example(document) {
+        Some(EmailExample::BeforeKey(name)) => {
+            place = keys
+                .iter()
+                .position(|key| *key == name)
+                .expect("the key is in [email]");
+            let mut next = document["email"]
+                .as_table_mut()
+                .unwrap()
+                .key_mut(&name)
+                .unwrap();
+            take_email_example(next.leaf_decor_mut())
+        }
+        Some(EmailExample::BeforeSection(position)) => {
+            let next = section_at(document.as_table_mut(), position)
+                .expect("the section is in the document");
+            take_email_example(next.decor_mut())
+        }
+        Some(EmailExample::Trailing) => {
+            let prefix = document.trailing().as_str().unwrap_or("");
+            let (before, after) = split_email_example(prefix);
+            let before = before.to_string();
+            let after = after.to_string();
+            document.set_trailing(after);
+            before
+        }
+        None => String::new(),
+    };
+    key.leaf_decor_mut().set_prefix(prefix);
+    let email = document["email"]
+        .as_table_mut()
+        .expect("[email] is a section");
+    email.insert_formatted(&key, item.clone());
+    // Each key keeps its place, and `to` goes just before the key at `place`,
+    // or last: odd ranks for the keys that were there, an even one for `to`.
+    let rank = |name: &str| match keys.iter().position(|key| key == name) {
+        Some(at) => 2 * at + 1,
+        None => 2 * place,
+    };
+    email.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
+}
+
+/// A comment after the last email key belongs to the following section's
+/// prefix, or the document's trailing text. It still describes email.to.
+enum EmailExample {
+    BeforeKey(String),
+    BeforeSection(isize),
+    Trailing,
+}
+
+fn email_example(document: &DocumentMut) -> Option<EmailExample> {
+    let email = document.get("email")?.as_table()?;
+    if email.is_dotted() || email.is_implicit() {
+        return None;
+    }
+    for (name, _) in email.iter() {
+        let prefix = decor_prefix(email.key(name)?.leaf_decor());
+        if prefix.lines().any(is_commented_out_email_to) {
+            return Some(EmailExample::BeforeKey(name.to_string()));
+        }
+    }
+    let position = email
+        .position()
+        .expect("an explicit section has a position");
+    if let Some(next) = following_section(document.as_table(), position) {
+        decor_prefix(next.decor())
+            .lines()
+            .any(is_commented_out_email_to)
+            .then(|| EmailExample::BeforeSection(next.position().unwrap()))
+    } else {
+        document
+            .trailing()
+            .as_str()
+            .unwrap_or("")
+            .lines()
+            .any(is_commented_out_email_to)
+            .then_some(EmailExample::Trailing)
+    }
+}
+
+/// Find the next written section, including nested Harness sections whose
+/// headers can precede their parent's explicit header.
+fn following_section(table: &toml_edit::Table, position: isize) -> Option<&toml_edit::Table> {
+    let current = table
+        .position()
+        .filter(|at| *at > position && !table.is_implicit() && !table.is_dotted())
+        .map(|_| table);
+    table
+        .iter()
+        .filter_map(|(_, item)| item.as_table())
+        .filter_map(|section| following_section(section, position))
+        .chain(current)
+        .min_by_key(|section| section.position().unwrap())
+}
+
+fn section_at(table: &mut toml_edit::Table, position: isize) -> Option<&mut toml_edit::Table> {
+    if table.position() == Some(position) && !table.is_implicit() && !table.is_dotted() {
+        return Some(table);
+    }
+    table
+        .iter_mut()
+        .filter_map(|(_, item)| item.as_table_mut())
+        .find_map(|section| section_at(section, position))
+}
+
+fn take_email_example(decor: &mut toml_edit::Decor) -> String {
+    let prefix = decor_prefix(decor);
+    let (before, after) = split_email_example(&prefix);
+    decor.set_prefix(after);
+    before.to_string()
+}
+
+/// Remove only the example's line, retaining the adjacent comments on
+/// either side for the inserted recipient and the next key or section.
+fn split_email_example(prefix: &str) -> (&str, &str) {
+    let mut end = 0;
+    for line in prefix.split_inclusive('\n') {
+        let start = end;
+        end += line.len();
+        if is_commented_out_email_to(line) {
+            return (&prefix[..start], &prefix[end..]);
+        }
+    }
+    unreachable!("the decoration contains the email example")
 }
 
 /// Add to `settings`, a table of a User config, each key of `defaults`, the
@@ -294,12 +572,12 @@ fn complete_inline(settings: &mut toml_edit::InlineTable, defaults: &toml_edit::
     }
 }
 
-/// With no `email.to` in `email`, the `[email]` section of `text`, and no
-/// commented-out one either, add the commented-out example line from
+/// With no `email.to` in `email`, and no commented-out one either, add the
+/// commented-out example line from
 /// `defaults`, the `[email]` section of `DEFAULTS`, just before `email.from`:
 /// `email.to` has no default to write.
-fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, text: &str) {
-    if email.contains_key("to") || has_commented_out_email_to(text) {
+fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, has_example: bool) {
+    if email.contains_key("to") || has_example {
         return;
     }
     let example = decor_prefix(
@@ -317,7 +595,7 @@ fn note_email_to(email: &mut toml_edit::Table, defaults: &toml_edit::Table, text
 
 /// The text `decor` puts before a key: the comment and blank lines above it,
 /// and its indent.
-pub fn decor_prefix(decor: &toml_edit::Decor) -> String {
+fn decor_prefix(decor: &toml_edit::Decor) -> String {
     decor
         .prefix()
         .and_then(|prefix| prefix.as_str())
@@ -327,7 +605,7 @@ pub fn decor_prefix(decor: &toml_edit::Decor) -> String {
 
 /// The text `decor` puts after a value: the spaces and comment that end its
 /// line.
-pub fn decor_suffix(decor: &toml_edit::Decor) -> String {
+fn decor_suffix(decor: &toml_edit::Decor) -> String {
     decor
         .suffix()
         .and_then(|suffix| suffix.as_str())
@@ -335,22 +613,8 @@ pub fn decor_suffix(decor: &toml_edit::Decor) -> String {
         .to_string()
 }
 
-/// Whether the `[email]` section of `text` holds a commented-out `to` line.
-fn has_commented_out_email_to(text: &str) -> bool {
-    let mut in_email = false;
-    for line in text.lines().map(str::trim) {
-        if let Some(header) = line.strip_prefix('[') {
-            let header = header.split('#').next().unwrap_or("").trim_end();
-            in_email = header.strip_suffix(']').map(str::trim) == Some("email");
-        } else if in_email && is_commented_out_email_to(line) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Whether `line`, in the `[email]` section, is a commented-out `to` line.
-pub fn is_commented_out_email_to(line: &str) -> bool {
+fn is_commented_out_email_to(line: &str) -> bool {
     line.trim()
         .strip_prefix('#')
         .and_then(|comment| comment.trim_start().strip_prefix("to"))
@@ -387,7 +651,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 
 [harness]
-default = "claude"   # the Harness every Run's sessions run on, claude or codex; default claude
+default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -396,13 +660,29 @@ effort = ""   # how hard that Model reasons; default blank, for Claude Code's ow
 [harness.codex]
 model = ""    # the Model Codex's sessions run on; default blank, for Codex's own
 effort = ""   # how hard that Model reasons; default blank, for Codex's own
+
+[harness.agy]
+model = ""    # the Model Antigravity CLI's sessions run on; default blank, for agy's own
+effort = ""   # how hard that Model reasons; default blank, for agy's own
+
+[harness.grok]
+model = ""    # the Model Grok Build's sessions run on; default blank, for Grok Build's own
+effort = ""   # how hard that Model reasons; default blank, for Grok Build's own
+
+[harness.muse]
+model = ""    # the Model Muse Code's sessions run on; default blank, for Muse Code's own
+effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
+
+[harness.opencode]
+model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
+effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
 const NO_EMAIL_TO: &str = r#"# to = "you@example.com"        # where email goes when the command names no address; no default"#;
 
 /// `DEFAULTS` with `email.to` set to `to`, if there is one.
-pub fn with_email_to(to: Option<String>) -> String {
+fn with_email_to(to: Option<String>) -> String {
     let Some(to) = to else {
         return DEFAULTS.to_string();
     };
@@ -527,7 +807,15 @@ mod tests {
                 "harness.claude.model",
                 "harness.claude.effort",
                 "harness.codex.model",
-                "harness.codex.effort"
+                "harness.codex.effort",
+                "harness.agy.model",
+                "harness.agy.effort",
+                "harness.grok.model",
+                "harness.grok.effort",
+                "harness.muse.model",
+                "harness.muse.effort",
+                "harness.opencode.model",
+                "harness.opencode.effort"
             ]
         );
         let commented_out: Vec<&str> = DEFAULTS
@@ -540,8 +828,22 @@ mod tests {
     #[test]
     fn a_suggested_address_sets_email_to_in_place_of_the_commented_out_line() {
         assert!(DEFAULTS.contains(&format!("\n{NO_EMAIL_TO}\n")));
-        assert_eq!(with_email_to(None), DEFAULTS);
-        let text = with_email_to(Some("o\"brien@example.com".to_string()));
+        let path = Path::new("/home/me/.thirdshift/config.toml");
+        let home = Path::new("/home/me");
+        assert_eq!(
+            UserConfigDocument::defaults(path, home, None)
+                .unwrap()
+                .render(None),
+            DEFAULTS
+        );
+        let document =
+            UserConfigDocument::defaults(path, home, Some("o\"brien@example.com".to_string()))
+                .unwrap();
+        assert_eq!(
+            document.settings().email.to.as_deref(),
+            Some("o\"brien@example.com")
+        );
+        let text = document.render(None);
         let config = parse(&text).unwrap();
         assert_eq!(config.email.to.as_deref(), Some("o\"brien@example.com"));
         let line = text.lines().find(|line| line.starts_with("to = ")).unwrap();
@@ -577,6 +879,7 @@ mod tests {
                     model: Some("gpt-6.1-sol".to_string()),
                     effort: Some("max".to_string()),
                 },
+                ..harness::Settings::default()
             }
         );
         assert_eq!(parse("").unwrap().harness, harness::Settings::default());
@@ -587,7 +890,7 @@ mod tests {
         for (text, error) in [
             (
                 "[harness]\ndefault = \"gemini\"\n",
-                "harness.default must be claude or codex, not \"gemini\"",
+                "harness.default must be claude or codex or agy or grok or muse or opencode, not \"gemini\"",
             ),
             (
                 "[harness]\ndefault = true\n",
@@ -618,6 +921,14 @@ mod tests {
             let error_text = format!("{:#}", parse(text).unwrap_err());
 
             assert!(error_text.contains(error), "{text:?}: {error_text}");
+            let prepared_error = UserConfigDocument::existing(
+                text,
+                Path::new("/home/me/.thirdshift/config.toml"),
+                Path::new("/home/me"),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(format!("{prepared_error:#}"), error_text);
         }
     }
 
@@ -789,6 +1100,14 @@ mod tests {
             ),
         ] {
             let error = format!("{:#}", parse(text).unwrap_err());
+            let prepared_error = UserConfigDocument::existing(
+                text,
+                Path::new("/home/me/.thirdshift/config.toml"),
+                Path::new("/home/me"),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(format!("{prepared_error:#}"), error);
             assert!(error.contains(named), "{text:?}: {error}");
             assert!(
                 error.contains("/home/me/.thirdshift/config.toml"),
@@ -797,11 +1116,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn preparing_invalid_section_shapes_returns_the_runs_path_aware_error() {
+        let path = Path::new("/home/me/.thirdshift/config.toml");
+        let home = Path::new("/home/me");
+        for text in [
+            "merge = true\n",
+            "harness = false\n",
+            "[harness]\nclaude = true\n",
+        ] {
+            let error = UserConfigDocument::existing(text, path, home)
+                .err()
+                .unwrap();
+            assert_eq!(
+                format!("{error:#}"),
+                format!("{:#}", parse(text).unwrap_err())
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_document_has_completed_defaults_and_accepts_semantic_changes_directly() {
+        let path = Path::new("/users/jane/.thirdshift/config.toml");
+        let home = Path::new("/users/jane");
+        let document = UserConfigDocument::existing("", path, home).unwrap();
+        let current = document.settings();
+        assert_eq!(current.harness.default, Some(Harness::Claude));
+        assert_eq!(
+            current.email.from.as_deref(),
+            Some(crate::email::DEFAULT_FROM)
+        );
+        assert_eq!(current.email.to, None);
+        assert_eq!(current.harness.claude, ModelAndEffort::default());
+        assert_eq!(current.logs_dir, home.join(".thirdshift/logs"));
+
+        let text = document.render(Some(UserConfigChanges {
+            merge_always: true,
+            base_fix: true,
+            launch_pull: true,
+            notifications: Some(NotificationAddresses {
+                to: "me@example.com".to_string(),
+                from: "ts@example.com".to_string(),
+            }),
+            harness: Some((
+                Harness::Codex,
+                ModelAndEffort {
+                    model: Some("gpt-6.1-sol".to_string()),
+                    effort: Some("max".to_string()),
+                },
+            )),
+        }));
+        let config = UserConfig::parse(&text, path, home).unwrap();
+        assert!(config.merge_always && config.base_fix && config.launch_pull);
+        assert!(config.email.always);
+        assert_eq!(config.email.to.as_deref(), Some("me@example.com"));
+        assert_eq!(config.email.from.as_deref(), Some("ts@example.com"));
+        assert_eq!(config.harness.default, Some(Harness::Codex));
+        assert_eq!(config.harness.codex.model.as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(config.harness.codex.effort.as_deref(), Some("max"));
+        assert_eq!(config.logs_dir, home.join(".thirdshift/logs"));
+        assert_eq!(config.spec_parallel.get(), 3);
+        assert_eq!(config.pickup_limit.get(), 3);
+    }
+
     /// `text` completed, after checking a Run reads it with the settings it
     /// had, plus the defaults for the keys it lacked, which change nothing a
     /// Run does.
     fn completed(text: &str) -> String {
-        let completed = complete(text).unwrap();
+        let completed = document(text).render(None);
         let before = parse(text).unwrap();
         let mut after = parse(&completed).unwrap_or_else(|error| panic!("{error:#}\n{completed}"));
         if before.email.from.is_none() {
@@ -816,7 +1198,7 @@ mod tests {
             after.harness.default = None;
         }
         assert_eq!(after, before, "{completed}");
-        let again = complete(&completed).unwrap();
+        let again = document(&completed).render(None);
         assert_eq!(again, completed, "completing twice changed it");
         completed
     }
@@ -868,7 +1250,7 @@ mod tests {
             let config: toml::Table = completed.parse().unwrap();
             let harness = config["harness"].as_table().unwrap();
             assert!(harness.contains_key("default"), "{text:?}:\n{completed}");
-            for name in ["claude", "codex"] {
+            for name in Harness::ALL.map(Harness::name) {
                 let settings = harness[name].as_table().unwrap();
                 for key in ["model", "effort"] {
                     assert!(settings.contains_key(key), "{text:?}:\n{completed}");
@@ -903,5 +1285,347 @@ mod tests {
         }
         let completed = completed("[email]\nto = \"me@example.com\"\n");
         assert!(!completed.contains("# to ="), "{completed}");
+    }
+    fn document(text: &str) -> UserConfigDocument {
+        UserConfigDocument::existing(
+            text,
+            Path::new("/home/me/.thirdshift/config.toml"),
+            Path::new("/home/me"),
+        )
+        .unwrap()
+    }
+
+    // Semantic edits through the prepared document.
+
+    fn notifications_to(to: &str) -> UserConfigChanges {
+        UserConfigChanges {
+            harness: None,
+            merge_always: false,
+            base_fix: false,
+            launch_pull: false,
+            notifications: Some(NotificationAddresses {
+                to: to.to_string(),
+                from: crate::email::DEFAULT_FROM.to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn an_answered_address_takes_the_place_of_the_commented_out_line() {
+        let answered = document(DEFAULTS).render(Some(notifications_to("me@example.com")));
+        let expected = DEFAULTS.replace(NO_EMAIL_TO, "to = \"me@example.com\"           # where email goes when the command names no address; no default").replace(
+            "always = false                  #",
+            "always = true                   #",
+        );
+        assert_eq!(answered, expected);
+    }
+
+    #[test]
+    fn an_answered_address_keeps_the_lines_around_the_commented_out_one() {
+        let text =
+            "[email]\nalways = false\n\n# mine\n# to = \"x@y.z\"\n# more\nfrom = \"a@b.c\"\n";
+        let answered = document(text).render(Some(notifications_to("me@example.com")));
+        let lines: Vec<&str> = answered.lines().collect();
+        assert_eq!(
+            lines[..4],
+            ["[email]", "always = true", "", "# mine"],
+            "{answered}"
+        );
+        assert!(
+            lines[4].starts_with("to = \"me@example.com\""),
+            "{answered}"
+        );
+        assert_eq!(
+            lines[5..7],
+            ["# more", "from = \"onboarding@resend.dev\""],
+            "{answered}"
+        );
+    }
+    #[test]
+    fn completed_settings_expand_log_paths_and_leave_blank_model_and_effort_unset() {
+        let home = Path::new("/users/jane");
+        let path = home.join(".thirdshift/config.toml");
+        for (dir, expected) in [
+            ("~/elsewhere/logs", "/users/jane/elsewhere/logs"),
+            ("~", "/users/jane"),
+            ("/var/log/thirdshift", "/var/log/thirdshift"),
+        ] {
+            let text = format!("[logs]\ndir = {dir:?}\n[harness.codex]\nmodel = ''\neffort = ''\n");
+            let document = UserConfigDocument::existing(&text, &path, home).unwrap();
+            let settings = document.settings();
+            assert_eq!(settings.logs_dir, Path::new(expected));
+            assert_eq!(settings.harness.default, Some(Harness::Claude));
+            assert_eq!(
+                settings.email.from.as_deref(),
+                Some(crate::email::DEFAULT_FROM)
+            );
+            for harness in Harness::ALL {
+                assert_eq!(settings.harness.of(harness), &ModelAndEffort::default());
+            }
+        }
+    }
+
+    #[test]
+    fn equal_answers_keep_literal_spelling_and_decoration() {
+        let text = DEFAULTS
+            .replace("default = \"claude\"", "default = \"\\u0063laude\"")
+            .replace("model = \"\"", "model = ''")
+            .replace("effort = \"\"", "effort = ''")
+            .replace("parallel = 3", "parallel = 1_000")
+            .replace(
+                "from = \"onboarding@resend.dev\"",
+                "from = 'onboarding@resend.dev'",
+            )
+            .replace(
+                "always = false                  #",
+                "always = true                   #",
+            )
+            .replace(NO_EMAIL_TO, "to = 'me@example.com'  # my inbox");
+        let mut changes = notifications_to("me@example.com");
+        changes.harness = Some((Harness::Claude, ModelAndEffort::default()));
+
+        assert_eq!(document(&text).render(Some(changes)), text);
+    }
+
+    #[test]
+    fn changed_values_keep_surrounding_comments_and_adjust_comment_columns() {
+        let text = "# top\n[merge]\n# before\nalways = false   # merge\n# after\n\n\
+                    [harness.codex]\nmodel = 'old'       # model\neffort = 'high'      # effort\n";
+        let changes = UserConfigChanges {
+            merge_always: true,
+            base_fix: false,
+            launch_pull: false,
+            notifications: None,
+            harness: Some((
+                Harness::Codex,
+                ModelAndEffort {
+                    model: Some("much-longer-model".to_string()),
+                    effort: None,
+                },
+            )),
+        };
+        let rendered = document(text).render(Some(changes));
+        assert!(
+            rendered.starts_with("# top\n[merge]\n# before\nalways = true    # merge\n# after\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("model = \"much-longer-model\" # model\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("effort = \"\"          # effort\n"),
+            "{rendered}"
+        );
+    }
+    #[test]
+    fn direct_edits_of_partial_dotted_inline_and_implicit_sections_preserve_other_harnesses() {
+        for text in [
+            "# dotted\nmerge.always = false\nbase.fix = false\nlaunch.pull = false\n\
+             email.always = false\nemail.to = 'saved@example.com'\n\
+             harness.default = 'claude'\nharness.codex.model = 'old'\n\
+             harness.codex.effort = 'high'\nharness.claude.model = 'opus'\n",
+            "# inline\nmerge = { always = false }\nbase = { fix = false }\n\
+             launch = { pull = false }\nemail = { always = false, to = 'saved@example.com' }\n\
+             harness = { default = 'claude', codex = { model = 'old', effort = 'high' }, claude = { model = 'opus' } }\n",
+            "[harness]\ndefault = 'claude'\ncodex = { model = 'old', effort = 'high' }\n\
+             claude = { model = 'opus' }\n",
+            "[harness.codex]\nmodel = 'old' # mine\neffort = 'high'\n\
+             [harness.claude]\nmodel = 'opus'\n",
+        ] {
+            let before = parse(text).unwrap();
+            let changes = UserConfigChanges {
+                merge_always: true,
+                base_fix: true,
+                launch_pull: true,
+                notifications: Some(NotificationAddresses {
+                    to: "o\"brien@example.com".to_string(),
+                    from: "ts@example.com".to_string(),
+                }),
+                harness: Some((Harness::Codex, ModelAndEffort::default())),
+            };
+            let rendered = document(text).render(Some(changes));
+            let config = parse(&rendered).unwrap();
+            assert!(
+                config.merge_always && config.base_fix && config.launch_pull,
+                "{rendered}"
+            );
+            assert!(config.email.always, "{rendered}");
+            assert_eq!(config.email.to.as_deref(), Some("o\"brien@example.com"));
+            assert_eq!(config.email.from.as_deref(), Some("ts@example.com"));
+            assert_eq!(config.harness.default, Some(Harness::Codex));
+            let table: toml::Table = rendered.parse().unwrap();
+            assert_eq!(table["harness"]["codex"]["model"].as_str(), Some(""));
+            assert_eq!(table["harness"]["codex"]["effort"].as_str(), Some(""));
+            for harness in Harness::ALL.into_iter().filter(|h| *h != Harness::Codex) {
+                assert_eq!(
+                    config.harness.of(harness),
+                    before.harness.of(harness),
+                    "{rendered}"
+                );
+            }
+            assert_eq!(config.logs_dir, before.logs_dir);
+            assert_eq!(config.quiet_skips, before.quiet_skips);
+            assert_eq!(config.spec_parallel, before.spec_parallel);
+            assert_eq!(config.pickup_limit, before.pickup_limit);
+            if let Some(comment) = text.lines().next().filter(|line| line.starts_with('#')) {
+                assert!(rendered.starts_with(comment), "{rendered}");
+            }
+            // The completed rendering still uses the user's representation.
+            if text.contains("merge.always") {
+                assert!(rendered.contains("merge.always = true\n"), "{rendered}");
+                assert!(
+                    rendered.contains("harness.codex.model = \"\"\n"),
+                    "{rendered}"
+                );
+            } else if text.contains("harness = {") {
+                assert!(
+                    rendered.contains("merge = { always = true }\n"),
+                    "{rendered}"
+                );
+                assert!(!rendered.contains("[harness]"), "{rendered}");
+            } else if text.contains("codex = {") {
+                assert!(
+                    rendered.contains("codex = { model = \"\", effort = \"\" }\n"),
+                    "{rendered}"
+                );
+            } else {
+                assert!(
+                    rendered
+                        .starts_with("[harness.codex]\nmodel = \"\"    # mine\neffort = \"\"\n"),
+                    "{rendered}"
+                );
+                assert!(
+                    rendered.find("[harness.claude]").unwrap()
+                        < rendered.find("[harness]\n").unwrap()
+                );
+            }
+            assert_eq!(document(&rendered).render(None), rendered);
+        }
+    }
+    #[test]
+    fn disabling_notifications_keeps_saved_addresses_harnesses_and_unasked_settings() {
+        let mut text = "[email]\nalways = true # enabled\nto = 'saved@example.com' # inbox\n\
+                        from = 'saved@example.net' # sender\n\
+                        [logs]\ndir = '~/custom'\n[activity]\nquiet_skips = true\n\
+                        [spec]\nparallel = 1_000 # capacity\n[pickup]\nlimit = 7\n\
+                        [harness]\ndefault = 'muse' # chosen\n"
+            .to_string();
+        for harness in Harness::ALL {
+            text.push_str(&format!(
+                "[harness.{}]\nmodel = 'saved-model' # model\neffort = 'saved-effort' # effort\n",
+                harness.name()
+            ));
+        }
+        let before = parse(&text).unwrap();
+        let changes = UserConfigChanges {
+            merge_always: true,
+            base_fix: false,
+            launch_pull: true,
+            notifications: None,
+            harness: None,
+        };
+        let rendered = document(&text).render(Some(changes));
+        let config = parse(&rendered).unwrap();
+        assert!(!config.email.always);
+        assert_eq!(config.email.to, before.email.to);
+        assert_eq!(config.email.from, before.email.from);
+        assert_eq!(config.harness, before.harness);
+        assert_eq!(config.logs_dir, before.logs_dir);
+        assert_eq!(config.quiet_skips, before.quiet_skips);
+        assert_eq!(config.spec_parallel, before.spec_parallel);
+        assert_eq!(config.pickup_limit, before.pickup_limit);
+        assert!(config.merge_always && config.launch_pull);
+        assert!(!config.base_fix);
+        assert!(rendered.starts_with("[email]\nalways = false # enabled\nto = 'saved@example.com' # inbox\nfrom = 'saved@example.net' # sender\n"), "{rendered}");
+        for line in text
+            .lines()
+            .filter(|line| *line != "always = true # enabled")
+        {
+            assert!(
+                rendered.lines().any(|kept| kept == line),
+                "lost {line:?}:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn enabling_notifications_quotes_the_recipient_and_replaces_the_example_in_place() {
+        let text = "[email]\nalways = false\n# mine\n# to = 'someday@example.com'\n# more\nfrom = 'onboarding@resend.dev'\n";
+        let to = "o\"brien\\team@example.com";
+        let rendered = document(text).render(Some(notifications_to(to)));
+        let config = parse(&rendered).unwrap();
+        assert!(config.email.always);
+        assert_eq!(config.email.to.as_deref(), Some(to));
+        let lines: Vec<_> = rendered.lines().collect();
+        assert_eq!(lines[..3], ["[email]", "always = true", "# mine"]);
+        assert!(lines[3].starts_with("to = "), "{rendered}");
+        assert!(
+            rendered.contains("\n# more\nfrom = 'onboarding@resend.dev'\n"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("# to ="), "{rendered}");
+        assert_eq!(document(&rendered).render(None), rendered);
+    }
+    #[test]
+    fn enabling_notifications_replaces_examples_at_section_and_document_boundaries() {
+        let email_start = DEFAULTS.find("[email]\n").unwrap();
+        let email_end = DEFAULTS.find("[logs]\n").unwrap();
+        let email_last = format!(
+            "{}{}\n[email]\nalways = false\nfrom = 'onboarding@resend.dev'\n# mine\n# to = 'saved@example.com'\n# more\n",
+            &DEFAULTS[..email_start],
+            &DEFAULTS[email_end..]
+        );
+        for text in [
+            "[email]\nalways = false\nfrom = 'onboarding@resend.dev'\n# mine\n# to = 'saved@example.com'\n# more\n",
+            "[email]\nalways = false\nfrom = 'onboarding@resend.dev'\n# mine\n# to = 'saved@example.com'\n# more\n[merge]\nalways = false\n",
+            "[email]\nalways = false\nfrom = 'onboarding@resend.dev'\n# mine\n# to = 'saved@example.com'\n# more\n[harness.codex]\nmodel = 'saved'\n",
+            "[email]\n# mine\n# to = 'saved@example.com'\n# more\n",
+            "[email]\n# mine\n# to = 'saved@example.com'\n# more\n[merge]\nalways = false\n",
+            &email_last,
+        ] {
+            let completed = document(text).render(None);
+            assert_eq!(completed.matches("# to =").count(), 1, "{completed}");
+            let rendered = document(text).render(Some(notifications_to("me@example.com")));
+            let lines: Vec<_> = rendered.lines().collect();
+            let to = lines
+                .iter()
+                .position(|line| line.starts_with("to = "))
+                .unwrap();
+            assert_eq!(lines[to - 1], "# mine", "{rendered}");
+            assert_eq!(lines[to + 1], "# more", "{rendered}");
+            assert!(!rendered.contains("# to ="), "{rendered}");
+            let settings = parse(&rendered).unwrap();
+            assert!(settings.email.always);
+            assert_eq!(settings.email.to.as_deref(), Some("me@example.com"));
+            assert_eq!(document(&rendered).render(None), rendered);
+        }
+    }
+    #[test]
+    fn quoted_email_headers_keep_one_example_and_render_idempotently() {
+        for header in [r#"["email"]"#, "['email']", r#"["em\u0061il"]"#] {
+            let text = format!(
+                "{header}\nalways = false\n# mine\n# to = 'saved@example.com'\n# more\nfrom = 'onboarding@resend.dev'\n"
+            );
+            let completed = document(&text).render(None);
+            assert_eq!(completed.matches("# to =").count(), 1, "{completed}");
+            assert!(completed.starts_with(&text), "{completed}");
+            assert_eq!(document(&completed).render(None), completed);
+
+            let rendered = document(&text).render(Some(notifications_to("me@example.com")));
+            assert!(rendered.starts_with(header), "{rendered}");
+            assert!(!rendered.contains("# to ="), "{rendered}");
+            let lines: Vec<_> = rendered.lines().collect();
+            let to = lines
+                .iter()
+                .position(|line| line.starts_with("to = "))
+                .unwrap();
+            assert_eq!(lines[to - 1], "# mine", "{rendered}");
+            assert_eq!(lines[to + 1], "# more", "{rendered}");
+            let settings = parse(&rendered).unwrap();
+            assert!(settings.email.always);
+            assert_eq!(settings.email.to.as_deref(), Some("me@example.com"));
+            assert_eq!(document(&rendered).render(None), rendered);
+        }
     }
 }
