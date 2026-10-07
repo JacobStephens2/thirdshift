@@ -7,7 +7,7 @@
 
 use anyhow::{Result, bail};
 
-use super::pull_request::MergeAttempt;
+use crate::pull_request::MergeAttempt;
 
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::PolicyRefusal;

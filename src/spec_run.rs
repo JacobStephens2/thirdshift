@@ -9,7 +9,6 @@
 //! [`ChildRunsAndGitHub`] does that for real; `Scripted`, in tests, from a
 //! script, recording each call.
 
-mod spec_pr;
 mod ticket_board;
 
 use std::num::NonZeroUsize;
@@ -18,7 +17,7 @@ use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{Ended, Kind, Runs};
-use crate::delivery::{Delivery, Identified, Opening};
+use crate::delivery::{Delivery, Opening};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
@@ -26,10 +25,10 @@ use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
 use crate::prompt;
+use crate::pull_request::PullRequest;
 use crate::run::Reached;
 use crate::worktree::Worktree;
 
-use spec_pr::SpecPr;
 use ticket_board::TicketBoard;
 
 /// The Spec review session's kind, in its progress lines and log name.
@@ -57,7 +56,8 @@ pub fn run(
 ) -> Result<Reached, FailedRun> {
     let (spec, base) = (delivery.issue, delivery.base);
     let branch = worktree.branch().to_string();
-    let spec_pr = SpecPr::resume(spec, &branch, base)?;
+    let mut spec_pr = PullRequest::new(spec, &branch, base, GitHub::new());
+    spec_pr.resume_spec()?;
     let mut outside = ChildRunsAndGitHub::new(worktree, delivery, spec_pr);
     run_through(&mut outside, spec, base, &branch, tickets, parallel)
 }
@@ -143,7 +143,7 @@ fn review_and_deliver(
         catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
-    let delivered = outside.deliver(opening, |outside, pr| outside.put_back(checklist, pr));
+    let delivered = outside.deliver(opening, checklist);
     if delivered.is_err() {
         outside.show(checklist);
     }
@@ -170,16 +170,9 @@ trait Outside {
     fn landed(&mut self, checklist: &str) -> Result<String>;
     /// The Spec PR's URL, if it is open.
     fn spec_pr_url(&mut self) -> Option<String>;
-    /// Put `checklist` back in the Spec PR's body.
-    fn put_back(&mut self, checklist: &str, pr: &Identified) -> Result<()>;
-    /// Take the Spec PR to its goal by the Delivery, opening with `opening`,
-    /// running `before_ready` before the Spec PR is marked ready. Called at
-    /// most once, after the Ticket loop.
-    fn deliver(
-        &mut self,
-        opening: Opening,
-        before_ready: impl FnOnce(&mut Self, &Identified) -> Result<()>,
-    ) -> Result<Reached, FailedRun>;
+    /// Take the Spec PR to its goal, restoring `checklist` before readiness.
+    /// Called at most once, after the Ticket loop.
+    fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun>;
     /// Whether the Spec run was interrupted.
     fn interrupted(&mut self) -> bool;
     /// Write the progress line `line`.
@@ -203,13 +196,13 @@ struct ChildRunsAndGitHub<'a> {
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
     harness: &'a Choice,
-    spec_pr: SpecPr<'a>,
+    spec_pr: PullRequest,
 }
 
 impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
-    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: SpecPr<'a>) -> Self {
+    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
         Self {
             spec: delivery.issue,
             children: Runs::default(),
@@ -263,35 +256,21 @@ impl Outside for ChildRunsAndGitHub<'_> {
     }
 
     fn show(&mut self, checklist: &str) {
-        self.spec_pr.show(checklist);
+        self.spec_pr.show_checklist(checklist);
     }
 
     fn landed(&mut self, checklist: &str) -> Result<String> {
-        self.spec_pr.landed(checklist).map(str::to_string)
+        self.spec_pr.land_spec(checklist)
     }
 
     fn spec_pr_url(&mut self) -> Option<String> {
-        self.spec_pr.url().map(str::to_string)
+        self.spec_pr.info().map(|pr| pr.url)
     }
 
-    fn put_back(&mut self, checklist: &str, pr: &Identified) -> Result<()> {
-        self.spec_pr.put_back(checklist, pr)
-    }
-
-    /// Hands the worktree and the Delivery over, then lends `self` to
-    /// `before_ready`, as the Delivery no longer borrows it.
-    fn deliver(
-        &mut self,
-        opening: Opening,
-        before_ready: impl FnOnce(&mut Self, &Identified) -> Result<()>,
-    ) -> Result<Reached, FailedRun> {
+    fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
         let worktree = self.worktree.take().expect("the Delivery starts once");
         let delivery = self.delivery.take().expect("the Delivery starts once");
-        let delivered = delivery.deliver(worktree, opening, |pr| before_ready(self, pr));
-        if let Some(pr) = delivered.pull_request {
-            self.spec_pr.follow(&pr);
-        }
-        delivered.outcome
+        delivery.deliver(worktree, opening, &mut self.spec_pr, Some(checklist))
     }
 
     fn interrupted(&mut self) -> bool {
@@ -632,21 +611,7 @@ mod tests {
             self.spec_pr_open.then(|| SPEC_PR.to_string())
         }
 
-        fn put_back(&mut self, checklist: &str, _: &Identified) -> Result<()> {
-            self.did.push(Did::PutBack(checklist.to_string()));
-            if self.script.put_back_fails {
-                bail!("could not put the Tickets checklist back");
-            }
-            Ok(())
-        }
-
-        /// Runs `before_ready`, then marks the Spec PR ready, as the
-        /// Delivery does, failing as the Failed run path would.
-        fn deliver(
-            &mut self,
-            opening: Opening,
-            before_ready: impl FnOnce(&mut Self, &Identified) -> Result<()>,
-        ) -> Result<Reached, FailedRun> {
+        fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
                 kind: opening.kind.to_string(),
                 prompt: opening.prompt,
@@ -655,13 +620,12 @@ mod tests {
             let delivered = if self.script.review_fails {
                 Err(anyhow!("the spec-review session failed"))
             } else {
-                before_ready(
-                    self,
-                    &Identified {
-                        number: 30,
-                        url: SPEC_PR.to_string(),
-                    },
-                )
+                self.did.push(Did::PutBack(checklist.to_string()));
+                if self.script.put_back_fails {
+                    Err(anyhow!("could not put the Tickets checklist back"))
+                } else {
+                    Ok(())
+                }
             };
             let delivered = delivered.and_then(|()| {
                 self.did.push(Did::Ready);

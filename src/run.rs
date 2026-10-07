@@ -438,9 +438,14 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         base: &str,
         opening: Opening,
     ) -> Result<Reached, FailedRun> {
+        let mut pull_request = crate::pull_request::PullRequest::new(
+            self.issue,
+            worktree.branch(),
+            base,
+            GitHub::new(),
+        );
         self.delivery(base)
-            .deliver(worktree, opening, |_| Ok(()))
-            .outcome
+            .deliver(worktree, opening, &mut pull_request, None)
     }
 
     fn step(&mut self, line: String) {

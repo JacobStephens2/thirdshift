@@ -363,16 +363,9 @@ impl GitHub {
         }
     }
 
-    /// The pull request whose head is `branch`, if `gh` finds one.
-    pub fn pull_request_for(&self, issue: &IssueUrl, branch: &str) -> Result<Option<PullRequest>> {
-        let Some(json) = self.optional_pr_view(issue, branch, PR_FIELDS)? else {
-            return Ok(None);
-        };
-        PullRequest::from_json(&json).map(Some)
-    }
-
-    /// A coherent Delivery observation, selected by head branch for initial
-    /// discovery and by number after capture. Policy belongs to Delivery.
+    /// A coherent pull request observation, selected by head branch for initial
+    /// discovery and by number after capture. Policy belongs to the pull
+    /// request owner.
     pub fn pr_snapshot(&self, issue: &IssueUrl, selector: &str) -> Result<Option<PrSnapshot>> {
         let Some(json) = self.optional_pr_view(issue, selector, SNAPSHOT_FIELDS)? else {
             return Ok(None);
@@ -840,7 +833,7 @@ const PR_FIELDS: &str = "number,url,state,headRefName,baseRefName,isDraft";
 const SNAPSHOT_FIELDS: &str =
     "number,url,state,headRefName,baseRefName,isDraft,mergeable,headRefOid,isCrossRepository";
 
-/// The fields needed for one Delivery gate, read together.
+/// The fields needed for one pull request observation, read together.
 #[derive(Debug, Clone)]
 pub struct PrSnapshot {
     pub pr: PullRequest,
