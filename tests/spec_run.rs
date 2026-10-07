@@ -1828,8 +1828,9 @@ fn an_existing_spec_pr_accounts_for_every_drained_ticket_after_interruption() {
 fn parent_only_interruption_reaches_all_active_tickets_before_waiting_and_saves_their_work() {
     let scenario = diamond_spec();
     let root = scenario.path("");
-    // Each Failed run's push must meet its sibling's push before it can
-    // finish. Waiting on one Ticket before signalling the other cannot pass.
+    // Each Failed run's push must observe its sibling session interrupted
+    // before it can finish. Salvage pushes may hold the repository locks one
+    // at a time; waiting on one Ticket before signalling the other cannot pass.
     scenario.repo_has_hook(
         &scenario.origin_dir(),
         "pre-receive",
@@ -1837,16 +1838,15 @@ fn parent_only_interruption_reaches_all_active_tickets_before_waiting_and_saves_
             r#"#!/bin/sh
 while read old new ref; do
   case "$ref" in
-    refs/heads/issue-21) ticket=21; other=22 ;;
-    refs/heads/issue-22) ticket=22; other=21 ;;
+    refs/heads/issue-21) other=22 ;;
+    refs/heads/issue-22) other=21 ;;
     *) continue ;;
   esac
-  touch {root}/cleanup-$ticket
   for attempt in $(seq 80); do
-    test -f {root}/cleanup-$other && break
+    test -f {root}/interrupted-$other && break
     sleep 0.05
   done
-  test -f {root}/cleanup-$other || exit 1
+  test -f {root}/interrupted-$other || exit 1
 done
 "#,
             root = root.display()
@@ -1854,7 +1854,8 @@ done
     );
     for (ticket, other) in [(21, 22), (22, 21)] {
         scenario.agent_does_for(ticket, &format!(
-            "echo 'half done {ticket}' > wip.txt\n{}touch {root}/both-started\nsleep 30\ntouch {root}/outlived-{ticket}\n",
+            "trap ': > {root}/interrupted-{ticket}; exit 143' TERM\n\
+             echo 'half done {ticket}' > wip.txt\n{}touch {root}/both-started\nsleep 30\ntouch {root}/outlived-{ticket}\n",
             waits_for_other_session(&scenario, ticket, other), root = root.display()
         ));
     }
@@ -1871,6 +1872,7 @@ done
     sessions.sort();
     assert_eq!(sessions, ["21", "22"]);
     for ticket in [21, 22] {
+        assert!(scenario.path(&format!("interrupted-{ticket}")).exists());
         assert!(!scenario.path(&format!("outlived-{ticket}")).exists());
         assert_eq!(
             scenario.origin_file(&format!("issue-{ticket}"), "wip.txt"),

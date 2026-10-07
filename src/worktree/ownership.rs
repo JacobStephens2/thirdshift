@@ -1,14 +1,16 @@
-//! Pin the acquired checkout instance and dispose of only that instance.
+//! Pin the acquired checkout instance; preserve and dispose of only that instance.
 
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use chrono::{SecondsFormat, Utc};
 
 use super::acquisition::registrations;
 use super::{local_head, lock_launch};
 use crate::git::Git;
+use crate::host;
 use crate::progress;
 
 #[path = "review_recovery.rs"]
@@ -40,6 +42,55 @@ impl Checkout {
 
     pub(super) fn path(&self) -> &Path {
         &self.root.path
+    }
+
+    pub(super) fn preserve_failed_run(&self, launch: &Git, base: &str, reason: &str) -> Result<()> {
+        let launch = launch.completion();
+        let branch = self
+            .branch
+            .as_deref()
+            .context("Failed run preservation requires an acquired Issue branch")?;
+        let context = || {
+            format!(
+                "cannot preserve acquired checkout {} on expected Issue branch {branch}",
+                self.path().display()
+            )
+        };
+        self.common.verify().with_context(context)?;
+        let _lock = lock_launch(&launch).with_context(context)?;
+        let _refs_lock = launch.lock_worktree_refs().with_context(context)?;
+        let inspect = || self.inspect(&launch).with_context(context);
+        inspect()?;
+        let git = Git::new(self.path()).completion();
+        if git.merge_in_progress()? {
+            inspect()?;
+            git.run(&["merge", "--abort"])?;
+        }
+        inspect()?;
+        git.run(&["add", "-A"])?;
+        let base = format!("origin/{base}");
+        if !git.succeeds(&["diff", "--cached", "--quiet", &base])? {
+            let message = format!(
+                "thirdshift: failed run ({reason})\n\n\
+                 {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
+                timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                host = host::name().as_deref().unwrap_or("unknown"),
+            );
+            // No hooks: a hook that rejects the commit would strand the work.
+            inspect()?;
+            git.run(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "--no-verify",
+                "-m",
+                &message,
+            ])?;
+            inspect()?;
+            git.push(branch)?;
+        }
+        inspect()?;
+        Ok(())
     }
 
     /// Drop is best effort, including while another panic is unwinding.
