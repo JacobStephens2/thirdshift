@@ -719,6 +719,45 @@ mod tests {
         observed
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum ObservationChange {
+        WrongBase,
+        WrongHead,
+        Fork,
+        WrongRepository,
+        Replacement,
+        Closed,
+        Merged,
+        Missing,
+        Unreadable,
+        Ready,
+        Draft,
+    }
+
+    impl ObservationChange {
+        fn answer(self, mut observed: PrSnapshot) -> Answer {
+            match self {
+                Self::WrongBase => observed.pr.base = "develop".to_string(),
+                Self::WrongHead => observed.pr.head = "other".to_string(),
+                Self::Fork => observed.from_fork = true,
+                Self::WrongRepository => {
+                    observed.pr.url = "https://github.com/other/widgets/pull/12".to_string()
+                }
+                Self::Replacement => {
+                    observed.pr.number = 13;
+                    observed.pr.url = "https://github.com/acme/widgets/pull/13".to_string();
+                }
+                Self::Closed => observed.pr.state = PrState::Closed,
+                Self::Merged => observed.pr.state = PrState::Merged,
+                Self::Missing => return Ok(None),
+                Self::Unreadable => return Err("read failed"),
+                Self::Ready => observed.pr.is_draft = false,
+                Self::Draft => observed.pr.is_draft = true,
+            }
+            Ok(Some(observed))
+        }
+    }
+
     #[test]
     fn resume_drafts_the_observed_number_even_when_branch_discovery_would_find_a_replacement() {
         let (mut pr, world) = owner(World {
@@ -741,38 +780,22 @@ mod tests {
     #[test]
     fn resume_revalidates_before_drafting_and_never_follows_a_replacement() {
         for change in [
-            "base",
-            "head",
-            "fork",
-            "repository",
-            "number",
-            "closed",
-            "missing",
-            "unreadable",
+            ObservationChange::WrongBase,
+            ObservationChange::WrongHead,
+            ObservationChange::Fork,
+            ObservationChange::WrongRepository,
+            ObservationChange::Replacement,
+            ObservationChange::Closed,
+            ObservationChange::Missing,
+            ObservationChange::Unreadable,
         ] {
-            let mut changed = snapshot();
-            match change {
-                "base" => changed.pr.base = "develop".to_string(),
-                "head" => changed.pr.head = "other".to_string(),
-                "fork" => changed.from_fork = true,
-                "repository" => {
-                    changed.pr.url = "https://github.com/other/widgets/pull/12".to_string()
-                }
-                "number" => changed = numbered(13),
-                "closed" => changed.pr.state = PrState::Closed,
-                _ => (),
-            }
-            let next = match change {
-                "missing" => Ok(None),
-                "unreadable" => Err("read failed"),
-                _ => Ok(Some(changed)),
-            };
+            let next = change.answer(snapshot());
             let (mut pr, world) = owner(World {
                 observations: VecDeque::from([Ok(Some(snapshot())), next]),
                 ..World::default()
             });
-            assert!(pr.resume_spec().is_err(), "{change}");
-            assert!(world.borrow().draft.is_empty(), "{change}");
+            assert!(pr.resume_spec().is_err(), "{change:?}");
+            assert!(world.borrow().draft.is_empty(), "{change:?}");
             assert_eq!(
                 world.borrow().selected.last(),
                 Some(&("12".to_string(), false))
@@ -782,22 +805,17 @@ mod tests {
 
     #[test]
     fn resume_rejects_initial_wrong_branches_forks_and_repository_before_any_transition() {
-        for change in ["base", "head", "fork", "repository"] {
-            let mut changed = snapshot();
-            match change {
-                "base" => changed.pr.base = "develop".to_string(),
-                "head" => changed.pr.head = "other".to_string(),
-                "fork" => changed.from_fork = true,
-                "repository" => {
-                    changed.pr.url = "https://github.com/other/widgets/pull/12".to_string()
-                }
-                _ => unreachable!(),
-            }
+        for change in [
+            ObservationChange::WrongBase,
+            ObservationChange::WrongHead,
+            ObservationChange::Fork,
+            ObservationChange::WrongRepository,
+        ] {
             let (mut pr, world) = owner(World {
-                observations: VecDeque::from([Ok(Some(changed))]),
+                observations: VecDeque::from([change.answer(snapshot())]),
                 ..World::default()
             });
-            assert!(pr.resume_spec().is_err(), "{change}");
+            assert!(pr.resume_spec().is_err(), "{change:?}");
             assert!(world.borrow().draft.is_empty());
             assert!(world.borrow().edits.is_empty());
         }
@@ -874,42 +892,26 @@ mod tests {
     #[test]
     fn creation_requires_an_open_draft_with_the_returned_number_and_expected_ownership() {
         for change in [
-            "missing",
-            "unreadable",
-            "number",
-            "base",
-            "head",
-            "fork",
-            "repository",
-            "closed",
-            "ready",
+            ObservationChange::Missing,
+            ObservationChange::Unreadable,
+            ObservationChange::Replacement,
+            ObservationChange::WrongBase,
+            ObservationChange::WrongHead,
+            ObservationChange::Fork,
+            ObservationChange::WrongRepository,
+            ObservationChange::Closed,
+            ObservationChange::Ready,
         ] {
             let mut created = snapshot();
             created.pr.is_draft = true;
-            match change {
-                "number" => created = numbered(13),
-                "base" => created.pr.base = "develop".to_string(),
-                "head" => created.pr.head = "other".to_string(),
-                "fork" => created.from_fork = true,
-                "repository" => {
-                    created.pr.url = "https://github.com/other/widgets/pull/12".to_string()
-                }
-                "closed" => created.pr.state = PrState::Closed,
-                "ready" => created.pr.is_draft = false,
-                _ => (),
-            }
-            let observation = match change {
-                "missing" => Ok(None),
-                "unreadable" => Err("read failed"),
-                _ => Ok(Some(created)),
-            };
+            let observation = change.answer(created);
             let (mut pr, world) = owner(World {
                 observations: VecDeque::from([Ok(None)]),
                 completion: VecDeque::from([observation]),
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            assert!(pr.land_spec("landed\n").is_err(), "{change}");
+            assert!(pr.land_spec("landed\n").is_err(), "{change:?}");
             assert_eq!(
                 world.borrow().selected.last(),
                 Some(&("12".to_string(), true))
@@ -921,41 +923,24 @@ mod tests {
     #[test]
     fn accounting_never_edits_or_lands_an_invalid_numbered_observation() {
         for change in [
-            "base",
-            "head",
-            "fork",
-            "repository",
-            "number",
-            "closed",
-            "merged",
-            "missing",
-            "unreadable",
+            ObservationChange::WrongBase,
+            ObservationChange::WrongHead,
+            ObservationChange::Fork,
+            ObservationChange::WrongRepository,
+            ObservationChange::Replacement,
+            ObservationChange::Closed,
+            ObservationChange::Merged,
+            ObservationChange::Missing,
+            ObservationChange::Unreadable,
         ] {
-            let mut changed = snapshot();
-            match change {
-                "base" => changed.pr.base = "develop".to_string(),
-                "head" => changed.pr.head = "other".to_string(),
-                "fork" => changed.from_fork = true,
-                "repository" => {
-                    changed.pr.url = "https://github.com/other/widgets/pull/12".to_string()
-                }
-                "number" => changed = numbered(13),
-                "closed" => changed.pr.state = PrState::Closed,
-                "merged" => changed.pr.state = PrState::Merged,
-                _ => (),
-            }
-            let observation = match change {
-                "missing" => Ok(None),
-                "unreadable" => Err("read failed"),
-                _ => Ok(Some(changed)),
-            };
+            let observation = change.answer(snapshot());
             let (mut pr, world) = owner(World {
                 completion: VecDeque::from([observation]),
                 ..World::default()
             });
             pr.resume_spec().unwrap();
             pr.show_checklist("new\n");
-            assert!(pr.land_spec("new\n").is_err(), "{change}");
+            assert!(pr.land_spec("new\n").is_err(), "{change:?}");
             assert_eq!(world.borrow().body, "Closes #7\n");
             assert!(world.borrow().edits.is_empty());
             assert!(world.borrow().created.is_empty());
@@ -1274,31 +1259,29 @@ mod tests {
     fn every_unknown_mergeability_snapshot_revalidates_target_state_and_ownership() {
         // First UNKNOWN is followed immediately by the changed snapshot;
         // no pause is needed to script a change during polling.
-        for change in ["base", "closed", "draft", "head", "fork", "number"] {
+        for change in [
+            ObservationChange::WrongBase,
+            ObservationChange::Closed,
+            ObservationChange::Draft,
+            ObservationChange::WrongHead,
+            ObservationChange::Fork,
+            ObservationChange::Replacement,
+        ] {
             let mut unknown = snapshot();
             unknown.mergeable = Mergeable::Unknown;
-            let mut changed = unknown.clone();
-            match change {
-                "base" => changed.pr.base = "develop".to_string(),
-                "closed" => changed.pr.state = PrState::Closed,
-                "draft" => changed.pr.is_draft = true,
-                "head" => changed.pr.head = "other".to_string(),
-                "fork" => changed.from_fork = true,
-                "number" => changed.pr.number = 13,
-                _ => unreachable!(),
-            }
+            let changed = change.answer(unknown.clone());
             let (mut pr, world) = owner(World {
                 observations: VecDeque::from([
                     Ok(Some(snapshot())),
                     Ok(Some(snapshot())),
                     Ok(Some(unknown)),
-                    Ok(Some(changed)),
+                    changed,
                 ]),
                 grace: Duration::from_secs(60),
                 ..World::default()
             });
             pr.mark_ready(None).unwrap();
-            assert!(pr.ensure_ready_and_mergeable().is_err(), "{change}");
+            assert!(pr.ensure_ready_and_mergeable().is_err(), "{change:?}");
             assert!(
                 world.borrow().selected[1..]
                     .iter()
