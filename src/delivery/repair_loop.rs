@@ -289,7 +289,8 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// compares with no Base branch commit.
     /// If, after a CI-fix Repair and the Base branch merged again, the head
     /// is still the one whose CI failed, it gets its Check re-run instead of
-    /// a watch, once per head for the complete Delivery, whatever the Repair concluded. CI then
+    /// a watch, once per head for the complete Delivery, whatever the Repair
+    /// concluded. CI then
     /// green, or red only on Inherited failures, is taken as from any watch.
     /// Returns the head commit whose CI was last watched and found green or
     /// absent. Fails with a Declined CI fix if that Check re-run leaves a
@@ -734,6 +735,24 @@ mod tests {
             .collect()
     }
 
+    /// The Check re-run decisions observed through the adapter.
+    fn check_reruns(did: &[Did]) -> Vec<Did> {
+        did.iter()
+            .filter(|did| matches!(did, Did::Rerun(..)))
+            .cloned()
+            .collect()
+    }
+
+    /// The failures handed to CI-fix Repairs through the adapter.
+    fn ci_fix_repairs(did: &[Did]) -> Vec<Started> {
+        did.iter()
+            .filter_map(|did| match did {
+                Did::Repair(_, started @ Started::CiFix(..)) => Some(started.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The cause `delivered` failed with, every context included.
     fn cause(delivered: Result<()>) -> String {
         format!("{:#}", delivered.unwrap_err())
@@ -885,18 +904,11 @@ mod tests {
         );
 
         assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Rerun(..)))
-                .count(),
+            check_reruns(&did).len(),
             1,
             "a refused Self-merge must not grant another Check re-run: {did:?}"
         );
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Repair(_, Started::CiFix(..))))
-                .count(),
-            1
-        );
+        assert_eq!(ci_fix_repairs(&did).len(), 1);
         let error = delivered.unwrap_err();
         assert!(!error.is::<PolicyRefusal>(), "{error:#}");
         assert_eq!(
@@ -937,18 +949,8 @@ mod tests {
             cause(delivered),
             "CI red on h1 and the Repair found nothing to fix on the branch"
         );
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Rerun(..)))
-                .count(),
-            1
-        );
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Repair(_, Started::CiFix(..))))
-                .count(),
-            1
-        );
+        assert_eq!(check_reruns(&did).len(), 1);
+        assert_eq!(ci_fix_repairs(&did).len(), 1);
         assert!(did.contains(&Did::Rerun(
             "h1".to_string(),
             Some("b2".to_string()),
@@ -977,18 +979,8 @@ mod tests {
             cause(delivered),
             "CI red on h1 and the Repair found nothing to fix on the branch"
         );
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Rerun(..)))
-                .count(),
-            1
-        );
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Repair(_, Started::CiFix(..))))
-                .count(),
-            1
-        );
+        assert_eq!(check_reruns(&did).len(), 1);
+        assert_eq!(ci_fix_repairs(&did).len(), 1);
         assert!(did.contains(&Did::Rerun(
             "h1".to_string(),
             Some("b2".to_string()),
@@ -1021,18 +1013,8 @@ mod tests {
             cause(delivered),
             "CI red on h1 and the Repair found nothing to fix on the branch"
         );
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Rerun(..)))
-                .count(),
-            1
-        );
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Repair(_, Started::CiFix(..))))
-                .count(),
-            1
-        );
+        assert_eq!(check_reruns(&did).len(), 1);
+        assert_eq!(ci_fix_repairs(&did).len(), 1);
         assert!(did.contains(&Did::Rerun(
             "h1".to_string(),
             Some("b2".to_string()),
@@ -1061,13 +1043,8 @@ mod tests {
         );
 
         delivered.unwrap();
-        let reruns: Vec<_> = did
-            .iter()
-            .filter(|did| matches!(did, Did::Rerun(..)))
-            .cloned()
-            .collect();
         assert_eq!(
-            reruns,
+            check_reruns(&did),
             [
                 Did::Rerun(
                     first.to_string(),
@@ -1081,14 +1058,10 @@ mod tests {
                 ),
             ]
         );
-        let repairs: Vec<_> = did
-            .iter()
-            .filter_map(|did| match did {
-                Did::Repair(_, started @ Started::CiFix(..)) => Some(started.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(repairs, [ci_fix(&["test"], &[]), ci_fix(&["lint"], &[])]);
+        assert_eq!(
+            ci_fix_repairs(&did),
+            [ci_fix(&["test"], &[]), ci_fix(&["lint"], &[])]
+        );
         assert!(did.contains(&Did::Watch(first.to_string(), Some("b1".to_string()))));
         assert!(did.contains(&Did::Watch(second.to_string(), Some("b3".to_string()))));
         assert!(did.contains(&Did::CheckPr));
@@ -1110,12 +1083,7 @@ mod tests {
 
         delivered.unwrap();
         assert!(!did.iter().any(|did| matches!(did, Did::Rerun(..))));
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Repair(_, Started::CiFix(..))))
-                .count(),
-            1
-        );
+        assert_eq!(ci_fix_repairs(&did).len(), 1);
         assert!(did.contains(&Did::Watch(first.to_string(), Some("b1".to_string()))));
         assert!(did.contains(&Did::Watch(second.to_string(), Some("b2".to_string()))));
     }
@@ -1139,18 +1107,8 @@ mod tests {
         );
 
         delivered.unwrap();
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Rerun(..)))
-                .count(),
-            1
-        );
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Repair(_, Started::CiFix(..))))
-                .count(),
-            1
-        );
+        assert_eq!(check_reruns(&did).len(), 1);
+        assert_eq!(ci_fix_repairs(&did).len(), 1);
         assert!(did.contains(&Did::Watch(
             "h1".to_string(),
             Some("rewound-base".to_string())
@@ -1176,18 +1134,8 @@ mod tests {
             );
 
             delivered.unwrap();
-            assert_eq!(
-                did.iter()
-                    .filter(|did| matches!(did, Did::Rerun(..)))
-                    .count(),
-                1
-            );
-            assert_eq!(
-                did.iter()
-                    .filter(|did| matches!(did, Did::Repair(_, Started::CiFix(..))))
-                    .count(),
-                1
-            );
+            assert_eq!(check_reruns(&did).len(), 1);
+            assert_eq!(ci_fix_repairs(&did).len(), 1);
             assert!(did.contains(&Did::Rerun(
                 "h1".to_string(),
                 Some("b1".to_string()),
