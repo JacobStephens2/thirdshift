@@ -83,8 +83,17 @@ fn gives_the_agent_the_fresh_prompt() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
+    let prompt = scenario.first_prompt();
+    let directory = prompt
+        .split("to `")
+        .nth(1)
+        .unwrap()
+        .split("/standards.md`")
+        .next()
+        .unwrap();
+    assert!(std::path::Path::new(directory).starts_with(scenario.path("work/widgets-issue-7")));
     assert_eq!(
-        scenario.claude_calls()[0]["prompt"],
+        prompt.replace(directory, "<review reports directory>"),
         "/thirdshift-implement https://github.com/acme/widgets/issues/7\n\
          The base branch is main. Review with the `thirdshift-code-review` skill using main as the fixed point.\n\
          For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. \
@@ -92,6 +101,8 @@ fn gives_the_agent_the_fresh_prompt() {
          If it passes, you may decline the finding, citing the run. \
          A passing run counts only when it exercises that finding; a green suite does not. \
          Address the Standards and Spec findings you agree with.\n\
+         Write the reviewers' reports, with each axis's final files-read list, \
+         to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).\n\
          Push branch issue-7 and create a pull request against main using the `thirdshift-pr` skill, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, \
          with the line of code, plan decision, ADR or run that refutes each finding. \
@@ -189,7 +200,7 @@ fn a_second_run_adds_no_second_exclude_entry() {
         .collect();
     assert_eq!(
         entries,
-        ["/.claude/skills/thirdshift-*"],
+        ["/.claude/skills/thirdshift-*", "/.thirdshift-review-*/"],
         "exclude: {exclude}"
     );
 }

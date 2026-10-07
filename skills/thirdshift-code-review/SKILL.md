@@ -89,6 +89,8 @@ Present the two reports under `## Standards` and `## Spec` headings, verbatim or
 
 Include the final files-read list for each reviewer and name every changed file still unread under its axis, or explicitly say none is unread. Include findings from the follow-up in the same axis as its initial report.
 
+If the Session prompt names a place for the reviewers' reports, write the final Standards report to its `standards.md` and the final Spec report to its `spec.md`. Each file includes that axis's initial and follow-up findings, its combined files-read list, and any changed files still unread (or explicitly none). Write both reports even when there are no findings. When the prompt names no place, report in the conversation only.
+
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
 ## Why two axes
