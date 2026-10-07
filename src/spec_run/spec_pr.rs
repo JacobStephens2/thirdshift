@@ -193,7 +193,7 @@ impl Outside for OnGitHub<'_> {
     }
 
     fn create_draft(&mut self, title: &str, body: &str) -> Result<()> {
-        GitHub::new()
+        self.github
             .create_draft_pr(self.spec, &self.branch, self.base, title, body)
             .map(|_| ())
     }

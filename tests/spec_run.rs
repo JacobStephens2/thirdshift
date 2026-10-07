@@ -1575,6 +1575,42 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
 }
 
 #[test]
+fn the_first_landing_opens_its_spec_pr_when_accounting_is_interrupted() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "{}gh fake on-issue-view 20 'touch {}; sleep 1'\n",
+            agent_lands(21, "first.txt"),
+            scenario.path("reading-spec-title").display()
+        ),
+    );
+
+    // The Ticket has landed; interruption arrives while accounting reads
+    // the title, before opening the Spec PR. No subsequent work may start.
+    let result = scenario.run_and_signal(&[&spec_url(&scenario)], "reading-spec-title", "TERM");
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21"]);
+    let pr = spec_pr(&scenario);
+    let pr_url = pr["url"].as_str().unwrap();
+    assert_eq!(result.stdout, format!("{pr_url}\n"));
+    assert_eq!(pr["isDraft"], true);
+    let checklist = checklist_in(pr["body"].as_str().unwrap());
+    assert_contains(
+        checklist,
+        "- [x] #21 landed with https://github.com/acme/widgets/pull/1\n",
+    );
+    assert_contains(checklist, "- [ ] #22 not started\n");
+    assert_contains(&result.stderr, "thirdshift: #21 landed\n");
+    assert_eq!(
+        support::before_command_log(&result.stderr).last(),
+        Some(&"thirdshift: interrupted")
+    );
+    scenario.assert_cleaned_up("issue-20");
+}
+
+#[test]
 fn an_existing_spec_pr_accounts_for_every_drained_ticket_after_interruption() {
     let scenario = diamond_spec();
     scenario.origin_has_branch("issue-20", "main", &[]);
