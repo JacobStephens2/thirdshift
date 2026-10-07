@@ -29,7 +29,7 @@ use crate::prompt;
 use crate::run::{Goal, Reached};
 use crate::run_ending::Cause;
 use crate::session::{Logs, Sessions};
-use crate::worktree::{Merge, PendingMerge, Worktree};
+use crate::worktree::{ForeignCommits, Merge, PendingMerge, Worktree};
 
 use repair_loop::{Repair, Upstream};
 /// A Delivery of the pull request for `issue`, the Run's issue or the Spec,
@@ -521,12 +521,12 @@ struct RunOutside<'a> {
 impl repair_loop::Outside for RunOutside<'_> {
     type Pending = PendingMerge;
 
-    fn merge_base_branch(&mut self) -> Result<Option<PendingMerge>> {
-        Ok(pending(self.worktree.merge_base_branch(self.base)?))
+    fn merge_base_branch(&mut self) -> Result<Merge> {
+        self.worktree.merge_base_branch(self.base)
     }
 
-    fn merge_new_commits(&mut self) -> Result<Option<PendingMerge>> {
-        Ok(pending(self.worktree.merge_new_commits()?))
+    fn merge_new_commits(&mut self, observed: ForeignCommits) -> Result<Merge> {
+        self.worktree.merge_new_commits(observed)
     }
 
     fn ensure_merged(&mut self, pending: &PendingMerge) -> Result<()> {
@@ -541,20 +541,12 @@ impl repair_loop::Outside for RunOutside<'_> {
         self.worktree.head()
     }
 
-    fn merged_base_commit(&mut self) -> Result<String> {
-        self.worktree.merged_base_commit(self.base)
-    }
-
     fn base_branch_moved(&mut self) -> Result<bool> {
         self.worktree.base_branch_moved(self.base)
     }
 
-    fn new_commits_on_origin(&mut self) -> Result<Vec<String>> {
+    fn new_commits_on_origin(&mut self) -> Result<ForeignCommits> {
         self.worktree.new_commits_on_origin()
-    }
-
-    fn upstream(&mut self) -> String {
-        self.worktree.upstream()
     }
 
     fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
@@ -615,14 +607,6 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn progress(&mut self, line: String) {
         progress::step(line);
-    }
-}
-
-/// The merge `merge` left pending for a conflict Repair, if it conflicted.
-fn pending(merge: Merge) -> Option<PendingMerge> {
-    match merge {
-        Merge::Clean => None,
-        Merge::Conflicted(pending) => Some(pending),
     }
 }
 

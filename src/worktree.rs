@@ -5,6 +5,7 @@
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use chrono::{SecondsFormat, Utc};
@@ -17,15 +18,17 @@ use crate::progress;
 mod acquisition_tests;
 #[cfg(test)]
 mod preservation_tests;
+#[cfg(test)]
+mod synchronization_tests;
 
 /// How merging the Base branch, or new commits on origin, into the Issue
 /// branch went.
 #[derive(Debug)]
-pub enum Merge {
-    /// Merged, or nothing to merge.
-    Clean,
+pub enum Merge<P = PendingMerge> {
+    /// Merged, or nothing to merge, with the selected origin commit.
+    Clean { commit: String },
     /// Conflicted; the merge is left in progress for a conflict Repair.
-    Conflicted(PendingMerge),
+    Conflicted(P),
 }
 
 /// A conflicted merge left for a conflict Repair: `upstream` as it was when
@@ -33,14 +36,67 @@ pub enum Merge {
 /// the shared remote-tracking ref before the Repair finishes.
 #[derive(Debug)]
 pub struct PendingMerge {
+    origin: OriginCommit,
+}
+
+/// One remote-tracking ref sample, with its readable label kept beside the ID.
+#[derive(Debug)]
+struct OriginCommit {
     upstream: String,
     commit: String,
+}
+
+/// A read-only observation of Foreign commits. Its facts share one origin
+/// sample and one local head. It can be consumed once, by the Worktree that
+/// produced it, while that local head is unchanged.
+#[derive(Debug)]
+pub struct ForeignCommits {
+    owner: Arc<()>,
+    origin: OriginCommit,
+    local_head: String,
+    commits: Vec<String>,
+}
+
+impl ForeignCommits {
+    pub fn origin_head(&self) -> &str {
+        &self.origin.commit
+    }
+
+    pub fn local_head(&self) -> &str {
+        &self.local_head
+    }
+
+    pub fn upstream(&self) -> &str {
+        &self.origin.upstream
+    }
+
+    /// Oldest first, the commits missing from the observed local head.
+    pub fn commits(&self) -> &[String] {
+        &self.commits
+    }
+
+    /// A coherent linear batch for the scripted Delivery adapter only.
+    #[cfg(test)]
+    pub(crate) fn fixture(local_head: &str, commits: &[&str]) -> Self {
+        Self {
+            owner: Arc::new(()),
+            origin: OriginCommit {
+                commit: commits.last().copied().unwrap_or(local_head).to_string(),
+                upstream: "origin/issue-7".to_string(),
+            },
+            local_head: local_head.to_string(),
+            commits: commits.iter().map(|sha| sha.to_string()).collect(),
+        }
+    }
 }
 
 pub struct Worktree {
     launch: Git,
     branch: String,
     git: Git,
+    /// Per-instance identity: a later worktree at the same path must not
+    /// consume this one's observations. No lock is held by an observation.
+    synchronization_owner: Arc<()>,
     /// Leave the worktree and local Issue branch in place when dropped.
     kept: bool,
 }
@@ -97,6 +153,7 @@ impl Worktree {
             launch: Git::new(root),
             branch: branch.to_string(),
             git: Git::new(path),
+            synchronization_owner: Arc::new(()),
             kept: false,
         })
     }
@@ -180,61 +237,95 @@ impl Worktree {
         self.git.run(&["rev-parse", "HEAD"])
     }
 
-    /// Fetch `origin/<base>` and merge it into the Issue branch.
+    /// Fetch and sample `origin/<base>`, then merge that commit into the
+    /// Issue branch. A clean outcome includes the selected commit for CI
+    /// comparison, including when the merge had nothing to do.
     pub fn merge_base_branch(&self, base: &str) -> Result<Merge> {
         progress::step(format_args!("merging origin/{base} into {}", self.branch));
-        self.git.run(&["fetch", "origin", base])?;
-        self.merge(&format!("origin/{base}"))
-    }
-
-    /// The Base branch commit the Issue branch last merged in: the newest
-    /// commit of `origin/<base>`, as last fetched, that its head contains.
-    /// Another Run's fetch may have moved the shared remote-tracking ref on
-    /// since the merge, which this is unaffected by.
-    pub fn merged_base_commit(&self, base: &str) -> Result<String> {
-        self.git
-            .run(&["merge-base", "HEAD", &format!("origin/{base}")])
-    }
-
-    /// The Issue branch on origin, as fetched: `origin/<branch>`.
-    pub fn upstream(&self) -> String {
-        format!("origin/{}", self.branch)
+        let origin = self.sample_origin(base)?;
+        self.merge(&origin.upstream, &origin.commit)
     }
 
     /// Fetch the Issue branch from origin and list, oldest first, the commits
-    /// there that the local Issue branch does not have yet.
-    pub fn new_commits_on_origin(&self) -> Result<Vec<String>> {
-        self.git.run(&["fetch", "origin", &self.branch])?;
-        let range = format!("HEAD..{}", self.upstream());
+    /// there that the local Issue branch does not have yet, together with
+    /// the exact heads and readable upstream label. Does not change the
+    /// local head; a caller may refuse the batch before merging it.
+    pub fn new_commits_on_origin(&self) -> Result<ForeignCommits> {
+        let origin = self.sample_origin(&self.branch)?;
+        let local_head = self.head()?;
+        let range = format!("{local_head}..{}", origin.commit);
         let commits = self.git.run(&["rev-list", "--reverse", &range])?;
-        Ok(commits.lines().map(String::from).collect())
+        Ok(ForeignCommits {
+            owner: Arc::clone(&self.synchronization_owner),
+            origin,
+            local_head,
+            commits: commits.lines().map(String::from).collect(),
+        })
     }
 
     /// Fetch the Issue branch from origin and fast-forward the local one to
     /// it, failing if the two have diverged.
     pub fn fast_forward_to_origin(&self) -> Result<()> {
-        let upstream = self.upstream();
-        progress::step(format_args!("updating {} from {upstream}", self.branch));
-        self.git.run(&["fetch", "origin", &self.branch])?;
+        progress::step(format_args!(
+            "updating {} from origin/{}",
+            self.branch, self.branch
+        ));
+        let origin = self.sample_origin(&self.branch)?;
         self.git
-            .run(&["merge", "--ff-only", "--quiet", &upstream])?;
+            .run(&["merge", "--ff-only", "--quiet", &origin.commit])?;
         Ok(())
     }
 
-    /// Merge the Issue branch as last fetched from origin into the local one.
-    pub fn merge_new_commits(&self) -> Result<Merge> {
-        self.merge(&self.upstream())
+    /// Consume this Worktree's observation, merging its sampled origin head.
+    /// Refuse before mutation if it belongs to another worktree or the local
+    /// head has changed since observation.
+    pub fn merge_new_commits(&self, observed: ForeignCommits) -> Result<Merge> {
+        if !Arc::ptr_eq(&observed.owner, &self.synchronization_owner) {
+            bail!("the Foreign commit observation belongs to another worktree");
+        }
+        if self.head()? != observed.local_head() {
+            bail!(
+                "the local head changed since observing {}",
+                observed.upstream()
+            );
+        }
+        self.merge(observed.upstream(), observed.origin_head())
     }
 
-    /// Merge `upstream` into the Issue branch: a merge, never a rebase, so
+    /// Fetch, then resolve a fully qualified remote-tracking ref once. Every
+    /// calculation and mutation after this sample uses the commit ID, so
+    /// sibling fetches and shadowing local names cannot change its meaning.
+    fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
+        self.git.run(&["fetch", "origin", branch])?;
+        let upstream = format!("origin/{branch}");
+        let commit = self.git.run(&[
+            "rev-parse",
+            "--verify",
+            &format!("refs/remotes/{upstream}^{{commit}}"),
+        ])?;
+        Ok(OriginCommit { upstream, commit })
+    }
+
+    /// Merge the sampled origin commit into the Issue branch, never rebase, so
     /// pushing it is always a fast-forward. `--ff` keeps a user's
     /// `merge.ff = only` from turning a clean merge into an error.
-    fn merge(&self, upstream: &str) -> Result<Merge> {
-        match self.git.run(&["merge", "--no-edit", "--ff", upstream]) {
-            Ok(_) => Ok(Merge::Clean),
+    fn merge(&self, upstream: &str, commit: &str) -> Result<Merge> {
+        let message = format!(
+            "Merge remote-tracking branch '{upstream}' into {}",
+            self.branch
+        );
+        match self
+            .git
+            .run(&["merge", "--no-edit", "--ff", "-m", &message, commit])
+        {
+            Ok(_) => Ok(Merge::Clean {
+                commit: commit.to_string(),
+            }),
             Err(_) if self.git.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge {
-                upstream: upstream.to_string(),
-                commit: self.git.run(&["rev-parse", "MERGE_HEAD"])?,
+                origin: OriginCommit {
+                    upstream: upstream.to_string(),
+                    commit: commit.to_string(),
+                },
             })),
             Err(error) => Err(error),
         }
@@ -245,11 +336,11 @@ impl Worktree {
     /// aborted it. The upstream may have moved on since; merging that is the
     /// next round's work.
     pub fn ensure_merged(&self, pending: &PendingMerge) -> Result<()> {
-        let upstream = &pending.upstream;
+        let upstream = &pending.origin.upstream;
         if self.git.merge_in_progress()? {
             bail!("the merge of {upstream} is still in progress");
         }
-        if !self.merged(&pending.commit)? {
+        if !self.merged(&pending.origin.commit)? {
             bail!("{upstream} is not merged into {}", self.branch);
         }
         Ok(())
@@ -258,8 +349,8 @@ impl Worktree {
     /// Fetch `origin/<base>` and say whether it has commits the Issue branch
     /// has not merged yet.
     pub fn base_branch_moved(&self, base: &str) -> Result<bool> {
-        self.git.run(&["fetch", "origin", base])?;
-        Ok(!self.merged(&format!("origin/{base}"))?)
+        let origin = self.sample_origin(base)?;
+        Ok(!self.merged(&origin.commit)?)
     }
 
     /// Whether `rev` is fully merged into the Issue branch.
