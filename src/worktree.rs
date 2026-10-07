@@ -1,15 +1,20 @@
 //! The Run's worktree: a sibling of the launch repository, on the Issue
 //! branch, removed together with the local Issue branch when dropped unless
-//! it is kept. And the Architecture review's: a sibling too, on no branch,
-//! always removed when dropped.
+//! Failed run preservation fails. And the Architecture review's: a sibling
+//! too, on no branch, always removed when dropped.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use chrono::{SecondsFormat, Utc};
 
 use crate::git::Git;
+use crate::host;
 use crate::progress;
+
+#[cfg(test)]
+mod preservation_tests;
 
 /// How merging the Base branch, or new commits on origin, into the Issue
 /// branch went.
@@ -98,10 +103,6 @@ impl Worktree {
         &self.branch
     }
 
-    pub fn git(&self) -> &Git {
-        &self.git
-    }
-
     /// The Launch directory the worktree was added from.
     pub fn launch(&self) -> &Git {
         &self.launch
@@ -113,6 +114,42 @@ impl Worktree {
     /// origin.
     pub fn push(&self) -> Result<()> {
         self.git.push(&self.branch)
+    }
+
+    /// Preserve all work from a Failed run against the last-fetched Base
+    /// branch, even after Command interruption. An unfinished merge is
+    /// aborted first; changes are committed as the failure marker and pushed
+    /// without local hooks. With no changes, nothing is committed or pushed.
+    /// Retention is armed before salvage: any error or unwinding leaves the
+    /// worktree and local Issue branch in place. Success allows normal cleanup.
+    pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<()> {
+        self.kept = true;
+        let git = self.git.completion();
+        if git.merge_in_progress()? {
+            git.run(&["merge", "--abort"])?;
+        }
+        git.run(&["add", "-A"])?;
+        let base = format!("origin/{base}");
+        if !git.succeeds(&["diff", "--cached", "--quiet", &base])? {
+            let message = format!(
+                "thirdshift: failed run ({reason})\n\n\
+                 {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
+                timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                host = host::name().as_deref().unwrap_or("unknown"),
+            );
+            // No hooks: a hook that rejects the commit would strand the work.
+            git.run(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "--no-verify",
+                "-m",
+                &message,
+            ])?;
+            git.push(&self.branch)?;
+        }
+        self.kept = false;
+        Ok(())
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone
@@ -130,13 +167,6 @@ impl Worktree {
             Ok(false) => Ok(()),
             _ => Err(error),
         }
-    }
-
-    /// Keep the worktree and the local Issue branch once it is dropped, for
-    /// work that may exist nowhere else. Dropping it then says where they
-    /// are and the branch's head commit, rather than removing them.
-    pub fn keep(&mut self) {
-        self.kept = true;
     }
 
     /// The Issue branch's head commit.
@@ -365,7 +395,7 @@ mod tests {
 
     /// A clone `work` of a bare `origin.git` with one commit on `main`, both
     /// in a temp directory. No global or system config is read.
-    fn launch_directory() -> (tempfile::TempDir, Git) {
+    pub(super) fn launch_directory() -> (tempfile::TempDir, Git) {
         let temp = tempfile::TempDir::new().unwrap();
         let git = |dir: &Path, args: &[&str]| {
             let status = Command::new("git")
@@ -383,6 +413,24 @@ mod tests {
         );
         git(temp.path(), &["clone", "-q", "origin.git", "work"]);
         let work = temp.path().join("work");
+        let hooks = temp.path().join("hooks");
+        std::fs::create_dir(&hooks).unwrap();
+        git(
+            &temp.path().join("origin.git"),
+            &[
+                "config",
+                "core.hooksPath",
+                temp.path().join("origin.git/hooks").to_str().unwrap(),
+            ],
+        );
+        for (key, value) in [
+            ("user.name", "Test Runner"),
+            ("user.email", "runner@example.com"),
+            ("commit.gpgSign", "false"),
+            ("core.hooksPath", hooks.to_str().unwrap()),
+        ] {
+            git(&work, &["config", key, value]);
+        }
         git(
             &work,
             &[

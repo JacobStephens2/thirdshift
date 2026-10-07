@@ -13,7 +13,6 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use chrono::{SecondsFormat, Utc};
 
 mod repair_loop;
 
@@ -22,7 +21,6 @@ use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
 use crate::github::{GitHub, Mergeable, PullRequest};
 use crate::harness::Choice;
-use crate::host;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::poll;
@@ -304,9 +302,9 @@ fn open(pr: Option<PullRequest>) -> Result<PullRequest> {
 /// instead: it can surface as some other error, such as a killed git. A
 /// `PolicyRefusal` neither pushes nor converts, so the PR stays ready on the
 /// head whose CI was watched. Problems along the way are reported, not
-/// raised, so the error is what the Run fails with. The worktree is kept if
-/// its work may not have reached origin. `log` is the most recent Session
-/// log, if a session created one.
+/// raised, so the error is what the Run fails with. Worktree owns preservation
+/// and retains work that may not have reached origin. `log` is the most recent
+/// Session log, if a session created one.
 fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::Error) -> FailedRun {
     let interrupted = outside.interrupted();
     let error = interrupted_or(error, interrupted);
@@ -315,12 +313,7 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
     let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
     let keep_ready = error.is::<PolicyRefusal>();
-    let pushed = if keep_ready {
-        Ok(())
-    } else {
-        outside.commit_and_push(&reason)
-    };
-    if let Err(problem) = &pushed {
+    if !keep_ready && let Err(problem) = outside.preserve_failed_run(&reason) {
         outside.step(format!(
             "could not push the failed run's work, so it may exist only locally: {problem:#}"
         ));
@@ -332,9 +325,6 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
             None
         }
     };
-    if pushed.is_err() {
-        outside.keep();
-    }
     FailedRun {
         error,
         pr_url,
@@ -394,15 +384,13 @@ trait Outside {
 /// What the Failed run path does or reads outside the Delivery, once its
 /// sessions have ended.
 trait FailedOutside {
-    /// Commit the work as the failure commit for `reason`, and push it.
-    fn commit_and_push(&mut self, reason: &str) -> Result<()>;
+    /// Preserve the Failed run's work for `reason`, retaining it locally if
+    /// preservation fails.
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<()>;
     /// The pull request for the Issue branch, if it has one.
     fn pull_request(&mut self) -> Result<Option<PullRequest>>;
     /// Convert the pull request back to a draft.
     fn convert_to_draft(&mut self) -> Result<()>;
-    /// Keep the worktree and the local Issue branch, for work that may exist
-    /// nowhere else.
-    fn keep(&mut self);
     /// Whether an interrupt was requested.
     fn interrupted(&mut self) -> bool;
     /// Hand on the progress line `line`.
@@ -485,9 +473,8 @@ impl Outside for InWorktree<'_> {
     }
 }
 
-/// A failed Delivery's worktree, which it owns, so it can keep it, and its
-/// pull request on GitHub. The worktree is cleaned up, unless kept, when
-/// this is dropped.
+/// A failed Delivery's worktree and its pull request on GitHub. Worktree
+/// owns preservation and the cleanup decision when this is dropped.
 struct OnFailure<'a> {
     issue: &'a IssueUrl,
     base: &'a str,
@@ -495,37 +482,8 @@ struct OnFailure<'a> {
 }
 
 impl FailedOutside for OnFailure<'_> {
-    /// Commit everything in the worktree, uncommitted work included, as the
-    /// failure commit for `reason`, and push the Issue branch. An unfinished
-    /// merge is aborted first. Does neither if the branch has no changes
-    /// against the Base branch, so no empty Issue branch appears on origin.
-    fn commit_and_push(&mut self, reason: &str) -> Result<()> {
-        let worktree = &self.worktree;
-        let git = worktree.git().completion();
-        if git.merge_in_progress()? {
-            git.run(&["merge", "--abort"])?;
-        }
-        git.run(&["add", "-A"])?;
-        let base = format!("origin/{}", self.base);
-        if git.succeeds(&["diff", "--cached", "--quiet", &base])? {
-            return Ok(());
-        }
-        let message = format!(
-            "thirdshift: failed run ({reason})\n\n\
-             {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
-            timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-            host = host::name().as_deref().unwrap_or("unknown"),
-        );
-        // No hooks: a hook that rejects the commit would strand the work.
-        git.run(&[
-            "commit",
-            "-q",
-            "--allow-empty",
-            "--no-verify",
-            "-m",
-            &message,
-        ])?;
-        git.push(worktree.branch())
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<()> {
+        self.worktree.preserve_failed_run(self.base, reason)
     }
 
     fn pull_request(&mut self) -> Result<Option<PullRequest>> {
@@ -538,10 +496,6 @@ impl FailedOutside for OnFailure<'_> {
         GitHub::new()
             .completion()
             .convert_to_draft(self.issue, self.worktree.branch())
-    }
-
-    fn keep(&mut self) {
-        self.worktree.keep();
     }
 
     fn interrupted(&mut self) -> bool {
@@ -722,7 +676,7 @@ mod scripted {
         DeleteBranch,
         IssueIsOpen,
         CloseIssue,
-        CommitAndPush,
+        PreserveFailedRun,
         ConvertToDraft,
     }
 
@@ -749,11 +703,9 @@ mod scripted {
         IssueIsOpen,
         /// It closed the issue with this comment.
         CloseIssue(String),
-        /// It committed the work and pushed it, for this reason.
-        CommitAndPush(String),
+        /// It preserved the Failed run's work, for this reason.
+        PreserveFailedRun(String),
         ConvertToDraft,
-        /// It kept the worktree.
-        Keep,
         /// It asked whether an interrupt was requested.
         Interrupted,
         /// It handed on this progress line.
@@ -952,9 +904,9 @@ mod scripted {
     }
 
     impl FailedOutside for Scripted {
-        fn commit_and_push(&mut self, reason: &str) -> Result<()> {
-            self.calls.push(Call::CommitAndPush(reason.to_string()));
-            self.fail_if(Fails::CommitAndPush)
+        fn preserve_failed_run(&mut self, reason: &str) -> Result<()> {
+            self.calls.push(Call::PreserveFailedRun(reason.to_string()));
+            self.fail_if(Fails::PreserveFailedRun)
         }
 
         fn pull_request(&mut self) -> Result<Option<PullRequest>> {
@@ -966,10 +918,6 @@ mod scripted {
             self.fail_if(Fails::ConvertToDraft)?;
             self.set_draft(true);
             Ok(())
-        }
-
-        fn keep(&mut self) {
-            self.calls.push(Call::Keep);
         }
 
         fn interrupted(&mut self) -> bool {
@@ -1404,7 +1352,7 @@ mod tests {
             assert_eq!(failed.log, log, "{failing:?}");
             assert!(!failed.interrupted, "{failing:?}");
             assert!(
-                outside.calls.contains(&Call::CommitAndPush(error)),
+                outside.calls.contains(&Call::PreserveFailedRun(error)),
                 "{failing:?}: {:?}",
                 outside.calls
             );
@@ -1426,7 +1374,7 @@ mod tests {
             after(&outside, &Call::TakeToGoal(Goal::Merged)),
             [
                 Call::Interrupted,
-                Call::CommitAndPush("CI failed".to_string()),
+                Call::PreserveFailedRun("CI failed".to_string()),
                 Call::PullRequest,
                 Call::ConvertToDraft,
             ]
@@ -1448,7 +1396,7 @@ mod tests {
         assert!(
             outside
                 .calls
-                .contains(&Call::CommitAndPush("interrupted".to_string()))
+                .contains(&Call::PreserveFailedRun("interrupted".to_string()))
         );
     }
 
@@ -1486,39 +1434,40 @@ mod tests {
         assert!(
             outside
                 .calls
-                .contains(&Call::CommitAndPush("test failed on main".to_string()))
+                .contains(&Call::PreserveFailedRun("test failed on main".to_string()))
         );
     }
 
     #[test]
-    fn a_failed_push_keeps_the_worktree_and_says_so() {
-        let mut outside = Scripted::default()
-            .failing(Fails::Session)
-            .failing(Fails::CommitAndPush);
+    fn a_preservation_error_is_secondary_and_pr_accounting_keeps_the_original_failure() {
+        let original = "session failed\nmore context";
+        for interrupted in [false, true] {
+            let mut outside = Scripted {
+                interrupted,
+                repair_loop_error: original,
+                ..Scripted::default()
+            }
+            .failing(Fails::TakeToGoal)
+            .failing(Fails::PreserveFailedRun);
+            let log = PathBuf::from("/logs/7-implement.jsonl");
 
-        let failed = failed(Goal::ReadyForReview, &mut outside);
+            let failed = failed(Goal::ReadyForReview, &mut outside);
 
-        assert_eq!(cause(&failed), "Session failed");
-        assert_eq!(
-            after(&outside, &Call::CommitAndPush("Session failed".to_string())),
-            [
-                step(
-                    "could not push the failed run's work, so it may exist only locally: \
-                     CommitAndPush failed"
-                ),
-                Call::PullRequest,
-                Call::Keep,
-            ]
-        );
-    }
-
-    #[test]
-    fn a_pushed_failure_does_not_keep_the_worktree() {
-        let mut outside = Scripted::default().failing(Fails::Session);
-
-        failed(Goal::ReadyForReview, &mut outside);
-
-        assert!(!outside.calls.contains(&Call::Keep));
+            let reason = if interrupted {
+                "interrupted"
+            } else {
+                "session failed"
+            };
+            assert_eq!(cause(&failed), if interrupted { reason } else { original });
+            assert_eq!(failed.interrupted, interrupted);
+            assert_eq!(failed.log, Some(log));
+            assert_eq!(failed.pr_url.as_deref(), Some(PR_URL));
+            assert!(outside.pr.unwrap().draft);
+            assert!(outside.calls.contains(&step(
+                "could not push the failed run's work, so it may exist only locally: \
+                 PreserveFailedRun failed"
+            )));
+        }
     }
 
     #[test]
