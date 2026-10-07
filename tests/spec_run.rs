@@ -1201,6 +1201,46 @@ fn a_spec_pr_closed_during_the_spec_review_fails_the_spec_run() {
 }
 
 #[test]
+fn a_spec_pr_replaced_during_review_gets_its_checklist_on_the_delivered_identity() {
+    for failing_review in [false, true] {
+        let scenario = linear_spec();
+        scenario.agent_does_for(
+            SPEC,
+            &format!(
+                r#"
+gh fake pr issue-20 state '"CLOSED"'
+gh pr create --base main --head issue-20 --title Replacement --body 'Closes #20'
+{}
+"#,
+                if failing_review { "exit 1" } else { "true" }
+            ),
+        );
+
+        let result = scenario.run(&[&spec_url(&scenario)]);
+
+        assert_eq!(
+            result.code,
+            Some(i32::from(failing_review)),
+            "{}",
+            result.stderr
+        );
+        let prs = prs_from(&scenario, "issue-20");
+        assert_eq!(prs[0]["state"], "CLOSED");
+        assert_eq!(
+            result.stdout,
+            format!("{}\n", prs[1]["url"].as_str().unwrap())
+        );
+        assert_eq!(prs[1]["isDraft"], failing_review);
+        let body = prs[1]["body"].as_str().unwrap();
+        assert_contains(checklist_in(body), "- [x] #21");
+        assert_contains(checklist_in(body), "- [x] #22");
+        if !failing_review {
+            assert_contains(body, "Built with claude");
+        }
+    }
+}
+
+#[test]
 fn spec_delivery_rejects_late_retargeting_and_keeps_the_original_identity() {
     for merge in [false, true] {
         for replacement in [false, true] {

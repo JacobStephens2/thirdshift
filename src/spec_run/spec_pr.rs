@@ -10,6 +10,7 @@
 
 use anyhow::{Context, Result};
 
+use crate::delivery::Identified;
 use crate::github::{GitHub, PullRequest};
 use crate::issue::IssueUrl;
 use crate::progress;
@@ -99,9 +100,19 @@ impl<'a, O: Outside> SpecPr<'a, O> {
 
     /// Put `checklist` back in the Spec PR's body, as the Spec review may
     /// have rewritten it without the checklist.
-    pub(super) fn put_back(&mut self, checklist: &str) -> Result<()> {
+    pub(super) fn put_back(&mut self, checklist: &str, identified: &Identified) -> Result<()> {
+        self.follow(identified);
         let number = self.number().context("the Spec PR is not open")?;
         self.write(number, checklist)
+    }
+
+    /// Once Delivery captures its PR, checklist writes follow that identity,
+    /// including after an opening-session failure and completion discovery.
+    pub(super) fn follow(&mut self, identified: &Identified) {
+        if let Some(pr) = &mut self.pr {
+            pr.number = identified.number;
+            pr.url = identified.url.clone();
+        }
     }
 
     /// The Spec PR's URL, if it is open.
@@ -611,7 +622,15 @@ mod tests {
         let spec = spec();
         let mut spec_pr = resume(&spec, InMemory::default()).unwrap();
 
-        let error = spec_pr.put_back("new\n").unwrap_err();
+        let error = spec_pr
+            .put_back(
+                "new\n",
+                &Identified {
+                    number: 30,
+                    url: "https://github.com/acme/widgets/pull/30".to_string(),
+                },
+            )
+            .unwrap_err();
 
         assert_eq!(format!("{error:#}"), "the Spec PR is not open");
         assert_eq!(after_resume(&spec_pr), []);
@@ -622,7 +641,15 @@ mod tests {
         let spec = spec();
         let mut spec_pr = resume(&spec, open_with("Rewritten. Closes #20\n")).unwrap();
 
-        spec_pr.put_back("new\n").unwrap();
+        spec_pr
+            .put_back(
+                "new\n",
+                &Identified {
+                    number: 30,
+                    url: "https://github.com/acme/widgets/pull/30".to_string(),
+                },
+            )
+            .unwrap();
 
         assert_eq!(
             spec_pr.outside.body,
@@ -639,7 +666,15 @@ mod tests {
         };
         let mut spec_pr = resume(&spec, outside).unwrap();
 
-        let error = spec_pr.put_back("new\n").unwrap_err();
+        let error = spec_pr
+            .put_back(
+                "new\n",
+                &Identified {
+                    number: 30,
+                    url: "https://github.com/acme/widgets/pull/30".to_string(),
+                },
+            )
+            .unwrap_err();
 
         assert_eq!(format!("{error:#}"), "SetPrBody failed");
     }

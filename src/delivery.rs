@@ -17,7 +17,8 @@ use anyhow::Result;
 mod pull_request;
 mod repair_loop;
 
-use pull_request::{Identified, MergeAttempt, PullRequest};
+pub(crate) use pull_request::Identified;
+use pull_request::{MergeAttempt, PullRequest};
 
 use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
@@ -50,6 +51,13 @@ pub struct Delivery<'a> {
     pub harness: &'a Choice,
 }
 
+/// The outcome and immutable captured PR information. The Spec PR uses the
+/// latter for checklist accounting even when capture happened during salvage.
+pub(crate) struct Delivered {
+    pub outcome: Result<Reached, FailedRun>,
+    pub pull_request: Option<Identified>,
+}
+
 /// The session a Delivery opens with: the implement session, or the Spec
 /// review.
 pub struct Opening<'a> {
@@ -79,8 +87,8 @@ impl Delivery<'_> {
         self,
         worktree: Worktree,
         opening: Opening,
-        before_ready: impl FnOnce() -> Result<()>,
-    ) -> Result<Reached, FailedRun> {
+        before_ready: impl FnOnce(&Identified) -> Result<()>,
+    ) -> Delivered {
         let route = Route {
             issue: self.issue,
             base: self.base,
@@ -100,9 +108,9 @@ impl Delivery<'_> {
                     sessions,
                     pull_request: &mut pull_request,
                 };
-                route.steps(&mut outside, &opening, |_| before_ready())
+                route.steps(&mut outside, &opening, before_ready)
             });
-        match delivered {
+        let outcome = match delivered {
             Ok(pr_url) => Ok(Reached {
                 pr_url,
                 goal: self.goal,
@@ -117,6 +125,10 @@ impl Delivery<'_> {
                 };
                 Err(fail(&mut outside, log, error))
             }
+        };
+        Delivered {
+            outcome,
+            pull_request: pull_request.info(),
         }
     }
 }
@@ -142,7 +154,7 @@ impl Route<'_> {
         &self,
         outside: &mut O,
         opening: &Opening,
-        before_ready: impl FnOnce(&mut O) -> Result<()>,
+        before_ready: impl FnOnce(&Identified) -> Result<()>,
     ) -> Result<String> {
         if opening.catch_up_from_origin {
             outside.catch_up()?;
@@ -150,8 +162,7 @@ impl Route<'_> {
         outside.session(opening.kind, &opening.prompt)?;
         outside.push()?;
         self.write_built_with(outside);
-        before_ready(outside)?;
-        let pr = outside.mark_pr_ready()?;
+        let pr = outside.mark_pr_ready(before_ready)?;
         outside.take_to_goal(&pr.url, self.goal)?;
         if self.goal == Goal::Merged {
             self.after_merge(outside, &pr);
@@ -285,7 +296,10 @@ trait Outside {
     /// Write the annotation through the captured pull request module.
     fn write_built_with(&mut self, choice: &Choice) -> Result<()>;
     /// Validate and mark the captured pull request ready.
-    fn mark_pr_ready(&mut self) -> Result<Identified>;
+    fn mark_pr_ready(
+        &mut self,
+        before_ready: impl FnOnce(&Identified) -> Result<()>,
+    ) -> Result<Identified>;
     /// Take the ready pull request at `pr_url` to `goal` through the Repair
     /// loop.
     fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()>;
@@ -346,8 +360,11 @@ impl Outside for InWorktree<'_> {
         self.pull_request.write_built_with(choice)
     }
 
-    fn mark_pr_ready(&mut self) -> Result<Identified> {
-        self.pull_request.mark_ready()
+    fn mark_pr_ready(
+        &mut self,
+        before_ready: impl FnOnce(&Identified) -> Result<()>,
+    ) -> Result<Identified> {
+        self.pull_request.mark_ready(before_ready)
     }
 
     fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()> {
@@ -596,7 +613,17 @@ mod tests {
             self.calls.push(Call::Annotation);
             self.check(Fails::Annotation)
         }
-        fn mark_pr_ready(&mut self) -> Result<Identified> {
+        fn mark_pr_ready(
+            &mut self,
+            before_ready: impl FnOnce(&Identified) -> Result<()>,
+        ) -> Result<Identified> {
+            let pr = Identified {
+                number: 12,
+                url: PR_URL.to_string(),
+            };
+            self.calls.push(Call::BeforeReady);
+            self.check(Fails::BeforeReady)?;
+            before_ready(&pr)?;
             self.calls.push(Call::Ready);
             self.check(Fails::Ready)?;
             Ok(Identified {
@@ -666,10 +693,7 @@ mod tests {
             catch_up_from_origin: spec,
         };
         route
-            .steps(outside, &opening, |outside| {
-                outside.calls.push(Call::BeforeReady);
-                outside.check(Fails::BeforeReady)
-            })
+            .steps(outside, &opening, |_| Ok(()))
             .map_err(|error| fail(outside, outside.log.clone(), error))
     }
 

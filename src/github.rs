@@ -348,14 +348,25 @@ impl GitHub {
         ])
     }
 
+    /// A PR JSON read where GitHub's missing-PR diagnostic means absence.
+    /// Active cancellation and all other transport failures still propagate.
+    fn optional_pr_view(
+        &self,
+        issue: &IssueUrl,
+        selector: &str,
+        fields: &str,
+    ) -> Result<Option<Value>> {
+        match self.pr_view(issue, selector, fields) {
+            Ok(json) => Ok(Some(json)),
+            Err(error) if format!("{error:#}").contains("no pull requests found") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// The pull request whose head is `branch`, if `gh` finds one.
     pub fn pull_request_for(&self, issue: &IssueUrl, branch: &str) -> Result<Option<PullRequest>> {
-        let json = match self.pr_view(issue, branch, PR_FIELDS) {
-            Ok(json) => json,
-            Err(error) if format!("{error:#}").contains("no pull requests found") => {
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
+        let Some(json) = self.optional_pr_view(issue, branch, PR_FIELDS)? else {
+            return Ok(None);
         };
         PullRequest::from_json(&json).map(Some)
     }
@@ -363,12 +374,8 @@ impl GitHub {
     /// A coherent Delivery observation, selected by head branch for initial
     /// discovery and by number after capture. Policy belongs to Delivery.
     pub fn pr_snapshot(&self, issue: &IssueUrl, selector: &str) -> Result<Option<PrSnapshot>> {
-        let json = match self.pr_view(issue, selector, SNAPSHOT_FIELDS) {
-            Ok(json) => json,
-            Err(error) if format!("{error:#}").contains("no pull requests found") => {
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
+        let Some(json) = self.optional_pr_view(issue, selector, SNAPSHOT_FIELDS)? else {
+            return Ok(None);
         };
         let mergeable = match json["mergeable"].as_str() {
             Some("MERGEABLE") => Mergeable::Yes,

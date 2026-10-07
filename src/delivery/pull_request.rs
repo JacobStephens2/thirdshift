@@ -11,7 +11,7 @@ use crate::{poll, progress};
 
 /// Immutable information for reporting and confirmed Self-merge finishing.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Identified {
+pub(crate) struct Identified {
     pub number: u64,
     pub url: String,
 }
@@ -66,18 +66,30 @@ impl<A: Adapter> PullRequest<A> {
 
     /// Observe afresh and validate the expected branches and open state
     /// before marking this number ready. Already-ready PRs need no request.
-    pub fn mark_ready(&mut self) -> Result<Identified> {
+    pub fn mark_ready(
+        &mut self,
+        before_ready: impl FnOnce(&Identified) -> Result<()>,
+    ) -> Result<Identified> {
+        // Annotation normally captured identity already. If it was absent or
+        // unreadable, discover before handing the callback a numbered identity.
+        if self.identified.is_none() {
+            self.observe(false)?.context("no PR found")?;
+        }
+        let identified = self.info().expect("observation captured identity");
+        before_ready(&identified)?;
         progress::step("checking the PR");
         let snapshot = self.observe(false)?.context("no PR found")?;
         self.validate(&snapshot, false)?;
         if snapshot.pr.is_draft {
             self.adapter.ready(&self.issue, snapshot.pr.number)?;
         }
-        Ok(self
-            .identified
-            .as_ref()
-            .expect("observation captured identity")
-            .clone())
+        Ok(identified)
+    }
+
+    /// Immutable information for Delivery's final accounting, including
+    /// identity captured only by Failed run completion discovery.
+    pub fn info(&self) -> Option<Identified> {
+        self.identified.clone()
     }
 
     /// Every unknown-mergeability poll repeats all readiness checks on one
@@ -451,13 +463,18 @@ mod tests {
                 ..World::default()
             });
             let _ = pr.write_built_with(&Choice::default());
-            assert_eq!(pr.mark_ready().unwrap().url, URL);
+            assert_eq!(pr.mark_ready(|_| Ok(())).unwrap().url, URL);
             assert_eq!(
-                world.borrow().selected,
+                world.borrow().selected[..2],
                 [
                     ("issue-7".to_string(), false),
                     ("issue-7".to_string(), false)
                 ]
+            );
+            assert!(
+                world.borrow().selected[2..]
+                    .iter()
+                    .all(|(selector, _)| selector == "12")
             );
         }
     }
@@ -469,7 +486,7 @@ mod tests {
             ..World::default()
         });
         assert!(pr.write_built_with(&Choice::default()).is_err());
-        pr.mark_ready().unwrap();
+        pr.mark_ready(|_| Ok(())).unwrap();
         assert_eq!(pr.finish_failed_run(false).unwrap().as_deref(), Some(URL));
         assert_eq!(world.borrow().draft, [12]);
         assert_eq!(
@@ -488,13 +505,16 @@ mod tests {
             ..World::default()
         });
         assert_eq!(
-            pr.mark_ready().unwrap_err().to_string(),
+            pr.mark_ready(|_| Ok(())).unwrap_err().to_string(),
             "PR targets develop, not main"
         );
         assert_eq!(pr.finish_failed_run(false).unwrap().as_deref(), Some(URL));
         assert!(world.borrow().ready.is_empty());
         assert_eq!(world.borrow().draft, [12]);
-        assert_eq!(world.borrow().selected[1], ("12".to_string(), true));
+        assert_eq!(
+            world.borrow().selected.last(),
+            Some(&("12".to_string(), true))
+        );
     }
 
     #[test]
@@ -510,7 +530,7 @@ mod tests {
                 observations: VecDeque::from([Ok(Some(wrong))]),
                 ..World::default()
             });
-            assert!(pr.mark_ready().is_err());
+            assert!(pr.mark_ready(|_| Ok(())).is_err());
             assert!(world.borrow().ready.is_empty());
         }
     }
@@ -525,7 +545,7 @@ mod tests {
                 ..World::default()
             });
             assert_eq!(
-                pr.mark_ready().unwrap(),
+                pr.mark_ready(|_| Ok(())).unwrap(),
                 Identified {
                     number: 12,
                     url: URL.to_string()
@@ -536,6 +556,29 @@ mod tests {
                 if draft { vec![12] } else { Vec::new() }
             );
         }
+    }
+
+    #[test]
+    fn the_callback_receives_captured_identity_and_readiness_is_rechecked_after_it() {
+        let (mut pr, world) = owner(World::default());
+        pr.write_built_with(&Choice::default()).unwrap();
+        let error = pr
+            .mark_ready(|identified| {
+                assert_eq!(
+                    identified,
+                    &Identified {
+                        number: 12,
+                        url: URL.to_string()
+                    }
+                );
+                let mut retargeted = snapshot();
+                retargeted.pr.base = "develop".to_string();
+                world.borrow_mut().observations = VecDeque::from([Ok(Some(retargeted))]);
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "PR targets develop, not main");
+        assert!(world.borrow().ready.is_empty());
     }
 
     #[test]
@@ -558,13 +601,14 @@ mod tests {
             let (mut pr, world) = owner(World {
                 observations: VecDeque::from([
                     Ok(Some(snapshot())),
+                    Ok(Some(snapshot())),
                     Ok(Some(unknown)),
                     Ok(Some(changed)),
                 ]),
                 grace: Duration::from_secs(60),
                 ..World::default()
             });
-            pr.mark_ready().unwrap();
+            pr.mark_ready(|_| Ok(())).unwrap();
             assert!(pr.ensure_ready_and_mergeable().is_err(), "{change}");
             assert!(
                 world.borrow().selected[1..]
@@ -592,10 +636,10 @@ mod tests {
             (Ok(Some(unknown)), "has not worked out"),
         ] {
             let (mut pr, _) = owner(World {
-                observations: VecDeque::from([Ok(Some(snapshot())), answer]),
+                observations: VecDeque::from([Ok(Some(snapshot())), Ok(Some(snapshot())), answer]),
                 ..World::default()
             });
-            pr.mark_ready().unwrap();
+            pr.mark_ready(|_| Ok(())).unwrap();
             assert!(
                 pr.ensure_ready_and_mergeable()
                     .unwrap_err()
@@ -609,15 +653,19 @@ mod tests {
     fn disappearance_or_transport_failure_after_capture_never_rediscovers_by_branch() {
         for missing in [Ok(None), Err("gone")] {
             let (mut pr, world) = owner(World {
-                observations: VecDeque::from([Ok(Some(snapshot())), missing.clone()]),
+                observations: VecDeque::from([
+                    Ok(Some(snapshot())),
+                    Ok(Some(snapshot())),
+                    missing.clone(),
+                ]),
                 completion: VecDeque::from([missing]),
                 ..World::default()
             });
-            pr.mark_ready().unwrap();
+            pr.mark_ready(|_| Ok(())).unwrap();
             assert!(pr.ensure_ready_and_mergeable().is_err());
             let _ = pr.finish_failed_run(false);
             assert_eq!(
-                world.borrow().selected[1..],
+                world.borrow().selected[2..],
                 [("12".to_string(), false), ("12".to_string(), true)]
             );
             assert!(world.borrow().draft.is_empty());
@@ -637,7 +685,7 @@ mod tests {
                 completion: VecDeque::from([Ok(Some(original))]),
                 ..World::default()
             });
-            pr.mark_ready().unwrap();
+            pr.mark_ready(|_| Ok(())).unwrap();
             assert!(pr.finish_failed_run(false).ok().flatten().is_none());
             assert!(world.borrow().draft.is_empty());
         }
@@ -649,10 +697,10 @@ mod tests {
         wrong.pr.base = "develop".to_string();
         for gate in [Ok(Some(wrong)), Err("unreadable")] {
             let (mut pr, world) = owner(World {
-                observations: VecDeque::from([Ok(Some(snapshot())), gate]),
+                observations: VecDeque::from([Ok(Some(snapshot())), Ok(Some(snapshot())), gate]),
                 ..World::default()
             });
-            pr.mark_ready().unwrap();
+            pr.mark_ready(|_| Ok(())).unwrap();
             assert!(pr.merge("watched").is_err());
             assert!(world.borrow().merges.is_empty());
         }
@@ -664,7 +712,7 @@ mod tests {
             completion: VecDeque::from([Err("completion unavailable")]),
             ..World::default()
         });
-        pr.mark_ready().unwrap();
+        pr.mark_ready(|_| Ok(())).unwrap();
         assert!(matches!(pr.merge("watched").unwrap(), MergeAttempt::Merged));
         assert_eq!(world.borrow().merges, [(12, "watched".to_string())]);
         assert!(
@@ -712,7 +760,7 @@ mod tests {
                 completion: VecDeque::from([completion]),
                 ..World::default()
             });
-            pr.mark_ready().unwrap();
+            pr.mark_ready(|_| Ok(())).unwrap();
             let attempt = pr.merge("watched").unwrap();
             assert_eq!(
                 matches!(attempt, MergeAttempt::Merged),
@@ -763,7 +811,7 @@ mod tests {
                 completion: VecDeque::from([Ok(Some(completion))]),
                 ..World::default()
             });
-            pr.mark_ready().unwrap();
+            pr.mark_ready(|_| Ok(())).unwrap();
             let attempt = pr.merge("watched").unwrap();
             assert_eq!(matches!(attempt, MergeAttempt::Merged), confirmed);
             if let MergeAttempt::Refused(error) = attempt {
