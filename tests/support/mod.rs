@@ -1067,6 +1067,20 @@ test -f {root}/{COPY_REPLACED}
             .to_string()
     }
 
+    /// The first review prompt, with its per-session directory normalized.
+    pub fn first_prompt_with_report_placeholder(&self) -> String {
+        let prompt = self.first_prompt();
+        let directory = prompt
+            .split("to `")
+            .nth(1)
+            .unwrap()
+            .split("/standards.md`")
+            .next()
+            .unwrap();
+        assert!(Path::new(directory).starts_with(self.path("work")));
+        prompt.replace(directory, "<review reports directory>")
+    }
+
     /// The argv of every `gh` call, in order.
     pub fn gh_calls(&self) -> Vec<Vec<String>> {
         match fs::read_to_string(self.path("gh-calls.json")) {
