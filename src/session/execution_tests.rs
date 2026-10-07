@@ -301,7 +301,11 @@ fn review_fixture(script: &str) -> Fixture {
     fixture
 }
 
-fn execute_review(root: &Path, harness: Harness) -> (Result<()>, PathBuf) {
+fn with_review_sessions(
+    root: &Path,
+    harness: Harness,
+    steps: impl FnOnce(&Sessions) -> Result<()>,
+) -> (Result<()>, PathBuf) {
     logs::begin(logs::Begin::ChildRun("fixture"));
     let worktree = root.join("worktree");
     fs::create_dir(&worktree).unwrap();
@@ -321,13 +325,17 @@ fn execute_review(root: &Path, harness: Harness) -> (Result<()>, PathBuf) {
         harness,
         ..Choice::default()
     };
+    let (result, log) = Sessions::within(&logs, &worktree, &choice, steps);
+    (result, log.unwrap())
+}
+
+fn execute_review(root: &Path, harness: Harness) -> (Result<()>, PathBuf) {
     let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
-    let (result, log) = Sessions::within(&logs, &worktree, &choice, |sessions| {
+    with_review_sessions(root, harness, |sessions| {
         sessions.run("implement", &prompt::fresh(&issue, "main", "issue-7"))?;
         fs::write(root.join("carried-on"), "").unwrap();
         Ok(())
-    });
-    (result, log.unwrap())
+    })
 }
 
 #[test]
@@ -458,29 +466,10 @@ fn a_failed_session_still_keeps_whichever_review_report_it_left() {
 fn unavailable_report_setup_warns_and_the_run_carries_on() {
     if let Some(root) = std::env::var_os(FIXTURE) {
         let root = Path::new(&root);
-        logs::begin(logs::Begin::ChildRun("fixture"));
-        let worktree = root.join("worktree");
-        fs::create_dir(&worktree).unwrap();
-        assert!(
-            Command::new("git")
-                .args(["init", "-q"])
-                .arg(&worktree)
-                .status()
-                .unwrap()
-                .success()
-        );
-        let logs = Logs {
-            name: "7".into(),
-            dir: root.join("logs"),
-        };
-        let choice = Choice {
-            harness: Harness::OpenCode,
-            ..Choice::default()
-        };
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
-        let (result, log) = Sessions::within(&logs, &worktree, &choice, |sessions| {
+        let (result, log) = with_review_sessions(root, Harness::OpenCode, |sessions| {
             // Skills are already linked. Only adding the report ignore pattern fails.
-            let exclude = worktree.join(".git/info/exclude");
+            let exclude = root.join("worktree/.git/info/exclude");
             let original_permissions = fs::metadata(&exclude).unwrap().permissions();
             fs::set_permissions(&exclude, fs::Permissions::from_mode(0o444)).unwrap();
             let result = sessions.run("implement", &prompt::fresh(&issue, "main", "issue-7"));
@@ -490,7 +479,7 @@ fn unavailable_report_setup_warns_and_the_run_carries_on() {
             Ok(())
         });
         result.unwrap();
-        assert!(log.unwrap().exists());
+        assert!(log.exists());
         assert!(root.join("carried-on").exists());
         let received = fs::read_to_string(root.join("prompts")).unwrap();
         assert!(!received.contains(prompt::REVIEW_REPORTS_DIRECTORY));
