@@ -47,8 +47,12 @@ A finding from the Standards axis of a code review: the change breaks a document
 **Spec finding**:
 A finding from the Spec axis of a code review: the change is missing, gets wrong, or goes beyond what the issue asked for.
 
+**Security finding**:
+A vulnerability a **Security review** or a **Security audit** found. One the **Run**'s own change introduced, left unaddressed, holds a **Self-merge** into the **Base branch**. One already on the Base branch is never written up in public before it is fixed: it is recorded privately for the **Day shift**, as a draft security advisory on a public repository or a labelled issue on a private one.
+_Avoid_: vulnerability report, security issue
+
 **Unaddressed finding**:
-A **Standards finding** or **Spec finding** the agent chose not to fix. It is listed in the pull request body so a human can decide on it.
+A **Standards finding**, a **Spec finding**, or a **Security finding** the change itself introduced, that the agent chose not to fix. It is listed in the pull request body so a human can decide on it.
 
 **Spec**:
 An issue describing a multi-session piece of work, what is being built rather than how each session does its share, made of **Tickets**: its GitHub sub-issues. See [Spec](https://www.aihero.dev/ai-coding-dictionary/spec) in Matt Pocock's AI Coding Dictionary.
@@ -59,7 +63,7 @@ An issue scoping one session of work, standing alone or as a sub-issue of a **Sp
 _Avoid_: task, sub-task
 
 **Run**:
-One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, or by a **Pickup run** for the **Ready issue** it took.
+One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, by a **Pickup run** for the **Ready issue** it took, or by a **Security run** for a **Security finding** it fixes.
 
 **Worktree**:
 A factory-owned checkout, on an **Issue branch** for a **Run** or detached for an **Architecture review**. Acquisition accounts for partial local effects, removing only attempt-owned clean artifacts on failure and retaining and naming work or uncertain artifacts. Failed-acquisition retention survives later Architecture review attempts. Successful acquisition carries checkout and registration identity through its lifetime; cleanup removes only that acquired instance, retaining and naming replaced or uncertain resources. Stale Architecture review scratch is disposable only with evidence of successful detached acquisition and unchanged ownership; unmarked or uncertain checkouts are retained.
@@ -73,7 +77,7 @@ One invocation of the factory on a **Spec**'s **Issue URL**: it works through th
 _Avoid_: batch run, spec implementation
 
 **Architect run**:
-One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another Architect run or a **Pickup run** on the same repository is still running on the machine, its Spec run or Run included, when an earlier Architect plan is still open, when an **Architect idea** is waiting for triage, or when the repository has a **Ready issue**, so that work a human shaped goes first. Skipped is not a failure, and sends no **Run notification**, so that it can be started every few minutes and so follow the last one as soon as its plan is merged.
+One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another **Pass** on the same repository is still running on the machine, its Spec run or Run included, when an earlier Architect plan is still open, when an **Architect idea** is waiting for triage, or when the repository has a **Ready issue**, so that work a human shaped goes first. Skipped is not a failure, and sends no **Run notification**, so that it can be started every few minutes and so follow the last one as soon as its plan is merged.
 _Avoid_: improve run, architecture run
 
 **Weeding**:
@@ -81,11 +85,15 @@ The factory clearing the detritus that features leave in a repository's codebase
 _Avoid_: upkeep, continuous architect, daemon, loop
 
 **Pickup run**:
-One invocation of the factory with no **Issue URL**: it takes the lowest-numbered **Ready issue** in the repository and starts a **Spec run** or a **Run** on it, as the command on that issue's URL would. One issue per invocation, and thirdshift never schedules itself: the operating system's scheduler starts each one. It is skipped, doing nothing, when another Pickup run or an **Architect run** on the same repository is still running on the machine, its Spec run or Run included, when there is no Ready issue, or when the repository is at its **Claim limit**. Skipped is not a failure, and sends no **Run notification**.
+One invocation of the factory with no **Issue URL**: it takes the lowest-numbered **Ready issue** in the repository and starts a **Spec run** or a **Run** on it, as the command on that issue's URL would. One issue per invocation, and thirdshift never schedules itself: the operating system's scheduler starts each one. It is skipped, doing nothing, when another **Pass** on the same repository is still running on the machine, its Spec run or Run included, when there is no Ready issue, or when the repository is at its **Claim limit**. Skipped is not a failure, and sends no **Run notification**.
 _Avoid_: watch, daemon, queue run, poll
 
+**Security run**:
+One invocation of the factory with no **Issue URL**: a **Security audit** of the **Base branch**, then, when a flag or the **User config** allows it, a **Run** that fixes each **Security finding** a proof-of-concept test reproduces. A finding nothing reproduces waits for the **Day shift**, and is never fixed unattended. It is skipped, like an **Architect run**, when another **Pass** on the same repository is still running on the machine, when the repository has a **Ready issue**, or when one of its findings still waits for the Day shift.
+_Avoid_: Secure run (it reads as a run that is secure), audit run, security pass
+
 **Pass**:
-An **Architect run** or a **Pickup run**: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped.
+An **Architect run**, a **Pickup run** or a **Security run**: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped.
 _Avoid_: tick, cycle
 
 **Claim limit**:
@@ -112,6 +120,10 @@ _Avoid_: plan, plan doc
 The issue an **Architecture review** ends on when its top recommendation is not Strong: the one it filed, or the open issue that already covered it. thirdshift labels it `architect-idea` and `needs-triage`, the second put back on an issue that already covered the idea and had been triaged, since the factory again takes it for the best next move. While any Architect idea is open and still labelled `needs-triage`, every **Architect run** on the repository is skipped: the factory has run out of Strong ideas, and waits for the **Day shift** to triage one, whatever the decision.
 _Avoid_: weak plan, suggestion
 
+**Security audit**:
+The agent session that opens a **Security run**: it audits the **Base branch** for vulnerabilities, and records each **Security finding** privately for the **Day shift**. It changes nothing in the repository, and writes nothing public about a vulnerability.
+_Avoid_: security scan, security review (a **Security review** reviews one Run's change)
+
 **Spec branch**:
 The **Issue branch** of the **Spec** in a **Spec run**, branched off the **Base branch**. Each **Ticket**'s **Run** is a **Merge run** into it, so the Spec's work gathers there before it reaches the Base branch.
 _Avoid_: integration branch, feature branch
@@ -128,6 +140,10 @@ An open **Ticket** labelled with a triage role that says it is not agent work: `
 **Spec review**:
 The agent session a **Spec run** starts once every **Ticket** is done: it reviews the whole **Spec branch** against the **Base branch** and the **Spec**, fixes what it agrees with, and writes the **Spec PR**'s description, listing the rest as **Unaddressed findings**.
 
+**Security review**:
+When a flag or the **User config** asks for one, the agent session a **Run** starts after its opening session, or a **Spec run** starts on its **Spec PR** after the **Spec review**: it reviews the branch's change against the **Base branch** for vulnerabilities, and fixes each **Security finding** it can show with a failing test. A **Ticket**'s Run gets none. A Security review that a model refused, or that ended early, holds a **Self-merge** as an unaddressed Security finding does.
+_Avoid_: security axis, security audit (a **Security audit** covers the whole Base branch)
+
 **Failed spec run**:
 A **Spec run** that ends, including by interruption, with any of its **Tickets** not done, or with its **Spec PR** not ready, mergeable and green (or, when asked to merge, not merged). It still takes every Ticket it can reach, and a failed Ticket stops only the Tickets it blocks. After Command interruption it starts no new Ticket or Spec review, drains its active Tickets, and finishes publishing their final Tickets checklist and outcome lines.
 
@@ -136,7 +152,7 @@ A **Run** asked to end with its pull request merged rather than left for review,
 _Avoid_: auto-merge (GitHub's own feature, which thirdshift does not use)
 
 **Run notification**:
-A message thirdshift sends when a **Run**, a **Spec run** or an **Architect run** ends, whatever its outcome (ready, merged, failed or interrupted; for an Architect run that dispatched nothing, plan published, idea filed, idea already filed or review failed), to the address given with the email flag or the default in the **User config**. Each sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. After an **Inherited failure** it carries, beside the cause, what the Run says on stderr: where the checks fail on the **Base branch**, and the offer of a **Base fix** if nobody decided against one. An Architect run's notification tells how its **Architecture review** ended, naming the plan or idea issue, and how the Spec run or Run it dispatched ended, which sends none of its own; a skipped one sends none. A **Pickup run** that took a **Ready issue** sends the one the Spec run or Run it dispatched would have sent, which sends none of its own; a skipped one sends none. Failing to send one never changes the outcome.
+A message thirdshift sends when a **Run**, a **Spec run**, an **Architect run** or a **Security run** ends, whatever its outcome (ready, merged, failed or interrupted; for an Architect run that dispatched nothing, plan published, idea filed, idea already filed or review failed), to the address given with the email flag or the default in the **User config**. Each sends one only when asked to, by the flag or by the User config; a Spec run's notification lists each **Ticket**'s outcome, and a Ticket's **Run** never sends one of its own. After an **Inherited failure** it carries, beside the cause, what the Run says on stderr: where the checks fail on the **Base branch**, and the offer of a **Base fix** if nobody decided against one. An Architect run's notification tells how its **Architecture review** ended, naming the plan or idea issue, and how the Spec run or Run it dispatched ended, which sends none of its own; a skipped one sends none. A **Pickup run** that took a **Ready issue** sends the one the Spec run or Run it dispatched would have sent, which sends none of its own; a skipped one sends none. A **Security run**'s notification lists each **Security finding**'s severity, title and private link, never its write-up, since the message passes through a third party; a skipped one sends none. Failing to send one never changes the outcome.
 _Avoid_: completion email, alert
 
 **User config**:
@@ -200,7 +216,7 @@ The full transcript of one agent session, one per session, a **Resume** and each
 _Avoid_: transcript, session file
 
 **Command**:
-One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, or a **Pickup run**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
+One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, or a **Security run**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
 _Avoid_: invocation, job
 
 **Command log**:
