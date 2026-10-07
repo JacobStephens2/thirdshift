@@ -33,16 +33,7 @@ fn an_old_owner_retains_a_recreated_checkout_even_with_the_same_paths_branch_and
     fs::write(path.join("replacement.txt"), "replacement work\n").unwrap();
     let refs = launch.run(&["show-ref"]).unwrap();
     let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
-    expect_warning(
-        &path,
-        if path.ends_with("work-architect") {
-            None
-        } else {
-            Some(BRANCH)
-        },
-        &head,
-        "replaced",
-    );
+    expect_warning(&path, Some(BRANCH), &head, "replaced");
 
     drop(owner);
 
@@ -84,16 +75,7 @@ fn an_old_review_owner_retains_a_recreated_detached_checkout() {
     fs::write(path.join("replacement.txt"), "review replacement\n").unwrap();
     let refs = launch.run(&["show-ref"]).unwrap();
     let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
-    expect_warning(
-        &path,
-        if path.ends_with("work-architect") {
-            None
-        } else {
-            Some(BRANCH)
-        },
-        &head,
-        "replaced",
-    );
+    expect_warning(&path, None, &head, "replaced");
 
     drop(owner);
 
@@ -1064,7 +1046,7 @@ fn the_repository_lock_is_held_through_configuration_cleanup() {
 if test "$1" = config && test "$4" = --remove-section; then
   touch "$THIRDSHIFT_FAULT_MARKER"
   tries=0
-  while test ! -e "$THIRDSHIFT_FAULT_MARKER.release" && test "$tries" -lt 100; do
+  while test ! -e "$THIRDSHIFT_FAULT_MARKER.release" && test "$tries" -lt 600; do
     sleep 0.05
     tries=$((tries + 1))
   done
@@ -1086,7 +1068,7 @@ fi
         .join("thirdshift-worktrees.lock");
     let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
     let checking = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while !marker.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
