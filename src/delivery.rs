@@ -501,8 +501,8 @@ impl FailedOutside for OnFailure<'_> {
     /// against the Base branch, so no empty Issue branch appears on origin.
     fn commit_and_push(&mut self, reason: &str) -> Result<()> {
         let worktree = &self.worktree;
-        let git = worktree.git();
-        if worktree.merge_in_progress()? {
+        let git = worktree.git().completion();
+        if git.merge_in_progress()? {
             git.run(&["merge", "--abort"])?;
         }
         git.run(&["add", "-A"])?;
@@ -525,7 +525,7 @@ impl FailedOutside for OnFailure<'_> {
             "-m",
             &message,
         ])?;
-        worktree.push()
+        git.push(worktree.branch())
     }
 
     fn pull_request(&mut self) -> Result<Option<PullRequest>> {

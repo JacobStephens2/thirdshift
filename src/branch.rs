@@ -97,7 +97,7 @@ trait Reads {
     /// `first_branch`, from `issue`'s repository only.
     fn pull_requests(&self, issue: &IssueUrl, first_branch: &str) -> Result<Vec<PullRequest>>;
     /// The head of the local `branch` in the Launch directory, if it has one.
-    fn local_head(&self, branch: &str) -> Option<String>;
+    fn local_head(&self, branch: &str) -> Result<Option<String>>;
 }
 
 /// A branch on origin.
@@ -138,15 +138,13 @@ impl Reads for GitHubAndOrigin<'_> {
         github::pull_requests_with_head_prefix(issue, first_branch)
     }
 
-    fn local_head(&self, branch: &str) -> Option<String> {
-        self.launch
-            .run(&[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ])
-            .ok()
+    fn local_head(&self, branch: &str) -> Result<Option<String>> {
+        self.launch.run_optional(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
     }
 }
 
@@ -230,7 +228,7 @@ fn used(reads: &impl Reads, issue: &IssueUrl) -> Result<Used> {
 /// A local `branch` in the launch repository must be at `origin_sha`, or not
 /// exist when origin has no copy, so no local-only commits are destroyed.
 fn check_local_branch(reads: &impl Reads, branch: &str, origin_sha: Option<&str>) -> Result<()> {
-    let Some(local_sha) = reads.local_head(branch) else {
+    let Some(local_sha) = reads.local_head(branch)? else {
         return Ok(());
     };
     match origin_sha {
@@ -335,14 +333,15 @@ mod tests {
                 .collect())
         }
 
-        fn local_head(&self, branch: &str) -> Option<String> {
+        fn local_head(&self, branch: &str) -> Result<Option<String>> {
             self.seen
                 .borrow_mut()
                 .push(Read::LocalHead(branch.to_string()));
-            self.local
+            Ok(self
+                .local
                 .iter()
                 .find(|(name, _)| *name == branch)
-                .map(|(_, head)| head.to_string())
+                .map(|(_, head)| head.to_string()))
         }
     }
 
