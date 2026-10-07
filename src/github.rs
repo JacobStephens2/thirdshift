@@ -348,16 +348,52 @@ impl GitHub {
         ])
     }
 
+    /// A PR JSON read where GitHub's missing-PR diagnostic means absence.
+    /// Active cancellation and all other transport failures still propagate.
+    fn optional_pr_view(
+        &self,
+        issue: &IssueUrl,
+        selector: &str,
+        fields: &str,
+    ) -> Result<Option<Value>> {
+        match self.pr_view(issue, selector, fields) {
+            Ok(json) => Ok(Some(json)),
+            Err(error) if format!("{error:#}").contains("no pull requests found") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// The pull request whose head is `branch`, if `gh` finds one.
     pub fn pull_request_for(&self, issue: &IssueUrl, branch: &str) -> Result<Option<PullRequest>> {
-        let json = match self.pr_view(issue, branch, PR_FIELDS) {
-            Ok(json) => json,
-            Err(error) if format!("{error:#}").contains("no pull requests found") => {
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
+        let Some(json) = self.optional_pr_view(issue, branch, PR_FIELDS)? else {
+            return Ok(None);
         };
         PullRequest::from_json(&json).map(Some)
+    }
+
+    /// A coherent Delivery observation, selected by head branch for initial
+    /// discovery and by number after capture. Policy belongs to Delivery.
+    pub fn pr_snapshot(&self, issue: &IssueUrl, selector: &str) -> Result<Option<PrSnapshot>> {
+        let Some(json) = self.optional_pr_view(issue, selector, SNAPSHOT_FIELDS)? else {
+            return Ok(None);
+        };
+        let mergeable = match json["mergeable"].as_str() {
+            Some("MERGEABLE") => Mergeable::Yes,
+            Some("CONFLICTING") => Mergeable::No,
+            Some("UNKNOWN") => Mergeable::Unknown,
+            other => bail!("gh output has an unknown mergeable state {other:?}"),
+        };
+        Ok(Some(PrSnapshot {
+            pr: PullRequest::from_json(&json)?,
+            mergeable,
+            head_commit: json["headRefOid"]
+                .as_str()
+                .context("gh output has no headRefOid")?
+                .to_string(),
+            from_fork: json["isCrossRepository"]
+                .as_bool()
+                .context("gh output has no isCrossRepository")?,
+        }))
     }
 
     /// Every pull request in this repository, in any state, whose head branch
@@ -439,70 +475,37 @@ impl GitHub {
         ])
     }
 
-    /// Mark the pull request whose head is `branch` ready for review.
-    pub fn mark_ready(&self, issue: &IssueUrl, branch: &str) -> Result<()> {
-        self.gh(&["pr", "ready", branch, "--repo", &issue.repo_slug()])
+    /// Mark the selected pull request ready for review.
+    pub fn mark_ready(&self, issue: &IssueUrl, selector: &str) -> Result<()> {
+        self.gh(&["pr", "ready", selector, "--repo", &issue.repo_slug()])
     }
 
-    /// Convert the pull request whose head is `branch` back to a draft.
-    pub fn convert_to_draft(&self, issue: &IssueUrl, branch: &str) -> Result<()> {
+    /// Convert the selected pull request back to a draft. Spec PR creation
+    /// also uses this before Delivery has captured its identity.
+    pub fn convert_to_draft(&self, issue: &IssueUrl, selector: &str) -> Result<()> {
         self.gh(&[
             "pr",
             "ready",
-            branch,
+            selector,
             "--undo",
             "--repo",
             &issue.repo_slug(),
         ])
     }
 
-    /// Merge the pull request whose head is `branch` into its base with a merge
-    /// commit, but only if its head is still `head`. Never GitHub's auto-merge
-    /// (ADR-0004), and never `--delete-branch`, whose local deletion would
-    /// interfere with the worktree. If `gh` fails but the pull request merged at
-    /// `head` anyway, e.g. because `gh` was interrupted once GitHub had merged,
-    /// that is a merge.
-    pub fn merge(&self, issue: &IssueUrl, branch: &str, head: &str) -> Result<()> {
-        let Err(error) = self.gh(&[
+    /// One guarded merge request, with a merge commit and without auto-merge
+    /// or local branch deletion (ADR 0004). Delivery owns reconciliation.
+    pub fn merge(&self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
+        self.gh(&[
             "pr",
             "merge",
-            branch,
+            &number.to_string(),
             "--repo",
             &issue.repo_slug(),
             "--merge",
             "--match-head-commit",
             head,
-        ]) else {
-            return Ok(());
-        };
-        match self.completion().merged_head(issue, branch) {
-            Ok(Some(merged)) if merged == head => Ok(()),
-            _ => Err(error),
-        }
-    }
-
-    /// The head commit the pull request whose head is `branch` was merged at, if
-    /// it is merged.
-    fn merged_head(&self, issue: &IssueUrl, branch: &str) -> Result<Option<String>> {
-        let json = self.pr_view(issue, branch, "state,headRefOid")?;
-        if json["state"] != "MERGED" {
-            return Ok(None);
-        }
-        let head = json["headRefOid"]
-            .as_str()
-            .context("gh output has no headRefOid")?;
-        Ok(Some(head.to_string()))
-    }
-
-    /// Whether the pull request whose head is `branch` can be merged.
-    pub fn mergeable(&self, issue: &IssueUrl, branch: &str) -> Result<Mergeable> {
-        let json = self.pr_view(issue, branch, "mergeable")?;
-        match json["mergeable"].as_str() {
-            Some("MERGEABLE") => Ok(Mergeable::Yes),
-            Some("CONFLICTING") => Ok(Mergeable::No),
-            Some("UNKNOWN") => Ok(Mergeable::Unknown),
-            other => bail!("gh output has an unknown mergeable state {other:?}"),
-        }
+        ])
     }
 
     /// Every check run and commit status on commit `sha`. Of the check runs
@@ -834,6 +837,18 @@ query($owner: String!, $repo: String!, $number: Int!) {
 
 const PR_FIELDS: &str = "number,url,state,headRefName,baseRefName,isDraft";
 
+const SNAPSHOT_FIELDS: &str =
+    "number,url,state,headRefName,baseRefName,isDraft,mergeable,headRefOid,isCrossRepository";
+
+/// The fields needed for one Delivery gate, read together.
+#[derive(Debug, Clone)]
+pub struct PrSnapshot {
+    pub pr: PullRequest,
+    pub mergeable: Mergeable,
+    pub head_commit: String,
+    pub from_fork: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrState {
     Open,
@@ -851,6 +866,7 @@ impl fmt::Display for PrState {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct PullRequest {
     pub number: u64,
     pub url: String,

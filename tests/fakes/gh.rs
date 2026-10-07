@@ -91,7 +91,8 @@
 //! `linked`. Any other query exits 2.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
-//! PR's body. `gh pr view` names the PR by its head branch or its number.
+//! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
+//! its head branch or its number; numeric merge reads that PR's actual head.
 //!
 //! `gh issue close` closes the issue, recording its `--comment`; on an issue
 //! already closed it only warns, as gh does.
@@ -276,6 +277,18 @@ fn newest_pr_from(state: &Json, head: &str) -> usize {
         .unwrap_or_else(|| no_pr_for(head))
 }
 
+/// Resolve a numeric identity or, for fake agents, a head branch.
+fn selected_pr(state: &Json, name: &str) -> usize {
+    if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+        prs(state)
+            .iter()
+            .rposition(|pr| pr.at("number").as_i64() == name.parse().ok())
+            .unwrap_or_else(|| no_pr_for(name))
+    } else {
+        newest_pr_from(state, name)
+    }
+}
+
 fn no_pr_for(name: &str) -> ! {
     die(&format!("no pull requests found for branch \"{name}\""), 1)
 }
@@ -315,14 +328,7 @@ fn pr_create(state: &mut Json, flags: &Flags) {
 /// one field raw, as gh does for a string.
 fn pr_view(state: &mut Json, positional: &[String], flags: &Flags) {
     let name = &positional[0];
-    let at = if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
-        prs(state)
-            .iter()
-            .rposition(|pr| pr.at("number").as_i64() == name.parse().ok())
-            .unwrap_or_else(|| no_pr_for(name))
-    } else {
-        newest_pr_from(state, name)
-    };
+    let at = selected_pr(state, name);
     let pr = &prs(state)[at];
     let wanted = wanted_fields(flags);
     let mut fields = pr_fields(pr, &wanted);
@@ -486,7 +492,7 @@ fn pr_list(state: &Json, flags: &Flags) {
 }
 
 fn pr_ready(state: &mut Json, positional: &[String], flags: &Flags) {
-    let at = newest_pr_from(state, &positional[0]);
+    let at = selected_pr(state, &positional[0]);
     let pr = &mut state.at_mut("prs").items_mut()[at];
     ensure_open(pr);
     pr.set("isDraft", Bool(flags.contains_key("undo")));
@@ -545,12 +551,12 @@ fn pr_merge(state: &mut Json, positional: &[String], flags: &Flags) {
         save(state);
         die(&error, 1);
     }
-    let head = &positional[0];
-    let at = newest_pr_from(state, head);
+    let at = selected_pr(state, &positional[0]);
     let pr = &prs(state)[at];
+    let head = pr.at("head").str().to_owned();
     ensure_open(pr);
     let base = pr.at("base").str().to_owned();
-    let head_sha = branch_tip(head);
+    let head_sha = branch_tip(&head);
     if Some(head_sha.as_str()) != flag(flags, "match-head-commit") {
         die(
             "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)",

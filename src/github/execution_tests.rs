@@ -213,72 +213,77 @@ fn an_optional_pr_probe_propagates_active_cancellation_instead_of_absence() {
             ));
             let error = GitHub::new()
                 .pull_request_for(&issue(), "issue-7")
-                .err()
-                .expect("cancellation became absence");
+                .expect_err("cancellation became absence");
             assert_eq!(error.to_string(), "interrupted");
             assert!(!exists(fixture.pid().unwrap()));
         },
     );
 }
 
-fn cancelled_merge(name: &str, state: &str, head: &str, confirmed: bool) {
-    with_recorded_signal(name, |signal| {
-        let fixture = Fixture::new(&format!(
-            r#"
-case "$1 $2" in
-  'pr merge') kill -{signal} {parent}; exec sleep 3 ;;
-  'pr view') printf '%s' '{{"state":"{state}","headRefOid":"{head}"}}' ;;
+#[test]
+fn cancelled_numbered_merge_still_allows_an_independent_completion_snapshot() {
+    with_recorded_signal(
+        "github::execution_tests::cancelled_numbered_merge_still_allows_an_independent_completion_snapshot",
+        |signal| {
+            let fixture = Fixture::new(&format!(
+                r#"
+case "$1 $2 $3" in
+  'pr merge 12') kill -{signal} {parent}; exec sleep 3 ;;
+  'pr view 12') printf '%s' '{{"number":12,"url":"https://github.com/acme/widgets/pull/12","state":"MERGED","headRefName":"issue-7","baseRefName":"main","isDraft":false,"mergeable":"UNKNOWN","headRefOid":"requested-head","isCrossRepository":false}}' ;;
   *) exit 1 ;;
 esac
 "#,
-            parent = std::process::id()
-        ));
-        let github = GitHub::new();
-        let result = github.merge(&issue(), "issue-7", "requested-head");
-        if confirmed {
-            result.unwrap();
-        } else {
-            assert_eq!(result.unwrap_err().to_string(), "interrupted");
-        }
-        assert!(interrupt::requested());
-        assert_eq!(
+                parent = std::process::id()
+            ));
+            let github = GitHub::new();
+            assert_eq!(
+                github
+                    .merge(&issue(), 12, "requested-head")
+                    .unwrap_err()
+                    .to_string(),
+                "interrupted"
+            );
+            let snapshot = github
+                .completion()
+                .pr_snapshot(&issue(), "12")
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.pr.number, 12);
+            assert_eq!(snapshot.pr.state, PrState::Merged);
+            assert_eq!(snapshot.pr.head, "issue-7");
+            assert_eq!(snapshot.pr.base, "main");
+            assert_eq!(snapshot.head_commit, "requested-head");
+            assert_eq!(snapshot.mergeable, Mergeable::Unknown);
+            assert!(!snapshot.from_fork);
+            assert!(interrupt::requested());
+            assert!(github.pr_snapshot(&issue(), "12").is_err());
+            assert!(github.mark_ready(&issue(), "12").is_err());
+            assert!(!exists(fixture.pid().unwrap()));
+        },
+    );
+}
+
+#[test]
+fn numbered_pr_transitions_use_the_repository_and_guarded_merge_flags() {
+    with_recorded_signal(
+        "github::execution_tests::numbered_pr_transitions_use_the_repository_and_guarded_merge_flags",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"
+case "$*" in
+  'pr ready 12 --repo acme/widgets' | 'pr ready 12 --undo --repo acme/widgets' | 'pr merge 12 --repo acme/widgets --merge --match-head-commit abc') ;;
+  *) echo "unexpected args: $*" >&2; exit 1 ;;
+esac
+"#,
+            );
+            let github = GitHub::new();
+            github.mark_ready(&issue(), "12").unwrap();
             github
-                .mark_ready(&issue(), "issue-7")
-                .unwrap_err()
-                .to_string(),
-            "interrupted"
-        );
-        assert!(!exists(fixture.pid().unwrap()));
-    });
-}
-
-#[test]
-fn a_cancelled_merge_is_confirmed_only_at_the_requested_head() {
-    cancelled_merge(
-        "github::execution_tests::a_cancelled_merge_is_confirmed_only_at_the_requested_head",
-        "MERGED",
-        "requested-head",
-        true,
-    );
-}
-
-#[test]
-fn a_cancelled_merge_at_another_head_remains_a_failure() {
-    cancelled_merge(
-        "github::execution_tests::a_cancelled_merge_at_another_head_remains_a_failure",
-        "MERGED",
-        "foreign-head",
-        false,
-    );
-}
-
-#[test]
-fn an_unconfirmed_cancelled_merge_remains_a_failure() {
-    cancelled_merge(
-        "github::execution_tests::an_unconfirmed_cancelled_merge_remains_a_failure",
-        "OPEN",
-        "requested-head",
-        false,
+                .completion()
+                .convert_to_draft(&issue(), "12")
+                .unwrap();
+            github.merge(&issue(), 12, "abc").unwrap();
+        },
     );
 }
 

@@ -1,7 +1,8 @@
 //! The Run's worktree: a sibling of the launch repository, on the Issue
 //! branch, removed together with the local Issue branch when dropped unless
-//! Failed run preservation fails. And the Architecture review's: a sibling
-//! too, on no branch, always removed when dropped.
+//! Failed run preservation fails or ownership is uncertain. And the
+//! Architecture review's: a sibling too, on no branch, disposable when owned.
+//! Both retain the acquired instance's identity and leave replacements alone.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -14,10 +15,16 @@ use crate::git::Git;
 use crate::host;
 use crate::progress;
 
+mod acquisition;
 #[cfg(test)]
 mod acquisition_tests;
 #[cfg(test)]
+mod cleanup_tests;
+mod ownership;
+#[cfg(test)]
 mod preservation_tests;
+#[cfg(test)]
+mod review_recovery_tests;
 #[cfg(test)]
 mod synchronization_tests;
 
@@ -91,6 +98,7 @@ impl ForeignCommits {
 }
 
 pub struct Worktree {
+    checkout: ownership::Checkout,
     launch: Git,
     branch: String,
     git: Git,
@@ -108,11 +116,10 @@ impl Worktree {
     /// Issue branch and create without force. No selection preflight is required.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base])?;
-        let source = format!("origin/{base}");
-        let commit = launch.run(&["rev-parse", &format!("refs/remotes/{source}")])?;
+        launch.fetch(&[base])?;
+        let origin = fetched_origin(launch, base)?;
         check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
-        Self::add(launch, repo, branch, &["-b", branch], &commit, &source)
+        Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
     /// Check out the existing `branch` from origin in a new worktree next to
@@ -123,33 +130,22 @@ impl Worktree {
     /// without force at the pinned commit. No selection preflight is required.
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base, branch])?;
-        let source = format!("origin/{branch}");
-        let commit = launch.run(&["rev-parse", &format!("refs/remotes/{source}")])?;
+        launch.fetch(&[base, branch])?;
+        let origin = fetched_origin(launch, branch)?;
         let local = local_head(launch, branch)?;
-        check_local_branch(branch, local.as_deref(), Some(&commit))?;
-        if local.is_some() {
-            Self::add(launch, repo, branch, &[], branch, &source)
-        } else {
-            Self::add(launch, repo, branch, &["-b", branch], &commit, &source)
-        }
+        check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
+        Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
-    fn add(
-        launch: &Git,
-        repo: &str,
-        branch: &str,
-        branch_args: &[&str],
-        start: &str,
-        source: &str,
-    ) -> Result<Self> {
+    fn add(launch: &Git, repo: &str, branch: &str, start: &str, source: &str) -> Result<Self> {
         let (root, path) = sibling(launch, &format!("{repo}-{branch}"))?;
         progress::step(format_args!(
             "creating worktree {} on {branch} from {source}",
             path.display()
         ));
-        add_worktree(launch, branch_args, &path, start)?;
+        let checkout = acquisition::add(launch, Some(branch), &path, start)?;
         Ok(Worktree {
+            checkout,
             launch: Git::new(root),
             branch: branch.to_string(),
             git: Git::new(path),
@@ -301,14 +297,8 @@ impl Worktree {
     /// calculation and mutation after this sample uses the commit ID, so
     /// sibling fetches and shadowing local names cannot change its meaning.
     fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
-        self.git.run(&["fetch", "origin", branch])?;
-        let upstream = format!("origin/{branch}");
-        let commit = self.git.run(&[
-            "rev-parse",
-            "--verify",
-            &format!("refs/remotes/{upstream}^{{commit}}"),
-        ])?;
-        Ok(OriginCommit { upstream, commit })
+        self.git.fetch(&[branch])?;
+        fetched_origin(&self.git, branch)
     }
 
     /// Merge the sampled origin commit into the Issue branch, never rebase, so
@@ -365,12 +355,22 @@ impl Worktree {
 
 /// The local Issue branch head sampled for acquisition or advisory preflight.
 pub(crate) fn local_head(launch: &Git, branch: &str) -> Result<Option<String>> {
-    launch.run_optional(&[
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        &format!("refs/heads/{branch}"),
-    ])
+    let reference = format!("refs/heads/{branch}");
+    let refs = launch.run(&[
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)%00%(symref)",
+        &reference,
+    ])?;
+    for line in refs.lines() {
+        let fields: Vec<_> = line.split('\0').collect();
+        if fields.first() == Some(&reference.as_str()) {
+            if fields.len() != 3 || !fields[2].is_empty() {
+                bail!("cannot establish the local branch {branch}: unexpected ref identity");
+            }
+            return Ok(Some(fields[1].to_string()));
+        }
+    }
+    Ok(None)
 }
 
 /// Refuse local work acquisition would replace. A fresh checkout requires
@@ -398,94 +398,51 @@ pub(crate) fn check_local_branch(
 
 impl Drop for Worktree {
     fn drop(&mut self) {
-        let path = self.path().to_string_lossy().into_owned();
-        if self.kept {
-            let head = self
-                .git
-                .completion()
-                .run(&["rev-parse", "HEAD"])
-                .unwrap_or_else(|error| format!("an unknown commit ({error:#})"));
-            progress::step(format_args!(
-                "keeping the worktree {path} and local branch {} at {head}",
-                self.branch
-            ));
-            return;
-        }
-        progress::step(format_args!(
-            "cleaning up the worktree and local branch {}",
-            self.branch
-        ));
-        let launch = self.launch.completion();
-        let _lock = lock_launch(&launch).inspect_err(|error| {
-            progress::step(format_args!("cleaning up without the lock: {error:#}"))
-        });
-        // Each step is attempted even if the one before it failed.
-        let steps: [&[&str]; 2] = [
-            &["worktree", "remove", "--force", &path],
-            &["branch", "-D", &self.branch],
-        ];
-        for step in steps {
-            if let Err(error) = launch.run(step) {
-                progress::step(format_args!("cleanup incomplete: {error:#}"));
-            }
-        }
+        self.checkout.cleanup(&self.launch, self.kept);
     }
 }
 
 /// The worktree an Architecture review runs in: detached at the head of the
 /// Base branch on origin, with no Issue branch, and removed when dropped,
-/// whatever the session left in it. Nothing in it is committed or pushed.
+/// whatever the session left in the owned instance. Replaced or uncertain
+/// resources are retained. Nothing in it is committed or pushed by cleanup.
 pub struct ReviewWorktree {
     launch: Git,
-    path: PathBuf,
+    checkout: ownership::Checkout,
 }
 
 impl ReviewWorktree {
     /// Check out `origin/<base>`, detached, in a new worktree next to the
     /// launch repository's root, named `<repo>-architect`. A worktree left
-    /// there by a process that ended before it could remove it is removed
-    /// first, so the caller sees that no Architecture review is still running
-    /// in it.
+    /// there by a process that ended before cleanup is removed only with
+    /// evidence of successful acquisition and unchanged instance ownership.
+    /// Failed, unmarked and uncertain acquisitions are retained and named.
     pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base])?;
         let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
-        if path.exists() {
-            let stale = path.to_str().context("worktree path is not UTF-8")?;
-            // Anything else at the path is left for `git worktree add` to
-            // refuse.
-            if launch.succeeds(&["worktree", "remove", "--force", stale])? {
-                progress::step(format_args!("removed the leftover worktree {stale}"));
-            }
-        }
-        let start = format!("origin/{base}");
+        ownership::recover_review(launch, &path)?;
+        launch.fetch(&[base])?;
+        let origin = fetched_origin(launch, base)?;
         progress::step(format_args!(
-            "creating worktree {} detached at {start}",
-            path.display()
+            "creating worktree {} detached at {}",
+            path.display(),
+            origin.upstream,
         ));
-        add_worktree(launch, &["--detach"], &path, &start)?;
+        let checkout = acquisition::add(launch, None, &path, &origin.commit)?;
         Ok(ReviewWorktree {
             launch: Git::new(root),
-            path,
+            checkout,
         })
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        self.checkout.path()
     }
 }
 
 impl Drop for ReviewWorktree {
     fn drop(&mut self) {
-        progress::step("cleaning up the worktree");
-        let launch = self.launch.completion();
-        let _lock = lock_launch(&launch).inspect_err(|error| {
-            progress::step(format_args!("cleaning up without the lock: {error:#}"))
-        });
-        let path = self.path.to_string_lossy();
-        if let Err(error) = launch.run(&["worktree", "remove", "--force", &path]) {
-            progress::step(format_args!("cleanup incomplete: {error:#}"));
-        }
+        self.checkout.cleanup(&self.launch, false);
     }
 }
 
@@ -500,21 +457,21 @@ fn sibling(launch: &Git, name: &str) -> Result<(PathBuf, PathBuf)> {
     Ok((root, path))
 }
 
-/// `git worktree add <checkout> <path> <start>` in the launch repository,
-/// where `checkout` says what the worktree is on: a branch, or nothing.
-fn add_worktree(launch: &Git, checkout: &[&str], path: &Path, start: &str) -> Result<()> {
-    let path = path.to_str().context("worktree path is not UTF-8")?;
-    let mut args = vec!["worktree", "add"];
-    args.extend_from_slice(checkout);
-    args.extend([path, start]);
-    launch.run(&args)?;
-    Ok(())
+/// Pin an already-fetched origin branch, avoiding ambiguous local names.
+fn fetched_origin(git: &Git, branch: &str) -> Result<OriginCommit> {
+    let upstream = format!("origin/{branch}");
+    let commit = git.run(&[
+        "rev-parse",
+        "--verify",
+        &format!("refs/remotes/{upstream}^{{commit}}"),
+    ])?;
+    Ok(OriginCommit { upstream, commit })
 }
 
 /// Wait for, then hold until the file is dropped, the Launch directory's
 /// worktree lock, so the Runs of a Spec run's Tickets add and remove their
-/// worktrees and local Issue branches one at a time: `git worktree add -b`
-/// and `git branch -D` can fail partway on a lock file another holds.
+/// worktrees and local Issue branches one at a time. Acquisition and verified
+/// cleanup hold it through their filesystem, registration and ref effects.
 fn lock_launch(launch: &Git) -> Result<File> {
     launch.lock("thirdshift-worktrees.lock")
 }

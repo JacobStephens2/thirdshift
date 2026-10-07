@@ -23,7 +23,7 @@ use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label};
-use crate::launch::LaunchDirectory;
+use crate::launch::{BaseBranch, LaunchDirectory};
 use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, ReadyIssue};
@@ -77,10 +77,9 @@ pub trait Outside {
     fn check_harness(&mut self) -> Result<()>;
     /// Record that the pass started `work`, on the Harness it checked.
     fn started(&mut self, work: Work);
-    /// Bring the Launch directory's checkout of the Base branch `base` up to
-    /// date with origin, if it is the branch checked out there: only a
-    /// warning if it can't.
-    fn pull(&mut self, base: &str);
+    /// Request the prepared Base branch's checkout update: only a warning
+    /// if it cannot fast-forward to its sampled origin commit.
+    fn pull(&mut self);
     /// Run the Architecture review session of the Base branch `base` on
     /// `prompt`, on the Harness the pass checked, to its final message,
     /// handing on the progress line `starting` once it is ready to start it,
@@ -104,6 +103,7 @@ pub trait Outside {
 /// and the User config `config`, which ask the run it dispatches.
 pub struct LaunchAndGitHub<'a> {
     pub launch: &'a LaunchDirectory,
+    pub base: &'a BaseBranch,
     pub repo: &'a Repo,
     /// Settled on the Harness's names for its Model and Effort once
     /// checked.
@@ -153,8 +153,8 @@ impl Outside for LaunchAndGitHub<'_> {
         logs::started(work, self.harness);
     }
 
-    fn pull(&mut self, base: &str) {
-        self.launch.pull(base);
+    fn pull(&mut self) {
+        self.base.pull();
     }
 
     /// The session runs in its own worktree, detached at `base`'s head on
@@ -256,8 +256,8 @@ mod in_memory {
         /// It recorded that it started work: on this issue, for a Pickup
         /// run, or on its repository, for an Architect run.
         Started(Option<u64>),
-        /// It pulled the Launch directory's checkout of this Base branch.
-        Pull(String),
+        /// It requested the prepared Base branch's checkout update.
+        Pull,
         /// It ran the Architecture review session of this Base branch on
         /// this prompt, handing on its starting line next.
         Review { base: String, prompt: String },
@@ -507,8 +507,8 @@ mod in_memory {
             self.calls.push(Call::Started(issue));
         }
 
-        fn pull(&mut self, base: &str) {
-            self.calls.push(Call::Pull(base.to_string()));
+        fn pull(&mut self) {
+            self.calls.push(Call::Pull);
         }
 
         fn review<T>(

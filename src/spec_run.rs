@@ -18,7 +18,7 @@ use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{Ended, Kind, Runs};
-use crate::delivery::{Delivery, Opening};
+use crate::delivery::{Delivery, Identified, Opening};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
@@ -143,7 +143,7 @@ fn review_and_deliver(
         catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
-    let delivered = outside.deliver(opening, |outside| outside.put_back(checklist));
+    let delivered = outside.deliver(opening, |outside, pr| outside.put_back(checklist, pr));
     if delivered.is_err() {
         outside.show(checklist);
     }
@@ -171,14 +171,14 @@ trait Outside {
     /// The Spec PR's URL, if it is open.
     fn spec_pr_url(&mut self) -> Option<String>;
     /// Put `checklist` back in the Spec PR's body.
-    fn put_back(&mut self, checklist: &str) -> Result<()>;
+    fn put_back(&mut self, checklist: &str, pr: &Identified) -> Result<()>;
     /// Take the Spec PR to its goal by the Delivery, opening with `opening`,
     /// running `before_ready` before the Spec PR is marked ready. Called at
     /// most once, after the Ticket loop.
     fn deliver(
         &mut self,
         opening: Opening,
-        before_ready: impl FnOnce(&mut Self) -> Result<()>,
+        before_ready: impl FnOnce(&mut Self, &Identified) -> Result<()>,
     ) -> Result<Reached, FailedRun>;
     /// Whether the Spec run was interrupted.
     fn interrupted(&mut self) -> bool;
@@ -274,8 +274,8 @@ impl Outside for ChildRunsAndGitHub<'_> {
         self.spec_pr.url().map(str::to_string)
     }
 
-    fn put_back(&mut self, checklist: &str) -> Result<()> {
-        self.spec_pr.put_back(checklist)
+    fn put_back(&mut self, checklist: &str, pr: &Identified) -> Result<()> {
+        self.spec_pr.put_back(checklist, pr)
     }
 
     /// Hands the worktree and the Delivery over, then lends `self` to
@@ -283,11 +283,15 @@ impl Outside for ChildRunsAndGitHub<'_> {
     fn deliver(
         &mut self,
         opening: Opening,
-        before_ready: impl FnOnce(&mut Self) -> Result<()>,
+        before_ready: impl FnOnce(&mut Self, &Identified) -> Result<()>,
     ) -> Result<Reached, FailedRun> {
         let worktree = self.worktree.take().expect("the Delivery starts once");
         let delivery = self.delivery.take().expect("the Delivery starts once");
-        delivery.deliver(worktree, opening, || before_ready(self))
+        let delivered = delivery.deliver(worktree, opening, |pr| before_ready(self, pr));
+        if let Some(pr) = delivered.pull_request {
+            self.spec_pr.follow(&pr);
+        }
+        delivered.outcome
     }
 
     fn interrupted(&mut self) -> bool {
@@ -628,7 +632,7 @@ mod tests {
             self.spec_pr_open.then(|| SPEC_PR.to_string())
         }
 
-        fn put_back(&mut self, checklist: &str) -> Result<()> {
+        fn put_back(&mut self, checklist: &str, _: &Identified) -> Result<()> {
             self.did.push(Did::PutBack(checklist.to_string()));
             if self.script.put_back_fails {
                 bail!("could not put the Tickets checklist back");
@@ -641,7 +645,7 @@ mod tests {
         fn deliver(
             &mut self,
             opening: Opening,
-            before_ready: impl FnOnce(&mut Self) -> Result<()>,
+            before_ready: impl FnOnce(&mut Self, &Identified) -> Result<()>,
         ) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
                 kind: opening.kind.to_string(),
@@ -651,7 +655,13 @@ mod tests {
             let delivered = if self.script.review_fails {
                 Err(anyhow!("the spec-review session failed"))
             } else {
-                before_ready(self)
+                before_ready(
+                    self,
+                    &Identified {
+                        number: 30,
+                        url: SPEC_PR.to_string(),
+                    },
+                )
             };
             let delivered = delivered.and_then(|()| {
                 self.did.push(Did::Ready);

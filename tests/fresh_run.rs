@@ -42,6 +42,51 @@ fn a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_push() {
 }
 
 #[test]
+fn a_clean_failed_acquisition_releases_its_claim_and_can_retry_without_starting_a_session() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+    scenario.repo_has_hook(
+        &scenario.launch_dir(),
+        "post-checkout",
+        "#!/bin/sh\necho 'checkout refused' >&2\nexit 1\n",
+    );
+
+    let failed = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(failed.code, Some(1), "stderr: {}", failed.stderr);
+    assert!(
+        failed.stderr.contains("checkout refused"),
+        "{}",
+        failed.stderr
+    );
+    assert_eq!(failed.stdout, "");
+    assert!(scenario.claude_calls().is_empty());
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/sessions")
+            .exists()
+    );
+    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    assert_eq!(scenario.origin_log("issue-7"), None);
+    assert_eq!(scenario.gh_state()["prs"], serde_json::json!([]));
+    scenario.assert_cleaned_up("issue-7");
+
+    scenario.repo_has_hook(
+        &scenario.launch_dir(),
+        "post-checkout",
+        "#!/bin/sh\nexit 0\n",
+    );
+    let retry = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(retry.code, Some(0), "stderr: {}", retry.stderr);
+    assert_eq!(retry.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
 fn runs_claude_headless_in_auto_mode_in_a_sibling_worktree_on_the_issue_branch() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
