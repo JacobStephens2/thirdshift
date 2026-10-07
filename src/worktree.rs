@@ -99,7 +99,6 @@ pub struct Worktree {
     checkout: ownership::Checkout,
     launch: Git,
     branch: String,
-    git: Git,
     /// Per-instance identity: a later worktree at the same path must not
     /// consume this one's observations. No lock is held by an observation.
     synchronization_owner: Arc<()>,
@@ -146,14 +145,13 @@ impl Worktree {
             checkout,
             launch: Git::new(root),
             branch: branch.to_string(),
-            git: Git::new(path),
             synchronization_owner: Arc::new(()),
             kept: false,
         })
     }
 
     pub fn path(&self) -> &Path {
-        self.git.dir()
+        self.checkout.path()
     }
 
     pub fn branch(&self) -> &str {
@@ -170,7 +168,8 @@ impl Worktree {
     /// gates the PR, so a local hook doesn't decide whether work reaches
     /// origin.
     pub fn push(&self) -> Result<()> {
-        self.git.push(&self.branch)
+        self.checkout
+            .ordinary(&self.launch, |operation| operation.push(&self.branch))
     }
 
     /// Preserve all work from a Failed run against the last-fetched Base
@@ -192,23 +191,17 @@ impl Worktree {
     /// Delete the Issue branch on origin, or do nothing if it is already gone
     /// there, e.g. deleted by GitHub after a merge. Hooks are skipped, as for
     /// [`Worktree::push`]. This finishes a confirmed Self-merge, including
-    /// the origin read that reconciles a failed deletion.
+    /// the origin read that reconciles a failed deletion, through the captured
+    /// Launch repository even if the acquired checkout is no longer valid.
     pub fn delete_from_origin(&self) -> Result<()> {
         progress::step(format_args!("deleting {} on origin", self.branch));
-        let git = self.git.completion();
-        let Err(error) = git.run(&["push", "--no-verify", "origin", "--delete", &self.branch])
-        else {
-            return Ok(());
-        };
-        match git.on_origin(&self.branch) {
-            Ok(false) => Ok(()),
-            _ => Err(error),
-        }
+        self.checkout.delete_from_origin(&self.launch, &self.branch)
     }
 
     /// The Issue branch's head commit.
     pub fn head(&self) -> Result<String> {
-        self.git.run(&["rev-parse", "HEAD"])
+        self.checkout
+            .ordinary(&self.launch, |operation| operation.head())
     }
 
     /// Fetch and sample `origin/<base>`, then merge that commit into the
@@ -216,7 +209,9 @@ impl Worktree {
     /// comparison, including when the merge had nothing to do.
     pub fn merge_base_branch(&self, base: &str) -> Result<Merge> {
         progress::step(format_args!("merging origin/{base} into {}", self.branch));
-        self.merge(self.sample_origin(base)?)
+        self.checkout.ordinary(&self.launch, |operation| {
+            operation.merge(operation.sample_origin(base)?, &self.branch)
+        })
     }
 
     /// Fetch the Issue branch from origin and list, oldest first, the commits
@@ -224,22 +219,23 @@ impl Worktree {
     /// the exact heads and readable upstream label. Does not change the
     /// local head; a caller may refuse the batch before merging it.
     pub fn new_commits_on_origin(&self) -> Result<ForeignCommits> {
-        let origin = self.sample_origin(&self.branch)?;
-        let local_head = self.head()?;
-        let mut observed = ForeignCommits {
-            owner: Arc::clone(&self.synchronization_owner),
-            origin,
-            local_head,
-            commits: Vec::new(),
-        };
-        let range = format!("{}..{}", observed.local_head(), observed.origin_head());
-        observed.commits = self
-            .git
-            .run(&["rev-list", "--reverse", &range])?
-            .lines()
-            .map(String::from)
-            .collect();
-        Ok(observed)
+        self.checkout.ordinary(&self.launch, |operation| {
+            let origin = operation.sample_origin(&self.branch)?;
+            let local_head = operation.head()?;
+            let mut observed = ForeignCommits {
+                owner: Arc::clone(&self.synchronization_owner),
+                origin,
+                local_head,
+                commits: Vec::new(),
+            };
+            let range = format!("{}..{}", observed.local_head(), observed.origin_head());
+            observed.commits = operation
+                .run(&["rev-list", "--reverse", &range])?
+                .lines()
+                .map(String::from)
+                .collect();
+            Ok(observed)
+        })
     }
 
     /// Fetch the Issue branch from origin and fast-forward the local one to
@@ -249,57 +245,29 @@ impl Worktree {
             "updating {} from origin/{}",
             self.branch, self.branch
         ));
-        let origin = self.sample_origin(&self.branch)?;
-        self.git
-            .run(&["merge", "--ff-only", "--quiet", &origin.commit])?;
-        Ok(())
+        self.checkout.ordinary(&self.launch, |operation| {
+            let origin = operation.sample_origin(&self.branch)?;
+            operation.run(&["merge", "--ff-only", "--quiet", &origin.commit])?;
+            Ok(())
+        })
     }
 
     /// Consume this Worktree's observation, merging its sampled origin head.
     /// Refuse before mutation if it belongs to another worktree or the local
     /// head has changed since observation.
     pub fn merge_new_commits(&self, observed: ForeignCommits) -> Result<Merge> {
-        if !Arc::ptr_eq(&observed.owner, &self.synchronization_owner) {
-            bail!("the Foreign commit observation belongs to another worktree");
-        }
-        if self.head()? != observed.local_head() {
-            bail!(
-                "the local head changed since observing {}",
-                observed.upstream()
-            );
-        }
-        self.merge(observed.origin)
-    }
-
-    /// Fetch, then resolve a fully qualified remote-tracking ref once. Every
-    /// calculation and mutation after this sample uses the commit ID, so
-    /// sibling fetches and shadowing local names cannot change its meaning.
-    fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
-        self.git.fetch(&[branch])?;
-        fetched_origin(&self.git, branch)
-    }
-
-    /// Merge the sampled origin commit into the Issue branch, never rebase, so
-    /// pushing it is always a fast-forward. `--ff` keeps a user's
-    /// `merge.ff = only` from turning a clean merge into an error.
-    fn merge(&self, origin: OriginCommit) -> Result<Merge> {
-        let upstream = &origin.upstream;
-        let message = format!(
-            "Merge remote-tracking branch '{upstream}' into {}",
-            self.branch
-        );
-        match self
-            .git
-            .run(&["merge", "--no-edit", "--ff", "-m", &message, &origin.commit])
-        {
-            Ok(_) => Ok(Merge::Clean {
-                commit: origin.commit,
-            }),
-            Err(_) if self.git.merge_in_progress()? => {
-                Ok(Merge::Conflicted(PendingMerge { origin }))
+        self.checkout.ordinary(&self.launch, |operation| {
+            if !Arc::ptr_eq(&observed.owner, &self.synchronization_owner) {
+                bail!("the Foreign commit observation belongs to another worktree");
             }
-            Err(error) => Err(error),
-        }
+            if operation.head()? != observed.local_head() {
+                bail!(
+                    "the local head changed since observing {}",
+                    observed.upstream()
+                );
+            }
+            operation.merge(observed.origin, &self.branch)
+        })
     }
 
     /// Fail unless the commit of a conflicted merge is merged into the Issue
@@ -307,27 +275,25 @@ impl Worktree {
     /// aborted it. The upstream may have moved on since; merging that is the
     /// next round's work.
     pub fn ensure_merged(&self, pending: &PendingMerge) -> Result<()> {
-        let upstream = &pending.origin.upstream;
-        if self.git.merge_in_progress()? {
-            bail!("the merge of {upstream} is still in progress");
-        }
-        if !self.merged(&pending.origin.commit)? {
-            bail!("{upstream} is not merged into {}", self.branch);
-        }
-        Ok(())
+        self.checkout.ordinary(&self.launch, |operation| {
+            let upstream = &pending.origin.upstream;
+            if operation.merge_in_progress()? {
+                bail!("the merge of {upstream} is still in progress");
+            }
+            if !operation.merged(&pending.origin.commit)? {
+                bail!("{upstream} is not merged into {}", self.branch);
+            }
+            Ok(())
+        })
     }
 
     /// Fetch `origin/<base>` and say whether it has commits the Issue branch
     /// has not merged yet.
     pub fn base_branch_moved(&self, base: &str) -> Result<bool> {
-        let origin = self.sample_origin(base)?;
-        Ok(!self.merged(&origin.commit)?)
-    }
-
-    /// Whether `rev` is fully merged into the Issue branch.
-    fn merged(&self, rev: &str) -> Result<bool> {
-        self.git
-            .succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"])
+        self.checkout.ordinary(&self.launch, |operation| {
+            let origin = operation.sample_origin(base)?;
+            Ok(!operation.merged(&origin.commit)?)
+        })
     }
 }
 

@@ -1,4 +1,4 @@
-//! Pin the acquired checkout instance; preserve and dispose of only that instance.
+//! Own checked synchronization, preservation and disposal of the acquired instance.
 
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{SecondsFormat, Utc};
 
 use super::acquisition::registrations;
-use super::{local_head, lock_launch};
+use super::{Merge, OriginCommit, PendingMerge, local_head, lock_launch};
 use crate::git::Git;
 use crate::host;
 use crate::progress;
@@ -42,6 +42,75 @@ impl Checkout {
 
     pub(super) fn path(&self) -> &Path {
         &self.root.path
+    }
+
+    /// One interruptible operation owns the lock, including observations and
+    /// no-op returns. Fetch takes its refs lock inside this scope, in that order.
+    pub(super) fn ordinary<T>(
+        &self,
+        launch: &Git,
+        perform: impl FnOnce(&Operation<'_>) -> Result<T>,
+    ) -> Result<T> {
+        crate::interrupt::check()?;
+        self.verify_repository(&launch.completion())
+            .with_context(|| self.operation_context())?;
+        let lock = lock_launch(launch);
+        crate::interrupt::check()?;
+        let _lock = lock.with_context(|| self.operation_context())?;
+        let operation = Operation {
+            checkout: self,
+            launch,
+            git: Git::new(self.path()),
+        };
+        operation.inspect()?;
+        let result = perform(&operation);
+        operation.inspect()?;
+        result
+    }
+
+    fn operation_context(&self) -> String {
+        format!(
+            "cannot synchronize acquired checkout {} on expected Issue branch {}",
+            self.path().display(),
+            self.branch.as_deref().unwrap_or("unknown"),
+        )
+    }
+
+    fn verify_repository(&self, launch: &Git) -> Result<()> {
+        self.common.verify().context("common repository identity")?;
+        if launch.common_dir()?.canonicalize()? != self.common.path {
+            bail!("launch no longer belongs to the captured common repository");
+        }
+        self.common.verify()?;
+        Ok(())
+    }
+
+    /// A confirmed Self-merge authorizes completion in the captured repository,
+    /// independently of checkout attachment, root and administrative identity.
+    pub(super) fn delete_from_origin(&self, launch: &Git, branch: &str) -> Result<()> {
+        let launch = launch.completion();
+        let verify = || {
+            self.verify_repository(&launch).with_context(|| {
+                format!(
+                    "cannot delete expected Issue branch {branch} for acquired checkout {}",
+                    self.path().display()
+                )
+            })
+        };
+        verify()?;
+        let result = launch.run(&["push", "--no-verify", "origin", "--delete", branch]);
+        verify()?;
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let present = launch.on_origin(branch);
+                verify()?;
+                match present {
+                    Ok(false) => Ok(()),
+                    _ => Err(error),
+                }
+            }
+        }
     }
 
     pub(super) fn preserve_failed_run(&self, launch: &Git, base: &str, reason: &str) -> Result<()> {
@@ -232,10 +301,7 @@ impl Checkout {
         self.admin
             .verify()
             .context("administrative directory identity")?;
-        self.common.verify().context("common repository identity")?;
-        if launch.common_dir()?.canonicalize()? != self.common.path {
-            bail!("launch no longer belongs to the captured common repository");
-        }
+        self.verify_repository(launch)?;
         let entries = registrations(launch)?;
         let entry = entries
             .iter()
@@ -263,6 +329,12 @@ impl Checkout {
         {
             bail!("administrative Git backlink became a symlink");
         }
+        if fs::symlink_metadata(self.admin.path.join("commondir"))?
+            .file_type()
+            .is_symlink()
+        {
+            bail!("administrative common repository link became a symlink");
+        }
         let git = Git::new(self.path()).completion();
         let head = git.run(&["rev-parse", "--verify", "HEAD"])?;
         let backlink = fs::read_to_string(self.admin.path.join("gitdir"))?;
@@ -286,6 +358,81 @@ impl Checkout {
         self.admin.verify()?;
         self.common.verify()?;
         Ok(head)
+    }
+}
+
+/// Git execution cannot escape this acquired operation. Inspection before and
+/// after every command gates later commands and even successful no-op results.
+/// Advisory locks coordinate factory operations, not arbitrary outside writers.
+pub(super) struct Operation<'a> {
+    checkout: &'a Checkout,
+    launch: &'a Git,
+    git: Git,
+}
+
+impl Operation<'_> {
+    fn inspect(&self) -> Result<String> {
+        crate::interrupt::check()?;
+        let result = self
+            .checkout
+            .inspect(&self.launch.completion())
+            .with_context(|| self.checkout.operation_context());
+        crate::interrupt::check()?;
+        result
+    }
+
+    fn execute<T>(&self, command: impl FnOnce(&Git) -> Result<T>) -> Result<T> {
+        self.inspect()?;
+        let result = command(&self.git);
+        self.inspect()?;
+        result
+    }
+
+    pub(super) fn run(&self, args: &[&str]) -> Result<String> {
+        self.execute(|git| git.run(args))
+    }
+
+    pub(super) fn head(&self) -> Result<String> {
+        self.inspect()
+    }
+
+    pub(super) fn push(&self, branch: &str) -> Result<()> {
+        self.execute(|git| git.push(branch))
+    }
+
+    pub(super) fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
+        self.execute(|git| git.fetch(&[branch]))?;
+        let upstream = format!("origin/{branch}");
+        let commit = self.run(&[
+            "rev-parse",
+            "--verify",
+            &format!("refs/remotes/{upstream}^{{commit}}"),
+        ])?;
+        Ok(OriginCommit { upstream, commit })
+    }
+
+    pub(super) fn merge_in_progress(&self) -> Result<bool> {
+        self.execute(Git::merge_in_progress)
+    }
+
+    pub(super) fn merged(&self, rev: &str) -> Result<bool> {
+        self.execute(|git| git.succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"]))
+    }
+
+    /// Merge the exact sampled commit, preserving the readable upstream label
+    /// and allowing a merge even when the repository config demands ff-only.
+    pub(super) fn merge(&self, origin: OriginCommit, branch: &str) -> Result<Merge> {
+        let message = format!(
+            "Merge remote-tracking branch '{}' into {branch}",
+            origin.upstream
+        );
+        match self.run(&["merge", "--no-edit", "--ff", "-m", &message, &origin.commit]) {
+            Ok(_) => Ok(Merge::Clean {
+                commit: origin.commit,
+            }),
+            Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge { origin })),
+            Err(error) => Err(error),
+        }
     }
 }
 
