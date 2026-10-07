@@ -11,13 +11,14 @@ You are continuing work on branch <branch>, which already has commits (see git l
 
 The base branch is <base>. Review with the `thirdshift-code-review` skill using <base> as the fixed point.
 
-Address the Standards and Spec findings you agree with.
+For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
+Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).
 
 Push branch <branch>.
 
 Create a pull request against <base> using the `thirdshift-pr` skill, marked ready for review.
 
-In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 
 Include "Closes #<n>" in the PR body.
 

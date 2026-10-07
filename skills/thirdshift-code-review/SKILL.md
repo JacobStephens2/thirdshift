@@ -18,7 +18,7 @@ The issue tracker should have been provided to you. If `docs/agents/issue-tracke
 
 Whatever the user said is the fixed point (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.).
 
-Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also capture the changed-file list via `git diff --name-only <fixed-point>...HEAD` and the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside two parallel sub-agents.
 
@@ -57,23 +57,39 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn both sub-agents in parallel
 
+Include this shared reporting instruction in **both sub-agent prompts**:
+
+> List the files you read, using repository-relative paths, including supporting files. For a deleted file, read its removed contents in the pinned diff and list the deleted path. For every finding that says behaviour is wrong, include a test or command, written out in full, that fails if the finding is right. Keep the prose under 800 words; written-out tests, commands and files-read lists are outside that limit.
+
 **Standards sub-agent prompt** should include:
 
 - The full diff command and commit list.
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full (the sub-agent has no other access to it).
-- The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+- The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces."
 
 **Spec sub-agent prompt** should include:
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding."
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 
-### 5. Aggregate
+### 5. Close unread changed files once
+
+Compare each reviewer's files-read list with the changed-file list captured in step 1. For each reviewer with changed files absent from its list, send all those missing files back to that reviewer in **one follow-up**, scoped to those files and retaining its axis's brief and reporting instruction. Ask for any additional findings and the list of files it read on this pass.
+
+On a Harness where a finished sub-agent cannot be asked again, spawn a fresh one with the same axis's brief and context, scoped to read just those missing changed files.
+
+Combine each axis's initial and follow-up files-read lists, then compare again with the original changed-file list. Any changed file still absent is **unread**: report it in step 6. Each axis gets at most one follow-up or replacement; remaining gaps are reported, not retried.
+
+### 6. Aggregate
 
 Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
+
+Include the final files-read list for each reviewer and name every changed file still unread under its axis, or explicitly say none is unread. Include findings from the follow-up in the same axis as its initial report.
+
+If the Session prompt names a place for the reviewers' reports, write the final Standards report to its `standards.md` and the final Spec report to its `spec.md`. Each file includes that axis's initial and follow-up findings, its combined files-read list, and any changed files still unread (or explicitly none). Write both reports even when there are no findings. When the prompt names no place, report in the conversation only.
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 

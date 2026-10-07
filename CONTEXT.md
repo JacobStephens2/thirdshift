@@ -48,7 +48,7 @@ A finding from the Standards axis of a code review: the change breaks a document
 A finding from the Spec axis of a code review: the change is missing, gets wrong, or goes beyond what the issue asked for.
 
 **Unaddressed finding**:
-A **Standards finding** or **Spec finding** the agent chose not to fix. It is listed in the pull request body so a human can decide on it.
+A **Standards finding** or **Spec finding** the agent chose not to fix, listed in the pull request body with what refutes it: a line of code, a plan decision, an ADR or a run that exercises the finding. When a Spec or the Day shift must decide, the entry instead links the `needs-triage` issue filed for that decision, or the open issue already covering it.
 
 **Spec**:
 An issue describing a multi-session piece of work, what is being built rather than how each session does its share, made of **Tickets**: its GitHub sub-issues. See [Spec](https://www.aihero.dev/ai-coding-dictionary/spec) in Matt Pocock's AI Coding Dictionary.
@@ -196,7 +196,7 @@ A commit that appears on the **Issue branch** during a **Run** and was made neit
 A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. A Resume that ends the same way gets no second Resume and does not fail the **Run**: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the steps that follow decide the outcome. If the Run is then a **Failed run**, its cause names the killed work ahead of the step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
 
 **Session log**:
-The full transcript of one agent session, one per session, a **Resume** and each **Repair** included. Kept with its repository's other logs, named for the session's kind and stamped with the local time its command started, so all of a command's Session logs sort together.
+The full transcript of one agent session, one per session, a **Resume** and each **Repair** included. Kept with its repository's other logs, named for the session's kind and stamped with the local time its command started, so all of a command's Session logs sort together. A session that ran the code review has its reviewers' reports kept beside its Session log.
 _Avoid_: transcript, session file
 
 **Command**:
