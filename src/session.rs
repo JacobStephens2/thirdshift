@@ -157,7 +157,15 @@ impl<'a> Sessions<'a> {
     /// one, if anything.
     pub fn run_to_final_message(&self, kind: &str, prompt: &str) -> Result<Option<String>> {
         let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
-            Some(ReviewReports::new(self.worktree)?)
+            match ReviewReports::new(self.worktree) {
+                Ok(reports) => Some(reports),
+                Err(error) => {
+                    self.step(format!(
+                        "{kind}: could not prepare review reports: {error:#}; carrying on"
+                    ));
+                    None
+                }
+            }
         } else {
             None
         };
@@ -204,7 +212,10 @@ impl<'a> Sessions<'a> {
         let log = self.logs.path(kind);
         self.step(format!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
-        let prompt = reports.map_or_else(|| prompt.to_string(), |reports| reports.prompt(prompt));
+        let prompt = reports.map_or_else(
+            || prompt.replace(prompt::REVIEW_REPORTS, ""),
+            |reports| reports.prompt(prompt),
+        );
         let ended = self
             .outside
             .borrow_mut()

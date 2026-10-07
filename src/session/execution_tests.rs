@@ -453,3 +453,60 @@ fn a_failed_session_still_keeps_whichever_review_report_it_left() {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
 }
+
+#[test]
+fn unavailable_report_setup_warns_and_the_run_carries_on() {
+    if let Some(root) = std::env::var_os(FIXTURE) {
+        let root = Path::new(&root);
+        logs::begin(logs::Begin::ChildRun("fixture"));
+        let worktree = root.join("worktree");
+        fs::create_dir(&worktree).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .arg(&worktree)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let logs = Logs {
+            name: "7".into(),
+            dir: root.join("logs"),
+        };
+        let choice = Choice {
+            harness: Harness::OpenCode,
+            ..Choice::default()
+        };
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let (result, log) = Sessions::within(&logs, &worktree, &choice, |sessions| {
+            // Skills are already linked. Only adding the report ignore pattern fails.
+            let exclude = worktree.join(".git/info/exclude");
+            let original_permissions = fs::metadata(&exclude).unwrap().permissions();
+            fs::set_permissions(&exclude, fs::Permissions::from_mode(0o444)).unwrap();
+            let result = sessions.run("implement", &prompt::fresh(&issue, "main", "issue-7"));
+            fs::set_permissions(&exclude, original_permissions).unwrap();
+            result?;
+            fs::write(root.join("carried-on"), "").unwrap();
+            Ok(())
+        });
+        result.unwrap();
+        assert!(log.unwrap().exists());
+        assert!(root.join("carried-on").exists());
+        let received = fs::read_to_string(root.join("prompts")).unwrap();
+        assert!(!received.contains(prompt::REVIEW_REPORTS_DIRECTORY));
+        assert!(!received.contains("Write the reviewers' reports"));
+        assert!(received.contains("run its test or command as written"));
+        return;
+    }
+    let fixture = review_fixture("#!/bin/bash\ncat > \"$THIRDSHIFT_SESSION_TEST_DIR/prompts\"\n");
+    let output = fixture
+        .command("session::execution_tests::unavailable_report_setup_warns_and_the_run_carries_on")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("could not prepare review reports"),
+        "{stderr}"
+    );
+}
