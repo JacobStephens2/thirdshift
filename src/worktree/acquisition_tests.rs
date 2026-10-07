@@ -1924,3 +1924,217 @@ fi
         }
     }
 }
+
+#[test]
+fn a_failed_initial_capture_never_authorizes_a_replacement() {
+    const NAME: &str =
+        "worktree::acquisition_tests::a_failed_initial_capture_never_authorizes_a_replacement";
+    if crate::test_support::git_fault(
+        NAME,
+        r#"
+case "$PWD" in
+  */work-issue-7|*/work-architect)
+    if test "$1" = rev-parse && test "$2" = --absolute-git-dir && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+      touch "$THIRDSHIFT_FAULT_MARKER"
+      mv "$PWD" "$PWD.original"
+      cp -R "$PWD.original" "$PWD"
+    fi
+    ;;
+esac
+"#,
+    )
+    .is_some()
+    {
+        return;
+    }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in KINDS {
+        let (temp, launch, start) = kind.prepare();
+
+        let error = kind.acquire(&launch).unwrap_err();
+
+        assert!(marker.exists(), "{kind:?}: capture replacement did not run");
+        assert!(
+            error.to_string().contains("replaced"),
+            "{kind:?}: {error:#}"
+        );
+        let path = kind.path(&temp);
+        assert!(
+            path.exists(),
+            "{kind:?}: replacement checkout was removed: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("tracked.txt")).unwrap(),
+            "baseline\n"
+        );
+        assert!(
+            launch
+                .run(&["worktree", "list", "--porcelain"])
+                .unwrap()
+                .contains(path.to_str().unwrap()),
+            "{kind:?}: replacement registration was removed: {error:#}"
+        );
+        assert!(
+            error.to_string().contains("retaining checkout"),
+            "{kind:?}: {error:#}"
+        );
+        if !matches!(kind, AcquisitionKind::Review) {
+            assert_eq!(
+                local_head(&launch, BRANCH).unwrap().as_deref(),
+                Some(start.as_str()),
+                "{kind:?}: branch behind retained replacement was removed"
+            );
+        }
+        std::fs::remove_file(&marker).unwrap();
+    }
+}
+
+#[test]
+fn recovery_retains_a_path_recreated_during_final_registration_observation() {
+    const NAME: &str = "worktree::acquisition_tests::recovery_retains_a_path_recreated_during_final_registration_observation";
+    if crate::test_support::git_fault(
+        NAME,
+        r#"
+if test "$1" = worktree && test "$2" = remove; then
+  touch "$THIRDSHIFT_FAULT_MARKER.checkout"
+fi
+if test "$1" = worktree && test "$2" = list && test -e "$THIRDSHIFT_FAULT_MARKER.checkout"; then
+  count=0
+  if test -e "$THIRDSHIFT_FAULT_MARKER.count"; then
+    count=$(cat "$THIRDSHIFT_FAULT_MARKER.count")
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$THIRDSHIFT_FAULT_MARKER.count"
+  if test "$count" = 3; then
+    touch "$THIRDSHIFT_FAULT_MARKER"
+    mkdir ../work-issue-7
+    printf 'later work\n' > ../work-issue-7/work.txt
+  fi
+fi
+"#,
+    )
+    .is_some()
+    {
+        return;
+    }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    let kind = AcquisitionKind::Fresh;
+    let (temp, launch, start) = kind.prepare();
+    checkout_hook(&temp, "");
+
+    let error = kind.acquire(&launch).unwrap_err();
+
+    assert!(marker.exists(), "injection did not run: {error:#}");
+    assert_eq!(
+        std::fs::read_to_string(kind.path(&temp).join("work.txt")).unwrap(),
+        "later work\n"
+    );
+    assert_eq!(
+        local_head(&launch, BRANCH).unwrap().as_deref(),
+        Some(start.as_str()),
+        "recreated path must retain the expected branch: {error:#}"
+    );
+}
+
+#[test]
+fn an_absent_branch_still_reports_a_recreated_checkout() {
+    const NAME: &str =
+        "worktree::acquisition_tests::an_absent_branch_still_reports_a_recreated_checkout";
+    if crate::test_support::git_fault(
+        NAME,
+        r#"
+if test "$1" = worktree && test "$2" = remove; then
+  "$THIRDSHIFT_REAL_GIT" "$@"
+  touch "$THIRDSHIFT_FAULT_MARKER.checkout"
+  exit 0
+fi
+if test "$1" = for-each-ref && test -e "$THIRDSHIFT_FAULT_MARKER.checkout" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  "$THIRDSHIFT_REAL_GIT" update-ref --no-deref -d refs/heads/issue-7
+  mkdir ../work-issue-7
+  printf 'later work\n' > ../work-issue-7/work.txt
+fi
+"#,
+    )
+    .is_some()
+    {
+        return;
+    }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in [AcquisitionKind::Fresh, AcquisitionKind::ContinuationAbsent] {
+        let (temp, launch, _) = kind.prepare();
+        checkout_hook(&temp, "");
+
+        let error = kind.acquire(&launch).unwrap_err();
+
+        assert!(marker.exists(), "{kind:?}: injection did not run");
+        let path = kind.path(&temp);
+        assert_eq!(
+            std::fs::read_to_string(path.join("work.txt")).unwrap(),
+            "later work\n"
+        );
+        assert!(local_head(&launch, BRANCH).unwrap().is_none());
+        assert!(
+            error
+                .root_cause()
+                .to_string()
+                .contains("checkout hook refused"),
+            "{kind:?}: original acquisition cause was replaced: {error:#}"
+        );
+        assert!(
+            error.to_string().contains("retaining"),
+            "{kind:?}: recreated unregistered checkout was silently retained: {error:#}"
+        );
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::remove_file(marker.with_extension("checkout")).unwrap();
+    }
+}
+
+#[test]
+fn recovery_retains_paths_recreated_during_final_repository_observation() {
+    const NAME: &str = "worktree::acquisition_tests::recovery_retains_paths_recreated_during_final_repository_observation";
+    if crate::test_support::git_fault(NAME, r#"
+if test "$1" = worktree && test "$2" = remove; then
+  touch "$THIRDSHIFT_FAULT_MARKER.checkout"
+fi
+if test "$1" = worktree && test "$2" = list && test -e "$THIRDSHIFT_FAULT_MARKER.checkout"; then
+  count=0
+  if test -e "$THIRDSHIFT_FAULT_MARKER.count"; then count=$(cat "$THIRDSHIFT_FAULT_MARKER.count"); fi
+  count=$((count + 1))
+  printf '%s' "$count" > "$THIRDSHIFT_FAULT_MARKER.count"
+  if test "$count" = 3; then touch "$THIRDSHIFT_FAULT_MARKER.final"; fi
+fi
+if test "$1" = rev-parse && test "$2" = --git-common-dir && test -e "$THIRDSHIFT_FAULT_MARKER.final" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  count=0
+  if test -e "$THIRDSHIFT_FAULT_MARKER.repository"; then count=$(cat "$THIRDSHIFT_FAULT_MARKER.repository"); fi
+  count=$((count + 1))
+  printf '%s' "$count" > "$THIRDSHIFT_FAULT_MARKER.repository"
+  if test "$count" = 3; then
+    touch "$THIRDSHIFT_FAULT_MARKER"
+    mkdir ../work-issue-7
+    printf 'later work\n' > ../work-issue-7/work.txt
+  fi
+fi
+"#).is_some() { return; }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in [AcquisitionKind::Fresh, AcquisitionKind::ContinuationAbsent] {
+        let (temp, launch, start) = kind.prepare();
+        checkout_hook(&temp, "");
+
+        let error = kind.acquire(&launch).unwrap_err();
+
+        assert!(marker.exists());
+        assert_eq!(
+            std::fs::read_to_string(kind.path(&temp).join("work.txt")).unwrap(),
+            "later work\n"
+        );
+        assert_eq!(
+            local_head(&launch, BRANCH).unwrap().as_deref(),
+            Some(start.as_str()),
+            "{kind:?}: {error:#}"
+        );
+        for suffix in ["", ".checkout", ".count", ".final", ".repository"] {
+            std::fs::remove_file(format!("{}{suffix}", marker.display())).unwrap();
+        }
+    }
+}

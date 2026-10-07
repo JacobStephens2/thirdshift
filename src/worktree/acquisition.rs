@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::local_head;
-use super::ownership::{Checkout, Directory};
+use super::ownership::{Checkout, Directory, remove_local_ref};
 use crate::git::Git;
 
 pub(super) fn add(
@@ -37,21 +37,20 @@ pub(super) fn add(
     // Arm before the first possible mutation, including unwinding in Git.
     owner.armed = true;
     match launch.run(&args).and_then(|_| {
-        owner.checkout = Some(Checkout::capture(launch, path, branch)?);
+        owner.capture_checkout(launch)?;
         if branch.is_none() {
-            owner.publication.publish(
-                launch,
-                owner
-                    .checkout
-                    .as_ref()
-                    .context("missing captured checkout")?,
-            )?;
+            owner
+                .publication
+                .publish(launch, owner.checkout.captured()?)?;
         }
         Ok(())
     }) {
         Ok(()) => {
             owner.armed = false;
-            owner.checkout.take().context("missing captured checkout")
+            match std::mem::replace(&mut owner.checkout, CheckoutCapture::Unattempted) {
+                CheckoutCapture::Complete(checkout) => Ok(checkout),
+                _ => bail!("missing captured checkout"),
+            }
         }
         Err(cause) => {
             let retained = owner.recover();
@@ -75,7 +74,7 @@ struct Acquisition<'a> {
     registered_before: bool,
     branch_before: Option<String>,
     common: Directory,
-    checkout: Option<Checkout>,
+    checkout: CheckoutCapture,
     publication: super::ownership::Publication,
     armed: bool,
 }
@@ -117,10 +116,19 @@ impl<'a> Acquisition<'a> {
             registered_before,
             branch_before,
             common,
-            checkout: None,
+            checkout: CheckoutCapture::Unattempted,
             publication: super::ownership::Publication::default(),
             armed: false,
         })
+    }
+
+    fn capture_checkout(&mut self, launch: &Git) -> Result<()> {
+        // Retain incomplete capture even during unwinding: it cannot grant
+        // a replacement a fresh identity on entry to recovery.
+        self.checkout = CheckoutCapture::Incomplete;
+        let checkout = Checkout::capture(launch, self.path, self.branch)?;
+        self.checkout = CheckoutCapture::Complete(checkout);
+        Ok(())
     }
 
     fn recover(&mut self) -> Vec<String> {
@@ -130,6 +138,21 @@ impl<'a> Acquisition<'a> {
             launch,
         }
         .run()
+    }
+}
+
+enum CheckoutCapture {
+    Unattempted,
+    Incomplete,
+    Complete(Checkout),
+}
+
+impl CheckoutCapture {
+    fn captured(&self) -> Result<&Checkout> {
+        match self {
+            Self::Complete(checkout) => Ok(checkout),
+            _ => bail!("checkout ownership capture is incomplete; current head unknown"),
+        }
     }
 }
 
@@ -152,13 +175,7 @@ impl Recovery<'_, '_> {
         let outcome = match self.recover_checkout() {
             Ok(outcome) => Some(outcome),
             Err(error) => {
-                let owner = &self.acquisition;
-                retained.push(format!(
-                    "retaining checkout {} (expected {} at {}): {error:#}",
-                    owner.path.display(),
-                    owner.branch.unwrap_or("detached HEAD"),
-                    owner.start,
-                ));
+                retained.push(self.checkout_diagnostic(&error));
                 None
             }
         };
@@ -172,7 +189,26 @@ impl Recovery<'_, '_> {
                 owner.start,
             ));
         }
+        // Even an already-absent ref grants no permission to hide a changed
+        // checkout outcome. Report resources that appeared during ref inspection.
+        if let Some(outcome) = outcome
+            && let Err(error) = self
+                .verify_outcome(outcome)
+                .context("final checkout outcome is uncertain; current checkout head unknown")
+        {
+            retained.push(self.checkout_diagnostic(&error));
+        }
         retained
+    }
+
+    fn checkout_diagnostic(&self, error: &anyhow::Error) -> String {
+        let owner = &self.acquisition;
+        format!(
+            "retaining checkout {} (expected {} at {}): {error:#}",
+            owner.path.display(),
+            owner.branch.unwrap_or("detached HEAD"),
+            owner.start,
+        )
     }
 
     fn verify_repository(&self) -> Result<()> {
@@ -216,9 +252,10 @@ impl Recovery<'_, '_> {
             if entry.head.as_deref() != Some(owner.start) {
                 bail!("checkout HEAD changed from the sampled {}", owner.start);
             }
-            if owner.checkout.is_none() {
-                owner.checkout = Some(Checkout::capture(&self.launch, owner.path, owner.branch)?);
+            if matches!(owner.checkout, CheckoutCapture::Unattempted) {
+                owner.capture_checkout(&self.launch)?;
             }
+            owner.checkout.captured()?;
             Ok(())
         };
         capture().context(identity.clone())?;
@@ -248,10 +285,7 @@ impl Recovery<'_, '_> {
     fn verify_clean_checkout(&self) -> Result<()> {
         self.verify_repository()?;
         let owner = &self.acquisition;
-        let checkout = owner
-            .checkout
-            .as_ref()
-            .context("checkout identity unknown")?;
+        let checkout = owner.checkout.captured()?;
         let head = checkout.inspect(&self.launch)?;
         if head != owner.start {
             bail!(
@@ -301,7 +335,8 @@ impl Recovery<'_, '_> {
                 owner.start
             );
         }
-        self.verify_repository()
+        self.verify_repository()?;
+        checkout.verify_directory_identity()
     }
 
     fn verify_outcome(&self, outcome: CheckoutOutcome) -> Result<Vec<Registration>> {
@@ -309,7 +344,9 @@ impl Recovery<'_, '_> {
         let owner = &self.acquisition;
         let entries = match outcome {
             CheckoutOutcome::NoEffect => {
-                if owner.checkout.is_some() || owner.registered_before {
+                if !matches!(owner.checkout, CheckoutCapture::Unattempted)
+                    || owner.registered_before
+                {
                     bail!("original checkout registration disappeared; head unknown");
                 }
                 let entries = registrations(&self.launch)?;
@@ -319,19 +356,26 @@ impl Recovery<'_, '_> {
                 {
                     bail!("unexpected checkout registration appeared; head unknown");
                 }
+                entries
+            }
+            CheckoutOutcome::Removed => owner.checkout.captured()?.verify_removed(&self.launch)?,
+        };
+        self.verify_repository()?;
+        self.verify_outcome_paths(outcome)?;
+        Ok(entries)
+    }
+
+    fn verify_outcome_paths(&self, outcome: CheckoutOutcome) -> Result<()> {
+        let owner = &self.acquisition;
+        match outcome {
+            CheckoutOutcome::NoEffect => {
                 if !owner.path_existed && path_exists(owner.path)? {
                     bail!("unregistered path has uncertain ownership; head unknown");
                 }
-                entries
+                Ok(())
             }
-            CheckoutOutcome::Removed => owner
-                .checkout
-                .as_ref()
-                .context("removed checkout identity unknown")?
-                .verify_removed(&self.launch)?,
-        };
-        self.verify_repository()?;
-        Ok(entries)
+            CheckoutOutcome::Removed => owner.checkout.captured()?.verify_removed_paths(),
+        }
     }
 
     fn recover_branch(&self, branch: &str, outcome: Option<CheckoutOutcome>) -> Result<()> {
@@ -350,28 +394,9 @@ impl Recovery<'_, '_> {
         let outcome = outcome.with_context(|| {
             format!("head {head}; checkout was retained or could not be inspected")
         })?;
-        let reference = format!("refs/heads/{branch}");
-        self.launch
-            .run_transition(
-                &[
-                    "update-ref",
-                    "--no-deref",
-                    "-d",
-                    &reference,
-                    self.acquisition.start,
-                ],
-                || self.verify_branch(branch, outcome, Some(self.acquisition.start)),
-                |result| {
-                    let expected = if result.as_ref().is_ok_and(|output| output.status.success()) {
-                        None
-                    } else {
-                        Some(self.acquisition.start)
-                    };
-                    self.verify_branch(branch, outcome, expected)
-                },
-            )
-            .with_context(|| format!("conditional removal failed; last observed head {head}"))?;
-        Ok(())
+        remove_local_ref(&self.launch, branch, self.acquisition.start, |expected| {
+            self.verify_branch(branch, outcome, expected)
+        })
     }
 
     fn verify_branch(
@@ -410,7 +435,8 @@ impl Recovery<'_, '_> {
         }
         // Ref observations must not authorize recreated paths or new attachments.
         unused()?;
-        self.verify_repository()
+        self.verify_repository()?;
+        self.verify_outcome_paths(outcome)
     }
 }
 
@@ -446,7 +472,7 @@ struct AcquisitionFailure {
 
 impl std::fmt::Display for AcquisitionFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}\n{}", self.cause, self.retained.join("\n"))
+        write!(f, "{:#}\n{}", self.cause, self.retained.join("\n"))
     }
 }
 
