@@ -449,7 +449,9 @@ fn acquisition_inspection_fails_before_add_when_a_registration_cannot_be_identif
         let uncertain = launch.common_dir().unwrap().join("worktrees/uncertain");
         std::fs::create_dir_all(&uncertain).unwrap();
         std::fs::write(uncertain.join("HEAD"), "ref: refs/heads/issue-7\n").unwrap();
-        // Missing gitdir: Git omits this registration from its listing.
+        // Missing gitdir: Git omits this registration from its listing. A lock
+        // keeps fetch's automatic maintenance from pruning it before inspection.
+        std::fs::write(uncertain.join("locked"), "retain damaged registration\n").unwrap();
         checkout_hook(&temp, "touch ../hook-ran");
 
         let error = kind.acquire(&launch).unwrap_err().to_string();
