@@ -60,15 +60,34 @@ impl Git {
         check: impl Fn() -> Result<()>,
     ) -> Result<String> {
         let output = self.retried_output_checked(args, &check)?;
-        if !output.status.success() {
-            let tail = [error_first(&output.stderr), last_lines(&output.stdout)].concat();
-            let mut message = format!("git {} failed", args.join(" "));
-            if !tail.is_empty() {
-                message = format!("{message}: {}", tail.join("\n"));
+        command_result(args, &output)
+    }
+
+    /// A destructive transition has different authority before and after
+    /// success. Failed attempts (including execution errors) still need an
+    /// outcome check before retrying, with the original failure preserved.
+    pub(crate) fn run_transition(
+        &self,
+        args: &[&str],
+        before: impl Fn() -> Result<()>,
+        after: impl Fn(&Result<Output>) -> Result<()>,
+    ) -> Result<String> {
+        let output = Self::retry_output(|| {
+            before()?;
+            let result = self.output(args);
+            if let Err(authority) = after(&result) {
+                let failure = match &result {
+                    Ok(output) => command_result(args, output).err(),
+                    Err(error) => Some(anyhow::anyhow!("{error:#}")),
+                };
+                return match failure {
+                    Some(failure) => Err(authority).context(format!("{failure:#}")),
+                    None => Err(authority),
+                };
             }
-            bail!(message);
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            result
+        })?;
+        command_result(args, &output)
     }
 
     /// A probe's trimmed stdout, or no answer for a completed nonzero exit.
@@ -90,12 +109,15 @@ impl Git {
         args: &[&str],
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Output> {
-        let attempt = || {
+        Self::retry_output(|| {
             check()?;
             let result = self.output(args);
             check()?;
             result
-        };
+        })
+    }
+
+    fn retry_output(attempt: impl Fn() -> Result<Output>) -> Result<Output> {
         let deadline = Instant::now() + LOCK_WAIT;
         let mut output = attempt()?;
         while !output.status.success() && held_lock(&output.stderr) && Instant::now() < deadline {
@@ -218,6 +240,18 @@ impl Git {
             },
         )
     }
+}
+
+fn command_result(args: &[&str], output: &Output) -> Result<String> {
+    if !output.status.success() {
+        let tail = [error_first(&output.stderr), last_lines(&output.stdout)].concat();
+        let mut message = format!("git {} failed", args.join(" "));
+        if !tail.is_empty() {
+            message = format!("{message}: {}", tail.join("\n"));
+        }
+        bail!(message);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// How long [`Git::run`] keeps trying a command that fails on a lock file

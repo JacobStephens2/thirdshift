@@ -1,7 +1,7 @@
 //! Durable authority for disposable review scratch, private to ownership.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -180,6 +180,16 @@ impl Artifact {
     fn verify(&self) -> Result<()> {
         verify_file(&self.path, &self.file)
     }
+
+    fn contents(&self) -> Result<Vec<u8>> {
+        self.verify()?;
+        let mut file = &self.file;
+        file.rewind()?;
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        self.verify()?;
+        Ok(contents)
+    }
 }
 
 fn verify_file(path: &Path, file: &File) -> Result<()> {
@@ -240,8 +250,15 @@ pub(in crate::worktree) fn recover(launch: &Git, path: &Path) -> Result<()> {
         }
         token.verify()?;
         record_file.verify()?;
+        let token_contents = token.contents()?;
+        let record_contents = record_file.contents()?;
         interrupt::check()?;
-        checkout.remove_locked(launch)?;
+        checkout.remove_locked(launch, || {
+            if token.contents()? != token_contents || record_file.contents()? != record_contents {
+                bail!("successful review disposal evidence changed; scratch retained");
+            }
+            Ok(())
+        })?;
         progress::step(format_args!(
             "removed the leftover worktree {}",
             path.display()
