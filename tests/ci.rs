@@ -265,6 +265,214 @@ fn assert_declined_ci_fix(
 }
 
 #[test]
+fn a_repair_that_already_re_ran_ci_to_green_delivers_or_self_merges_the_unchanged_head() {
+    for merge in [false, true] {
+        for pending in [false, true] {
+            let scenario = Scenario::new();
+            let rerun = if pending {
+                r#"{"conclusion": "success", "pending_polls": 3}"#
+            } else {
+                RERUN_PASSES
+            };
+            scenario.agent_does(&format!(
+                "{AGENT_OPENS_PR}{}",
+                checks_on_head(&format!("[{}]", actions_failure("test", 900, 1, rerun)))
+            ));
+            scenario.agent_does_in_session(2, "gh run rerun 900 --failed --repo acme/widgets\n");
+            let issue = scenario.issue_url(7);
+            let args = if merge {
+                vec!["merge", &issue]
+            } else {
+                vec![issue.as_str()]
+            };
+
+            let result = scenario.run(&args);
+
+            assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+            assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+            assert_one_repair(&scenario, &result);
+            assert_eq!(rerun_requests(&scenario), ["900", "900"]);
+            assert!(
+                result.stderr.contains("were not re-run"),
+                "{}",
+                result.stderr
+            );
+            assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+            if pending {
+                assert!(
+                    result.stderr.contains("1 of 1 checks still running"),
+                    "{}",
+                    result.stderr
+                );
+            }
+            if merge {
+                assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+                let head = scenario.origin_git(&["rev-parse", "main^2"]);
+                assert_eq!(
+                    scenario.gh_calls_of("pr", "merge")[0],
+                    [
+                        "pr",
+                        "merge",
+                        "1",
+                        "--repo",
+                        "acme/widgets",
+                        "--merge",
+                        "--match-head-commit",
+                        head.trim()
+                    ]
+                );
+                assert!(
+                    result
+                        .stderr
+                        .contains(&format!("CI passed on {}", &head[..7])),
+                    "{}",
+                    result.stderr
+                );
+                assert_eq!(
+                    scenario
+                        .origin_git(&["log", "-1", "--format=%s", head.trim()])
+                        .trim(),
+                    "Add feature"
+                );
+                assert_eq!(scenario.origin_log("issue-7"), None);
+            } else {
+                assert_eq!(
+                    scenario.origin_log("issue-7"),
+                    Some(vec![
+                        "Add feature".to_string(),
+                        "Initial commit".to_string()
+                    ])
+                );
+                assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+            }
+            scenario.assert_cleaned_up("issue-7");
+        }
+    }
+}
+
+#[test]
+fn a_refused_request_still_waits_for_an_earlier_accepted_workflows_new_attempt() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(&format!(
+            "[{}, {}]",
+            actions_failure(
+                "test",
+                900,
+                1,
+                r#"{"conclusion": "success", "stale_polls": 3, "pending_polls": 2}"#
+            ),
+            actions_failure("lint", 901, 2, RERUN_PASSES)
+        ))
+    ));
+    scenario.agent_does_in_session(2, "gh run rerun 901 --failed --repo acme/widgets\n");
+
+    let result = scenario.run_with_env(
+        &[&scenario.issue_url(7)],
+        &[("THIRDSHIFT_CI_GRACE_MS", "5000")],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_one_repair(&scenario, &result);
+    assert_eq!(rerun_requests(&scenario), ["901", "900", "901"]);
+    assert!(
+        result.stderr.contains("were not re-run"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("1 of 2 checks still running"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+}
+
+#[test]
+fn a_refused_request_cannot_deliver_or_merge_without_readable_nonempty_checks() {
+    for merge in [false, true] {
+        for empty in [true, false] {
+            let scenario = Scenario::new();
+            scenario.agent_does(&format!(
+                "{AGENT_OPENS_PR}{}gh fake fails 'run rerun'\n",
+                checks_on_head(&format!(
+                    "[{}]",
+                    actions_failure("test", 900, 1, RERUN_PASSES)
+                ))
+            ));
+            let repair = if empty {
+                checks_on_head("[]")
+            } else {
+                "gh fake fails 'api'\n".to_string()
+            };
+            scenario.agent_does_in_session(2, &repair);
+            let issue = scenario.issue_url(7);
+            let args = if merge {
+                vec!["merge", &issue]
+            } else {
+                vec![issue.as_str()]
+            };
+
+            let result = scenario.run(&args);
+
+            assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+            assert_one_repair(&scenario, &result);
+            assert_eq!(rerun_requests(&scenario), ["900"]);
+            assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+            assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+            assert!(
+                result.stderr.contains("were not re-run"),
+                "{}",
+                result.stderr
+            );
+            let cause = if empty {
+                "CI checks disappeared"
+            } else {
+                "gh api repos/acme/widgets/commits/"
+            };
+            assert!(result.stderr.contains(cause), "{}", result.stderr);
+        }
+    }
+}
+
+#[test]
+fn a_refused_request_pending_then_red_is_a_declined_ci_fix_without_another_repair() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(&format!(
+            "[{}]",
+            actions_failure("test", 900, 1, RERUN_PASSES)
+        ))
+    ));
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{}gh fake fails 'run rerun'\n",
+            checks_on_head(
+                r#"[{"name": "test", "conclusion": "failure", "pending_polls": 3,
+                     "url": "https://github.com/acme/widgets/actions/runs/900/job/1"}]"#
+            )
+        ),
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_declined_ci_fix(&scenario, &result, &["900"]);
+    assert!(
+        result.stderr.contains("were not re-run"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("1 of 1 checks still running"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn a_failed_commit_status_cant_be_re_run_so_nothing_is() {
     let scenario = Scenario::new();
     // The check run could be re-run, but the commit status could not, so the
@@ -317,7 +525,7 @@ fn a_check_re_run_github_refuses_is_a_declined_ci_fix_that_shows_the_refusal() {
     );
     assert_eq!(
         result.stderr.matches("CI failed on").count(),
-        1,
+        2,
         "stderr: {}",
         result.stderr
     );
