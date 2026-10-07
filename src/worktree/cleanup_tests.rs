@@ -259,42 +259,10 @@ fn ordinary_cleanup_removes_tracking_configuration_only_for_the_owned_issue_bran
 /// Isolate PATH and capture progress at the same process seam as fault tests.
 /// The shim changes real Git state at a precise observation/mutation boundary.
 fn isolated(name: &str, script: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
     let name = format!("worktree::cleanup_tests::{name}");
-    if std::env::var("THIRDSHIFT_CLEANUP_TEST").as_deref() == Ok(&name) {
+    let Some(output) = crate::test_support::git_fault(&name, script) else {
         return false;
-    }
-    let temp = tempfile::TempDir::new().unwrap();
-    let real_git = Command::new("sh")
-        .args(["-c", "command -v git"])
-        .output()
-        .unwrap();
-    assert!(real_git.status.success());
-    let shim = temp.path().join("git");
-    fs::write(
-        &shim,
-        format!("#!/bin/sh\nset -e\n{script}\nexec \"$THIRDSHIFT_REAL_GIT\" \"$@\"\n"),
-    )
-    .unwrap();
-    fs::set_permissions(shim, fs::Permissions::from_mode(0o755)).unwrap();
-    let search = std::env::var_os("PATH").unwrap();
-    let path = std::env::join_paths(
-        std::iter::once(temp.path().to_path_buf()).chain(std::env::split_paths(&search)),
-    )
-    .unwrap();
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", &name, "--nocapture"])
-        .env("PATH", path)
-        .env("THIRDSHIFT_CLEANUP_TEST", &name)
-        .env(
-            "THIRDSHIFT_REAL_GIT",
-            String::from_utf8(real_git.stdout).unwrap().trim(),
-        )
-        .env("THIRDSHIFT_FAULT_MARKER", temp.path().join("fault"))
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
+    };
     let stderr = String::from_utf8(output.stderr).unwrap();
     let warnings: Vec<_> = stderr
         .lines()

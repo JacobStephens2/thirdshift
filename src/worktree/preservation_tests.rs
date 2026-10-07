@@ -3,10 +3,12 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::interrupt;
-use crate::test_support::with_recorded_signal;
+use crate::test_support::{git_fault, with_recorded_signal};
 
 const BRANCH: &str = "issue-7";
 
@@ -59,6 +61,493 @@ fn assert_retained(launch: &Git, path: &Path) {
             .unwrap(),
         "local Issue branch was removed"
     );
+}
+
+fn assert_ownership_error(error: &anyhow::Error, path: &Path, cause: &str) {
+    let error = format!("{error:#}");
+    assert!(error.contains(path.to_str().unwrap()), "{error}");
+    assert!(
+        error.contains(&format!("expected Issue branch {BRANCH}")),
+        "{error}"
+    );
+    assert!(error.contains(cause), "{error}");
+}
+
+#[test]
+fn switched_and_detached_checkouts_refuse_preservation_without_touching_unrelated_work() {
+    for detached in [false, true] {
+        let (_temp, launch, mut worktree) = fixture();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        if detached {
+            git.run(&["checkout", "-q", "--detach"]).unwrap();
+        } else {
+            git.run(&["checkout", "-q", "-b", "manual"]).unwrap();
+        }
+        fs::write(path.join("unrelated.txt"), "manual work\n").unwrap();
+        let refs = launch.run(&["show-ref"]).unwrap();
+        let status = git.run(&["status", "--porcelain"]).unwrap();
+
+        let error = worktree
+            .preserve_failed_run("main", "session failed")
+            .unwrap_err();
+        assert_ownership_error(&error, &path, "identity changed");
+        drop(worktree);
+
+        assert_retained(&launch, &path);
+        assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+        assert_eq!(git.run(&["status", "--porcelain"]).unwrap(), status);
+        assert_eq!(
+            fs::read_to_string(path.join("unrelated.txt")).unwrap(),
+            "manual work\n"
+        );
+        assert!(!launch.on_origin(BRANCH).unwrap());
+        assert!(!launch.on_origin("manual").unwrap());
+    }
+}
+
+#[test]
+fn changed_ownership_refuses_preservation_even_with_unchanged_work() {
+    for detached in [false, true] {
+        let (_temp, launch, mut worktree) = fixture();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        if detached {
+            git.run(&["checkout", "-q", "--detach"]).unwrap();
+        } else {
+            git.run(&["checkout", "-q", "-b", "manual"]).unwrap();
+        }
+        let refs = launch.run(&["show-ref"]).unwrap();
+
+        let error = worktree
+            .preserve_failed_run("main", "session failed")
+            .unwrap_err();
+        assert_ownership_error(&error, &path, "identity changed");
+        // Restore readable ownership before Drop: retention must come from
+        // the failed preservation, rather than cleanup refusing the mismatch.
+        git.run(&["checkout", "-q", BRANCH]).unwrap();
+        drop(worktree);
+
+        assert_retained(&launch, &path);
+        assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+        assert_eq!(git.run(&["status", "--porcelain"]).unwrap(), "");
+        assert!(!launch.on_origin(BRANCH).unwrap());
+    }
+}
+
+#[test]
+fn recreated_checkout_on_the_same_branch_and_head_refuses_preservation() {
+    let (_temp, launch, mut worktree) = fixture();
+    let path = worktree.path().to_path_buf();
+    let git = Git::new(&path);
+    let head = git.run(&["rev-parse", "HEAD"]).unwrap();
+    let admin = git.run(&["rev-parse", "--absolute-git-dir"]).unwrap();
+    launch
+        .run(&["worktree", "remove", "--force", path.to_str().unwrap()])
+        .unwrap();
+    launch
+        .run(&["worktree", "add", path.to_str().unwrap(), BRANCH])
+        .unwrap();
+    assert_eq!(git.run(&["rev-parse", "HEAD"]).unwrap(), head);
+    assert_eq!(
+        git.run(&["rev-parse", "--absolute-git-dir"]).unwrap(),
+        admin
+    );
+    fs::write(path.join("replacement.txt"), "replacement work\n").unwrap();
+    let refs = launch.run(&["show-ref"]).unwrap();
+    let registered = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+    let status = git.run(&["status", "--porcelain"]).unwrap();
+
+    let error = worktree
+        .preserve_failed_run("main", "session failed")
+        .unwrap_err();
+    assert_ownership_error(&error, &path, "replaced");
+    drop(worktree);
+
+    assert_retained(&launch, &path);
+    assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+    assert_eq!(
+        launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+        registered
+    );
+    assert_eq!(git.run(&["status", "--porcelain"]).unwrap(), status);
+    assert_eq!(
+        fs::read_to_string(path.join("replacement.txt")).unwrap(),
+        "replacement work\n"
+    );
+    assert!(!launch.on_origin(BRANCH).unwrap());
+}
+
+#[test]
+fn locked_or_damaged_ownership_refuses_preservation_and_retains_work_after_evidence_is_repaired() {
+    for damage in [
+        "locked",
+        "missing-backlink",
+        "wrong-backlink",
+        "unreadable-backlink",
+        "duplicate-registration",
+    ] {
+        let (_temp, launch, mut worktree) = fixture();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        let admin = PathBuf::from(git.run(&["rev-parse", "--absolute-git-dir"]).unwrap());
+        let backlink = admin.join("gitdir");
+        let original = fs::read(&backlink).unwrap();
+        fs::write(path.join("wip.txt"), "half done\n").unwrap();
+        let refs = launch.run(&["show-ref"]).unwrap();
+        let status = git.run(&["status", "--porcelain"]).unwrap();
+        match damage {
+            "locked" => {
+                launch
+                    .run(&["worktree", "lock", path.to_str().unwrap()])
+                    .unwrap();
+            }
+            "missing-backlink" => fs::remove_file(&backlink).unwrap(),
+            "wrong-backlink" => {
+                fs::write(&backlink, launch.dir().join(".git").to_str().unwrap()).unwrap()
+            }
+            "unreadable-backlink" => {
+                fs::remove_file(&backlink).unwrap();
+                fs::create_dir(&backlink).unwrap();
+            }
+            _ => {
+                let duplicate = admin.with_file_name("duplicate");
+                fs::create_dir(&duplicate).unwrap();
+                for file in ["HEAD", "gitdir", "commondir"] {
+                    fs::copy(admin.join(file), duplicate.join(file)).unwrap();
+                }
+            }
+        }
+
+        let error = worktree
+            .preserve_failed_run("main", "session failed")
+            .unwrap_err();
+        assert_ownership_error(&error, &path, "cannot preserve acquired checkout");
+        match damage {
+            "locked" => {
+                launch
+                    .run(&["worktree", "unlock", path.to_str().unwrap()])
+                    .unwrap();
+            }
+            "unreadable-backlink" => fs::remove_dir(&backlink).unwrap(),
+            "duplicate-registration" => {
+                fs::remove_dir_all(admin.with_file_name("duplicate")).unwrap()
+            }
+            _ => {}
+        }
+        fs::write(&backlink, original).unwrap();
+        drop(worktree);
+
+        assert_retained(&launch, &path);
+        assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+        assert_eq!(git.run(&["status", "--porcelain"]).unwrap(), status);
+        assert_eq!(
+            fs::read_to_string(path.join("wip.txt")).unwrap(),
+            "half done\n"
+        );
+        assert!(!launch.on_origin(BRANCH).unwrap());
+    }
+}
+
+#[test]
+fn replaced_pinned_directories_refuse_preservation_and_do_not_lock_a_replacement_repository() {
+    for directory in ["checkout", "administration", "common"] {
+        let (_temp, launch, mut worktree) = fixture();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        fs::write(path.join("wip.txt"), "half done\n").unwrap();
+        let refs = launch.run(&["show-ref"]).unwrap();
+        let status = git.run(&["status", "--porcelain"]).unwrap();
+        let pinned = match directory {
+            "checkout" => path.clone(),
+            "administration" => {
+                PathBuf::from(git.run(&["rev-parse", "--absolute-git-dir"]).unwrap())
+            }
+            _ => launch.common_dir().unwrap(),
+        };
+        let moved = pinned.with_extension("original");
+        fs::rename(&pinned, &moved).unwrap();
+        fs::create_dir(&pinned).unwrap();
+
+        let error = worktree
+            .preserve_failed_run("main", "session failed")
+            .unwrap_err();
+        assert_ownership_error(&error, &path, "replaced");
+        assert_eq!(
+            fs::read_dir(&pinned).unwrap().count(),
+            0,
+            "replacement was mutated"
+        );
+        fs::remove_dir(&pinned).unwrap();
+        fs::rename(&moved, &pinned).unwrap();
+        drop(worktree);
+
+        assert_retained(&launch, &path);
+        assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+        assert_eq!(git.run(&["status", "--porcelain"]).unwrap(), status);
+        assert_eq!(
+            fs::read_to_string(path.join("wip.txt")).unwrap(),
+            "half done\n"
+        );
+        assert!(!launch.on_origin(BRANCH).unwrap());
+    }
+}
+
+#[test]
+fn a_successful_retry_on_the_original_checkout_restores_cleanup_eligibility() {
+    let (_temp, launch, mut worktree) = fixture();
+    let path = worktree.path().to_path_buf();
+    let git = Git::new(&path);
+    git.run(&["checkout", "-q", "--detach"]).unwrap();
+    assert!(
+        worktree
+            .preserve_failed_run("main", "session failed")
+            .is_err()
+    );
+    git.run(&["checkout", "-q", BRANCH]).unwrap();
+
+    worktree
+        .preserve_failed_run("main", "session failed")
+        .unwrap();
+    drop(worktree);
+
+    assert_cleaned_up(&launch, &path);
+    assert!(!launch.on_origin(BRANCH).unwrap());
+}
+
+#[test]
+fn preservation_lock_errors_retain_work_even_after_the_locks_are_repaired() {
+    for name in ["thirdshift-worktrees.lock", "thirdshift-worktree-refs.lock"] {
+        let (_temp, launch, mut worktree) = fixture();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        fs::write(path.join("wip.txt"), "half done\n").unwrap();
+        let refs = launch.run(&["show-ref"]).unwrap();
+        let status = git.run(&["status", "--porcelain"]).unwrap();
+        let lock = launch.common_dir().unwrap().join(name);
+        fs::remove_file(&lock).unwrap();
+        fs::create_dir(&lock).unwrap();
+
+        let error = worktree
+            .preserve_failed_run("main", "session failed")
+            .unwrap_err();
+        assert_ownership_error(&error, &path, "can't open");
+        fs::remove_dir(&lock).unwrap();
+        drop(worktree);
+
+        assert_retained(&launch, &path);
+        assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+        assert_eq!(git.run(&["status", "--porcelain"]).unwrap(), status);
+        assert_eq!(
+            fs::read_to_string(path.join("wip.txt")).unwrap(),
+            "half done\n"
+        );
+        assert!(!launch.on_origin(BRANCH).unwrap());
+    }
+}
+
+#[test]
+fn preservation_waits_for_both_repository_locks_before_changing_work() {
+    for name in ["thirdshift-worktrees.lock", "thirdshift-worktree-refs.lock"] {
+        let (_temp, launch, mut worktree) = fixture();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        fs::write(path.join("wip.txt"), "half done\n").unwrap();
+        let original_status = git.run(&["status", "--porcelain"]).unwrap();
+        let original_refs = launch.run(&["show-ref"]).unwrap();
+        let held = launch.lock(name).unwrap();
+        let (finished, received) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = worktree.preserve_failed_run("main", "session failed");
+            let _ = finished.send(());
+            (result, worktree)
+        });
+        let finished_while_held = received.recv_timeout(Duration::from_millis(500)).is_ok();
+        let status = git.run(&["status", "--porcelain"]);
+        let refs = launch.run(&["show-ref"]);
+        let pushed = launch.on_origin(BRANCH);
+        drop(held);
+        let (result, worktree) = worker.join().unwrap();
+
+        assert!(!finished_while_held, "preservation bypassed {name}");
+        assert_eq!(status.unwrap(), original_status);
+        assert_eq!(refs.unwrap(), original_refs);
+        assert!(!pushed.unwrap());
+        result.unwrap();
+        drop(worktree);
+        assert_cleaned_up(&launch, &path);
+    }
+}
+
+#[test]
+fn ownership_changes_during_preservation_refuse_the_next_mutation_or_success() {
+    if git_fault(
+        "worktree::preservation_tests::ownership_changes_during_preservation_refuse_the_next_mutation_or_success",
+        r#"
+if test -f "$THIRDSHIFT_FAULT_MARKER.gate" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  gate=$(cat "$THIRDSHIFT_FAULT_MARKER.gate")
+  case "$gate:$1:$2" in
+    abort:rev-parse:-q|stage:rev-parse:-q|commit:diff:--cached|push:commit:-q|unchanged:diff:--cached)
+      status=0
+      "$THIRDSHIFT_REAL_GIT" "$@" || status=$?
+      "$THIRDSHIFT_REAL_GIT" symbolic-ref HEAD refs/heads/manual
+      printf 'unrelated work\n' > unrelated.txt
+      touch "$THIRDSHIFT_FAULT_MARKER"
+      exit "$status"
+      ;;
+  esac
+fi
+"#,
+    ).is_some() {
+        return;
+    }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for gate in ["abort", "stage", "commit", "push", "unchanged"] {
+        let _ = fs::remove_file(&marker);
+        let _ = fs::remove_file(marker.with_extension("gate"));
+        let (_temp, launch, mut worktree) = fixture();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        if gate == "abort" {
+            unfinished_merge(&git);
+        }
+        git.run(&["branch", "manual"]).unwrap();
+        let head = git.run(&["rev-parse", "HEAD"]).unwrap();
+        let refs = launch.run(&["show-ref"]).unwrap();
+        let index = git.run(&["diff", "--cached", "--name-status"]).unwrap();
+        if gate != "unchanged" {
+            fs::write(path.join("wip.txt"), "half done\n").unwrap();
+        }
+        fs::write(marker.with_extension("gate"), gate).unwrap();
+
+        let error = worktree
+            .preserve_failed_run("main", "session failed")
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains(path.to_str().unwrap()), "{gate}: {error}");
+        assert!(error.contains(BRANCH), "{gate}: {error}");
+        assert!(error.contains("identity changed"), "{gate}: {error}");
+        assert!(
+            marker.exists(),
+            "ownership change was not exercised: {gate}"
+        );
+        drop(worktree);
+
+        assert_retained(&launch, &path);
+        assert_eq!(
+            fs::read_to_string(path.join("unrelated.txt")).unwrap(),
+            "unrelated work\n"
+        );
+        assert_eq!(git.run(&["rev-parse", "manual"]).unwrap(), head);
+        assert!(!launch.on_origin(BRANCH).unwrap());
+        assert!(!launch.on_origin("manual").unwrap());
+        if gate == "push" {
+            assert_eq!(
+                git.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
+                "thirdshift: failed run (session failed)"
+            );
+            assert_eq!(git.run(&["show", "issue-7:wip.txt"]).unwrap(), "half done");
+        } else {
+            assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+        }
+        if matches!(gate, "abort" | "stage" | "unchanged") {
+            assert_eq!(
+                git.run(&["diff", "--cached", "--name-status"]).unwrap(),
+                index
+            );
+        }
+        if gate == "abort" {
+            assert!(git.merge_in_progress().unwrap());
+            assert_eq!(
+                fs::read_to_string(path.join("merged.txt")).unwrap(),
+                "theirs\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn ownership_changing_during_a_successful_push_still_fails_and_holds_both_locks_through_final_inspection()
+ {
+    if git_fault(
+        "worktree::preservation_tests::ownership_changing_during_a_successful_push_still_fails_and_holds_both_locks_through_final_inspection",
+        r#"
+if test -e "$THIRDSHIFT_FAULT_MARKER.armed"; then
+  if test "$1" = push && test "$2" = --no-verify; then
+    "$THIRDSHIFT_REAL_GIT" "$@"
+    "$THIRDSHIFT_REAL_GIT" symbolic-ref HEAD refs/heads/manual
+    printf 'unrelated work\n' > unrelated.txt
+    touch "$THIRDSHIFT_FAULT_MARKER.pushed"
+    exit 0
+  fi
+  if test "$1" = worktree && test "$2" = list && test -e "$THIRDSHIFT_FAULT_MARKER.pushed"; then
+    touch "$THIRDSHIFT_FAULT_MARKER"
+    for _ in $(seq 500); do
+      test -e "$THIRDSHIFT_FAULT_MARKER.release" && break
+      sleep 0.01
+    done
+    test -e "$THIRDSHIFT_FAULT_MARKER.release"
+  fi
+fi
+"#,
+    ).is_some() {
+        return;
+    }
+    let (temp, launch, mut worktree) = fixture();
+    let path = worktree.path().to_path_buf();
+    let git = Git::new(&path);
+    git.run(&["branch", "manual"]).unwrap();
+    let manual = git.run(&["rev-parse", "manual"]).unwrap();
+    fs::write(path.join("wip.txt"), "half done\n").unwrap();
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    let common = launch.common_dir().unwrap();
+    fs::write(marker.with_extension("armed"), "armed").unwrap();
+    let (finished, received) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = worktree.preserve_failed_run("main", "session failed");
+        let _ = finished.send(());
+        (result, worktree)
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.exists() && received.try_recv().is_err() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let held: Vec<_> = ["thirdshift-worktrees.lock", "thirdshift-worktree-refs.lock"]
+        .into_iter()
+        .map(|name| {
+            let held = File::open(common.join(name))
+                .map(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+            (name, held)
+        })
+        .collect();
+    let released = fs::write(marker.with_extension("release"), "released");
+    let (result, worktree) = worker.join().unwrap();
+    released.unwrap();
+
+    assert_ownership_error(&result.unwrap_err(), &path, "identity changed");
+    assert!(marker.exists(), "final inspection was not exercised");
+    for (name, held) in held {
+        assert!(held.unwrap(), "{name} was released before final inspection");
+    }
+    drop(worktree);
+
+    assert_retained(&launch, &path);
+    assert_eq!(git.run(&["rev-parse", "manual"]).unwrap(), manual);
+    assert_eq!(
+        fs::read_to_string(path.join("unrelated.txt")).unwrap(),
+        "unrelated work\n"
+    );
+    assert_eq!(git.run(&["show", "issue-7:wip.txt"]).unwrap(), "half done");
+    let origin = Git::new(temp.path().join("origin.git"));
+    assert_eq!(
+        origin.run(&["show", "issue-7:wip.txt"]).unwrap(),
+        "half done"
+    );
+    assert_eq!(
+        origin.run(&["rev-parse", BRANCH]).unwrap(),
+        launch.run(&["rev-parse", BRANCH]).unwrap()
+    );
+    assert!(!launch.on_origin("manual").unwrap());
 }
 
 #[test]

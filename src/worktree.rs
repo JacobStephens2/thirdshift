@@ -9,10 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use chrono::{SecondsFormat, Utc};
 
 use crate::git::Git;
-use crate::host;
 use crate::progress;
 
 mod acquisition;
@@ -179,34 +177,14 @@ impl Worktree {
     /// branch, even after Command interruption. An unfinished merge is
     /// aborted first; changes are committed as the failure marker and pushed
     /// without local hooks. With no changes, nothing is committed or pushed.
+    /// Only the acquired checkout instance on its Issue branch may be changed.
     /// Retention is armed before salvage: any error or unwinding leaves the
-    /// worktree and local Issue branch in place. Success allows normal cleanup.
+    /// worktree and local Issue branch in place. Final verified ownership
+    /// allows normal cleanup.
     pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<()> {
         self.kept = true;
-        let git = self.git.completion();
-        if git.merge_in_progress()? {
-            git.run(&["merge", "--abort"])?;
-        }
-        git.run(&["add", "-A"])?;
-        let base = format!("origin/{base}");
-        if !git.succeeds(&["diff", "--cached", "--quiet", &base])? {
-            let message = format!(
-                "thirdshift: failed run ({reason})\n\n\
-                 {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
-                timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                host = host::name().as_deref().unwrap_or("unknown"),
-            );
-            // No hooks: a hook that rejects the commit would strand the work.
-            git.run(&[
-                "commit",
-                "-q",
-                "--allow-empty",
-                "--no-verify",
-                "-m",
-                &message,
-            ])?;
-            git.push(&self.branch)?;
-        }
+        self.checkout
+            .preserve_failed_run(&self.launch, base, reason)?;
         self.kept = false;
         Ok(())
     }

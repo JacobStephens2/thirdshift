@@ -66,6 +66,53 @@ fn assert_failed(scenario: &Scenario, result: &RunResult, stdout: &str) {
 }
 
 #[test]
+fn ownership_refusal_warns_without_replacing_the_failed_run_cause_or_changing_pr_and_claim_finishing()
+ {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.origin_has_branch("issue-7", "main", &[]);
+    let pr = scenario.github_has_pr("issue-7", "main", "OPEN");
+    let head = scenario.origin_git(&["rev-parse", "issue-7"]);
+    scenario.agent_does("git checkout -q -b manual\necho 'unrelated work' > wip.txt\nexit 3\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{pr}\n"));
+    assert!(
+        result.stderr.contains("claude exited 3"),
+        "{}",
+        result.stderr
+    );
+    let worktree = scenario.path("work/widgets-issue-7");
+    let warning = result
+        .stderr
+        .lines()
+        .find(|line| {
+            line.contains("could not push the failed run's work, so it may exist only locally")
+        })
+        .expect(&result.stderr);
+    for detail in [
+        worktree.to_str().unwrap(),
+        "expected Issue branch issue-7",
+        "identity changed",
+    ] {
+        assert!(warning.contains(detail), "{warning}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("wip.txt")).unwrap(),
+        "unrelated work\n"
+    );
+    assert_eq!(scenario.launch_git(&["rev-parse", "issue-7"]), head);
+    assert_eq!(scenario.launch_git(&["rev-parse", "manual"]), head);
+    assert_eq!(scenario.origin_git(&["rev-parse", "issue-7"]), head);
+    assert_eq!(scenario.origin_log("manual"), None);
+    assert_eq!(scenario.origin_file("issue-7", "wip.txt"), None);
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+}
+
+#[test]
 fn a_pr_against_the_wrong_base_is_sent_back_to_draft() {
     let scenario = Scenario::new();
     scenario.origin_has_branch("develop", "main", &[]);

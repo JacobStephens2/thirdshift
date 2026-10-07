@@ -53,3 +53,40 @@ pub(crate) fn write_executable(path: &std::path::Path, contents: &str) {
     let status = child.wait().unwrap();
     assert!(status.success(), "could not write {}", path.display());
 }
+
+/// Run a single test with a Git shim in an isolated child. The parent receives
+/// its captured output; the selected child exercises the real interface.
+pub(crate) fn git_fault(name: &str, script: &str) -> Option<std::process::Output> {
+    if std::env::var("THIRDSHIFT_GIT_FAULT_TEST").as_deref() == Ok(name) {
+        return None;
+    }
+    let temp = tempfile::TempDir::new().unwrap();
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    assert!(real_git.status.success());
+    let shim = temp.path().join("git");
+    write_executable(
+        &shim,
+        &format!("#!/bin/sh\nset -e\n{script}\nexec \"$THIRDSHIFT_REAL_GIT\" \"$@\"\n"),
+    );
+    let search = std::env::var_os("PATH").unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(temp.path().to_path_buf()).chain(std::env::split_paths(&search)),
+    )
+    .unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture"])
+        .env("PATH", path)
+        .env("THIRDSHIFT_GIT_FAULT_TEST", name)
+        .env(
+            "THIRDSHIFT_REAL_GIT",
+            String::from_utf8(real_git.stdout).unwrap().trim(),
+        )
+        .env("THIRDSHIFT_FAULT_MARKER", temp.path().join("fault"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    Some(output)
+}
