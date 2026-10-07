@@ -114,7 +114,7 @@ impl Worktree {
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.fetch(&[base])?;
-        let origin = fetched_origin(launch, base)?;
+        let origin = fetched_origin(base, |args| launch.run(args))?;
         check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
@@ -128,7 +128,7 @@ impl Worktree {
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.fetch(&[base, branch])?;
-        let origin = fetched_origin(launch, branch)?;
+        let origin = fetched_origin(branch, |args| launch.run(args))?;
         let local = local_head(launch, branch)?;
         check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
@@ -366,7 +366,7 @@ impl ReviewWorktree {
         let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
         ownership::recover_review(launch, &path)?;
         launch.fetch(&[base])?;
-        let origin = fetched_origin(launch, base)?;
+        let origin = fetched_origin(base, |args| launch.run(args))?;
         progress::step(format_args!(
             "creating worktree {} detached at {}",
             path.display(),
@@ -402,9 +402,12 @@ fn sibling(launch: &Git, name: &str) -> Result<(PathBuf, PathBuf)> {
 }
 
 /// Pin an already-fetched origin branch, avoiding ambiguous local names.
-fn fetched_origin(git: &Git, branch: &str) -> Result<OriginCommit> {
+fn fetched_origin(
+    branch: &str,
+    run: impl FnOnce(&[&str]) -> Result<String>,
+) -> Result<OriginCommit> {
     let upstream = format!("origin/{branch}");
-    let commit = git.run(&[
+    let commit = run(&[
         "rev-parse",
         "--verify",
         &format!("refs/remotes/{upstream}^{{commit}}"),

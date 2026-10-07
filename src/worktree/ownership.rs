@@ -98,12 +98,15 @@ impl Checkout {
             })
         };
         verify()?;
-        let result = launch.run(&["push", "--no-verify", "origin", "--delete", branch]);
+        let result = launch.run_checked(
+            &["push", "--no-verify", "origin", "--delete", branch],
+            verify,
+        );
         verify()?;
         match result {
             Ok(_) => Ok(()),
             Err(error) => {
-                let present = launch.on_origin(branch);
+                let present = launch.on_origin_checked(branch, verify);
                 verify()?;
                 match present {
                     Ok(false) => Ok(()),
@@ -389,7 +392,7 @@ impl Operation<'_> {
     }
 
     pub(super) fn run(&self, args: &[&str]) -> Result<String> {
-        self.execute(|git| git.run(args))
+        self.execute(|git| git.run_checked(args, || self.inspect().map(|_| ())))
     }
 
     pub(super) fn head(&self) -> Result<String> {
@@ -397,18 +400,12 @@ impl Operation<'_> {
     }
 
     pub(super) fn push(&self, branch: &str) -> Result<()> {
-        self.execute(|git| git.push(branch))
+        self.execute(|git| git.push_checked(branch, || self.inspect().map(|_| ())))
     }
 
     pub(super) fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
-        self.execute(|git| git.fetch(&[branch]))?;
-        let upstream = format!("origin/{branch}");
-        let commit = self.run(&[
-            "rev-parse",
-            "--verify",
-            &format!("refs/remotes/{upstream}^{{commit}}"),
-        ])?;
-        Ok(OriginCommit { upstream, commit })
+        self.execute(|git| git.fetch_checked(&[branch], || self.inspect().map(|_| ())))?;
+        super::fetched_origin(branch, |args| self.run(args))
     }
 
     pub(super) fn merge_in_progress(&self) -> Result<bool> {

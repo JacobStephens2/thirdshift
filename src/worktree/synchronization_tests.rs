@@ -620,6 +620,52 @@ fi
 }
 
 #[test]
+fn ownership_changing_after_a_git_lock_failure_refuses_the_retry_before_it_merges_unrelated_work() {
+    if git_fault(
+        "worktree::synchronization_tests::ownership_changing_after_a_git_lock_failure_refuses_the_retry_before_it_merges_unrelated_work",
+        r#"
+if test "$1" = merge && test -e "$THIRDSHIFT_FAULT_MARKER.armed" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  "$THIRDSHIFT_REAL_GIT" symbolic-ref HEAD refs/heads/manual
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  printf "fatal: Unable to create '%s/index.lock': File exists\n" "$PWD" >&2
+  exit 1
+fi
+"#,
+    ).is_some() { return; }
+    let (_temp, launch, worktree) = fixture();
+    let git = Git::new(worktree.path());
+    let initial = worktree.head().unwrap();
+    git.run(&["branch", "manual"]).unwrap();
+    fs::write(worktree.path().join("manual.txt"), "unrelated work\n").unwrap();
+    git.run(&["add", "manual.txt"]).unwrap();
+    commit(&launch, "Base advances");
+    launch.run(&["push", "-q", "origin", "main"]).unwrap();
+    let refs = launch.run(&["show-ref"]).unwrap();
+    let index = git.run(&["diff", "--cached"]).unwrap();
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    fs::write(marker.with_extension("armed"), "armed").unwrap();
+
+    let error = worktree.merge_base_branch("main").unwrap_err();
+
+    assert!(marker.exists(), "lock failure did not occur");
+    assert!(
+        format!("{error:#}").contains("expected Issue branch issue-7"),
+        "{error:#}"
+    );
+    assert_eq!(
+        git.run(&["rev-parse", "manual"]).unwrap(),
+        initial,
+        "merge retry mutated unrelated branch"
+    );
+    assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+    assert_eq!(git.run(&["diff", "--cached"]).unwrap(), index);
+    assert_eq!(
+        fs::read_to_string(worktree.path().join("manual.txt")).unwrap(),
+        "unrelated work\n"
+    );
+}
+
+#[test]
 fn ordinary_operations_wait_for_ownership_and_refs_locks_before_changing_work() {
     for name in ["thirdshift-worktrees.lock", "thirdshift-worktree-refs.lock"] {
         let (_temp, launch, worktree) = fixture();
@@ -647,6 +693,75 @@ fn ordinary_operations_wait_for_ownership_and_refs_locks_before_changing_work() 
             launch.run(&["rev-parse", "HEAD"]).unwrap()
         );
     }
+}
+
+#[test]
+fn ownership_changing_while_fetch_waits_for_refs_refuses_the_fetch_before_it_updates_refs() {
+    let (_temp, launch, worktree) = fixture();
+    let git = Git::new(worktree.path());
+    git.run(&["branch", "manual"]).unwrap();
+    commit(&launch, "Base advances after acquisition");
+    launch.run(&["push", "-q", "origin", "main"]).unwrap();
+    // Rewind the tracking ref so an erroneously executed fetch is observable.
+    let initial = worktree.head().unwrap();
+    launch
+        .run(&["update-ref", "refs/remotes/origin/main", &initial])
+        .unwrap();
+    let refs = launch.run(&["show-ref"]).unwrap();
+    let held = launch.lock_worktree_refs().unwrap();
+    let lock = fs::File::open(
+        launch
+            .common_dir()
+            .unwrap()
+            .join("thirdshift-worktrees.lock"),
+    )
+    .unwrap();
+    let (started, starting) = std::sync::mpsc::channel();
+    let (finished, received) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = started.send(());
+        let result = worktree.merge_base_branch("main");
+        let _ = finished.send(());
+        (result, worktree)
+    });
+    let started = starting.recv_timeout(Duration::from_secs(2)).is_ok();
+    // Confirm this operation holds ownership while waiting for the refs lock.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let waiting = loop {
+        match lock.try_lock() {
+            Err(fs::TryLockError::WouldBlock) => break true,
+            Ok(()) => {
+                if lock.unlock().is_err() {
+                    break false;
+                }
+            }
+            Err(_) => break false,
+        }
+        if std::time::Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let blocked_on_refs = received.recv_timeout(Duration::from_millis(500)).is_err();
+    let switched = git.run(&["checkout", "-q", "manual"]);
+    drop(held);
+    let joined = worker.join();
+
+    assert!(
+        started && waiting && blocked_on_refs,
+        "fetch did not wait for refs while holding ownership"
+    );
+    switched.unwrap();
+    let (result, worktree) = joined.unwrap();
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("expected Issue branch issue-7"), "{error}");
+    assert_eq!(
+        launch.run(&["show-ref"]).unwrap(),
+        refs,
+        "fetch ran after ownership changed"
+    );
+    assert_eq!(git.run(&["rev-parse", "manual"]).unwrap(), initial);
+    drop(worktree);
 }
 
 #[test]
