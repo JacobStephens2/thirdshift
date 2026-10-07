@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use crate::git::Git;
 use crate::github::{GitHub, PrState, PullRequest};
 use crate::issue::IssueUrl;
+use crate::worktree;
 
 pub enum Selection {
     /// No Issue branch has been used yet, or the highest-numbered one's PR is
@@ -64,8 +65,9 @@ impl Selection {
 
 /// Pick the Issue branch for `issue` from the Issue branches on origin and
 /// their PRs in any state: the highest number seen on either decides. Fails
-/// if a local copy of the chosen branch in the Launch directory differs from
-/// origin's: the Run replaces it and deletes it at cleanup.
+/// early if Worktree's advisory preflight refuses the sampled local head,
+/// before the Run makes its Claim. Worktree independently checks again
+/// during acquisition and owns normal cleanup of the acquired branch.
 pub fn select(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<Selection> {
     select_through(&GitHubAndOrigin { launch, github }, issue)
 }
@@ -141,12 +143,7 @@ impl Reads for GitHubAndOrigin<'_> {
     }
 
     fn local_head(&self, branch: &str) -> Result<Option<String>> {
-        self.launch.run_optional(&[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ])
+        worktree::local_head(self.launch, branch)
     }
 }
 
@@ -161,7 +158,11 @@ fn select_through(reads: &impl Reads, issue: &IssueUrl) -> Result<Selection> {
         .chain(prs.iter().map(|(number, _)| *number))
         .max();
     let Some(highest) = highest else {
-        check_local_branch(reads, &first_branch, None)?;
+        worktree::check_local_branch(
+            &first_branch,
+            reads.local_head(&first_branch)?.as_deref(),
+            None,
+        )?;
         return Ok(Selection::Fresh {
             branch: first_branch,
         });
@@ -179,11 +180,15 @@ fn select_through(reads: &impl Reads, issue: &IssueUrl) -> Result<Selection> {
         // A merged or closed PR uses its number up, even if its branch was deleted.
         (_, Some(pr)) if pr.state != PrState::Open => {
             let next = branch_name(issue, highest + 1);
-            check_local_branch(reads, &next, None)?;
+            worktree::check_local_branch(&next, reads.local_head(&next)?.as_deref(), None)?;
             Ok(Selection::Fresh { branch: next })
         }
         (Some(origin_sha), pr) => {
-            check_local_branch(reads, &branch, Some(&origin_sha))?;
+            worktree::check_local_branch(
+                &branch,
+                reads.local_head(&branch)?.as_deref(),
+                Some(&origin_sha),
+            )?;
             Ok(Selection::Continuation { branch, pr })
         }
         (None, _) => bail!("{branch} has an open PR but is gone from origin"),
@@ -225,23 +230,6 @@ fn used(reads: &impl Reads, issue: &IssueUrl) -> Result<Used> {
         .filter_map(|pr| Some((branch_number(issue, &pr.head)?, pr)))
         .collect();
     Ok(Used { on_origin, prs })
-}
-
-/// A local `branch` in the launch repository must be at `origin_sha`, or not
-/// exist when origin has no copy, so no local-only commits are destroyed.
-fn check_local_branch(reads: &impl Reads, branch: &str, origin_sha: Option<&str>) -> Result<()> {
-    let Some(local_sha) = reads.local_head(branch)? else {
-        return Ok(());
-    };
-    match origin_sha {
-        Some(origin_sha) if origin_sha == local_sha => Ok(()),
-        Some(_) => bail!(
-            "the local branch {branch} differs from origin/{branch}; push, reset or delete it first"
-        ),
-        None => {
-            bail!("the local branch {branch} is not on origin; push, rename or delete it first")
-        }
-    }
 }
 
 /// `issue-<n>` is branch 1, `issue-<n>-branch-<k>` is branch k for k ≥ 2.
@@ -545,16 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn a_local_copy_of_a_fresh_branch_is_refused() {
-        let reads = InMemory {
-            local: vec![("issue-5", "abc")],
-            ..InMemory::default()
-        };
-        assert_eq!(
-            refusal(&reads),
-            "the local branch issue-5 is not on origin; push, rename or delete it first"
-        );
-
+    fn advisory_preflight_refuses_the_chosen_next_numbered_branch() {
         let reads = InMemory {
             prs: vec![pr(1, "issue-5", PrState::Merged)],
             local: vec![("issue-5-branch-2", "abc")],
@@ -564,31 +543,6 @@ mod tests {
             refusal(&reads),
             "the local branch issue-5-branch-2 is not on origin; push, rename or delete it first"
         );
-    }
-
-    #[test]
-    fn a_local_copy_of_a_continued_branch_at_another_head_is_refused() {
-        let reads = InMemory {
-            origin: vec![("issue-5", "abc")],
-            local: vec![("issue-5", "def")],
-            ..InMemory::default()
-        };
-
-        assert_eq!(
-            refusal(&reads),
-            "the local branch issue-5 differs from origin/issue-5; push, reset or delete it first"
-        );
-    }
-
-    #[test]
-    fn a_local_copy_at_origins_head_is_continued() {
-        let reads = InMemory {
-            origin: vec![("issue-5", "abc")],
-            local: vec![("issue-5", "abc")],
-            ..InMemory::default()
-        };
-
-        assert_eq!(picked(&reads), continued("issue-5", None));
     }
 
     #[test]

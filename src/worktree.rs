@@ -14,6 +14,8 @@ use crate::host;
 use crate::progress;
 
 #[cfg(test)]
+mod acquisition_tests;
+#[cfg(test)]
 mod preservation_tests;
 
 /// How merging the Base branch, or new commits on origin, into the Issue
@@ -45,33 +47,36 @@ pub struct Worktree {
 
 impl Worktree {
     /// Create `branch` fresh from `origin/<base>` in a new worktree next to the
-    /// launch repository's root, named `<repo>-<branch>`.
+    /// launch repository's root, named `<repo>-<branch>`. Under the worktree
+    /// lock, pin the fetched Base branch commit, refuse any existing local
+    /// Issue branch and create without force. No selection preflight is required.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;
-        Self::add(
-            launch,
-            repo,
-            branch,
-            &["-b", branch],
-            &format!("origin/{base}"),
-        )
+        let source = format!("origin/{base}");
+        let commit = launch.run(&["rev-parse", &source])?;
+        check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
+        Self::add(launch, repo, branch, &["-b", branch], &commit, &source)
     }
 
     /// Check out the existing `branch` from origin in a new worktree next to
     /// the launch repository's root, named `<repo>-<branch>`. `origin/<base>`
-    /// is fetched too, for the review fixed point. A local `branch`, if any, is
-    /// reset to origin's: `branch::select` has checked they already match.
+    /// is fetched too, for the review fixed point. Under the worktree lock,
+    /// pin the fetched head and refuse any different local head. An equal
+    /// branch is attached without resetting it; an absent one is created
+    /// without force at the pinned commit. No selection preflight is required.
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base, branch])?;
-        Self::add(
-            launch,
-            repo,
-            branch,
-            &["-B", branch],
-            &format!("origin/{branch}"),
-        )
+        let source = format!("origin/{branch}");
+        let commit = launch.run(&["rev-parse", &source])?;
+        let local = local_head(launch, branch)?;
+        check_local_branch(branch, local.as_deref(), Some(&commit))?;
+        if local.is_some() {
+            Self::add(launch, repo, branch, &[], branch, &source)
+        } else {
+            Self::add(launch, repo, branch, &["-b", branch], &commit, &source)
+        }
     }
 
     fn add(
@@ -80,10 +85,11 @@ impl Worktree {
         branch: &str,
         branch_args: &[&str],
         start: &str,
+        source: &str,
     ) -> Result<Self> {
         let (root, path) = sibling(launch, &format!("{repo}-{branch}"))?;
         progress::step(format_args!(
-            "creating worktree {} on {branch} from {start}",
+            "creating worktree {} on {branch} from {source}",
             path.display()
         ));
         add_worktree(launch, branch_args, &path, start)?;
@@ -260,6 +266,39 @@ impl Worktree {
     fn merged(&self, rev: &str) -> Result<bool> {
         self.git
             .succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"])
+    }
+}
+
+/// The local Issue branch head sampled for acquisition or advisory preflight.
+pub(crate) fn local_head(launch: &Git, branch: &str) -> Result<Option<String>> {
+    launch.run_optional(&[
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("refs/heads/{branch}"),
+    ])
+}
+
+/// Refuse local work acquisition would replace. A fresh checkout requires
+/// absence; a Continuation permits absence or exact equality with its
+/// sampled origin head. Selection shares this rule for advisory preflight;
+/// acquisition checks it again under the worktree lock after fetching.
+pub(crate) fn check_local_branch(
+    branch: &str,
+    local_head: Option<&str>,
+    origin_head: Option<&str>,
+) -> Result<()> {
+    let Some(local_head) = local_head else {
+        return Ok(());
+    };
+    match origin_head {
+        Some(origin_head) if origin_head == local_head => Ok(()),
+        Some(_) => bail!(
+            "the local branch {branch} differs from origin/{branch}; push, reset or delete it first"
+        ),
+        None => {
+            bail!("the local branch {branch} is not on origin; push, rename or delete it first")
+        }
     }
 }
 
