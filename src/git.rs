@@ -206,7 +206,6 @@ fn non_empty_lines(stream: &[u8]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
 
@@ -243,8 +242,7 @@ mod tests {
     fn a_failure_includes_a_hooks_output_and_gits_own_error() {
         let (_temp, git) = repo_with_origin();
         let hook = git.dir().join(".git/hooks/pre-push");
-        std::fs::write(&hook, "#!/bin/sh\necho 'hook says no'\nexit 1\n").unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_executable(&hook, "#!/bin/sh\necho 'hook says no'\nexit 1\n");
 
         let error = git
             .run(&["push", "origin", "main"])

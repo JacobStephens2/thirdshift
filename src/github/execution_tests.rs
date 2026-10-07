@@ -2,7 +2,6 @@ use super::*;
 use crate::interrupt;
 use crate::test_support::with_recorded_signal;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -35,15 +34,13 @@ impl Fixture {
 
     fn script(&self, script: &str) {
         let gh = self.path("gh");
-        fs::write(
+        crate::test_support::write_executable(
             &gh,
-            format!(
+            &format!(
                 "#!/bin/sh\necho $$ > '{}'\n{script}\n",
                 self.path("pid").display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(gh, fs::Permissions::from_mode(0o755)).unwrap();
+        );
     }
 
     fn pid(&self) -> Option<libc::pid_t> {
