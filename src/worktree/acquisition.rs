@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::local_head;
+use super::ownership::{Checkout, Directory};
 use crate::git::Git;
 
 pub(super) fn add(
@@ -35,18 +36,22 @@ pub(super) fn add(
     ]);
     // Arm before the first possible mutation, including unwinding in Git.
     owner.armed = true;
-    match launch
-        .run(&args)
-        .and_then(|_| super::ownership::Checkout::capture(launch, path, branch))
-        .and_then(|checkout| {
-            if branch.is_none() {
-                owner.publication.publish(launch, &checkout)?;
-            }
-            Ok(checkout)
-        }) {
-        Ok(checkout) => {
+    match launch.run(&args).and_then(|_| {
+        owner.checkout = Some(Checkout::capture(launch, path, branch)?);
+        if branch.is_none() {
+            owner.publication.publish(
+                launch,
+                owner
+                    .checkout
+                    .as_ref()
+                    .context("missing captured checkout")?,
+            )?;
+        }
+        Ok(())
+    }) {
+        Ok(()) => {
             owner.armed = false;
-            Ok(checkout)
+            owner.checkout.take().context("missing captured checkout")
         }
         Err(cause) => {
             let retained = owner.recover();
@@ -69,7 +74,8 @@ struct Acquisition<'a> {
     registration_path: PathBuf,
     registered_before: bool,
     branch_before: Option<String>,
-    common_dir: PathBuf,
+    common: Directory,
+    checkout: Option<Checkout>,
     publication: super::ownership::Publication,
     armed: bool,
 }
@@ -82,6 +88,7 @@ impl<'a> Acquisition<'a> {
         start: &'a str,
     ) -> Result<Self> {
         path.to_str().context("worktree path is not UTF-8")?;
+        let common = Directory::open(launch.common_dir()?.canonicalize()?)?;
         let path_existed = path_exists(path)?;
         let registration_path = if path_existed {
             path.canonicalize()
@@ -96,7 +103,7 @@ impl<'a> Acquisition<'a> {
             .map(|branch| local_head(launch, branch))
             .transpose()?
             .flatten();
-        let common_dir = launch.common_dir()?.canonicalize()?;
+        common.verify_repository(launch)?;
         if let Some(branch) = branch {
             super::check_local_branch(branch, branch_before.as_deref(), Some(start))?;
         }
@@ -109,96 +116,151 @@ impl<'a> Acquisition<'a> {
             registration_path,
             registered_before,
             branch_before,
-            common_dir,
+            common,
+            checkout: None,
             publication: super::ownership::Publication::default(),
             armed: false,
         })
     }
 
-    fn recover(&self) -> Vec<String> {
+    fn recover(&mut self) -> Vec<String> {
         let launch = self.launch.completion();
+        Recovery {
+            acquisition: self,
+            launch,
+        }
+        .run()
+    }
+}
+
+/// Recovery alone owns clean-only authority and the verified checkout outcome.
+/// Both caller locks remain held; outside writers still require fresh checks.
+struct Recovery<'a, 'repo> {
+    acquisition: &'a mut Acquisition<'repo>,
+    launch: Git,
+}
+
+#[derive(Clone, Copy)]
+enum CheckoutOutcome {
+    NoEffect,
+    Removed,
+}
+
+impl Recovery<'_, '_> {
+    fn run(&mut self) -> Vec<String> {
         let mut retained = Vec::new();
-        let checkout_safe = match self.recover_checkout(&launch) {
-            Ok(()) => true,
+        let outcome = match self.recover_checkout() {
+            Ok(outcome) => Some(outcome),
             Err(error) => {
+                let owner = &self.acquisition;
                 retained.push(format!(
                     "retaining checkout {} (expected {} at {}): {error:#}",
-                    self.path.display(),
-                    self.branch.unwrap_or("detached HEAD"),
-                    self.start,
+                    owner.path.display(),
+                    owner.branch.unwrap_or("detached HEAD"),
+                    owner.start,
                 ));
-                false
+                None
             }
         };
-        if let Some(branch) = self.branch.filter(|_| self.branch_before.is_none())
-            && let Err(error) = self.recover_branch(&launch, branch, checkout_safe)
+        let owner = &self.acquisition;
+        if let Some(branch) = owner.branch.filter(|_| owner.branch_before.is_none())
+            && let Err(error) = self.recover_branch(branch, outcome)
         {
             retained.push(format!(
-                "retaining local branch {branch} for {}: {error:#}",
-                self.path.display()
+                "retaining local branch {branch} for {} (expected head {}): {error:#}",
+                owner.path.display(),
+                owner.start,
             ));
         }
         retained
     }
 
-    fn recover_checkout(&self, launch: &Git) -> Result<()> {
-        self.publication.remove_artifacts()?;
-        let entries =
-            registrations(launch).context("cannot inspect registrations; current head unknown")?;
-        if let Some(entry) = entries
-            .iter()
-            .find(|entry| entry.path == self.registration_path)
-        {
-            return self.remove_checkout(launch, entry).with_context(|| {
-                format!(
-                    "on {} at {}",
-                    entry.branch.as_deref().unwrap_or(if entry.detached {
-                        "detached HEAD"
-                    } else {
-                        "unknown identity"
-                    }),
-                    entry.head.as_deref().unwrap_or("unknown head")
-                )
-            });
-        }
-        if !self.path_existed && path_exists(self.path)? {
-            bail!("unregistered path has uncertain ownership; head unknown");
-        }
-        Ok(())
+    fn verify_repository(&self) -> Result<()> {
+        self.acquisition.common.verify_repository(&self.launch)
     }
 
-    fn remove_checkout(&self, launch: &Git, entry: &Registration) -> Result<()> {
-        if self.path_existed || self.registered_before {
-            bail!("path or registration existed before this add");
+    fn recover_checkout(&mut self) -> Result<CheckoutOutcome> {
+        self.verify_repository().context("current head unknown")?;
+        self.acquisition.publication.remove_artifacts()?;
+        let entries = registrations(&self.launch)
+            .context("cannot inspect registrations; current head unknown")?;
+        self.verify_repository()?;
+        let owner = &mut self.acquisition;
+        let Some(entry) = entries
+            .iter()
+            .find(|entry| entry.path == owner.registration_path)
+        else {
+            self.verify_outcome(CheckoutOutcome::NoEffect)?;
+            return Ok(CheckoutOutcome::NoEffect);
+        };
+        let identity = format!(
+            "on {} at {}",
+            entry.branch.as_deref().unwrap_or(if entry.detached {
+                "detached HEAD"
+            } else {
+                "unknown identity"
+            }),
+            entry.head.as_deref().unwrap_or("unknown head"),
+        );
+        let mut capture = || -> Result<()> {
+            if owner.path_existed || owner.registered_before {
+                bail!("path or registration existed before this add");
+            }
+            if entry.locked {
+                bail!("checkout is locked");
+            }
+            let reference = owner.branch.map(|branch| format!("refs/heads/{branch}"));
+            if entry.branch != reference || entry.detached != owner.branch.is_none() {
+                bail!("unexpected checkout identity");
+            }
+            if entry.head.as_deref() != Some(owner.start) {
+                bail!("checkout HEAD changed from the sampled {}", owner.start);
+            }
+            if owner.checkout.is_none() {
+                owner.checkout = Some(Checkout::capture(&self.launch, owner.path, owner.branch)?);
+            }
+            Ok(())
+        };
+        capture().context(identity.clone())?;
+        self.launch
+            .run_transition(
+                &[
+                    "worktree",
+                    "remove",
+                    self.acquisition
+                        .path
+                        .to_str()
+                        .context("worktree path is not UTF-8")?,
+                ],
+                || self.verify_clean_checkout(),
+                |result| {
+                    if result.as_ref().is_ok_and(|output| output.status.success()) {
+                        self.verify_outcome(CheckoutOutcome::Removed).map(|_| ())
+                    } else {
+                        self.verify_clean_checkout()
+                    }
+                },
+            )
+            .context(identity)?;
+        Ok(CheckoutOutcome::Removed)
+    }
+
+    fn verify_clean_checkout(&self) -> Result<()> {
+        self.verify_repository()?;
+        let owner = &self.acquisition;
+        let checkout = owner
+            .checkout
+            .as_ref()
+            .context("checkout identity unknown")?;
+        let head = checkout.inspect(&self.launch)?;
+        if head != owner.start {
+            bail!(
+                "checkout HEAD changed from the sampled {} to {head}",
+                owner.start
+            );
         }
-        if entry.locked {
-            bail!("checkout is locked");
-        }
-        let reference = self.branch.map(|branch| format!("refs/heads/{branch}"));
-        if entry.branch != reference || entry.detached != self.branch.is_none() {
-            bail!("unexpected checkout identity");
-        }
-        if entry.head.as_deref() != Some(self.start) {
-            bail!("checkout HEAD changed from the sampled {}", self.start);
-        }
-        if std::fs::symlink_metadata(self.path)?
-            .file_type()
-            .is_symlink()
-        {
-            bail!("checkout path became a symlink");
-        }
-        let git = Git::new(self.path).completion();
-        if Path::new(&git.run(&["rev-parse", "--show-toplevel"])?) != self.path
-            || git.common_dir()?.canonicalize()? != self.common_dir
-            || git.run(&["rev-parse", "--verify", "HEAD"])? != self.start
-            || git.run(&["rev-parse", "--symbolic-full-name", "HEAD"])?
-                != reference.as_deref().unwrap_or("HEAD")
-        {
-            bail!("checkout no longer matches its registration and sampled start");
-        }
-        // Status (and non-force removal) can call real edits clean when
-        // assume-unchanged or skip-worktree flags hide them. These index
-        // entries cannot establish absence of work, even at the sampled HEAD.
+        let git = Git::new(owner.path).completion();
+        // Hidden index entries cannot establish absence of tracked work.
         if git
             .run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?
             .split('\0')
@@ -232,40 +294,123 @@ impl<'a> Acquisition<'a> {
         {
             bail!("checkout contains initialized submodules");
         }
-        launch.run(&[
-            "worktree",
-            "remove",
-            self.path.to_str().context("worktree path is not UTF-8")?,
-        ])?;
+        let head = checkout.inspect(&self.launch)?;
+        if head != owner.start {
+            bail!(
+                "checkout HEAD changed from the sampled {} to {head}",
+                owner.start
+            );
+        }
+        self.verify_repository()
+    }
+
+    fn verify_outcome(&self, outcome: CheckoutOutcome) -> Result<Vec<Registration>> {
+        self.verify_repository()?;
+        let owner = &self.acquisition;
+        let entries = match outcome {
+            CheckoutOutcome::NoEffect => {
+                if owner.checkout.is_some() || owner.registered_before {
+                    bail!("original checkout registration disappeared; head unknown");
+                }
+                let entries = registrations(&self.launch)?;
+                if entries
+                    .iter()
+                    .any(|entry| entry.path == owner.registration_path)
+                {
+                    bail!("unexpected checkout registration appeared; head unknown");
+                }
+                if !owner.path_existed && path_exists(owner.path)? {
+                    bail!("unregistered path has uncertain ownership; head unknown");
+                }
+                entries
+            }
+            CheckoutOutcome::Removed => owner
+                .checkout
+                .as_ref()
+                .context("removed checkout identity unknown")?
+                .verify_removed(&self.launch)?,
+        };
+        self.verify_repository()?;
+        Ok(entries)
+    }
+
+    fn recover_branch(&self, branch: &str, outcome: Option<CheckoutOutcome>) -> Result<()> {
+        self.verify_repository().context("current head unknown")?;
+        let Some(head) =
+            local_head(&self.launch, branch).context("cannot inspect local ref; head unknown")?
+        else {
+            return self.verify_repository();
+        };
+        if head != self.acquisition.start {
+            bail!(
+                "head {head} changed from the sampled {}",
+                self.acquisition.start
+            );
+        }
+        let outcome = outcome.with_context(|| {
+            format!("head {head}; checkout was retained or could not be inspected")
+        })?;
+        let reference = format!("refs/heads/{branch}");
+        self.launch
+            .run_transition(
+                &[
+                    "update-ref",
+                    "--no-deref",
+                    "-d",
+                    &reference,
+                    self.acquisition.start,
+                ],
+                || self.verify_branch(branch, outcome, Some(self.acquisition.start)),
+                |result| {
+                    let expected = if result.as_ref().is_ok_and(|output| output.status.success()) {
+                        None
+                    } else {
+                        Some(self.acquisition.start)
+                    };
+                    self.verify_branch(branch, outcome, expected)
+                },
+            )
+            .with_context(|| format!("conditional removal failed; last observed head {head}"))?;
         Ok(())
     }
 
-    fn recover_branch(&self, launch: &Git, branch: &str, checkout_safe: bool) -> Result<()> {
-        let Some(head) =
-            local_head(launch, branch).context("cannot inspect local ref; head unknown")?
-        else {
-            return Ok(());
+    fn verify_branch(
+        &self,
+        branch: &str,
+        outcome: CheckoutOutcome,
+        expected: Option<&str>,
+    ) -> Result<()> {
+        if self.acquisition.branch_before.is_some() {
+            bail!("Issue branch existed before this add");
+        }
+        let unused = || -> Result<()> {
+            let entries = self.verify_outcome(outcome)?;
+            let reference = format!("refs/heads/{branch}");
+            if let Some(entry) = entries
+                .iter()
+                .find(|entry| entry.branch.as_deref() == Some(&reference))
+            {
+                bail!(
+                    "head {}; still registered at {}",
+                    entry.head.as_deref().unwrap_or("unknown"),
+                    entry.path.display()
+                );
+            }
+            Ok(())
         };
-        if head != self.start {
-            bail!("head {head} changed from the sampled {}", self.start);
+        unused()?;
+        let head =
+            local_head(&self.launch, branch).context("cannot inspect local ref; head unknown")?;
+        if head.as_deref() != expected {
+            bail!(
+                "local branch head changed (expected {}, observed {})",
+                expected.unwrap_or("absent"),
+                head.as_deref().unwrap_or("absent")
+            );
         }
-        if !checkout_safe {
-            bail!("head {head}; checkout was retained or could not be inspected");
-        }
-        let reference = format!("refs/heads/{branch}");
-        if let Some(entry) = registrations(launch)
-            .with_context(|| format!("head {head}; cannot inspect registered checkouts"))?
-            .iter()
-            .find(|entry| entry.branch.as_deref() == Some(&reference))
-        {
-            bail!("head {head}; still registered at {}", entry.path.display());
-        }
-        // Git locks and compares the old value atomically. Never delete a
-        // checked-out ref just because its head happens to match.
-        launch
-            .run(&["update-ref", "--no-deref", "-d", &reference, self.start])
-            .with_context(|| format!("conditional removal failed; last observed head {head}"))?;
-        Ok(())
+        // Ref observations must not authorize recreated paths or new attachments.
+        unused()?;
+        self.verify_repository()
     }
 }
 

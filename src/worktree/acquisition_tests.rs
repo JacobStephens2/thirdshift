@@ -66,6 +66,124 @@ fn checkout_hook(temp: &tempfile::TempDir, script: &str) {
 }
 
 #[test]
+fn work_arriving_during_checkout_removal_retry_survives() {
+    const NAME: &str =
+        "worktree::acquisition_tests::work_arriving_during_checkout_removal_retry_survives";
+    if crate::test_support::git_fault(
+        NAME,
+        r#"
+if test "$1" = worktree && test "$2" = remove && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  mutation=$(cat ../retry-mutation)
+  if test "$mutation" = ignored; then
+    printf 'later work\n' > "$3/ignored.txt"
+  else
+    "$THIRDSHIFT_REAL_GIT" -C "$3" update-index --"$mutation" tracked.txt
+    printf 'later work\n' > "$3/tracked.txt"
+  fi
+  echo "fatal: Unable to create 'recovery.lock': File exists" >&2
+  exit 1
+fi
+"#,
+    )
+    .is_some()
+    {
+        return;
+    }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in KINDS {
+        for mutation in ["ignored", "assume-unchanged", "skip-worktree"] {
+            let (temp, launch, start) = kind.prepare();
+            std::fs::write(temp.path().join("retry-mutation"), mutation).unwrap();
+            std::fs::write(launch.dir().join(".git/info/exclude"), "ignored.txt\n").unwrap();
+            checkout_hook(&temp, "");
+
+            let error = kind.acquire(&launch).unwrap_err();
+
+            let work = if mutation == "ignored" {
+                "ignored.txt"
+            } else {
+                "tracked.txt"
+            };
+            assert_eq!(
+                std::fs::read_to_string(kind.path(&temp).join(work)).unwrap(),
+                "later work\n",
+                "{kind:?}, {mutation}: {error:#}"
+            );
+            assert!(marker.exists(), "retry injection did not run");
+            assert!(
+                error.to_string().contains("retaining checkout"),
+                "{error:#}"
+            );
+            assert!(error.to_string().contains(&start), "{error:#}");
+            assert!(error.to_string().contains("recovery.lock"), "{error:#}");
+            assert!(
+                error
+                    .root_cause()
+                    .to_string()
+                    .contains("checkout hook refused")
+            );
+            if !matches!(kind, AcquisitionKind::Review) {
+                assert_eq!(
+                    local_head(&launch, BRANCH).unwrap().as_deref(),
+                    Some(start.as_str())
+                );
+            }
+            std::fs::remove_file(&marker).unwrap();
+        }
+    }
+}
+
+#[test]
+fn same_head_attachment_during_ref_removal_retry_survives() {
+    const NAME: &str =
+        "worktree::acquisition_tests::same_head_attachment_during_ref_removal_retry_survives";
+    if crate::test_support::git_fault(
+        NAME,
+        r#"
+if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  "$THIRDSHIFT_REAL_GIT" -c core.hooksPath=/dev/null worktree add ../manual issue-7
+  printf 'manual work\n' > ../manual/work.txt
+  echo "fatal: Unable to create 'recovery.lock': File exists" >&2
+  exit 1
+fi
+"#,
+    )
+    .is_some()
+    {
+        return;
+    }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in [AcquisitionKind::Fresh, AcquisitionKind::ContinuationAbsent] {
+        let (temp, launch, start) = kind.prepare();
+        checkout_hook(&temp, "");
+
+        let error = kind.acquire(&launch).unwrap_err();
+
+        assert!(!kind.path(&temp).exists());
+        assert_eq!(
+            local_head(&launch, BRANCH).unwrap().as_deref(),
+            Some(start.as_str()),
+            "{kind:?}: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("manual/work.txt")).unwrap(),
+            "manual work\n"
+        );
+        assert!(error.to_string().contains("still registered"), "{error:#}");
+        assert!(error.to_string().contains("recovery.lock"), "{error:#}");
+        assert!(
+            error
+                .root_cause()
+                .to_string()
+                .contains("checkout hook refused")
+        );
+        std::fs::remove_file(&marker).unwrap();
+    }
+}
+
+#[test]
 fn clean_hook_failures_remove_only_the_attempts_checkout_and_branch() {
     for kind in KINDS {
         let (temp, launch, start) = kind.prepare();
@@ -1312,4 +1430,497 @@ fn a_review_retry_recovers_successful_scratch_and_detached_commits() {
             .unwrap(),
         launch.run(&["rev-parse", "main"]).unwrap()
     );
+}
+
+#[test]
+fn recovery_retains_changed_checkout_authority_during_removal() {
+    const NAME: &str =
+        "worktree::acquisition_tests::recovery_retains_changed_checkout_authority_during_removal";
+    if crate::test_support::git_fault(NAME, r#"
+if test "$1" = worktree && test "$2" = list && test -e "$THIRDSHIFT_FAULT_MARKER" && test "$(cat ../retry-mutation)" = inspection; then
+  echo 'registration inspection refused' >&2
+  exit 1
+fi
+if test "$1" = worktree && test "$2" = remove && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  admin=$("$THIRDSHIFT_REAL_GIT" -C "$3" rev-parse --absolute-git-dir)
+  case "$(cat ../retry-mutation)" in
+    checkout) mv "$3" "$3.original"; cp -R "$3.original" "$3" ;;
+    admin) mv "$admin" ../original-admin; cp -R ../original-admin "$admin" ;;
+    common) cp -R .git ../copied-common; mv .git ../original-common; mv ../copied-common .git ;;
+    switched) "$THIRDSHIFT_REAL_GIT" -C "$3" symbolic-ref HEAD refs/heads/main ;;
+    locked) "$THIRDSHIFT_REAL_GIT" worktree lock "$3" --reason 'later owner' ;;
+    git-link) mv "$3/.git" "$3/.git.original"; ln -s .git.original "$3/.git" ;;
+    backlink) mv "$admin/gitdir" "$admin/gitdir.original"; ln -s gitdir.original "$admin/gitdir" ;;
+    common-link) mv "$admin/commondir" "$admin/commondir.original"; ln -s commondir.original "$admin/commondir" ;;
+    inconsistent) printf '%s\n' "$PWD/.git" > "$admin/gitdir" ;;
+    missing-registration) rm "$admin/gitdir" ;;
+    inspection) : ;;
+  esac
+  echo "fatal: Unable to create 'recovery.lock': File exists" >&2
+  exit 1
+fi
+"#).is_some() { return; }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in KINDS {
+        for mutation in [
+            "checkout",
+            "admin",
+            "common",
+            "switched",
+            "locked",
+            "git-link",
+            "backlink",
+            "common-link",
+            "inconsistent",
+            "missing-registration",
+            "inspection",
+        ] {
+            let (temp, launch, start) = kind.prepare();
+            std::fs::write(temp.path().join("retry-mutation"), mutation).unwrap();
+            checkout_hook(&temp, "");
+
+            let error = kind.acquire(&launch).unwrap_err();
+
+            assert!(
+                marker.exists(),
+                "{kind:?}, {mutation}: injection did not run"
+            );
+            assert!(
+                kind.path(&temp).join("tracked.txt").exists(),
+                "{kind:?}, {mutation}: {error:#}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("retaining checkout")
+                    && message.contains(&start)
+                    && message.contains("recovery.lock"),
+                "{kind:?}, {mutation}: {error:#}"
+            );
+            assert!(
+                error
+                    .root_cause()
+                    .to_string()
+                    .contains("checkout hook refused")
+            );
+            if !matches!(kind, AcquisitionKind::Review) {
+                assert_eq!(
+                    local_head(&launch, BRANCH).unwrap().as_deref(),
+                    Some(start.as_str()),
+                    "{kind:?}, {mutation}: {error:#}"
+                );
+            }
+            std::fs::remove_file(&marker).unwrap();
+        }
+    }
+}
+
+#[test]
+fn recovery_retains_replacements_during_cleanliness_observation() {
+    const NAME: &str =
+        "worktree::acquisition_tests::recovery_retains_replacements_during_cleanliness_observation";
+    if crate::test_support::git_fault(NAME, r#"
+if test "$1" = -c && test "$2" = core.fsmonitor=false && test "$3" = status && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  mv "$PWD" "$PWD.original"
+  cp -R "$PWD.original" "$PWD"
+fi
+"#).is_some() { return; }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in KINDS {
+        let (temp, launch, start) = kind.prepare();
+        checkout_hook(&temp, "");
+
+        let error = kind.acquire(&launch).unwrap_err();
+
+        assert!(marker.exists());
+        assert_eq!(
+            std::fs::read_to_string(kind.path(&temp).join("tracked.txt")).unwrap(),
+            "baseline\n"
+        );
+        assert!(error.to_string().contains("replaced"), "{error:#}");
+        if !matches!(kind, AcquisitionKind::Review) {
+            assert_eq!(
+                local_head(&launch, BRANCH).unwrap().as_deref(),
+                Some(start.as_str())
+            );
+        }
+        std::fs::remove_file(&marker).unwrap();
+    }
+}
+
+#[test]
+fn recovery_requires_verified_checkout_removal_before_deleting_refs() {
+    const NAME: &str = "worktree::acquisition_tests::recovery_requires_verified_checkout_removal_before_deleting_refs";
+    if crate::test_support::git_fault(NAME, r#"
+if test "$1" = worktree && test "$2" = remove && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  admin=$("$THIRDSHIFT_REAL_GIT" -C "$3" rev-parse --absolute-git-dir)
+  case "$(cat ../retry-mutation)" in
+    false-success) exit 0 ;;
+    root-only) rm -rf "$3" ;;
+    admin-only) rm -rf "$admin" ;;
+    removed-failure) "$THIRDSHIFT_REAL_GIT" "$@" ;;
+    recreated) "$THIRDSHIFT_REAL_GIT" "$@"; mkdir "$3"; printf 'replacement work\n' > "$3/work.txt"; exit 0 ;;
+  esac
+  echo "fatal: Unable to create 'recovery.lock': File exists" >&2
+  exit 1
+fi
+"#).is_some() { return; }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in KINDS {
+        for mutation in [
+            "false-success",
+            "root-only",
+            "admin-only",
+            "removed-failure",
+            "recreated",
+        ] {
+            let (temp, launch, start) = kind.prepare();
+            std::fs::write(temp.path().join("retry-mutation"), mutation).unwrap();
+            checkout_hook(
+                &temp,
+                "printf '%s' \"$(git rev-parse --absolute-git-dir)\" > ../captured-admin",
+            );
+
+            let error = kind.acquire(&launch).unwrap_err();
+
+            let path = kind.path(&temp);
+            let admin =
+                PathBuf::from(std::fs::read_to_string(temp.path().join("captured-admin")).unwrap());
+            assert!(marker.exists());
+            assert_eq!(
+                path.exists(),
+                matches!(mutation, "false-success" | "admin-only" | "recreated"),
+                "{kind:?}, {mutation}: {error:#}"
+            );
+            assert_eq!(
+                admin.exists(),
+                matches!(mutation, "false-success" | "root-only"),
+                "{kind:?}, {mutation}: {error:#}"
+            );
+            assert!(
+                error.to_string().contains("retaining checkout"),
+                "{kind:?}, {mutation}: {error:#}"
+            );
+            assert!(
+                error
+                    .root_cause()
+                    .to_string()
+                    .contains("checkout hook refused")
+            );
+            if mutation == "recreated" {
+                assert_eq!(
+                    std::fs::read_to_string(path.join("work.txt")).unwrap(),
+                    "replacement work\n"
+                );
+            }
+            if !matches!(kind, AcquisitionKind::Review) {
+                assert_eq!(
+                    local_head(&launch, BRANCH).unwrap().as_deref(),
+                    Some(start.as_str()),
+                    "{kind:?}, {mutation}: {error:#}"
+                );
+            }
+            std::fs::remove_file(&marker).unwrap();
+        }
+    }
+}
+
+#[test]
+fn recovery_retries_complete_with_unchanged_authority() {
+    const NAME: &str =
+        "worktree::acquisition_tests::recovery_retries_complete_with_unchanged_authority";
+    if crate::test_support::git_fault(NAME, r#"
+if test "$1" = worktree && test "$2" = remove && test ! -e "$THIRDSHIFT_FAULT_MARKER.checkout"; then
+  touch "$THIRDSHIFT_FAULT_MARKER.checkout"
+  echo "fatal: Unable to create 'recovery.lock': File exists" >&2
+  exit 1
+fi
+if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d && test ! -e "$THIRDSHIFT_FAULT_MARKER.ref"; then
+  touch "$THIRDSHIFT_FAULT_MARKER.ref"
+  echo "fatal: Unable to create 'recovery.lock': File exists" >&2
+  exit 1
+fi
+"#).is_some() { return; }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in KINDS {
+        let (temp, launch, start) = kind.prepare();
+        let reflog_path = launch.dir().join(".git/logs/refs/heads/issue-7");
+        let reflog = std::fs::read(&reflog_path).ok();
+        let registered = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+        checkout_hook(&temp, "");
+
+        let error = kind.acquire(&launch).unwrap_err();
+
+        assert!(marker.with_extension("checkout").exists());
+        assert!(!kind.path(&temp).exists(), "{kind:?}: {error:#}");
+        assert_eq!(
+            launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+            registered
+        );
+        assert!(
+            !error.to_string().contains("retaining"),
+            "{kind:?}: {error:#}"
+        );
+        assert!(
+            error
+                .root_cause()
+                .to_string()
+                .contains("checkout hook refused")
+        );
+        if matches!(kind, AcquisitionKind::ContinuationEqual) {
+            assert_eq!(
+                local_head(&launch, BRANCH).unwrap().as_deref(),
+                Some(start.as_str())
+            );
+            assert_eq!(std::fs::read(reflog_path).ok(), reflog);
+        } else {
+            assert!(local_head(&launch, BRANCH).unwrap().is_none());
+        }
+        if matches!(
+            kind,
+            AcquisitionKind::Fresh | AcquisitionKind::ContinuationAbsent
+        ) {
+            assert!(marker.with_extension("ref").exists());
+            std::fs::remove_file(marker.with_extension("ref")).unwrap();
+        }
+        std::fs::remove_file(marker.with_extension("checkout")).unwrap();
+    }
+}
+#[test]
+fn recovery_retains_attachments_arriving_during_ref_observation() {
+    const NAME: &str =
+        "worktree::acquisition_tests::recovery_retains_attachments_arriving_during_ref_observation";
+    if crate::test_support::git_fault(NAME, r#"
+if test "$1" = worktree && test "$2" = remove; then
+  touch "$THIRDSHIFT_FAULT_MARKER.checkout"
+fi
+if test "$1" = for-each-ref && test -e "$THIRDSHIFT_FAULT_MARKER.checkout" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  if test ! -e "$THIRDSHIFT_FAULT_MARKER.head"; then
+    touch "$THIRDSHIFT_FAULT_MARKER.head"
+  else
+    touch "$THIRDSHIFT_FAULT_MARKER"
+    "$THIRDSHIFT_REAL_GIT" -c core.hooksPath=/dev/null worktree add ../manual issue-7
+    printf 'manual work\n' > ../manual/work.txt
+  fi
+fi
+"#).is_some() { return; }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in [AcquisitionKind::Fresh, AcquisitionKind::ContinuationAbsent] {
+        let (temp, launch, start) = kind.prepare();
+        checkout_hook(&temp, "");
+
+        let error = kind.acquire(&launch).unwrap_err();
+
+        assert!(marker.exists());
+        assert_eq!(
+            local_head(&launch, BRANCH).unwrap().as_deref(),
+            Some(start.as_str()),
+            "{kind:?}: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("manual/work.txt")).unwrap(),
+            "manual work\n"
+        );
+        assert!(error.to_string().contains("still registered"), "{error:#}");
+        for suffix in ["", ".checkout", ".head"] {
+            std::fs::remove_file(format!("{}{suffix}", marker.display())).unwrap();
+        }
+    }
+}
+
+#[test]
+fn recovery_requires_verified_ref_outcomes() {
+    const NAME: &str = "worktree::acquisition_tests::recovery_requires_verified_ref_outcomes";
+    if crate::test_support::git_fault(NAME, r#"
+if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  case "$(cat ../retry-mutation)" in
+    false-success) exit 0 ;;
+    absent-failure) "$THIRDSHIFT_REAL_GIT" "$@" ;;
+    moved) changed=$(printf 'Later commit\n' | "$THIRDSHIFT_REAL_GIT" commit-tree "$5^{tree}" -p "$5"); "$THIRDSHIFT_REAL_GIT" update-ref "$4" "$changed" "$5" ;;
+    recreated) mkdir ../work-issue-7; printf 'later work\n' > ../work-issue-7/work.txt ;;
+    common) cp -R .git ../copied-common; mv .git ../original-common; mv ../copied-common .git ;;
+    registration) mkdir -p .git/worktrees/uncertain; printf 'ref: refs/heads/issue-7\n' > .git/worktrees/uncertain/HEAD ;;
+  esac
+  echo "fatal: Unable to create 'recovery.lock': File exists" >&2
+  exit 1
+fi
+"#).is_some() { return; }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in [AcquisitionKind::Fresh, AcquisitionKind::ContinuationAbsent] {
+        for mutation in [
+            "false-success",
+            "absent-failure",
+            "moved",
+            "recreated",
+            "common",
+            "registration",
+        ] {
+            let (temp, launch, start) = kind.prepare();
+            std::fs::write(temp.path().join("retry-mutation"), mutation).unwrap();
+            checkout_hook(&temp, "");
+
+            let error = kind.acquire(&launch).unwrap_err();
+
+            assert!(marker.exists());
+            let head = local_head(&launch, BRANCH).unwrap();
+            match mutation {
+                "absent-failure" => assert!(head.is_none()),
+                "moved" => {
+                    assert_ne!(head.as_deref(), Some(start.as_str()));
+                    assert_eq!(
+                        launch.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
+                        "Later commit"
+                    );
+                }
+                _ => assert_eq!(
+                    head.as_deref(),
+                    Some(start.as_str()),
+                    "{kind:?}, {mutation}: {error:#}"
+                ),
+            }
+            assert!(
+                error.to_string().contains("retaining local branch"),
+                "{kind:?}, {mutation}: {error:#}"
+            );
+            assert!(
+                error
+                    .root_cause()
+                    .to_string()
+                    .contains("checkout hook refused")
+            );
+            if mutation == "recreated" {
+                assert_eq!(
+                    std::fs::read_to_string(kind.path(&temp).join("work.txt")).unwrap(),
+                    "later work\n"
+                );
+            } else {
+                assert!(!kind.path(&temp).exists());
+            }
+            std::fs::remove_file(&marker).unwrap();
+        }
+    }
+}
+
+#[test]
+fn recovery_reuses_capture_after_failed_review_publication() {
+    const NAME: &str =
+        "worktree::acquisition_tests::recovery_reuses_capture_after_failed_review_publication";
+    if crate::test_support::git_fault(
+        NAME,
+        r#"
+if test "$1" = ls-files && test "$2" = --error-unmatch && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  if test "$(cat ../retry-mutation)" = checkout; then
+    mv "$PWD" "$PWD.original"
+    cp -R "$PWD.original" "$PWD"
+  else
+    admin=$("$THIRDSHIFT_REAL_GIT" rev-parse --absolute-git-dir)
+    mv "$admin" ../original-admin
+    cp -R ../original-admin "$admin"
+  fi
+  exit 0
+fi
+"#,
+    )
+    .is_some()
+    {
+        return;
+    }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for mutation in ["checkout", "admin"] {
+        let (temp, launch, start) = AcquisitionKind::Review.prepare();
+        std::fs::write(temp.path().join("retry-mutation"), mutation).unwrap();
+
+        let error = AcquisitionKind::Review.acquire(&launch).unwrap_err();
+
+        let path = AcquisitionKind::Review.path(&temp);
+        assert!(marker.exists());
+        assert_eq!(
+            std::fs::read_to_string(path.join("tracked.txt")).unwrap(),
+            "baseline\n"
+        );
+        assert!(
+            error.to_string().contains("replaced") && error.to_string().contains(&start),
+            "{error:#}"
+        );
+        assert!(
+            error
+                .root_cause()
+                .to_string()
+                .contains("review token path is tracked")
+        );
+        assert!(!path.join(".thirdshift-review-token").exists());
+        let admin = Git::new(&path)
+            .run(&["rev-parse", "--absolute-git-dir"])
+            .unwrap();
+        assert!(!Path::new(&admin).join("thirdshift-review.json").exists());
+        std::fs::remove_file(&marker).unwrap();
+    }
+}
+#[test]
+fn recovery_revalidates_early_add_refusal_during_ref_retry() {
+    const NAME: &str =
+        "worktree::acquisition_tests::recovery_revalidates_early_add_refusal_during_ref_retry";
+    if crate::test_support::git_fault(NAME, r#"
+if test "$1" = worktree && test "$2" = add && test "$3" = -b; then
+  "$THIRDSHIFT_REAL_GIT" branch "$4" "$6"
+  echo 'early add refused' >&2
+  exit 1
+fi
+if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  if test "$(cat ../retry-mutation)" = later-path; then
+    mkdir ../work-issue-7
+    printf 'later work\n' > ../work-issue-7/work.txt
+  fi
+  echo "fatal: Unable to create 'recovery.lock': File exists" >&2
+  exit 1
+fi
+"#).is_some() { return; }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for kind in [AcquisitionKind::Fresh, AcquisitionKind::ContinuationAbsent] {
+        for mutation in ["clean", "occupied", "later-path"] {
+            let (temp, launch, start) = kind.prepare();
+            std::fs::write(temp.path().join("retry-mutation"), mutation).unwrap();
+            let path = kind.path(&temp);
+            if mutation == "occupied" {
+                std::fs::create_dir(&path).unwrap();
+                std::fs::write(path.join("work.txt"), "pre-existing work\n").unwrap();
+            }
+
+            let error = kind.acquire(&launch).unwrap_err();
+
+            assert!(marker.exists());
+            assert!(error.root_cause().to_string().contains("early add refused"));
+            if mutation == "later-path" {
+                assert_eq!(
+                    std::fs::read_to_string(path.join("work.txt")).unwrap(),
+                    "later work\n"
+                );
+                assert_eq!(
+                    local_head(&launch, BRANCH).unwrap().as_deref(),
+                    Some(start.as_str())
+                );
+                assert!(
+                    error.to_string().contains("uncertain ownership"),
+                    "{error:#}"
+                );
+            } else {
+                assert!(local_head(&launch, BRANCH).unwrap().is_none(), "{error:#}");
+                assert!(!error.to_string().contains("retaining"), "{error:#}");
+                if mutation == "occupied" {
+                    assert_eq!(
+                        std::fs::read_to_string(path.join("work.txt")).unwrap(),
+                        "pre-existing work\n"
+                    );
+                } else {
+                    assert!(!path.exists());
+                }
+            }
+            std::fs::remove_file(&marker).unwrap();
+        }
+    }
 }
