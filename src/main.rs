@@ -24,6 +24,7 @@ mod notification;
 mod pass;
 mod pickup;
 mod poll;
+mod process;
 mod progress;
 mod prompt;
 #[cfg(test)]

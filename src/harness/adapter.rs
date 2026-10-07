@@ -34,7 +34,7 @@ pub trait Adapter: Sync {
     /// Stop the session and its descendants, including commands that made
     /// their own process group or session, with this Harness's stop signals.
     fn stop(&self, child: &mut Child) {
-        super::process_tree::stop(child, self.stop_signals());
+        crate::process::stop(child, self.stop_signals());
     }
 
     /// Fixed overrides, also used by the adapter's Model and Effort check.

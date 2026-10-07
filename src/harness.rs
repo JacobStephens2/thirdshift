@@ -21,7 +21,6 @@ pub(crate) mod interpretation_tests;
 pub(crate) mod muse;
 pub(crate) mod opencode;
 pub(crate) mod process;
-mod process_tree;
 pub(crate) mod settings;
 mod skill_load;
 
