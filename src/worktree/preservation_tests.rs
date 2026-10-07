@@ -467,10 +467,9 @@ fi
 }
 
 #[test]
-fn ownership_changing_during_a_successful_push_still_fails_and_holds_both_locks_through_final_inspection()
- {
+fn ownership_changing_during_a_successful_push_retains_work_and_blocks_sibling_operations() {
     if git_fault(
-        "worktree::preservation_tests::ownership_changing_during_a_successful_push_still_fails_and_holds_both_locks_through_final_inspection",
+        "worktree::preservation_tests::ownership_changing_during_a_successful_push_retains_work_and_blocks_sibling_operations",
         r#"
 if test -e "$THIRDSHIFT_FAULT_MARKER.armed"; then
   if test "$1" = push && test "$2" = --no-verify; then
@@ -494,13 +493,13 @@ fi
         return;
     }
     let (temp, launch, mut worktree) = fixture();
+    let reader = Worktree::create_fresh(&launch, "work", "issue-8", "main").unwrap();
     let path = worktree.path().to_path_buf();
     let git = Git::new(&path);
     git.run(&["branch", "manual"]).unwrap();
     let manual = git.run(&["rev-parse", "manual"]).unwrap();
     fs::write(path.join("wip.txt"), "half done\n").unwrap();
     let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
-    let common = launch.common_dir().unwrap();
     fs::write(marker.with_extension("armed"), "armed").unwrap();
     let (finished, received) = mpsc::channel();
     let worker = std::thread::spawn(move || {
@@ -512,23 +511,62 @@ fi
     while !marker.exists() && received.try_recv().is_err() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
-    let held: Vec<_> = ["thirdshift-worktrees.lock", "thirdshift-worktree-refs.lock"]
-        .into_iter()
-        .map(|name| {
-            let held = File::open(common.join(name))
-                .map(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
-            (name, held)
-        })
-        .collect();
-    let released = fs::write(marker.with_extension("release"), "released");
-    let (result, worktree) = worker.join().unwrap();
-    released.unwrap();
+    let (result, worktree) = std::thread::scope(|scope| {
+        let (acquiring, acquisition_started) = mpsc::channel();
+        let (acquired, acquisition_finished) = mpsc::channel();
+        let launch_view = &launch;
+        let acquirer = scope.spawn(move || {
+            let _ = acquiring.send(());
+            let result = Worktree::create_fresh(launch_view, "work", "issue-9", "main");
+            let _ = acquired.send(());
+            result
+        });
+        let (fetching, fetch_started) = mpsc::channel();
+        let (fetched, fetch_finished) = mpsc::channel();
+        let reader_view = &reader;
+        let fetcher = scope.spawn(move || {
+            let _ = fetching.send(());
+            let result = reader_view.merge_base_branch("main");
+            let _ = fetched.send(());
+            result
+        });
+        let acquisition_started = acquisition_started
+            .recv_timeout(Duration::from_secs(2))
+            .is_ok();
+        let fetch_started = fetch_started.recv_timeout(Duration::from_secs(2)).is_ok();
+        let acquisition_bypassed = acquisition_finished
+            .recv_timeout(Duration::from_millis(500))
+            .is_ok();
+        let fetch_bypassed = fetch_finished
+            .recv_timeout(Duration::from_millis(500))
+            .is_ok();
+        let released = fs::write(marker.with_extension("release"), "released");
+        let preserved = worker.join();
+        let acquired = acquirer.join();
+        let merged = fetcher.join();
+        released.unwrap();
+        // Every worker has finished before an assertion can unwind.
+        let acquired = acquired.unwrap().unwrap();
+        assert!(matches!(merged.unwrap().unwrap(), Merge::Clean { .. }));
+        assert!(
+            acquisition_started && fetch_started,
+            "sibling operations did not start"
+        );
+        assert!(
+            !acquisition_bypassed,
+            "acquisition overlapped final ownership inspection"
+        );
+        assert!(
+            !fetch_bypassed,
+            "sibling fetch overlapped final ownership inspection"
+        );
+        assert!(acquired.path().exists());
+        drop(acquired);
+        preserved.unwrap()
+    });
 
     assert_ownership_error(&result.unwrap_err(), &path, "identity changed");
     assert!(marker.exists(), "final inspection was not exercised");
-    for (name, held) in held {
-        assert!(held.unwrap(), "{name} was released before final inspection");
-    }
     drop(worktree);
 
     assert_retained(&launch, &path);
