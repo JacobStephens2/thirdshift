@@ -1,7 +1,8 @@
 //! The Run's worktree: a sibling of the launch repository, on the Issue
 //! branch, removed together with the local Issue branch when dropped unless
-//! Failed run preservation fails. And the Architecture review's: a sibling
-//! too, on no branch, always removed when dropped.
+//! Failed run preservation fails or ownership is uncertain. And the
+//! Architecture review's: a sibling too, on no branch, disposable when owned.
+//! Both retain the acquired instance's identity and leave replacements alone.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,9 @@ use crate::progress;
 mod acquisition;
 #[cfg(test)]
 mod acquisition_tests;
+#[cfg(test)]
+mod cleanup_tests;
+mod ownership;
 #[cfg(test)]
 mod preservation_tests;
 #[cfg(test)]
@@ -92,6 +96,7 @@ impl ForeignCommits {
 }
 
 pub struct Worktree {
+    checkout: ownership::Checkout,
     launch: Git,
     branch: String,
     git: Git,
@@ -136,8 +141,9 @@ impl Worktree {
             "creating worktree {} on {branch} from {source}",
             path.display()
         ));
-        acquisition::add(launch, Some(branch), &path, start)?;
+        let checkout = acquisition::add(launch, Some(branch), &path, start)?;
         Ok(Worktree {
+            checkout,
             launch: Git::new(root),
             branch: branch.to_string(),
             git: Git::new(path),
@@ -390,46 +396,17 @@ pub(crate) fn check_local_branch(
 
 impl Drop for Worktree {
     fn drop(&mut self) {
-        let path = self.path().to_string_lossy().into_owned();
-        if self.kept {
-            let head = self
-                .git
-                .completion()
-                .run(&["rev-parse", "HEAD"])
-                .unwrap_or_else(|error| format!("an unknown commit ({error:#})"));
-            progress::step(format_args!(
-                "keeping the worktree {path} and local branch {} at {head}",
-                self.branch
-            ));
-            return;
-        }
-        progress::step(format_args!(
-            "cleaning up the worktree and local branch {}",
-            self.branch
-        ));
-        let launch = self.launch.completion();
-        let _lock = lock_launch(&launch).inspect_err(|error| {
-            progress::step(format_args!("cleaning up without the lock: {error:#}"))
-        });
-        // Each step is attempted even if the one before it failed.
-        let steps: [&[&str]; 2] = [
-            &["worktree", "remove", "--force", &path],
-            &["branch", "-D", &self.branch],
-        ];
-        for step in steps {
-            if let Err(error) = launch.run(step) {
-                progress::step(format_args!("cleanup incomplete: {error:#}"));
-            }
-        }
+        self.checkout.cleanup(&self.launch, self.kept);
     }
 }
 
 /// The worktree an Architecture review runs in: detached at the head of the
 /// Base branch on origin, with no Issue branch, and removed when dropped,
-/// whatever the session left in it. Nothing in it is committed or pushed.
+/// whatever the session left in the owned instance. Replaced or uncertain
+/// resources are retained. Nothing in it is committed or pushed by cleanup.
 pub struct ReviewWorktree {
     launch: Git,
-    path: PathBuf,
+    checkout: ownership::Checkout,
 }
 
 impl ReviewWorktree {
@@ -456,29 +433,21 @@ impl ReviewWorktree {
             path.display(),
             origin.upstream,
         ));
-        acquisition::add(launch, None, &path, &origin.commit)?;
+        let checkout = acquisition::add(launch, None, &path, &origin.commit)?;
         Ok(ReviewWorktree {
             launch: Git::new(root),
-            path,
+            checkout,
         })
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        self.checkout.path()
     }
 }
 
 impl Drop for ReviewWorktree {
     fn drop(&mut self) {
-        progress::step("cleaning up the worktree");
-        let launch = self.launch.completion();
-        let _lock = lock_launch(&launch).inspect_err(|error| {
-            progress::step(format_args!("cleaning up without the lock: {error:#}"))
-        });
-        let path = self.path.to_string_lossy();
-        if let Err(error) = launch.run(&["worktree", "remove", "--force", &path]) {
-            progress::step(format_args!("cleanup incomplete: {error:#}"));
-        }
+        self.checkout.cleanup(&self.launch, false);
     }
 }
 
@@ -506,8 +475,8 @@ fn fetched_origin(git: &Git, branch: &str) -> Result<OriginCommit> {
 
 /// Wait for, then hold until the file is dropped, the Launch directory's
 /// worktree lock, so the Runs of a Spec run's Tickets add and remove their
-/// worktrees and local Issue branches one at a time: `git worktree add -b`
-/// and `git branch -D` can fail partway on a lock file another holds.
+/// worktrees and local Issue branches one at a time. Acquisition and verified
+/// cleanup hold it through their filesystem, registration and ref effects.
 fn lock_launch(launch: &Git) -> Result<File> {
     launch.lock("thirdshift-worktrees.lock")
 }

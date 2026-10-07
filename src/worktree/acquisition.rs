@@ -8,7 +8,12 @@ use anyhow::{Context, Result, bail};
 use super::local_head;
 use crate::git::Git;
 
-pub(super) fn add(launch: &Git, branch: Option<&str>, path: &Path, start: &str) -> Result<()> {
+pub(super) fn add(
+    launch: &Git,
+    branch: Option<&str>,
+    path: &Path,
+    start: &str,
+) -> Result<super::ownership::Checkout> {
     let mut owner = Acquisition::inspect(launch, branch, path, start)?;
     let mut args = vec!["worktree", "add"];
     match branch {
@@ -29,10 +34,13 @@ pub(super) fn add(launch: &Git, branch: Option<&str>, path: &Path, start: &str) 
     ]);
     // Arm before the first possible mutation, including unwinding in Git.
     owner.armed = true;
-    match launch.run(&args) {
-        Ok(_) => {
+    match launch
+        .run(&args)
+        .and_then(|_| super::ownership::Checkout::capture(launch, path, branch))
+    {
+        Ok(checkout) => {
             owner.armed = false;
-            Ok(())
+            Ok(checkout)
         }
         Err(cause) => {
             let retained = owner.recover();
@@ -302,15 +310,15 @@ fn path_exists(path: &Path) -> Result<bool> {
     }
 }
 
-struct Registration {
-    path: PathBuf,
-    head: Option<String>,
-    branch: Option<String>,
-    detached: bool,
-    locked: bool,
+pub(super) struct Registration {
+    pub(super) path: PathBuf,
+    pub(super) head: Option<String>,
+    pub(super) branch: Option<String>,
+    pub(super) detached: bool,
+    pub(super) locked: bool,
 }
 
-fn registrations(launch: &Git) -> Result<Vec<Registration>> {
+pub(super) fn registrations(launch: &Git) -> Result<Vec<Registration>> {
     let listing = launch.run(&["worktree", "list", "--porcelain", "-z"])?;
     if listing.contains('\u{fffd}') {
         bail!("worktree registration is not unambiguous UTF-8; head unknown");
@@ -334,11 +342,15 @@ fn registrations(launch: &Git) -> Result<Vec<Registration>> {
                 };
                 let mut bare = false;
                 for field in fields {
-                    if let Some(head) = field.strip_prefix("HEAD ") {
-                        entry.head = Some(head.to_string());
+                    if let Some(head) = field.strip_prefix("HEAD ")
+                        && entry.head.replace(head.to_string()).is_some()
+                    {
+                        bail!("cannot inspect registration: duplicate HEAD");
                     }
-                    if let Some(branch) = field.strip_prefix("branch ") {
-                        entry.branch = Some(branch.to_string());
+                    if let Some(branch) = field.strip_prefix("branch ")
+                        && entry.branch.replace(branch.to_string()).is_some()
+                    {
+                        bail!("cannot inspect registration: duplicate branch");
                     }
                     entry.detached |= field == "detached";
                     entry.locked |= field == "locked" || field.starts_with("locked ");
@@ -357,6 +369,15 @@ fn registrations(launch: &Git) -> Result<Vec<Registration>> {
                 Ok(entry)
             })
             .collect::<Result<_>>()?;
+    let mut paths = std::collections::HashSet::new();
+    for entry in &entries {
+        if !paths.insert(&entry.path) {
+            bail!(
+                "cannot inspect duplicate registration at {}",
+                entry.path.display()
+            );
+        }
+    }
     // Git omits damaged administrative directories (e.g. a missing gitdir).
     // An incomplete listing cannot prove that a branch is unused.
     let admin = launch.common_dir()?.join("worktrees");
