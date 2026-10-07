@@ -24,6 +24,8 @@ mod ownership;
 #[cfg(test)]
 mod preservation_tests;
 #[cfg(test)]
+mod review_recovery_tests;
+#[cfg(test)]
 mod synchronization_tests;
 
 /// How merging the Base branch, or new commits on origin, into the Issue
@@ -412,21 +414,14 @@ pub struct ReviewWorktree {
 impl ReviewWorktree {
     /// Check out `origin/<base>`, detached, in a new worktree next to the
     /// launch repository's root, named `<repo>-architect`. A worktree left
-    /// there by a process that ended before it could remove it is removed
-    /// first, so the caller sees that no Architecture review is still running
-    /// in it.
+    /// there by a process that ended before cleanup is removed only with
+    /// evidence of successful acquisition and unchanged instance ownership.
+    /// Failed, unmarked and uncertain acquisitions are retained and named.
     pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;
         let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
-        if path.exists() {
-            let stale = path.to_str().context("worktree path is not UTF-8")?;
-            // Anything else at the path is left for `git worktree add` to
-            // refuse.
-            if launch.succeeds(&["worktree", "remove", "--force", stale])? {
-                progress::step(format_args!("removed the leftover worktree {stale}"));
-            }
-        }
+        ownership::recover_review(launch, &path)?;
         let origin = fetched_origin(launch, base)?;
         progress::step(format_args!(
             "creating worktree {} detached at {}",

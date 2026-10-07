@@ -1475,6 +1475,7 @@ dependencies = [
  "include_dir",
  "libc",
  "reqwest",
+ "serde",
  "serde_json",
  "signal-hook",
  "tempfile",
