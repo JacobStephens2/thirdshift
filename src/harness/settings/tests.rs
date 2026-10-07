@@ -62,7 +62,7 @@ fn isolated(name: &str, installed: &[Harness]) -> bool {
             .map(|harness| harness.name())
             .collect::<Vec<_>>(),
     );
-    for utility in ["git", "bash"] {
+    for utility in ["git", "bash", "sleep"] {
         let path = std::env::split_paths(&std::env::var_os("PATH").unwrap())
             .map(|dir| dir.join(utility))
             .find(|path| path.is_file())
@@ -984,9 +984,11 @@ fn an_interrupted_model_check_is_an_error_instead_of_retrying_the_pair() {
 
 fn interrupt_the_check() {
     crate::interrupt::install().unwrap();
+    // Keep the check alive until its owner observes the interrupt and stops it.
+    // Exiting immediately can win the race with delivery of the signal.
     fs::write(
         root().join("check.sh"),
-        format!("kill -INT {}\nexit 1\n", std::process::id()),
+        format!("kill -INT {}\nsleep 30\nexit 1\n", std::process::id()),
     )
     .unwrap();
 }
