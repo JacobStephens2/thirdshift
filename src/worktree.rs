@@ -14,6 +14,7 @@ use crate::git::Git;
 use crate::host;
 use crate::progress;
 
+mod acquisition;
 #[cfg(test)]
 mod acquisition_tests;
 #[cfg(test)]
@@ -110,9 +111,13 @@ impl Worktree {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;
         let source = format!("origin/{base}");
-        let commit = launch.run(&["rev-parse", &format!("refs/remotes/{source}")])?;
+        let commit = launch.run(&[
+            "rev-parse",
+            "--verify",
+            &format!("refs/remotes/{source}^{{commit}}"),
+        ])?;
         check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
-        Self::add(launch, repo, branch, &["-b", branch], &commit, &source)
+        Self::add(launch, repo, branch, &commit, &source)
     }
 
     /// Check out the existing `branch` from origin in a new worktree next to
@@ -125,30 +130,23 @@ impl Worktree {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base, branch])?;
         let source = format!("origin/{branch}");
-        let commit = launch.run(&["rev-parse", &format!("refs/remotes/{source}")])?;
+        let commit = launch.run(&[
+            "rev-parse",
+            "--verify",
+            &format!("refs/remotes/{source}^{{commit}}"),
+        ])?;
         let local = local_head(launch, branch)?;
         check_local_branch(branch, local.as_deref(), Some(&commit))?;
-        if local.is_some() {
-            Self::add(launch, repo, branch, &[], branch, &source)
-        } else {
-            Self::add(launch, repo, branch, &["-b", branch], &commit, &source)
-        }
+        Self::add(launch, repo, branch, &commit, &source)
     }
 
-    fn add(
-        launch: &Git,
-        repo: &str,
-        branch: &str,
-        branch_args: &[&str],
-        start: &str,
-        source: &str,
-    ) -> Result<Self> {
+    fn add(launch: &Git, repo: &str, branch: &str, start: &str, source: &str) -> Result<Self> {
         let (root, path) = sibling(launch, &format!("{repo}-{branch}"))?;
         progress::step(format_args!(
             "creating worktree {} on {branch} from {source}",
             path.display()
         ));
-        add_worktree(launch, branch_args, &path, start)?;
+        acquisition::add(launch, Some(branch), &path, start)?;
         Ok(Worktree {
             launch: Git::new(root),
             branch: branch.to_string(),
@@ -365,12 +363,22 @@ impl Worktree {
 
 /// The local Issue branch head sampled for acquisition or advisory preflight.
 pub(crate) fn local_head(launch: &Git, branch: &str) -> Result<Option<String>> {
-    launch.run_optional(&[
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        &format!("refs/heads/{branch}"),
-    ])
+    let reference = format!("refs/heads/{branch}");
+    let refs = launch.run(&[
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)%00%(symref)",
+        &reference,
+    ])?;
+    for line in refs.lines() {
+        let fields: Vec<_> = line.split('\0').collect();
+        if fields.first() == Some(&reference.as_str()) {
+            if fields.len() != 3 || !fields[2].is_empty() {
+                bail!("cannot establish the local branch {branch}: unexpected ref identity");
+            }
+            return Ok(Some(fields[1].to_string()));
+        }
+    }
+    Ok(None)
 }
 
 /// Refuse local work acquisition would replace. A fresh checkout requires
@@ -459,11 +467,16 @@ impl ReviewWorktree {
             }
         }
         let start = format!("origin/{base}");
+        let commit = launch.run(&[
+            "rev-parse",
+            "--verify",
+            &format!("refs/remotes/{start}^{{commit}}"),
+        ])?;
         progress::step(format_args!(
             "creating worktree {} detached at {start}",
             path.display()
         ));
-        add_worktree(launch, &["--detach"], &path, &start)?;
+        acquisition::add(launch, None, &path, &commit)?;
         Ok(ReviewWorktree {
             launch: Git::new(root),
             path,
@@ -498,17 +511,6 @@ fn sibling(launch: &Git, name: &str) -> Result<(PathBuf, PathBuf)> {
         .context("the repository root has no parent directory")?
         .join(name);
     Ok((root, path))
-}
-
-/// `git worktree add <checkout> <path> <start>` in the launch repository,
-/// where `checkout` says what the worktree is on: a branch, or nothing.
-fn add_worktree(launch: &Git, checkout: &[&str], path: &Path, start: &str) -> Result<()> {
-    let path = path.to_str().context("worktree path is not UTF-8")?;
-    let mut args = vec!["worktree", "add"];
-    args.extend_from_slice(checkout);
-    args.extend([path, start]);
-    launch.run(&args)?;
-    Ok(())
 }
 
 /// Wait for, then hold until the file is dropped, the Launch directory's
