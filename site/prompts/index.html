@@ -52,9 +52,9 @@
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
 The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
-Address the Standards and Spec findings you agree with.
+For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
 Push branch <mark class="ph">&lt;branch&gt;</mark> and create a pull request against <mark class="ph">&lt;base&gt;</mark> using the `thirdshift-pr` skill, marked ready for review.
-In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing.
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
@@ -69,13 +69,13 @@ You are continuing work on branch <mark class="ph">&lt;branch&gt;</mark>, which 
 
 The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
 
-Address the Standards and Spec findings you agree with.
+For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
 
 Push branch <mark class="ph">&lt;branch&gt;</mark>.
 
 Create a pull request against <mark class="ph">&lt;base&gt;</mark> using the `thirdshift-pr` skill, marked ready for review.
 
-In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing.
 
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
@@ -92,13 +92,13 @@ You are continuing work on branch <mark class="ph">&lt;branch&gt;</mark>, which 
 
 The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
 
-Address the Standards and Spec findings you agree with.
+For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
 
 Push branch <mark class="ph">&lt;branch&gt;</mark>.
 
 Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using the `thirdshift-pr` skill, rewriting its body to cover the whole branch, marked ready for review.
 
-In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing.
 
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
@@ -115,13 +115,13 @@ Every Ticket of the Spec <mark class="ph">&lt;Spec URL&gt;</mark> has landed on 
 
 Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point and <mark class="ph">&lt;Spec URL&gt;</mark> as the spec.
 
-Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.
+For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.
 
 Push branch <mark class="ph">&lt;Spec branch&gt;</mark>. Do not rebase or force-push.
 
 Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.
 
-In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with at least a one-line reason.
+In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing.
 
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
@@ -192,9 +192,9 @@ Someone else pushed commits to <mark class="ph">&lt;branch&gt;</mark> while it w
 
 Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;own head&gt;</mark> as the fixed point: <mark class="ph">&lt;branch&gt;</mark>'s head before their commits were merged in.
 
-Address the Standards and Spec findings you agree with.
+For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
 
-Add each skipped finding to the "Unaddressed findings" section of the pull request body, under Standards or Spec, marked as coming from their commits, with at least a one-line reason. Keep the rest of the body as it is.
+Add each skipped finding to the "Unaddressed findings" section of the pull request body, under Standards or Spec, marked as coming from their commits, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Keep the rest of the body as it is.
 
 Commit and push <mark class="ph">&lt;branch&gt;</mark>. Do not rebase or force-push.
 
@@ -320,17 +320,21 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn both sub-agents in parallel
 
+Include this shared evidence instruction in **both sub-agent prompts**:
+
+&gt; For every finding that says behaviour is wrong, include a test or command, written out in full, that fails if the finding is right. Keep the prose under 800 words; written-out tests and commands are outside that limit.
+
 **Standards sub-agent prompt** should include:
 
 - The full diff command and commit list.
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full (the sub-agent has no other access to it).
-- The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+- The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces."
 
 **Spec sub-agent prompt** should include:
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding."
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 

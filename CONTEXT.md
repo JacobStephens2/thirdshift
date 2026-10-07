@@ -48,7 +48,7 @@ A finding from the Standards axis of a code review: the change breaks a document
 A finding from the Spec axis of a code review: the change is missing, gets wrong, or goes beyond what the issue asked for.
 
 **Unaddressed finding**:
-A **Standards finding** or **Spec finding** the agent chose not to fix. It is listed in the pull request body so a human can decide on it.
+A **Standards finding** or **Spec finding** the agent chose not to fix, listed in the pull request body with what refutes it: a line of code, a plan decision, an ADR or a run that exercises the finding. When a Spec or the Day shift must decide, the entry instead links the `needs-triage` issue filed for that decision, or the open issue already covering it.
 
 **Spec**:
 An issue describing a multi-session piece of work, what is being built rather than how each session does its share, made of **Tickets**: its GitHub sub-issues. See [Spec](https://www.aihero.dev/ai-coding-dictionary/spec) in Matt Pocock's AI Coding Dictionary.
