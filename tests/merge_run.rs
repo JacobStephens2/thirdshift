@@ -279,6 +279,108 @@ fn an_issue_branch_already_deleted_by_github_is_no_warning() {
 }
 
 #[test]
+fn confirmed_merge_finishing_preserves_a_replacement_checkout_and_its_origin() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    let script = scenario.path("replace-after-merge.sh");
+    let worktree = scenario.path("work/widgets-issue-7");
+    let other_origin = scenario.path("replacement-origin.git");
+    std::fs::write(
+        &script,
+        format!(
+            r#"set -e
+git clone -q --bare "$(git remote get-url origin)" '{other_origin}'
+mv '{worktree}' '{worktree}.saved'
+git clone -q --branch issue-7 '{other_origin}' '{worktree}'
+printf 'replacement work\n' > '{worktree}/manual.txt'
+"#,
+            other_origin = other_origin.display(),
+            worktree = worktree.display()
+        ),
+    )
+    .unwrap();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake after-merge \"bash '{}'\"\n",
+        script.display()
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.origin_log("issue-7"), None);
+    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
+    assert!(scenario.issue_labels(7).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("manual.txt")).unwrap(),
+        "replacement work\n"
+    );
+    let replacement = std::process::Command::new("git")
+        .args([
+            "--git-dir",
+            other_origin.to_str().unwrap(),
+            "show-ref",
+            "--verify",
+            "refs/heads/issue-7",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        replacement.status.success(),
+        "replacement origin branch was deleted"
+    );
+    assert!(
+        result.stderr.contains("retaining checkout"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("could not delete issue-7 on origin"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn repository_identity_failure_during_confirmed_merge_finishing_warns_and_still_ends_the_claim() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    let script = scenario.path("replace-repository-after-merge.sh");
+    let common = scenario.launch_dir().join(".git");
+    std::fs::write(
+        &script,
+        format!(
+            r#"set -e
+mv '{common}' '{common}.saved'
+mkdir '{common}'
+"#,
+            common = common.display()
+        ),
+    )
+    .unwrap();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake after-merge \"bash '{}'\"\n",
+        script.display()
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("could not delete issue-7 on origin"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("common repository identity"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
+    assert!(scenario.issue_labels(7).is_empty());
+    assert!(scenario.origin_log("issue-7").is_some());
+}
+
+#[test]
 fn ctrl_c_after_the_merge_finishes_the_post_merge_steps_and_exits_as_merged() {
     let scenario = Scenario::new();
     merge_into_develop(

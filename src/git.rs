@@ -49,7 +49,17 @@ impl Git {
     /// Tickets fetch or create worktrees from one Launch directory at once,
     /// it is run again, for up to [`LOCK_WAIT`].
     pub fn run(&self, args: &[&str]) -> Result<String> {
-        let output = self.retried_output(args)?;
+        self.run_checked(args, || Ok(()))
+    }
+
+    /// Keep a caller's authority check around every subprocess, including
+    /// retries. A completed helper cannot authorize its next command attempt.
+    pub(crate) fn run_checked(
+        &self,
+        args: &[&str],
+        check: impl Fn() -> Result<()>,
+    ) -> Result<String> {
+        let output = self.retried_output_checked(args, &check)?;
         if !output.status.success() {
             let tail = [error_first(&output.stderr), last_lines(&output.stdout)].concat();
             let mut message = format!("git {} failed", args.join(" "));
@@ -72,11 +82,25 @@ impl Git {
     }
 
     fn retried_output(&self, args: &[&str]) -> Result<Output> {
+        self.retried_output_checked(args, &|| Ok(()))
+    }
+
+    fn retried_output_checked(
+        &self,
+        args: &[&str],
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Output> {
+        let attempt = || {
+            check()?;
+            let result = self.output(args);
+            check()?;
+            result
+        };
         let deadline = Instant::now() + LOCK_WAIT;
-        let mut output = self.output(args)?;
+        let mut output = attempt()?;
         while !output.status.success() && held_lock(&output.stderr) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
-            output = self.output(args)?;
+            output = attempt()?;
         }
         Ok(output)
     }
@@ -92,11 +116,20 @@ impl Git {
     /// recorded interruption; completion acquisition keeps waiting. Contention
     /// is polled every 100 ms without a deadline, and the file is never removed.
     pub fn lock(&self, name: &str) -> Result<File> {
-        let path = self.common_dir()?.join(name);
+        self.lock_checked(name, &|| Ok(()))
+    }
+
+    fn lock_checked(&self, name: &str, check: &dyn Fn() -> Result<()>) -> Result<File> {
+        let common = self
+            .dir
+            .join(self.run_checked(&["rev-parse", "--git-common-dir"], check)?);
+        let path = common.join(name);
+        check()?;
         self.interruption.check()?;
         let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
         loop {
             self.interruption.check()?;
+            check()?;
             match file.try_lock() {
                 Ok(()) => {
                     self.interruption.check()?;
@@ -121,26 +154,48 @@ impl Git {
 
     /// Whether origin has the branch `branch`, as origin itself answers.
     pub fn on_origin(&self, branch: &str) -> Result<bool> {
+        self.on_origin_checked(branch, || Ok(()))
+    }
+
+    pub(crate) fn on_origin_checked(
+        &self,
+        branch: &str,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<bool> {
         let reference = format!("refs/heads/{branch}");
-        let found = self.run(&["ls-remote", "--heads", "origin", &reference])?;
+        let found = self.run_checked(&["ls-remote", "--heads", "origin", &reference], check)?;
         Ok(!found.is_empty())
     }
 
     /// Fetch origin without automatic maintenance: worktree disposal must
     /// pass ownership inspection, never a fetch's implicit pruning.
     pub fn fetch(&self, branches: &[&str]) -> Result<()> {
-        let _lock = self.lock_worktree_refs()?;
+        self.fetch_checked(branches, || Ok(()))
+    }
+
+    /// An acquired operation rechecks ownership after waiting for refs and
+    /// before the fetch can change them. The refs lock remains local to fetch.
+    pub(crate) fn fetch_checked(
+        &self,
+        branches: &[&str],
+        check: impl Fn() -> Result<()>,
+    ) -> Result<()> {
+        let _lock = self.lock_checked("thirdshift-worktree-refs.lock", &check)?;
         let mut args = vec!["fetch", "--no-auto-maintenance", "origin"];
         args.extend_from_slice(branches);
-        self.run(&args)?;
+        self.run_checked(&args, check)?;
         Ok(())
     }
 
     /// Push `branch` to origin without local hooks: sessions and CI check
     /// the work, and a rejecting hook must not strand Failed run salvage.
     pub fn push(&self, branch: &str) -> Result<()> {
+        self.push_checked(branch, || Ok(()))
+    }
+
+    pub(crate) fn push_checked(&self, branch: &str, check: impl Fn() -> Result<()>) -> Result<()> {
         progress::step(format_args!("pushing {branch}"));
-        self.run(&["push", "--no-verify", "origin", branch])?;
+        self.run_checked(&["push", "--no-verify", "origin", branch], check)?;
         Ok(())
     }
 
