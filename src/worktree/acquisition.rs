@@ -14,6 +14,7 @@ pub(super) fn add(
     path: &Path,
     start: &str,
 ) -> Result<super::ownership::Checkout> {
+    let _refs_lock = launch.lock_worktree_refs()?;
     let mut owner = Acquisition::inspect(launch, branch, path, start)?;
     let mut args = vec!["worktree", "add"];
     match branch {
