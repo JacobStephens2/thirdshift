@@ -185,7 +185,7 @@ fn when_origin_rejects_the_failure_push_the_worktree_and_local_branch_are_kept()
         "stderr: {}",
         result.stderr
     );
-    assert_kept(&scenario, &result);
+    assert_kept(&scenario, &result, "claude exited 3");
 }
 
 #[test]
@@ -198,13 +198,36 @@ fn when_origin_is_unreachable_for_the_failure_push_the_worktree_and_local_branch
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
-    assert_kept(&scenario, &result);
+    assert_kept(&scenario, &result, "claude exited 3");
+}
+
+#[test]
+fn an_interrupted_failure_push_that_is_rejected_keeps_the_work_and_reports_its_head() {
+    let scenario = Scenario::new();
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        "#!/bin/sh\necho 'origin says no' >&2\nexit 1\n",
+    );
+    scenario.agent_does(&format!(
+        "echo 'half done' > wip.txt\ntouch {}\nsleep 30\n",
+        scenario.path("agent-started").display()
+    ));
+
+    let result = scenario.run_and_signal(&[&scenario.issue_url(7)], "agent-started", "TERM");
+
+    assert!(
+        result.stderr.contains("origin says no"),
+        "{}",
+        result.stderr
+    );
+    assert_kept(&scenario, &result, "interrupted");
 }
 
 /// What a Failed run whose work didn't reach origin shares: the failure
 /// commit is on the local Issue branch in the worktree, which are both kept,
 /// and a line on stderr says where.
-fn assert_kept(scenario: &Scenario, result: &RunResult) {
+fn assert_kept(scenario: &Scenario, result: &RunResult, reason: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(scenario.origin_log("issue-7"), None);
     let worktree = scenario.path("work/widgets-issue-7");
@@ -218,7 +241,7 @@ fn assert_kept(scenario: &Scenario, result: &RunResult) {
         scenario
             .launch_git(&["log", "-1", "--format=%s", head])
             .trim(),
-        "thirdshift: failed run (claude exited 3)"
+        format!("thirdshift: failed run ({reason})")
     );
     let kept = result
         .stderr

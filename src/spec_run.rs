@@ -227,7 +227,7 @@ impl<'a> ChildRunsAndGitHub<'a> {
 
 impl Outside for ChildRunsAndGitHub<'_> {
     fn push(&mut self) -> Result<()> {
-        self.worktree().push()
+        self.worktree().push(self.worktree().git())
     }
 
     /// Retain the child Run's ownership until polling delivers its ending.

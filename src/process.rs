@@ -25,8 +25,6 @@ mod tests;
 #[derive(Clone, Copy)]
 pub(crate) enum Interruption {
     Ordinary,
-    // The following Git/GitHub migration tickets supply production callers.
-    #[cfg_attr(not(test), allow(dead_code))]
     Completion,
 }
 

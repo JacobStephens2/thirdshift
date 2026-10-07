@@ -62,12 +62,8 @@ impl Claim<'_> {
     /// The run has ended as it has, so this never fails: a failure is a
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
     pub fn end(self, reached: Option<Goal>) {
-        self.claimed.end(
-            &mut OnGitHub {
-                launch: self.launch,
-            },
-            reached,
-        );
+        let launch = self.launch.completion();
+        self.claimed.end(&mut OnGitHub { launch: &launch }, reached);
     }
 }
 

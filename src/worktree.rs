@@ -111,25 +111,24 @@ impl Worktree {
     /// The target repo's hooks are skipped: the session runs the tests and CI
     /// gates the PR, so a local hook doesn't decide whether work reaches
     /// origin.
-    pub fn push(&self) -> Result<()> {
+    pub fn push(&self, git: &Git) -> Result<()> {
         progress::step(format_args!("pushing {}", self.branch));
-        self.git
-            .run(&["push", "--no-verify", "origin", &self.branch])?;
+        git.run(&["push", "--no-verify", "origin", &self.branch])?;
         Ok(())
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone
     /// there, e.g. deleted by GitHub after a merge. Hooks are skipped, as for
-    /// [`Worktree::push`].
+    /// [`Worktree::push`]. This finishes a confirmed Self-merge, including
+    /// the origin read that reconciles a failed deletion.
     pub fn delete_from_origin(&self) -> Result<()> {
         progress::step(format_args!("deleting {} on origin", self.branch));
-        let Err(error) = self
-            .git
-            .run(&["push", "--no-verify", "origin", "--delete", &self.branch])
+        let git = self.git.completion();
+        let Err(error) = git.run(&["push", "--no-verify", "origin", "--delete", &self.branch])
         else {
             return Ok(());
         };
-        match self.git.on_origin(&self.branch) {
+        match git.on_origin(&self.branch) {
             Ok(false) => Ok(()),
             _ => Err(error),
         }
@@ -199,7 +198,7 @@ impl Worktree {
     fn merge(&self, upstream: &str) -> Result<Merge> {
         match self.git.run(&["merge", "--no-edit", "--ff", upstream]) {
             Ok(_) => Ok(Merge::Clean),
-            Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge {
+            Err(_) if self.merge_in_progress(&self.git)? => Ok(Merge::Conflicted(PendingMerge {
                 upstream: upstream.to_string(),
                 commit: self.git.run(&["rev-parse", "MERGE_HEAD"])?,
             })),
@@ -213,7 +212,7 @@ impl Worktree {
     /// next round's work.
     pub fn ensure_merged(&self, pending: &PendingMerge) -> Result<()> {
         let upstream = &pending.upstream;
-        if self.merge_in_progress()? {
+        if self.merge_in_progress(&self.git)? {
             bail!("the merge of {upstream} is still in progress");
         }
         if !self.merged(&pending.commit)? {
@@ -236,9 +235,8 @@ impl Worktree {
     }
 
     /// Whether a merge is in progress in the worktree.
-    pub fn merge_in_progress(&self) -> Result<bool> {
-        self.git
-            .succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+    pub fn merge_in_progress(&self, git: &Git) -> Result<bool> {
+        git.succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
     }
 }
 
@@ -247,7 +245,9 @@ impl Drop for Worktree {
         let path = self.path().to_string_lossy().into_owned();
         if self.kept {
             let head = self
-                .head()
+                .git
+                .completion()
+                .run(&["rev-parse", "HEAD"])
                 .unwrap_or_else(|error| format!("an unknown commit ({error:#})"));
             progress::step(format_args!(
                 "keeping the worktree {path} and local branch {} at {head}",
@@ -259,7 +259,8 @@ impl Drop for Worktree {
             "cleaning up the worktree and local branch {}",
             self.branch
         ));
-        let _lock = lock_launch(&self.launch).inspect_err(|error| {
+        let launch = self.launch.completion();
+        let _lock = lock_launch(&launch).inspect_err(|error| {
             progress::step(format_args!("cleaning up without the lock: {error:#}"))
         });
         // Each step is attempted even if the one before it failed.
@@ -268,7 +269,7 @@ impl Drop for Worktree {
             &["branch", "-D", &self.branch],
         ];
         for step in steps {
-            if let Err(error) = self.launch.run(step) {
+            if let Err(error) = launch.run(step) {
                 progress::step(format_args!("cleanup incomplete: {error:#}"));
             }
         }
@@ -321,11 +322,12 @@ impl ReviewWorktree {
 impl Drop for ReviewWorktree {
     fn drop(&mut self) {
         progress::step("cleaning up the worktree");
-        let _lock = lock_launch(&self.launch).inspect_err(|error| {
+        let launch = self.launch.completion();
+        let _lock = lock_launch(&launch).inspect_err(|error| {
             progress::step(format_args!("cleaning up without the lock: {error:#}"))
         });
         let path = self.path.to_string_lossy();
-        if let Err(error) = self.launch.run(&["worktree", "remove", "--force", &path]) {
+        if let Err(error) = launch.run(&["worktree", "remove", "--force", &path]) {
             progress::step(format_args!("cleanup incomplete: {error:#}"));
         }
     }
