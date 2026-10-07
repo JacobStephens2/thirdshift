@@ -29,6 +29,7 @@ mod progress;
 mod prompt;
 #[cfg(test)]
 mod prompts_page;
+mod pull_request;
 mod ready;
 mod resend_key;
 mod run;

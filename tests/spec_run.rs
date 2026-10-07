@@ -1201,6 +1201,65 @@ fn a_spec_pr_closed_during_the_spec_review_fails_the_spec_run() {
 }
 
 #[test]
+fn a_failed_ticket_that_retargets_the_spec_pr_leaves_its_body_untouched() {
+    let scenario = linear_spec();
+    scenario.origin_has_branch("develop", "main", &[]);
+    scenario.agent_does_for(
+        22,
+        r#"gh fake pr issue-20 base '"develop"'
+gh fake pr issue-20 body '"untouched"'
+exit 1
+"#,
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(spec_pr(&scenario)["body"], "untouched");
+    assert_contains(&result.stderr, "PR targets develop, not main");
+    assert_contains(&result.stderr, "#22 failed");
+    assert!(!sessions_by_issue(&scenario).contains(&SPEC.to_string()));
+}
+
+#[test]
+fn successful_ticket_completion_with_an_invalid_spec_pr_starts_no_review() {
+    for replacement in [false, true] {
+        let scenario = linear_spec();
+        scenario.origin_has_branch("develop", "main", &[]);
+        let change = if replacement {
+            r#"gh fake pr issue-20 state '"CLOSED"'
+gh pr create --base main --head issue-20 --title Replacement --body untouched"#
+        } else {
+            r#"gh fake pr issue-20 base '"develop"'
+gh fake pr issue-20 body '"untouched"'"#
+        };
+        scenario.agent_does_for(
+            22,
+            &format!("{}\n{change}\n", agent_lands(22, "second.txt")),
+        );
+
+        let result = scenario.run(&[&spec_url(&scenario)]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(!sessions_by_issue(&scenario).contains(&SPEC.to_string()));
+        assert_eq!(spec_pr(&scenario)["body"], "untouched");
+        assert_contains(
+            &result.stderr,
+            if replacement {
+                "is closed, not open"
+            } else {
+                "PR targets develop, not main"
+            },
+        );
+        assert_contains(&result.stderr, "#22 landed");
+        assert_eq!(scenario.gh_state()["issues"]["22"], "CLOSED");
+        if replacement {
+            assert_eq!(spec_pr(&scenario)["isDraft"], false);
+        }
+    }
+}
+
+#[test]
 fn a_spec_pr_replaced_during_review_gets_its_checklist_on_the_delivered_identity() {
     for failing_review in [false, true] {
         let scenario = linear_spec();

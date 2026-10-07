@@ -14,11 +14,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-mod pull_request;
 mod repair_loop;
 
-pub(crate) use pull_request::Identified;
-use pull_request::{MergeAttempt, PullRequest};
+use crate::pull_request::{Identified, MergeAttempt, PullRequest};
 
 use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
@@ -51,13 +49,6 @@ pub struct Delivery<'a> {
     pub harness: &'a Choice,
 }
 
-/// The outcome and immutable captured PR information. The Spec PR uses the
-/// latter for checklist accounting even when capture happened during salvage.
-pub(crate) struct Delivered {
-    pub outcome: Result<Reached, FailedRun>,
-    pub pull_request: Option<Identified>,
-}
-
 /// The session a Delivery opens with: the implement session, or the Spec
 /// review.
 pub struct Opening<'a> {
@@ -75,8 +66,8 @@ impl Delivery<'_> {
     /// branch to origin. Then run the opening session, push the branch, for
     /// any commit the session left unpushed, write the line that says what it
     /// was built with in the pull request's body, only warning if that fails,
-    /// run `before_ready`, and mark the pull request ready, failing unless it
-    /// exists, is open and targets the Base branch. Then keep it mergeable
+    /// restore the optional Tickets checklist, and mark the pull request ready,
+    /// failing unless it exists, is open and targets the Base branch. Then keep it mergeable
     /// and its CI green through the Repair loop, and for [`Goal::Merged`],
     /// Self-merge it. A merge that fails goes back round the Repair loop and
     /// is tried again on the new head; if that round finds nothing to fix,
@@ -87,8 +78,9 @@ impl Delivery<'_> {
         self,
         worktree: Worktree,
         opening: Opening,
-        before_ready: impl FnOnce(&Identified) -> Result<()>,
-    ) -> Delivered {
+        pull_request: &mut PullRequest,
+        checklist: Option<&str>,
+    ) -> Result<Reached, FailedRun> {
         let route = Route {
             issue: self.issue,
             base: self.base,
@@ -96,8 +88,7 @@ impl Delivery<'_> {
             goal: self.goal,
             harness: self.harness,
         };
-        let mut pull_request =
-            PullRequest::new(self.issue, worktree.branch(), self.base, GitHub::new());
+        pull_request.begin_delivery();
         let (delivered, log) =
             Sessions::within(self.logs, worktree.path(), self.harness, |sessions| {
                 let mut outside = InWorktree {
@@ -106,11 +97,11 @@ impl Delivery<'_> {
                     base: self.base,
                     base_fix: self.base_fix,
                     sessions,
-                    pull_request: &mut pull_request,
+                    pull_request,
                 };
-                route.steps(&mut outside, &opening, before_ready)
+                route.steps(&mut outside, &opening, checklist)
             });
-        let outcome = match delivered {
+        match delivered {
             Ok(pr_url) => Ok(Reached {
                 pr_url,
                 goal: self.goal,
@@ -121,14 +112,10 @@ impl Delivery<'_> {
                 let mut outside = OnFailure {
                     base: self.base,
                     worktree,
-                    pull_request: &mut pull_request,
+                    pull_request,
                 };
                 Err(fail(&mut outside, log, error))
             }
-        };
-        Delivered {
-            outcome,
-            pull_request: pull_request.info(),
         }
     }
 }
@@ -146,15 +133,14 @@ struct Route<'a> {
 impl Route<'_> {
     /// [`Delivery::deliver`]'s steps, through `outside`, in order: catch up
     /// from origin if `opening` says to, the opening session, the push, the
-    /// line saying what it was built with, `before_ready`, marking the pull
-    /// request ready, taking it to the goal
-    /// through the Repair loop, then for [`Goal::Merged`], the steps after
+    /// line saying what it was built with, checklist restoration, marking the
+    /// pull request ready, taking it to the goal through the Repair loop, then for [`Goal::Merged`], the steps after
     /// the merge. Returns the pull request's URL.
     fn steps<O: Outside>(
         &self,
         outside: &mut O,
         opening: &Opening,
-        before_ready: impl FnOnce(&Identified) -> Result<()>,
+        checklist: Option<&str>,
     ) -> Result<String> {
         if opening.catch_up_from_origin {
             outside.catch_up()?;
@@ -162,7 +148,7 @@ impl Route<'_> {
         outside.session(opening.kind, &opening.prompt)?;
         outside.push()?;
         self.write_built_with(outside);
-        let pr = outside.mark_pr_ready(before_ready)?;
+        let pr = outside.mark_pr_ready(checklist)?;
         outside.take_to_goal(&pr.url, self.goal)?;
         if self.goal == Goal::Merged {
             self.after_merge(outside, &pr);
@@ -296,10 +282,7 @@ trait Outside {
     /// Write the annotation through the captured pull request module.
     fn write_built_with(&mut self, choice: &Choice) -> Result<()>;
     /// Validate and mark the captured pull request ready.
-    fn mark_pr_ready(
-        &mut self,
-        before_ready: impl FnOnce(&Identified) -> Result<()>,
-    ) -> Result<Identified>;
+    fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified>;
     /// Take the ready pull request at `pr_url` to `goal` through the Repair
     /// loop.
     fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()>;
@@ -360,11 +343,8 @@ impl Outside for InWorktree<'_> {
         self.pull_request.write_built_with(choice)
     }
 
-    fn mark_pr_ready(
-        &mut self,
-        before_ready: impl FnOnce(&Identified) -> Result<()>,
-    ) -> Result<Identified> {
-        self.pull_request.mark_ready(before_ready)
+    fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified> {
+        self.pull_request.mark_ready(checklist)
     }
 
     fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()> {
@@ -548,7 +528,7 @@ mod tests {
         Session,
         Push,
         Annotation,
-        BeforeReady,
+        Checklist,
         Ready,
         Goal,
         Preserve,
@@ -563,7 +543,7 @@ mod tests {
         Session(String),
         Push,
         Annotation,
-        BeforeReady,
+        Checklist,
         Ready,
         Goal(Goal),
         Preserve(String),
@@ -613,17 +593,11 @@ mod tests {
             self.calls.push(Call::Annotation);
             self.check(Fails::Annotation)
         }
-        fn mark_pr_ready(
-            &mut self,
-            before_ready: impl FnOnce(&Identified) -> Result<()>,
-        ) -> Result<Identified> {
-            let pr = Identified {
-                number: 12,
-                url: PR_URL.to_string(),
-            };
-            self.calls.push(Call::BeforeReady);
-            self.check(Fails::BeforeReady)?;
-            before_ready(&pr)?;
+        fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified> {
+            if checklist.is_some() {
+                self.calls.push(Call::Checklist);
+                self.check(Fails::Checklist)?;
+            }
             self.calls.push(Call::Ready);
             self.check(Fails::Ready)?;
             Ok(Identified {
@@ -693,15 +667,15 @@ mod tests {
             catch_up_from_origin: spec,
         };
         route
-            .steps(outside, &opening, |_| Ok(()))
+            .steps(outside, &opening, spec.then_some("Tickets"))
             .map_err(|error| fail(outside, outside.log.clone(), error))
     }
 
     #[test]
-    fn delivery_pushes_then_annotates_then_runs_the_callback_before_readiness() {
+    fn spec_delivery_pushes_then_annotates_then_restores_checklist_before_readiness() {
         let mut outside = Scripted::default();
         assert_eq!(
-            deliver(&mut outside, Goal::ReadyForReview, false)
+            deliver(&mut outside, Goal::ReadyForReview, true)
                 .ok()
                 .as_deref(),
             Some(PR_URL)
@@ -709,10 +683,11 @@ mod tests {
         assert_eq!(
             outside.calls,
             [
-                Call::Session("implement".to_string()),
+                Call::CatchUp,
+                Call::Session("spec-review".to_string()),
                 Call::Push,
                 Call::Annotation,
-                Call::BeforeReady,
+                Call::Checklist,
                 Call::Ready,
                 Call::Goal(Goal::ReadyForReview)
             ]
@@ -730,19 +705,19 @@ mod tests {
     }
 
     #[test]
-    fn annotation_failure_warns_and_still_runs_the_callback_and_readiness() {
+    fn annotation_failure_warns_and_still_restores_checklist_and_marks_ready() {
         let mut outside = Scripted {
             failing: Some(Fails::Annotation),
             ..Default::default()
         };
-        assert!(deliver(&mut outside, Goal::ReadyForReview, false).is_ok());
+        assert!(deliver(&mut outside, Goal::ReadyForReview, true).is_ok());
         assert!(
-            matches!(&outside.calls[3], Call::Warning(line) if line.contains("could not write"))
+            matches!(&outside.calls[4], Call::Warning(line) if line.contains("could not write"))
         );
         assert_eq!(
-            outside.calls[4..],
+            outside.calls[5..],
             [
-                Call::BeforeReady,
+                Call::Checklist,
                 Call::Ready,
                 Call::Goal(Goal::ReadyForReview)
             ]
@@ -765,7 +740,7 @@ mod tests {
             Fails::CatchUp,
             Fails::Session,
             Fails::Push,
-            Fails::BeforeReady,
+            Fails::Checklist,
             Fails::Ready,
             Fails::Goal,
         ] {
