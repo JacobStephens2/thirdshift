@@ -105,6 +105,7 @@ impl Checkout {
 
     /// Acquisition and stale recovery already hold the same repository lock.
     fn remove_locked(&self, launch: &Git) -> Result<()> {
+        let _refs_lock = launch.lock_worktree_refs()?;
         let head = self.inspect(launch)?;
         let config = self
             .branch

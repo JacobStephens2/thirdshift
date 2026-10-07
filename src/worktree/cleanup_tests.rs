@@ -6,6 +6,120 @@ use std::fs;
 const BRANCH: &str = "issue-7";
 
 #[test]
+fn a_sibling_fetch_waits_for_worktree_creation_to_finish() {
+    if isolated(
+        "a_sibling_fetch_waits_for_worktree_creation_to_finish",
+        r#"
+if test "$1" = worktree && test "$2" = add && test "$4" = issue-22; then
+  "$THIRDSHIFT_REAL_GIT" "$@"
+  common=$("$THIRDSHIFT_REAL_GIT" rev-parse --git-common-dir)
+  head="$common/worktrees/work-issue-22/HEAD"
+  cp "$head" "$THIRDSHIFT_FAULT_MARKER.saved"
+  printf '0000000000000000000000000000000000000000\n' > "$head"
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  for _ in $(seq 500); do
+    test -e "$THIRDSHIFT_FAULT_MARKER.release" && break
+    sleep 0.01
+  done
+  mv "$THIRDSHIFT_FAULT_MARKER.saved" "$head"
+  test -e "$THIRDSHIFT_FAULT_MARKER.release"
+  exit
+fi
+"#,
+    ) {
+        return;
+    }
+    let (_temp, launch) = super::tests::launch_directory();
+    let reader = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    let (finished_during_creation, merged, sibling) = std::thread::scope(|scope| {
+        let creator = scope.spawn(|| Worktree::create_fresh(&launch, "work", "issue-22", "main"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let (sent, received) = std::sync::mpsc::channel();
+        let reader = &reader;
+        let fetcher = scope.spawn(move || {
+            let merged = reader.merge_base_branch("main");
+            sent.send(()).unwrap();
+            merged
+        });
+        let finished = received
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_ok();
+        fs::write(marker.with_extension("release"), "released").unwrap();
+        let merged = fetcher.join().unwrap();
+        let sibling = creator.join().unwrap();
+        (finished, merged, sibling)
+    });
+    sibling.unwrap();
+    assert!(
+        marker.exists(),
+        "creation never reached the controlled transition"
+    );
+    assert!(
+        !finished_during_creation,
+        "fetch observed an incomplete Worktree: {merged:?}"
+    );
+    assert!(matches!(merged.unwrap(), Merge::Clean { .. }));
+}
+
+#[test]
+fn a_sibling_fetch_waits_for_worktree_disposal_to_finish() {
+    if isolated(
+        "a_sibling_fetch_waits_for_worktree_disposal_to_finish",
+        r#"
+if test "$1" = worktree && test "$2" = remove && test "${4##*/}" = work-issue-22; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  for _ in $(seq 500); do
+    test -e "$THIRDSHIFT_FAULT_MARKER.release" && break
+    sleep 0.01
+  done
+  test -e "$THIRDSHIFT_FAULT_MARKER.release"
+fi
+"#,
+    ) {
+        return;
+    }
+    let (_temp, launch) = super::tests::launch_directory();
+    let reader = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
+    let sibling = Worktree::create_fresh(&launch, "work", "issue-22", "main").unwrap();
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    let (finished_during_disposal, merged) = std::thread::scope(|scope| {
+        let disposer = scope.spawn(|| drop(sibling));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let (sent, received) = std::sync::mpsc::channel();
+        let reader = &reader;
+        let fetcher = scope.spawn(move || {
+            let merged = reader.merge_base_branch("main");
+            sent.send(()).unwrap();
+            merged
+        });
+        let finished = received
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_ok();
+        fs::write(marker.with_extension("release"), "released").unwrap();
+        let merged = fetcher.join().unwrap();
+        disposer.join().unwrap();
+        (finished, merged)
+    });
+    assert!(
+        marker.exists(),
+        "disposal never reached the controlled transition"
+    );
+    assert!(
+        !finished_during_disposal,
+        "fetch overlapped Worktree disposal: {merged:?}"
+    );
+    assert!(matches!(merged.unwrap(), Merge::Clean { .. }));
+    assert!(local_head(&launch, "issue-22").unwrap().is_none());
+}
+
+#[test]
 fn an_old_owner_retains_a_recreated_checkout_even_with_the_same_paths_branch_and_head() {
     if isolated(
         "an_old_owner_retains_a_recreated_checkout_even_with_the_same_paths_branch_and_head",
