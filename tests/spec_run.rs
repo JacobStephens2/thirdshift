@@ -1575,6 +1575,67 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
 }
 
 #[test]
+fn an_existing_spec_pr_accounts_for_every_drained_ticket_after_interruption() {
+    let scenario = diamond_spec();
+    scenario.origin_has_branch("issue-20", "main", &[]);
+    let pr_url = scenario.github_has_pr("issue-20", "main", "OPEN");
+    for (ticket, other) in [(21, 22), (22, 21)] {
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                "echo 'half done {ticket}' > wip.txt\n{}touch {root}/both-started\nsleep 30\n",
+                waits_for_other_session(&scenario, ticket, other),
+                root = scenario.path("").display()
+            ),
+        );
+    }
+
+    let result = scenario.run_and_signal(
+        &[&spec_url(&scenario), "parallel", "2"],
+        "both-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{pr_url}\n"));
+    let mut sessions = sessions_by_issue(&scenario);
+    sessions.sort();
+    assert_eq!(
+        sessions,
+        ["21", "22"],
+        "no new Ticket or Spec review may start"
+    );
+    let pr = spec_pr(&scenario);
+    assert_eq!(pr["url"], pr_url);
+    assert_eq!(pr["isDraft"], true);
+    assert_eq!(
+        checklist_in(pr["body"].as_str().unwrap()),
+        "<!-- thirdshift:tickets -->\n## Tickets\n\n- [ ] #21 interrupted\n- [ ] #22 interrupted\n- [ ] #23 blocked by #21, #22\n<!-- /thirdshift:tickets -->"
+    );
+    for ticket in [21, 22] {
+        assert_contains(
+            &result.stderr,
+            &format!("thirdshift: #{ticket} interrupted\n"),
+        );
+        assert_eq!(
+            scenario.origin_log(&format!("issue-{ticket}")).unwrap()[0],
+            "thirdshift: failed run (interrupted)"
+        );
+        scenario.assert_cleaned_up(&format!("issue-{ticket}"));
+    }
+    assert_eq!(
+        support::before_command_log(&result.stderr).last(),
+        Some(&"thirdshift: interrupted")
+    );
+    assert!(
+        !result.stderr.contains("could not update the Spec PR"),
+        "{}",
+        result.stderr
+    );
+    scenario.assert_cleaned_up("issue-20");
+}
+
+#[test]
 fn parent_only_interruption_reaches_all_active_tickets_before_waiting_and_saves_their_work() {
     let scenario = diamond_spec();
     let root = scenario.path("");

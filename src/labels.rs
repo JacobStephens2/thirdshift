@@ -8,7 +8,7 @@ use std::fmt;
 
 use anyhow::Result;
 
-use crate::github;
+use crate::github::{self, GitHub};
 use crate::issue::IssueUrl;
 
 /// A label thirdshift knows. It prints as its name.
@@ -202,15 +202,15 @@ impl<'a> Edit<'a> {
     /// puts on to the repository, with its description, if the repository
     /// lacks it. A change of no label makes no request, and taking a single
     /// label off, putting none on, keeps the labels added since the read.
-    pub fn apply(&self) -> Result<()> {
+    pub fn apply(&self, github: &GitHub) -> Result<()> {
         match request(&self.labels, &self.off, &self.on) {
             Request::None => Ok(()),
-            Request::Delete(label) => github::remove_label(self.issue, &label),
+            Request::Delete(label) => github.remove_label(self.issue, &label),
             Request::Put { missing, labels } => {
                 if !missing.is_empty() {
-                    github::ensure_labels(&self.issue.repo_slug(), &missing)?;
+                    github.ensure_labels(&self.issue.repo_slug(), &missing)?;
                 }
-                github::set_labels(self.issue, &labels)
+                github.set_labels(self.issue, &labels)
             }
         }
     }

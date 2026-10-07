@@ -19,7 +19,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::config;
 use crate::git::Git;
-use crate::github;
+use crate::github::GitHub;
 use crate::issue::{IssueUrl, Repo};
 use crate::progress;
 
@@ -61,7 +61,7 @@ impl LaunchDirectory {
                 directory.origin
             );
         }
-        if !github::issue_is_open(issue)? {
+        if !GitHub::new().issue_is_open(issue)? {
             bail!("issue #{} is closed", issue.number);
         }
         directory.check_identity()?;

@@ -10,7 +10,7 @@
 
 use anyhow::{Context, Result};
 
-use crate::github::{self, PullRequest};
+use crate::github::{GitHub, PullRequest};
 use crate::issue::IssueUrl;
 use crate::progress;
 
@@ -39,8 +39,13 @@ impl<'a> SpecPr<'a> {
             spec,
             branch: branch.to_string(),
             base,
+            github: GitHub::new(),
         };
-        Self::resume_through(on_github, spec, branch, base)
+        let mut resumed = Self::resume_through(on_github, spec, branch, base)?;
+        // Resume is ordinary; subsequent writes account for child endings,
+        // even when interruption prevents more implementation work.
+        resumed.outside.github = resumed.outside.github.completion();
+        Ok(resumed)
     }
 }
 
@@ -168,6 +173,7 @@ pub(super) trait Outside {
 /// The Spec PR of `spec`, from `branch` into `base`, on GitHub, and progress
 /// lines printed on stderr.
 pub(super) struct OnGitHub<'a> {
+    github: GitHub,
     spec: &'a IssueUrl,
     branch: String,
     base: &'a str,
@@ -175,27 +181,29 @@ pub(super) struct OnGitHub<'a> {
 
 impl Outside for OnGitHub<'_> {
     fn pull_request(&mut self) -> Result<Option<PullRequest>> {
-        github::pull_request_for(self.spec, &self.branch)
+        self.github.pull_request_for(self.spec, &self.branch)
     }
 
     fn convert_to_draft(&mut self) -> Result<()> {
-        github::convert_to_draft(self.spec, &self.branch)
+        self.github.convert_to_draft(self.spec, &self.branch)
     }
 
     fn spec_title(&mut self) -> Result<String> {
-        github::issue_title(self.spec)
+        self.github.issue_title(self.spec)
     }
 
     fn create_draft(&mut self, title: &str, body: &str) -> Result<()> {
-        github::create_draft_pr(self.spec, &self.branch, self.base, title, body).map(|_| ())
+        GitHub::new()
+            .create_draft_pr(self.spec, &self.branch, self.base, title, body)
+            .map(|_| ())
     }
 
     fn pr_body(&mut self, number: u64) -> Result<String> {
-        github::pr_body(self.spec, number)
+        self.github.pr_body(self.spec, number)
     }
 
     fn set_pr_body(&mut self, number: u64, body: &str) -> Result<()> {
-        github::set_pr_body(self.spec, number, body)
+        self.github.set_pr_body(self.spec, number, body)
     }
 
     fn step(&mut self, line: String) {

@@ -17,7 +17,7 @@ use anyhow::{Result, bail};
 use crate::child_run::{self, Ended, Kind};
 use crate::ci::{self, FailedChecks};
 use crate::git::Git;
-use crate::github::{self, Check, ListedIssue};
+use crate::github::{Check, GitHub, ListedIssue};
 use crate::harness::Choice;
 use crate::issue::IssueUrl;
 use crate::labels::{Label, Labels, READY_FOR_AGENT};
@@ -484,7 +484,7 @@ impl Outside for LaunchAndGitHub<'_> {
 
     /// One `gh issue list`.
     fn open_fixes(&mut self) -> Result<Vec<ListedIssue>> {
-        github::open_issues_labelled(&self.issue.repo_slug(), BASE_FIX)
+        GitHub::new().open_issues_labelled(&self.issue.repo_slug(), BASE_FIX)
     }
 
     /// Left if the mark file is there and its lock free when first opened.
@@ -508,11 +508,11 @@ impl Outside for LaunchAndGitHub<'_> {
     }
 
     fn issue_is_open(&mut self, issue: &IssueUrl) -> Result<bool> {
-        github::issue_is_open(issue)
+        GitHub::new().issue_is_open(issue)
     }
 
     fn create_issue(&mut self, title: &str, body: &str, labels: &[Label]) -> Result<IssueUrl> {
-        github::create_issue(self.issue, title, body, labels)
+        GitHub::new().create_issue(self.issue, title, body, labels)
     }
 
     fn mark_running(&mut self, number: u64) -> Result<Running> {
