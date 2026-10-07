@@ -20,6 +20,13 @@ const HEADLESS: &str = "You run headless: nobody is watching, and ending your tu
     Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): \
     a task still running when your turn ends is taken as work you were waiting on.\n";
 
+/// Sessions replaces this placeholder with its git-ignored report directory.
+pub const REVIEW_REPORTS_DIRECTORY: &str = "<review reports directory>";
+
+/// The same report contract for every session that runs the code review.
+pub const REVIEW_REPORTS: &str = "Write the reviewers' reports, with each axis's final files-read list, \
+    to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).";
+
 /// The shared review instruction, with each Session prompt's variations.
 enum ReviewInstruction {
     Implement,
@@ -38,7 +45,8 @@ impl ReviewInstruction {
              If it fails as the finding says, fix the code and keep the test. \
              If it passes, you may decline the finding, citing the run. \
              A passing run counts only when it exercises that finding; a green suite does not. \
-             Address the Standards and Spec findings you agree with{ending}"
+             Address the Standards and Spec findings you agree with{ending}\n\
+             {REVIEW_REPORTS}"
         )
     }
 

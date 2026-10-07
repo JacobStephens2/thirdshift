@@ -23,6 +23,9 @@ use crate::progress;
 use crate::prompt;
 use crate::skills;
 
+mod review_reports;
+use review_reports::ReviewReports;
+
 #[cfg(test)]
 mod execution_tests;
 
@@ -68,6 +71,7 @@ impl Logs {
 /// its `logs`. It lasts for the steps given to [`Sessions::within`].
 pub struct Sessions<'a> {
     logs: &'a Logs,
+    worktree: &'a Path,
     /// How each session is run, and where progress lines go. Held, not
     /// passed to each call as the other seams' are, since the steps reach
     /// it through the `&Sessions` they are given.
@@ -106,7 +110,7 @@ impl<'a> Sessions<'a> {
             harness: harness.clone(),
             adapter,
         };
-        let (taken, log) = Sessions::taking(logs, Box::new(on_machine), steps);
+        let (taken, log) = Sessions::taking(logs, worktree, Box::new(on_machine), steps);
         (taken, log.filter(|log| log.exists()))
     }
 
@@ -115,11 +119,13 @@ impl<'a> Sessions<'a> {
     /// session's, whether or not the session created it.
     fn taking<T>(
         logs: &'a Logs,
+        worktree: &'a Path,
         outside: Box<dyn Outside>,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let sessions = Sessions {
             logs,
+            worktree,
             outside: RefCell::new(outside),
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
@@ -150,15 +156,28 @@ impl<'a> Sessions<'a> {
     /// what the agent said as it ended its last turn, its Resume's if it got
     /// one, if anything.
     pub fn run_to_final_message(&self, kind: &str, prompt: &str) -> Result<Option<String>> {
-        let mut ended = self.start(kind, None, prompt)?;
+        let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
+            Some(ReviewReports::new(self.worktree)?)
+        } else {
+            None
+        };
+        let mut ended = self.start(kind, None, prompt, reports.as_ref())?;
         // What ended last, as the progress line on its killed work calls it.
         let mut ended_last = "session";
         if let (false, Some(session_id)) = (ended.killed.is_empty(), &ended.session_id) {
-            let resume_prompt = prompt::resume(&ended.killed_work());
+            let mut resume_prompt = prompt::resume(&ended.killed_work());
+            if reports.is_some() {
+                resume_prompt.push_str(prompt::REVIEW_REPORTS);
+            }
             self.step(format!(
                 "{kind}: background work was killed as the session ended; resuming it once"
             ));
-            ended = self.start(&format!("{kind}-resume"), Some(session_id), &resume_prompt)?;
+            ended = self.start(
+                &format!("{kind}-resume"),
+                Some(session_id),
+                &resume_prompt,
+                reports.as_ref(),
+            )?;
             ended_last = "Resume";
         }
         if !ended.killed.is_empty() {
@@ -175,13 +194,27 @@ impl<'a> Sessions<'a> {
 
     /// Run one session as `kind`, logged under its own path, which becomes
     /// the last log.
-    fn start(&self, kind: &str, resume: Option<&str>, prompt: &str) -> Result<Ended> {
+    fn start(
+        &self,
+        kind: &str,
+        resume: Option<&str>,
+        prompt: &str,
+        reports: Option<&ReviewReports>,
+    ) -> Result<Ended> {
         let log = self.logs.path(kind);
         self.step(format!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
-        self.outside
+        let prompt = reports.map_or_else(|| prompt.to_string(), |reports| reports.prompt(prompt));
+        let ended = self
+            .outside
             .borrow_mut()
-            .run_session(kind, resume, prompt, &log)
+            .run_session(kind, resume, &prompt, &log);
+        if let Some(reports) = reports {
+            for line in reports.keep(&log) {
+                self.step(format!("{kind}: {line}"));
+            }
+        }
+        ended
     }
 
     /// Hand on the progress line `line`.
@@ -422,7 +455,7 @@ mod tests {
             calls: Rc::clone(&calls),
         };
         let logs = logs();
-        let (taken, log) = Sessions::taking(&logs, Box::new(scripted), steps);
+        let (taken, log) = Sessions::taking(&logs, Path::new("/unused"), Box::new(scripted), steps);
         let calls = calls.take();
         (taken, log, calls)
     }

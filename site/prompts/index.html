@@ -53,6 +53,7 @@
         <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
 The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
+Write the reviewers' reports, with each axis's final files-read list, to `<mark class="ph">&lt;review reports directory&gt;</mark>/standards.md` (Standards) and `<mark class="ph">&lt;review reports directory&gt;</mark>/spec.md` (Spec).
 Push branch <mark class="ph">&lt;branch&gt;</mark> and create a pull request against <mark class="ph">&lt;base&gt;</mark> using the `thirdshift-pr` skill, marked ready for review.
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
@@ -70,6 +71,7 @@ You are continuing work on branch <mark class="ph">&lt;branch&gt;</mark>, which 
 The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
 
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
+Write the reviewers' reports, with each axis's final files-read list, to `<mark class="ph">&lt;review reports directory&gt;</mark>/standards.md` (Standards) and `<mark class="ph">&lt;review reports directory&gt;</mark>/spec.md` (Spec).
 
 Push branch <mark class="ph">&lt;branch&gt;</mark>.
 
@@ -93,6 +95,7 @@ You are continuing work on branch <mark class="ph">&lt;branch&gt;</mark>, which 
 The base branch is <mark class="ph">&lt;base&gt;</mark>. Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point.
 
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
+Write the reviewers' reports, with each axis's final files-read list, to `<mark class="ph">&lt;review reports directory&gt;</mark>/standards.md` (Standards) and `<mark class="ph">&lt;review reports directory&gt;</mark>/spec.md` (Spec).
 
 Push branch <mark class="ph">&lt;branch&gt;</mark>.
 
@@ -116,6 +119,7 @@ Every Ticket of the Spec <mark class="ph">&lt;Spec URL&gt;</mark> has landed on 
 Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&gt;</mark> as the fixed point and <mark class="ph">&lt;Spec URL&gt;</mark> as the spec.
 
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.
+Write the reviewers' reports, with each axis's final files-read list, to `<mark class="ph">&lt;review reports directory&gt;</mark>/standards.md` (Standards) and `<mark class="ph">&lt;review reports directory&gt;</mark>/spec.md` (Spec).
 
 Push branch <mark class="ph">&lt;Spec branch&gt;</mark>. Do not rebase or force-push.
 
@@ -193,6 +197,7 @@ Someone else pushed commits to <mark class="ph">&lt;branch&gt;</mark> while it w
 Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;own head&gt;</mark> as the fixed point: <mark class="ph">&lt;branch&gt;</mark>'s head before their commits were merged in.
 
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
+Write the reviewers' reports, with each axis's final files-read list, to `<mark class="ph">&lt;review reports directory&gt;</mark>/standards.md` (Standards) and `<mark class="ph">&lt;review reports directory&gt;</mark>/spec.md` (Spec).
 
 Add each skipped finding to the "Unaddressed findings" section of the pull request body, under Standards or Spec, marked as coming from their commits, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread. Keep the rest of the body as it is.
 
@@ -351,6 +356,8 @@ Combine each axis's initial and follow-up files-read lists, then compare again w
 Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
 
 Include the final files-read list for each reviewer and name every changed file still unread under its axis, or explicitly say none is unread. Include findings from the follow-up in the same axis as its initial report.
+
+If the Session prompt names a place for the reviewers' reports, write the final Standards report to its `standards.md` and the final Spec report to its `spec.md`. Each file includes that axis's initial and follow-up findings, its combined files-read list, and any changed files still unread (or explicitly none). Write both reports even when there are no findings. When the prompt names no place, report in the conversation only.
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 

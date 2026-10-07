@@ -273,3 +273,183 @@ fn startup_failure_preserves_its_cause_without_completion_reporting() {
     );
     assert!(!fixture.path("calls").exists());
 }
+
+// These CLIs consume the real invocation's prompt and leave opaque reports.
+// No Harness-specific report transport is involved.
+const LEAVE_REPORTS: &str = r#"#!/bin/bash
+set -eu
+if test "$(basename "$0")" = opencode; then
+    prompt=$(cat)
+else
+    prompt=${!#}
+fi
+printf '%s\n' "$prompt" >> "$THIRDSHIFT_SESSION_TEST_DIR/prompts"
+reports=$(printf '%s\n' "$prompt" | sed -n 's/.*`\([^`]*\)\/standards\.md`.*/\1/p')
+test -d "$reports"
+git check-ignore -q "$reports/standards.md"
+printf 'Standards report\nFiles read: src/session.rs\n' > "$reports/standards.md"
+printf 'Spec report\nFiles read: CONTEXT.md\n' > "$reports/spec.md"
+"#;
+
+fn review_fixture(script: &str) -> Fixture {
+    let fixture = Fixture::new("");
+    for harness in Harness::ALL {
+        let cli = fixture.path(&format!("bin/{}", harness.name()));
+        fs::write(&cli, script).unwrap();
+        fs::set_permissions(cli, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fixture
+}
+
+fn execute_review(root: &Path, harness: Harness) -> (Result<()>, PathBuf) {
+    logs::begin(logs::Begin::ChildRun("fixture"));
+    let worktree = root.join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&worktree)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let logs = Logs {
+        name: "7".into(),
+        dir: root.join("logs"),
+    };
+    let choice = Choice {
+        harness,
+        ..Choice::default()
+    };
+    let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+    let (result, log) = Sessions::within(&logs, &worktree, &choice, |sessions| {
+        sessions.run("implement", &prompt::fresh(&issue, "main", "issue-7"))?;
+        fs::write(root.join("carried-on"), "").unwrap();
+        Ok(())
+    });
+    (result, log.unwrap())
+}
+
+#[test]
+fn keeps_review_reports_beside_each_harness_session_log() {
+    if let Some(root) = std::env::var_os(FIXTURE) {
+        let root = Path::new(&root);
+        let harness =
+            Harness::named(&std::env::var("THIRDSHIFT_REVIEW_TEST_HARNESS").unwrap()).unwrap();
+        let (result, log) = execute_review(root, harness);
+        result.unwrap();
+        assert!(log.exists());
+        assert_eq!(
+            fs::read_to_string(log.with_extension("standards")).unwrap(),
+            "Standards report\nFiles read: src/session.rs\n"
+        );
+        assert_eq!(
+            fs::read_to_string(log.with_extension("spec")).unwrap(),
+            "Spec report\nFiles read: CONTEXT.md\n"
+        );
+        return;
+    }
+    for harness in Harness::ALL {
+        let fixture = review_fixture(LEAVE_REPORTS);
+        let output = fixture
+            .command(
+                "session::execution_tests::keeps_review_reports_beside_each_harness_session_log",
+            )
+            .env("THIRDSHIFT_REVIEW_TEST_HARNESS", harness.name())
+            .env("XDG_DATA_HOME", fixture.path("data"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{harness:?}: {output:?}");
+    }
+}
+
+#[test]
+fn missing_review_reports_get_a_progress_line_and_the_run_carries_on() {
+    if let Some(root) = std::env::var_os(FIXTURE) {
+        let root = Path::new(&root);
+        let (result, log) = execute_review(root, Harness::OpenCode);
+        result.unwrap();
+        assert!(root.join("carried-on").exists());
+        assert!(!log.with_extension("standards").exists());
+        assert!(!log.with_extension("spec").exists());
+        return;
+    }
+    let fixture = review_fixture("#!/bin/bash\ncat >/dev/null\n");
+    let output = fixture
+        .command("session::execution_tests::missing_review_reports_get_a_progress_line_and_the_run_carries_on")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("implement: no review reports were left; carrying on"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_resumes_review_reports_are_kept_beside_its_own_session_log() {
+    if let Some(root) = std::env::var_os(FIXTURE) {
+        let root = Path::new(&root);
+        let (result, log) = execute_review(root, Harness::Claude);
+        result.unwrap();
+        assert_eq!(log.file_name().unwrap(), "7-fixture-implement-resume.jsonl");
+        assert_eq!(
+            fs::read_to_string(log.with_extension("standards")).unwrap(),
+            "Resume Standards report\nFiles read: src/prompt.rs\n"
+        );
+        assert_eq!(
+            fs::read_to_string(log.with_extension("spec")).unwrap(),
+            "Resume Spec report\nFiles read: src/session.rs\n"
+        );
+        // The first session's reports remain with its own Session log.
+        assert_eq!(
+            fs::read_to_string(root.join("logs/7-fixture-implement.standards")).unwrap(),
+            "Standards report\nFiles read: src/session.rs\n"
+        );
+        return;
+    }
+    let script = format!(
+        r#"{LEAVE_REPORTS}
+echo '{{"type":"system","subtype":"init","session_id":"s1"}}'
+echo '{{"type":"result","subtype":"success"}}'
+if test -f "$THIRDSHIFT_SESSION_TEST_DIR/first-session-ended"; then
+    printf 'Resume Standards report\nFiles read: src/prompt.rs\n' > "$reports/standards.md"
+    printf 'Resume Spec report\nFiles read: src/session.rs\n' > "$reports/spec.md"
+else
+    touch "$THIRDSHIFT_SESSION_TEST_DIR/first-session-ended"
+    echo '{{"type":"system","subtype":"task_notification","task_id":"t1","status":"stopped","summary":"cargo test"}}'
+fi
+"#
+    );
+    let fixture = review_fixture(&script);
+    let output = fixture
+        .command("session::execution_tests::a_resumes_review_reports_are_kept_beside_its_own_session_log")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn a_failed_session_still_keeps_whichever_review_report_it_left() {
+    if let Some(root) = std::env::var_os(FIXTURE) {
+        let root = Path::new(&root);
+        let (result, log) = execute_review(root, Harness::Codex);
+        assert!(result.is_err());
+        assert!(!root.join("carried-on").exists());
+        assert_eq!(
+            fs::read_to_string(log.with_extension("standards")).unwrap(),
+            "Standards report\nFiles read: src/session.rs\n"
+        );
+        assert!(!log.with_extension("spec").exists());
+        return;
+    }
+    let fixture = review_fixture(&format!(
+        "{LEAVE_REPORTS}\nrm \"$reports/spec.md\"\nexit 1\n"
+    ));
+    let output = fixture
+        .command("session::execution_tests::a_failed_session_still_keeps_whichever_review_report_it_left")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
