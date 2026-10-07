@@ -110,14 +110,9 @@ impl Worktree {
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base])?;
-        let source = format!("origin/{base}");
-        let commit = launch.run(&[
-            "rev-parse",
-            "--verify",
-            &format!("refs/remotes/{source}^{{commit}}"),
-        ])?;
+        let origin = fetched_origin(launch, base)?;
         check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
-        Self::add(launch, repo, branch, &commit, &source)
+        Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
     /// Check out the existing `branch` from origin in a new worktree next to
@@ -129,15 +124,10 @@ impl Worktree {
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         launch.run(&["fetch", "origin", base, branch])?;
-        let source = format!("origin/{branch}");
-        let commit = launch.run(&[
-            "rev-parse",
-            "--verify",
-            &format!("refs/remotes/{source}^{{commit}}"),
-        ])?;
+        let origin = fetched_origin(launch, branch)?;
         let local = local_head(launch, branch)?;
-        check_local_branch(branch, local.as_deref(), Some(&commit))?;
-        Self::add(launch, repo, branch, &commit, &source)
+        check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
+        Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
     fn add(launch: &Git, repo: &str, branch: &str, start: &str, source: &str) -> Result<Self> {
@@ -300,13 +290,7 @@ impl Worktree {
     /// sibling fetches and shadowing local names cannot change its meaning.
     fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
         self.git.run(&["fetch", "origin", branch])?;
-        let upstream = format!("origin/{branch}");
-        let commit = self.git.run(&[
-            "rev-parse",
-            "--verify",
-            &format!("refs/remotes/{upstream}^{{commit}}"),
-        ])?;
-        Ok(OriginCommit { upstream, commit })
+        fetched_origin(&self.git, branch)
     }
 
     /// Merge the sampled origin commit into the Issue branch, never rebase, so
@@ -466,17 +450,13 @@ impl ReviewWorktree {
                 progress::step(format_args!("removed the leftover worktree {stale}"));
             }
         }
-        let start = format!("origin/{base}");
-        let commit = launch.run(&[
-            "rev-parse",
-            "--verify",
-            &format!("refs/remotes/{start}^{{commit}}"),
-        ])?;
+        let origin = fetched_origin(launch, base)?;
         progress::step(format_args!(
-            "creating worktree {} detached at {start}",
-            path.display()
+            "creating worktree {} detached at {}",
+            path.display(),
+            origin.upstream,
         ));
-        acquisition::add(launch, None, &path, &commit)?;
+        acquisition::add(launch, None, &path, &origin.commit)?;
         Ok(ReviewWorktree {
             launch: Git::new(root),
             path,
@@ -511,6 +491,17 @@ fn sibling(launch: &Git, name: &str) -> Result<(PathBuf, PathBuf)> {
         .context("the repository root has no parent directory")?
         .join(name);
     Ok((root, path))
+}
+
+/// Pin an already-fetched origin branch, avoiding ambiguous local names.
+fn fetched_origin(git: &Git, branch: &str) -> Result<OriginCommit> {
+    let upstream = format!("origin/{branch}");
+    let commit = git.run(&[
+        "rev-parse",
+        "--verify",
+        &format!("refs/remotes/{upstream}^{{commit}}"),
+    ])?;
+    Ok(OriginCommit { upstream, commit })
 }
 
 /// Wait for, then hold until the file is dropped, the Launch directory's

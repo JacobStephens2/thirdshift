@@ -633,6 +633,58 @@ fn initialized_clean_submodules_are_retained_on_failure() {
     }
 }
 
+#[test]
+fn tracked_work_hidden_by_index_flags_or_fsmonitor_survives_failure() {
+    for kind in KINDS {
+        for hiding in [
+            "assume-unchanged",
+            "skip-worktree",
+            "ignorestat",
+            "fsmonitor",
+        ] {
+            let (temp, launch, start) = kind.prepare();
+            let script = match hiding {
+                "ignorestat" => {
+                    launch.run(&["config", "core.ignoreStat", "true"]).unwrap();
+                    "echo 'hook work' > tracked.txt".to_string()
+                }
+                "fsmonitor" => {
+                    let monitor = temp.path().join("hooks/fsmonitor");
+                    std::fs::write(&monitor, "#!/bin/sh\nprintf 'token\\0'\n").unwrap();
+                    std::fs::set_permissions(&monitor, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                    launch
+                        .run(&["config", "core.fsmonitor", monitor.to_str().unwrap()])
+                        .unwrap();
+                    "git status --porcelain >/dev/null\necho 'hook work' > tracked.txt".to_string()
+                }
+                flag => {
+                    format!("git update-index --{flag} tracked.txt\necho 'hook work' > tracked.txt")
+                }
+            };
+            checkout_hook(&temp, &script);
+
+            let error = kind.acquire(&launch).unwrap_err().to_string();
+
+            assert_eq!(
+                std::fs::read_to_string(kind.path(&temp).join("tracked.txt")).unwrap(),
+                "hook work\n",
+                "{kind:?}, {hiding}: {error}"
+            );
+            assert!(
+                error.contains("retaining checkout") && error.contains(&start),
+                "{kind:?}, {hiding}: {error}"
+            );
+            if !matches!(kind, AcquisitionKind::Review) {
+                assert_eq!(
+                    local_head(&launch, BRANCH).unwrap().as_deref(),
+                    Some(start.as_str())
+                );
+            }
+        }
+    }
+}
+
 fn interrupted_add(test_name: &str, kind: AcquisitionKind, work: &str) {
     crate::test_support::with_recorded_signal(test_name, |signal| {
         let (temp, launch, start) = kind.prepare();

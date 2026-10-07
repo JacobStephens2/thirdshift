@@ -179,8 +179,24 @@ impl<'a> Acquisition<'a> {
         {
             bail!("checkout no longer matches its registration and sampled start");
         }
+        // Status (and non-force removal) can call real edits clean when
+        // assume-unchanged or skip-worktree flags hide them. These index
+        // entries cannot establish absence of work, even at the sampled HEAD.
+        if git
+            .run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?
+            .split('\0')
+            .any(|file| {
+                file.as_bytes()
+                    .first()
+                    .is_some_and(|flag| flag.is_ascii_lowercase() || *flag == b'S')
+            })
+        {
+            bail!("checkout has uncertain index flags that can hide tracked work");
+        }
         if !git
             .run(&[
+                "-c",
+                "core.fsmonitor=false",
                 "status",
                 "--porcelain=v1",
                 "-z",
