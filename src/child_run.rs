@@ -1,6 +1,11 @@
 //! A Run in a child `thirdshift`, started from the same Launch directory by a
 //! Spec run for one of its Tickets (ADR-0006) or by a Run for its Base fix
-//! (ADR-0008).
+//! (ADR-0008). [`Runs`] owns concurrent children and their collective cleanup;
+//! standalone [`start`] and [`Handle::wait`] serve Base fix.
+
+mod runs;
+
+pub use runs::Runs;
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
@@ -487,7 +492,7 @@ impl Handle {
     /// Poll the process and finished readers without waiting for unfinished
     /// work. Pending and stopping return None. A failure is returned only
     /// after graceful shutdown, reaping, and joining both readers.
-    pub fn try_wait(&mut self) -> Option<Result<Ended>> {
+    fn try_wait(&mut self) -> Option<Result<Ended>> {
         if self.completed || !self.poll_completion() {
             return None;
         }
