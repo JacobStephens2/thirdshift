@@ -1,6 +1,6 @@
 //! Running `git` in a directory.
 
-use std::fs::File;
+use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -88,13 +88,28 @@ impl Git {
 
     /// Wait for, then hold until the file returned is dropped, a lock on the
     /// file `name` in the repository's common git directory, which every Run
-    /// from one Launch directory shares.
+    /// from one Launch directory shares. Ordinary acquisition stops for a
+    /// recorded interruption; completion acquisition keeps waiting. Contention
+    /// is polled every 100 ms without a deadline, and the file is never removed.
     pub fn lock(&self, name: &str) -> Result<File> {
         let path = self.common_dir()?.join(name);
+        self.interruption.check()?;
         let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
-        file.lock()
-            .with_context(|| format!("can't lock {}", path.display()))?;
-        Ok(file)
+        loop {
+            self.interruption.check()?;
+            match file.try_lock() {
+                Ok(()) => {
+                    self.interruption.check()?;
+                    return Ok(file);
+                }
+                Err(TryLockError::WouldBlock) => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(TryLockError::Error(error)) => {
+                    return Err(error).with_context(|| format!("can't lock {}", path.display()));
+                }
+            }
+        }
     }
 
     /// Whether origin has the branch `branch`, as origin itself answers.

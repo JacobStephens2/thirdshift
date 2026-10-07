@@ -6,6 +6,128 @@ use crate::interrupt;
 use crate::test_support::with_recorded_signal;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::mpsc;
+
+/// Observe whether acquisition finishes while an independent open still
+/// holds the lock. Release and join before the caller can assert, even when
+/// acquisition ignores interruption or returns unexpectedly early.
+fn contended_repository_lock(git: &Git, signal: Option<libc::c_int>) -> (bool, Result<File>) {
+    let path = git.common_dir().unwrap().join("thirdshift-test.lock");
+    let held = File::create(path).unwrap();
+    held.lock().unwrap();
+    std::thread::scope(|scope| {
+        let (finished, received) = mpsc::channel();
+        let contender = scope.spawn(move || {
+            let result = git.lock("thirdshift-test.lock");
+            let _ = finished.send(());
+            result
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let delivered = signal.map(signal_hook::low_level::raise);
+        let finished_while_held = received.recv_timeout(Duration::from_secs(1)).is_ok();
+        drop(held);
+        let result = contender.join().unwrap();
+        if let Some(delivered) = delivered {
+            delivered.unwrap();
+        }
+        (finished_while_held, result)
+    })
+}
+
+#[test]
+fn ordinary_repository_lock_contention_stops_before_the_holder_releases() {
+    with_recorded_signal(
+        "git::execution_tests::ordinary_repository_lock_contention_stops_before_the_holder_releases",
+        |signal| {
+            let (_temp, git) = super::tests::repo_with_origin();
+            let (finished_while_held, result) = contended_repository_lock(&git, Some(signal));
+
+            assert!(finished_while_held, "acquisition waited for holder release");
+            assert_eq!(result.unwrap_err().to_string(), "interrupted");
+            assert!(interrupt::requested());
+            let independent = File::open(git.dir().join(".git/thirdshift-test.lock")).unwrap();
+            independent.try_lock().unwrap();
+        },
+    );
+}
+
+#[test]
+fn completion_repository_lock_waits_through_arriving_and_recorded_interruption() {
+    with_recorded_signal(
+        "git::execution_tests::completion_repository_lock_waits_through_arriving_and_recorded_interruption",
+        |signal| {
+            let (_temp, git) = super::tests::repo_with_origin();
+            let completion = git.completion();
+            let path = git.common_dir().unwrap().join("thirdshift-test.lock");
+            // First deliver a new request during contention, then acquire
+            // again with that request already recorded.
+            for signal in [Some(signal), None] {
+                let (finished_while_held, result) = contended_repository_lock(&completion, signal);
+
+                assert!(!finished_while_held, "completion did not wait for release");
+                let acquired = result.unwrap();
+                let independent = File::open(&path).unwrap();
+                assert!(matches!(
+                    independent.try_lock(),
+                    Err(TryLockError::WouldBlock)
+                ));
+                assert!(interrupt::requested());
+                assert_eq!(
+                    git.lock("ordinary.lock").unwrap_err().to_string(),
+                    "interrupted"
+                );
+                assert_eq!(
+                    Git::new(git.dir())
+                        .lock("ordinary.lock")
+                        .unwrap_err()
+                        .to_string(),
+                    "interrupted"
+                );
+                assert_eq!(
+                    git.run(&["rev-parse", "HEAD"]).unwrap_err().to_string(),
+                    "interrupted"
+                );
+                assert!(!path.with_file_name("ordinary.lock").exists());
+                drop(acquired);
+                independent.try_lock().unwrap();
+                assert!(path.exists(), "release removed the shared locking identity");
+            }
+        },
+    );
+}
+
+#[test]
+fn repository_lock_is_shared_by_worktrees_and_owned_until_drop() {
+    let (temp, git) = super::tests::repo_with_origin();
+    let worktree_path = temp.path().join("worktree");
+    git.run(&[
+        "worktree",
+        "add",
+        "--detach",
+        worktree_path.to_str().unwrap(),
+        "HEAD",
+    ])
+    .unwrap();
+    let worktree = Git::new(worktree_path);
+    let path = git.common_dir().unwrap().join("thirdshift-test.lock");
+    let acquired = git.lock("thirdshift-test.lock").unwrap();
+    let independent =
+        File::open(worktree.common_dir().unwrap().join("thirdshift-test.lock")).unwrap();
+
+    assert!(matches!(
+        independent.try_lock(),
+        Err(TryLockError::WouldBlock)
+    ));
+    drop(acquired);
+    let acquired = worktree.lock("thirdshift-test.lock").unwrap();
+    assert!(matches!(
+        independent.try_lock(),
+        Err(TryLockError::WouldBlock)
+    ));
+    drop(acquired);
+    independent.try_lock().unwrap();
+    assert!(path.exists(), "release removed the shared locking identity");
+}
 
 #[test]
 fn ordinary_git_refuses_to_spawn_after_interruption() {
@@ -19,6 +141,11 @@ fn ordinary_git_refuses_to_spawn_after_interruption() {
                 .unwrap_err();
             assert_eq!(error.to_string(), "interrupted");
             assert!(!git.dir().join("started").exists());
+            assert_eq!(
+                git.lock("ordinary.lock").unwrap_err().to_string(),
+                "interrupted"
+            );
+            assert!(!git.dir().join(".git/ordinary.lock").exists());
         },
     );
 }
