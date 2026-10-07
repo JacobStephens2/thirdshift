@@ -19,12 +19,13 @@ use anyhow::{Context, Result};
 
 use crate::config::{self, EmailSettings, UserConfig, UserConfigDocument};
 use crate::git::Git;
+use crate::github::GitHub;
 use crate::harness::{
     Harness, ModelAndEffort, Settings,
     settings::{self, Terminal},
 };
 use crate::resend_key::{Credentials, Source};
-use crate::{email, github, interrupt, progress};
+use crate::{email, interrupt, progress};
 
 use questions::Answers;
 
@@ -326,7 +327,7 @@ impl Outside for OnMachine<'_> {
     }
 
     fn github_email(&mut self) -> Result<Option<String>> {
-        github::profile_email()
+        GitHub::new().profile_email()
     }
 
     fn git_email(&mut self) -> Result<String> {

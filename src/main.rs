@@ -24,6 +24,7 @@ mod notification;
 mod pass;
 mod pickup;
 mod poll;
+mod process;
 mod progress;
 mod prompt;
 #[cfg(test)]
@@ -36,6 +37,8 @@ mod session;
 mod setup;
 mod skills;
 mod spec_run;
+#[cfg(test)]
+mod test_support;
 mod update;
 mod worktree;
 

@@ -19,7 +19,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::config;
 use crate::git::Git;
-use crate::github;
+use crate::github::GitHub;
 use crate::issue::{IssueUrl, Repo};
 use crate::progress;
 
@@ -61,7 +61,7 @@ impl LaunchDirectory {
                 directory.origin
             );
         }
-        if !github::issue_is_open(issue)? {
+        if !GitHub::new().issue_is_open(issue)? {
             bail!("issue #{} is closed", issue.number);
         }
         directory.check_identity()?;
@@ -73,9 +73,7 @@ impl LaunchDirectory {
     fn open(dir: PathBuf, opening: Opening) -> Result<Self> {
         let git = Git::new(dir);
         let origin = git.run(&["config", "remote.origin.url"])?;
-        let checked_out = git
-            .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
-            .ok();
+        let checked_out = git.run_optional(&["symbolic-ref", "--quiet", "--short", "HEAD"])?;
         Ok(LaunchDirectory {
             git,
             origin,
@@ -145,8 +143,7 @@ impl LaunchDirectory {
         let local = format!("refs/heads/{base}");
         if self
             .git
-            .run(&["rev-parse", "--verify", "--quiet", &local])
-            .is_ok()
+            .succeeds(&["rev-parse", "--verify", "--quiet", &local])?
         {
             let ahead =
                 self.git
@@ -172,8 +169,16 @@ impl LaunchDirectory {
         let up_to_date = self
             .git
             .succeeds(&["merge-base", "--is-ancestor", &origin_base, "HEAD"]);
-        if up_to_date.unwrap_or(false) {
-            return;
+        match up_to_date {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                progress::warn(
+                    &error,
+                    format_args!("could not check whether {base} is up to date"),
+                );
+                return;
+            }
         }
         progress::step(format_args!(
             "updating {base} in the Launch directory from {origin_base}"

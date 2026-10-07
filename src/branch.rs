@@ -4,7 +4,7 @@
 use anyhow::{Result, bail};
 
 use crate::git::Git;
-use crate::github::{self, PrState, PullRequest};
+use crate::github::{GitHub, PrState, PullRequest};
 use crate::issue::IssueUrl;
 
 pub enum Selection {
@@ -66,8 +66,8 @@ impl Selection {
 /// their PRs in any state: the highest number seen on either decides. Fails
 /// if a local copy of the chosen branch in the Launch directory differs from
 /// origin's: the Run replaces it and deletes it at cleanup.
-pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
-    select_through(&GitHubAndOrigin { launch }, issue)
+pub fn select(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<Selection> {
+    select_through(&GitHubAndOrigin { launch, github }, issue)
 }
 
 /// What shows an issue was started.
@@ -82,8 +82,8 @@ pub enum Started {
 /// What shows `issue` was ever started, if it was: the first Issue branch for
 /// it on origin, or else the newest pull request from one, open, merged or
 /// closed.
-pub fn started(launch: &Git, issue: &IssueUrl) -> Result<Option<Started>> {
-    started_through(&GitHubAndOrigin { launch }, issue)
+pub fn started(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<Option<Started>> {
+    started_through(&GitHubAndOrigin { launch, github }, issue)
 }
 
 /// What selection reads of origin, GitHub and the Launch directory. Each
@@ -97,7 +97,7 @@ trait Reads {
     /// `first_branch`, from `issue`'s repository only.
     fn pull_requests(&self, issue: &IssueUrl, first_branch: &str) -> Result<Vec<PullRequest>>;
     /// The head of the local `branch` in the Launch directory, if it has one.
-    fn local_head(&self, branch: &str) -> Option<String>;
+    fn local_head(&self, branch: &str) -> Result<Option<String>>;
 }
 
 /// A branch on origin.
@@ -109,6 +109,7 @@ struct OnOrigin {
 /// The reads of GitHub, of the Launch directory `launch` and of its origin.
 struct GitHubAndOrigin<'a> {
     launch: &'a Git,
+    github: &'a GitHub,
 }
 
 impl Reads for GitHubAndOrigin<'_> {
@@ -135,18 +136,17 @@ impl Reads for GitHubAndOrigin<'_> {
 
     /// One `gh pr list`.
     fn pull_requests(&self, issue: &IssueUrl, first_branch: &str) -> Result<Vec<PullRequest>> {
-        github::pull_requests_with_head_prefix(issue, first_branch)
+        self.github
+            .pull_requests_with_head_prefix(issue, first_branch)
     }
 
-    fn local_head(&self, branch: &str) -> Option<String> {
-        self.launch
-            .run(&[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ])
-            .ok()
+    fn local_head(&self, branch: &str) -> Result<Option<String>> {
+        self.launch.run_optional(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
     }
 }
 
@@ -230,7 +230,7 @@ fn used(reads: &impl Reads, issue: &IssueUrl) -> Result<Used> {
 /// A local `branch` in the launch repository must be at `origin_sha`, or not
 /// exist when origin has no copy, so no local-only commits are destroyed.
 fn check_local_branch(reads: &impl Reads, branch: &str, origin_sha: Option<&str>) -> Result<()> {
-    let Some(local_sha) = reads.local_head(branch) else {
+    let Some(local_sha) = reads.local_head(branch)? else {
         return Ok(());
     };
     match origin_sha {
@@ -335,14 +335,15 @@ mod tests {
                 .collect())
         }
 
-        fn local_head(&self, branch: &str) -> Option<String> {
+        fn local_head(&self, branch: &str) -> Result<Option<String>> {
             self.seen
                 .borrow_mut()
                 .push(Read::LocalHead(branch.to_string()));
-            self.local
+            Ok(self
+                .local
                 .iter()
                 .find(|(name, _)| *name == branch)
-                .map(|(_, head)| head.to_string())
+                .map(|(_, head)| head.to_string()))
         }
     }
 

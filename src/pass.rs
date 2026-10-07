@@ -18,7 +18,7 @@ use anyhow::Result;
 
 use crate::asks::{Asks, Flags};
 use crate::config::UserConfig;
-use crate::github::{self, Issue, ListedIssue};
+use crate::github::{GitHub, Issue, ListedIssue};
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
@@ -114,19 +114,19 @@ pub struct LaunchAndGitHub<'a> {
 
 impl Outside for LaunchAndGitHub<'_> {
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>> {
-        github::open_issues_labelled(&self.repo.slug(), label)
+        GitHub::new().open_issues_labelled(&self.repo.slug(), label)
     }
 
     fn closed_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>> {
-        github::closed_issues_labelled(&self.repo.slug(), label)
+        GitHub::new().closed_issues_labelled(&self.repo.slug(), label)
     }
 
     fn issue(&mut self, issue: &IssueUrl) -> Result<Issue> {
-        github::issue(issue)
+        GitHub::new().issue(issue)
     }
 
     fn apply(&mut self, edit: &Edit) -> Result<()> {
-        edit.apply()
+        edit.apply(&GitHub::new())
     }
 
     fn interrupted(&mut self) -> bool {
