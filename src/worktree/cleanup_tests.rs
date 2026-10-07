@@ -473,7 +473,13 @@ fn damaged_or_inconsistent_registration_evidence_retains_local_work() {
             "missing-gitdir" => fs::remove_file(admin.join("gitdir")).unwrap(),
             "wrong-backlink" => fs::write(
                 admin.join("gitdir"),
-                launch.dir().join(".git").to_str().unwrap(),
+                launch
+                    .dir()
+                    .join(".git")
+                    .canonicalize()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
             )
             .unwrap(),
             "broken-head" => fs::write(admin.join("HEAD"), "broken\n").unwrap(),
