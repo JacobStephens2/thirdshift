@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 
 use crate::branch;
 use crate::git::Git;
-use crate::github;
+use crate::github::GitHub;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::labels::{self, Edit, Label, Labels, READY_FOR_AGENT};
@@ -45,7 +45,13 @@ pub struct Claim<'a> {
 /// `ready-for-agent`, is left as it is, with no request made. A failure names
 /// the Claim as what could not be made.
 pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git) -> Result<Claim<'a>> {
-    let claimed = Claimed::make(&mut OnGitHub { launch }, issue)?;
+    let claimed = Claimed::make(
+        &mut OnGitHub {
+            launch,
+            github: GitHub::new(),
+        },
+        issue,
+    )?;
     Ok(Claim { launch, claimed })
 }
 
@@ -63,7 +69,13 @@ impl Claim<'_> {
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
     pub fn end(self, reached: Option<Goal>) {
         let launch = self.launch.completion();
-        self.claimed.end(&mut OnGitHub { launch: &launch }, reached);
+        self.claimed.end(
+            &mut OnGitHub {
+                launch: &launch,
+                github: GitHub::new().completion(),
+            },
+            reached,
+        );
     }
 }
 
@@ -98,15 +110,16 @@ struct State {
 /// The issue on GitHub, and origin as the Launch directory `launch` sees it.
 struct OnGitHub<'a> {
     launch: &'a Git,
+    github: GitHub,
 }
 
 impl Outside for OnGitHub<'_> {
     fn labels(&mut self, issue: &IssueUrl) -> Result<Labels> {
-        github::issue_labels(issue)
+        self.github.issue_labels(issue)
     }
 
     fn state(&mut self, issue: &IssueUrl) -> Result<State> {
-        let issue = github::issue(issue)?;
+        let issue = self.github.issue(issue)?;
         Ok(State {
             is_open: issue.is_open,
             labels: issue.labels,
@@ -114,11 +127,11 @@ impl Outside for OnGitHub<'_> {
     }
 
     fn started(&mut self, issue: &IssueUrl) -> Result<bool> {
-        Ok(branch::started(self.launch, issue)?.is_some())
+        Ok(branch::started(self.launch, &self.github, issue)?.is_some())
     }
 
     fn apply(&mut self, edit: &Edit) -> Result<()> {
-        edit.apply()
+        edit.apply(&self.github)
     }
 
     fn interrupted(&mut self) -> bool {

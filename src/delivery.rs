@@ -20,7 +20,7 @@ mod repair_loop;
 use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
-use crate::github::{self, Mergeable, PullRequest};
+use crate::github::{GitHub, Mergeable, PullRequest};
 use crate::harness::Choice;
 use crate::host;
 use crate::interrupt;
@@ -433,19 +433,19 @@ impl Outside for InWorktree<'_> {
     }
 
     fn pull_request(&mut self) -> Result<Option<PullRequest>> {
-        github::pull_request_for(self.issue, self.worktree.branch())
+        GitHub::new().pull_request_for(self.issue, self.worktree.branch())
     }
 
     fn pr_body(&mut self, number: u64) -> Result<String> {
-        github::pr_body(self.issue, number)
+        GitHub::new().pr_body(self.issue, number)
     }
 
     fn set_pr_body(&mut self, number: u64, body: &str) -> Result<()> {
-        github::set_pr_body(self.issue, number, body)
+        GitHub::new().set_pr_body(self.issue, number, body)
     }
 
     fn mark_ready(&mut self) -> Result<()> {
-        github::mark_ready(self.issue, self.worktree.branch())
+        GitHub::new().mark_ready(self.issue, self.worktree.branch())
     }
 
     fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()> {
@@ -465,11 +465,11 @@ impl Outside for InWorktree<'_> {
     }
 
     fn issue_is_open(&mut self) -> Result<bool> {
-        github::issue_is_open(self.issue)
+        GitHub::new().completion().issue_is_open(self.issue)
     }
 
     fn close_issue(&mut self, comment: &str) -> Result<()> {
-        github::close_issue(self.issue, comment)
+        GitHub::new().completion().close_issue(self.issue, comment)
     }
 
     fn interrupted(&mut self) -> bool {
@@ -529,11 +529,15 @@ impl FailedOutside for OnFailure<'_> {
     }
 
     fn pull_request(&mut self) -> Result<Option<PullRequest>> {
-        github::pull_request_for(self.issue, self.worktree.branch())
+        GitHub::new()
+            .completion()
+            .pull_request_for(self.issue, self.worktree.branch())
     }
 
     fn convert_to_draft(&mut self) -> Result<()> {
-        github::convert_to_draft(self.issue, self.worktree.branch())
+        GitHub::new()
+            .completion()
+            .convert_to_draft(self.issue, self.worktree.branch())
     }
 
     fn keep(&mut self) {
@@ -648,7 +652,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn merge(&mut self, head: &str) -> Result<()> {
-        github::merge(self.issue, self.worktree.branch(), head)
+        GitHub::new().merge(self.issue, self.worktree.branch(), head)
     }
 
     fn interrupt_requested(&mut self) -> bool {
@@ -672,12 +676,13 @@ fn pending(merge: Merge) -> Option<PendingMerge> {
 /// mergeable, waiting up to the grace period for GitHub to work out the last.
 fn ensure_pr_ready_and_mergeable(issue: &IssueUrl, branch: &str) -> Result<()> {
     progress::step("checking the PR is open, ready and mergeable");
-    let pr = open(github::pull_request_for(issue, branch)?)?;
+    let github = GitHub::new();
+    let pr = open(github.pull_request_for(issue, branch)?)?;
     if pr.is_draft {
         bail!("PR {} is a draft", pr.url);
     }
     let mergeable = poll::within(poll::grace_period(), || {
-        Ok(Some(github::mergeable(issue, branch)?).filter(|m| *m != Mergeable::Unknown))
+        Ok(Some(github.mergeable(issue, branch)?).filter(|m| *m != Mergeable::Unknown))
     })?;
     match mergeable {
         Some(Mergeable::Yes) => Ok(()),

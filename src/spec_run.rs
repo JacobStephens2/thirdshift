@@ -23,7 +23,7 @@ use crate::base_fix::BaseFixAsk;
 use crate::child_run::{self, Ended, Handle, Kind};
 use crate::delivery::{Delivery, Opening};
 use crate::failed_run::{FailedRun, interrupted_or};
-use crate::github::{self, Ticket};
+use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -133,6 +133,13 @@ fn review_and_deliver(
     checklist: &str,
     spec_pr_url: &str,
 ) -> Result<Reached, FailedRun> {
+    if outside.interrupted() {
+        return Err(FailedRun {
+            interrupted: true,
+            pr_url: Some(spec_pr_url.to_string()),
+            ..FailedRun::from(anyhow::anyhow!("interrupted"))
+        });
+    }
     let opening = Opening {
         kind: SPEC_REVIEW,
         prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
@@ -270,7 +277,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
     }
 
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
-        github::tickets(self.spec)
+        GitHub::new().completion().tickets(self.spec)
     }
 
     fn show(&mut self, checklist: &str) {

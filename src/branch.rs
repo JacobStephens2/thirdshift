@@ -4,7 +4,7 @@
 use anyhow::{Result, bail};
 
 use crate::git::Git;
-use crate::github::{self, PrState, PullRequest};
+use crate::github::{GitHub, PrState, PullRequest};
 use crate::issue::IssueUrl;
 
 pub enum Selection {
@@ -66,8 +66,8 @@ impl Selection {
 /// their PRs in any state: the highest number seen on either decides. Fails
 /// if a local copy of the chosen branch in the Launch directory differs from
 /// origin's: the Run replaces it and deletes it at cleanup.
-pub fn select(launch: &Git, issue: &IssueUrl) -> Result<Selection> {
-    select_through(&GitHubAndOrigin { launch }, issue)
+pub fn select(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<Selection> {
+    select_through(&GitHubAndOrigin { launch, github }, issue)
 }
 
 /// What shows an issue was started.
@@ -82,8 +82,8 @@ pub enum Started {
 /// What shows `issue` was ever started, if it was: the first Issue branch for
 /// it on origin, or else the newest pull request from one, open, merged or
 /// closed.
-pub fn started(launch: &Git, issue: &IssueUrl) -> Result<Option<Started>> {
-    started_through(&GitHubAndOrigin { launch }, issue)
+pub fn started(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<Option<Started>> {
+    started_through(&GitHubAndOrigin { launch, github }, issue)
 }
 
 /// What selection reads of origin, GitHub and the Launch directory. Each
@@ -109,6 +109,7 @@ struct OnOrigin {
 /// The reads of GitHub, of the Launch directory `launch` and of its origin.
 struct GitHubAndOrigin<'a> {
     launch: &'a Git,
+    github: &'a GitHub,
 }
 
 impl Reads for GitHubAndOrigin<'_> {
@@ -135,7 +136,8 @@ impl Reads for GitHubAndOrigin<'_> {
 
     /// One `gh pr list`.
     fn pull_requests(&self, issue: &IssueUrl, first_branch: &str) -> Result<Vec<PullRequest>> {
-        github::pull_requests_with_head_prefix(issue, first_branch)
+        self.github
+            .pull_requests_with_head_prefix(issue, first_branch)
     }
 
     fn local_head(&self, branch: &str) -> Result<Option<String>> {

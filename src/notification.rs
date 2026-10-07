@@ -9,7 +9,7 @@ use anyhow::Result;
 
 use crate::config::EmailSettings;
 use crate::email::Resend;
-use crate::github;
+use crate::github::GitHub;
 use crate::harness::Choice;
 use crate::host;
 use crate::issue::{IssueUrl, Repo};
@@ -96,7 +96,7 @@ impl RunNotification {
                 issue: issue.clone(),
                 // Left out of the subject if GitHub can't be asked; the Run's
                 // own preflight reports why.
-                title: github::issue_title(issue).ok(),
+                title: GitHub::new().issue_title(issue).ok(),
             },
             // Left out of the subject if origin names none; the Architect
             // run's own preflight reports why.
