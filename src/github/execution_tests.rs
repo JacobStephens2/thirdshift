@@ -105,12 +105,7 @@ fn ordinary_github_refuses_reads_and_writes_before_spawn() {
         |signal| {
             let fixture = Fixture::new("echo 'no pull requests found' >&2; exit 1");
             let github = GitHub::new();
-            assert!(
-                github
-                    .pull_request_for(&issue(), "issue-7")
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(github.pr_snapshot(&issue(), "issue-7").unwrap().is_none());
             fs::remove_file(fixture.path("pid")).unwrap();
             signal_hook::low_level::raise(signal).unwrap();
             assert_eq!(
@@ -128,7 +123,7 @@ fn ordinary_github_refuses_reads_and_writes_before_spawn() {
                 github.checks_on(&issue(), "abc").err().unwrap().to_string(),
                 "interrupted"
             );
-            assert!(github.pull_request_for(&issue(), "issue-7").is_err());
+            assert!(github.pr_snapshot(&issue(), "issue-7").is_err());
             assert!(
                 !fixture.path("pid").exists(),
                 "an ordinary operation spawned after interruption"
@@ -209,7 +204,7 @@ fn an_optional_pr_probe_propagates_active_cancellation_instead_of_absence() {
                 std::process::id()
             ));
             let error = GitHub::new()
-                .pull_request_for(&issue(), "issue-7")
+                .pr_snapshot(&issue(), "issue-7")
                 .expect_err("cancellation became absence");
             assert_eq!(error.to_string(), "interrupted");
             assert!(!exists(fixture.pid().unwrap()));
@@ -360,6 +355,53 @@ fn github_keeps_its_exit_and_parse_diagnostics() {
                 github.checks_on(&issue(), "abc").err().unwrap().to_string(),
                 "gh api repos/acme/widgets/commits/abc/check-runs?per_page=100 returned invalid JSON"
             );
+        },
+    );
+}
+
+#[test]
+fn spec_creation_observes_the_returned_number_with_completion_after_interruption() {
+    with_recorded_signal(
+        "github::execution_tests::spec_creation_observes_the_returned_number_with_completion_after_interruption",
+        |signal| {
+            let fixture = Fixture::new("");
+            fixture.script(&format!(
+                r#"
+printf '%s\n' "$1 $2 $3" >> '{calls}'
+case "$1 $2 $3" in
+  'pr view issue-7')
+    if test -f '{discovered}'; then
+      printf '%s' '{{"number":13,"url":"https://github.com/acme/widgets/pull/13","state":"OPEN","headRefName":"issue-7","baseRefName":"main","isDraft":true,"mergeable":"MERGEABLE","headRefOid":"head","isCrossRepository":false}}'
+    else
+      touch '{discovered}'
+      echo 'no pull requests found' >&2
+      exit 1
+    fi ;;
+  'issue view 7') printf '%s' '{{"title":"Widgets"}}' ;;
+  'pr create --repo') printf '  https://github.com/acme/widgets/pull/12\n\n' ;;
+  'pr view 12') printf '%s' '{{"number":12,"url":"https://github.com/acme/widgets/pull/12","state":"OPEN","headRefName":"issue-7","baseRefName":"main","isDraft":true,"mergeable":"MERGEABLE","headRefOid":"head","isCrossRepository":false}}' ;;
+  *) exit 1 ;;
+esac
+"#,
+                calls = fixture.path("calls").display(),
+                discovered = fixture.path("discovered").display(),
+            ));
+            let mut pr =
+                crate::pull_request::PullRequest::new(&issue(), "issue-7", "main", GitHub::new());
+            pr.resume_spec().unwrap();
+            signal_hook::low_level::raise(signal).unwrap();
+
+            assert_eq!(
+                pr.land_spec("- [x] #8 landed\n").unwrap(),
+                "https://github.com/acme/widgets/pull/12"
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.path("calls")).unwrap(),
+                "pr view issue-7\nissue view 7\npr create --repo\npr view 12\n"
+            );
+            assert!(interrupt::requested());
+            pr.begin_delivery();
+            assert_eq!(pr.mark_ready(None).unwrap_err().to_string(), "interrupted");
         },
     );
 }
