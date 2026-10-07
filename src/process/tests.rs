@@ -1,6 +1,7 @@
 //! Behavior through the same two operations used by sessions and checks.
 
 use super::*;
+use crate::test_support::with_recorded_signal;
 
 use std::fs;
 use std::path::Path;
@@ -652,23 +653,6 @@ fn startup_failure_returns_no_state_even_when_the_consumer_has_returned() {
         "startup failure returned recovered state: {result:?}"
     );
     owned.assert_stopped();
-}
-
-fn with_recorded_signal(test_name: &str, exercise: impl FnOnce(libc::c_int)) {
-    const SIGNAL: &str = "THIRDSHIFT_EXECUTION_ACTIVE_SIGNAL";
-    if let Ok(signal) = std::env::var(SIGNAL) {
-        interrupt::install().unwrap();
-        exercise(signal.parse().unwrap());
-        return;
-    }
-    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        let result = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", test_name, "--nocapture"])
-            .env(SIGNAL, signal.to_string())
-            .output()
-            .unwrap();
-        assert!(result.status.success(), "{result:?}");
-    }
 }
 
 #[test]

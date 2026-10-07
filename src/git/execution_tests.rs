@@ -3,39 +3,14 @@
 
 use super::*;
 use crate::interrupt;
+use crate::test_support::with_recorded_signal;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-fn isolated(name: &str, test: impl FnOnce(libc::c_int)) {
-    if std::env::var("THIRDSHIFT_TEST_GIT").as_deref() == Ok(name) {
-        interrupt::install().unwrap();
-        test(
-            std::env::var("THIRDSHIFT_TEST_GIT_SIGNAL")
-                .unwrap()
-                .parse()
-                .unwrap(),
-        );
-        return;
-    }
-    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &format!("git::execution_tests::{name}"),
-                "--nocapture",
-            ])
-            .env("THIRDSHIFT_TEST_GIT", name)
-            .env("THIRDSHIFT_TEST_GIT_SIGNAL", signal.to_string())
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "signal {signal}: {output:?}");
-    }
-}
-
 #[test]
 fn ordinary_git_refuses_to_spawn_after_interruption() {
-    isolated(
-        "ordinary_git_refuses_to_spawn_after_interruption",
+    with_recorded_signal(
+        "git::execution_tests::ordinary_git_refuses_to_spawn_after_interruption",
         |signal| {
             let (_temp, git) = super::tests::repo_with_origin();
             signal_hook::low_level::raise(signal).unwrap();
@@ -50,8 +25,8 @@ fn ordinary_git_refuses_to_spawn_after_interruption() {
 
 #[test]
 fn completion_git_finishes_without_permitting_the_original_view() {
-    isolated(
-        "completion_git_finishes_without_permitting_the_original_view",
+    with_recorded_signal(
+        "git::execution_tests::completion_git_finishes_without_permitting_the_original_view",
         |signal| {
             let (_temp, git) = super::tests::repo_with_origin();
             let completion = git.completion();
@@ -84,8 +59,8 @@ fn completion_git_finishes_without_permitting_the_original_view() {
 
 #[test]
 fn optional_answers_distinguish_absence_from_execution_failure() {
-    isolated(
-        "optional_answers_distinguish_absence_from_execution_failure",
+    with_recorded_signal(
+        "git::execution_tests::optional_answers_distinguish_absence_from_execution_failure",
         |signal| {
             let (_temp, git) = super::tests::repo_with_origin();
             assert_eq!(
@@ -168,8 +143,8 @@ const FIXTURE: &[&str] = &["-c", "alias.fixture=!./fixture.sh", "fixture"];
 
 #[test]
 fn a_parent_only_signal_stops_active_git_and_propagates_through_probes() {
-    isolated(
-        "a_parent_only_signal_stops_active_git_and_propagates_through_probes",
+    with_recorded_signal(
+        "git::execution_tests::a_parent_only_signal_stops_active_git_and_propagates_through_probes",
         |signal| {
             let (_temp, git) = super::tests::repo_with_origin();
             let fixture = Fixture::new(
@@ -202,8 +177,8 @@ fn a_parent_only_signal_stops_active_git_and_propagates_through_probes() {
 
 #[test]
 fn completion_git_finishes_with_a_newly_arriving_signal() {
-    isolated(
-        "completion_git_finishes_with_a_newly_arriving_signal",
+    with_recorded_signal(
+        "git::execution_tests::completion_git_finishes_with_a_newly_arriving_signal",
         |signal| {
             let (_temp, git) = super::tests::repo_with_origin();
             let _fixture = Fixture::new(
@@ -222,8 +197,8 @@ fn completion_git_finishes_with_a_newly_arriving_signal() {
 
 #[test]
 fn an_optional_probe_propagates_active_cancellation() {
-    isolated(
-        "an_optional_probe_propagates_active_cancellation",
+    with_recorded_signal(
+        "git::execution_tests::an_optional_probe_propagates_active_cancellation",
         |signal| {
             let (_temp, git) = super::tests::repo_with_origin();
             let _fixture = Fixture::new(
@@ -265,19 +240,22 @@ fn interrupt_lock_retry(git: &Git, signal: libc::c_int) -> Result<String> {
 
 #[test]
 fn ordinary_lock_retries_observe_interruption() {
-    isolated("ordinary_lock_retries_observe_interruption", |signal| {
-        let (_temp, git) = super::tests::repo_with_origin();
-        assert_eq!(
-            interrupt_lock_retry(&git, signal).unwrap_err().to_string(),
-            "interrupted"
-        );
-    });
+    with_recorded_signal(
+        "git::execution_tests::ordinary_lock_retries_observe_interruption",
+        |signal| {
+            let (_temp, git) = super::tests::repo_with_origin();
+            assert_eq!(
+                interrupt_lock_retry(&git, signal).unwrap_err().to_string(),
+                "interrupted"
+            );
+        },
+    );
 }
 
 #[test]
 fn completion_lock_retries_ignore_existing_and_arriving_interruption() {
-    isolated(
-        "completion_lock_retries_ignore_existing_and_arriving_interruption",
+    with_recorded_signal(
+        "git::execution_tests::completion_lock_retries_ignore_existing_and_arriving_interruption",
         |signal| {
             let (_temp, git) = super::tests::repo_with_origin();
             let completion = git.completion();

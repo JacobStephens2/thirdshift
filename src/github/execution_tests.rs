@@ -1,35 +1,10 @@
 use super::*;
 use crate::interrupt;
+use crate::test_support::with_recorded_signal;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-fn isolated(name: &str, test: impl FnOnce(libc::c_int)) {
-    if std::env::var("THIRDSHIFT_TEST_GITHUB").as_deref() == Ok(name) {
-        interrupt::install().unwrap();
-        test(
-            std::env::var("THIRDSHIFT_TEST_GITHUB_SIGNAL")
-                .unwrap()
-                .parse()
-                .unwrap(),
-        );
-        return;
-    }
-    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &format!("github::execution_tests::{name}"),
-                "--nocapture",
-            ])
-            .env("THIRDSHIFT_TEST_GITHUB", name)
-            .env("THIRDSHIFT_TEST_GITHUB_SIGNAL", signal.to_string())
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "signal {signal}: {output:?}");
-    }
-}
 
 /// PATH changes happen only in the isolated process. Cleanup uses the
 /// executable's recorded PID, including after a failed assertion.
@@ -102,31 +77,34 @@ fn issue() -> IssueUrl {
 
 #[test]
 fn parent_only_interruption_stops_active_github() {
-    isolated("parent_only_interruption_stops_active_github", |signal| {
-        let fixture = Fixture::new(&format!(
-            "kill -{signal} {}\nexec sleep 3",
-            std::process::id()
-        ));
-        let started = Instant::now();
-        assert_eq!(
-            GitHub::new().issue_title(&issue()).unwrap_err().to_string(),
-            "interrupted"
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "GitHub waited for natural expiry"
-        );
-        assert!(
-            !exists(fixture.pid().expect("the executable never started")),
-            "GitHub left its executable alive"
-        );
-    });
+    with_recorded_signal(
+        "github::execution_tests::parent_only_interruption_stops_active_github",
+        |signal| {
+            let fixture = Fixture::new(&format!(
+                "kill -{signal} {}\nexec sleep 3",
+                std::process::id()
+            ));
+            let started = Instant::now();
+            assert_eq!(
+                GitHub::new().issue_title(&issue()).unwrap_err().to_string(),
+                "interrupted"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "GitHub waited for natural expiry"
+            );
+            assert!(
+                !exists(fixture.pid().expect("the executable never started")),
+                "GitHub left its executable alive"
+            );
+        },
+    );
 }
 
 #[test]
 fn ordinary_github_refuses_reads_and_writes_before_spawn() {
-    isolated(
-        "ordinary_github_refuses_reads_and_writes_before_spawn",
+    with_recorded_signal(
+        "github::execution_tests::ordinary_github_refuses_reads_and_writes_before_spawn",
         |signal| {
             let fixture = Fixture::new("echo 'no pull requests found' >&2; exit 1");
             let github = GitHub::new();
@@ -163,7 +141,7 @@ fn ordinary_github_refuses_reads_and_writes_before_spawn() {
 }
 
 fn finish_issue_creation(name: &str, already_interrupted: bool) {
-    isolated(name, |signal| {
+    with_recorded_signal(name, |signal| {
         let github = GitHub::new();
         let completion = github.completion();
         let fixture = Fixture::new("");
@@ -211,20 +189,23 @@ esac
 #[test]
 fn completion_finishes_nested_label_reads_and_writes_without_permitting_ordinary_views() {
     finish_issue_creation(
-        "completion_finishes_nested_label_reads_and_writes_without_permitting_ordinary_views",
+        "github::execution_tests::completion_finishes_nested_label_reads_and_writes_without_permitting_ordinary_views",
         true,
     );
 }
 
 #[test]
 fn completion_finishes_with_a_newly_arriving_interrupt() {
-    finish_issue_creation("completion_finishes_with_a_newly_arriving_interrupt", false);
+    finish_issue_creation(
+        "github::execution_tests::completion_finishes_with_a_newly_arriving_interrupt",
+        false,
+    );
 }
 
 #[test]
 fn an_optional_pr_probe_propagates_active_cancellation_instead_of_absence() {
-    isolated(
-        "an_optional_pr_probe_propagates_active_cancellation_instead_of_absence",
+    with_recorded_signal(
+        "github::execution_tests::an_optional_pr_probe_propagates_active_cancellation_instead_of_absence",
         |signal| {
             let fixture = Fixture::new(&format!(
                 "echo 'no pull requests found' >&2\nkill -{signal} {}\nexec sleep 3",
@@ -241,7 +222,7 @@ fn an_optional_pr_probe_propagates_active_cancellation_instead_of_absence() {
 }
 
 fn cancelled_merge(name: &str, state: &str, head: &str, confirmed: bool) {
-    isolated(name, |signal| {
+    with_recorded_signal(name, |signal| {
         let fixture = Fixture::new(&format!(
             r#"
 case "$1 $2" in
@@ -274,7 +255,7 @@ esac
 #[test]
 fn a_cancelled_merge_is_confirmed_only_at_the_requested_head() {
     cancelled_merge(
-        "a_cancelled_merge_is_confirmed_only_at_the_requested_head",
+        "github::execution_tests::a_cancelled_merge_is_confirmed_only_at_the_requested_head",
         "MERGED",
         "requested-head",
         true,
@@ -284,7 +265,7 @@ fn a_cancelled_merge_is_confirmed_only_at_the_requested_head() {
 #[test]
 fn a_cancelled_merge_at_another_head_remains_a_failure() {
     cancelled_merge(
-        "a_cancelled_merge_at_another_head_remains_a_failure",
+        "github::execution_tests::a_cancelled_merge_at_another_head_remains_a_failure",
         "MERGED",
         "foreign-head",
         false,
@@ -294,7 +275,7 @@ fn a_cancelled_merge_at_another_head_remains_a_failure() {
 #[test]
 fn an_unconfirmed_cancelled_merge_remains_a_failure() {
     cancelled_merge(
-        "an_unconfirmed_cancelled_merge_remains_a_failure",
+        "github::execution_tests::an_unconfirmed_cancelled_merge_remains_a_failure",
         "OPEN",
         "requested-head",
         false,
@@ -303,8 +284,8 @@ fn an_unconfirmed_cancelled_merge_remains_a_failure() {
 
 #[test]
 fn github_preserves_trimmed_text_json_and_paginated_items() {
-    isolated(
-        "github_preserves_trimmed_text_json_and_paginated_items",
+    with_recorded_signal(
+        "github::execution_tests::github_preserves_trimmed_text_json_and_paginated_items",
         |_| {
             let _fixture = Fixture::new(
                 r#"
@@ -348,32 +329,35 @@ esac
 
 #[test]
 fn github_keeps_its_exit_and_parse_diagnostics() {
-    isolated("github_keeps_its_exit_and_parse_diagnostics", |_| {
-        let fixture = Fixture::new("printf ' refused \\n' >&2; exit 1");
-        let github = GitHub::new();
-        assert_eq!(
-            github.issue_title(&issue()).unwrap_err().to_string(),
-            "gh issue view failed: refused"
-        );
-        assert_eq!(
-            github
-                .mark_ready(&issue(), "issue-7")
-                .unwrap_err()
-                .to_string(),
-            "gh pr ready issue-7 --repo acme/widgets failed: refused"
-        );
-        assert_eq!(
-            github.checks_on(&issue(), "abc").err().unwrap().to_string(),
-            "gh api repos/acme/widgets/commits/abc/check-runs?per_page=100 failed: refused"
-        );
-        fixture.script("printf 'invalid'");
-        assert_eq!(
-            github.issue_title(&issue()).unwrap_err().to_string(),
-            "gh issue view returned invalid JSON"
-        );
-        assert_eq!(
-            github.checks_on(&issue(), "abc").err().unwrap().to_string(),
-            "gh api repos/acme/widgets/commits/abc/check-runs?per_page=100 returned invalid JSON"
-        );
-    });
+    with_recorded_signal(
+        "github::execution_tests::github_keeps_its_exit_and_parse_diagnostics",
+        |_| {
+            let fixture = Fixture::new("printf ' refused \\n' >&2; exit 1");
+            let github = GitHub::new();
+            assert_eq!(
+                github.issue_title(&issue()).unwrap_err().to_string(),
+                "gh issue view failed: refused"
+            );
+            assert_eq!(
+                github
+                    .mark_ready(&issue(), "issue-7")
+                    .unwrap_err()
+                    .to_string(),
+                "gh pr ready issue-7 --repo acme/widgets failed: refused"
+            );
+            assert_eq!(
+                github.checks_on(&issue(), "abc").err().unwrap().to_string(),
+                "gh api repos/acme/widgets/commits/abc/check-runs?per_page=100 failed: refused"
+            );
+            fixture.script("printf 'invalid'");
+            assert_eq!(
+                github.issue_title(&issue()).unwrap_err().to_string(),
+                "gh issue view returned invalid JSON"
+            );
+            assert_eq!(
+                github.checks_on(&issue(), "abc").err().unwrap().to_string(),
+                "gh api repos/acme/widgets/commits/abc/check-runs?per_page=100 returned invalid JSON"
+            );
+        },
+    );
 }
