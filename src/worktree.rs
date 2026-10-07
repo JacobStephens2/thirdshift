@@ -242,8 +242,7 @@ impl Worktree {
     /// comparison, including when the merge had nothing to do.
     pub fn merge_base_branch(&self, base: &str) -> Result<Merge> {
         progress::step(format_args!("merging origin/{base} into {}", self.branch));
-        let origin = self.sample_origin(base)?;
-        self.merge(&origin.upstream, &origin.commit)
+        self.merge(self.sample_origin(base)?)
     }
 
     /// Fetch the Issue branch from origin and list, oldest first, the commits
@@ -253,14 +252,20 @@ impl Worktree {
     pub fn new_commits_on_origin(&self) -> Result<ForeignCommits> {
         let origin = self.sample_origin(&self.branch)?;
         let local_head = self.head()?;
-        let range = format!("{local_head}..{}", origin.commit);
-        let commits = self.git.run(&["rev-list", "--reverse", &range])?;
-        Ok(ForeignCommits {
+        let mut observed = ForeignCommits {
             owner: Arc::clone(&self.synchronization_owner),
             origin,
             local_head,
-            commits: commits.lines().map(String::from).collect(),
-        })
+            commits: Vec::new(),
+        };
+        let range = format!("{}..{}", observed.local_head(), observed.origin_head());
+        observed.commits = self
+            .git
+            .run(&["rev-list", "--reverse", &range])?
+            .lines()
+            .map(String::from)
+            .collect();
+        Ok(observed)
     }
 
     /// Fetch the Issue branch from origin and fast-forward the local one to
@@ -289,7 +294,7 @@ impl Worktree {
                 observed.upstream()
             );
         }
-        self.merge(observed.upstream(), observed.origin_head())
+        self.merge(observed.origin)
     }
 
     /// Fetch, then resolve a fully qualified remote-tracking ref once. Every
@@ -309,24 +314,22 @@ impl Worktree {
     /// Merge the sampled origin commit into the Issue branch, never rebase, so
     /// pushing it is always a fast-forward. `--ff` keeps a user's
     /// `merge.ff = only` from turning a clean merge into an error.
-    fn merge(&self, upstream: &str, commit: &str) -> Result<Merge> {
+    fn merge(&self, origin: OriginCommit) -> Result<Merge> {
+        let upstream = &origin.upstream;
         let message = format!(
             "Merge remote-tracking branch '{upstream}' into {}",
             self.branch
         );
         match self
             .git
-            .run(&["merge", "--no-edit", "--ff", "-m", &message, commit])
+            .run(&["merge", "--no-edit", "--ff", "-m", &message, &origin.commit])
         {
             Ok(_) => Ok(Merge::Clean {
-                commit: commit.to_string(),
+                commit: origin.commit,
             }),
-            Err(_) if self.git.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge {
-                origin: OriginCommit {
-                    upstream: upstream.to_string(),
-                    commit: commit.to_string(),
-                },
-            })),
+            Err(_) if self.git.merge_in_progress()? => {
+                Ok(Merge::Conflicted(PendingMerge { origin }))
+            }
             Err(error) => Err(error),
         }
     }
