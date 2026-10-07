@@ -27,7 +27,9 @@
 # on and merges an open PR, or tags a merged one, without the refusals above,
 # which the first run passed. If v<version> is already on origin, on the merge
 # of the bump PR, it says so and waits on or reports the release workflow run
-# instead; a v<version> tag anywhere else on origin is refused.
+# instead; a v<version> tag anywhere else on origin is refused. A bump PR
+# closed without merging is refused while release-<version> is on origin;
+# once that branch is deleted, the next run starts over.
 #
 # Prints a progress line on stderr for each step, with the release workflow
 # run's URL once it waits for that run, and the GitHub Release's URL last.
@@ -99,13 +101,19 @@ main() {
 # find_earlier_run
 # Sets what an earlier run for this version got done: pr_state (OPEN, MERGED,
 # CLOSED, or empty with no PR), url, head and merge from the newest PR from
-# $branch, or with no PR, head from $branch on origin if it was pushed.
+# $branch, or with no PR, head from $branch on origin if it was pushed. A PR
+# closed without merging whose branch is gone from origin counts as no PR.
 find_earlier_run() {
 	local pr
 	pr=$(gh pr list --head "$branch" --base main --state all --limit 1 \
 		--json state,url,headRefOid,mergeCommit \
 		--jq '.[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")"')
 	read -r pr_state url head merge <<<"$pr"
+	# A PR closed without merging whose branch was then deleted leaves
+	# nothing to resume: start over.
+	if [ "$pr_state" = CLOSED ] && [ -z "$(git ls-remote origin "refs/heads/$branch")" ]; then
+		pr_state='' url='' head='' merge=''
+	fi
 	if [ -z "$pr_state" ]; then
 		head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
 		if [ -n "$head" ]; then
