@@ -17,3 +17,5 @@ Codex sessions, and every Resume of one, run with `--dangerously-bypass-approval
 - `.git/info/exclude` is shared by every worktree of a repository. The `thirdshift-*` patterns are added once and left there. They are harmless.
 - Each Codex session adds a permanent `trust_level = "trusted"` entry for the target repository's root to the user's `~/.codex/config.toml`.
 - The user's Claude-only instructions and hooks (`~/.claude/`) don't reach Codex sessions. Codex reads `AGENTS.md`, and falls back to `CLAUDE.md` when the repository has none.
+
+Generalised to every Harness by ADR 0013.
