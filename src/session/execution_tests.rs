@@ -402,7 +402,7 @@ fn a_resumes_review_reports_are_kept_beside_its_own_session_log() {
             fs::read_to_string(log.with_extension("spec")).unwrap(),
             "Resume Spec report\nFiles read: src/session.rs\n"
         );
-        // The first session's reports remain with its own transcript.
+        // The first session's reports remain with its own Session log.
         assert_eq!(
             fs::read_to_string(root.join("logs/7-fixture-implement.standards")).unwrap(),
             "Standards report\nFiles read: src/session.rs\n"

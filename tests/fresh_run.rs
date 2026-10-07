@@ -83,17 +83,8 @@ fn gives_the_agent_the_fresh_prompt() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    let prompt = scenario.first_prompt();
-    let directory = prompt
-        .split("to `")
-        .nth(1)
-        .unwrap()
-        .split("/standards.md`")
-        .next()
-        .unwrap();
-    assert!(std::path::Path::new(directory).starts_with(scenario.path("work/widgets-issue-7")));
     assert_eq!(
-        prompt.replace(directory, "<review reports directory>"),
+        scenario.first_prompt_with_report_placeholder(),
         "/thirdshift-implement https://github.com/acme/widgets/issues/7\n\
          The base branch is main. Review with the `thirdshift-code-review` skill using main as the fixed point.\n\
          For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. \
