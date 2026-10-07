@@ -243,6 +243,19 @@ fn hook_commits_survive_including_detached_review_commits() {
                 local_head(&launch, BRANCH).unwrap().as_deref(),
                 Some(head.as_str())
             );
+        } else {
+            std::fs::remove_file(temp.path().join("hooks/post-checkout")).unwrap();
+            let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+            let retry = kind.acquire(&launch).unwrap_err().to_string();
+            assert!(
+                retry.contains("retaining checkout") && retry.contains(&head),
+                "{retry}"
+            );
+            assert_eq!(git.run(&["rev-parse", "HEAD"]).unwrap(), head);
+            assert_eq!(
+                launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+                registrations
+            );
         }
     }
 }
@@ -302,6 +315,8 @@ fn pre_existing_empty_directories_and_symlinks_retain_partial_registrations() {
             }
             checkout_hook(&temp, "");
 
+            let registered = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+
             let error = kind.acquire(&launch).unwrap_err().to_string();
 
             assert!(path.exists(), "{kind:?}, symlink {symlink}: {error}");
@@ -312,6 +327,17 @@ fn pre_existing_empty_directories_and_symlinks_retain_partial_registrations() {
                     .is_symlink(),
                 symlink
             );
+            if matches!(kind, AcquisitionKind::Review) {
+                // Reviews refuse unknown paths before a new add can create
+                // any registration or run the checkout hook.
+                assert_eq!(
+                    launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+                    registered
+                );
+                assert!(error.contains("retaining checkout"), "{error}");
+                assert!(!path.join(".git").exists());
+                continue;
+            }
             assert!(
                 launch
                     .run(&["worktree", "list", "--porcelain"])
@@ -486,7 +512,12 @@ fn a_path_inspection_error_occurs_before_any_add_mutation() {
 
         let error = kind.acquire(&launch).unwrap_err().to_string();
 
-        assert!(error.contains("cannot resolve"), "{kind:?}: {error}");
+        let reason = if matches!(kind, AcquisitionKind::Review) {
+            "symlink"
+        } else {
+            "cannot resolve"
+        };
+        assert!(error.contains(reason), "{kind:?}: {error}");
         assert!(!temp.path().join("hook-ran").exists());
         assert!(
             std::fs::symlink_metadata(path)
@@ -688,6 +719,31 @@ fn tracked_work_hidden_by_index_flags_or_fsmonitor_survives_failure() {
 }
 
 fn interrupted_add(test_name: &str, kind: AcquisitionKind, work: &str) {
+    if let Some(launch_path) = std::env::var_os("THIRDSHIFT_REVIEW_RETRY") {
+        let launch = Git::new(launch_path);
+        let path = launch.dir().parent().unwrap().join("work-architect");
+        let git = Git::new(&path);
+        let head = git.run(&["rev-parse", "HEAD"]).unwrap();
+        let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+        let error = ReviewWorktree::create(&launch, "work", "main")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("retaining checkout") && error.contains(&head),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("tracked.txt")).unwrap(),
+            "hook work\n"
+        );
+        assert_eq!(git.run(&["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(
+            launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+            registrations
+        );
+        return;
+    }
     crate::test_support::with_recorded_signal(test_name, |signal| {
         let (temp, launch, start) = kind.prepare();
         let reflog_path = launch.dir().join(".git/logs/refs/heads/issue-7");
@@ -745,6 +801,18 @@ fn interrupted_add(test_name: &str, kind: AcquisitionKind, work: &str) {
                     std::fs::read_to_string(kind.path(&temp).join("tracked.txt")).unwrap(),
                     "hook work\n"
                 );
+                if matches!(kind, AcquisitionKind::Review) {
+                    std::fs::remove_file(temp.path().join("hooks/post-checkout")).unwrap();
+                    let output = std::process::Command::new(std::env::current_exe().unwrap())
+                        .args(["--exact", test_name, "--nocapture"])
+                        .env("THIRDSHIFT_REVIEW_RETRY", launch.dir())
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "retry after interruption: {output:?}"
+                    );
+                }
             }
         }
     });
@@ -1156,4 +1224,92 @@ fn acquisition_pins_origin_even_when_local_branches_shadow_remote_tracking_names
     );
     assert!(!temp.path().join("work-issue-7").exists());
     assert!(local_head(&launch, BRANCH).unwrap().is_none());
+}
+
+#[test]
+fn a_review_retry_preserves_work_retained_after_a_failed_hook() {
+    let kind = AcquisitionKind::Review;
+    let (temp, launch, _) = kind.prepare();
+    checkout_hook(
+        &temp,
+        "echo 'retained review work' > tracked.txt\ngit add tracked.txt\necho 'untracked review work' > untracked.txt\necho 'ignored review work' > ignored.txt",
+    );
+    std::fs::write(launch.dir().join(".git/info/exclude"), "ignored.txt\n").unwrap();
+    let first = kind.acquire(&launch).unwrap_err().to_string();
+    assert!(first.contains("retaining checkout"), "{first}");
+    let path = kind.path(&temp);
+    let git = Git::new(&path);
+    let head = git.run(&["rev-parse", "HEAD"]).unwrap();
+    let status = git.run(&["status", "--porcelain", "--ignored"]).unwrap();
+    let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+    std::fs::remove_file(temp.path().join("hooks/post-checkout")).unwrap();
+
+    let retry = kind.acquire(&launch).unwrap_err().to_string();
+
+    assert!(retry.contains(path.to_str().unwrap()), "{retry}");
+    assert!(retry.contains(&head), "{retry}");
+    assert_eq!(
+        std::fs::read_to_string(path.join("tracked.txt")).unwrap(),
+        "retained review work\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("untracked.txt")).unwrap(),
+        "untracked review work\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("ignored.txt")).unwrap(),
+        "ignored review work\n"
+    );
+    assert_eq!(
+        git.run(&["status", "--porcelain", "--ignored"]).unwrap(),
+        status
+    );
+    assert_eq!(git.run(&["rev-parse", "HEAD"]).unwrap(), head);
+    assert_eq!(
+        launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+        registrations
+    );
+}
+
+#[test]
+fn a_review_retry_recovers_successful_scratch_and_detached_commits() {
+    let (temp, launch) = super::tests::launch_directory();
+    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let path = owner.path().to_path_buf();
+    let git = Git::new(&path);
+    std::fs::write(path.join("experiment.txt"), "disposable experiment\n").unwrap();
+    git.run(&["add", "-A"]).unwrap();
+    git.run(&["commit", "-q", "-m", "Detached experiment"])
+        .unwrap();
+    let experiment = git.run(&["rev-parse", "HEAD"]).unwrap();
+    assert_eq!(git.run(&["ls-files"]).unwrap(), "experiment.txt");
+    std::fs::write(path.join("scratch.txt"), "disposable scratch\n").unwrap();
+    let refs = launch.run(&["show-ref"]).unwrap();
+    std::mem::forget(owner);
+
+    let next = ReviewWorktree::create(&launch, "work", "main").unwrap();
+
+    assert!(!next.path().join("experiment.txt").exists());
+    assert!(!next.path().join("scratch.txt").exists());
+    assert_ne!(
+        Git::new(next.path()).run(&["rev-parse", "HEAD"]).unwrap(),
+        experiment
+    );
+    assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+    drop(next);
+    assert!(!path.exists());
+    assert_eq!(
+        launch
+            .run(&["worktree", "list", "--porcelain"])
+            .unwrap()
+            .matches("worktree ")
+            .count(),
+        1
+    );
+    assert_eq!(
+        Git::new(temp.path().join("origin.git"))
+            .run(&["rev-parse", "main"])
+            .unwrap(),
+        launch.run(&["rev-parse", "main"]).unwrap()
+    );
 }

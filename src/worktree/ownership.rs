@@ -11,6 +11,10 @@ use super::{local_head, lock_launch};
 use crate::git::Git;
 use crate::progress;
 
+#[path = "review_recovery.rs"]
+mod review_recovery;
+pub(super) use review_recovery::{Publication, recover as recover_review};
+
 pub(super) struct Checkout {
     root: Directory,
     admin: Directory,
@@ -96,6 +100,11 @@ impl Checkout {
     fn remove(&self, launch: &Git) -> Result<()> {
         self.common.verify()?;
         let _lock = lock_launch(launch).context("cannot establish cleanup worktree lock")?;
+        self.remove_locked(launch)
+    }
+
+    /// Acquisition and stale recovery already hold the same repository lock.
+    fn remove_locked(&self, launch: &Git) -> Result<()> {
         let head = self.inspect(launch)?;
         let config = self
             .branch
@@ -195,6 +204,12 @@ impl Checkout {
             .is_symlink()
         {
             bail!("checkout Git link became a symlink");
+        }
+        if fs::symlink_metadata(self.admin.path.join("gitdir"))?
+            .file_type()
+            .is_symlink()
+        {
+            bail!("administrative Git backlink became a symlink");
         }
         let git = Git::new(self.path()).completion();
         let head = git.run(&["rev-parse", "--verify", "HEAD"])?;

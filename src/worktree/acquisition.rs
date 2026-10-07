@@ -37,7 +37,12 @@ pub(super) fn add(
     match launch
         .run(&args)
         .and_then(|_| super::ownership::Checkout::capture(launch, path, branch))
-    {
+        .and_then(|checkout| {
+            if branch.is_none() {
+                owner.publication.publish(launch, &checkout)?;
+            }
+            Ok(checkout)
+        }) {
         Ok(checkout) => {
             owner.armed = false;
             Ok(checkout)
@@ -64,6 +69,7 @@ struct Acquisition<'a> {
     registered_before: bool,
     branch_before: Option<String>,
     common_dir: PathBuf,
+    publication: super::ownership::Publication,
     armed: bool,
 }
 
@@ -103,6 +109,7 @@ impl<'a> Acquisition<'a> {
             registered_before,
             branch_before,
             common_dir,
+            publication: super::ownership::Publication::default(),
             armed: false,
         })
     }
@@ -134,6 +141,7 @@ impl<'a> Acquisition<'a> {
     }
 
     fn recover_checkout(&self, launch: &Git) -> Result<()> {
+        self.publication.remove_artifacts()?;
         let entries =
             registrations(launch).context("cannot inspect registrations; current head unknown")?;
         if let Some(entry) = entries

@@ -88,6 +88,22 @@ fn an_old_review_owner_retains_a_recreated_detached_checkout() {
         launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
         registrations
     );
+    let retry = ReviewWorktree::create(&launch, "work", "main")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        retry.contains("retaining checkout") && retry.contains(&head),
+        "{retry}"
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("replacement.txt")).unwrap(),
+        "review replacement\n"
+    );
+    assert_eq!(
+        launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+        registrations
+    );
 }
 
 #[test]
@@ -1267,4 +1283,399 @@ fi
 
     fs::remove_file(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap()).unwrap();
     assert_retained(&launch, &path, &head);
+}
+
+#[test]
+fn review_publication_failure_recovers_only_attempt_artifacts_and_preserves_work() {
+    if isolated(
+        "review_publication_failure_recovers_only_attempt_artifacts_and_preserves_work",
+        r#"
+if test "$1" = rev-parse && test "$2" = --symbolic-full-name && test -f .thirdshift-review-token && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  if test "$THIRDSHIFT_PUBLICATION_WORK" = yes; then printf 'publication work\n' > work.txt; fi
+  echo 'final review inspection refused' >&2
+  exit 1
+fi
+"#,
+    ) {
+        return;
+    }
+    for work in [false, true] {
+        unsafe {
+            std::env::set_var(
+                "THIRDSHIFT_PUBLICATION_WORK",
+                if work { "yes" } else { "no" },
+            );
+        }
+        let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+        let _ = fs::remove_file(marker);
+        let (temp, launch) = super::tests::launch_directory();
+        let path = temp.path().join("work-architect");
+        let error = ReviewWorktree::create(&launch, "work", "main")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("final review inspection refused"), "{error}");
+        if work {
+            assert_eq!(
+                fs::read_to_string(path.join("work.txt")).unwrap(),
+                "publication work\n"
+            );
+            let admin = PathBuf::from(
+                Git::new(&path)
+                    .run(&["rev-parse", "--absolute-git-dir"])
+                    .unwrap(),
+            );
+            assert!(!admin.join("thirdshift-review.json").exists());
+            assert!(!path.join(".thirdshift-review-token").exists());
+            let retry = ReviewWorktree::create(&launch, "work", "main")
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(retry.contains("retaining checkout"), "{retry}");
+            assert_eq!(
+                fs::read_to_string(path.join("work.txt")).unwrap(),
+                "publication work\n"
+            );
+        } else {
+            assert!(!path.exists(), "{error}");
+            let next = ReviewWorktree::create(&launch, "work", "main").unwrap();
+            drop(next);
+            assert!(!path.exists());
+        }
+    }
+}
+
+#[test]
+fn review_record_publication_never_replaces_existing_files_or_links() {
+    if isolated(
+        "review_record_publication_never_replaces_existing_files_or_links",
+        r#"
+if test "$1" = rev-parse && test "$2" = --symbolic-full-name && test -f .thirdshift-review-token && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  admin=$("$THIRDSHIFT_REAL_GIT" rev-parse --absolute-git-dir)
+  printf 'record collision work\n' > work.txt
+  if test "$THIRDSHIFT_RECORD_LINK" = yes; then
+    printf 'link target\n' > ../record-target
+    ln -s "$PWD/../record-target" "$admin/thirdshift-review.json"
+  else
+    printf 'existing record\n' > "$admin/thirdshift-review.json"
+  fi
+fi
+"#,
+    ) {
+        return;
+    }
+    for link in [false, true] {
+        unsafe {
+            std::env::set_var("THIRDSHIFT_RECORD_LINK", if link { "yes" } else { "no" });
+        }
+        let _ = fs::remove_file(PathBuf::from(
+            std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap(),
+        ));
+        let (temp, launch) = super::tests::launch_directory();
+        let path = temp.path().join("work-architect");
+        let error = ReviewWorktree::create(&launch, "work", "main")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("cannot publish successful review acquisition"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("work.txt")).unwrap(),
+            "record collision work\n"
+        );
+        let admin = PathBuf::from(
+            Git::new(&path)
+                .run(&["rev-parse", "--absolute-git-dir"])
+                .unwrap(),
+        );
+        let record = admin.join("thirdshift-review.json");
+        assert_eq!(
+            fs::read_to_string(&record).unwrap(),
+            if link {
+                "link target\n"
+            } else {
+                "existing record\n"
+            }
+        );
+        assert_eq!(
+            fs::symlink_metadata(&record)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            link
+        );
+        assert!(!path.join(".thirdshift-review-token").exists());
+        let retry = ReviewWorktree::create(&launch, "work", "main")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(retry.contains("retaining checkout"), "{retry}");
+        assert_eq!(
+            fs::read_to_string(&record).unwrap(),
+            if link {
+                "link target\n"
+            } else {
+                "existing record\n"
+            }
+        );
+    }
+}
+
+#[test]
+fn uncertain_publication_artifacts_are_retained_instead_of_unlinked() {
+    if isolated(
+        "uncertain_publication_artifacts_are_retained_instead_of_unlinked",
+        r#"
+if test "$1" = rev-parse && test "$2" = --symbolic-full-name && test -f .thirdshift-review-token && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  if test "$THIRDSHIFT_REPLACE_ARTIFACT" = token; then
+    artifact="$PWD/.thirdshift-review-token"
+  else
+    admin=$("$THIRDSHIFT_REAL_GIT" rev-parse --absolute-git-dir)
+    for candidate in "$admin"/.thirdshift-review-*; do artifact="$candidate"; done
+  fi
+  mv "$artifact" ../original-artifact
+  printf 'replacement artifact\n' > "$artifact"
+  printf '%s\n' "$artifact" > ../replacement-path
+fi
+"#,
+    ) {
+        return;
+    }
+    for kind in ["token", "record"] {
+        unsafe {
+            std::env::set_var("THIRDSHIFT_REPLACE_ARTIFACT", kind);
+        }
+        let _ = fs::remove_file(PathBuf::from(
+            std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap(),
+        ));
+        let (temp, launch) = super::tests::launch_directory();
+        let path = temp.path().join("work-architect");
+        let error = ReviewWorktree::create(&launch, "work", "main")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("retaining checkout") && error.contains("uncertain ownership"),
+            "{kind}: {error}"
+        );
+        let replacement = fs::read_to_string(temp.path().join("replacement-path")).unwrap();
+        assert_eq!(
+            fs::read_to_string(replacement.trim()).unwrap(),
+            "replacement artifact\n"
+        );
+        let head = Git::new(&path).run(&["rev-parse", "HEAD"]).unwrap();
+        assert!(error.contains(&head), "{error}");
+        let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+        let retry = ReviewWorktree::create(&launch, "work", "main")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(retry.contains("retaining checkout"), "{retry}");
+        assert_eq!(
+            fs::read_to_string(replacement.trim()).unwrap(),
+            "replacement artifact\n"
+        );
+        assert_eq!(
+            launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+            registrations
+        );
+    }
+}
+
+#[test]
+fn stale_review_removal_failure_retains_resources_and_reports_the_available_head() {
+    if isolated(
+        "stale_review_removal_failure_retains_resources_and_reports_the_available_head",
+        r#"
+if test "$1" = worktree && test "$2" = remove; then
+  echo 'stale review removal refused' >&2
+  exit 1
+fi
+"#,
+    ) {
+        return;
+    }
+    let (temp, launch) = super::tests::launch_directory();
+    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let path = owner.path().to_path_buf();
+    let head = Git::new(&path).run(&["rev-parse", "HEAD"]).unwrap();
+    fs::write(path.join("scratch.txt"), "retained scratch\n").unwrap();
+    let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+    let refs = launch.run(&["show-ref"]).unwrap();
+    std::mem::forget(owner);
+    let error = ReviewWorktree::create(&launch, "work", "main")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains("retaining checkout")
+            && error.contains(&head)
+            && error.contains("stale review removal refused"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("scratch.txt")).unwrap(),
+        "retained scratch\n"
+    );
+    assert_eq!(
+        launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+        registrations
+    );
+    assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+    assert!(temp.path().join("work-architect").exists());
+}
+
+#[test]
+fn exclusion_errors_never_publish_review_disposal_authority() {
+    if isolated(
+        "exclusion_errors_never_publish_review_disposal_authority",
+        r#"
+if test "$1" = ls-files && test "$2" = --error-unmatch; then
+  common=$("$THIRDSHIFT_REAL_GIT" rev-parse --git-common-dir)
+  rm -f "$common/info/exclude"
+  mkdir -p "$common/info/exclude"
+  printf 'exclusion failure work\n' > work.txt
+fi
+"#,
+    ) {
+        return;
+    }
+    let (temp, launch) = super::tests::launch_directory();
+    let path = temp.path().join("work-architect");
+    let error = ReviewWorktree::create(&launch, "work", "main")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains("exclude") && error.contains("retaining checkout"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("work.txt")).unwrap(),
+        "exclusion failure work\n"
+    );
+    let admin = PathBuf::from(
+        Git::new(&path)
+            .run(&["rev-parse", "--absolute-git-dir"])
+            .unwrap(),
+    );
+    assert!(!admin.join("thirdshift-review.json").exists());
+    fs::remove_dir(launch.dir().join(".git/info/exclude")).unwrap();
+    let retry = ReviewWorktree::create(&launch, "work", "main")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(retry.contains("retaining checkout"), "{retry}");
+    assert_eq!(
+        fs::read_to_string(path.join("work.txt")).unwrap(),
+        "exclusion failure work\n"
+    );
+}
+
+#[test]
+fn interrupted_review_publication_finishes_guarded_acquisition_recovery() {
+    const NAME: &str = "worktree::cleanup_tests::interrupted_review_publication_finishes_guarded_acquisition_recovery";
+    if isolated(
+        "interrupted_review_publication_finishes_guarded_acquisition_recovery",
+        r#"
+if test "$1" = rev-parse && test "$2" = --symbolic-full-name && test -f .thirdshift-review-token && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  if test "$THIRDSHIFT_PUBLICATION_WORK" = yes; then printf 'interrupted publication work\n' > work.txt; fi
+  kill -"$THIRDSHIFT_TEST_SIGNAL" "$THIRDSHIFT_PUBLICATION_PID"
+fi
+"#,
+    ) {
+        return;
+    }
+    crate::test_support::with_recorded_signal(NAME, |_signal| {
+        let _ = fs::remove_file(PathBuf::from(
+            std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap(),
+        ));
+        unsafe {
+            std::env::set_var("THIRDSHIFT_PUBLICATION_WORK", "yes");
+            std::env::set_var("THIRDSHIFT_PUBLICATION_PID", std::process::id().to_string());
+        }
+        let (temp, launch) = super::tests::launch_directory();
+        let path = temp.path().join("work-architect");
+        let error = ReviewWorktree::create(&launch, "work", "main")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.starts_with("interrupted") && error.contains("retaining checkout"),
+            "{error}"
+        );
+        let admin = PathBuf::from(
+            Git::new(&path)
+                .completion()
+                .run(&["rev-parse", "--absolute-git-dir"])
+                .unwrap(),
+        );
+        assert!(!admin.join("thirdshift-review.json").exists());
+        assert!(!path.join(".thirdshift-review-token").exists());
+        assert_eq!(
+            fs::read_to_string(path.join("work.txt")).unwrap(),
+            "interrupted publication work\n"
+        );
+        assert!(crate::interrupt::requested());
+        assert_eq!(
+            launch.run(&["rev-parse", "HEAD"]).unwrap_err().to_string(),
+            "interrupted"
+        );
+    });
+}
+
+#[test]
+fn damaged_review_registration_is_retained_before_a_fetch_can_prune_it() {
+    if isolated(
+        "damaged_review_registration_is_retained_before_a_fetch_can_prune_it",
+        r#"
+if test "$1" = fetch; then
+  common=$("$THIRDSHIFT_REAL_GIT" rev-parse --git-common-dir)
+  if test -d "$common/worktrees/work-architect" && test ! -e "$common/worktrees/work-architect/gitdir"; then
+    "$THIRDSHIFT_REAL_GIT" worktree prune
+    touch "$THIRDSHIFT_FAULT_MARKER"
+  fi
+fi
+"#,
+    ) {
+        return;
+    }
+    let (_temp, launch) = super::tests::launch_directory();
+    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let path = owner.path().to_path_buf();
+    let admin = PathBuf::from(
+        Git::new(&path)
+            .run(&["rev-parse", "--absolute-git-dir"])
+            .unwrap(),
+    );
+    let record = fs::read(admin.join("thirdshift-review.json")).unwrap();
+    fs::write(path.join("retained.txt"), "uncertain review work\n").unwrap();
+    std::mem::forget(owner);
+    fs::remove_file(admin.join("gitdir")).unwrap();
+
+    let error = ReviewWorktree::create(&launch, "work", "main")
+        .err()
+        .unwrap()
+        .to_string();
+
+    assert!(error.contains("retaining checkout"), "{error}");
+    assert_eq!(
+        fs::read_to_string(path.join("retained.txt")).unwrap(),
+        "uncertain review work\n"
+    );
+    assert!(
+        admin.exists(),
+        "fetch pruned the retained registration: {error}"
+    );
+    assert_eq!(
+        fs::read(admin.join("thirdshift-review.json")).unwrap(),
+        record
+    );
+    assert!(!PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap()).exists());
 }

@@ -24,6 +24,8 @@ mod ownership;
 #[cfg(test)]
 mod preservation_tests;
 #[cfg(test)]
+mod review_recovery_tests;
+#[cfg(test)]
 mod synchronization_tests;
 
 /// How merging the Base branch, or new commits on origin, into the Issue
@@ -114,7 +116,7 @@ impl Worktree {
     /// Issue branch and create without force. No selection preflight is required.
     pub fn create_fresh(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base])?;
+        launch.fetch(&[base])?;
         let origin = fetched_origin(launch, base)?;
         check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
@@ -128,7 +130,7 @@ impl Worktree {
     /// without force at the pinned commit. No selection preflight is required.
     pub fn continue_existing(launch: &Git, repo: &str, branch: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base, branch])?;
+        launch.fetch(&[base, branch])?;
         let origin = fetched_origin(launch, branch)?;
         let local = local_head(launch, branch)?;
         check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
@@ -295,7 +297,7 @@ impl Worktree {
     /// calculation and mutation after this sample uses the commit ID, so
     /// sibling fetches and shadowing local names cannot change its meaning.
     fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
-        self.git.run(&["fetch", "origin", branch])?;
+        self.git.fetch(&[branch])?;
         fetched_origin(&self.git, branch)
     }
 
@@ -412,21 +414,14 @@ pub struct ReviewWorktree {
 impl ReviewWorktree {
     /// Check out `origin/<base>`, detached, in a new worktree next to the
     /// launch repository's root, named `<repo>-architect`. A worktree left
-    /// there by a process that ended before it could remove it is removed
-    /// first, so the caller sees that no Architecture review is still running
-    /// in it.
+    /// there by a process that ended before cleanup is removed only with
+    /// evidence of successful acquisition and unchanged instance ownership.
+    /// Failed, unmarked and uncertain acquisitions are retained and named.
     pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        launch.run(&["fetch", "origin", base])?;
         let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
-        if path.exists() {
-            let stale = path.to_str().context("worktree path is not UTF-8")?;
-            // Anything else at the path is left for `git worktree add` to
-            // refuse.
-            if launch.succeeds(&["worktree", "remove", "--force", stale])? {
-                progress::step(format_args!("removed the leftover worktree {stale}"));
-            }
-        }
+        ownership::recover_review(launch, &path)?;
+        launch.fetch(&[base])?;
         let origin = fetched_origin(launch, base)?;
         progress::step(format_args!(
             "creating worktree {} detached at {}",

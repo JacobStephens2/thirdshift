@@ -119,6 +119,15 @@ impl Git {
         Ok(!found.is_empty())
     }
 
+    /// Fetch origin without automatic maintenance: worktree disposal must
+    /// pass ownership inspection, never a fetch's implicit pruning.
+    pub fn fetch(&self, branches: &[&str]) -> Result<()> {
+        let mut args = vec!["fetch", "--no-auto-maintenance", "origin"];
+        args.extend_from_slice(branches);
+        self.run(&args)?;
+        Ok(())
+    }
+
     /// Push `branch` to origin without local hooks: sessions and CI check
     /// the work, and a rejecting hook must not strand Failed run salvage.
     pub fn push(&self, branch: &str) -> Result<()> {
