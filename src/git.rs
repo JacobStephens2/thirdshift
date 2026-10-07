@@ -189,10 +189,6 @@ impl Git {
 
     /// Push `branch` to origin without local hooks: sessions and CI check
     /// the work, and a rejecting hook must not strand Failed run salvage.
-    pub fn push(&self, branch: &str) -> Result<()> {
-        self.push_checked(branch, || Ok(()))
-    }
-
     pub(crate) fn push_checked(&self, branch: &str, check: impl Fn() -> Result<()>) -> Result<()> {
         progress::step(format_args!("pushing {branch}"));
         self.run_checked(&["push", "--no-verify", "origin", branch], check)?;
@@ -450,7 +446,7 @@ mod tests {
     #[test]
     fn a_fetch_still_reports_a_missing_required_ref() {
         let (_temp, git) = repo_with_origin();
-        git.push("main").unwrap();
+        git.run(&["push", "--no-verify", "origin", "main"]).unwrap();
 
         let error = git.fetch(&["absent"]).unwrap_err().to_string();
 
@@ -478,7 +474,7 @@ mod tests {
         git.run(&["commit", "-q", "--allow-empty", "-m", "Required commit"])
             .unwrap();
         let required = git.run(&["rev-parse", "HEAD"]).unwrap();
-        git.push("main").unwrap();
+        git.run(&["push", "--no-verify", "origin", "main"]).unwrap();
         git.run(&["reset", "--hard", &initial]).unwrap();
         for objects in [
             git.dir().join(".git/objects"),

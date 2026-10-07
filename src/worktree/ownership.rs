@@ -11,6 +11,7 @@ use super::acquisition::registrations;
 use super::{Merge, OriginCommit, PendingMerge, local_head, lock_launch};
 use crate::git::Git;
 use crate::host;
+use crate::process::Interruption;
 use crate::progress;
 
 #[path = "review_recovery.rs"]
@@ -51,29 +52,16 @@ impl Checkout {
         launch: &Git,
         perform: impl FnOnce(&Operation<'_>) -> Result<T>,
     ) -> Result<T> {
-        crate::interrupt::check()?;
-        self.verify_repository(&launch.completion())
-            .with_context(|| self.operation_context())?;
+        let operation = Operation::new(self, launch, Purpose::Synchronization);
+        operation.interruption.check()?;
+        operation.verify_repository()?;
         let lock = lock_launch(launch);
-        crate::interrupt::check()?;
-        let _lock = lock.with_context(|| self.operation_context())?;
-        let operation = Operation {
-            checkout: self,
-            launch,
-            git: Git::new(self.path()),
-        };
+        operation.interruption.check()?;
+        let _lock = lock.with_context(|| operation.context.clone())?;
         operation.inspect()?;
         let result = perform(&operation);
         operation.inspect()?;
         result
-    }
-
-    fn operation_context(&self) -> String {
-        format!(
-            "cannot synchronize acquired checkout {} on expected Issue branch {}",
-            self.path().display(),
-            self.branch.as_deref().unwrap_or("unknown"),
-        )
     }
 
     fn verify_repository(&self, launch: &Git) -> Result<()> {
@@ -117,31 +105,24 @@ impl Checkout {
     }
 
     pub(super) fn preserve_failed_run(&self, launch: &Git, base: &str, reason: &str) -> Result<()> {
-        let launch = launch.completion();
+        let operation = Operation::new(self, launch, Purpose::Preservation);
         let branch = self
             .branch
             .as_deref()
             .context("Failed run preservation requires an acquired Issue branch")?;
-        let context = || {
-            format!(
-                "cannot preserve acquired checkout {} on expected Issue branch {branch}",
-                self.path().display()
-            )
-        };
-        self.common.verify().with_context(context)?;
-        let _lock = lock_launch(&launch).with_context(context)?;
-        let _refs_lock = launch.lock_worktree_refs().with_context(context)?;
-        let inspect = || self.inspect(&launch).with_context(context);
-        inspect()?;
-        let git = Git::new(self.path()).completion();
-        if git.merge_in_progress()? {
-            inspect()?;
-            git.run(&["merge", "--abort"])?;
+        operation.verify_repository()?;
+        let _lock = lock_launch(&operation.launch).with_context(|| operation.context.clone())?;
+        let _refs_lock = operation
+            .launch
+            .lock_worktree_refs()
+            .with_context(|| operation.context.clone())?;
+        operation.inspect()?;
+        if operation.merge_in_progress()? {
+            operation.run(&["merge", "--abort"])?;
         }
-        inspect()?;
-        git.run(&["add", "-A"])?;
+        operation.run(&["add", "-A"])?;
         let base = format!("origin/{base}");
-        if !git.succeeds(&["diff", "--cached", "--quiet", &base])? {
+        if !operation.succeeds(&["diff", "--cached", "--quiet", &base])? {
             let message = format!(
                 "thirdshift: failed run ({reason})\n\n\
                  {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
@@ -149,8 +130,7 @@ impl Checkout {
                 host = host::name().as_deref().unwrap_or("unknown"),
             );
             // No hooks: a hook that rejects the commit would strand the work.
-            inspect()?;
-            git.run(&[
+            operation.run(&[
                 "commit",
                 "-q",
                 "--allow-empty",
@@ -158,10 +138,9 @@ impl Checkout {
                 "-m",
                 &message,
             ])?;
-            inspect()?;
-            git.push(branch)?;
+            operation.push(branch)?;
         }
-        inspect()?;
+        operation.inspect()?;
         Ok(())
     }
 
@@ -369,18 +348,53 @@ impl Checkout {
 /// Advisory locks coordinate factory operations, not arbitrary outside writers.
 pub(super) struct Operation<'a> {
     checkout: &'a Checkout,
-    launch: &'a Git,
+    launch: Git,
     git: Git,
+    interruption: Interruption,
+    context: String,
 }
 
-impl Operation<'_> {
+enum Purpose {
+    Synchronization,
+    Preservation,
+}
+
+impl<'a> Operation<'a> {
+    /// Bind command execution, inspection interruption and diagnostics together.
+    /// Inspection's Git observations finish before the interruption recheck,
+    /// as they do for acquisition and disposal, without clearing the request.
+    fn new(checkout: &'a Checkout, launch: &Git, purpose: Purpose) -> Self {
+        let git = Git::new(checkout.path());
+        let (git, interruption, action) = match purpose {
+            Purpose::Synchronization => (git, Interruption::Ordinary, "synchronize"),
+            Purpose::Preservation => (git.completion(), Interruption::Completion, "preserve"),
+        };
+        Self {
+            checkout,
+            launch: launch.completion(),
+            git,
+            interruption,
+            context: format!(
+                "cannot {action} acquired checkout {} on expected Issue branch {}",
+                checkout.path().display(),
+                checkout.branch.as_deref().unwrap_or("unknown"),
+            ),
+        }
+    }
+
+    fn verify_repository(&self) -> Result<()> {
+        self.checkout
+            .verify_repository(&self.launch)
+            .with_context(|| self.context.clone())
+    }
+
     fn inspect(&self) -> Result<String> {
-        crate::interrupt::check()?;
+        self.interruption.check()?;
         let result = self
             .checkout
-            .inspect(&self.launch.completion())
-            .with_context(|| self.checkout.operation_context());
-        crate::interrupt::check()?;
+            .inspect(&self.launch)
+            .with_context(|| self.context.clone());
+        self.interruption.check()?;
         result
     }
 
@@ -414,7 +428,13 @@ impl Operation<'_> {
     }
 
     pub(super) fn merged(&self, rev: &str) -> Result<bool> {
-        self.execute(|git| git.succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"]))
+        self.succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"])
+    }
+
+    /// Boolean probes are gated but never retried or reinterpreted as errors
+    /// for completed nonzero exits (including an absent comparison ref).
+    fn succeeds(&self, args: &[&str]) -> Result<bool> {
+        self.execute(|git| git.succeeds(args))
     }
 
     /// Merge the exact sampled commit, preserving the readable upstream label
