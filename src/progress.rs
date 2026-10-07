@@ -90,7 +90,7 @@ pub fn relayed(number: u64, line: &str) -> String {
 }
 
 /// The progress line for `message`, stamped with `time`.
-fn progress_line(time: impl Display, message: impl Display) -> String {
+pub(crate) fn progress_line(time: impl Display, message: impl Display) -> String {
     format!("{PREFIX}{time} {message}")
 }
 

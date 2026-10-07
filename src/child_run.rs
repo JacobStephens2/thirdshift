@@ -302,7 +302,7 @@ pub fn start(
 ) -> Result<Handle> {
     let given = Given {
         kind,
-        stamp: logs::stamp().to_string(),
+        stamp: logs::stamp(),
         base_fix,
         harness: harness.clone(),
     };

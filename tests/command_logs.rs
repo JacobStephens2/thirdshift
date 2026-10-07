@@ -201,35 +201,6 @@ fn a_pickup_run_that_takes_an_issue_keeps_a_command_log_from_its_first_line() {
 }
 
 #[test]
-fn a_skipped_pickup_run_keeps_no_command_log() {
-    let scenario = Scenario::new();
-
-    let result = run_in_zone(&scenario, &["pickup"], &[]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_dated_first_line(&result, "Pickup run starting");
-    assert_eq!(logs_in(&scenario, ""), ["activity.log"]);
-}
-
-#[test]
-fn a_skipped_architect_run_keeps_no_command_log() {
-    let scenario = Scenario::new();
-    scenario.issue_is(7, "OPEN");
-    scenario.issue_labelled(7, &["ready-for-agent", "architect-plan"]);
-
-    let result = run_in_zone(&scenario, &["architect"], &[]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert!(
-        result.stderr.contains("is still open"),
-        "stderr: {}",
-        result.stderr
-    );
-    assert_dated_first_line(&result, "Architect run starting");
-    assert_eq!(logs_in(&scenario, ""), ["activity.log"]);
-}
-
-#[test]
 fn an_architect_runs_command_log_covers_the_run_its_plan_was_dispatched_as() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);

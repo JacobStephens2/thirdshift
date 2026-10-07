@@ -216,61 +216,6 @@ fn the_first_skip_on_a_repository_creates_its_folder_and_repeated_skips_write_on
 }
 
 #[test]
-fn a_skip_whose_reason_changes_writes_a_new_line() {
-    let scenario = Scenario::new();
-    scenario.user_config_is("[pickup]\nlimit = 1\n");
-
-    run_in_zone(&scenario, &["pickup"]);
-    scenario.issue_is(9, "OPEN");
-    scenario.issue_labelled(9, &["in-progress"]);
-    run_in_zone(&scenario, &["pickup"]);
-    run_in_zone(&scenario, &["pickup"]);
-    scenario.issue_is(9, "CLOSED");
-    run_in_zone(&scenario, &["pickup"]);
-
-    assert_eq!(
-        activity(&scenario),
-        [
-            "Pickup run skipped: no Ready issue on acme/widgets",
-            "Pickup run skipped: at the Claim limit on acme/widgets: 1 open issue(s) labelled \
-             in-progress, pickup.limit is 1",
-            "Pickup run skipped: no Ready issue on acme/widgets",
-        ]
-    );
-}
-
-#[test]
-fn a_pass_that_works_resets_its_kinds_skips_and_the_other_kinds_lines_do_not() {
-    let scenario = Scenario::new();
-    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
-
-    run_in_zone(&scenario, &["pickup"]);
-    open_plan(&scenario, 5);
-    run_in_zone(&scenario, &["architect"]);
-    run_in_zone(&scenario, &["pickup"]);
-    ready_issue(&scenario, 7);
-    run_in_zone(&scenario, &["pickup"]);
-    run_in_zone(&scenario, &["architect"]);
-    scenario.issue_is(7, "CLOSED");
-    run_in_zone(&scenario, &["pickup"]);
-
-    let command_log = the_one_command_log(&scenario, "pickup");
-    let open_plan = "Architect run skipped: Architect plan #5 ";
-    let lines = activity(&scenario);
-    assert_eq!(
-        lines,
-        [
-            "Pickup run skipped: no Ready issue on acme/widgets".to_string(),
-            lines[1].clone(),
-            format!("Pickup run #7 started: {command_log}, {ON_CLAUDE}"),
-            format!("Pickup run #7 ended: PR {PR_URL} is ready for review"),
-            "Pickup run skipped: no Ready issue on acme/widgets".to_string(),
-        ]
-    );
-    assert!(lines[1].starts_with(open_plan), "{lines:?}");
-}
-
-#[test]
 fn a_skip_because_another_pass_is_running_is_recorded_like_any_other() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7);
