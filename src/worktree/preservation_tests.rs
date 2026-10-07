@@ -73,6 +73,211 @@ fn assert_ownership_error(error: &anyhow::Error, path: &Path, cause: &str) {
     assert!(error.contains(cause), "{error}");
 }
 
+const RETRYABLE_PRESERVATION_FAILURE: &str = r#"
+if test -e "$THIRDSHIFT_FAULT_MARKER.mutation" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  mutation=$(cat "$THIRDSHIFT_FAULT_MARKER.mutation")
+  if test "$mutation" = "$1:$2"; then
+    if test -e "$THIRDSHIFT_FAULT_MARKER.switch"; then
+      "$THIRDSHIFT_REAL_GIT" symbolic-ref HEAD refs/heads/manual
+      printf 'unrelated work\n' > unrelated.txt
+    fi
+    touch "$THIRDSHIFT_FAULT_MARKER"
+    printf "fatal: Unable to create '%s/index.lock': File exists\n" "$PWD" >&2
+    exit 1
+  fi
+fi
+"#;
+
+fn assert_preservation_refuses_retry(name: &str, mutation: &str) {
+    if git_fault(name, RETRYABLE_PRESERVATION_FAILURE).is_some() {
+        return;
+    }
+    let (_temp, launch, mut worktree) = fixture();
+    let path = worktree.path().to_path_buf();
+    let git = Git::new(&path);
+    if mutation == "merge:--abort" {
+        unfinished_merge(&git);
+    }
+    git.run(&["branch", "manual"]).unwrap();
+    fs::write(path.join("wip.txt"), "half done\n").unwrap();
+    let head = worktree.head().unwrap();
+    let refs = launch.run(&["show-ref"]).unwrap();
+    let index = git.run(&["diff", "--cached"]).unwrap();
+    let conflict = fs::read_to_string(path.join("conflict.txt")).ok();
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    fs::write(marker.with_extension("mutation"), mutation).unwrap();
+    fs::write(marker.with_extension("switch"), "switch ownership").unwrap();
+
+    let error = worktree
+        .preserve_failed_run("main", "session failed")
+        .unwrap_err();
+
+    assert!(marker.exists(), "{mutation} lock failure was not exercised");
+    assert_ownership_error(&error, &path, "identity changed");
+    assert_eq!(
+        git.run(&["rev-parse", "manual"]).unwrap(),
+        head,
+        "retry committed to unrelated branch"
+    );
+    assert!(
+        !launch.on_origin(BRANCH).unwrap(),
+        "retry pushed the Issue branch after ownership changed"
+    );
+    assert!(!launch.on_origin("manual").unwrap());
+    for (file, contents) in [
+        ("wip.txt", "half done\n"),
+        ("unrelated.txt", "unrelated work\n"),
+    ] {
+        assert_eq!(fs::read_to_string(path.join(file)).unwrap(), contents);
+    }
+    match mutation {
+        "merge:--abort" => {
+            assert!(git.merge_in_progress().unwrap(), "retry aborted the merge");
+            assert_eq!(fs::read_to_string(path.join("conflict.txt")).ok(), conflict);
+            assert_eq!(
+                fs::read_to_string(path.join("merged.txt")).unwrap(),
+                "theirs\n"
+            );
+            assert_eq!(git.run(&["diff", "--cached"]).unwrap(), index);
+            assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+        }
+        "add:-A" => {
+            assert_eq!(
+                git.run(&["diff", "--cached"]).unwrap(),
+                index,
+                "retry staged unrelated work"
+            );
+            assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+            assert_eq!(
+                git.run(&["status", "--porcelain"]).unwrap(),
+                "?? unrelated.txt\n?? wip.txt"
+            );
+        }
+        "commit:-q" => {
+            assert_eq!(git.run(&["show", ":wip.txt"]).unwrap(), "half done");
+            assert_eq!(
+                git.run(&["diff", "--cached", "--name-only"]).unwrap(),
+                "wip.txt"
+            );
+            assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+        }
+        "push:--no-verify" => {
+            assert_eq!(git.run(&["rev-parse", "issue-7^"]).unwrap(), head);
+            assert_eq!(
+                git.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
+                "thirdshift: failed run (session failed)"
+            );
+            assert_eq!(git.run(&["show", "issue-7:wip.txt"]).unwrap(), "half done");
+            assert!(
+                git.succeeds(&["diff", "--cached", "--quiet", BRANCH])
+                    .unwrap()
+            );
+        }
+        _ => panic!("unknown preservation mutation: {mutation}"),
+    }
+    for lock in ["thirdshift-worktrees.lock", "thirdshift-worktree-refs.lock"] {
+        let file = fs::File::open(launch.common_dir().unwrap().join(lock)).unwrap();
+        file.try_lock()
+            .expect("ownership failure did not release the repository lock");
+    }
+    // Restore attachment before Drop so retention proves preservation stays
+    // armed, independently of cleanup's refusal to remove a changed checkout.
+    git.run(&["symbolic-ref", "HEAD", "refs/heads/issue-7"])
+        .unwrap();
+    drop(worktree);
+    assert_retained(&launch, &path);
+}
+
+#[test]
+fn retryable_abort_failure_with_changed_ownership_retains_the_unfinished_merge() {
+    assert_preservation_refuses_retry(
+        "worktree::preservation_tests::retryable_abort_failure_with_changed_ownership_retains_the_unfinished_merge",
+        "merge:--abort",
+    );
+}
+
+#[test]
+fn retryable_stage_failure_with_changed_ownership_retains_unstaged_work() {
+    assert_preservation_refuses_retry(
+        "worktree::preservation_tests::retryable_stage_failure_with_changed_ownership_retains_unstaged_work",
+        "add:-A",
+    );
+}
+
+#[test]
+fn retryable_commit_failure_with_changed_ownership_retains_staged_work() {
+    assert_preservation_refuses_retry(
+        "worktree::preservation_tests::retryable_commit_failure_with_changed_ownership_retains_staged_work",
+        "commit:-q",
+    );
+}
+
+#[test]
+fn retryable_push_failure_with_changed_ownership_retains_the_failure_commit_locally() {
+    assert_preservation_refuses_retry(
+        "worktree::preservation_tests::retryable_push_failure_with_changed_ownership_retains_the_failure_commit_locally",
+        "push:--no-verify",
+    );
+}
+
+#[test]
+fn retryable_preservation_failures_with_valid_ownership_finish_and_restore_cleanup() {
+    if git_fault(
+        "worktree::preservation_tests::retryable_preservation_failures_with_valid_ownership_finish_and_restore_cleanup",
+        RETRYABLE_PRESERVATION_FAILURE,
+    ).is_some() {
+        return;
+    }
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    for mutation in ["merge:--abort", "add:-A", "commit:-q", "push:--no-verify"] {
+        let _ = fs::remove_file(marker.with_extension("mutation"));
+        let _ = fs::remove_file(&marker);
+        let (temp, launch, mut worktree) = fixture();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        if mutation == "merge:--abort" {
+            unfinished_merge(&git);
+        }
+        let head = worktree.head().unwrap();
+        fs::write(path.join("wip.txt"), "half done\n").unwrap();
+        fs::write(marker.with_extension("mutation"), mutation).unwrap();
+
+        worktree
+            .preserve_failed_run("main", "session failed")
+            .unwrap();
+
+        assert!(marker.exists(), "{mutation} lock failure was not exercised");
+        assert_eq!(git.run(&["rev-parse", "issue-7^"]).unwrap(), head);
+        assert!(!git.merge_in_progress().unwrap());
+        assert_eq!(git.run(&["status", "--porcelain"]).unwrap(), "");
+        if mutation == "merge:--abort" {
+            assert_eq!(
+                fs::read_to_string(path.join("conflict.txt")).unwrap(),
+                "ours\n"
+            );
+            assert_eq!(
+                fs::read_to_string(path.join("merged.txt")).unwrap(),
+                "base\n"
+            );
+        }
+        let origin = Git::new(temp.path().join("origin.git"));
+        assert_eq!(
+            origin.run(&["show", "issue-7:wip.txt"]).unwrap(),
+            "half done"
+        );
+        assert_eq!(
+            origin.run(&["rev-parse", BRANCH]).unwrap(),
+            worktree.head().unwrap()
+        );
+        assert_eq!(
+            origin.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
+            "thirdshift: failed run (session failed)"
+        );
+        drop(worktree);
+        assert_cleaned_up(&launch, &path);
+    }
+}
+
 #[test]
 fn switched_and_detached_checkouts_refuse_preservation_without_touching_unrelated_work() {
     for detached in [false, true] {
@@ -901,6 +1106,58 @@ fn recorded_interruption_allows_preservation_and_cleanup_but_still_blocks_ordina
 }
 
 #[test]
+fn recorded_interruption_still_waits_for_both_preservation_locks_and_finishes() {
+    with_recorded_signal(
+        "worktree::preservation_tests::recorded_interruption_still_waits_for_both_preservation_locks_and_finishes",
+        |signal| {
+            let cases =
+                ["thirdshift-worktrees.lock", "thirdshift-worktree-refs.lock"].map(|name| {
+                    let (temp, launch, worktree) = fixture();
+                    fs::write(worktree.path().join("wip.txt"), "half done\n").unwrap();
+                    (name, temp, launch, worktree)
+                });
+            signal_hook::low_level::raise(signal).unwrap();
+            for (name, temp, launch, mut worktree) in cases {
+                let launch = launch.completion();
+                let path = worktree.path().to_path_buf();
+                let git = Git::new(&path).completion();
+                let refs = launch.run(&["show-ref"]).unwrap();
+                let status = git.run(&["status", "--porcelain"]).unwrap();
+                let held = launch.lock(name).unwrap();
+                let (finished, received) = mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    let result = worktree.preserve_failed_run("main", "interrupted");
+                    let _ = finished.send(());
+                    (result, worktree)
+                });
+                let finished_while_held = received.recv_timeout(Duration::from_millis(300)).is_ok();
+                let waiting_refs = launch.run(&["show-ref"]);
+                let waiting_status = git.run(&["status", "--porcelain"]);
+                drop(held);
+                let (result, worktree) = worker.join().unwrap();
+
+                assert!(
+                    !finished_while_held,
+                    "interrupted preservation bypassed {name}"
+                );
+                assert_eq!(waiting_refs.unwrap(), refs);
+                assert_eq!(waiting_status.unwrap(), status);
+                result.unwrap();
+                assert_eq!(worktree.head().unwrap_err().to_string(), "interrupted");
+                drop(worktree);
+                let origin = Git::new(temp.path().join("origin.git")).completion();
+                assert_eq!(
+                    origin.run(&["show", "issue-7:wip.txt"]).unwrap(),
+                    "half done"
+                );
+                assert_cleaned_up(&launch, &path);
+                assert!(interrupt::requested());
+            }
+        },
+    );
+}
+
+#[test]
 fn successful_preservation_after_an_error_restores_cleanup_even_with_unchanged_work() {
     let (_temp, launch, mut worktree) = fixture();
     let path = worktree.path().to_path_buf();
@@ -986,6 +1243,47 @@ fn a_completed_nonzero_cached_diff_probe_still_makes_and_pushes_the_failure_mark
             .succeeds(&["diff", "--quiet", "main", BRANCH])
             .unwrap()
     );
+    assert_cleaned_up(&launch, &path);
+}
+
+#[test]
+fn a_completed_lock_failure_in_the_cached_diff_probe_is_false_without_a_retry() {
+    if git_fault(
+        "worktree::preservation_tests::a_completed_lock_failure_in_the_cached_diff_probe_is_false_without_a_retry",
+        r#"
+if test "$1" = diff && test "$2" = --cached && test -e "$THIRDSHIFT_FAULT_MARKER.armed" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
+  touch "$THIRDSHIFT_FAULT_MARKER"
+  printf "fatal: Unable to create '%s/index.lock': File exists\n" "$PWD" >&2
+  exit 1
+fi
+"#,
+    ).is_some() {
+        return;
+    }
+    let (temp, launch, mut worktree) = fixture();
+    let path = worktree.path().to_path_buf();
+    let head = worktree.head().unwrap();
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    fs::write(marker.with_extension("armed"), "armed").unwrap();
+
+    worktree
+        .preserve_failed_run("main", "session failed")
+        .unwrap();
+
+    assert!(marker.exists(), "completed nonzero probe was not exercised");
+    // A retry would find an unchanged index and skip this empty marker.
+    let origin = Git::new(temp.path().join("origin.git"));
+    assert_eq!(origin.run(&["rev-parse", "issue-7^"]).unwrap(), head);
+    assert_eq!(
+        origin.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
+        "thirdshift: failed run (session failed)"
+    );
+    assert!(
+        origin
+            .succeeds(&["diff", "--quiet", "main", BRANCH])
+            .unwrap()
+    );
+    drop(worktree);
     assert_cleaned_up(&launch, &path);
 }
 
