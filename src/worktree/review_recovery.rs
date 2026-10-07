@@ -234,7 +234,8 @@ pub(in crate::worktree) fn recover(launch: &Git, path: &Path) -> Result<()> {
         // those exact instances. HEAD may have advanced while detached.
         let checkout = Checkout::capture(launch, path, None)?;
         let record_file = Artifact::read(checkout.admin.path.join(RECORD))?;
-        let record: Record = serde_json::from_reader(&record_file.file)
+        let record_contents = record_file.contents()?;
+        let record: Record = serde_json::from_slice(&record_contents)
             .context("invalid successful review acquisition record")?;
         if record.version != VERSION || !record.detached || record.nonce.is_empty() {
             bail!("unsupported or inconsistent successful review acquisition record");
@@ -242,16 +243,14 @@ pub(in crate::worktree) fn recover(launch: &Git, path: &Path) -> Result<()> {
         record.root.verify(&checkout.root)?;
         record.admin.verify(&checkout.admin)?;
         record.common.verify(&checkout.common)?;
-        let mut token = Artifact::read(checkout.path().join(TOKEN))?;
-        let mut nonce = String::new();
-        token.file.read_to_string(&mut nonce)?;
+        let token = Artifact::read(checkout.path().join(TOKEN))?;
+        let token_contents = token.contents()?;
+        let nonce = std::str::from_utf8(&token_contents)?;
         if nonce != record.nonce {
             bail!("checkout token does not match successful review acquisition record");
         }
         token.verify()?;
         record_file.verify()?;
-        let token_contents = token.contents()?;
-        let record_contents = record_file.contents()?;
         interrupt::check()?;
         checkout.remove_locked(launch, || {
             if token.contents()? != token_contents || record_file.contents()? != record_contents {
@@ -271,7 +270,7 @@ pub(in crate::worktree) fn recover(launch: &Git, path: &Path) -> Result<()> {
             .ok()
             .or(registered_head);
         let message = format!(
-            "retaining checkout {} at {}: {error:#}",
+            "retaining checkout {} (expected detached HEAD) at {}: {error:#}",
             path.display(),
             head.as_deref().unwrap_or("unknown head")
         );

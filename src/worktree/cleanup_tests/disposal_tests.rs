@@ -252,21 +252,32 @@ fi
     }
 }
 
-#[test]
-fn unchanged_authority_retries_and_completes_all_disposal_transitions() {
-    if isolated(
-        "disposal_tests::unchanged_authority_retries_and_completes_all_disposal_transitions",
+/// Recognize the existing Git fault adapter's three destructive commands.
+fn disposal_fault(scenario: &str) -> String {
+    format!(
         r#"
 stage=
 if test "$1" = worktree && test "$2" = remove; then stage=checkout; fi
 if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d; then stage=ref; fi
 if test "$1" = config && test "$4" = --remove-section; then stage=config; fi
+{scenario}
+"#
+    )
+}
+
+#[test]
+fn unchanged_authority_retries_and_completes_all_disposal_transitions() {
+    if isolated(
+        "disposal_tests::unchanged_authority_retries_and_completes_all_disposal_transitions",
+        &disposal_fault(
+            r#"
 if test -n "$stage" && test ! -e "$THIRDSHIFT_FAULT_MARKER.$stage"; then
   touch "$THIRDSHIFT_FAULT_MARKER.$stage"
   echo 'fatal: could not lock config file: unchanged authority' >&2
   exit 1
 fi
 "#,
+        ),
     ) {
         return;
     }
@@ -357,11 +368,8 @@ fi
 fn failed_attempts_with_partial_effects_stop_and_preserve_the_original_failure() {
     if isolated(
         "disposal_tests::failed_attempts_with_partial_effects_stop_and_preserve_the_original_failure",
-        r#"
-stage=
-if test "$1" = worktree && test "$2" = remove; then stage=checkout; fi
-if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d; then stage=ref; fi
-if test "$1" = config && test "$4" = --remove-section; then stage=config; fi
+        &disposal_fault(
+            r#"
 if test -n "$stage" && test "$stage" = "$(cat "$THIRDSHIFT_FAULT_MARKER.action" 2>/dev/null)"; then
   if test -e "$THIRDSHIFT_FAULT_MARKER"; then
     echo 'destructive retry after partial effect' > "$THIRDSHIFT_FAULT_MARKER"
@@ -377,6 +385,7 @@ if test "$1" = fetch && test -e "$THIRDSHIFT_FAULT_MARKER"; then
   exit 1
 fi
 "#,
+        ),
     ) {
         return;
     }
@@ -437,11 +446,8 @@ fi
 fn repository_changes_or_reappearing_removed_paths_stop_disposal_retries() {
     if isolated(
         "disposal_tests::repository_changes_or_reappearing_removed_paths_stop_disposal_retries",
-        r#"
-stage=
-if test "$1" = worktree && test "$2" = remove; then stage=checkout; fi
-if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d; then stage=ref; fi
-if test "$1" = config && test "$4" = --remove-section; then stage=config; fi
+        &disposal_fault(
+            r#"
 selected=$(cat "$THIRDSHIFT_FAULT_MARKER.action" 2>/dev/null) || selected=
 if test -n "$stage" && test "$stage" = "${selected%%:*}" && test ! -e "$THIRDSHIFT_FAULT_MARKER"; then
   case ${selected#*:} in
@@ -466,6 +472,7 @@ if test "$1" = fetch && test -e "$THIRDSHIFT_FAULT_MARKER"; then
   exit 1
 fi
 "#,
+        ),
     ) {
         return;
     }
@@ -535,11 +542,8 @@ fi
 fn successful_commands_without_the_expected_transition_stop_disposal() {
     if isolated(
         "disposal_tests::successful_commands_without_the_expected_transition_stop_disposal",
-        r#"
-stage=
-if test "$1" = worktree && test "$2" = remove; then stage=checkout; fi
-if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d; then stage=ref; fi
-if test "$1" = config && test "$4" = --remove-section; then stage=config; fi
+        &disposal_fault(
+            r#"
 if test -n "$stage" && test "$stage" = "$(cat "$THIRDSHIFT_FAULT_MARKER.action" 2>/dev/null)"; then
   touch "$THIRDSHIFT_FAULT_MARKER"
   exit 0
@@ -549,6 +553,7 @@ if test "$1" = fetch && test -e "$THIRDSHIFT_FAULT_MARKER"; then
   exit 1
 fi
 "#,
+        ),
     ) {
         return;
     }
@@ -593,4 +598,39 @@ fi
             assert!(registration(&fixture.launch).contains(fixture.path.to_str().unwrap()));
         }
     }
+}
+
+#[test]
+fn stale_disposal_failure_identifies_detached_state() {
+    if isolated(
+        "disposal_tests::stale_disposal_failure_identifies_detached_state",
+        r#"
+if test "$1" = worktree && test "$2" = remove; then
+  echo 'stale disposal diagnostic test refusal' >&2
+  exit 1
+fi
+"#,
+    ) {
+        return;
+    }
+    let fixture = Fixture::new(Lifetime::Stale);
+    let error = ReviewWorktree::create(&fixture.launch, "work", "main")
+        .err()
+        .expect("stale disposal must refuse");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(fixture.path.to_str().unwrap()),
+        "{message}"
+    );
+    assert!(message.contains(&fixture.head), "{message}");
+    assert!(
+        message.contains("stale disposal diagnostic test refusal"),
+        "{message}"
+    );
+    assert!(message.contains("detached HEAD"), "{message}");
+    assert_eq!(
+        fs::read_to_string(fixture.path.join("work.txt")).unwrap(),
+        "owned work\n"
+    );
+    assert!(fixture.admin.exists());
 }
