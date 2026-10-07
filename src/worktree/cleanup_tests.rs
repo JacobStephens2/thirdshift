@@ -2,8 +2,42 @@
 
 use super::*;
 use std::fs;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 const BRANCH: &str = "issue-7";
+
+/// Hold the selected Git transition open while a sibling asks to merge its
+/// Base branch. Release and join both workers before any assertion can unwind.
+fn merge_during_worktree_change<T: Send>(
+    reader: &Worktree,
+    marker: &Path,
+    change: impl FnOnce() -> T + Send,
+) -> (bool, Result<Merge>, T) {
+    std::thread::scope(|scope| {
+        let changer = scope.spawn(change);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let (begun, started) = mpsc::channel();
+        let (sent, received) = mpsc::channel();
+        let fetcher = scope.spawn(move || {
+            let _ = begun.send(());
+            let merged = reader.merge_base_branch("main");
+            let _ = sent.send(());
+            merged
+        });
+        let started = started.recv_timeout(Duration::from_secs(5)).is_ok();
+        let finished = received.recv_timeout(Duration::from_millis(500)).is_ok();
+        fs::write(marker.with_extension("release"), "released").unwrap();
+        let merged = fetcher.join().unwrap();
+        let changed = changer.join().unwrap();
+        assert!(marker.exists(), "Worktree change never reached its gate");
+        assert!(started, "sibling fetch never started");
+        (finished, merged, changed)
+    })
+}
 
 #[test]
 fn a_sibling_fetch_waits_for_worktree_creation_to_finish() {
@@ -32,32 +66,11 @@ fi
     let (_temp, launch) = super::tests::launch_directory();
     let reader = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
     let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
-    let (finished_during_creation, merged, sibling) = std::thread::scope(|scope| {
-        let creator = scope.spawn(|| Worktree::create_fresh(&launch, "work", "issue-22", "main"));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !marker.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let (sent, received) = std::sync::mpsc::channel();
-        let reader = &reader;
-        let fetcher = scope.spawn(move || {
-            let merged = reader.merge_base_branch("main");
-            sent.send(()).unwrap();
-            merged
+    let (finished_during_creation, merged, sibling) =
+        merge_during_worktree_change(&reader, &marker, || {
+            Worktree::create_fresh(&launch, "work", "issue-22", "main")
         });
-        let finished = received
-            .recv_timeout(std::time::Duration::from_millis(500))
-            .is_ok();
-        fs::write(marker.with_extension("release"), "released").unwrap();
-        let merged = fetcher.join().unwrap();
-        let sibling = creator.join().unwrap();
-        (finished, merged, sibling)
-    });
     sibling.unwrap();
-    assert!(
-        marker.exists(),
-        "creation never reached the controlled transition"
-    );
     assert!(
         !finished_during_creation,
         "fetch observed an incomplete Worktree: {merged:?}"
@@ -86,31 +99,8 @@ fi
     let reader = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
     let sibling = Worktree::create_fresh(&launch, "work", "issue-22", "main").unwrap();
     let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
-    let (finished_during_disposal, merged) = std::thread::scope(|scope| {
-        let disposer = scope.spawn(|| drop(sibling));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !marker.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let (sent, received) = std::sync::mpsc::channel();
-        let reader = &reader;
-        let fetcher = scope.spawn(move || {
-            let merged = reader.merge_base_branch("main");
-            sent.send(()).unwrap();
-            merged
-        });
-        let finished = received
-            .recv_timeout(std::time::Duration::from_millis(500))
-            .is_ok();
-        fs::write(marker.with_extension("release"), "released").unwrap();
-        let merged = fetcher.join().unwrap();
-        disposer.join().unwrap();
-        (finished, merged)
-    });
-    assert!(
-        marker.exists(),
-        "disposal never reached the controlled transition"
-    );
+    let (finished_during_disposal, merged, ()) =
+        merge_during_worktree_change(&reader, &marker, || drop(sibling));
     assert!(
         !finished_during_disposal,
         "fetch overlapped Worktree disposal: {merged:?}"
