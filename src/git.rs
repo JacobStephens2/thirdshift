@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::process::{self, Control, Interruption};
+use crate::progress;
 
 #[cfg(test)]
 mod execution_tests;
@@ -101,6 +102,19 @@ impl Git {
         let reference = format!("refs/heads/{branch}");
         let found = self.run(&["ls-remote", "--heads", "origin", &reference])?;
         Ok(!found.is_empty())
+    }
+
+    /// Push `branch` to origin without local hooks: sessions and CI check
+    /// the work, and a rejecting hook must not strand Failed run salvage.
+    pub fn push(&self, branch: &str) -> Result<()> {
+        progress::step(format_args!("pushing {branch}"));
+        self.run(&["push", "--no-verify", "origin", branch])?;
+        Ok(())
+    }
+
+    /// Whether a merge is in progress in this directory.
+    pub fn merge_in_progress(&self) -> Result<bool> {
+        self.succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
     }
 
     /// Run `git <args>` and report whether it exited zero, for commands whose

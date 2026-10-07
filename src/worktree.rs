@@ -111,10 +111,8 @@ impl Worktree {
     /// The target repo's hooks are skipped: the session runs the tests and CI
     /// gates the PR, so a local hook doesn't decide whether work reaches
     /// origin.
-    pub fn push(&self, git: &Git) -> Result<()> {
-        progress::step(format_args!("pushing {}", self.branch));
-        git.run(&["push", "--no-verify", "origin", &self.branch])?;
-        Ok(())
+    pub fn push(&self) -> Result<()> {
+        self.git.push(&self.branch)
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone
@@ -198,7 +196,7 @@ impl Worktree {
     fn merge(&self, upstream: &str) -> Result<Merge> {
         match self.git.run(&["merge", "--no-edit", "--ff", upstream]) {
             Ok(_) => Ok(Merge::Clean),
-            Err(_) if self.merge_in_progress(&self.git)? => Ok(Merge::Conflicted(PendingMerge {
+            Err(_) if self.git.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge {
                 upstream: upstream.to_string(),
                 commit: self.git.run(&["rev-parse", "MERGE_HEAD"])?,
             })),
@@ -212,7 +210,7 @@ impl Worktree {
     /// next round's work.
     pub fn ensure_merged(&self, pending: &PendingMerge) -> Result<()> {
         let upstream = &pending.upstream;
-        if self.merge_in_progress(&self.git)? {
+        if self.git.merge_in_progress()? {
             bail!("the merge of {upstream} is still in progress");
         }
         if !self.merged(&pending.commit)? {
@@ -232,11 +230,6 @@ impl Worktree {
     fn merged(&self, rev: &str) -> Result<bool> {
         self.git
             .succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"])
-    }
-
-    /// Whether a merge is in progress in the worktree.
-    pub fn merge_in_progress(&self, git: &Git) -> Result<bool> {
-        git.succeeds(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])
     }
 }
 

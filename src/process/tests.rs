@@ -504,98 +504,86 @@ fn stop_fixture(child: &mut Child) {
 
 #[test]
 fn completion_ignores_recorded_signals_without_permitting_ordinary_work() {
-    const SIGNAL: &str = "THIRDSHIFT_EXECUTION_RECORDED_SIGNAL";
-    if let Ok(signal) = std::env::var(SIGNAL) {
-        interrupt::install().unwrap();
-        signal_hook::low_level::raise(signal.parse().unwrap()).unwrap();
-        let result = output(
-            &mut shell("cat; printf diagnostic >&2; exit 7"),
-            Some(b"\xffonce\0"),
-            Control {
-                name: "fixture",
-                interruption: Interruption::Completion,
-                stop: &stop_fixture,
-            },
-        )
-        .unwrap();
-        assert_eq!(result.status.code(), Some(7));
-        assert_eq!(result.stdout, b"\xffonce\0");
-        assert_eq!(result.stderr, b"diagnostic");
-        assert!(interrupt::requested());
-
-        let streamed = streaming(
-            &mut shell("printf retained; exec 0<&-; exec sleep 0.2"),
-            Some(&vec![b'p'; 1024 * 1024]),
-            Control {
-                name: "fixture",
-                interruption: Interruption::Completion,
-                stop: &stop_fixture,
-            },
-            Vec::new(),
-            |mut pipe, state| {
-                pipe.read_to_end(state)?;
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(streamed.state, b"retained");
-        assert_eq!(
-            streamed
-                .execution
-                .unwrap_err()
-                .downcast_ref::<std::io::Error>()
-                .unwrap()
-                .kind(),
-            std::io::ErrorKind::BrokenPipe
-        );
-        let panicked = streaming(
-            &mut shell("printf ready; exec sleep 0.2"),
-            None,
-            Control {
-                name: "fixture",
-                interruption: Interruption::Completion,
-                stop: &stop_fixture,
-            },
-            (),
-            |mut pipe, _| {
-                pipe.read_exact(&mut [0; 5])?;
-                panic!("completion consumer exploded")
-            },
-        )
-        .unwrap_err();
-        assert!(
-            panicked
-                .to_string()
-                .contains("completion consumer exploded")
-        );
-        assert!(interrupt::requested());
-
-        let refused = RecordedProcess::new();
-        let result = output(
-            &mut refused.command("echo $$ > \"$PID_FILE\""),
-            None,
-            Control {
-                name: "fixture",
-                interruption: Interruption::Ordinary,
-                stop: &stop_fixture,
-            },
-        );
-        assert_eq!(result.unwrap_err().to_string(), "interrupted");
-        assert!(!refused.0.path().join("pid").exists());
-        return;
-    }
-    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        let result = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "process::tests::completion_ignores_recorded_signals_without_permitting_ordinary_work",
-                "--nocapture",
-            ])
-            .env(SIGNAL, signal.to_string())
-            .output()
+    with_recorded_signal(
+        "process::tests::completion_ignores_recorded_signals_without_permitting_ordinary_work",
+        |signal| {
+            signal_hook::low_level::raise(signal).unwrap();
+            let result = output(
+                &mut shell("cat; printf diagnostic >&2; exit 7"),
+                Some(b"\xffonce\0"),
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Completion,
+                    stop: &stop_fixture,
+                },
+            )
             .unwrap();
-        assert!(result.status.success(), "{result:?}");
-    }
+            assert_eq!(result.status.code(), Some(7));
+            assert_eq!(result.stdout, b"\xffonce\0");
+            assert_eq!(result.stderr, b"diagnostic");
+            assert!(interrupt::requested());
+
+            let streamed = streaming(
+                &mut shell("printf retained; exec 0<&-; exec sleep 0.2"),
+                Some(&vec![b'p'; 1024 * 1024]),
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Completion,
+                    stop: &stop_fixture,
+                },
+                Vec::new(),
+                |mut pipe, state| {
+                    pipe.read_to_end(state)?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(streamed.state, b"retained");
+            assert_eq!(
+                streamed
+                    .execution
+                    .unwrap_err()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+            let panicked = streaming(
+                &mut shell("printf ready; exec sleep 0.2"),
+                None,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Completion,
+                    stop: &stop_fixture,
+                },
+                (),
+                |mut pipe, _| {
+                    pipe.read_exact(&mut [0; 5])?;
+                    panic!("completion consumer exploded")
+                },
+            )
+            .unwrap_err();
+            assert!(
+                panicked
+                    .to_string()
+                    .contains("completion consumer exploded")
+            );
+            assert!(interrupt::requested());
+
+            let refused = RecordedProcess::new();
+            let result = output(
+                &mut refused.command("echo $$ > \"$PID_FILE\""),
+                None,
+                Control {
+                    name: "fixture",
+                    interruption: Interruption::Ordinary,
+                    stop: &stop_fixture,
+                },
+            );
+            assert_eq!(result.unwrap_err().to_string(), "interrupted");
+            assert!(!refused.0.path().join("pid").exists());
+        },
+    );
 }
 
 #[test]

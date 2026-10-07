@@ -429,7 +429,7 @@ impl Outside for InWorktree<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
-        self.worktree.push(self.worktree.git())
+        self.worktree.push()
     }
 
     fn pull_request(&mut self) -> Result<Option<PullRequest>> {
@@ -502,7 +502,7 @@ impl FailedOutside for OnFailure<'_> {
     fn commit_and_push(&mut self, reason: &str) -> Result<()> {
         let worktree = &self.worktree;
         let git = worktree.git().completion();
-        if worktree.merge_in_progress(&git)? {
+        if git.merge_in_progress()? {
             git.run(&["merge", "--abort"])?;
         }
         git.run(&["add", "-A"])?;
@@ -525,7 +525,7 @@ impl FailedOutside for OnFailure<'_> {
             "-m",
             &message,
         ])?;
-        worktree.push(&git)
+        git.push(worktree.branch())
     }
 
     fn pull_request(&mut self) -> Result<Option<PullRequest>> {
@@ -576,7 +576,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
-        self.worktree.push(self.worktree.git())
+        self.worktree.push()
     }
 
     fn head(&mut self) -> Result<String> {
