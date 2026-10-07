@@ -438,7 +438,9 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         base: &str,
         opening: Opening,
     ) -> Result<Reached, FailedRun> {
-        self.delivery(base).deliver(worktree, opening, || Ok(()))
+        self.delivery(base)
+            .deliver(worktree, opening, |_| Ok(()))
+            .outcome
     }
 
     fn step(&mut self, line: String) {

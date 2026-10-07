@@ -110,7 +110,7 @@ fn the_merge_is_a_merge_commit_of_exactly_the_watched_head() {
         vec![vec![
             "pr",
             "merge",
-            "issue-7",
+            "1",
             "--repo",
             "acme/widgets",
             "--merge",
@@ -163,6 +163,79 @@ fn a_run_without_merge_leaves_the_pr_open_and_ready() {
     assert_eq!(pr["state"], "OPEN");
     assert_eq!(pr["isDraft"], false);
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+}
+
+#[test]
+fn retargeting_during_ci_fails_delivery_and_drafts_the_captured_pr() {
+    for merge in [false, true] {
+        let scenario = Scenario::new();
+        scenario.origin_has_branch("develop", "main", &[]);
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}gh fake on-ci-read 1 'gh fake pr issue-7 base \"\\\"develop\\\"\"'\n"
+        ));
+        let issue = scenario.issue_url(7);
+        let args = if merge {
+            vec!["merge", &issue]
+        } else {
+            vec![&*issue]
+        };
+
+        let result = scenario.run(&args);
+
+        assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+        assert!(
+            result.stderr.contains("PR targets develop, not main"),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+        assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
+        assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+        assert!(scenario.origin_log("issue-7").is_some());
+        assert_eq!(scenario.origin_log("main").unwrap(), vec!["Initial commit"]);
+        assert_eq!(
+            scenario.origin_log("develop").unwrap(),
+            vec!["Initial commit"]
+        );
+    }
+}
+
+#[test]
+fn a_replacement_from_the_same_branch_cannot_rescue_delivery_or_be_modified() {
+    for merge in [false, true] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                1,
+                r#"gh fake pr issue-7 state '"CLOSED"'
+gh pr create --base main --head issue-7 --title Replacement --body untouched"#
+            )
+        ));
+        let issue = scenario.issue_url(7);
+        let args = if merge {
+            vec!["merge", &issue]
+        } else {
+            vec![&*issue]
+        };
+
+        let result = scenario.run(&args);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("pull/1 is closed, not open"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(result.stdout, "");
+        let state = scenario.gh_state();
+        assert_eq!(state["prs"][1]["state"], "OPEN");
+        assert_eq!(state["prs"][1]["isDraft"], false);
+        assert_eq!(state["prs"][1]["body"], "untouched");
+        assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+        assert_eq!(state["issues"]["7"], "OPEN");
+        assert!(scenario.origin_log("issue-7").is_some());
+    }
 }
 
 #[test]

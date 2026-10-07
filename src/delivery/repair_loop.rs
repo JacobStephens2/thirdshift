@@ -7,6 +7,8 @@
 
 use anyhow::{Result, bail};
 
+use super::pull_request::MergeAttempt;
+
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::PolicyRefusal;
 use crate::run::Goal;
@@ -81,7 +83,7 @@ pub(super) trait Outside {
     /// Fail unless the pull request is open, ready for review and mergeable.
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()>;
     /// Merge the pull request at `head`.
-    fn merge(&mut self, head: &str) -> Result<()>;
+    fn merge(&mut self, head: &str) -> Result<MergeAttempt>;
 
     /// Whether an interrupt was requested.
     fn interrupt_requested(&mut self) -> bool;
@@ -116,8 +118,9 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
             return Ok(());
         }
         outside.progress(format!("merging the PR into {base}"));
-        let Err(error) = outside.merge(&watched) else {
-            return Ok(());
+        let error = match outside.merge(&watched)? {
+            MergeAttempt::Merged => return Ok(()),
+            MergeAttempt::Refused(error) => error,
         };
         outside.progress(format!("the merge failed: {error:#}"));
         match repair_loop.round_after_failed_merge(&watched)? {
@@ -467,6 +470,7 @@ mod tests {
         base_fixes: VecDeque<Option<&'static str>>,
         /// For each merge, the error it fails with, if it does.
         merges: VecDeque<Option<&'static str>>,
+        merge_gate_error: Option<&'static str>,
         sees_no_inherited_failures: bool,
         interrupted: bool,
     }
@@ -610,11 +614,14 @@ mod tests {
             Ok(())
         }
 
-        fn merge(&mut self, head: &str) -> Result<()> {
+        fn merge(&mut self, head: &str) -> Result<MergeAttempt> {
+            if let Some(error) = self.script.merge_gate_error {
+                bail!(error);
+            }
             self.did.push(Did::Merge(head.to_string()));
             match self.script.merges.pop_front().expect("no merge scripted") {
-                Some(error) => Err(anyhow!(error)),
-                None => Ok(()),
+                Some(error) => Ok(MergeAttempt::Refused(anyhow!(error))),
+                None => Ok(MergeAttempt::Merged),
             }
         }
 
@@ -1270,6 +1277,32 @@ mod tests {
         assert!(
             !did.iter()
                 .any(|did| matches!(did, Did::Repair(_, Started::Review(_))))
+        );
+    }
+
+    #[test]
+    fn a_terminal_pre_merge_gate_error_never_enters_another_round_or_policy_refusal() {
+        let (ended, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["h1"]),
+                watches: script([Is::Passed]),
+                merge_gate_error: Some("PR targets develop, not main"),
+                ..Script::default()
+            },
+        );
+        let error = ended.unwrap_err();
+        assert_eq!(error.to_string(), "PR targets develop, not main");
+        assert!(!error.is::<PolicyRefusal>());
+        assert_eq!(
+            did.iter()
+                .filter(|call| matches!(call, Did::Watch(..)))
+                .count(),
+            1
+        );
+        assert!(
+            !did.iter()
+                .any(|call| matches!(call, Did::Merge(..) | Did::Repair(..)))
         );
     }
 
