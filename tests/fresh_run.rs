@@ -129,12 +129,24 @@ fn gives_the_agent_the_fresh_prompt() {
     scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(
-        scenario.claude_calls()[0]["prompt"],
+        scenario.first_prompt_with_report_placeholder(),
         "/thirdshift-implement https://github.com/acme/widgets/issues/7\n\
          The base branch is main. Review with the `thirdshift-code-review` skill using main as the fixed point.\n\
+         For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. \
+         If it fails as the finding says, fix the code and keep the test. \
+         If it passes, you may decline the finding, citing the run. \
+         A passing run counts only when it exercises that finding; a green suite does not. \
          Address the Standards and Spec findings you agree with.\n\
+         Write the reviewers' reports, with each axis's final files-read list, \
+         to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).\n\
          Push branch issue-7 and create a pull request against main using the `thirdshift-pr` skill, marked ready for review.\n\
-         In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, with at least a one-line reason.\n\
+         In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, \
+         with the line of code, plan decision, ADR or run that refutes each finding. \
+         If you decline a finding because a Spec or the Day shift must decide, \
+         file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. \
+         The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. \
+         Give a new issue only the `needs-triage` label so it pauses nothing. \
+         Name in the pull request body any changed file the review left unread.\n\
          Include \"Closes #7\" in the PR body.\n\
          You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
     );
@@ -224,7 +236,7 @@ fn a_second_run_adds_no_second_exclude_entry() {
         .collect();
     assert_eq!(
         entries,
-        ["/.claude/skills/thirdshift-*"],
+        ["/.claude/skills/thirdshift-*", "/.thirdshift-review-*/"],
         "exclude: {exclude}"
     );
 }

@@ -143,7 +143,10 @@ fn a_merge_run_gives_the_agent_the_same_implement_prompt_as_a_run() {
     run.run(&[&run.issue_url(7)]);
     merge_run.run(&["merge", &merge_run.issue_url(7)]);
 
-    assert_eq!(merge_run.first_prompt(), run.first_prompt());
+    assert_eq!(
+        merge_run.first_prompt_with_report_placeholder(),
+        run.first_prompt_with_report_placeholder()
+    );
 }
 
 #[test]
