@@ -565,3 +565,36 @@ fn a_missing_registered_review_reports_its_available_head_and_retains_registrati
         registrations
     );
 }
+
+#[test]
+fn a_repository_negating_the_token_exclusion_refuses_review_acquisition() {
+    let (temp, launch) = super::tests::launch_directory();
+    fs::write(
+        launch.dir().join(".gitignore"),
+        "!/.thirdshift-review-token\n",
+    )
+    .unwrap();
+    launch.run(&["add", ".gitignore"]).unwrap();
+    launch
+        .run(&["commit", "-q", "-m", "Negate private token exclusion"])
+        .unwrap();
+    launch.run(&["push", "origin", "main"]).unwrap();
+    let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+    let refs = launch.run(&["show-ref"]).unwrap();
+
+    let error = ReviewWorktree::create(&launch, "work", "main")
+        .err()
+        .unwrap()
+        .to_string();
+
+    assert!(
+        error.contains("token") && error.contains("excluded"),
+        "{error}"
+    );
+    assert!(!temp.path().join("work-architect").exists());
+    assert_eq!(
+        launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+        registrations
+    );
+    assert_eq!(launch.run(&["show-ref"]).unwrap(), refs);
+}

@@ -79,6 +79,9 @@ impl Publication {
             bail!("review token path is tracked; refusing to replace it");
         }
         skills::exclude(&git, &format!("/{TOKEN}"))?;
+        if !git.succeeds(&["check-ignore", "--quiet", "--", TOKEN])? {
+            bail!("review token is not excluded by Git; check repository ignore rules");
+        }
         let mut temporary = tempfile::Builder::new()
             .prefix(".thirdshift-review-")
             .rand_bytes(32)
@@ -198,7 +201,7 @@ fn verify_file(path: &Path, file: &File) -> Result<()> {
 /// The caller holds one worktree lock through inspection, disposal and add.
 pub(in crate::worktree) fn recover(launch: &Git, path: &Path) -> Result<()> {
     let mut registered_head = None;
-    let mut inspect = || -> Result<()> {
+    let mut inspect_and_remove = || -> Result<()> {
         let entries = super::registrations(launch)?;
         registered_head = entries
             .iter()
@@ -245,7 +248,7 @@ pub(in crate::worktree) fn recover(launch: &Git, path: &Path) -> Result<()> {
         ));
         Ok(())
     };
-    inspect().map_err(|error| {
+    inspect_and_remove().map_err(|error| {
         let head = Git::new(path)
             .run(&["rev-parse", "--verify", "HEAD"])
             .ok()
