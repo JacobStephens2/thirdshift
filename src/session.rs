@@ -274,7 +274,11 @@ impl Outside for OnMachine {
         prompt: &str,
         log: &Path,
     ) -> Result<Ended> {
-        let invocation = self.adapter.session(&self.harness, resume, prompt);
+        let invocation = if kind.starts_with("security-") {
+            self.adapter.security_session(&self.harness, resume, prompt)
+        } else {
+            self.adapter.session(&self.harness, resume, prompt)
+        };
         let interpretation = self.adapter.interpretation(&self.worktree, prompt);
         run(
             kind,
