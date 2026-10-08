@@ -24,6 +24,7 @@ pub enum Severity {
     High,
     Medium,
     Low,
+    Informational,
 }
 
 impl Severity {
@@ -33,6 +34,7 @@ impl Severity {
             Self::High => "high",
             Self::Medium => "medium",
             Self::Low => "low",
+            Self::Informational => "informational",
         }
     }
 }
@@ -83,7 +85,7 @@ impl Reproduction {
 
     pub fn description(&self, original: &str) -> String {
         let original = original
-            .split_once("\n## Reproduction\n")
+            .split_once("\n<!-- thirdshift:security-reproduction -->\n")
             .map_or(original, |(original, _)| original);
         let severity = self
             .severity()
@@ -105,7 +107,7 @@ impl Reproduction {
                 + 1,
         );
         format!(
-            "{}\n\n## Reproduction\n\nOutcome: {}\n{severity}{size}\n{}\n\n### Proof-of-concept test\n\n{fence}\n{}{fence}\n",
+            "{}\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: {}\n{severity}{size}\n{}\n\n### Proof-of-concept test\n\n{fence}\n{}{fence}\n",
             original.trim_end(),
             self.outcome,
             self.notes,
@@ -166,6 +168,7 @@ pub fn run(
                     "high" => Severity::High,
                     "medium" => Severity::Medium,
                     "low" => Severity::Low,
+                    "informational" => Severity::Informational,
                     _ => bail!("the Security reproduction ended with an invalid severity"),
                 };
                 let size = match *size {

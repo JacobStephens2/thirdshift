@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::GitHub;
 use crate::issue::IssueUrl;
 use crate::labels::{Label, NEEDS_TRIAGE};
-use crate::security::reproduction::Reproduction;
+use crate::security::reproduction::{Reproduction, Severity};
 
 const SECURITY_FINDING: Label = Label::new(
     "security-finding",
@@ -55,6 +55,7 @@ impl SecurityRecords {
                     .as_str()
                     .context("Security finding record has no description")?
                     .to_string(),
+                untriaged: value["state"] == "draft" && value["severity"].is_null(),
             },
             Self::Issues(_) => SecurityRecord::Issue {
                 number: value["number"]
@@ -64,6 +65,16 @@ impl SecurityRecords {
                     .as_str()
                     .context("Security finding record has no body")?
                     .to_string(),
+                untriaged: value["state"]
+                    .as_str()
+                    .is_some_and(|state| state.eq_ignore_ascii_case("open"))
+                    && value["labels"].as_array().is_some_and(|labels| {
+                        labels.iter().any(|label| {
+                            label["name"]
+                                .as_str()
+                                .is_some_and(|name| name.eq_ignore_ascii_case(NEEDS_TRIAGE.name()))
+                        })
+                    }),
             },
         })
     }
@@ -71,11 +82,27 @@ impl SecurityRecords {
 
 /// A finding read from the private storage selected for this repository.
 pub enum SecurityRecord {
-    Advisory { id: String, description: String },
-    Issue { number: u64, description: String },
+    Advisory {
+        id: String,
+        description: String,
+        untriaged: bool,
+    },
+    Issue {
+        number: u64,
+        description: String,
+        untriaged: bool,
+    },
 }
 
 impl SecurityRecord {
+    /// A Day-shift decision is the finding's grade; a repeated fingerprint
+    /// must not publish new proof-of-concept evidence or replace that grade.
+    pub fn untriaged(&self) -> bool {
+        match self {
+            Self::Advisory { untriaged, .. } | Self::Issue { untriaged, .. } => *untriaged,
+        }
+    }
+
     pub fn description(&self) -> &str {
         match self {
             Self::Advisory { description, .. } | Self::Issue { description, .. } => description,
@@ -175,7 +202,7 @@ impl GitHub {
                         "creating a private Security finding issue returned no issue URL"
                     )
                 })?;
-                self.issue_view(&issue, "number,body")
+                self.issue_view(&issue, "number,body,state,labels")
             }
         }
     }
@@ -188,16 +215,52 @@ impl GitHub {
         record: &SecurityRecord,
         reproduction: &Reproduction,
     ) -> Result<()> {
-        let description = reproduction.description(record.description());
-        let (path, body) = match record {
+        if !record.untriaged() {
+            bail!("refusing to replace a triaged Security finding record");
+        }
+        let (path, storage) = match record {
             SecurityRecord::Advisory { id, .. } => (
                 format!("repos/{repo}/security-advisories/{id}"),
-                json!({"description": description, "severity": reproduction.severity()}),
+                SecurityRecords::Advisories(Vec::new()),
             ),
             SecurityRecord::Issue { number, .. } => (
                 format!("repos/{repo}/issues/{number}"),
-                json!({"body": description}),
+                SecurityRecords::Issues(Vec::new()),
             ),
+        };
+        let observed = self.output_with_input(&["api", &path], None)?;
+        if !observed.status.success() {
+            bail!(
+                "reading a private Security finding record before its update failed ({})",
+                observed.status
+            );
+        }
+        let observed: Value = serde_json::from_slice(&observed.stdout)
+            .context("reading a private Security finding record returned invalid JSON")?;
+        let current = storage.record(&observed)?;
+        if !current.untriaged() {
+            bail!(
+                "the Security finding was triaged during its reproduction; leaving the record unchanged"
+            );
+        }
+        if current.description() != record.description() {
+            bail!(
+                "the Security finding changed during its reproduction; leaving the record unchanged"
+            );
+        }
+        if matches!(record, SecurityRecord::Advisory { .. })
+            && matches!(reproduction.severity(), Some(Severity::Informational))
+        {
+            bail!(
+                "informational severity has no GitHub advisory field; the Day shift must decide its representation; leaving the record unchanged"
+            );
+        }
+        let description = reproduction.description(record.description());
+        let body = match record {
+            SecurityRecord::Advisory { .. } => {
+                json!({"description": description, "severity": reproduction.severity()})
+            }
+            SecurityRecord::Issue { .. } => json!({"body": description}),
         };
         let body = serde_json::to_vec(&body)?;
         let output = self.output_with_input(

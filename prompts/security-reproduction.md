@@ -11,7 +11,7 @@ Write a proof-of-concept test from the finding's validation plan, then run it ag
 If the test reproduces the finding, score its severity with the skill's rubric and judge whether one session can hold the fix (single) or it needs a Spec (spec).
 Test file: `<test file>`.
 Write the test's full text to this file, even when not reproduced. In your final message, give reproduction notes: the exact command, its result, and, when reproduced, likelihood, impact and the fix-size reasoning.
-End your final message with exactly `Security reproduction: reproduced <severity> <size>`, where severity is critical, high, medium or low and size is single or spec, or `Security reproduction: not reproduced`.
+End your final message with exactly `Security reproduction: reproduced <severity> <size>`, where severity is critical, high, medium, low or informational and size is single or spec, or `Security reproduction: not reproduced`.
 This session commits, pushes, opens and publishes nothing.
 
 Recorded finding:

@@ -202,7 +202,7 @@ fn incomplete_reproductions_preserve_the_record_and_stop_before_the_next_session
                 github["bodies"] = json!({"8": original});
                 github["labels"] = json!({"8": ["security-finding", "needs-triage"]});
             } else {
-                github["advisories"] = json!([{"ghsa_id": "GHSA-existing", "description": original, "severity": "high", "state": "draft"}]);
+                github["advisories"] = json!([{"ghsa_id": "GHSA-existing", "description": original, "severity": null, "state": "draft"}]);
             }
             scenario.write_gh_state(&github);
             scenario.agent_does_in_session(
@@ -245,7 +245,7 @@ fn incomplete_reproductions_preserve_the_record_and_stop_before_the_next_session
 }
 
 #[test]
-fn an_unreproduced_finding_clears_its_previous_severity_and_keeps_the_test_and_notes() {
+fn an_unreproduced_finding_keeps_no_severity_and_keeps_the_test_and_notes() {
     let scenario = Scenario::new();
     let commit = scenario.origin_git(&["rev-parse", "main"]);
     let original = format!(
@@ -253,7 +253,7 @@ fn an_unreproduced_finding_clears_its_previous_severity_and_keeps_the_test_and_n
         commit.trim()
     );
     let mut github = scenario.gh_state();
-    github["advisories"] = json!([{"ghsa_id": "GHSA-existing", "description": original, "severity": "high", "state": "draft"}]);
+    github["advisories"] = json!([{"ghsa_id": "GHSA-existing", "description": original, "severity": null, "state": "draft"}]);
     scenario.write_gh_state(&github);
     scenario.agent_does_in_session(
         1,
@@ -541,7 +541,7 @@ fn keeps_fingerprints_in_every_advisory_state_and_creates_each_new_finding_once(
         assert_eq!(api_calls.iter().filter(|call| call[2] == "POST").count(), 2);
         assert_eq!(
             api_calls.iter().filter(|call| call[2] == "PATCH").count(),
-            4
+            if state == "draft" { 4 } else { 2 }
         );
         assert_eq!(
             scenario
@@ -844,5 +844,153 @@ fn security_audit_names_the_threat_model_under_docs() {
     assert!(
         prompt.contains("Read the repository's threat-model document `docs/THREAT-MODEL.md`."),
         "the existing threat-model document was not named: {prompt}"
+    );
+}
+
+#[test]
+fn reproduction_preserves_an_original_finding_reproduction_heading() {
+    for private in [false, true] {
+        let scenario = Scenario::new();
+        let mut github = scenario.gh_state();
+        github["private"] = json!(private);
+        scenario.write_gh_state(&github);
+        let mut candidate = finding("markdown-evidence");
+        let original_writeup = "Candidate notes.\n\n## Reproduction\n\nOriginal local validation evidence must survive.";
+        candidate["description"] = json!(original_writeup);
+        scenario.agent_does_in_session(1, &audit_script(&json!([candidate]).to_string()));
+        scenario.agent_does_in_session(2, &reproduction_script("reproduced medium single"));
+        let result = scenario.run(&["secure"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let state = scenario.gh_state();
+        let body = if private {
+            state["bodies"]["8"].as_str().unwrap()
+        } else {
+            state["advisories"][0]["description"].as_str().unwrap()
+        };
+        assert!(
+            body.contains(original_writeup),
+            "original finding was deleted: {body}"
+        );
+        assert!(
+            body.contains("\"validation_plan\""),
+            "validation plan was deleted: {body}"
+        );
+        assert!(body.contains("Severity: medium"), "{body}");
+    }
+}
+
+#[test]
+fn a_published_finding_keeps_new_reproduction_evidence_private_and_its_grade() {
+    let scenario = Scenario::new();
+    let commit = scenario.origin_git(&["rev-parse", "main"]);
+    let original = format!(
+        "Fingerprint: `published-finding`\nAudited commit: `{}`\nDay-shift-approved published description.\n",
+        commit.trim()
+    );
+    let mut github = scenario.gh_state();
+    github["advisories"] = json!([{
+        "ghsa_id": "GHSA-existing", "description": original,
+        "severity": "high", "state": "published"
+    }]);
+    scenario.write_gh_state(&github);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("published-finding")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced critical single"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(
+        state["advisories"][0]["description"], original,
+        "new reproduction evidence became part of a published advisory"
+    );
+    assert_eq!(
+        state["advisories"][0]["severity"], "high",
+        "the Day shift grade changed"
+    );
+}
+
+#[test]
+fn a_private_reproduction_accepts_the_rubrics_informational_severity() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["private"] = json!(true);
+    scenario.write_gh_state(&github);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("minimal-impact")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced informational single"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let body = state["bodies"]["8"].as_str().unwrap();
+    assert!(body.contains("Severity: informational"), "{body}");
+    assert!(body.contains("bounded_fixture();"), "{body}");
+    assert!(body.contains("Local command: bounded-fixture"), "{body}");
+}
+
+#[test]
+fn a_finding_triaged_during_reproduction_is_left_unchanged() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("input-size")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &format!(r#"
+printf '%s\n' '{{"state":"published","severity":"high"}}' | gh api --method PATCH repos/acme/widgets/security-advisories/GHSA-test-test-0001 --input - >/dev/null
+{}
+"#, reproduction_script("reproduced critical single")));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("triaged during its reproduction"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    let record = &state["advisories"][0];
+    assert_eq!(record["state"], "published");
+    assert_eq!(record["severity"], "high");
+    assert!(
+        !record["description"]
+            .as_str()
+            .unwrap()
+            .contains("bounded_fixture();")
+    );
+}
+
+#[test]
+fn an_informational_advisory_requires_a_day_shift_decision_without_an_invented_grade() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("minimal-impact")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced informational single"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("the Day shift must decide its representation"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    let record = &state["advisories"][0];
+    assert_eq!(record["severity"], Value::Null);
+    assert!(
+        !record["description"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- thirdshift:security-reproduction -->")
+    );
+    assert!(
+        scenario
+            .gh_calls_of("api", "--method")
+            .iter()
+            .all(|call| call[2] != "PATCH")
     );
 }

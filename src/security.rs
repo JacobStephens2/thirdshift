@@ -135,8 +135,13 @@ fn audit_and_record(
                 outside.step("recorded a Security finding privately".to_string());
                 read
             };
-            if seen.insert(finding.fingerprint) {
+            if record.untriaged() && seen.insert(finding.fingerprint) {
                 records.push(record);
+            } else if !record.untriaged() {
+                outside.step(format!(
+                    "keeping the Day shift's grade for {}",
+                    record.name()
+                ));
             }
         }
         for (index, record) in records.iter().enumerate() {
@@ -277,8 +282,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 &Call::CreateAdvisory("new".into()),
-                &Call::Reproduce("old".into()),
-                &Call::UpdateSecurityRecord("old".into()),
                 &Call::Reproduce("new".into()),
                 &Call::UpdateSecurityRecord("new".into()),
             ]

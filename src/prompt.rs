@@ -322,7 +322,7 @@ pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path
          If the test reproduces the finding, score its severity with the skill's rubric and judge whether one session can hold the fix (single) or it needs a Spec (spec).\n\
          Test file: `{test}`.\n\
          Write the test's full text to this file, even when not reproduced. In your final message, give reproduction notes: the exact command, its result, and, when reproduced, likelihood, impact and the fix-size reasoning.\n\
-         End your final message with exactly `Security reproduction: reproduced <severity> <size>`, where severity is critical, high, medium or low and size is single or spec, or `Security reproduction: not reproduced`.\n\
+         End your final message with exactly `Security reproduction: reproduced <severity> <size>`, where severity is critical, high, medium, low or informational and size is single or spec, or `Security reproduction: not reproduced`.\n\
          This session commits, pushes, opens and publishes nothing.\n\n\
          Recorded finding:\n{finding}\n\n{HEADLESS}",
         test = test.display(),

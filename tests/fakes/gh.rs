@@ -976,6 +976,16 @@ fn advisory_api(state: &mut Json, positional: &[String], flags: &Flags) {
     }
     let method = flag(flags, "method").unwrap_or("GET");
     if method == "GET" {
+        if let Some(id) = rest.strip_prefix("security-advisories/") {
+            let advisory = state
+                .at("advisories")
+                .items()
+                .iter()
+                .find(|advisory| advisory.at("ghsa_id").as_str() == Some(id))
+                .unwrap();
+            println!("{advisory}");
+            return;
+        }
         let wanted = query
             .split('&')
             .find_map(|pair| pair.strip_prefix("state="));
@@ -1059,6 +1069,13 @@ fn finding_issue_patch(state: &mut Json, rest: &[&str]) {
 
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(n) = rest.strip_prefix("issues/")
+    {
+        check_repo_is(state, Some(repo));
+        println!("{}", issue_fields(state, n, state.at("issues").at(n)));
+        return;
+    }
     if path == &format!("repos/{}", state.at("repo").str()) {
         println!(
             "{}",
