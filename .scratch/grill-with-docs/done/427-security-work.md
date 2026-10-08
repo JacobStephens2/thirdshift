@@ -155,7 +155,7 @@ I want the security audit to be somewhat language agnostic so that it can generi
 
 *Answer:* agree
 
-## Round 3 (open)
+## Round 3 (answered)
 
 Updated on 7 October for the second research note, `docs/research/security-skill-candidates.md`. Q9, Q14, Q15 and Q16 now carry what it found, and Q20–Q23 are new.
 
@@ -202,7 +202,7 @@ Updated on 7 October for the second research note, `docs/research/security-skill
 
 *Recommended:* (a). `secure` is a verb like `architect` and `pickup`, and unlike "audit" it says security on its own. Capitalised, as the glossary's terms are, "Secure run" reads as a name, not a claim. "Security run" would sit too close to the Security review inside every Run.
 
-*Answer:*a, `thirdshift secure`, and Security audit as the session, except call the pass a Security run, as Secure run can have a bit of connotation of a run that is secure as opposed to a run which is about increasing security in the codebase. 
+*Answer:* a, `thirdshift secure`, and Security audit as the session, except call the pass a Security run, as Secure run can have a bit of connotation of a run that is secure as opposed to a run which is about increasing security in the codebase.
 
 **Q18 - What a pass's fix Run works from.** When fixing is allowed, the pass dispatches a Run for each reproduced finding, and a Run needs an issue. The options:
 - (a) **On a public repo, a terse public issue** that links the draft advisory, whose write-up the fix session reads through the API. **On a private repo, the finding's own issue.**
@@ -211,7 +211,7 @@ Updated on 7 October for the second research note, `docs/research/security-skill
 
 *Recommended:* (a). Every Run stays a Run on an Issue URL, as the glossary has it, and the write-up stays private until the fix lands.
 
-*Answer:*I want to have a way to run `thirdshift secure` as a cron job which can automatically do the Cloudflare security audit and address the findings and self-merge them - so a way I can leave a process running that can just improve the security of the application. I agree with a here. I'm curious even about the possibility of a spec issue and tickets sub-issues type structure for bigger fixes, like we have for architect runs, that might benefit from breaking the work up for multiple agent sessions to manage the context load of each agent session. 
+*Answer:* I want to have a way to run `thirdshift secure` as a cron job which can automatically do the Cloudflare security audit and address the findings and self-merge them - so a way I can leave a process running that can just improve the security of the application. I agree with a here. I'm curious even about the possibility of a spec issue and tickets sub-issues type structure for bigger fixes, like we have for architect runs, that might benefit from breaking the work up for multiple agent sessions to manage the context load of each agent session.
 
 **Q19 - How the pass yields.** The options:
 - (a) **Like an Architect run:** skipped while another pass on the repo is running on the machine, while the repo has a Ready issue, and while one of its own findings still waits for the Day shift.
@@ -220,7 +220,7 @@ Updated on 7 October for the second research note, `docs/research/security-skill
 
 *Recommended:* (a). Work you shaped goes first, and findings shouldn't arrive faster than you read them. With fixing allowed, a reproduced finding doesn't wait, because its fix Run is dispatched. What ends a finding's wait comes in a later round.
 
-*Answer:*agree
+*Answer:* agree
 
 **Q20 - A vulnerability the Security review finds that was already on the Base branch.** The skill's scoped run audits the surfaces a diff touches, not only its added lines, so it will find old vulnerabilities too, and fixing one in the Run's public PR would disclose it. A proof-of-concept test tells old from new: one that also fails at the merge base shows a vulnerability already on the Base branch, and one that passes there shows the Run introduced it. The options:
 - (a) **Treat it as a pass's finding.** It goes to the private record, stays out of the PR, and doesn't hold the merge, the way an Inherited failure isn't the branch's to fix. If fixing is allowed, it's fixed as the pass would fix it.
@@ -248,40 +248,224 @@ Updated on 7 October for the second research note, `docs/research/security-skill
 
 *Recommended:* (a) on the dedicated VM you plan, with (b) until then. A disposable VM limits what a bad test can break, not what it can read.
 
-*Answer:* 
+*Answer:* agree, possibly even a microVM such as sbx as another option, but maybe even making the VM sandbox a separate issue, and just getting this running initially with b. I'm thinking of for example putting `thirdshift secure` as a cron job on this machine for example.
 
-agree, possibly even a microVM such as sbx as another option, but maybe even making the VM sandbox a separate issue, and just getting this running initially with b.* I'm thinking of for example putting `thirdshift secure` as a cron job on this machine for example.*Q23 - The repo's own threat model.** The skill never looks for a `SECURITY.md` or a threat model. Chrome, Codex Security and Anthropic's harness all feed one in, and Anthropic saw owners dismiss real, reproduced findings because they didn't fit the project's threat model. The options:
+*Checked:* Docker Sandboxes (`sbx` v0.39.0) is already installed on this machine, and `/dev/kvm` is present. But your user isn't in the `kvm` group, and `sbx` isn't signed in to Docker.
+
+**Q23 - The repo's own threat model.** The skill never looks for a `SECURITY.md` or a threat model. Chrome, Codex Security and Anthropic's harness all feed one in, and Anthropic saw owners dismiss real, reproduced findings because they didn't fit the project's threat model. The options:
 - (a) **thirdshift's Session prompts point the review and the audit at the repo's `SECURITY.md` or threat-model file,** when it has one. That's process, not new skill text.
 - (b) **Leave it to the skill.**
 
 *Recommended:* (a). It's cheap, and it's the one input every precise reviewer in the research uses that Cloudflare's skill lacks. cascade already has one, in `server/docs/threat-model.md`.
 
-*Answer:* 
+*Answer:* agree
 
-#agree# Settled by earlier answers (shout if any is wrong)
+## Round 4 (answered)
+
+**Q24 - The trial, now that the Security run is your main use.** Q21 agreed to a trial before building the Security review, and Q14 says your main use will be `thirdshift secure` from cron. The options:
+- (a) **Both, before building anything:** a Security audit (full audit mode, `quick`) of two repos on Codex and on Claude, and the Security review's two modes over three recent merged PRs on Codex, with one on Claude. About ten sessions, perhaps $300 at list price on your subscriptions, going by the one measurement.
+- (b) **The Security audit first:** two repos, such as muxboard and keeplore, on Codex and on Claude, about $120 at list price. The Security review's trial waits until you want the review.
+- (c) **No trial:** build first, run the first Security runs without fixing, and read their cost from the Command logs.
+
+*Recommended:* (b). It answers first what your cron loop depends on: whether the skill runs under Codex at all, what an audit costs here, and whether its findings are worth your time. Every result stays private: no advisories, issues or pushes, and the findings come to you in a local file, never into a repo.
+
+*Answer:* agree
+
+**Q25 - Where a finding is reproduced.** Until the sandbox issue lands, every finding the Security audit records comes back unconfirmed, with a validation plan, and nothing is fixed until a test reproduces it. The options:
+- (a) **In the Security run, before anything goes public.** After the Security audit, one session per finding turns its validation plan into a test in a throwaway worktree. Only a finding whose test fails on the untouched code gets a fix issue; the rest wait for the Day shift.
+- (b) **In the fix Run.** The Security run files a terse issue for every finding, and the fix Run starts by reproducing it. A Run that can't fails, and leaves the finding for you.
+- (c) **In the Security audit session,** once the skill has finished and before the session ends.
+
+*Recommended:* (a). Public issues then exist only for vulnerabilities shown to be real, and each reproduction gets a fresh context. Under (b), a public issue goes up for every unproven lead, and each failed Run leaves its trail in public. (c) mixes thirdshift's steps into the skill's session, which the skill's own run should keep as upstream wrote it.
+
+*Answer:* agree
+
+**Q26 - Fixes too big for one session.** Q18's answer asked about a Spec with Tickets, the way an Architect plan can be one. The options:
+- (a) **Like an Architect plan:** the session that reproduced the finding judges the fix's size, and when one session isn't enough it publishes a Spec with Tickets through the `thirdshift-to-spec` and `thirdshift-to-tickets` skills. Every issue stays terse and links the private record, and the Security run dispatches a Spec run on it.
+- (b) **Always one Run.** A finding too big for one session waits for the Day shift.
+- (c) **Always a Spec,** even for a small fix.
+
+*Recommended:* (a). It's the shape you already trust for Architect plans, and it keeps each session's context small. On a public repo it publishes several terse issues for one vulnerability, but none says more than which area it hardens.
+
+*Answer:* agree
+
+**Q27 - A name for the cron loop.** Q18 described a process you leave running that keeps improving a repo's security: Security runs started often enough that each follows the last, with fixing allowed and every fix merged. Weeding is that loop for architecture. The options:
+- (a) **Fencing:** the garden's other upkeep, mending the fence that keeps pests out.
+- (b) **Patrol:** the night-shift guard's rounds.
+- (c) **No new name:** just Security runs on a schedule.
+
+*Recommended:* (a). It pairs with Weeding in the garden you chose for the factory's upkeep. Like Weeding, it would yield to work you shaped, and pause for the Day shift whenever a finding can't be reproduced.
+
+*Answer:* agree
+
+**Q28 - A finding's severity once it's reproduced.** Unconfirmed findings carry no severity, so until the sandbox lands, no advisory would have one. The options:
+- (a) **The session that reproduces a finding scores it,** with the skill's own likelihood-and-impact rubric, and sets the advisory's severity.
+- (b) **None until you set one.**
+- (c) **The Security audit estimates one** for every finding, reproduced or not.
+
+*Recommended:* (a). A reproduced finding is as validated as the skill's `confirmed` ones, so scoring it with the skill's rubric keeps the settled rule that a severity comes only from a validated finding. (c) puts numbers on guesses.
+
+*Answer:* agree
+
+**Q29 - What ends a finding's wait.** A finding nothing reproduces waits for the Day shift, and while one waits, Security runs on that repo are skipped (Q19). The options:
+- (a) **Your triage, in the record's own terms.** On a private repo, the finding's issue leaves `needs-triage`, as an Architect idea's does. On a public repo, you close its draft advisory, publish it, or give it a severity. Whatever you decide ends the wait, and the decision is also the finding's grade: real if you publish it or give it a severity, not real if you close it.
+- (b) **Only closing it** ends the wait.
+- (c) **Nothing:** Security runs never wait on findings, which revisits Q19.
+
+*Recommended:* (a). It reuses the Architect idea's rule, that the factory waits until you triage, whatever the decision, and each record's own states, so there's no new label to learn.
+
+*Answer:* agree
+
+## Round 5 (answered)
+
+**Q30 - A fix that fails.** An Architect plan's rule is that a failed Run or Spec run on it leaves it open for the Day shift, no later pass retries it, and Weeding pauses while it's open. The options:
+- (a) **The same for Fencing:** a failed fix leaves its issue open for you, no later Security run or Pickup run retries it, and Security runs on that repo are skipped while it's open.
+- (b) **Retry it:** the next Security run tries the fix again, up to a limit.
+- (c) **Carry on:** later Security runs keep auditing and fixing other findings.
+
+*Recommended:* (a). A fix that failed may be wrong in a way the factory can't see, and on a public repo its PR has already disclosed the vulnerability, so it needs you soon. Carrying on would bury it under new findings.
+
+*Answer:* agree.
+
+**Q31 - When a Security run has nothing new to audit.** Updated for the trial. Fencing starts Security runs often. On Claude, an audit took 20–24 minutes and $14–20 at list price, about five Architecture reviews' worth, and the factory merges into a busy repo like keeplore several times on some days. The options:
+- (a) **Skip when the Base branch hasn't changed** since the last Security audit that finished on it. The skill reads its earlier runs, so the next audit after a change turns what changed, and what's still open, into its work.
+- (b) **A minimum interval,** such as a day, whatever changed.
+- (c) **Audit every time** a Security run isn't otherwise skipped.
+- (d) **Both (a) and (b):** audit only when the Base branch has changed and at least a day has passed since the last audit that finished.
+
+*Recommended:* (d). It still audits every change, but at most once a day per repo, so Fencing costs about one audit a day on a busy repo and nothing on a quiet one.
+
+*Answer:* A, and leave the frequency of running this more up to the operator depending on how frequently they set the `thirdshift secure` cron job to run. I also want to add in this process the ability to have a security review in spec runs and in just one off implement runs - to be able to User config that to happen there - not for each ticket on a spec run, but once at the end like the spec review. 
+
+**Q32 - Settings, words and labels.** The names from Q17 need settings and words to match. The options:
+- (a) **Follow the Base fix and the Architect plan:**
+  - A `[security]` section in the User config, with `review` (a Security review in every Run) and `fix` (fix reproduced findings), both off by default. Setup asks about both.
+  - The words `security-review` / `no-security-review` and `security-fix` / `no-security-fix`, on any command, so one cron line can set them for one repo.
+  - On a private repo, a finding's issue is labelled `security-finding`. Every fix issue is labelled `security-fix`, as a plan is labelled `architect-plan`.
+- (b) **As (a), with shorter words:** `review` / `no-review` and `fix` / `no-fix`.
+- (c) **As (a), without the Setup questions.**
+
+*Recommended:* (a). The words follow `base-fix` / `no-base-fix` and the labels follow `architect-plan`, so there's nothing new to learn. On a Run's command, a bare `review` could mean the code review.
+
+*Answer:* agree
+
+**Q33 - Two ADRs.** Two decisions here are hard to reverse, would surprise a later reader, and came out of real trade-offs. The options:
+- (a) **Write both:**
+  - **Security findings stay private until they're fixed.** A reproduced one may be fixed in a public PR, because GitHub has no private fix path the factory can run.
+  - **The security work embeds Cloudflare's security-audit-skill byte for byte,** with a drift test, to borrow its publisher's trust instead of writing security text of thirdshift's own.
+- (b) **Only the first.**
+- (c) **Neither.**
+
+*Recommended:* (a). Each records a choice someone will question later: why findings never become ordinary issues, and why thirdshift carries 183 KB of another project's Markdown that it may not edit.
+
+*Answer:* I'm open to the security findings staying private until they're fixed so long as we can for example have a `thirdshift secure` run fix them. And I'm open to modifying the Cloudflare security audit skill a bit if necessary for our particular context, like we did with the matt pocock skills. The Pocock skills are essentially the same, but modified a touch to work within the context of thirdshift.
+
+**Q34 - The Security review: in this Spec, or an issue of its own.** This revisits Q2. You've put off the Security review's trial (Q24), and its mode depends on that trial (Q21), so this Spec can't settle how the review works. The options:
+- (a) **An issue of its own.** This Spec builds the Security run and Fencing. The Security review, with everything settled here, goes into its own issue, to be specced once its trial has run.
+- (b) **Keep it in this Spec,** with a Ticket that runs its trial first and blocks its build Tickets.
+- (c) **Keep it in this Spec in guidance mode,** the trial's expected winner, and trial it later.
+
+*Recommended:* (a). It keeps this Spec to what you'll use first, and nothing settled about the review is lost, since its issue carries it. (b) puts a trial you postponed inside the build, and (c) builds a mode no measurement has backed yet.
+
+*Answer:* b
+
+**Q35 - Which Harness runs a Security run.** New, from the trial.
+- **On Claude,** both audits finished in 20–24 minutes, with no refusal and no change of Model.
+- **On Codex,** your default Harness:
+  - muxboard's audit took 99 minutes.
+  - keeplore's was refused partway by OpenAI's cybersecurity safeguard, and its retry ended `incomplete`. Codex ran at most three sub-agents at once, and had no fresh one left to verify with.
+  - Codex sub-agents also share the parent's conversation unless asked for a fresh one, so its verifiers weren't independent.
+
+The options:
+- (a) **Name the Harness on the cron line,** as in `thirdshift secure harness claude`. The Harness stays one per Command, as the glossary has it, and nothing new is built.
+- (b) **A Harness setting for Security runs** in the `[security]` section, used when the command names none. That's a per-command default, close to #429's per-step mechanism.
+- (c) **Keep Codex and work around it:** have the Session prompt ask Codex for fresh sub-agents, raise its thread limit if that's a setting, and apply for OpenAI's trusted access.
+
+*Recommended:* (a), plus (c)'s prompt fix, so that a Security run you do start on Codex at least keeps its verifiers independent. (a) costs nothing to build, and the trial says Claude is the Harness that works for this today.
+
+*Answer:* a, b, and c
+
+**Q36 - The Security audit's profile.** New, from the trial. The trial ran `quick`, which on Claude started 16–21 sub-agents. `standard` adds hunting waves until a critic comes back clean, a second critic, and a second verifier per finding, at a cost nobody has measured. Fencing repeats audits, and each audit reads the last, so coverage builds up across runs. The options:
+- (a) **`quick` always.**
+- (b) **`standard` always.**
+- (c) **`quick` by default, and `standard` on a word,** for an occasional fuller sweep.
+
+*Recommended:* (a). Fencing's repetition does over time what `standard` does in one run, at a price the trial has measured. A word for `standard` can come later, if a repo ever needs it.
+
+*Answer:* agree. Add fencing to CONTEXT.md on https://github.com/JacobStephens2/thirdshift/pull/519
+
+## Round 6 (answered)
+
+**Q37 - Codex sub-agents that aren't fresh: an issue of its own?** The trial found that Codex's sub-agents share their parent's conversation unless spawned with `fork_turns: "none"`. If that holds, `thirdshift-code-review`'s Standards and Spec sub-agents don't review with fresh context under Codex, your default Harness, which undercuts the reason the skill uses them. The options:
+- (a) **File a thirdshift issue,** labelled `needs-triage` and linked to #429, which is about reviewers' independence.
+- (b) **Fold it into #429.**
+- (c) **Leave it.**
+
+*Recommended:* (a). It affects every Run on Codex today, not only security work, and it needs its own check first: whether the code review's sub-agents really share context, read from Codex's rollout files.
+
+*Answer:* b
+
+**Q38 - How the Security review's trial Ticket hands over.** Q34 kept the Security review in this Spec, with a Ticket that runs its trial first and blocks its build Tickets. A trial only measures. Choosing the review's mode needs your grades on its findings, and those stay private. The options:
+- (a) **The build Tickets wait for you.** The trial Ticket's Run writes the measurements to a public research note and the findings to a private file on the machine. The build Tickets stay labelled `needs-triage`, so the Spec run passes over them as Unready Tickets. Once you've graded the findings and chosen the mode, you relabel them, and the next Spec run builds them.
+- (b) **A rule set now decides,** such as guidance mode unless full audit mode finds more at no more than twice the cost, and the build Tickets follow it unattended.
+- (c) **No trial Ticket:** I run the trial now, as I ran the Security audit's, and the build Tickets are written once you've chosen.
+
+*Recommended:* (a). It uses the Spec run's existing rule for Unready Tickets, keeps the findings private, and leaves the mode to your grades. (b) picks a mode before anyone knows whether the findings are real.
+
+*Answer:* agree
+
+## Settled by earlier answers (shout if any is wrong)
 
 - #427 covers vulnerabilities in a repo's own code, prompt injection included where a repo passes text to agents (thirdshift, vaulted-agent). Known-vulnerable dependencies and committed secrets aren't factory work in #427.
 - GitHub's free features and the base-safe CI checks are filed as https://github.com/JacobStephens2/ideas/issues/3, outside this Spec, together with the thirdshift follow-up that points the CI-fix Repair at CodeQL's check-run annotations.
 - The factory's own attack surface is filed as https://github.com/JacobStephens2/thirdshift/issues/511, labelled `needs-triage`, since how to fix it is a design call. Interaction limits (collaborators only) are on all five public repos until 2027-04-07. Once you've shaped #511, a Pickup run can take it.
-- One Spec covers both shapes. The order of their Tickets is left to `/to-spec`.
+- One Spec covers both shapes (Q2, Q34). The Security run's Tickets come first, since it's your main use. Then come the Security review's trial Ticket and the build Tickets it blocks.
+- **The trial Ticket's handover (Q38):** its Run writes the measurements to a public research note and the findings to a private file on the machine. The Security review's build Tickets stay labelled `needs-triage`, so the Spec run passes over them as Unready Tickets. Once you've graded the findings and chosen the review's mode, you relabel them, and the next Spec run builds them.
+- **Codex sub-agents that aren't fresh (Q37)** are folded into #429, in https://github.com/JacobStephens2/thirdshift/issues/429#issuecomment-6051123998.
+- **Names (Q17, Q27):** the command is `thirdshift secure`, and it starts a **Security run**, whose session is the **Security audit**. Each Run's session is the **Security review**. A vulnerability either session finds is a **Security finding**. Security runs on a schedule with fixing allowed are **Fencing**. The glossary has all five, and ADR 0015 records why findings stay private, in https://github.com/JacobStephens2/thirdshift/pull/519. The Command log and Activity log entries there now cover a Security run too.
+- By those names, the session inside a Run or a Spec run is the Security review, and the Security audit is the Security run's own. Q20's answer reads that way.
 - `thirdshift-code-review` stays as it is, Standards and Spec only, close to Matt Pocock's skill.
-- Each Run's security work is a separate Factory skill, run in a session of its own when you turn it on (Q14). This file calls it the Security review; Q17 settles the names.
-- The security-only mode you asked for in Q6 is the pass, run on its own like `thirdshift architect`. Q17 names its command.
-- The security work is Harness-agnostic. It needs no tool only one Harness has, and like every session it runs on the Command's Harness, Model and Effort. Giving it a different one is #429's per-step mechanism, not this Spec's.
+- **Settings, words and labels (Q32):** a `[security]` section in the User config with `review` and `fix`, both off by default, and Setup asks about both. The words `security-review` / `no-security-review` and `security-fix` / `no-security-fix` work on any command, so one cron line can set them for one repo. A private repo's finding issue is labelled `security-finding`, and every fix issue `security-fix`.
+- A Security review runs once after the opening session of a one-off Run or a Base fix, and once on a Spec PR after its Spec review, never in a Ticket's Run.
+- An unaddressed Security finding the Run introduced holds the Self-merge: the Run ends a Failed run with its PR ready for review. So does a Security review a model refused or cut short, and thirdshift logs the Model each security session actually ran on.
+- A Security review sends a vulnerability already on the Base branch to the private record, keeps it out of the PR, and doesn't hold the merge. With fixing allowed, it's fixed as a Security run would fix it. A proof-of-concept test that also fails at the merge base marks a vulnerability as old.
+- A Security run fixes what it finds, in public PRs, when fixing is allowed.
+- **Harnesses (Q35):**
+  - A cron line can name the Harness, as in `thirdshift secure harness claude`.
+  - A `harness` setting under `[security]` picks the Security run's Harness when the command names none. Its Model and Effort come from that Harness's own section, as for any Command.
+  - On Codex, the Session prompt asks for fresh sub-agents (`fork_turns: "none"`), and thirdshift raises Codex's `agents.max_concurrent_threads_per_session` for the session.
+  - Applying for OpenAI's trusted access for cybersecurity work is yours to do.
+- The security work is Harness-agnostic beyond that: it needs no tool only one Harness has, across the six Harnesses thirdshift now runs (ADR 0013). A Security review runs on its Run's Harness, Model and Effort, as every session does.
 - It's language-agnostic: the skill works by trust boundary and attack class, not by language.
-- The Security review and the pass use one upstream skill, Cloudflare's security-audit-skill. The research found no better one: nothing else is MIT, self-contained, agent-neutral, language-agnostic and able to do both jobs. thirdshift adds only its process: the Session prompts, the scope, and what happens to findings. So a reader's trust rests on the skill's publisher and on thirdshift's process.
-- The skill sits in `skills/thirdshift-security-audit/` byte for byte, except the frontmatter `name`, which thirdshift's naming rule (ADR 0012) forces. Cloudflare's `LICENSE` sits beside it, the upstream commit is pinned, and a test fails if any other byte drifts.
-- Every Session prompt that uses the skill states what the skill would otherwise ask about: the mode, the profile, the scope, an output directory outside the worktree, which earlier runs to read, and to end `incomplete` rather than ask.
-- A Run's review in full audit mode gets an output directory of its own, so it doesn't inherit the pass's open leads. The pass keeps one output root per repo and reads its own earlier runs.
+- The Security review and the Security audit use one upstream skill, Cloudflare's security-audit-skill. The research found no better one. thirdshift adds its process: the Session prompts, the scope, and what happens to findings.
+- The skill is adapted as Matt Pocock's skills were (Q33). It sits in `skills/thirdshift-security-audit/`, close to upstream, with Cloudflare's MIT notice kept and the upstream commit recorded. It's edited only where a Session prompt can't do the job, and there is no byte-for-byte drift test. Because the Factory skills' existing pattern (ADR 0001, ADR 0012) covers this, it needs no ADR of its own.
+- Every Session prompt that uses the skill states what the skill would otherwise ask about: the mode, the profile (`quick` always, Q36), the scope, an output directory outside the worktree, which earlier runs to read, and to end `incomplete` rather than ask.
+- The Session prompts also point the Security review and the Security audit at the repo's `SECURITY.md` or threat-model file, when it has one.
+- A Run's review in full audit mode gets an output directory of its own, so it doesn't inherit the Security run's open leads. The Security run keeps one output root per repo and reads its own earlier runs.
 - Q7's other sources drop out: no open-code-review rules and no `/security-review` text.
 - The Security review fixes a finding only when it can show it with a failing test, or else a concrete trace from input to sink. The test stays as a regression test, and the fix must turn it green.
-- A proof of concept runs as an ordinary test in the worktree, unsandboxed like every Run's tests, with harmless payloads only, never against a deployed site or a real third-party service. You plan to run thirdshift on a dedicated VM that serves no production code. Q22 revisits this.
-- The pass fixes a finding unattended only when a proof-of-concept test reproduces it and the fix is allowed the way a Base fix is: by a word on the command or a setting in the User config, off by default. Otherwise it only reports the finding.
+- Until a sandbox lands, the skill's findings come back unconfirmed, each with a local validation plan, and a session of the Security run reproduces each one as an ordinary test in a throwaway worktree (Q25). It runs unsandboxed like every Run's tests, with harmless payloads only, and never against a deployed site or a real third-party service. `thirdshift secure` can run from cron on this machine meanwhile.
+- Only a finding whose test fails on the untouched code gets a fix issue, and only when fixing is allowed. Reproduction runs either way, so even with fixing off, a reproduced finding's record gets a severity.
+- The reproducing session scores the finding's severity with the skill's own likelihood-and-impact rubric, and sets the advisory's severity (Q28).
+- The reproducing session also judges the fix's size, as an Architecture review judges a plan's (Q26). It files one terse Ticket, or a Spec with Tickets through `thirdshift-to-spec` and `thirdshift-to-tickets`, each linking the private record. The Security run then dispatches a Run or a Spec run on it.
+- The sandbox is a separate issue, with Docker Sandboxes (`sbx`) among its options. Its draft and the command to file it are in chat.
+- A fix issue on a public repo is terse and links the draft advisory. On a private repo, the finding's own issue serves. With fixing allowed and your `merge.always`, every fix is a Merge run, so Fencing improves a repo's security unattended.
+- **When a Security run is skipped (Q19, Q30, Q31):**
+  - while another Pass on the repo runs on the machine;
+  - while the repo has a Ready issue;
+  - while one of its findings waits for the Day shift;
+  - while a fix it dispatched has failed and is still open, since no later Security run or Pickup run retries a failed fix;
+  - when the Base branch hasn't changed since the last Security audit that finished.
+
+  How often it runs is up to the cron schedule you set. The Architect run and the Pickup run likewise skip while any other Pass runs, a Security run included.
+- Your triage, in the record's own terms, ends a finding's wait: closing its draft advisory, publishing it or giving it a severity on a public repo, or taking `needs-triage` off its issue on a private one. That decision is also its grade, real or not (Q29).
+- The Security run fixes a finding unattended only when a proof-of-concept test reproduces it and the fix is allowed the way a Base fix is: by a word on the command or a setting in the User config, off by default. Otherwise it only reports the finding.
 - Like a failed Run's offer of a Base fix, a report whose finding wasn't fixed only because nobody allowed it offers both ways to allow it: the command, and the User config setting.
 - A finding no proof of concept reproduces is never fixed unattended, whatever the setting. That settles #427's question about `needs_validation`.
 - With fixing allowed, a fix on a public repo goes out as a public PR, which discloses the vulnerability when it's pushed. That window is the price of the speed.
-- Every finding of the pass goes to a private record with its write-up: a draft security advisory on a public repo, or an issue labelled as a security finding on a private one. The Run notification lists each finding's severity, title and link, without the write-up. Public issues and PR bodies say only what the change does.
+- Every Security finding of a Security run goes to a private record with its write-up: a draft security advisory on a public repo, or an issue labelled `security-finding` on a private one. The Run notification lists each finding's severity, title and link, without the write-up. Public issues and PR bodies say only what the change does.
 - Draft advisories follow the rules OpenAI's Codex Security (Apache-2.0) wrote for this step: one draft per finding; a severity only from the finding's own, and none for an unconfirmed or informational finding; a CWE only when certain; the package from the manifest; no version range claimed from one commit; the fingerprint and commit in the description; and an existing draft matched first, in every advisory state.
+- The trial's findings wait for your grades in `~/.thirdshift/security-trial/2026-10-07/FINDINGS.md`, private on this machine. Your grades are the first precision numbers on your own repos.
 
 ## Research results (2026-10-06, 2026-10-07)
 
@@ -319,3 +503,11 @@ agree, possibly even a microVM such as sbx as another option, but maybe even mak
 - Its findings carry no CWE, package, version range or credit, and unconfirmed findings carry no severity, confirmed by source (its `report-schema.json`).
 - It never looks for a repo's `SECURITY.md` or threat model, confirmed by source.
 - Under Claude Code, Opus 5.5's cybersecurity classifier can move a session to Opus 4.8 or end it, and it ended one of the research's own sub-agents, confirmed by docs and test.
+- Docker Sandboxes (`sbx` v0.39.0) is installed on this machine, and `/dev/kvm` is present. The factory's user isn't in the `kvm` group, and `sbx` isn't signed in to Docker, confirmed by test.
+- ADR 0013, now on `main`: every Harness runs unattended and fully trusted, with the worktree the only boundary, and a sandboxed mode left as a separate issue, confirmed by source.
+- In the trial, Claude (`claude-opus-5-5` at medium) finished a whole-repository `quick` audit of muxboard in 20m 31s for $14.48, and of keeplore in 23m 42s for $20.04, both at list price. It started 16 and 21 sub-agents, and had no refusal and no change of Model, confirmed by test.
+- On Codex (`gpt-6.1-sol` at xhigh), muxboard's audit took 99 minutes and 35.8M input tokens. keeplore's was refused after 35 minutes by OpenAI's cybersecurity safeguard, which asked for trusted access; its retry ended `incomplete` with no records, for want of a fresh verifier. Confirmed by test.
+- Codex ran at most three sub-agents at once. Its sub-agents shared the parent's conversation unless spawned with `fork_turns: "none"`, and `codex exec --json` showed neither the sub-agents nor their tokens, which were about half the total. Confirmed by test (Codex's rollout files).
+- No trial session asked a question, hit its 2.5-hour timeout or ran target code, and every finished run's files passed the skill's own validators, confirmed by test.
+- As expected with no sandbox, nothing came back `confirmed`. The finished runs recorded 23 findings in all, mostly `needs_validation`, and many of them turned up under both Harnesses. Confirmed by test; the findings themselves stay in the private file.
+- Codex 0.160.1 has a config key, `agents.max_concurrent_threads_per_session`, so its limit of three sub-agents at once is a setting thirdshift can raise per session, confirmed by source (the binary's config keys; not yet tried).
