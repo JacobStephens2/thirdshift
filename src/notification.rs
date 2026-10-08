@@ -238,8 +238,11 @@ fn body(
     if let Some(pr_url) = account.pr_url {
         text += &format!("Pull request: {pr_url}\n");
     }
+    // Security failure causes can quote private verifier work or Harness
+    // diagnostics. Their details belong in the local logs.
     if let Err(cause) = &account.ended
         && !account.interrupted
+        && account.security_findings.is_none()
     {
         text += &format!("Cause:        {}\n", cause.full());
     }

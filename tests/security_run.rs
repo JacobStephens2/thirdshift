@@ -192,7 +192,7 @@ fn a_skipped_security_run_sends_no_notification_requested_by_word_or_config() {
 }
 
 #[test]
-fn failed_security_audits_send_one_notification_with_the_cause() {
+fn failed_security_audits_send_one_notification_with_a_safe_status() {
     for (script, failing_call, cause) in [
         (
             audit_script("[]").replace("Security audit: complete", "Security audit: incomplete"),
@@ -214,7 +214,15 @@ fn failed_security_audits_send_one_notification_with_the_cause() {
         let scenario = Scenario::new();
         scenario.agent_does(&script);
         if let Some(call) = failing_call {
-            scenario.gh_fails(call);
+            if call == "api --method POST" {
+                // The API consumes the request before rejecting it, avoiding
+                // a race between writing stdin and an early fake gh exit.
+                let mut github = scenario.gh_state();
+                github["advisory_create_fails_after"] = json!(0);
+                scenario.write_gh_state(&github);
+            } else {
+                scenario.gh_fails(call);
+            }
         }
         let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
         let result =
@@ -226,7 +234,12 @@ fn failed_security_audits_send_one_notification_with_the_cause() {
             "[thirdshift] acme/widgets Security run: audit failed"
         );
         assert!(text.contains("Audit:        audit failed"), "{text}");
-        assert!(text.contains(cause), "expected {cause}: {text}");
+        assert!(
+            result.stderr.contains(cause),
+            "expected {cause}: {}",
+            result.stderr
+        );
+        assert!(!text.contains("Cause:"), "{text}");
         assert!(!text.contains("Private candidate write-up."), "{text}");
     }
 }
@@ -716,4 +729,53 @@ fn security_audit_names_the_threat_model_under_docs() {
         prompt.contains("Read the repository's threat-model document `docs/THREAT-MODEL.md`."),
         "the existing threat-model document was not named: {prompt}"
     );
+}
+
+#[test]
+fn failed_security_notification_excludes_description_from_killed_verifier() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{}{}",
+            audit_script(&json!([finding("private-candidate")]).to_string()),
+            support::leaves_running("Private candidate write-up.")
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{}printf '%s\\n' 'Security audit: incomplete' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+            support::leaves_running("Private candidate write-up.")
+        ),
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": audit failed"), "{subject}");
+    assert!(text.contains("Audit:        audit failed"), "{text}");
+    assert!(
+        !resend.requests()[0]
+            .body
+            .to_string()
+            .contains("Private candidate write-up."),
+        "finding description leaked to Resend: {text}"
+    );
+}
+
+#[test]
+fn security_notification_omits_private_background_trace() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&support::leaves_running(
+        "Private exploit trace: POST /admin/debug with token",
+    ));
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert!(!text.contains("Private exploit trace"), "{text}");
 }
