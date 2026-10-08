@@ -175,6 +175,53 @@ fn finds_every_factory_skill_in_the_worktree_as_thirdshift_skill() {
 }
 
 #[test]
+fn ships_cloudflares_security_audit_with_its_license_and_provenance_on_both_harnesses() {
+    for harness in ["claude", "codex"] {
+        let scenario = Scenario::new();
+        let status = scenario.path("status.txt");
+        scenario.agent_does(&format!(
+            "git status --porcelain --untracked-files=all > '{}'\n{AGENT_COMMITS_AND_OPENS_PR}",
+            status.display()
+        ));
+
+        let result = scenario.run(&[&scenario.issue_url(7), "harness", harness]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert_eq!(std::fs::read_to_string(&status).unwrap(), "");
+        let calls = if harness == "claude" {
+            scenario.assert_every_session_found_the_factory_skills();
+            scenario.claude_calls()
+        } else {
+            scenario.assert_every_codex_session_found_the_factory_skills();
+            scenario.codex_calls()
+        };
+        let files = &calls[0]["skill_files"];
+        let license = files["thirdshift-security-audit/LICENSE"].as_str().unwrap();
+        assert!(license.contains("MIT License"));
+        assert!(license.contains("Copyright (c) 2025-2026 Cloudflare, Inc."));
+        let credits = files["thirdshift-security-audit/CREDITS.md"]
+            .as_str()
+            .unwrap();
+        assert!(credits.contains("https://github.com/cloudflare/security-audit-skill"));
+        assert!(credits.contains("c1c8a8c1471069fb0e188eeaff69b8e8db6564a8"));
+        for supporting in [
+            "HUNTING.md",
+            "VALIDATION-AND-REPORTING.md",
+            "report-schema.json",
+            "validate-coverage-ledger.cjs",
+            "validate-coverage-ledger.test.cjs",
+            "validate-findings.cjs",
+            "validate-findings.test.cjs",
+        ] {
+            assert!(
+                files[format!("thirdshift-security-audit/{supporting}")].is_string(),
+                "{harness} found no {supporting}"
+            );
+        }
+    }
+}
+
+#[test]
 fn ships_the_mattpocock_skills_mit_notice_with_the_factory_skills() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);

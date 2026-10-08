@@ -340,6 +340,9 @@ fn skill_used_by(skill: &str) -> String {
         | "thirdshift-codebase-design" => {
             "the Architecture review, in an Architect run".to_string()
         }
+        "thirdshift-security-audit" => {
+            "the Security audit, in a Security run, or a Security review".to_string()
+        }
         _ => panic!("the Factory skill {skill} has no user: add it to skill_used_by"),
     }
 }
@@ -481,7 +484,7 @@ fn licence_section(html: &mut String) {
         r##"<section class="sec" aria-labelledby="licence-title">
   <div class="wrap">
     <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
-    <p class="lede">The Factory skills are adapted from Matt Pocock's skills, under this licence. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>.</p>
+    <p class="lede">Most Factory skills are adapted from Matt Pocock's skills, under the licence below. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>. The <a href="#skill-thirdshift-security-audit">thirdshift-security-audit</a> skill is copied from <a href="https://github.com/cloudflare/security-audit-skill">Cloudflare's security-audit-skill</a>, under its own <a href="#file-thirdshift-security-audit-license">MIT licence</a>, with its upstream repository and commit recorded in <a href="#file-thirdshift-security-audit-credits-md">CREDITS.md</a>.</p>
 "##,
     );
     let mut files: Vec<&File> = SKILLS.files().collect();
@@ -618,6 +621,21 @@ mod tests {
             page_path.display(),
             diff(checked_in, &rendered, before.lines().count() + 2),
         );
+    }
+
+    #[test]
+    fn prompts_page_shows_cloudflares_security_audit_and_its_mit_license() {
+        let html = render();
+        let (_, skill) = html
+            .split_once("id=\"skill-thirdshift-security-audit\"")
+            .expect("the page lists thirdshift-security-audit");
+        let (skill, _) = skill.split_once("</article>").unwrap();
+        assert!(skill.contains("Security run") && skill.contains("Security review"));
+        assert!(skill.contains("MIT License"));
+        assert!(skill.contains("Copyright (c) 2025-2026 Cloudflare, Inc."));
+        assert!(skill.contains("https://github.com/cloudflare/security-audit-skill"));
+        assert!(skill.contains("c1c8a8c1471069fb0e188eeaff69b8e8db6564a8"));
+        assert!(html.contains("href=\"#file-thirdshift-security-audit-license\""));
     }
 
     /// The golden-file test for `prompts/`: a file for each prompt and the

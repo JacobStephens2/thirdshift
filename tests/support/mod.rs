@@ -78,7 +78,7 @@ pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
 
 /// Every Factory skill, by the name a session finds it under.
-pub const FACTORY_SKILLS: [&str; 9] = [
+pub const FACTORY_SKILLS: [&str; 10] = [
     "thirdshift-implement",
     "thirdshift-code-review",
     "thirdshift-pr",
@@ -88,6 +88,7 @@ pub const FACTORY_SKILLS: [&str; 9] = [
     "thirdshift-to-spec",
     "thirdshift-to-tickets",
     "thirdshift-codebase-design",
+    "thirdshift-security-audit",
 ];
 
 /// How long a test waits for a Run to reach a point, such as starting the
