@@ -85,18 +85,18 @@ pub fn publish(
             FixSize::Single => prompt::SECURITY_FIX_LINE,
             FixSize::Spec => prompt::SECURITY_FIX_SPEC_LINE,
         };
-        let ticket = line.strip_prefix(prefix).and_then(|url| IssueUrl::parse(url).ok()).context("the Security fix publishing session ended without the final line its prompt asks for")?;
-        if !ticket.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
+        let issue = line.strip_prefix(prefix).and_then(|url| IssueUrl::parse(url).ok()).context("the Security fix publishing session ended without the final line its prompt asks for")?;
+        if !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
             bail!("the Security fix Ticket is not in this repository");
         }
         let private = matches!(record, SecurityRecord::Issue { .. });
         if let SecurityRecord::Issue { number, .. } = record
-            && ticket.number != *number
+            && issue.number != *number
         {
             bail!("a private Security fix must reuse the finding's own issue");
         }
         let github = GitHub::new();
-        let viewed = github.issue(&ticket)?;
+        let viewed = github.issue(&issue)?;
         if !viewed.is_open {
             bail!("the Security fix Ticket is closed");
         }
@@ -114,15 +114,15 @@ pub fn publish(
                 "the Security fix Ticket must be labelled needs-triage with no other Unready Ticket label"
             );
         }
-        let tickets = github.tickets(&ticket)?;
+        let tickets = github.tickets(&issue)?;
         if (size == FixSize::Spec) == tickets.is_empty() {
             bail!("the Security fix's sub-issues do not match the reproduced fix size");
         }
         if !private {
-            check_issue_text(&github, &ticket, record, url)?;
+            check_issue_text(&github, &issue, record, url)?;
         }
         for child in &tickets {
-            let issue = ticket.sibling(child.number);
+            let issue = issue.sibling(child.number);
             let viewed = github.issue(&issue)?;
             if !viewed.is_open || viewed.created.timestamp() < started.timestamp() {
                 bail!("a Security fix Spec's Ticket must be new and open");
@@ -136,30 +136,30 @@ pub fn publish(
             check_issue_text(&github, &issue, record, url)?;
         }
         for child in tickets {
-            let issue = ticket.sibling(child.number);
+            let issue = issue.sibling(child.number);
             Edit::of(&issue, github.issue_labels(&issue)?, &[], &[SECURITY_FIX]).apply(&github)?;
         }
         if crate::interrupt::requested() {
             bail!("interrupted");
         }
         Edit::of(
-            &ticket,
+            &issue,
             viewed.labels,
             &[NEEDS_TRIAGE],
             &[READY_FOR_AGENT, SECURITY_FIX],
         )
         .apply(&github)?;
-        Ok(ticket)
+        Ok(issue)
     })
 }
 
 fn check_issue_text(
     github: &GitHub,
-    ticket: &IssueUrl,
+    issue: &IssueUrl,
     record: &SecurityRecord,
     url: &str,
 ) -> Result<()> {
-    let body = github.security_fix_text(&ticket)?;
+    let body = github.security_fix_text(issue)?;
     if !body.contains(url) {
         bail!("the Security fix Ticket does not link the private record");
     }

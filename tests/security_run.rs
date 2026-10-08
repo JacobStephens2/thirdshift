@@ -711,7 +711,17 @@ fn an_audit_goes_on_to_one_reproduced_fix_when_fixing_is_allowed() {
     scenario.agent_does_for(10, &implement_spec_ticket(10, 8));
     let result = scenario.run(&["secure", "security-fix"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/2\n");
+    let state = scenario.gh_state();
+    let spec_pr = state["prs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pr| pr["head"] == "issue-8")
+        .unwrap();
+    assert_eq!(
+        result.stdout,
+        format!("{}\n", spec_pr["url"].as_str().unwrap())
+    );
     assert_eq!(scenario.claude_calls().len(), 7);
     assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 4);
     assert!(

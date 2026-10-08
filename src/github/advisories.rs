@@ -231,12 +231,12 @@ pub struct DraftAdvisory {
 }
 
 impl GitHub {
-    /// Link the dispatched Ticket without changing the private record's grade.
+    /// Link the dispatched fix issue without changing the private record's grade.
     pub fn link_security_fix(
         &self,
         repo: &str,
         record: &SecurityRecord,
-        ticket: &IssueUrl,
+        issue: &IssueUrl,
     ) -> Result<()> {
         let (path, field) = match record {
             SecurityRecord::Advisory { id, .. } => (
@@ -262,7 +262,7 @@ impl GitHub {
         let description = format!(
             "{}{FIX_TICKET_MARKER}{}\n",
             record.description().trim_end(),
-            ticket.url
+            issue.url
         );
         let body = serde_json::to_vec(&json!({field: description}))?;
         let output = self.output_with_input(
@@ -278,8 +278,8 @@ impl GitHub {
         Ok(())
     }
 
-    pub fn security_fix_text(&self, ticket: &IssueUrl) -> Result<String> {
-        let value = self.issue_view(ticket, "title,body")?;
+    pub fn security_fix_text(&self, issue: &IssueUrl) -> Result<String> {
+        let value = self.issue_view(issue, "title,body")?;
         let title = value["title"]
             .as_str()
             .context("the Security fix Ticket has no title")?;
