@@ -35,6 +35,183 @@ fn finding(fingerprint: &str) -> Value {
     })
 }
 
+fn safeguard_refusals() -> [(&'static str, &'static str, &'static str); 2] {
+    [
+        (
+            "claude",
+            r#"printf '%s\n' 'API Error: [cyber] Private refusal evidence.' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+            "Claude Code's [cyber] safeguard refusal",
+        ),
+        (
+            "codex",
+            r#"printf '%s\n' 'Cybersecurity safeguard refused: Private refusal evidence.' > "$FAKE_CODEX_ERROR"
+exit 1"#,
+            "Codex's cybersecurity safeguard refusal",
+        ),
+    ]
+}
+
+fn security_command_log(scenario: &Scenario) -> String {
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+    fs::read_to_string(scenario.path(&format!(
+        "home/.thirdshift/logs/acme/widgets/commands/secure/{}",
+        logs[0]
+    )))
+    .unwrap()
+}
+
+#[test]
+fn a_claude_cyber_refusal_fails_the_security_audit_with_its_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+printf '%s\n' 'API Error: [cyber] This request was refused by the safeguard.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("Claude Code's [cyber] safeguard refusal"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_state()["advisories"].is_null());
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(scenario.entries("work"), vec![REPO]);
+}
+
+#[test]
+fn safeguard_refusals_notify_the_cause_without_private_diagnostics() {
+    for (harness, script, cause) in safeguard_refusals() {
+        let scenario = Scenario::new();
+        scenario.agent_does(script);
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let result = scenario.run_with_env(
+            &["secure", "harness", harness, "email", "me@example.com"],
+            &resend_env(&resend),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.stderr.contains(cause), "{}", result.stderr);
+        let (subject, text) = the_one_notification(&resend);
+        assert_eq!(
+            subject,
+            "[thirdshift] acme/widgets Security run: audit failed"
+        );
+        assert!(text.contains(&format!("Cause:        {cause}")), "{text}");
+        assert!(!text.contains("Private refusal evidence."), "{text}");
+    }
+}
+
+#[test]
+fn security_sessions_log_claudes_answering_models_in_progress_and_the_command_log() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, "true\n"); // Requested Model check.
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            r#"
+printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-5-5","content":[]}}}}'
+printf '%s\n' '{{"type":"assistant","parent_tool_use_id":"child","message":{{"model":"claude-sonnet-5","content":[]}}}}'
+printf '%s\n' '{{"type":"system","subtype":"model_refusal_fallback","original_model":"claude-opus-5-5","fallback_model":"claude-opus-4-8","api_refusal_category":"cyber"}}'
+printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-4-8","content":[]}}}}'
+{}
+"#,
+            audit_script(&json!([finding("model-switch")]).to_string())
+        ),
+    );
+    scenario.agent_does_in_session(
+        3,
+        &format!(
+            "printf '%s\\n' '{{\"type\":\"assistant\",\"message\":{{\"model\":\"claude-opus-4-8\",\"content\":[]}}}}'\n{}",
+            reproduction_script("not reproduced")
+        ),
+    );
+    let result = scenario.run(&["secure", "model", "opus"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let command_log = security_command_log(&scenario);
+    for line in [
+        "security-audit: Model: claude-opus-5-5",
+        "security-audit: Model: claude-opus-4-8",
+        "security-reproduction-1: Model: claude-opus-4-8",
+    ] {
+        assert!(result.stderr.contains(line), "{}", result.stderr);
+        assert!(command_log.contains(line), "{command_log}");
+    }
+    assert!(
+        !command_log.contains("Model: claude-sonnet-5"),
+        "{command_log}"
+    );
+}
+
+#[test]
+fn codex_logs_the_requested_model_for_each_security_session_and_resume() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{}\nprintf '%s\\n' '{{\"type\":\"item.started\",\"item\":{{\"id\":\"child\",\"type\":\"collab_tool_call\",\"tool\":\"spawn_agent\",\"status\":\"in_progress\"}}}}'\n",
+            audit_script(&json!([finding("codex-model")]).to_string())
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+    );
+    scenario.agent_does_in_session(3, &reproduction_script("not reproduced"));
+    let result = scenario.run(&["secure", "harness", "codex", "model", "GPT-6.1-Sol"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let command_log = security_command_log(&scenario);
+    for kind in [
+        "security-audit",
+        "security-audit-resume",
+        "security-reproduction-1",
+    ] {
+        let line = format!("{kind}: Model: gpt-6.1-sol (requested)");
+        assert!(result.stderr.contains(&line), "{}", result.stderr);
+        assert!(command_log.contains(&line), "{command_log}");
+    }
+}
+
+#[test]
+fn refused_security_reproductions_keep_the_record_and_stop_before_the_next_finding() {
+    for (harness, script, cause) in safeguard_refusals() {
+        let scenario = Scenario::new();
+        scenario.agent_does_in_session(
+            1,
+            &audit_script(&json!([finding("first"), finding("second")]).to_string()),
+        );
+        scenario.agent_does_in_session(2, script);
+        scenario.agent_does_in_session(3, "exit 99\n");
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let result = scenario.run_with_env(
+            &["secure", "harness", harness, "email", "me@example.com"],
+            &resend_env(&resend),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.stderr.contains(cause), "{}", result.stderr);
+        let (_, text) = the_one_notification(&resend);
+        assert!(text.contains(cause), "{text}");
+        assert!(!text.contains("Private refusal evidence."), "{text}");
+        let state = scenario.gh_state();
+        for record in state["advisories"].as_array().unwrap() {
+            assert!(record["severity"].is_null());
+            assert!(
+                !record["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("## Reproduction")
+            );
+        }
+        assert_eq!(
+            scenario.claude_calls().len() + scenario.codex_calls().len(),
+            2
+        );
+        assert_eq!(scenario.entries("work"), vec![REPO]);
+    }
+}
+
 #[test]
 fn a_reproduction_scores_the_finding_and_keeps_its_test_in_the_private_record() {
     let scenario = Scenario::new();
@@ -2316,4 +2493,118 @@ fn spec_followup_common_poc_token_must_not_block_a_terse_fix_ticket() {
     );
     assert_eq!(scenario.claude_calls().len(), 2);
     assert_eq!(state["prs"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn claude_security_progress_ignores_synthetic_api_errors() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        r#"
+printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-4-8","content":[]}}}}'
+printf '%s\n' '{{"type":"assistant","parent_tool_use_id":null,"is_api_error_message":true,"error":"rate_limit","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"API Error: Rate limit reached"}}]}}}}'
+printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-4-8","content":[]}}}}'
+{}
+"#,
+        audit_script("[]")
+    ));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let command_log = security_command_log(&scenario);
+    for text in [&result.stderr, &command_log] {
+        assert!(!text.contains("Model: <synthetic>"), "{text}");
+        assert_eq!(
+            text.matches("security-audit: Model: claude-opus-4-8")
+                .count(),
+            1,
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn grok_security_audits_log_the_model_that_answered() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+node -e 'const fs = require("fs"); const calls = JSON.parse(fs.readFileSync(process.env.FAKE_GROK_RECORD, "utf8")); process.stdout.write(calls[calls.length - 1].prompt);' > prompt.txt
+output=$(sed -n 's/^Output directory: `\(.*\)`\.$/\1/p' prompt.txt)
+test -n "$output"
+printf '%s\n' '[]' > "$output/findings.json"
+printf '%s\n' '[]' > "$output/coverage-ledger.json"
+printf '%s\n' '{"run_status":"complete"}' > "$output/run-metadata.json"
+printf '%s\n' '{"type":"assistant","message":{"model":"grok-4.7","content":[]}}'
+printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["secure", "harness", "grok", "model", "grok-4.7"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let command_log = security_command_log(&scenario);
+    for text in [&result.stderr, &command_log] {
+        assert!(text.contains("security-audit: Model: grok-4.7"), "{text}");
+    }
+}
+
+#[test]
+fn muse_security_audits_log_the_answering_model_from_the_session_record() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        r#"
+export FAKE_CLAUDE_PROMPT="$(node -e 'const fs = require("fs"); const calls = JSON.parse(fs.readFileSync(process.env.FAKE_MUSE_RECORD, "utf8")); process.stdout.write(calls[calls.length - 1].prompt);')"
+{}
+root="$HOME/.local/share/muse/sessions/2026/10/06/fake-muse-1"
+mkdir -p "$root"
+printf '%s\n' '{{"stream":{{"id":"child"}},"payload":{{"kind":"run","event":{{"kind":"model_completed","model":"child-model"}}}}}}' '{{"stream":{{"id":"fake-muse-1"}},"payload":{{"kind":"run","event":{{"kind":"model_completed","model":"muse-spark-1.3"}}}}}}' > "$root/session.jsonl"
+"#,
+        audit_script("[]")
+    ));
+    let result =
+        scenario.run_with_env(&["secure", "harness", "muse"], &[("FAKE_MUSE_NO_LOG", "1")]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("security-audit: Model: muse-spark-1.3"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("Model: child-model"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn opencode_security_audits_log_the_answering_model_from_the_export() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        r#"
+export FAKE_CLAUDE_PROMPT="$(node -e 'const fs = require("fs"); const calls = JSON.parse(fs.readFileSync(process.env.FAKE_OPENCODE_RECORD, "utf8")); process.stdout.write(calls[calls.length - 1].prompt);')"
+{}
+"#,
+        audit_script("[]")
+    ));
+    let script = scenario.path("export-model.sh");
+    fs::write(&script, format!(
+        r#"node -e 'const fs = require("fs"); const p = process.argv[1]; const record = JSON.parse(fs.readFileSync(p, "utf8")); record.info.model = {{id:"title-model",providerID:"title"}}; for (const message of record.messages) {{ if (message.type === "assistant") message.model = {{id:"MiMo-V2.6-Pro",providerID:"primalabs"}}; }} fs.writeFileSync(p, JSON.stringify(record));' "{}"
+"#,
+        scenario.path("opencode-calls.fake-opencode-1.export.json").display()
+    )).unwrap();
+    let result = scenario.run_with_env(
+        &["secure", "harness", "opencode"],
+        &[("FAKE_OPENCODE_EXPORT_SCRIPT", script.to_str().unwrap())],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("security-audit: Model: primalabs/MiMo-V2.6-Pro"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("Model: title/"),
+        "{}",
+        result.stderr
+    );
 }

@@ -121,22 +121,33 @@ pub struct Review<'a> {
 /// A failure's cause, as stderr gives it, down to what a session left
 /// running.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Cause(String);
+pub struct Cause {
+    full: String,
+    safeguard_refusal: Option<crate::harness::interpretation::SafeguardRefusal>,
+}
 
 impl Cause {
     /// The cause of a failure that failed with `error`.
     pub fn of(error: &anyhow::Error) -> Self {
-        Cause(format!("{error:#}"))
+        Self {
+            full: format!("{error:#}"),
+            safeguard_refusal: error.downcast_ref().copied(),
+        }
     }
 
     /// The whole cause, of as many lines as it has.
     pub fn full(&self) -> &str {
-        &self.0
+        &self.full
     }
 
     /// Its first line, all of it that a short account gives.
     pub fn first_line(&self) -> &str {
-        self.0.lines().next().unwrap_or_default()
+        self.full.lines().next().unwrap_or_default()
+    }
+
+    /// A fixed refusal category safe to send without the Harness's private diagnostic.
+    pub fn safeguard_refusal(&self) -> Option<&'static str> {
+        self.safeguard_refusal.map(|refusal| refusal.description())
     }
 }
 
@@ -431,7 +442,7 @@ mod tests {
     }
 
     fn cause(cause: &str) -> Cause {
-        Cause(cause.to_string())
+        Cause::of(&anyhow!("{cause}"))
     }
 
     fn strings(lines: &[&str]) -> Vec<String> {
@@ -474,7 +485,7 @@ mod tests {
     fn failed_account(cause: &str) -> Account<'static> {
         Account {
             outcome: "failed",
-            ended: Err(Cause(cause.to_string())),
+            ended: Err(Cause::of(&anyhow!("{cause}"))),
             interrupted: false,
             pr_url: None,
             advice: &[],
