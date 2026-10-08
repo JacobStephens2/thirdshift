@@ -24,6 +24,40 @@ pub struct Audited {
     pub findings: Vec<DraftAdvisory>,
 }
 
+/// Read the skill's own run records, ignoring unfinished or unreadable records
+/// so a failed audit can be retried. Completion time, rather than the directory's
+/// random suffix, orders audits that started within the same second.
+pub fn last_commit(repo: &Repo) -> Result<Option<String>> {
+    let root = logs::root(repo).join("audits");
+    let entries = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("could not read the Security audit history"),
+    };
+    let mut last = None;
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path().join("run-metadata.json");
+        let Some(record) = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        else {
+            continue;
+        };
+        if record["run_status"] != "complete" {
+            continue;
+        }
+        let completed = fs::metadata(&path)?.modified()?;
+        if last.as_ref().is_none_or(|(time, _)| completed > *time) {
+            last = Some((completed, record["source_ref"].as_str().map(String::from)));
+        }
+    }
+    Ok(last.and_then(|(_, commit)| commit))
+}
+
 pub fn check_node() -> Result<()> {
     node(&["--version"])
         .context("Node.js is required for the Security audit validators; install node on PATH")?;
@@ -70,7 +104,7 @@ pub fn run(
         Err(error) => return (Err(error), None),
     };
     let logs = Logs::of_security_run(repo);
-    Sessions::within(&logs, worktree.path(), harness, |sessions| {
+    let (audited, log) = Sessions::within(&logs, worktree.path(), harness, |sessions| {
         progress::step(format!("starting the Security audit of {base}"));
         let message = sessions.run_to_final_message("security-audit", &prompt)?;
         let line = message.as_deref().and_then(|message| {
@@ -130,7 +164,36 @@ pub fn run(
             })
         }).collect::<Result<_>>()?;
         Ok(Audited { findings })
-    })
+    });
+    // The session may claim completion before a validator or its final line
+    // fails. Keep that attempt incomplete in the same skill record. The source
+    // ref comes from the acquired checkout, even if the session wrote it wrong.
+    let recorded = finish_record(&output, &commit, audited.is_ok());
+    let audited = match (audited, recorded) {
+        (Ok(audited), Ok(())) => Ok(audited),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    };
+    (audited, log)
+}
+
+fn finish_record(output: &Path, commit: &str, complete: bool) -> Result<()> {
+    let path = output.join("run-metadata.json");
+    let mut metadata: Value = match fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    {
+        Some(Value::Object(metadata)) => Value::Object(metadata),
+        _ if !complete => return Ok(()),
+        _ => bail!("could not read the completed Security audit's run record"),
+    };
+    metadata["source_ref"] = Value::String(commit.to_string());
+    metadata["run_status"] = Value::String(if complete { "complete" } else { "incomplete" }.into());
+    if !complete {
+        metadata["incomplete_reason"] =
+            Value::String("thirdshift did not accept the Security audit".into());
+    }
+    fs::write(&path, serde_json::to_vec_pretty(&metadata)?)
+        .context("could not finish the Security audit's run record")
 }
 
 fn node(args: &[&str]) -> Result<()> {

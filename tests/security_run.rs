@@ -125,6 +125,7 @@ fn repeat_private_audits_match_open_and_closed_findings_after_triage_without_dup
             github["labels"][number] = json!(["Security-Finding"]);
         }
         scenario.write_gh_state(&github);
+        scenario.origin_has_commit("main", "new-work.txt", "new work", "Move Base branch");
         let second = scenario.run(&["secure"]);
         assert_eq!(second.code, Some(0), "{}", second.stderr);
         assert!(
@@ -242,6 +243,151 @@ printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 }
 
 #[test]
+fn an_unchanged_base_skips_after_a_completed_audit_and_resumes_when_origin_moves() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[activity]\nquiet_skips = true\n");
+    scenario.agent_does(&audit_script("[]"));
+    let first = scenario.run(&["secure"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let before =
+        fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    let commands = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+    let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"unused"}"#);
+    for _ in 0..2 {
+        let skipped = scenario.run_with_env(
+            &["secure", "email", "me@example.com"],
+            &[
+                ("THIRDSHIFT_RESEND_URL", resend.url()),
+                ("RESEND_API_KEY", "re_test"),
+            ],
+        );
+        assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+        assert_eq!(skipped.stdout, "");
+        assert_eq!(skipped.stderr, "");
+    }
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(resend.requests().is_empty());
+    assert_eq!(
+        scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure"),
+        commands
+    );
+    let after =
+        fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert_eq!(after.lines().count(), before.lines().count() + 1);
+    assert!(
+        after.contains("Base branch main hasn't changed since the last completed Security audit"),
+        "{after}"
+    );
+    scenario.origin_has_commit("main", "change.txt", "new work", "Change Base branch");
+    let next = scenario.run(&["secure"]);
+    assert_eq!(next.code, Some(0), "{}", next.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+}
+
+#[test]
+fn waiting_findings_skip_quietly_once_and_triage_allows_the_next_audit() {
+    for triage in [
+        "closed",
+        "published",
+        "severity",
+        "private-closed",
+        "private-labelled",
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is("[activity]\nquiet_skips = true\n");
+        scenario.agent_does(&audit_script("[]"));
+        let mut github = scenario.gh_state();
+        let private = triage.starts_with("private-");
+        if private {
+            github["private"] = json!(true);
+            github["labels"]["7"] = json!(["security-finding", "Needs-Triage"]);
+        } else {
+            github["advisories"] = json!([{"state":"draft", "severity":null, "summary":"Private title", "description":"Private evidence"}]);
+        }
+        scenario.write_gh_state(&github);
+        let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"unused"}"#);
+        for _ in 0..2 {
+            let skipped = scenario.run_with_env(
+                &["secure", "email", "me@example.com"],
+                &[
+                    ("THIRDSHIFT_RESEND_URL", resend.url()),
+                    ("RESEND_API_KEY", "re_test"),
+                ],
+            );
+            assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+            assert_eq!(skipped.stdout, "");
+            assert_eq!(skipped.stderr, "");
+        }
+        assert!(resend.requests().is_empty());
+        assert!(scenario.claude_calls().is_empty());
+        assert!(
+            !scenario
+                .path("home/.thirdshift/logs/acme/widgets/commands")
+                .exists()
+        );
+        assert!(
+            !scenario
+                .path("home/.thirdshift/logs/acme/widgets/audits")
+                .exists()
+        );
+        let log =
+            fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+                .unwrap();
+        assert_eq!(log.lines().count(), 1, "{log}");
+        assert!(
+            log.contains("Security run skipped: a Security finding is waiting for the Day shift")
+        );
+        assert!(!log.contains("Private"));
+        assert_eq!(scenario.gh_state(), github);
+        match triage {
+            "private-closed" => github["issues"]["7"] = json!("CLOSED"),
+            "private-labelled" => github["labels"]["7"] = json!(["security-finding"]),
+            "severity" => github["advisories"][0]["severity"] = json!("high"),
+            state => github["advisories"][0]["state"] = json!(state),
+        }
+        scenario.write_gh_state(&github);
+        let next = scenario.run(&["secure"]);
+        assert_eq!(next.code, Some(0), "{triage}: {}", next.stderr);
+        assert_eq!(scenario.claude_calls().len(), 1, "{triage}");
+    }
+}
+
+#[test]
+fn incomplete_or_rejected_audit_artifacts_do_not_hold_the_next_attempt() {
+    for script in [
+        audit_script("[{}]"),
+        audit_script("[]").replace("Security audit: complete", "Missing protocol line"),
+        audit_script("[]").replace("Security audit: complete", "Security audit: incomplete"),
+        audit_script("[]").replace(
+            "\"run_status\":\"complete\"",
+            "\"run_status\":\"incomplete\"",
+        ),
+        format!("{}\nexit 1\n", audit_script("[]")),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&script);
+        let failed = scenario.run(&["secure"]);
+        assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+        let runs = scenario.entries("home/.thirdshift/logs/acme/widgets/audits");
+        let record: Value = serde_json::from_slice(
+            &fs::read(scenario.path(&format!(
+                "home/.thirdshift/logs/acme/widgets/audits/{}/run-metadata.json",
+                runs[0]
+            )))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["run_status"], "incomplete");
+        scenario.agent_does(&audit_script("[]"));
+        let retry = scenario.run(&["secure"]);
+        assert_eq!(retry.code, Some(0), "{}", retry.stderr);
+        assert_eq!(scenario.claude_calls().len(), 2);
+    }
+}
+
+#[test]
 fn keeps_fingerprints_in_every_advisory_state_and_creates_each_new_finding_once() {
     for state in ["draft", "published", "closed", "triage"] {
         let scenario = Scenario::new();
@@ -254,8 +400,12 @@ fn keeps_fingerprints_in_every_advisory_state_and_creates_each_new_finding_once(
         assert_eq!(github["advisories"].as_array().unwrap().len(), 2);
         for advisory in github["advisories"].as_array_mut().unwrap() {
             advisory["state"] = json!(state);
+            if state == "draft" {
+                advisory["severity"] = json!("low");
+            }
         }
         scenario.write_gh_state(&github);
+        scenario.origin_has_commit("main", "new-work.txt", "new work", "Move Base branch");
         let second = scenario.run(&["secure"]);
         assert_eq!(second.code, Some(0), "{}", second.stderr);
         assert!(
