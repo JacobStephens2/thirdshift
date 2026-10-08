@@ -29,6 +29,14 @@ use review_reports::ReviewReports;
 #[cfg(test)]
 mod execution_tests;
 
+/// The session's launch policy, retained by its Resume independently of
+/// the label used for logs and progress.
+#[derive(Clone, Copy)]
+pub enum Purpose {
+    Ordinary,
+    Security,
+}
+
 /// Where a Run's or an Architect run's Session logs go: in `sessions/` under
 /// the root of its repository's logs, under the User config's `logs.dir` or
 /// `~/.thirdshift/logs`, each named for what is run and stamped with the
@@ -157,13 +165,20 @@ impl<'a> Sessions<'a> {
     /// abandoned rather than awaited: a progress line names it and this
     /// succeeds, leaving the steps that follow to decide the outcome.
     pub fn run(&self, kind: &str, prompt: &str) -> Result<()> {
-        self.run_to_final_message(kind, prompt).map(drop)
+        self.run_to_final_message(Purpose::Ordinary, kind, prompt)
+            .map(drop)
     }
 
     /// Run a session as [`Sessions::run`] does, and return its final message:
     /// what the agent said as it ended its last turn, its Resume's if it got
-    /// one, if anything.
-    pub fn run_to_final_message(&self, kind: &str, prompt: &str) -> Result<Option<String>> {
+    /// one, if anything. `purpose` selects the launch policy for both the
+    /// session and its Resume; `kind` only labels their logs and progress.
+    pub fn run_to_final_message(
+        &self,
+        purpose: Purpose,
+        kind: &str,
+        prompt: &str,
+    ) -> Result<Option<String>> {
         let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
             match ReviewReports::new(self.worktree) {
                 Ok(reports) => Some(reports),
@@ -177,7 +192,7 @@ impl<'a> Sessions<'a> {
         } else {
             None
         };
-        let mut ended = self.start(kind, None, prompt, reports.as_ref())?;
+        let mut ended = self.start(purpose, kind, None, prompt, reports.as_ref())?;
         // What ended last, as the progress line on its killed work calls it.
         let mut ended_last = "session";
         if let (false, Some(session_id)) = (ended.killed.is_empty(), &ended.session_id) {
@@ -189,6 +204,7 @@ impl<'a> Sessions<'a> {
                 "{kind}: background work was killed as the session ended; resuming it once"
             ));
             ended = self.start(
+                purpose,
                 &format!("{kind}-resume"),
                 Some(session_id),
                 &resume_prompt,
@@ -212,6 +228,7 @@ impl<'a> Sessions<'a> {
     /// the last log.
     fn start(
         &self,
+        purpose: Purpose,
         kind: &str,
         resume: Option<&str>,
         prompt: &str,
@@ -227,7 +244,7 @@ impl<'a> Sessions<'a> {
         let ended = self
             .outside
             .borrow_mut()
-            .run_session(kind, resume, &prompt, &log);
+            .run_session(purpose, kind, resume, &prompt, &log);
         if let Some(reports) = reports {
             for line in reports.keep(&log) {
                 self.step(format!("{kind}: {line}"));
@@ -249,6 +266,7 @@ trait Outside {
     /// what it ended with once it has exited cleanly, its turn not failed.
     fn run_session(
         &mut self,
+        purpose: Purpose,
         kind: &str,
         resume: Option<&str>,
         prompt: &str,
@@ -269,15 +287,15 @@ struct OnMachine {
 impl Outside for OnMachine {
     fn run_session(
         &mut self,
+        purpose: Purpose,
         kind: &str,
         resume: Option<&str>,
         prompt: &str,
         log: &Path,
     ) -> Result<Ended> {
-        let invocation = if kind.starts_with("security-") {
-            self.adapter.security_session(&self.harness, resume, prompt)
-        } else {
-            self.adapter.session(&self.harness, resume, prompt)
+        let invocation = match purpose {
+            Purpose::Security => self.adapter.security_session(&self.harness, resume, prompt),
+            Purpose::Ordinary => self.adapter.session(&self.harness, resume, prompt),
         };
         let interpretation = self.adapter.interpretation(&self.worktree, prompt);
         run(
@@ -427,6 +445,7 @@ mod tests {
     impl Outside for Scripted {
         fn run_session(
             &mut self,
+            _purpose: Purpose,
             kind: &str,
             resume: Option<&str>,
             prompt: &str,
@@ -516,7 +535,7 @@ mod tests {
     #[test]
     fn a_clean_session_runs_once_and_returns_its_final_message() {
         let (taken, log, calls) = take(vec![ended(Some("s1"), &[], "done")], |sessions| {
-            sessions.run_to_final_message("implement", "do it")
+            sessions.run_to_final_message(Purpose::Ordinary, "implement", "do it")
         });
 
         assert_eq!(taken.unwrap(), Some("done".to_string()));
@@ -534,7 +553,7 @@ mod tests {
                 ended(Some("s1"), &["cargo test"], "waiting"),
                 ended(Some("s1"), &[], "done"),
             ],
-            |sessions| sessions.run_to_final_message("implement", "do it"),
+            |sessions| sessions.run_to_final_message(Purpose::Ordinary, "implement", "do it"),
         );
 
         assert_eq!(taken.unwrap(), Some("done".to_string()));
@@ -567,7 +586,9 @@ mod tests {
             ],
             |sessions| -> Result<()> {
                 assert_eq!(
-                    sessions.run_to_final_message("implement", "do it").unwrap(),
+                    sessions
+                        .run_to_final_message(Purpose::Ordinary, "implement", "do it")
+                        .unwrap(),
                     Some("still waiting".to_string())
                 );
                 bail!("no PR found")
