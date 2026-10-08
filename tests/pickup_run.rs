@@ -290,10 +290,10 @@ fn an_issue_with_an_open_blocker_is_not_taken_and_with_that_blocker_closed_it_is
 /// What a Pickup run says of #7 when it was labelled `ready-for-agent` too
 /// recently to have settled.
 const LABELLED_TOO_RECENTLY: &str =
-    "#7 not settled: labelled ready-for-agent less than 10 minutes ago";
+    "#7 not settled: labelled ready-for-agent less than 30 minutes ago";
 
 #[test]
-fn an_issue_labelled_ready_for_agent_less_than_ten_minutes_ago_is_not_taken() {
+fn an_issue_labelled_ready_for_agent_less_than_thirty_minutes_ago_is_not_taken() {
     let scenario = ready_ticket();
     // Its other labels, however recent, and an earlier `ready-for-agent`
     // don't count: only the last time `ready-for-agent` was applied does.
@@ -301,7 +301,7 @@ fn an_issue_labelled_ready_for_agent_less_than_ten_minutes_ago_is_not_taken() {
         7,
         &[
             (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
-            (TimelineEvent::Labelled(READY_FOR_AGENT), 9),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 29),
             (TimelineEvent::Labelled("bug"), 1),
         ],
     );
@@ -314,12 +314,12 @@ fn an_issue_labelled_ready_for_agent_less_than_ten_minutes_ago_is_not_taken() {
 }
 
 #[test]
-fn an_issue_labelled_ready_for_agent_more_than_ten_minutes_ago_is_taken() {
+fn an_issue_labelled_ready_for_agent_more_than_thirty_minutes_ago_is_taken() {
     let scenario = ready_ticket();
     scenario.issue_timeline(
         7,
         &[
-            (TimelineEvent::Labelled(READY_FOR_AGENT), 11),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 31),
             (TimelineEvent::Labelled("bug"), 1),
         ],
     );
@@ -330,7 +330,52 @@ fn an_issue_labelled_ready_for_agent_more_than_ten_minutes_ago_is_taken() {
 }
 
 #[test]
-fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_ten_minutes_ago_is_not_taken()
+fn pickup_wait_in_the_user_config_shortens_lengthens_or_disables_settling() {
+    for (wait, ago, taken) in [(5, 6, true), (60, 31, false), (0, 0, true)] {
+        for (event, shaped) in [
+            (
+                TimelineEvent::Labelled(READY_FOR_AGENT),
+                "labelled ready-for-agent",
+            ),
+            (TimelineEvent::SubIssueAdded, "a sub-issue added or removed"),
+            (
+                TimelineEvent::SubIssueRemoved,
+                "a sub-issue added or removed",
+            ),
+            (
+                TimelineEvent::BlockedByAdded,
+                "a \"blocked by\" link added or removed",
+            ),
+            (
+                TimelineEvent::BlockedByRemoved,
+                "a \"blocked by\" link added or removed",
+            ),
+        ] {
+            let scenario = ready_ticket();
+            scenario.user_config_is(&format!("[pickup]\nwait_minutes = {wait}\n"));
+            scenario.issue_timeline(
+                7,
+                &[
+                    (TimelineEvent::Labelled(READY_FOR_AGENT), 600),
+                    (event, ago),
+                ],
+            );
+
+            let result = scenario.run(&["pickup"]);
+
+            if taken {
+                assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+            } else {
+                let line = format!("#7 not settled: {shaped} less than {wait} minutes ago");
+                assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
+                assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_thirty_minutes_ago_is_not_taken()
  {
     for (event, changed) in [
         (TimelineEvent::SubIssueAdded, "a sub-issue"),
@@ -344,13 +389,13 @@ fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_ten_m
             &[
                 (TimelineEvent::Labelled(READY_FOR_AGENT), 600),
                 (TimelineEvent::SubIssueAdded, 590),
-                (event, 5),
+                (event, 29),
             ],
         );
 
         let result = scenario.run(&["pickup"]);
 
-        let line = format!("#7 not settled: {changed} added or removed less than 10 minutes ago");
+        let line = format!("#7 not settled: {changed} added or removed less than 30 minutes ago");
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     }
@@ -1282,6 +1327,27 @@ fn a_pickup_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_naming_the
             ),
         );
         assert_eq!(result.code, Some(1), "{limit}: {}", result.stderr);
+        assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    }
+}
+
+#[test]
+fn an_invalid_pickup_wait_stops_the_pass_naming_the_file_and_key() {
+    for wait in ["-1", "1.5", "\"30\"", "true", "9223372036854775807"] {
+        let scenario = ready_ticket();
+        let path = scenario.user_config_is(&format!("[pickup]\nwait_minutes = {wait}\n"));
+
+        let result = scenario.run(&["pickup"]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!(
+                "thirdshift: pickup.wait_minutes must be a whole number of minutes from 0 up \
+                 within the supported range in the User config {}\n",
+                path.display()
+            ),
+        );
+        assert_eq!(result.code, Some(1), "{wait}: {}", result.stderr);
         assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
     }
 }

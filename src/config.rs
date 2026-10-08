@@ -8,6 +8,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::TimeDelta;
 use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
@@ -39,6 +40,10 @@ pub struct UserConfig {
     /// `pickup.limit`: the Claim limit, how many open issues carrying a
     /// Claim stop a Pickup run from taking another, by default 3.
     pub pickup_limit: NonZeroUsize,
+    /// `pickup.wait_minutes`: how long after its latest shaping event an
+    /// issue becomes a Ready issue, by default 30 minutes. Zero disables
+    /// the settling window.
+    pub pickup_wait: TimeDelta,
     /// The `[harness]` section: the Harness every Command runs its sessions
     /// on, and a Model and Effort for each Harness.
     pub harness: harness::Settings,
@@ -82,6 +87,7 @@ impl UserConfig {
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
+            pickup_wait: TimeDelta::minutes(30),
             harness: harness::Settings::default(),
         }
     }
@@ -150,6 +156,18 @@ impl UserConfig {
                     }
                     ("pickup", "limit", value) => {
                         config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
+                    }
+                    ("pickup", "wait_minutes", value) => {
+                        config.pickup_wait = value
+                            .as_integer()
+                            .filter(|minutes| *minutes >= 0)
+                            .and_then(TimeDelta::try_minutes)
+                            .with_context(|| {
+                                format!(
+                                    "pickup.wait_minutes must be a whole number of minutes from 0 up \
+                                     within the supported range in {file}"
+                                )
+                            })?;
                     }
                     ("harness", "default", Value::String(name)) => match Harness::named(name) {
                         Some(harness) => config.harness.default = Some(harness),
@@ -649,6 +667,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
+wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
 
 [harness]
 default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
@@ -803,6 +822,7 @@ mod tests {
                 "activity.quiet_skips",
                 "spec.parallel",
                 "pickup.limit",
+                "pickup.wait_minutes",
                 "harness.default",
                 "harness.claude.model",
                 "harness.claude.effort",

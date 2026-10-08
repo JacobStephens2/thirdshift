@@ -1124,6 +1124,7 @@ parallel = 5
 
 [pickup]
 limit = 5
+wait_minutes = 60
 
 [harness]
 default = \"claude\"
