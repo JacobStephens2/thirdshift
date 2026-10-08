@@ -2287,3 +2287,33 @@ fn a_later_audit_keeps_the_link_to_a_successfully_dispatched_private_fix() {
             .contains("Fix Ticket: https://github.com/acme/widgets/issues/8")
     );
 }
+
+#[test]
+fn spec_followup_common_poc_token_must_not_block_a_terse_fix_ticket() {
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    let description = state["advisories"][0]["description"]
+        .as_str()
+        .unwrap()
+        .replace("bounded_fixture();", "assert (\n    input\n) == 'overflow'");
+    state["advisories"][0]["description"] = json!(description);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    let result = scenario.run(&["secure", "security-fix"]);
+    let state = scenario.gh_state();
+    let ticket = state["bodies"]["8"].as_str().unwrap();
+    assert_eq!(
+        ticket,
+        "Reject oversized input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0",
+    );
+    assert!(!ticket.contains("assert (") && !ticket.contains("overflow"));
+    assert_eq!(
+        result.code,
+        Some(0),
+        "a valid terse Ticket was rejected because it shares an ordinary token with the private test: {}",
+        result.stderr,
+    );
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_eq!(state["prs"].as_array().unwrap().len(), 1);
+}

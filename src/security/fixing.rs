@@ -76,7 +76,10 @@ pub fn publish(
         // instructed to publish only what the fix changes, never a paraphrase.
         for line in record.description().lines().filter(|line| {
             let line = line.trim();
+            // A bare identifier can also be an ordinary word in fix prose.
+            // Complete short statements such as bypass_login(); stay checked.
             line.chars().any(char::is_alphanumeric)
+                && !line.chars().all(|ch| ch.is_alphanumeric() || ch == '_')
                 && !line.starts_with("```")
                 && !line.starts_with("Fingerprint:")
                 && !line.starts_with("Audited commit:")
