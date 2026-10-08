@@ -36,21 +36,28 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
         Ending::Architect { review, dispatched } => {
             Ok(Account::of_architect(review, dispatched.as_ref()))
         }
-        Ending::Security(audited) => Ok(match audited {
-            Ok(recorded) => Account {
-                outcome: "findings recorded",
-                ended: Ok(recorded.to_string()),
-                interrupted: false,
-                pr_url: None,
-                advice: &[],
-                base_fix: None,
-                log: None,
-                ticket_lines: &[],
-                review: None,
-                urls: Vec::new(),
-            },
-            Err(failed) => Account::of_failure(failed, "audit failed"),
-        }),
+        Ending::Security(audited) => {
+            let account = match &audited.outcome {
+                Ok(recorded) => Account {
+                    outcome: "findings recorded",
+                    ended: Ok(recorded.to_string()),
+                    interrupted: false,
+                    pr_url: None,
+                    advice: &[],
+                    base_fix: None,
+                    log: None,
+                    ticket_lines: &[],
+                    review: None,
+                    security_findings: None,
+                    urls: Vec::new(),
+                },
+                Err(failed) => Account::of_failure(failed, "audit failed"),
+            };
+            Ok(Account {
+                security_findings: Some(&audited.findings),
+                ..account
+            })
+        }
         Ending::Skipped(skip) => Err(skip),
     }
 }
@@ -90,6 +97,8 @@ pub struct Account<'a> {
     pub ticket_lines: &'a [String],
     /// In an Architect run, how its Architecture review ended.
     pub review: Option<Review<'a>>,
+    /// Safe metadata from a Security run's private records, even if the audit failed.
+    pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
@@ -146,6 +155,7 @@ impl<'a> Account<'a> {
                 log: reached.log.as_deref(),
                 ticket_lines: &reached.ticket_lines,
                 review: None,
+                security_findings: None,
                 urls: vec![&reached.pr_url],
             },
             Err(failed) => Account {
@@ -169,6 +179,7 @@ impl<'a> Account<'a> {
             log: failed.log.as_deref(),
             ticket_lines: &failed.ticket_lines,
             review: None,
+            security_findings: None,
             urls: failed.pr_url.as_deref().into_iter().collect(),
         }
     }
@@ -196,6 +207,7 @@ impl<'a> Account<'a> {
                 log: None,
                 ticket_lines: &[],
                 review: None,
+                security_findings: None,
                 urls: vec![reviewed.url()],
             },
             (Err(failed), None) => Account::of_failure(failed, "review failed"),
@@ -448,6 +460,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            security_findings: None,
             urls: vec![PR],
         }
     }
@@ -465,6 +478,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            security_findings: None,
             urls: Vec::new(),
         }
     }
@@ -640,6 +654,7 @@ mod tests {
                         line: format!("{outcome}: {PLAN}"),
                         dispatched: None,
                     }),
+                    security_findings: None,
                     urls: vec![PLAN],
                 }
             );

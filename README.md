@@ -743,7 +743,9 @@ thirdshift secure base main harness claude
 thirdshift secure base main harness codex model gpt-6.1-sol effort high
 ```
 
-The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email` and `no-email`, with or without dashes). This first step dispatches no fix and sends no Run notification; those options are reserved for later Security run work. It reproduces and fixes nothing, and never commits, pushes, publishes or closes an advisory.
+The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email` and `no-email`, with or without dashes). It reproduces and fixes nothing, dispatches no fix, and never commits, pushes, publishes or closes an advisory; the fix-related options are reserved for later Security run work.
+
+`email`, optionally followed by an address, or `email.always` in the User config asks for one **Run notification** when the Security run ends, whether the audit succeeded, failed or was interrupted. `no-email` overrides the default. The notification says how the audit ended and lists each finding it recorded or matched to an existing private record: its severity when known, title and private link. It includes no finding write-up, trace or evidence, since it passes through Resend. Detailed failure causes stay in the local logs; the notification gives the audit's status and log paths. A recording failure still lists the records reached before it failed. A skipped Security run sends none. The usual address and Resend API key checks run before the skip checks or any work; a failed send is a warning and never changes the run's outcome.
 
 A Security run chooses its Harness from the command's `harness` word, then `[security] harness` in the User config, then `harness.default`, then Claude Code. A blank or missing Security setting keeps that default. Model and Effort come from the chosen Harness's own `[harness.<name>]` section, with command words taking precedence. For example, `harness claude` overrides `[security] harness = "codex"` and uses `[harness.claude]`.
 
