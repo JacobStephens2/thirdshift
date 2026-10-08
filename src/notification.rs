@@ -18,7 +18,7 @@ use crate::logs;
 use crate::progress;
 use crate::run_ending::Account;
 
-/// What a Run, an Architect run or a Pickup run asks about its Run
+/// What a Run or a Pass asks about its Run
 /// notification, by its command or, without `email` or `no-email`, by the
 /// User config.
 #[derive(Debug, Clone, PartialEq, Eq)]

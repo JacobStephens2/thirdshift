@@ -213,12 +213,12 @@ A review that fails, is interrupted, or ends without naming one of these issues 
 Architect run and leaves any plan it published labelled needs-triage. One that finds no
 deepening opportunity at all has no issue to name, so it fails the Architect run too.
 
-Only one Architect run or Pickup run per repository runs at a time on a machine. An Architect
-run started while another on the same repository, or a Pickup run, is still running, the Spec
-run or Run it dispatched included, is skipped: it prints an Architect run or a Pickup run is
-already running on <owner>/<repo>, does nothing else and exits 0. Nothing is left to clear
-once that other run ends, however it ends. Runs started on an Issue URL are never skipped
-this way.
+A Pass is a command started with no Issue URL that decides before any work whether it is skipped.
+Only one Pass per repository runs at a time on a machine. A Pass started while another Pass
+on the same repository is still running, the Spec run or Run it dispatched included, is skipped:
+it prints another Pass is already running on <owner>/<repo>, does nothing else and exits 0.
+Nothing is left to clear once that other run ends, however it ends. Runs started on an Issue
+URL are never skipped this way.
 
 An Architect run that finds an open issue labelled architect-plan is skipped too, before
 any review, with or without --plan-only: the last Architect plan is not finished. It names
@@ -267,7 +267,7 @@ pickup takes nothing else: no focus and no --plan-only.
 
 A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why,
 after any lines on issues it passed over, when the repository has no Ready issue, when the
-repository is at its Claim limit, and while an Architect run or another Pickup run on the same
+repository is at its Claim limit, and while another Pass on the same
 repository is still running on this machine.
 
 A Pickup run takes nothing while as many open issues are labelled in-progress, whoever
@@ -327,21 +327,21 @@ logs.dir sets the root of the logs instead of ~/.thirdshift/logs: an absolute pa
 Each repository's logs go in <owner>/<repo>/ under it, named for the GitHub repository, in
 folders thirdshift creates as it needs them. Session logs go in sessions/, as
 <n>-<stamp>-<kind>.jsonl for a Run and architect-<stamp>-<kind>.jsonl for an Architect run.
-Command logs, everything a Run, a Spec run, an Architect run or a Pickup run printed, go in
+Command logs, everything a Run, a Spec run or a Pass printed, go in
 commands/issue/<n>-<stamp>.log, commands/pickup/<n>-<stamp>.log, named for the issue taken,
-and commands/architect/<stamp>.log. A Pickup run or Architect run skipped before any work
+and commands/architect/<stamp>.log. A Pass skipped before any work
 keeps no Command log, nor does a Run that fails before any work, as on the Origin match.
 
     [logs]
     dir = \"~/elsewhere/logs\"
 
 Each repository's Activity log, activity.log, is a short record of what the factory did there:
-a line when a Run, a Spec run, an Architect run or a Pickup run starts work, naming its Command
+a line when a Run, a Spec run or a Pass starts work, naming its Command
 log, and one when it ends, with its outcome, each starting with the local date and time. A
-skipped Pickup run or Architect run writes a line only when its reason differs from the last
+skipped Pass writes a line only when its reason differs from the last
 line of its own kind, so a repository that sits idle shows one line, not one per pass.
 
-With activity.quiet_skips set, a skipped Pickup run or Architect run prints nothing on stdout
+With activity.quiet_skips set, a skipped Pass prints nothing on stdout
 or stderr, its starting line included, leaving only its Activity log line; a pass that does
 work prints as ever. A crontab line can then send its output to one file, which catches only
 what failed:
@@ -426,8 +426,8 @@ fn main() -> ExitCode {
 /// it ended on on stdout: the plan, the idea issue the review filed, or the
 /// issue that already covers its top recommendation. One whose review or
 /// plan fails puts the cause and the session log on stderr. One that is
-/// skipped says why on stderr, and is no failure: as another on its
-/// repository, or a Pickup run, is still running, it puts nothing on stdout,
+/// skipped says why on stderr, and is no failure: as another Pass on its
+/// repository is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, or Architect ideas wait for
 /// triage there, the URL of each, or as it has a Ready issue, that issue's
 /// URL. If asked, by the command or the User config, it sends one Run

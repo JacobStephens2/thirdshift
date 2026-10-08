@@ -241,7 +241,7 @@ while [ -d "$root" ] && [ ! -e "$root/release" ]; do sleep 0.05; done
         assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     }
     let lines = activity(&scenario);
-    let running = "skipped: an Architect run or a Pickup run is already running on acme/widgets";
+    let running = "skipped: another Pass is already running on acme/widgets";
     assert_eq!(lines.len(), 4, "{lines:?}");
     assert!(lines[0].starts_with("Pickup run #7 started: "), "{lines:?}");
     assert_eq!(lines[1], format!("Pickup run {running}"));

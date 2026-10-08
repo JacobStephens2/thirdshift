@@ -1,6 +1,6 @@
 //! The Launch directory, as every command opens it: a Run, from an Issue
-//! URL, or a run with no Issue URL, an Architect run or a Pickup run. Its
-//! `origin` names the repository, git has the identity an agent commits
+//! URL, or a Pass, with no Issue URL. Its `origin` names the repository,
+//! git has the identity an agent commits
 //! with, and a branch is checked out there, or none on a detached HEAD. The
 //! Base branch is the one named for the run, or else the one checked out
 //! there, and must be on origin with no local copy ahead of it. With
@@ -51,7 +51,7 @@ pub struct BaseBranch {
 enum Opening {
     /// A Run, from an Issue URL.
     Run,
-    /// A run with no Issue URL, an Architect run or a Pickup run, whose
+    /// A Pass, with no Issue URL, whose
     /// command can name its Base branch with `base <branch>`.
     Pass,
 }
@@ -279,20 +279,15 @@ pub enum Start {
     AlreadyRunning(AlreadyRunning),
 }
 
-/// Why a run with no Issue URL is skipped at its start: another on the
-/// repository, an Architect run or a Pickup run, is still running on this
-/// machine, the Spec run or Run it dispatched included. Its `Display` is the
-/// reason, as the skipped run gives it.
+/// Why a Pass is skipped at its start: another Pass on the repository is
+/// still running on this machine, the Spec run or Run it dispatched included.
+/// Its `Display` is the reason, as the skipped run gives it.
 #[derive(Debug)]
 pub struct AlreadyRunning(pub Repo);
 
 impl fmt::Display for AlreadyRunning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "an Architect run or a Pickup run is already running on {}",
-            self.0.slug()
-        )
+        write!(f, "another Pass is already running on {}", self.0.slug())
     }
 }
 
@@ -310,7 +305,7 @@ pub fn start(base: Option<&str>) -> Result<Start> {
     let repo = directory.repo()?;
     directory.check_identity()?;
     let base = directory.prepare_base_branch(base)?;
-    let Some(lock) = try_run_lock(&repo)? else {
+    let Some(lock) = try_pass_lock(&repo)? else {
         return Ok(Start::AlreadyRunning(AlreadyRunning(repo)));
     };
     // Never closed, so the lock is held for as long as this process lives,
@@ -330,16 +325,15 @@ pub fn repo() -> Result<Repo> {
     LaunchDirectory::open(current_dir()?, Opening::Pass)?.repo()
 }
 
-/// Try, without waiting, for the lock that makes its holder the one Architect
-/// run or Pickup run on `repo` on this machine: an advisory lock on a file
-/// under `~/.thirdshift` named for the repository, as GitHub compares names,
-/// whatever their case. It is held until the file returned is closed, or the
+/// Try, without waiting, for the lock that makes its holder the one Pass on
+/// `repo` on this machine: an advisory lock on a file under `~/.thirdshift`
+/// named for the repository, as GitHub compares names, whatever their case. It is held until the file returned is closed, or the
 /// process ends. `None` if another process holds it: one of them on `repo` is
 /// still running. The lock file itself is never deleted, and means nothing
 /// unless locked. Its directory keeps the name it had when only an Architect
 /// run took the lock, so that a thirdshift from before the Pickup run and
 /// one from after still exclude each other.
-fn try_run_lock(repo: &Repo) -> Result<Option<File>> {
+fn try_pass_lock(repo: &Repo) -> Result<Option<File>> {
     let dir = config::home()?
         .join(".thirdshift/architect-locks")
         .join(repo.owner.to_ascii_lowercase());
