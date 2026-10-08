@@ -3,7 +3,42 @@ mod support;
 use std::fs;
 
 use serde_json::{Value, json};
+use support::resend::ResendStandIn;
 use support::{REPO, Scenario};
+
+fn resend_env(resend: &ResendStandIn) -> [(&str, &str); 2] {
+    [
+        ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ("RESEND_API_KEY", "re_security_test"),
+    ]
+}
+
+fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let body = &requests[0].body;
+    (
+        body["subject"].as_str().unwrap().to_string(),
+        body["text"].as_str().unwrap().to_string(),
+    )
+}
+
+#[test]
+fn a_completed_security_audit_sends_one_notification_when_asked() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&audit_script("[]"));
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Security run: findings recorded"
+    );
+    assert_eq!(resend.requests()[0].body["to"], "me@example.com");
+    assert!(text.contains("Built with claude"), "{text}");
+}
 
 fn finding(fingerprint: &str) -> Value {
     json!({
@@ -15,6 +50,253 @@ fn finding(fingerprint: &str) -> Value {
         "blockers": ["No sandbox available."],
         "validation_plan": {"local":"Exercise a bounded fixture."}
     })
+}
+
+#[test]
+fn the_notification_lists_each_recorded_finding_without_its_private_write_up() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["advisories"] = json!([{
+        "state": "draft", "severity": "high", "summary": "Existing finding",
+        "html_url": "https://github.com/acme/widgets/security/advisories/GHSA-existing",
+        "description": "Fingerprint: `existing`\nPrivate existing write-up."
+    }]);
+    scenario.write_gh_state(&github);
+    scenario.agent_does(&audit_script(
+        &json!([finding("existing"), finding("new")]).to_string(),
+    ));
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert!(
+        text.contains("Security audit recorded 1 new finding(s), 1 already recorded"),
+        "{text}"
+    );
+    assert!(text.contains("high: Existing finding"), "{text}");
+    assert!(
+        text.contains("https://github.com/acme/widgets/security/advisories/GHSA-existing"),
+        "{text}"
+    );
+    assert!(text.contains("Unchecked input size"), "{text}");
+    assert!(
+        text.contains("https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002"),
+        "{text}"
+    );
+    for private in [
+        "Private candidate write-up.",
+        "Private existing write-up.",
+        "Input reaches storage without a bound.",
+        "Private trace.",
+        "Private evidence.",
+        "No sandbox available.",
+        "Exercise a bounded fixture.",
+        "Fingerprint:",
+    ] {
+        assert!(
+            !resend.requests()[0].body.to_string().contains(private),
+            "leaked {private}: {text}"
+        );
+    }
+}
+
+#[test]
+fn security_notifications_follow_email_defaults_and_command_overrides() {
+    for (config, args, expected_to) in [
+        ("", vec!["secure"], None),
+        (
+            "[email]\nalways = true\nto = \"default@example.com\"\n",
+            vec!["secure"],
+            Some("default@example.com"),
+        ),
+        (
+            "[email]\nto = \"default@example.com\"\n",
+            vec!["secure", "--email"],
+            Some("default@example.com"),
+        ),
+        (
+            "[email]\nalways = true\nto = \"default@example.com\"\n",
+            vec!["secure", "no-email"],
+            None,
+        ),
+        (
+            "[email]\nto = \"default@example.com\"\n",
+            vec!["secure", "--email", "override@example.com"],
+            Some("override@example.com"),
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        scenario.agent_does(&audit_script("[]"));
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let result = scenario.run_with_env(&args, &resend_env(&resend));
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        match expected_to {
+            Some(to) => {
+                the_one_notification(&resend);
+                assert_eq!(resend.requests()[0].body["to"], to);
+            }
+            None => assert!(resend.requests().is_empty()),
+        }
+    }
+}
+
+#[test]
+fn a_recording_failure_still_notifies_each_finding_already_recorded() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["advisory_create_fails_after"] = json!(1);
+    scenario.write_gh_state(&github);
+    let mut first = finding("first");
+    first["title"] = json!("First recorded finding");
+    let mut second = finding("second");
+    second["title"] = json!("Unrecorded finding");
+    scenario.agent_does(&audit_script(&json!([first, second]).to_string()));
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(
+        scenario.gh_state()["advisories"].as_array().unwrap().len(),
+        1
+    );
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": audit failed"), "{subject}");
+    assert!(text.contains("First recorded finding"), "{text}");
+    assert!(
+        text.contains("https://github.com/acme/widgets/security/advisories/GHSA-test-test-0001"),
+        "{text}"
+    );
+    assert!(!text.contains("Unrecorded finding"), "{text}");
+    assert!(!text.contains("Private candidate write-up."), "{text}");
+}
+
+#[test]
+fn a_skipped_security_run_sends_no_notification_requested_by_word_or_config() {
+    for args in [vec!["secure"], vec!["secure", "email", "me@example.com"]] {
+        let scenario = Scenario::new();
+        scenario.user_config_is("[email]\nalways = true\nto = \"me@example.com\"\n");
+        scenario.issue_labelled(7, &["ready-for-agent"]);
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let result = scenario.run_with_env(&args, &resend_env(&resend));
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("Ready issue #7"),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(resend.requests().is_empty());
+    }
+}
+
+#[test]
+fn failed_security_audits_send_one_notification_with_the_cause() {
+    for (script, failing_call, cause) in [
+        (
+            audit_script("[]").replace("Security audit: complete", "Security audit: incomplete"),
+            None,
+            "ended incomplete",
+        ),
+        (
+            audit_script("[{}]"),
+            None,
+            "validator validate-findings.cjs",
+        ),
+        (
+            audit_script(&json!([finding("new")]).to_string()),
+            Some("api --method POST"),
+            "creating a draft repository security advisory failed",
+        ),
+        (audit_script("[]"), Some("issue list"), "gh issue list"),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&script);
+        if let Some(call) = failing_call {
+            scenario.gh_fails(call);
+        }
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let result =
+            scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let (subject, text) = the_one_notification(&resend);
+        assert_eq!(
+            subject,
+            "[thirdshift] acme/widgets Security run: audit failed"
+        );
+        assert!(text.contains("Audit:        audit failed"), "{text}");
+        assert!(text.contains(cause), "expected {cause}: {text}");
+        assert!(!text.contains("Private candidate write-up."), "{text}");
+    }
+}
+
+#[test]
+fn an_interrupted_security_audit_sends_one_notification() {
+    let scenario = Scenario::new();
+    scenario.agent_does("touch \"$HOME/../started\"\nsleep 60\n");
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_and_signal_with_env(
+        &["secure", "email", "me@example.com"],
+        &resend_env(&resend),
+        "started",
+        "TERM",
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Security run: interrupted"
+    );
+    assert!(text.contains("Audit:        interrupted"), "{text}");
+    assert!(!text.contains("Cause:"), "{text}");
+}
+
+#[test]
+fn a_failed_send_keeps_the_security_runs_success_or_failure() {
+    for script in [audit_script("[]"), "exit 3".to_string()] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&script);
+        let without_email = scenario.run(&["secure"]);
+        let resend = ResendStandIn::replying(500, "upstream exploded");
+        let result =
+            scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+        assert_eq!(result.code, without_email.code, "{}", result.stderr);
+        assert_eq!(result.stdout, without_email.stdout);
+        the_one_notification(&resend);
+        assert!(
+            result
+                .stderr
+                .contains("warning: could not send the Run notification"),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn notification_checks_precede_security_skip_checks_and_work() {
+    for (args, env, cause) in [
+        (vec!["secure", "email"], true, "no email address"),
+        (
+            vec!["secure", "email", "me@example.com"],
+            false,
+            "no Resend API key",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.issue_labelled(7, &["ready-for-agent"]);
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let env = if env {
+            resend_env(&resend).to_vec()
+        } else {
+            vec![("THIRDSHIFT_RESEND_URL", resend.url())]
+        };
+        let result = scenario.run_with_env(&args, &env);
+        scenario.assert_rejected_before_any_work(&result, cause);
+        assert!(scenario.gh_calls().is_empty());
+        assert!(resend.requests().is_empty());
+    }
 }
 
 #[test]
@@ -197,10 +479,13 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     );
     scenario.agent_does(&waiting);
     let first = scenario.run_until(&["secure"], &[], "started");
-    let second = scenario.run(&["secure"]);
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let second =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
     let pickup = scenario.run(&["pickup"]);
     fs::write(scenario.path("release"), "").unwrap();
     let first = first.finish();
+    assert!(resend.requests().is_empty());
     assert_eq!(first.code, Some(0), "{}", first.stderr);
     for skipped in [second, pickup] {
         assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);

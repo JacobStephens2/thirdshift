@@ -21,9 +21,9 @@ pub struct DraftAdvisory {
 }
 
 impl DraftAdvisory {
-    pub fn already_recorded(&self, advisories: &[Value]) -> bool {
+    pub fn recorded_in<'a>(&self, advisories: &'a [Value]) -> Option<&'a Value> {
         let marker = format!("Fingerprint: `{}`", self.fingerprint);
-        advisories.iter().any(|advisory| {
+        advisories.iter().find(|advisory| {
             advisory["description"]
                 .as_str()
                 .is_some_and(|description| description.lines().any(|line| line == marker))

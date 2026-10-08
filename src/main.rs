@@ -308,6 +308,13 @@ none, even when asked, so a scheduler can start one every few minutes. The notif
 checks, an address and a Resend API key, are made before any other work on every run, so
 one that would be skipped fails on them too, with exit 1.
 
+--email, --email <address> and --no-email ask a Security run for its Run notification as
+they do a Run, and email.always sets the default. It sends one when its audit ends, whether
+it succeeded, failed or was interrupted, listing each recorded finding's severity when
+known, title and private link, never its write-up. A skipped Security run sends none.
+The address and Resend API key checks come before skip checks or work; a failed send is
+only a warning and never changes the run's outcome.
+
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
 With merge.always set, every Run is a Merge run unless given --no-merge:
@@ -503,11 +510,11 @@ fn pickup(args: PassArgs) -> ExitCode {
     }
 }
 
-/// A report-only Security run. Notification delivery is added by #539.
+/// A report-only Security run, with one notification when asked, unless skipped.
 fn secure(args: PassArgs) -> ExitCode {
-    let (config, started) = match command::start(
+    let (config, mut started) = match command::start(
         Begin::SecurityRun,
-        |_| notification::NotificationAsk::Skip,
+        |config| args.flags.notification(config),
         About::SecurityRun,
     ) {
         Ok(started) => started,
@@ -515,6 +522,7 @@ fn secure(args: PassArgs) -> ExitCode {
     };
     let mut harness = args.flags.harness(&config);
     let outcome = security::run(args.base.as_deref(), &args.flags, &config, &mut harness);
+    started.built_with(&harness);
     started.finish(match outcome {
         security::Outcome::Skipped(skipped) => Ending::Skipped(command::Skip {
             reason: skipped.to_string(),

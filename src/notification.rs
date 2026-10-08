@@ -55,7 +55,7 @@ pub enum About<'a> {
     ArchitectRun,
     /// A Pickup run, which is about the issue it takes, once it takes one.
     PickupRun,
-    /// A report-only Security run; its notification is added by #539.
+    /// A Security run, from the Launch directory.
     SecurityRun,
 }
 
@@ -71,6 +71,8 @@ enum Subject {
     /// An Architect run, with the repository the Launch directory's `origin`
     /// names, if it names one.
     ArchitectRun(Option<Repo>),
+    /// A Security run, with its repository if origin names one.
+    SecurityRun(Option<Repo>),
     /// A Pass whose notification subject has not been established yet.
     Pending,
 }
@@ -104,7 +106,7 @@ impl RunNotification {
             // run's own preflight reports why.
             About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
             About::PickupRun => Subject::Pending,
-            About::SecurityRun => Subject::Pending,
+            About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
         };
         Ok(RunNotification {
             checked,
@@ -162,6 +164,13 @@ fn subject_line(subject: &Subject, outcome: &str) -> Option<String> {
     match subject {
         Subject::Issue { issue, title } => Some(issue_subject(issue, title.as_deref(), outcome)),
         Subject::ArchitectRun(repo) => Some(architect_subject(repo.as_ref(), outcome)),
+        Subject::SecurityRun(repo) => {
+            let repo = repo
+                .as_ref()
+                .map(|repo| format!(" {}", repo.slug()))
+                .unwrap_or_default();
+            Some(format!("[thirdshift]{repo} Security run: {outcome}"))
+        }
         Subject::Pending => None,
     }
 }
@@ -201,6 +210,25 @@ fn body(
     took: Duration,
 ) -> String {
     let mut text = String::new();
+    if let Some(findings) = account.security_findings {
+        let audit = match &account.ended {
+            Ok(line) => line.as_str(),
+            Err(_) => account.outcome,
+        };
+        text += &format!("Audit:        {audit}\n");
+        if !findings.is_empty() {
+            text += "\nSecurity findings:\n";
+            for finding in findings {
+                let severity = finding
+                    .severity
+                    .as_ref()
+                    .map(|severity| format!("{severity}: "))
+                    .unwrap_or_default();
+                text += &format!("- {severity}{}: {}\n", finding.title, finding.url);
+            }
+            text += "\n";
+        }
+    }
     if let Some(review) = &account.review {
         text += &format!("Review:       {}\n", review.line);
         if review.dispatched.is_some() {
@@ -293,6 +321,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            security_findings: None,
             urls: vec![PR],
         }
     }
@@ -310,6 +339,7 @@ mod tests {
             log: None,
             ticket_lines: &[],
             review: None,
+            security_findings: None,
             urls: Vec::new(),
         }
     }
