@@ -46,6 +46,9 @@ pub fn run(
             .prefix(&format!("{}-", logs::stamp()))
             .tempdir_in(&root)?
             .keep();
+        // Case-insensitive filesystems can resolve a candidate with different
+        // casing. Name the document as it is tracked in the audited checkout.
+        let tracked = Git::new(worktree.path()).run(&["ls-files", "-z"])?;
         let threat_model = [
             "SECURITY.md",
             "THREAT_MODEL.md",
@@ -55,7 +58,10 @@ pub fn run(
             "docs/THREAT_MODEL.md",
         ]
         .into_iter()
-        .find(|file| worktree.path().join(file).is_file());
+        .find(|file| {
+            tracked.split('\0').any(|tracked| tracked == *file)
+                && worktree.path().join(file).is_file()
+        });
         let prompt = prompt::security_audit(base, &commit, &root, &output, threat_model);
         Ok((worktree, output, prompt, commit))
     })();
