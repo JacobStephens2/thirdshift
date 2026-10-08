@@ -36,6 +36,192 @@ fn finding(fingerprint: &str) -> Value {
 }
 
 #[test]
+fn a_claude_cyber_refusal_fails_the_security_audit_with_its_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+printf '%s\n' 'API Error: [cyber] This request was refused by the safeguard.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("Claude Code's [cyber] safeguard refusal"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_state()["advisories"].is_null());
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(scenario.entries("work"), vec![REPO]);
+}
+
+#[test]
+fn safeguard_refusals_notify_the_cause_without_private_diagnostics() {
+    for (harness, script, cause) in [
+        (
+            "claude",
+            r#"printf '%s\n' 'API Error: [cyber] Private refusal evidence.' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+            "Claude Code's [cyber] safeguard refusal",
+        ),
+        (
+            "codex",
+            r#"printf '%s\n' 'Cybersecurity safeguard refused: Private refusal evidence.' > "$FAKE_CODEX_ERROR"
+exit 1"#,
+            "Codex's cybersecurity safeguard refusal",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(script);
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let result = scenario.run_with_env(
+            &["secure", "harness", harness, "email", "me@example.com"],
+            &resend_env(&resend),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.stderr.contains(cause), "{}", result.stderr);
+        let (subject, text) = the_one_notification(&resend);
+        assert_eq!(
+            subject,
+            "[thirdshift] acme/widgets Security run: audit failed"
+        );
+        assert!(text.contains(&format!("Cause:        {cause}")), "{text}");
+        assert!(!text.contains("Private refusal evidence."), "{text}");
+    }
+}
+
+#[test]
+fn security_sessions_log_claudes_answering_models_in_progress_and_the_command_log() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, "true\n"); // Requested Model check.
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            r#"
+printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-5-5","content":[]}}}}'
+printf '%s\n' '{{"type":"assistant","parent_tool_use_id":"child","message":{{"model":"claude-sonnet-5","content":[]}}}}'
+printf '%s\n' '{{"type":"system","subtype":"model_refusal_fallback","original_model":"claude-opus-5-5","fallback_model":"claude-opus-4-8","api_refusal_category":"cyber"}}'
+printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-4-8","content":[]}}}}'
+{}
+"#,
+            audit_script(&json!([finding("model-switch")]).to_string())
+        ),
+    );
+    scenario.agent_does_in_session(
+        3,
+        &format!(
+            "printf '%s\\n' '{{\"type\":\"assistant\",\"message\":{{\"model\":\"claude-opus-4-8\",\"content\":[]}}}}'\n{}",
+            reproduction_script("not reproduced")
+        ),
+    );
+    let result = scenario.run(&["secure", "model", "opus"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+    let command_log = fs::read_to_string(scenario.path(&format!(
+        "home/.thirdshift/logs/acme/widgets/commands/secure/{}",
+        logs[0]
+    )))
+    .unwrap();
+    for line in [
+        "security-audit: Model: claude-opus-5-5",
+        "security-audit: Model: claude-opus-4-8",
+        "security-reproduction-1: Model: claude-opus-4-8",
+    ] {
+        assert!(result.stderr.contains(line), "{}", result.stderr);
+        assert!(command_log.contains(line), "{command_log}");
+    }
+    assert!(
+        !command_log.contains("Model: claude-sonnet-5"),
+        "{command_log}"
+    );
+}
+
+#[test]
+fn codex_logs_the_requested_model_for_each_security_session_and_resume() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{}\nprintf '%s\\n' '{{\"type\":\"item.started\",\"item\":{{\"id\":\"child\",\"type\":\"collab_tool_call\",\"tool\":\"spawn_agent\",\"status\":\"in_progress\"}}}}'\n",
+            audit_script(&json!([finding("codex-model")]).to_string())
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+    );
+    scenario.agent_does_in_session(3, &reproduction_script("not reproduced"));
+    let result = scenario.run(&["secure", "harness", "codex", "model", "GPT-6.1-Sol"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+    let command_log = fs::read_to_string(scenario.path(&format!(
+        "home/.thirdshift/logs/acme/widgets/commands/secure/{}",
+        logs[0]
+    )))
+    .unwrap();
+    for kind in [
+        "security-audit",
+        "security-audit-resume",
+        "security-reproduction-1",
+    ] {
+        let line = format!("{kind}: Model: gpt-6.1-sol (requested)");
+        assert!(result.stderr.contains(&line), "{}", result.stderr);
+        assert!(command_log.contains(&line), "{command_log}");
+    }
+}
+
+#[test]
+fn refused_security_reproductions_keep_the_record_and_stop_before_the_next_finding() {
+    for (harness, script, cause) in [
+        (
+            "claude",
+            r#"printf '%s\n' 'API Error: [cyber] Private refusal evidence.' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+            "Claude Code's [cyber] safeguard refusal",
+        ),
+        (
+            "codex",
+            r#"printf '%s\n' 'Cybersecurity safeguard refused: Private refusal evidence.' > "$FAKE_CODEX_ERROR"
+exit 1"#,
+            "Codex's cybersecurity safeguard refusal",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does_in_session(
+            1,
+            &audit_script(&json!([finding("first"), finding("second")]).to_string()),
+        );
+        scenario.agent_does_in_session(2, script);
+        scenario.agent_does_in_session(3, "exit 99\n");
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let result = scenario.run_with_env(
+            &["secure", "harness", harness, "email", "me@example.com"],
+            &resend_env(&resend),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.stderr.contains(cause), "{}", result.stderr);
+        let (_, text) = the_one_notification(&resend);
+        assert!(text.contains(cause), "{text}");
+        assert!(!text.contains("Private refusal evidence."), "{text}");
+        let state = scenario.gh_state();
+        for record in state["advisories"].as_array().unwrap() {
+            assert!(record["severity"].is_null());
+            assert!(
+                !record["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("## Reproduction")
+            );
+        }
+        assert_eq!(
+            scenario.claude_calls().len() + scenario.codex_calls().len(),
+            2
+        );
+        assert_eq!(scenario.entries("work"), vec![REPO]);
+    }
+}
+
+#[test]
 fn a_reproduction_scores_the_finding_and_keeps_its_test_in_the_private_record() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(

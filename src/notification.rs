@@ -239,12 +239,18 @@ fn body(
         text += &format!("Pull request: {pr_url}\n");
     }
     // Security failure causes can quote private verifier work or Harness
-    // diagnostics. Their details belong in the local logs.
+    // diagnostics. Only the fixed safeguard category is safe to send.
     if let Err(cause) = &account.ended
         && !account.interrupted
-        && account.security_findings.is_none()
     {
-        text += &format!("Cause:        {}\n", cause.full());
+        let cause = if account.security_findings.is_some() {
+            cause.safeguard_refusal()
+        } else {
+            Some(cause.full())
+        };
+        if let Some(cause) = cause {
+            text += &format!("Cause:        {cause}\n");
+        }
     }
     for line in account.advice {
         text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);

@@ -298,6 +298,10 @@ impl Outside for OnMachine {
             Purpose::Ordinary => self.adapter.session(&self.harness, resume, prompt),
         };
         let interpretation = self.adapter.interpretation(&self.worktree, prompt);
+        let interpretation = match purpose {
+            Purpose::Security => interpretation.for_security(self.harness.model.as_deref()),
+            Purpose::Ordinary => interpretation,
+        };
         run(
             kind,
             self.adapter,
