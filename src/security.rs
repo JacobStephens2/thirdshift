@@ -1,5 +1,5 @@
-//! Report-only Security runs: gate before work, audit origin's Base branch,
-//! then record the validated findings privately for the Day shift.
+//! Security runs: gate before work, audit origin's Base branch, then record
+//! and reproduce the findings privately for the Day shift.
 
 use std::fmt;
 
@@ -16,6 +16,7 @@ use crate::logs::{self, Pass, Work};
 use crate::pass::{LaunchAndGitHub, Outside};
 
 pub mod audit;
+pub mod reproduction;
 
 pub enum Outcome {
     Skipped(Skipped),
@@ -109,6 +110,7 @@ fn audit_and_record(
     outside.check_node()?;
     outside.started(Work::SecurityRun(repo));
     let (audited, log) = outside.audit(base);
+    let mut log = log;
     let recorded = (|| -> Result<Recorded> {
         let audited = audited?;
         let mut recorded = Recorded {
@@ -119,15 +121,40 @@ fn audit_and_record(
             return Ok(recorded);
         }
         let mut known = outside.security_records()?;
+        let mut records = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for finding in audited.findings {
-            if finding.already_recorded(&known) {
+            let record = if let Some(record) = known.finding(&finding)? {
                 recorded.existing += 1;
+                record
             } else {
                 let record = outside.create_security_record(&known, &finding)?;
+                let read = known.record(&record)?;
                 known.remember(record);
                 recorded.created += 1;
                 outside.step("recorded a Security finding privately".to_string());
+                read
+            };
+            if seen.insert(finding.fingerprint) {
+                records.push(record);
             }
+        }
+        for (index, record) in records.iter().enumerate() {
+            let number = index + 1;
+            outside.step(format!(
+                "starting Security reproduction {number} of {}",
+                record.name()
+            ));
+            let (reproduced, session_log) = outside.reproduce(record, number);
+            if session_log.is_some() {
+                log = session_log;
+            }
+            let reproduced = reproduced?;
+            outside.update_security_record(record, &reproduced)?;
+            outside.step(format!(
+                "Security reproduction {number}: {}",
+                reproduced.outcome
+            ));
         }
         Ok(recorded)
     })();
@@ -222,7 +249,7 @@ mod tests {
         let mut outside = InMemory::default()
             .audited(vec![draft("old"), draft("new")])
             .advisories(vec![
-                json!({"state":"closed", "description":"Fingerprint: `old`"}),
+                json!({"ghsa_id":"old", "state":"closed", "description":"Fingerprint: `old`"}),
             ]);
         let Outcome::Audited(Ok(recorded)) = run_through(&mut outside, &widgets(), "main") else {
             panic!("audit should succeed");
@@ -238,6 +265,23 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec!["new"]
+        );
+        assert_eq!(
+            outside
+                .calls
+                .iter()
+                .filter(|call| matches!(
+                    call,
+                    Call::CreateAdvisory(_) | Call::Reproduce(_) | Call::UpdateSecurityRecord(_)
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                &Call::CreateAdvisory("new".into()),
+                &Call::Reproduce("old".into()),
+                &Call::UpdateSecurityRecord("old".into()),
+                &Call::Reproduce("new".into()),
+                &Call::UpdateSecurityRecord("new".into()),
+            ]
         );
     }
 }

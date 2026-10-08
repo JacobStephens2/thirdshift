@@ -18,6 +18,268 @@ fn finding(fingerprint: &str) -> Value {
 }
 
 #[test]
+fn a_reproduction_scores_the_finding_and_keeps_its_test_in_the_private_record() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("input-size")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" > prompt.txt
+test_file=$(sed -n 's/^Test file: `\(.*\)`\.$/\1/p' prompt.txt)
+test -n "$test_file"
+printf '%s\n' 'assert_eq!(bounded_fixture(), "overflow");' > "$test_file"
+printf '%s\n' 'A harmless local fixture crossed the storage bound. Likelihood high, impact high; one session can hold the fix.' 'Security reproduction: reproduced high single' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let record = &state["advisories"][0];
+    assert_eq!(record["severity"], "high");
+    let body = record["description"].as_str().unwrap();
+    assert!(body.contains("Likelihood high, impact high"), "{body}");
+    assert!(
+        body.contains("assert_eq!(bounded_fixture(), \"overflow\");"),
+        "{body}"
+    );
+    assert!(body.contains("Fix size: single"), "{body}");
+    assert!(
+        result
+            .stderr
+            .contains("reproduction 1: reproduced high single"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 2);
+    scenario.assert_every_session_found_the_factory_skills();
+}
+
+#[test]
+fn a_private_reproduction_writes_severity_size_notes_and_test_into_the_finding_issue() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["private"] = json!(true);
+    scenario.write_gh_state(&github);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("input-size")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced medium spec"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let body = state["bodies"]["8"].as_str().unwrap();
+    for required in [
+        "Fingerprint: `input-size`",
+        "Private candidate write-up.",
+        "Severity: medium",
+        "Fix size: spec",
+        "Local command: bounded-fixture",
+        "bounded_fixture();",
+    ] {
+        assert!(body.contains(required), "missing {required}: {body}");
+    }
+    assert_eq!(
+        state["labels"]["8"],
+        json!(["security-finding", "needs-triage"])
+    );
+    assert_eq!(state["issues"]["8"], "OPEN");
+    assert!(result.stderr.contains("issue #8"), "{}", result.stderr);
+    assert!(!result.stderr.contains("Local command: bounded-fixture"));
+}
+
+fn reproduction_script(outcome: &str) -> String {
+    format!(
+        r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" > prompt.txt
+test_file=$(sed -n 's/^Test file: `\(.*\)`\.$/\1/p' prompt.txt)
+test -n "$test_file"
+printf '%s\n' 'bounded_fixture();' > "$test_file"
+printf '%s\n' 'Local command: bounded-fixture; harmless local evidence and likelihood/impact reasoning.' 'Security reproduction: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
+#[test]
+fn reproductions_are_sequential_fresh_and_pinned_to_the_audited_commit() {
+    let scenario = Scenario::new();
+    let audited = scenario.origin_git(&["rev-parse", "main"]);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            r#"{}
+touch audit-only
+new=$(git commit-tree "$(git rev-parse 'HEAD^{{tree}}')" -p HEAD -m 'Base advanced')
+git push origin "$new:refs/heads/main"
+"#,
+            audit_script(&json!([finding("first"), finding("second")]).to_string())
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            r#"
+test -z "$(git branch --show-current)"
+test ! -e audit-only
+git rev-parse HEAD >> "$HOME/../reproductions"
+printf '%s\n' first >> "$HOME/../sequence"
+touch previous-poc
+{}
+"#,
+            reproduction_script("reproduced low single")
+        ),
+    );
+    scenario.agent_does_in_session(
+        3,
+        &format!(
+            r#"
+test ! -e previous-poc
+test ! -e audit-only
+test "$(cat "$HOME/../sequence")" = first
+git rev-parse HEAD >> "$HOME/../reproductions"
+printf '%s\n' second >> "$HOME/../sequence"
+{}
+"#,
+            reproduction_script("not reproduced")
+        ),
+    );
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_ne!(scenario.origin_git(&["rev-parse", "main"]), audited);
+    assert_eq!(
+        fs::read_to_string(scenario.path("reproductions")).unwrap(),
+        format!("{audited}{audited}")
+    );
+    assert_eq!(
+        fs::read_to_string(scenario.path("sequence")).unwrap(),
+        "first\nsecond\n"
+    );
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 3);
+    for (index, fingerprint) in [(1, "first"), (2, "second")] {
+        let prompt = calls[index]["prompt"].as_str().unwrap();
+        for required in [
+            "validation plan",
+            "untouched code",
+            "harmless payloads only",
+            "never a deployed site or a real third-party service",
+            "likelihood-and-impact",
+            "one session",
+            "Test file:",
+            "Security reproduction:",
+            "You run headless",
+        ] {
+            assert!(prompt.contains(required), "missing {required}: {prompt}");
+        }
+        assert!(
+            prompt.contains(&format!("Fingerprint: `{fingerprint}`")),
+            "{prompt}"
+        );
+        assert_eq!(calls[index]["branch"], "");
+    }
+    assert_eq!(scenario.entries("work"), vec![REPO]);
+    scenario.assert_every_session_found_the_factory_skills();
+}
+
+#[test]
+fn incomplete_reproductions_preserve_the_record_and_stop_before_the_next_session() {
+    for private in [false, true] {
+        for (outcome, cause) in [
+            ("No final line", "without the final line"),
+            ("reproduced invalid single", "invalid severity"),
+            ("reproduced high invalid", "invalid fix size"),
+        ] {
+            let scenario = Scenario::new();
+            let commit = scenario.origin_git(&["rev-parse", "main"]);
+            let original = format!(
+                "Fingerprint: `first`\nAudited commit: `{}`\nExisting private evidence.\n",
+                commit.trim()
+            );
+            let mut github = scenario.gh_state();
+            if private {
+                github["private"] = json!(true);
+                github["issues"]["8"] = json!("OPEN");
+                github["bodies"] = json!({"8": original});
+                github["labels"] = json!({"8": ["security-finding", "needs-triage"]});
+            } else {
+                github["advisories"] = json!([{"ghsa_id": "GHSA-existing", "description": original, "severity": "high", "state": "draft"}]);
+            }
+            scenario.write_gh_state(&github);
+            scenario.agent_does_in_session(
+                1,
+                &audit_script(&json!([finding("first"), finding("second")]).to_string()),
+            );
+            scenario.agent_does_in_session(2, &reproduction_script(outcome));
+            let result = scenario.run(&["secure"]);
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(result.stderr.contains(cause), "{}", result.stderr);
+            assert!(
+                result.stderr.contains("security-reproduction-1.jsonl"),
+                "{}",
+                result.stderr
+            );
+            let state = scenario.gh_state();
+            if private {
+                assert_eq!(state["bodies"]["8"], original);
+                assert_eq!(state["labels"]["8"], github["labels"]["8"]);
+                assert!(
+                    state["bodies"]["9"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Fingerprint: `second`")
+                );
+            } else {
+                assert_eq!(state["advisories"][0], github["advisories"][0]);
+                assert_eq!(state["advisories"].as_array().unwrap().len(), 2);
+            }
+            assert_eq!(scenario.claude_calls().len(), 2);
+            assert!(
+                scenario
+                    .gh_calls_of("api", "--method")
+                    .iter()
+                    .all(|call| call[2] != "PATCH")
+            );
+            assert_eq!(scenario.entries("work"), vec![REPO]);
+        }
+    }
+}
+
+#[test]
+fn an_unreproduced_finding_clears_its_previous_severity_and_keeps_the_test_and_notes() {
+    let scenario = Scenario::new();
+    let commit = scenario.origin_git(&["rev-parse", "main"]);
+    let original = format!(
+        "Fingerprint: `input-size`\nAudited commit: `{}`\nExisting private evidence.\n",
+        commit.trim()
+    );
+    let mut github = scenario.gh_state();
+    github["advisories"] = json!([{"ghsa_id": "GHSA-existing", "description": original, "severity": "high", "state": "draft"}]);
+    scenario.write_gh_state(&github);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("input-size")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("not reproduced"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let record = &state["advisories"][0];
+    assert_eq!(record["severity"], Value::Null);
+    let body = record["description"].as_str().unwrap();
+    assert!(body.starts_with(original.trim_end()), "{body}");
+    assert!(body.contains("Outcome: not reproduced"), "{body}");
+    assert!(body.contains("Local command: bounded-fixture"), "{body}");
+    assert!(body.contains("bounded_fixture();"), "{body}");
+    assert!(!body.contains("Severity:"), "{body}");
+    assert!(!body.contains("Fix size:"), "{body}");
+    assert!(
+        result.stderr.contains("reproduction 1: not reproduced"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn records_a_finding_privately_as_a_draft_without_severity_or_versions() {
     let scenario = Scenario::new();
     scenario.origin_has_commit(
@@ -95,7 +357,10 @@ fn a_private_repository_records_each_finding_as_a_labelled_issue_with_the_adviso
             commit.trim(),
             serde_json::to_string_pretty(&finding(fingerprint)).unwrap()
         );
-        assert_eq!(state["bodies"][number], expected);
+        let body = state["bodies"][number].as_str().unwrap();
+        assert!(body.starts_with(&expected), "{body}");
+        assert!(body.contains("Outcome: not reproduced"), "{body}");
+        assert!(!body.contains("Severity:"), "{body}");
     }
     assert!(!result.stderr.contains("Private candidate write-up."));
 }
@@ -231,6 +496,12 @@ fn audit_script(findings: &str) -> String {
     format!(
         r#"
 printf '%s' "$FAKE_CLAUDE_PROMPT" > prompt.txt
+test_file=$(sed -n 's/^Test file: `\(.*\)`\.$/\1/p' prompt.txt)
+if [ -n "$test_file" ]; then
+    printf '%s\n' 'bounded_fixture();' > "$test_file"
+    printf '%s\n' 'The harmless bounded fixture did not reproduce the claim.' 'Security reproduction: not reproduced' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+    exit 0
+fi
 output=$(sed -n 's/^Output directory: `\(.*\)`\.$/\1/p' prompt.txt)
 test -n "$output"
 printf '%s\n' '{findings}' > "$output/findings.json"
@@ -268,7 +539,10 @@ fn keeps_fingerprints_in_every_advisory_state_and_creates_each_new_finding_once(
         assert_eq!(scenario.gh_state()["advisories"], github["advisories"]);
         let api_calls = scenario.gh_calls_of("api", "--method");
         assert_eq!(api_calls.iter().filter(|call| call[2] == "POST").count(), 2);
-        assert!(api_calls.iter().all(|call| call[2] == "POST"));
+        assert_eq!(
+            api_calls.iter().filter(|call| call[2] == "PATCH").count(),
+            4
+        );
         assert_eq!(
             scenario
                 .entries("home/.thirdshift/logs/acme/widgets/audits")

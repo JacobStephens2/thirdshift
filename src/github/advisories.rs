@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::GitHub;
 use crate::issue::IssueUrl;
 use crate::labels::{Label, NEEDS_TRIAGE};
+use crate::security::reproduction::Reproduction;
 
 const SECURITY_FINDING: Label = Label::new(
     "security-finding",
@@ -25,6 +26,68 @@ impl SecurityRecords {
             Self::Advisories(records) | Self::Issues(records) => records.push(record),
         }
     }
+
+    pub fn finding(&self, draft: &DraftAdvisory) -> Result<Option<SecurityRecord>> {
+        let (records, field) = match self {
+            Self::Advisories(records) => (records, "description"),
+            Self::Issues(records) => (records, "body"),
+        };
+        let marker = format!("Fingerprint: `{}`", draft.fingerprint);
+        records
+            .iter()
+            .find(|record| {
+                record[field]
+                    .as_str()
+                    .is_some_and(|text| text.lines().any(|line| line == marker))
+            })
+            .map(|record| self.record(record))
+            .transpose()
+    }
+
+    pub fn record(&self, value: &Value) -> Result<SecurityRecord> {
+        Ok(match self {
+            Self::Advisories(_) => SecurityRecord::Advisory {
+                id: value["ghsa_id"]
+                    .as_str()
+                    .context("Security finding record has no advisory ID")?
+                    .to_string(),
+                description: value["description"]
+                    .as_str()
+                    .context("Security finding record has no description")?
+                    .to_string(),
+            },
+            Self::Issues(_) => SecurityRecord::Issue {
+                number: value["number"]
+                    .as_u64()
+                    .context("Security finding record has no issue number")?,
+                description: value["body"]
+                    .as_str()
+                    .context("Security finding record has no body")?
+                    .to_string(),
+            },
+        })
+    }
+}
+
+/// A finding read from the private storage selected for this repository.
+pub enum SecurityRecord {
+    Advisory { id: String, description: String },
+    Issue { number: u64, description: String },
+}
+
+impl SecurityRecord {
+    pub fn description(&self) -> &str {
+        match self {
+            Self::Advisory { description, .. } | Self::Issue { description, .. } => description,
+        }
+    }
+
+    pub fn name(&self) -> String {
+        match self {
+            Self::Advisory { id, .. } => id.clone(),
+            Self::Issue { number, .. } => format!("issue #{number}"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -39,21 +102,6 @@ pub struct DraftAdvisory {
     pub summary: String,
     pub description: String,
     pub package: Package,
-}
-
-impl DraftAdvisory {
-    pub fn already_recorded(&self, records: &SecurityRecords) -> bool {
-        let marker = format!("Fingerprint: `{}`", self.fingerprint);
-        let (records, field) = match records {
-            SecurityRecords::Advisories(records) => (records, "description"),
-            SecurityRecords::Issues(records) => (records, "body"),
-        };
-        records.iter().any(|record| {
-            record[field]
-                .as_str()
-                .is_some_and(|description| description.lines().any(|line| line == marker))
-        })
-    }
 }
 
 impl GitHub {
@@ -122,14 +170,47 @@ impl GitHub {
                 }
                 let url = std::str::from_utf8(&output.stdout)
                     .context("creating a private Security finding issue returned invalid UTF-8")?;
-                IssueUrl::parse(url.trim()).map_err(|_| {
+                let issue = IssueUrl::parse(url.trim()).map_err(|_| {
                     anyhow::anyhow!(
                         "creating a private Security finding issue returned no issue URL"
                     )
                 })?;
-                Ok(json!({"body": draft.description}))
+                self.issue_view(&issue, "number,body")
             }
         }
+    }
+
+    /// Only the reproduction fields change; state, labels and disclosure stay
+    /// with the Day shift. API diagnostics may contain private test evidence.
+    pub fn update_security_record(
+        &self,
+        repo: &str,
+        record: &SecurityRecord,
+        reproduction: &Reproduction,
+    ) -> Result<()> {
+        let description = reproduction.description(record.description());
+        let (path, body) = match record {
+            SecurityRecord::Advisory { id, .. } => (
+                format!("repos/{repo}/security-advisories/{id}"),
+                json!({"description": description, "severity": reproduction.severity()}),
+            ),
+            SecurityRecord::Issue { number, .. } => (
+                format!("repos/{repo}/issues/{number}"),
+                json!({"body": description}),
+            ),
+        };
+        let body = serde_json::to_vec(&body)?;
+        let output = self.output_with_input(
+            &["api", "--method", "PATCH", &path, "--input", "-"],
+            Some(&body),
+        )?;
+        if !output.status.success() {
+            bail!(
+                "updating a private Security finding record failed ({})",
+                output.status
+            );
+        }
+        Ok(())
     }
 
     /// The create endpoint creates a draft. No severity or version claim.

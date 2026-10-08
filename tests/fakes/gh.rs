@@ -1038,6 +1038,25 @@ fn advisory_api(state: &mut Json, positional: &[String], flags: &Flags) {
     println!("{body}");
 }
 
+/// Update a finding issue's body through the private-record operation.
+fn finding_issue_patch(state: &mut Json, rest: &[&str]) {
+    use std::io::Read;
+    let (positional, flags) = parse(rest);
+    let (repo, path) = repo_prefix(&positional[0]).unwrap();
+    check_repo_is(state, Some(repo));
+    let n = path.strip_prefix("issues/").unwrap();
+    assert_eq!(flag(&flags, "input"), Some("-"));
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input).unwrap();
+    let body = parse_json(&input);
+    let issue_state = state.at("issues").at(n).clone();
+    state
+        .entry("bodies", object([]))
+        .set(n, body.at("body").clone());
+    save(state);
+    println!("{}", issue_fields(state, n, &issue_state));
+}
+
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
     if path == &format!("repos/{}", state.at("repo").str()) {
@@ -1901,6 +1920,11 @@ pub fn main(args: Vec<String>) {
             release_view(&state, &positional, &flags);
         }
         ["api", "graphql", rest @ ..] => graphql(&state, rest),
+        ["api", "--method", "PATCH", rest @ ..]
+            if rest.iter().any(|word| word.contains("/issues/")) =>
+        {
+            finding_issue_patch(&mut state, rest)
+        }
         ["api", "--method", "PATCH", rest @ ..]
             if !rest
                 .iter()

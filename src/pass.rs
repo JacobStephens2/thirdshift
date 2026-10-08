@@ -14,7 +14,8 @@
 use std::fmt::Display;
 use std::path::PathBuf;
 
-use crate::github::{DraftAdvisory, SecurityRecords};
+use crate::github::{DraftAdvisory, SecurityRecord, SecurityRecords};
+use crate::security::reproduction::Reproduction;
 use anyhow::Result;
 use serde_json::Value;
 
@@ -108,6 +109,18 @@ pub trait Outside {
         records: &SecurityRecords,
         finding: &DraftAdvisory,
     ) -> Result<Value>;
+    /// Reproduce the finding read from this record, in a fresh checkout.
+    fn reproduce(
+        &mut self,
+        record: &SecurityRecord,
+        number: usize,
+    ) -> (Result<Reproduction>, Option<PathBuf>);
+    /// Write only a completed reproduction to its private record.
+    fn update_security_record(
+        &mut self,
+        record: &SecurityRecord,
+        reproduction: &Reproduction,
+    ) -> Result<()>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
 }
@@ -217,6 +230,28 @@ impl Outside for LaunchAndGitHub<'_> {
         GitHub::new().create_security_record(&self.repo.slug(), records, finding)
     }
 
+    fn reproduce(
+        &mut self,
+        record: &SecurityRecord,
+        number: usize,
+    ) -> (Result<Reproduction>, Option<PathBuf>) {
+        crate::security::reproduction::run(
+            self.launch.git(),
+            self.repo,
+            record,
+            number,
+            self.harness,
+        )
+    }
+
+    fn update_security_record(
+        &mut self,
+        record: &SecurityRecord,
+        reproduction: &Reproduction,
+    ) -> Result<()> {
+        GitHub::new().update_security_record(&self.repo.slug(), record, reproduction)
+    }
+
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
@@ -255,13 +290,14 @@ mod in_memory {
     use anyhow::{Result, anyhow, bail};
 
     use super::{Dispatch, Outside};
-    use crate::github::{DraftAdvisory, SecurityRecords};
+    use crate::github::{DraftAdvisory, SecurityRecord, SecurityRecords};
     use crate::github::{Issue, ListedIssue};
     use crate::issue::{IssueUrl, Repo};
     use crate::labels::{Edit, Label, Labels};
     use crate::logs::{Pass, Work};
     use crate::ready::ReadyIssue;
     use crate::run::{Ended, Goal, Reached};
+    use crate::security::reproduction::{Outcome, Reproduction};
     use serde_json::{Value, json};
 
     /// A call a pass made outside itself, in the order it made it.
@@ -297,6 +333,10 @@ mod in_memory {
         AdvisoryList,
         /// It recorded this fingerprint privately.
         CreateAdvisory(String),
+        /// It tried to reproduce this private record, in sequence.
+        Reproduce(String),
+        /// It wrote a completed reproduction to this private record.
+        UpdateSecurityRecord(String),
         /// It recorded that it started work: on this issue, for a Pickup
         /// run, or on its repository, for an Architect run.
         Started(Option<u64>),
@@ -636,9 +676,34 @@ mod in_memory {
         ) -> Result<Value> {
             self.calls
                 .push(Call::CreateAdvisory(finding.fingerprint.clone()));
-            let advisory = json!({"description": finding.description, "state": "draft"});
+            let advisory = json!({"ghsa_id": finding.fingerprint, "description": finding.description, "state": "draft"});
             self.advisories.push(advisory.clone());
             Ok(advisory)
+        }
+
+        fn reproduce(
+            &mut self,
+            record: &SecurityRecord,
+            _number: usize,
+        ) -> (Result<Reproduction>, Option<PathBuf>) {
+            self.calls.push(Call::Reproduce(record.name()));
+            (
+                Ok(Reproduction {
+                    outcome: Outcome::NotReproduced,
+                    notes: "Not reproduced with a local fixture".into(),
+                    test: "bounded_fixture()".into(),
+                }),
+                self.session_log.clone(),
+            )
+        }
+
+        fn update_security_record(
+            &mut self,
+            record: &SecurityRecord,
+            _reproduction: &Reproduction,
+        ) -> Result<()> {
+            self.calls.push(Call::UpdateSecurityRecord(record.name()));
+            Ok(())
         }
 
         fn dispatch(&mut self, dispatch: Dispatch) -> Ended {

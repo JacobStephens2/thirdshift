@@ -177,6 +177,25 @@ End your final message with exactly `Security audit: complete` after writing val
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
       </article>
+      <article class="job-sheet" id="prompt-security-reproduction" aria-labelledby="prompt-security-reproduction-title">
+        <h3 id="prompt-security-reproduction-title">Security reproduction</h3>
+        <p>After a Security audit, tries to reproduce one recorded finding in a fresh throwaway worktree at its audited commit. The test is copied into the private record only after a complete outcome.</p>
+        <p class="sent-by">Sent by a Security run, before any unit</p>
+        <pre class="job-text"><code>Reproduce this recorded Security finding at audited commit `&lt;audited commit&gt;`.
+Read the `thirdshift-security-audit` skill's likelihood-and-impact severity rubric.
+Write a proof-of-concept test from the finding's validation plan, then run it against the untouched code in this throwaway worktree. Use harmless payloads only, never a deployed site or a real third-party service. Do not fix or change repository source.
+If the test reproduces the finding, score its severity with the skill's rubric and judge whether one session can hold the fix (single) or it needs a Spec (spec).
+Test file: `&lt;test file&gt;`.
+Write the test's full text to this file, even when not reproduced. In your final message, give reproduction notes: the exact command, its result, and, when reproduced, likelihood, impact and the fix-size reasoning.
+End your final message with exactly `Security reproduction: reproduced &lt;severity&gt; &lt;size&gt;`, where severity is critical, high, medium or low and size is single or spec, or `Security reproduction: not reproduced`.
+This session commits, pushes, opens and publishes nothing.
+
+Recorded finding:
+&lt;recorded Security finding&gt;
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
+</code></pre>
+      </article>
       <article class="job-sheet" id="prompt-conflict-repair" aria-labelledby="prompt-conflict-repair-title">
         <h3 id="prompt-conflict-repair-title">Conflict Repair</h3>
         <p>Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.</p>
