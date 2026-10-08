@@ -1373,7 +1373,9 @@ fn plan_only_sends_one_notification_naming_the_plan() {
         "[thirdshift] acme/widgets Architect run: plan published"
     );
     assert!(
-        text.starts_with(&format!("Review:       plan published: {PLAN_URL}\n")),
+        text.starts_with(&format!(
+            "Result:       plan published\nReview:       plan published: {PLAN_URL}\n"
+        )),
         "{text}"
     );
     assert!(!text.contains("Dispatched:"), "{text}");
@@ -1404,7 +1406,9 @@ printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
         "[thirdshift] acme/widgets Architect run: idea filed"
     );
     assert!(
-        text.starts_with(&format!("Review:       idea filed: {PLAN_URL}\n")),
+        text.starts_with(&format!(
+            "Result:       idea filed\nReview:       idea filed: {PLAN_URL}\n"
+        )),
         "{text}"
     );
     assert!(!text.contains("Dispatched:"), "{text}");
@@ -1432,7 +1436,9 @@ fn a_review_whose_idea_is_already_filed_sends_one_notification_naming_that_issue
         "[thirdshift] acme/widgets Architect run: idea already filed"
     );
     assert!(
-        text.starts_with(&format!("Review:       idea already filed: {url}\n")),
+        text.starts_with(&format!(
+            "Result:       idea already filed\nReview:       idea already filed: {url}\n"
+        )),
         "{text}"
     );
 }
@@ -1460,7 +1466,8 @@ fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
     let log = ending[1].strip_prefix("thirdshift: session log: ").unwrap();
     assert!(
         text.starts_with(&format!(
-            "Review:       failed\n\
+            "Result:       review failed\n\
+             Review:       failed\n\
              Cause:        claude exited 3\n\
              Session log:  {log}\n\
              Command log:  {command_log}\n"
@@ -1491,7 +1498,8 @@ fn email_always_sends_one_notification_for_the_review_and_the_run_it_dispatched(
     );
     assert!(
         text.starts_with(&format!(
-            "Review:       plan published: {PLAN_URL}\n\
+            "Result:       ready for review\n\
+             Review:       plan published: {PLAN_URL}\n\
              Dispatched:   ready for review\n\
              Pull request: {PR_URL}\n"
         )),
@@ -1515,7 +1523,8 @@ fn the_one_notification_says_what_became_of_the_dispatched_runs_base_fix() {
     );
     assert!(
         text.starts_with(&format!(
-            "Review:       plan published: {PLAN_URL}\n\
+            "Result:       ready for review\n\
+             Review:       plan published: {PLAN_URL}\n\
              Dispatched:   ready for review\n\
              Pull request: {PR_URL}\n\
              Base fix:     https://github.com/acme/widgets/issues/9 merged\n"
@@ -1538,7 +1547,8 @@ fn a_dispatched_spec_run_sends_no_notification_of_its_own_and_its_tickets_are_in
     let spec_pr = pr_from(&scenario, "issue-8");
     assert!(
         text.starts_with(&format!(
-            "Review:       plan published: {PLAN_URL}\n\
+            "Result:       merged\n\
+             Review:       plan published: {PLAN_URL}\n\
              Dispatched:   merged\n\
              Pull request: {}\n",
             spec_pr["url"].as_str().unwrap()
@@ -1570,7 +1580,8 @@ fn a_dispatched_run_that_fails_sends_one_notification_with_its_outcome_and_cause
     assert_eq!(subject, "[thirdshift] acme/widgets Architect run: failed");
     assert!(
         text.starts_with(&format!(
-            "Review:       plan published: {PLAN_URL}\n\
+            "Result:       failed\n\
+             Review:       plan published: {PLAN_URL}\n\
              Dispatched:   failed\n\
              Pull request: {PR_URL}\n\
              Cause:        claude exited 3\n"
@@ -1635,7 +1646,10 @@ sleep 60"#,
         subject,
         "[thirdshift] acme/widgets Architect run: interrupted"
     );
-    assert!(text.starts_with("Review:       interrupted\n"), "{text}");
+    assert!(
+        text.starts_with("Result:       interrupted\nReview:       interrupted\n"),
+        "{text}"
+    );
     assert!(!text.contains("Cause:"), "{text}");
 }
 
@@ -1659,7 +1673,8 @@ fn a_plan_that_fails_its_checks_sends_one_notification_naming_it_in_the_cause() 
     );
     assert!(
         text.starts_with(&format!(
-            "Review:       failed\n\
+            "Result:       review failed\n\
+             Review:       failed\n\
              Cause:        the plan {PLAN_URL} is closed\n"
         )),
         "{text}"
@@ -1682,7 +1697,8 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
     assert_eq!(subject, "[thirdshift] acme/widgets Architect run: failed");
     assert!(
         text.starts_with(&format!(
-            "Review:       plan published: {PLAN_URL}\n\
+            "Result:       failed\n\
+             Review:       plan published: {PLAN_URL}\n\
              Dispatched:   failed\n"
         )),
         "{text}"
@@ -2228,7 +2244,8 @@ fn an_idea_that_cannot_be_labelled_sends_one_notification_with_the_cause() {
     );
     assert!(
         text.starts_with(
-            "Review:       failed\n\
+            "Result:       review failed\n\
+             Review:       failed\n\
              Cause:        could not label the Architect idea #7: gh api --method PUT"
         ),
         "{text}"

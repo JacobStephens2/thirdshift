@@ -100,6 +100,10 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
         "[thirdshift] acme/widgets#7 Add export button: ready for review"
     );
     let text = text(&request);
+    assert!(
+        text.starts_with("Result:       ready for review\n"),
+        "{text}"
+    );
     assert_contains(text, PR_URL);
     assert_contains(text, &the_one_log(&scenario));
     assert_contains(text, &hostname());
@@ -109,7 +113,10 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
 #[test]
 fn a_merge_run_sends_one_notification_that_it_merged() {
     let scenario = Scenario::new();
-    scenario.issue_titled(7, "Add export button");
+    scenario.issue_titled(
+        7,
+        "I cancelled my subscription but the account still shows as part of the monthly revenue total on the site",
+    );
     scenario.agent_does(AGENT_OPENS_PR);
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
@@ -124,7 +131,12 @@ fn a_merge_run_sends_one_notification_that_it_merged() {
     let request = the_one_request(&resend);
     assert_eq!(
         subject(&request),
-        "[thirdshift] acme/widgets#7 Add export button: merged"
+        "[thirdshift] acme/widgets#7 I cancelled my subscription but the account still shows as part of the monthly revenue total on the site: merged"
+    );
+    assert!(
+        text(&request).starts_with("Result:       merged\n"),
+        "{}",
+        text(&request)
     );
     assert_contains(text(&request), PR_URL);
 }
@@ -151,6 +163,7 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
         "[thirdshift] acme/widgets#7 Add export button: failed"
     );
     let text = text(&request);
+    assert!(text.starts_with("Result:       failed\n"), "{text}");
     assert_contains(text, "claude exited 3");
     assert_contains(text, &the_one_log(&scenario));
 }
@@ -200,6 +213,11 @@ fn an_interrupted_run_sends_one_notification_that_it_was_interrupted() {
         subject(&request).ends_with(": interrupted"),
         "{}",
         subject(&request)
+    );
+    assert!(
+        text(&request).starts_with("Result:       interrupted\n"),
+        "{}",
+        text(&request)
     );
 }
 
