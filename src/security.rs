@@ -52,6 +52,7 @@ impl RecordedFinding {
             severity: record["severity"].as_str().map(String::from),
             title: record["summary"]
                 .as_str()
+                .or_else(|| record["title"].as_str())
                 .context("the Security finding's private record has no title")?
                 .to_string(),
             url: record["html_url"]
@@ -157,16 +158,16 @@ fn audit_and_record(outside: &mut impl Outside, repo: &Repo, base: &str) -> Ende
         if audited.findings.is_empty() {
             return Ok(recorded);
         }
-        let mut known = outside.security_advisories()?;
+        let mut known = outside.security_records()?;
         for finding in audited.findings {
             let record = if let Some(record) = finding.recorded_in(&known) {
                 recorded.existing += 1;
                 record
             } else {
-                known.push(outside.create_security_advisory(&finding)?);
+                let record = outside.create_security_record(&known, &finding)?;
                 recorded.created += 1;
-                outside.step("recorded a Security finding as a private draft advisory".to_string());
-                known.last().expect("the new record was just added")
+                outside.step("recorded a Security finding privately".to_string());
+                known.remember(record)
             };
             findings.push(RecordedFinding::of_record(record)?);
         }

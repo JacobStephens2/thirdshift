@@ -4,6 +4,8 @@
 //!
 //! ```text
 //! {"repo": "owner/repo",
+//!  "private"?: true,
+//!  "advisory_error"?: "<stderr>",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
 //!  "titles"?: {"<number>": "<title>"},
 //!  "created"?: {"<number>": "<ISO 8601 time>"},
@@ -652,6 +654,14 @@ fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
         ("url", string(url)),
         ("labels", Array(labels)),
         ("createdAt", created),
+        (
+            "body",
+            state
+                .get("bodies")
+                .and_then(|bodies| bodies.get(n))
+                .cloned()
+                .unwrap_or_else(|| string("")),
+        ),
     ])
 }
 
@@ -809,6 +819,7 @@ fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
 /// Open an issue with `--title`, `--body` and the comma-separated `--label`s,
 /// numbered one past the highest issue, and print its URL.
 fn issue_create(state: &mut Json, flags: &Flags) {
+    use std::io::Read;
     let labels: Vec<&str> = flag(flags, "label")
         .map(|labels| labels.split(',').collect())
         .unwrap_or_default();
@@ -828,7 +839,13 @@ fn issue_create(state: &mut Json, flags: &Flags) {
     state.at_mut("issues").set(&n, string("OPEN"));
     let title = flag(flags, "title").expect("no --title");
     state.entry("titles", object([])).set(&n, string(title));
-    let body = flag(flags, "body").expect("no --body");
+    let mut input = String::new();
+    let body = if flag(flags, "body-file") == Some("-") {
+        std::io::stdin().read_to_string(&mut input).unwrap();
+        &input
+    } else {
+        flag(flags, "body").expect("no --body")
+    };
     state.entry("bodies", object([])).set(&n, string(body));
     let labels = labels.into_iter().map(string).collect();
     state.entry("labels", object([])).set(&n, Array(labels));
@@ -952,6 +969,12 @@ fn advisory_api(state: &mut Json, positional: &[String], flags: &Flags) {
         .unwrap_or((&positional[0], ""));
     let (repo, rest) = repo_prefix(path).unwrap();
     check_repo_is(state, Some(repo));
+    if let Some(error) = state.get("advisory_error") {
+        die(error.str(), 1);
+    }
+    if state.get("private").is_some_and(Json::truthy) {
+        die("gh: Not Found (HTTP 404)", 1);
+    }
     let method = flag(flags, "method").unwrap_or("GET");
     if method == "GET" {
         let wanted = query
@@ -1031,6 +1054,40 @@ fn advisory_api(state: &mut Json, positional: &[String], flags: &Flags) {
 
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
+    if path == &format!("repos/{}", state.at("repo").str()) {
+        println!(
+            "{}",
+            object([(
+                "private",
+                Bool(state.get("private").is_some_and(Json::truthy))
+            )])
+        );
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && rest.starts_with("issues?")
+    {
+        check_repo_is(state, Some(repo));
+        assert!(rest.contains("state=all"));
+        assert!(rest.contains("labels=security-finding"));
+        assert!(rest.contains("per_page=100"));
+        assert!(flags.contains_key("paginate"));
+        assert_eq!(flag(flags, "jq"), Some(".[]"));
+        let Json::Object(issues) = state.at("issues") else {
+            panic!("issues is an object")
+        };
+        for (n, issue_state) in issues {
+            if issue_labels(state, n)
+                .iter()
+                .any(|label| label.str().eq_ignore_ascii_case("security-finding"))
+            {
+                let mut issue = issue_fields(state, n, issue_state);
+                issue.set("html_url", issue.at("url").clone());
+                println!("{issue}");
+            }
+        }
+        return;
+    }
     if path.contains("/security-advisories") {
         advisory_api(state, positional, flags);
         return;
