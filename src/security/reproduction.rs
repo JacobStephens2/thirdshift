@@ -14,7 +14,7 @@ use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::logs;
 use crate::prompt;
-use crate::session::{Logs, Sessions};
+use crate::session::{Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
 
 #[derive(Clone, Copy, Serialize)]
@@ -156,8 +156,11 @@ pub fn run(
     };
     let logs = Logs::of_security_run(repo);
     Sessions::within(&logs, worktree.path(), harness, |sessions| {
-        let message =
-            sessions.run_to_final_message(&format!("security-reproduction-{number}"), &prompt)?;
+        let message = sessions.run_to_final_message(
+            Purpose::Security,
+            &format!("security-reproduction-{number}"),
+            &prompt,
+        )?;
         let message = message.as_deref().unwrap_or_default().trim_end();
         let (notes, line) = message.rsplit_once('\n').unwrap_or(("", message));
         let outcome = match line.split_whitespace().collect::<Vec<_>>().as_slice() {

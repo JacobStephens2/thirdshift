@@ -612,15 +612,26 @@ fn codex_security_sessions_and_their_resumes_raise_the_thread_cap_and_request_fr
         1,
         &format!(
             "{}\necho '{{\"type\":\"item.started\",\"item\":{{\"id\":\"pending\",\"type\":\"collab_tool_call\",\"tool\":\"spawn_agent\",\"prompt\":\"Verify finding\",\"status\":\"in_progress\"}}}}'\n",
-            audit_script("[]")
+            audit_script(&json!([finding("input-size")]).to_string())
         ),
     );
     scenario
         .agent_does("printf '%s\\n' 'Security audit: complete' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n");
+    scenario.agent_does_in_session(
+        3,
+        &format!(
+            "{}\necho '{{\"type\":\"item.started\",\"item\":{{\"id\":\"pending\",\"type\":\"command_execution\",\"command\":\"bounded-fixture\",\"status\":\"in_progress\"}}}}'\n",
+            reproduction_script("reproduced high single")
+        ),
+    );
+    scenario.agent_does_in_session(
+        4,
+        "printf '%s\\n' 'The resumed local fixture confirmed the finding.' 'Security reproduction: reproduced high single' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
     let result = scenario.run(&["secure", "harness", "codex"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let calls = scenario.codex_calls();
-    assert_eq!(calls.len(), 2);
+    assert_eq!(calls.len(), 4);
     for call in &calls {
         let args = call["argv"].as_array().unwrap();
         assert!(
@@ -635,12 +646,16 @@ fn codex_security_sessions_and_their_resumes_raise_the_thread_cap_and_request_fr
         assert!(prompt.contains("fork_turns: \"none\""), "{prompt}");
         assert!(prompt.contains("fresh sub-agents"), "{prompt}");
     }
-    let resumed = calls[1]["argv"].as_array().unwrap();
-    assert!(
-        resumed
-            .windows(2)
-            .any(|pair| pair == [json!("resume"), json!("fake-thread-1")])
-    );
+    for (index, thread) in [(1, "fake-thread-1"), (3, "fake-thread-3")] {
+        let resumed = calls[index]["argv"].as_array().unwrap();
+        assert!(
+            resumed
+                .windows(2)
+                .any(|pair| pair == [json!("resume"), json!(thread)]),
+            "{resumed:?}"
+        );
+    }
+    assert_eq!(scenario.gh_state()["advisories"][0]["severity"], "high");
 }
 
 #[test]
