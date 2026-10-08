@@ -3,7 +3,8 @@
 
 use std::fmt;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use serde_json::Value;
 
 use crate::asks::Flags;
 use crate::config::UserConfig;
@@ -20,7 +21,47 @@ pub mod reproduction;
 
 pub enum Outcome {
     Skipped(Skipped),
-    Audited(Result<Recorded, FailedRun>),
+    Audited(Ended),
+}
+
+/// The audit's outcome and the private records it reached, including before a failure.
+pub struct Ended {
+    pub outcome: Result<Recorded, FailedRun>,
+    pub findings: Vec<RecordedFinding>,
+}
+
+impl From<anyhow::Error> for Ended {
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            outcome: Err(error.into()),
+            findings: Vec::new(),
+        }
+    }
+}
+
+/// Only the metadata allowed in a Run notification; no private write-up.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecordedFinding {
+    pub severity: Option<String>,
+    pub title: String,
+    pub url: String,
+}
+
+impl RecordedFinding {
+    fn of_record(record: &Value) -> Result<Self> {
+        Ok(Self {
+            severity: record["severity"].as_str().map(String::from),
+            title: record["summary"]
+                .as_str()
+                .or_else(|| record["title"].as_str())
+                .context("the Security finding's private record has no title")?
+                .to_string(),
+            url: record["html_url"]
+                .as_str()
+                .context("the Security finding's private record has no link")?
+                .to_string(),
+        })
+    }
 }
 
 pub enum Skipped {
@@ -72,7 +113,7 @@ pub fn run(
             logs::skipped(Pass::Security, &running.0, &running);
             return Outcome::Skipped(Skipped::AlreadyRunning(running));
         }
-        Err(error) => return Outcome::Audited(Err(error.into())),
+        Err(error) => return Outcome::Audited(error.into()),
     };
     run_through(
         &mut LaunchAndGitHub {
@@ -96,22 +137,20 @@ fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str) -> Outcome {
             return Outcome::Skipped(skipped);
         }
         Ok(None) => {}
-        Err(error) => return Outcome::Audited(Err(error.into())),
+        Err(error) => return Outcome::Audited(error.into()),
     }
     Outcome::Audited(audit_and_record(outside, repo, base))
 }
 
-fn audit_and_record(
-    outside: &mut impl Outside,
-    repo: &Repo,
-    base: &str,
-) -> Result<Recorded, FailedRun> {
-    outside.check_harness()?;
-    outside.check_node()?;
-    outside.started(Work::SecurityRun(repo));
-    let (audited, log) = outside.audit(base);
-    let mut log = log;
+fn audit_and_record(outside: &mut impl Outside, repo: &Repo, base: &str) -> Ended {
+    let mut findings = Vec::new();
+    let mut log = None;
     let recorded = (|| -> Result<Recorded> {
+        outside.check_harness()?;
+        outside.check_node()?;
+        outside.started(Work::SecurityRun(repo));
+        let (audited, session_log) = outside.audit(base);
+        log = session_log;
         let audited = audited?;
         let mut recorded = Recorded {
             created: 0,
@@ -124,19 +163,22 @@ fn audit_and_record(
         let mut records = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for finding in audited.findings {
-            let record = if let Some(record) = known.finding(&finding)? {
+            let (record, metadata) = if let Some(value) = known.finding(&finding) {
                 recorded.existing += 1;
-                record
+                (known.record(value)?, RecordedFinding::of_record(value)?)
             } else {
-                let record = outside.create_security_record(&known, &finding)?;
-                let read = known.record(&record)?;
-                known.remember(record);
+                let value = outside.create_security_record(&known, &finding)?;
+                let record = known.record(&value)?;
+                let metadata = RecordedFinding::of_record(&value)?;
+                known.remember(value);
                 recorded.created += 1;
                 outside.step("recorded a Security finding privately".to_string());
-                read
+                (record, metadata)
             };
+            let url = metadata.url.clone();
+            findings.push(metadata);
             if record.untriaged() && seen.insert(finding.fingerprint) {
-                records.push(record);
+                records.push((record, url));
             } else if !record.untriaged() {
                 outside.step(format!(
                     "keeping the Day shift's grade for {}",
@@ -144,7 +186,7 @@ fn audit_and_record(
                 ));
             }
         }
-        for (index, record) in records.iter().enumerate() {
+        for (index, (record, url)) in records.iter().enumerate() {
             let number = index + 1;
             outside.step(format!(
                 "starting Security reproduction {number} of {}",
@@ -156,6 +198,11 @@ fn audit_and_record(
             }
             let reproduced = reproduced?;
             outside.update_security_record(record, &reproduced)?;
+            for finding in findings.iter_mut().filter(|finding| finding.url == *url) {
+                finding.severity = reproduced
+                    .severity()
+                    .map(|severity| severity.name().to_string());
+            }
             outside.step(format!(
                 "Security reproduction {number}: {}",
                 reproduced.outcome
@@ -163,10 +210,13 @@ fn audit_and_record(
         }
         Ok(recorded)
     })();
-    recorded.map_err(|error| FailedRun {
-        log,
-        ..error.into()
-    })
+    Ended {
+        outcome: recorded.map_err(|error| FailedRun {
+            log,
+            ..error.into()
+        }),
+        findings,
+    }
 }
 
 #[cfg(test)]
@@ -178,7 +228,10 @@ mod tests {
     fn checks_prerequisites_then_audits_without_pulling() {
         let mut outside = InMemory::default();
         let outcome = run_through(&mut outside, &widgets(), "main");
-        assert!(matches!(outcome, Outcome::Audited(Ok(_))));
+        assert!(matches!(
+            outcome,
+            Outcome::Audited(Ended { outcome: Ok(_), .. })
+        ));
         assert_eq!(
             outside.calls,
             vec![
@@ -220,7 +273,10 @@ mod tests {
         ] {
             assert!(matches!(
                 run_through(&mut outside, &widgets(), "main"),
-                Outcome::Audited(Err(_))
+                Outcome::Audited(Ended {
+                    outcome: Err(_),
+                    ..
+                })
             ));
             assert_eq!(outside.calls, expected);
         }
@@ -231,7 +287,11 @@ mod tests {
         let mut outside = InMemory::default()
             .audit_failing("invalid report")
             .session_log("audit.jsonl");
-        let Outcome::Audited(Err(failed)) = run_through(&mut outside, &widgets(), "main") else {
+        let Outcome::Audited(Ended {
+            outcome: Err(failed),
+            ..
+        }) = run_through(&mut outside, &widgets(), "main")
+        else {
             panic!("audit should fail");
         };
         assert_eq!(failed.log, Some(std::path::PathBuf::from("audit.jsonl")));
@@ -254,9 +314,13 @@ mod tests {
         let mut outside = InMemory::default()
             .audited(vec![draft("old"), draft("new")])
             .advisories(vec![
-                json!({"ghsa_id":"old", "state":"closed", "description":"Fingerprint: `old`"}),
+                json!({"ghsa_id":"old", "state":"closed", "description":"Fingerprint: `old`", "summary":"Candidate", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-old"}),
             ]);
-        let Outcome::Audited(Ok(recorded)) = run_through(&mut outside, &widgets(), "main") else {
+        let Outcome::Audited(Ended {
+            outcome: Ok(recorded),
+            ..
+        }) = run_through(&mut outside, &widgets(), "main")
+        else {
             panic!("audit should succeed");
         };
         assert_eq!((recorded.created, recorded.existing), (1, 1));

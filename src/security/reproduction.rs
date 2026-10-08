@@ -28,7 +28,7 @@ pub enum Severity {
 }
 
 impl Severity {
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Self::Critical => "critical",
             Self::High => "high",

@@ -26,6 +26,7 @@
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
 //!  "failing"?: ["<command> <subcommand>", ...],
+//!  "advisory_create_fails_after"?: <number of records>,
 //!  "user_email"?: "<address>" | null,
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
 //!  "labels"?: {"<number>": ["<label>", ...]},
@@ -1013,6 +1014,19 @@ fn advisory_api(state: &mut Json, positional: &[String], flags: &Flags) {
     } else {
         object([])
     };
+    if method == "POST"
+        && state
+            .get("advisory_create_fails_after")
+            .and_then(Json::as_i64)
+            .is_some_and(|limit| {
+                state
+                    .get("advisories")
+                    .map_or(0, |records| records.items().len())
+                    >= limit as usize
+            })
+    {
+        die("HTTP 422: Private candidate write-up.", 1);
+    }
     let advisories = state.entry("advisories", Array(Vec::new())).items_mut();
     if method == "POST" && rest == "security-advisories" {
         if !body.has("summary") || !body.has("description") || !body.has("vulnerabilities") {
@@ -1104,7 +1118,9 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 .iter()
                 .any(|label| label.str().eq_ignore_ascii_case("security-finding"))
             {
-                println!("{}", issue_fields(state, n, issue_state));
+                let mut issue = issue_fields(state, n, issue_state);
+                issue.set("html_url", issue.at("url").clone());
+                println!("{issue}");
             }
         }
         return;

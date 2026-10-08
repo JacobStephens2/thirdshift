@@ -41,7 +41,7 @@ pub enum Ending {
         dispatched: Option<Ended>,
     },
     /// A Security run completed its audit, or failed.
-    Security(Result<crate::security::Recorded, FailedRun>),
+    Security(crate::security::Ended),
     /// A Pass was skipped before any work.
     Skipped(Skip),
 }

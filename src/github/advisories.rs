@@ -27,21 +27,17 @@ impl SecurityRecords {
         }
     }
 
-    pub fn finding(&self, draft: &DraftAdvisory) -> Result<Option<SecurityRecord>> {
+    pub fn finding(&self, draft: &DraftAdvisory) -> Option<&Value> {
         let (records, field) = match self {
             Self::Advisories(records) => (records, "description"),
             Self::Issues(records) => (records, "body"),
         };
         let marker = format!("Fingerprint: `{}`", draft.fingerprint);
-        records
-            .iter()
-            .find(|record| {
-                record[field]
-                    .as_str()
-                    .is_some_and(|text| text.lines().any(|line| line == marker))
-            })
-            .map(|record| self.record(record))
-            .transpose()
+        records.iter().find(|record| {
+            record[field]
+                .as_str()
+                .is_some_and(|text| text.lines().any(|line| line == marker))
+        })
     }
 
     pub fn record(&self, value: &Value) -> Result<SecurityRecord> {
@@ -202,7 +198,9 @@ impl GitHub {
                         "creating a private Security finding issue returned no issue URL"
                     )
                 })?;
-                self.issue_view(&issue, "number,body,state,labels")
+                let mut record = self.issue_view(&issue, "number,body,state,labels,title")?;
+                record["html_url"] = json!(url.trim());
+                Ok(record)
             }
         }
     }
