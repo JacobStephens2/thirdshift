@@ -654,6 +654,7 @@ mod tests {
                         line: format!("{outcome}: {PLAN}"),
                         dispatched: None,
                     }),
+                    security_findings: None,
                     urls: vec![PLAN],
                 }
             );
