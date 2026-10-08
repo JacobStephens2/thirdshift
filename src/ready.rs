@@ -28,7 +28,9 @@ pub struct ReadyIssue {
 /// `launch`'s repository, if there is one, with a line on stderr for each
 /// issue labelled `ready-for-agent` passed over before it, with why.
 /// Nothing is changed, on GitHub or in `launch`.
-pub fn first(launch: &Git, repo: &Repo) -> Result<Option<ReadyIssue>> {
+/// `wait` is the User config's settling window since the latest shaping
+/// event; every pass uses the same Ready issue definition.
+pub fn first(launch: &Git, repo: &Repo, wait: TimeDelta) -> Result<Option<ReadyIssue>> {
     let reads = GitHubAndOrigin {
         launch,
         github: GitHub::new(),
@@ -36,7 +38,7 @@ pub fn first(launch: &Git, repo: &Repo) -> Result<Option<ReadyIssue>> {
     let candidates = reads
         .github
         .open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
-    Search::new(&reads, candidates, Utc::now(), progress::step).first_ready()
+    Search::new(&reads, candidates, Utc::now(), wait, progress::step).first_ready()
 }
 
 /// What the search reads of an issue beyond its listing, each only when a
@@ -64,11 +66,6 @@ impl Reads for GitHubAndOrigin<'_> {
         branch::started(self.launch, &self.github, issue)
     }
 }
-
-/// How long an issue is left after it was last shaped before it is a Ready
-/// issue, so a Spec is not taken while its Tickets are still being
-/// attached. Fixed, with no setting.
-const SETTLE: TimeDelta = TimeDelta::minutes(10);
 
 /// Where an open issue labelled `ready-for-agent` stands in the search.
 #[derive(Clone)]
@@ -100,8 +97,8 @@ enum Reason {
     /// It is a Spec whose Tickets are all closed, with nothing started: the
     /// Spec run it would be dispatched as refuses it, having nothing to do.
     TicketsClosed,
-    /// It is not settled: it was last shaped, by this, less than [`SETTLE`]
-    /// ago.
+    /// It is not settled: it was last shaped, by this, within the
+    /// configured settling window.
     Unsettled(Shaping),
 }
 
@@ -116,6 +113,9 @@ struct Search<'a, R, P> {
     standings: Vec<Option<Standing>>,
     /// The time of the pass, which settling is measured to.
     now: DateTime<Utc>,
+    /// How long an issue is left after it was last shaped before it is a
+    /// Ready issue, so a Spec is not taken while Tickets are attached.
+    wait: TimeDelta,
     /// Where each line on an issue passed over goes, as soon as it is.
     passed_over: P,
 }
@@ -125,6 +125,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         reads: &'a R,
         mut candidates: Vec<ListedIssue>,
         now: DateTime<Utc>,
+        wait: TimeDelta,
         passed_over: P,
     ) -> Self {
         candidates.sort_by_key(|candidate| candidate.issue.number);
@@ -134,6 +135,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
             candidates,
             standings,
             now,
+            wait,
             passed_over,
         }
     }
@@ -162,7 +164,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         if let Some(standing) = &self.standings[at] {
             return Ok(standing.clone());
         }
-        let standing = standing_of(self.reads, &self.candidates[at], self.now)?;
+        let standing = standing_of(self.reads, &self.candidates[at], self.now, self.wait)?;
         self.standings[at] = Some(standing.clone());
         Ok(standing)
     }
@@ -212,7 +214,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
                     Shaping::SubIssues => "a sub-issue added or removed".to_string(),
                     Shaping::Blockers => "a \"blocked by\" link added or removed".to_string(),
                 };
-                let minutes = SETTLE.num_minutes();
+                let minutes = self.wait.num_minutes();
                 format!("not settled: {shaped} less than {minutes} minutes ago")
             }
         };
@@ -225,13 +227,14 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
 /// Ready issue when it has no label that makes an Unready Ticket and no
 /// Claim, is not a sub-issue, has no `base-fix` label and no open blocker,
 /// was never started, is not a Spec whose Tickets are all closed, and is
-/// settled: [`SETTLE`] has passed since it was last labelled
+/// settled: `wait` has passed since it was last labelled
 /// `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
 /// last added or removed.
 fn standing_of(
     reads: &impl Reads,
     candidate: &ListedIssue,
     now: DateTime<Utc>,
+    wait: TimeDelta,
 ) -> Result<Standing> {
     let passed_over = |reason| Ok(Standing::PassedOver(reason));
     if let Some(label) = candidate.labels.unready() {
@@ -256,8 +259,9 @@ fn standing_of(
     if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
         return passed_over(Reason::TicketsClosed);
     }
-    if let Some(shaped) = read.last_shaped
-        && now - shaped.at < SETTLE
+    if wait > TimeDelta::zero()
+        && let Some(shaped) = read.last_shaped
+        && now - shaped.at < wait
     {
         return passed_over(Reason::Unsettled(shaped.by));
     }
@@ -386,7 +390,7 @@ mod tests {
             seen: &seen,
         };
         let sink = |line| seen.borrow_mut().push(Seen::Line(line));
-        let ready = Search::new(&reads, candidates, now(), sink)
+        let ready = Search::new(&reads, candidates, now(), TimeDelta::minutes(30), sink)
             .first_ready()
             .unwrap()
             .map(|ready| (ready.listed.issue.number, ready.is_spec));
@@ -633,15 +637,16 @@ mod tests {
     }
 
     #[test]
-    fn an_issue_settles_ten_minutes_after_it_was_last_shaped_whatever_shaped_it() {
-        let just_under = SETTLE - TimeDelta::seconds(1);
-        let just_over = SETTLE + TimeDelta::seconds(1);
+    fn an_issue_settles_thirty_minutes_after_it_was_last_shaped_whatever_shaped_it() {
+        let wait = TimeDelta::minutes(30);
+        let just_under = wait - TimeDelta::seconds(1);
+        let just_over = wait + TimeDelta::seconds(1);
         for (by, said) in [
             (Shaping::Labelled, "labelled ready-for-agent"),
             (Shaping::SubIssues, "a sub-issue added or removed"),
             (Shaping::Blockers, "a \"blocked by\" link added or removed"),
         ] {
-            for (ago, settled) in [(just_under, false), (SETTLE, true), (just_over, true)] {
+            for (ago, settled) in [(just_under, false), (wait, true), (just_over, true)] {
                 let facts = Facts {
                     last_shaped: shaped(by, ago),
                     ..Facts::default()
@@ -655,7 +660,7 @@ mod tests {
                 } else {
                     assert_eq!(ready, None, "{said}, {ago}");
                     let line =
-                        passed_over(&format!("#7 not settled: {said} less than 10 minutes ago"));
+                        passed_over(&format!("#7 not settled: {said} less than 30 minutes ago"));
                     assert_eq!(seen, [candidate, started, line], "{said}, {ago}");
                 }
             }
@@ -709,7 +714,7 @@ mod tests {
             (
                 &[],
                 facts(false, false, false, false),
-                "#7 not settled: labelled ready-for-agent less than 10 minutes ago",
+                "#7 not settled: labelled ready-for-agent less than 30 minutes ago",
             ),
         ] {
             let (ready, seen) = search(vec![listed(7, labels)], vec![(7, facts)]);

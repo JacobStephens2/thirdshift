@@ -134,7 +134,7 @@ impl Outside for LaunchAndGitHub<'_> {
     }
 
     fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
-        ready::first(self.launch.git(), self.repo)
+        ready::first(self.launch.git(), self.repo, self.config.pickup_wait)
     }
 
     fn step(&mut self, line: String) {

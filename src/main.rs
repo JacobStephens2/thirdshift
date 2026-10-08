@@ -247,10 +247,15 @@ ready-for-agent that has none of ready-for-human, needs-info, wontfix and needs-
 not in-progress, is not a sub-issue, is not labelled base-fix, has no open blocker, and was
 never started: no Issue branch for it is on origin, and no pull request from one exists,
 open, merged or closed. A Spec whose Tickets are all closed is not one either: a Spec run
-would find nothing to do. It must also be settled: ten minutes have passed since
+would find nothing to do. It must also be settled: by default, thirty minutes have passed since
 ready-for-agent was applied to it, and since a sub-issue or a \"blocked by\" link of its
 was last added or removed, so a Spec is not taken while its Tickets are being attached. A
 sub-issue is reached through its Spec, when the Spec is itself a Ready issue.
+pickup.wait_minutes in the User config sets that settling window in whole minutes from
+0 up, within the supported duration range; 0 disables waiting. There is no flag for it:
+
+    [pickup]
+    wait_minutes = 30
 
 Each ready-for-agent issue a pass looks at and does not take gets one line on stderr with
 the first reason that applies, such as #21 is a Ticket of #20, which is not ready or #30

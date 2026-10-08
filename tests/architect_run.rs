@@ -2334,7 +2334,7 @@ fn a_ready_for_agent_issue_that_is_claimed_unsettled_blocked_or_a_base_fixs_does
                 let labelled = (TimelineEvent::Labelled("ready-for-agent"), 9);
                 scenario.issue_timeline(7, &[labelled]);
             },
-            "#7 not settled: labelled ready-for-agent less than 10 minutes ago".to_string(),
+            "#7 not settled: labelled ready-for-agent less than 30 minutes ago".to_string(),
         ),
         (
             |scenario| scenario.issue_blocked_by(7, &[5]),
