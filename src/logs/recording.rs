@@ -83,6 +83,7 @@ impl<O: Outside> Record<O> {
             Begin::Run(issue) => (format!("starting on {}", issue.url), false),
             Begin::ArchitectRun => ("Architect run starting".into(), true),
             Begin::PickupRun => ("Pickup run starting".into(), true),
+            Begin::SecurityRun => ("Security run starting".into(), true),
         };
         let now = self.outside.now();
         self.stamp

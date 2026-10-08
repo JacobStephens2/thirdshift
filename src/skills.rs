@@ -61,7 +61,7 @@ pub fn remove_written() {
 
 /// Where the Command wrote the Factory skills out, writing them now if it
 /// has not yet.
-fn written_out() -> Result<PathBuf> {
+pub(crate) fn written_out() -> Result<PathBuf> {
     let mut written = WRITTEN.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(dir) = &*written {
         return Ok(dir.path().to_owned());

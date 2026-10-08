@@ -560,7 +560,9 @@ mod tests {
             let spec_run = match work {
                 Work::Run(_) => false,
                 Work::SpecRun(_) => true,
-                Work::PickupRun(_) | Work::ArchitectRun(_) => panic!("not a Run's work"),
+                Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
+                    panic!("not a Run's work")
+                }
             };
             self.calls.push(Call::Started { spec_run });
         }

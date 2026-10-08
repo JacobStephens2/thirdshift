@@ -727,6 +727,26 @@ A skip exits `0` and sends no email, even with Run notifications on, so the sche
 
 On a repository that also has a [Pickup line](#a-pickup-run-on-a-schedule), put `--plan-only` on the Weeding line instead: the Architect run publishes the Architect plan and marks it ready, and a Pickup run builds it as an ordinary Ready issue, under the [Claim limit](#the-claim-limit), and merges it with `merge.always`, as in the [whole crontab](#a-pickup-run-on-a-schedule) below.
 
+## Security runs
+
+`thirdshift secure` starts a report-only **Security run**: it audits the **Base branch** at its head on `origin` and records each **Security finding** privately as a draft repository security advisory. Start it from a clone on the Base branch, or name that branch from any checkout:
+
+```sh
+thirdshift secure
+thirdshift secure base main harness claude
+thirdshift secure base main harness codex model gpt-6.1-sol effort high
+```
+
+The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email` and `no-email`, with or without dashes). This first step dispatches no fix and sends no Run notification; those options are reserved for later Security run work. It reproduces and fixes nothing, and never commits, pushes, publishes or closes an advisory.
+
+A Security run is skipped while another **Pass** on the repository is running on the machine, or while the repository has a **Ready issue**. A skip exits `0`, starts no session and keeps no Command log; its reason goes into the repository's **Activity log**, with the usual `activity.quiet_skips` behavior. Before starting work, thirdshift checks the chosen Harness and that **Node.js** is on `PATH`, since the embedded skill's report validators require it.
+
+The Security audit runs in a throwaway worktree detached at origin's Base branch head, leaving the Launch directory and local work untouched, including when `launch.pull` is set. Its Session prompt runs `thirdshift-security-audit` in full audit mode with the `quick` profile, auditing the whole repository except vendored and third-party code. It names a `SECURITY.md` or conventional threat-model document when present, reads compatible earlier runs and ends `incomplete` instead of asking for input.
+
+Each audit keeps a new output directory under `<logs.dir>/<owner>/<repo>/audits/`, outside the worktree. The audit artifacts and private advisory descriptions contain evidence; keep the logs directory private. thirdshift runs both embedded validators before recording anything. A missing final line, an incomplete session or an invalid report fails the run and names its Session log. Command logs are in `commands/secure/`; Session logs are named `secure-<stamp>-security-audit.jsonl`; the Activity log records the start and ending as for other Passes.
+
+A finding's title becomes the advisory summary. Its description preserves its write-up, trace, evidence and validation plan, with the fingerprint and audited commit. thirdshift claims no severity, CWE or affected version range. It uses the package in the repository's manifest, or the `other` ecosystem when none is identified. Matching fingerprints in any advisory state are kept rather than recorded again. Rejected candidates stay in the local report and produce no advisory. Draft advisories require GitHub repository security manager or administrator access. Private-repository fallback is later work; this command fails if the advisory endpoint is unavailable, without publishing a finding as an issue.
+
 ## Pickup runs
 
 `thirdshift pickup` starts a **Pickup run**: one pass, with no **Issue URL**, that takes the lowest-numbered **Ready issue** in the repository and runs it, so that an issue you have already marked ready needs no command typed for it. Start it from a clone of the repository, on the **Base branch**, or name the Base branch with `base <branch>`:

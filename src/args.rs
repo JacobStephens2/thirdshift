@@ -25,6 +25,7 @@ pub enum Command {
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
     Pickup(PickupArgs),
+    Secure(PickupArgs),
     Run(RunArgs),
 }
 
@@ -49,7 +50,7 @@ pub struct ArchitectArgs {
     pub plan_only: bool,
 }
 
-/// A Pickup run's arguments.
+/// A Pickup run or Security run's shared Pass arguments.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PickupArgs {
     /// The Base branch `base <branch>` named, if given; without it, the
@@ -77,7 +78,7 @@ pub struct RunArgs {
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
-/// `setup`, `email-test`, `architect` and `pickup` are commands only as the
+/// `setup`, `email-test`, `architect`, `pickup` and `secure` are commands only as the
 /// first argument. Otherwise it is a Run: one Issue URL, with each Run flag at
 /// most once, before or after it.
 /// `email` may be followed by the address to send the Run notification to,
@@ -105,7 +106,8 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("architect") => return parse_architect(&args[1..]).map(Command::Architect),
-        Some("pickup") => return parse_pickup(&args[1..]).map(Command::Pickup),
+        Some("pickup") => return parse_pass(&args[1..], "pickup").map(Command::Pickup),
+        Some("secure") => return parse_pass(&args[1..], "secure").map(Command::Secure),
         _ => {}
     }
     let mut issue = None;
@@ -178,15 +180,15 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     })
 }
 
-/// Parse the arguments after `pickup`: its flags, each at most once, in any
+/// Parse the arguments after `pickup` or `secure`: shared flags, at most once, in any
 /// order, and nothing else. `base` must be followed by the Base branch.
-fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
+fn parse_pass(args: &[String], command: &str) -> Result<PickupArgs> {
     let mut base = None;
     let mut flags = Flags::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
         if !take_pass_flag(&mut base, &mut flags, arg, &mut args)? {
-            bail!("unexpected argument after pickup: {arg}");
+            bail!("unexpected argument after {command}: {arg}");
         }
     }
     Ok(PickupArgs { base, flags })

@@ -34,6 +34,7 @@ mod ready;
 mod resend_key;
 mod run;
 mod run_ending;
+mod security;
 mod session;
 mod setup;
 mod skills;
@@ -67,6 +68,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift architect base <branch> [<focus>]   Do either with <branch> as the Base branch, from a clone on any branch
        thirdshift pickup                              Take the lowest-numbered Ready issue in the repository and run it
        thirdshift pickup base <branch>                Do that with <branch> as the Base branch, from a clone on any branch
+       thirdshift secure                              Audit the Base branch and record findings privately
+       thirdshift secure base <branch>                Do that with <branch> as the Base branch
        thirdshift email-test [<address>]              Send a test email through Resend, to check the email setup
        thirdshift setup                               Choose your defaults, then write the User config with every setting
        thirdshift update                              Update thirdshift to the latest release
@@ -391,6 +394,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Architect(architect_args)) => return architect(architect_args),
         Ok(Command::Pickup(pickup_args)) => return pickup(pickup_args),
+        Ok(Command::Secure(args)) => return secure(args),
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
@@ -497,6 +501,27 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Ok(pickup::Outcome::Skipped(skipped)) => started.finish(Ending::Skipped(skipped.into())),
         Err(error) => failure(&error),
     }
+}
+
+/// A report-only Security run. Notification delivery is added by #539.
+fn secure(args: PickupArgs) -> ExitCode {
+    let (config, started) = match command::start(
+        Begin::SecurityRun,
+        |_| notification::NotificationAsk::Skip,
+        About::PickupRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = args.flags.harness(&config);
+    let outcome = security::run(args.base.as_deref(), &args.flags, &config, &mut harness);
+    started.finish(match outcome {
+        security::Outcome::Skipped(skipped) => Ending::Skipped(command::Skip {
+            reason: skipped.to_string(),
+            urls: Vec::new(),
+        }),
+        security::Outcome::Audited(audited) => Ending::Security(audited),
+    })
 }
 
 /// The end of a command other than a Run: the line that says how it went,

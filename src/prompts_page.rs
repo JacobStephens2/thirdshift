@@ -19,7 +19,7 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Units};
+use Sender::{ArchitectRun, SecurityRun, Units};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -87,6 +87,8 @@ enum Sender {
     Units(&'static [Unit]),
     /// An Architect run, which the press units, a Run's, don't cover.
     ArchitectRun,
+    /// A Security run, before any dispatched Run.
+    SecurityRun,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -161,6 +163,19 @@ fn prompts() -> Vec<Prompt> {
             when: "Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.",
             sender: ArchitectRun,
             text: prompt::architecture_review(BASE, Some(FOCUS)),
+        },
+        Prompt {
+            id: "prompt-security-audit",
+            title: "Security audit",
+            when: "Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root.",
+            sender: SecurityRun,
+            text: prompt::security_audit(
+                BASE,
+                "<audited commit>",
+                std::path::Path::new("<audit root>"),
+                std::path::Path::new("<output directory>"),
+                Some("SECURITY.md"),
+            ),
         },
         Prompt {
             id: "prompt-conflict-repair",
@@ -532,6 +547,7 @@ fn sent_by(sender: &Sender) -> String {
     match sender {
         Units(units) => unit_links(units),
         ArchitectRun => "an Architect run, before any unit".to_string(),
+        SecurityRun => "a Security run, before any unit".to_string(),
     }
 }
 

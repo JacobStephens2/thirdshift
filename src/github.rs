@@ -12,6 +12,9 @@ use crate::issue::IssueUrl;
 use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
+mod advisories;
+pub use advisories::{DraftAdvisory, Package};
+
 #[cfg(test)]
 mod execution_tests;
 
@@ -614,9 +617,13 @@ impl GitHub {
             .with_context(|| format!("{command} returned invalid JSON"))
     }
     fn output(&self, args: &[&str]) -> Result<Output> {
+        self.output_with_input(args, None)
+    }
+
+    fn output_with_input(&self, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
         process::output(
             Command::new("gh").args(args),
-            None,
+            input,
             Control {
                 name: "gh",
                 interruption: self.interruption,

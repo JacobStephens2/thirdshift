@@ -111,7 +111,7 @@ pub fn run(
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
-            logs::skipped(Pass::PickupRun, &running.0, &running);
+            logs::skipped(Pass::Pickup, &running.0, &running);
             return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
@@ -142,7 +142,7 @@ fn run_through(
     let ReadyIssue { listed, is_spec } = match gates(outside, repo, limit)? {
         Decision::Take(ready) => ready,
         Decision::Skip(skipped) => {
-            outside.skipped(Pass::PickupRun, &skipped);
+            outside.skipped(Pass::Pickup, &skipped);
             return Ok(Outcome::Skipped(skipped));
         }
     };

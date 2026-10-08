@@ -106,6 +106,7 @@ pub fn main(argv: Vec<String>) {
     let status = Command::new("bash")
         .arg("-e")
         .arg(&script)
+        .env("FAKE_CLAUDE_PROMPT", argv.last().unwrap())
         .env("FAKE_CLAUDE_FINAL_MESSAGE", &final_message)
         .env("FAKE_CODEX_ERROR", &error)
         .status()
