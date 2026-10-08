@@ -228,6 +228,7 @@ fn fix(
         outside.link_security_fix(&record, &ticket)?;
         Ok(outside.dispatch(crate::pass::Dispatch::SecurityFix {
             ticket: &ticket,
+            is_spec: record.fix_size()? == reproduction::FixSize::Spec,
             base,
         }))
     })();
@@ -367,6 +368,7 @@ mod tests {
                 );
                 assert!(outside.calls.contains(&Call::DispatchSecurityFix {
                     ticket: 8,
+                    is_spec: false,
                     base: "main".into()
                 }));
                 assert!(!outside.calls.contains(&Call::AuditHistory));

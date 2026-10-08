@@ -198,7 +198,7 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-security-fix",
             title: "Security fix publishing",
-            when: "With fixing allowed, publishes one terse Ticket for the most severe reproduced finding. thirdshift checks and marks it ready before dispatching its Run.",
+            when: "With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run.",
             sender: SecurityRun,
             text: prompt::security_fix(BASE, "<private record URL>", "<recorded Security finding>"),
         },

@@ -330,16 +330,18 @@ pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path
 }
 
 pub const SECURITY_FIX_LINE: &str = "Security fix Ticket: ";
+pub const SECURITY_FIX_SPEC_LINE: &str = "Security fix Spec: ";
 
 pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
     format!(
         "Publish the fix for this reproduced Security finding on Base branch `{base}`.\n\
          Read the private record at {url} and the record below.\n\
-         Publish exactly one new, terse Ticket in this repository, labelled `needs-triage`. Create that label if missing.\n\
-         The Ticket says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record.\n\
-         For now every fix is a single Ticket, even if the reproduction suggested a Spec. Publish no Spec or sub-issues.\n\
-         This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks the Ticket, marks it ready, labels it security-fix and dispatches its Run.\n\
-         End your final message with exactly `{SECURITY_FIX_LINE}<Issue URL>`.\n\n\
+         Follow the completed reproduction's fix size: single publishes one Ticket; spec publishes a Spec with Tickets using `thirdshift-to-spec` and `thirdshift-to-tickets`.\n\
+         On a public repository, publish one new top issue labelled `needs-triage`. Create that label if missing. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues.\n\
+         Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.\n\
+         A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. Read the links back before finishing.\n\
+         This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.\n\
+         End your final message with exactly `{SECURITY_FIX_LINE}<Issue URL>` for single or `{SECURITY_FIX_SPEC_LINE}<Issue URL>` for spec, naming the top issue.\n\n\
          Private record:\n{finding}\n\n{HEADLESS}"
     )
 }

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::GitHub;
 use crate::issue::IssueUrl;
 use crate::labels::{Label, NEEDS_TRIAGE};
-use crate::security::reproduction::{Reproduction, Severity};
+use crate::security::reproduction::{FixSize, Reproduction, Severity};
 
 const SECURITY_FINDING: Label = Label::new(
     "security-finding",
@@ -69,7 +69,9 @@ impl SecurityRecords {
             {
                 continue;
             }
-            if let Some(severity) = reproduced_severity(&value[description]) {
+            if let Some((severity, _)) =
+                reproduced_outcome(value[description].as_str().unwrap_or_default())
+            {
                 // The Day shift's current advisory grade takes precedence
                 // over the historical proof-of-concept's score.
                 let severity = value["severity"]
@@ -148,14 +150,18 @@ impl SecurityRecords {
 }
 
 fn reproduced_severity(description: &Value) -> Option<Severity> {
-    let (_, reproduction) = description
-        .as_str()?
-        .split_once("\n<!-- thirdshift:security-reproduction -->\n")?;
+    reproduced_outcome(description.as_str()?).map(|(severity, _)| severity)
+}
+
+fn reproduced_outcome(description: &str) -> Option<(Severity, FixSize)> {
+    let (_, reproduction) =
+        description.split_once("\n<!-- thirdshift:security-reproduction -->\n")?;
     let outcome = reproduction
         .lines()
         .find_map(|line| line.strip_prefix("Outcome: "))?;
     match outcome.split_whitespace().collect::<Vec<_>>().as_slice() {
-        ["reproduced", severity, "single" | "spec"] => Severity::parse(severity),
+        ["reproduced", severity, "single"] => Some((Severity::parse(severity)?, FixSize::Single)),
+        ["reproduced", severity, "spec"] => Some((Severity::parse(severity)?, FixSize::Spec)),
         _ => None,
     }
 }
@@ -181,6 +187,13 @@ pub enum SecurityRecord {
 }
 
 impl SecurityRecord {
+    /// The size judged by the completed reproduction, never the candidate write-up.
+    pub fn fix_size(&self) -> Result<FixSize> {
+        reproduced_outcome(self.description())
+            .map(|(_, size)| size)
+            .context("the Security finding has no reproduced fix size")
+    }
+
     /// A Day-shift decision is the finding's grade; a repeated fingerprint
     /// must not publish new proof-of-concept evidence or replace that grade.
     pub fn untriaged(&self) -> bool {

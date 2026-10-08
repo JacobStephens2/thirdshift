@@ -44,13 +44,11 @@ const REVIEW: &str = "architecture-review";
 pub enum Dispatch<'a> {
     SecurityFix {
         ticket: &'a IssueUrl,
+        is_spec: bool,
         base: &'a str,
     },
     /// An Architect run's Architect plan.
-    ArchitectPlan {
-        plan: &'a IssueUrl,
-        base: &'a str,
-    },
+    ArchitectPlan { plan: &'a IssueUrl, base: &'a str },
     /// The Ready issue a Pickup run took, a Spec or not, as `is_spec` says.
     ReadyIssue {
         issue: &'a IssueUrl,
@@ -279,9 +277,13 @@ impl Outside for LaunchAndGitHub<'_> {
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
         let (issue, asks, base) = match dispatch {
-            Dispatch::SecurityFix { ticket, base } => (
+            Dispatch::SecurityFix {
                 ticket,
-                Asks::of_ready_issue(ticket, false, self.flags, self.config),
+                is_spec,
+                base,
+            } => (
+                ticket,
+                Asks::of_ready_issue(ticket, is_spec, self.flags, self.config),
                 base,
             ),
             Dispatch::ArchitectPlan { plan, base } => (
@@ -391,6 +393,7 @@ mod in_memory {
         LinkSecurityFix(u64),
         DispatchSecurityFix {
             ticket: u64,
+            is_spec: bool,
             base: String,
         },
         /// It recorded that it started work: on this issue, for a Pickup
@@ -798,8 +801,13 @@ mod in_memory {
 
         fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
             self.calls.push(match dispatch {
-                Dispatch::SecurityFix { ticket, base } => Call::DispatchSecurityFix {
+                Dispatch::SecurityFix {
+                    ticket,
+                    is_spec,
+                    base,
+                } => Call::DispatchSecurityFix {
                     ticket: ticket.number,
+                    is_spec,
                     base: base.into(),
                 },
                 Dispatch::ArchitectPlan { plan, base } => Call::DispatchPlan {

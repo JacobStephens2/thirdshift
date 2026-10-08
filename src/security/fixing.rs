@@ -1,4 +1,4 @@
-//! Publish and check a terse fix Ticket, without exposing the private write-up.
+//! Publish and check a terse fix Ticket or Spec, without exposing the private write-up.
 
 use std::path::PathBuf;
 
@@ -11,6 +11,7 @@ use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::prompt;
+use crate::security::reproduction::FixSize;
 use crate::session::{Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
 
@@ -25,6 +26,44 @@ pub fn publish(
     url: &str,
     harness: &Choice,
 ) -> (Result<IssueUrl>, Option<PathBuf>) {
+    let size = match record.fix_size() {
+        Ok(size) => size,
+        Err(error) => return (Err(error), None),
+    };
+    if let SecurityRecord::Issue { number, .. } = record
+        && size == FixSize::Single
+    {
+        let ready = (|| -> Result<IssueUrl> {
+            let issue = IssueUrl::parse(url)?;
+            if issue.number != *number || !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
+                bail!("the private Security finding's issue does not match its record");
+            }
+            let github = GitHub::new();
+            let viewed = github.issue(&issue)?;
+            if !viewed.is_open
+                || viewed
+                    .labels
+                    .swapped(&[NEEDS_TRIAGE], &[])
+                    .unready()
+                    .is_some()
+                || !github.tickets(&issue)?.is_empty()
+            {
+                bail!("the private Security finding must be an open, ready single Ticket");
+            }
+            if crate::interrupt::requested() {
+                bail!("interrupted");
+            }
+            Edit::of(
+                &issue,
+                viewed.labels,
+                &[NEEDS_TRIAGE],
+                &[READY_FOR_AGENT, SECURITY_FIX],
+            )
+            .apply(&github)?;
+            Ok(issue)
+        })();
+        return (ready, None);
+    }
     let worktree = match ReviewWorktree::create(launch, &repo.name, base) {
         Ok(worktree) => worktree,
         Err(error) => return (Err(error), None),
@@ -42,19 +81,29 @@ pub fn publish(
             .map(str::trim)
             .rfind(|line| !line.is_empty())
             .unwrap_or_default();
-        let ticket = line.strip_prefix(prompt::SECURITY_FIX_LINE).and_then(|url| IssueUrl::parse(url).ok()).context("the Security fix publishing session ended without the final line its prompt asks for")?;
+        let prefix = match size {
+            FixSize::Single => prompt::SECURITY_FIX_LINE,
+            FixSize::Spec => prompt::SECURITY_FIX_SPEC_LINE,
+        };
+        let ticket = line.strip_prefix(prefix).and_then(|url| IssueUrl::parse(url).ok()).context("the Security fix publishing session ended without the final line its prompt asks for")?;
         if !ticket.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
             bail!("the Security fix Ticket is not in this repository");
+        }
+        let private = matches!(record, SecurityRecord::Issue { .. });
+        if let SecurityRecord::Issue { number, .. } = record
+            && ticket.number != *number
+        {
+            bail!("a private Security fix must reuse the finding's own issue");
         }
         let github = GitHub::new();
         let viewed = github.issue(&ticket)?;
         if !viewed.is_open {
             bail!("the Security fix Ticket is closed");
         }
-        if viewed.created.timestamp() < started.timestamp() {
+        if !private && viewed.created.timestamp() < started.timestamp() {
             bail!("the Security fix Ticket was created before this session");
         }
-        if !viewed.labels.has(NEEDS_TRIAGE)
+        if !private && !viewed.labels.has(NEEDS_TRIAGE)
             || viewed
                 .labels
                 .swapped(&[NEEDS_TRIAGE], &[])
@@ -65,33 +114,30 @@ pub fn publish(
                 "the Security fix Ticket must be labelled needs-triage with no other Unready Ticket label"
             );
         }
-        if github.candidate(&ticket, NEEDS_TRIAGE)?.has_sub_issues() {
-            bail!("the Security fix must be a single Ticket");
+        let tickets = github.tickets(&ticket)?;
+        if (size == FixSize::Spec) == tickets.is_empty() {
+            bail!("the Security fix's sub-issues do not match the reproduced fix size");
         }
-        let body = github.security_fix_text(&ticket)?;
-        if !body.contains(url) {
-            bail!("the Security fix Ticket does not link the private record");
+        if !private {
+            check_issue_text(&github, &ticket, record, url)?;
         }
-        // Reject copied write-up lines and test text. The session is also
-        // instructed to publish only what the fix changes, never a paraphrase.
-        for line in record.description().lines().filter(|line| {
-            let line = line.trim();
-            // A bare identifier can also be an ordinary word in fix prose.
-            // Complete short statements such as bypass_login(); stay checked.
-            line.chars().any(char::is_alphanumeric)
-                && !line.chars().all(|ch| ch.is_alphanumeric() || ch == '_')
-                && !line.starts_with("```")
-                && !line.starts_with("Fingerprint:")
-                && !line.starts_with("Audited commit:")
-                && !line.starts_with("Outcome:")
-                && !line.starts_with("Severity:")
-                && !line.starts_with("Fix size:")
-                && !line.starts_with('#')
-                && !line.starts_with("<!--")
-        }) {
-            if body.contains(line.trim()) {
-                bail!("the Security fix Ticket includes private write-up text");
+        for child in &tickets {
+            let issue = ticket.sibling(child.number);
+            let viewed = github.issue(&issue)?;
+            if !viewed.is_open || viewed.created.timestamp() < started.timestamp() {
+                bail!("a Security fix Spec's Ticket must be new and open");
             }
+            if child.has_sub_issues
+                || !viewed.labels.has(READY_FOR_AGENT)
+                || viewed.labels.unready().is_some()
+            {
+                bail!("a Security fix Spec's Ticket must be ready-for-agent with no sub-issues");
+            }
+            check_issue_text(&github, &issue, record, url)?;
+        }
+        for child in tickets {
+            let issue = ticket.sibling(child.number);
+            Edit::of(&issue, github.issue_labels(&issue)?, &[], &[SECURITY_FIX]).apply(&github)?;
         }
         if crate::interrupt::requested() {
             bail!("interrupted");
@@ -105,4 +151,38 @@ pub fn publish(
         .apply(&github)?;
         Ok(ticket)
     })
+}
+
+fn check_issue_text(
+    github: &GitHub,
+    ticket: &IssueUrl,
+    record: &SecurityRecord,
+    url: &str,
+) -> Result<()> {
+    let body = github.security_fix_text(&ticket)?;
+    if !body.contains(url) {
+        bail!("the Security fix Ticket does not link the private record");
+    }
+    // Reject copied write-up lines and test text. The session is also
+    // instructed to publish only what the fix changes, never a paraphrase.
+    for line in record.description().lines().filter(|line| {
+        let line = line.trim();
+        // A bare identifier can also be an ordinary word in fix prose.
+        // Complete short statements such as bypass_login(); stay checked.
+        line.chars().any(char::is_alphanumeric)
+            && !line.chars().all(|ch| ch.is_alphanumeric() || ch == '_')
+            && !line.starts_with("```")
+            && !line.starts_with("Fingerprint:")
+            && !line.starts_with("Audited commit:")
+            && !line.starts_with("Outcome:")
+            && !line.starts_with("Severity:")
+            && !line.starts_with("Fix size:")
+            && !line.starts_with('#')
+            && !line.starts_with("<!--")
+    }) {
+        if body.contains(line.trim()) {
+            bail!("the Security fix Ticket includes private write-up text");
+        }
+    }
+    Ok(())
 }
