@@ -116,6 +116,7 @@ pub struct BaseFix {
     /// The Harness, Model and Effort a Base fix it starts runs its sessions
     /// on: the Run's.
     harness: Choice,
+    security_fix: bool,
 }
 
 /// The Base fix a Run took as its one: one it started, or one it found
@@ -141,7 +142,7 @@ impl BaseFix {
     /// that asked `ask` about a Base fix, and whose sessions run on
     /// `harness`, as a Base fix it starts does. A Base fix starts none of
     /// its own, whatever it asked.
-    pub fn new(child: Option<&Kind>, ask: BaseFixAsk, harness: Choice) -> Self {
+    pub fn new(child: Option<&Kind>, ask: BaseFixAsk, harness: Choice, security_fix: bool) -> Self {
         let (on_inherited_failures, retry) = match (child, ask) {
             (Some(Kind::BaseFix { .. }), _) => (OnInheritedFailures::IsBaseFix, None),
             (_, BaseFixAsk::Allow) => (OnInheritedFailures::StartBaseFix, None),
@@ -154,6 +155,7 @@ impl BaseFix {
             taken: None,
             advice: Vec::new(),
             harness,
+            security_fix,
         }
     }
 
@@ -218,6 +220,7 @@ impl BaseFix {
             launch,
             issue,
             harness: &harness,
+            security_fix: self.security_fix,
         };
         self.fix_through(&mut outside, issue, pr_url, base, base_commit, failed)
     }
@@ -470,6 +473,7 @@ struct LaunchAndGitHub<'a> {
     launch: &'a Git,
     issue: &'a IssueUrl,
     harness: &'a Choice,
+    security_fix: bool,
 }
 
 impl Outside for LaunchAndGitHub<'_> {
@@ -527,7 +531,14 @@ impl Outside for LaunchAndGitHub<'_> {
         let kind = Kind::BaseFix {
             base: base.to_string(),
         };
-        child_run::start(fix, kind, BaseFixAsk::Forbid, self.harness)?.wait()
+        child_run::start(
+            fix,
+            kind,
+            BaseFixAsk::Forbid,
+            self.security_fix,
+            self.harness,
+        )?
+        .wait()
     }
 
     fn pause(&mut self) -> Result<()> {
@@ -875,7 +886,7 @@ mod tests {
 
     /// A Run's Base fix as asked `ask`, not itself a Base fix.
     fn asked(ask: BaseFixAsk) -> BaseFix {
-        BaseFix::new(None, ask, Choice::default())
+        BaseFix::new(None, ask, Choice::default(), false)
     }
 
     fn undecided() -> BaseFixAsk {
@@ -1322,7 +1333,7 @@ mod tests {
             base: "main".to_string(),
         };
         for ask in [BaseFixAsk::Allow, BaseFixAsk::Forbid, undecided()] {
-            let base_fix = BaseFix::new(Some(&child), ask, Choice::default());
+            let base_fix = BaseFix::new(Some(&child), ask, Choice::default(), false);
             assert!(!base_fix.sees_inherited_failures());
             assert_eq!(base_fix.ask_of_tickets(), BaseFixAsk::Forbid);
         }
@@ -1330,7 +1341,7 @@ mod tests {
             spec_branch: "spec-3".to_string(),
         };
         assert!(
-            BaseFix::new(Some(&ticket), BaseFixAsk::Allow, Choice::default())
+            BaseFix::new(Some(&ticket), BaseFixAsk::Allow, Choice::default(), false)
                 .sees_inherited_failures()
         );
         assert!(asked(BaseFixAsk::Forbid).sees_inherited_failures());

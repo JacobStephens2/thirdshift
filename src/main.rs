@@ -315,6 +315,17 @@ known, title and private link, never its write-up. A skipped Security run sends 
 The address and Resend API key checks come before skip checks or work; a failed send is
 only a warning and never changes the run's outcome.
 
+security-fix allows a Security run to fix one reproduced finding: the most severe first,
+ties in private-record order, before auditing or after an audit reproduces a finding.
+The publishing session creates one terse Ticket that says what the fix changes and links
+the private record; thirdshift checks it, swaps needs-triage for ready-for-agent, adds
+security-fix and dispatches its Run. The Security run ends as that Run ends, including
+merge when requested. Fixing is off by default. [security] fix = true also allows it;
+no-security-fix overrides the setting. Both words, with or without dashes, are accepted
+on Run, Spec run, Architect run, Pickup run and Security run commands, and passed to their
+Runs. Without permission, a reproduced finding waits until its record is closed or
+published, or its fix Ticket is closed.
+
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
 With merge.always set, every Run is a Merge run unless given --no-merge:
@@ -510,7 +521,7 @@ fn pickup(args: PassArgs) -> ExitCode {
     }
 }
 
-/// A report-only Security run, with one notification when asked, unless skipped.
+/// A Security run, with one notification when asked, unless skipped.
 fn secure(args: PassArgs) -> ExitCode {
     let (config, mut started) = match command::start(
         Begin::SecurityRun,
@@ -529,6 +540,7 @@ fn secure(args: PassArgs) -> ExitCode {
             urls: Vec::new(),
         }),
         security::Outcome::Audited(audited) => Ending::Security(audited),
+        security::Outcome::Fixed { ended, findings } => Ending::SecurityFix { ended, findings },
     })
 }
 

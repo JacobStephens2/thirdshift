@@ -58,7 +58,7 @@ pub struct PassArgs {
     pub base: Option<String>,
     /// The flags it shares with a Run: `email` and `no-email` for its own
     /// Run notification, the rest for a run the Pass dispatches. The
-    /// report-only Security run reserves them until those stages are built.
+    /// Security run also uses `security-fix` for its own choice of work.
     pub flags: Flags,
 }
 
@@ -246,6 +246,18 @@ fn take_flag<'a>(
         "no-base-fix" | "--no-base-fix" => {
             ask_once(&mut flags.base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
         }
+        "security-fix" | "--security-fix" => ask_once(
+            &mut flags.security_fix,
+            crate::security::FixAsk::Allow,
+            arg,
+            SECURITY_FIX_FLAGS,
+        )?,
+        "no-security-fix" | "--no-security-fix" => ask_once(
+            &mut flags.security_fix,
+            crate::security::FixAsk::Forbid,
+            arg,
+            SECURITY_FIX_FLAGS,
+        )?,
         "harness" | "--harness" => ask_harness(&mut flags.harness.harness, arg, rest.next())?,
         "model" | "--model" => {
             let model = &mut flags.harness.model_and_effort.model;
@@ -263,6 +275,7 @@ fn take_flag<'a>(
 const MERGE_FLAGS: &str = "merge and no-merge";
 const EMAIL_FLAGS: &str = "email and no-email";
 const BASE_FIX_FLAGS: &str = "base-fix and no-base-fix";
+const SECURITY_FIX_FLAGS: &str = "security-fix and no-security-fix";
 
 /// Record in `given` what the flag `arg` asked for: the same kind of ask
 /// twice is a repeated argument, and a different one contradicts the first,
@@ -724,6 +737,7 @@ mod tests {
         let all = PassArgs {
             base: Some("develop".to_string()),
             flags: Flags {
+                security_fix: None,
                 goal: Some(Goal::Merged),
                 email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
                 parallel: NonZeroUsize::new(2),
@@ -778,6 +792,7 @@ mod tests {
         let cautious = PassArgs {
             base: None,
             flags: Flags {
+                security_fix: None,
                 goal: Some(Goal::ReadyForReview),
                 email: Some(NotificationAsk::Skip),
                 parallel: None,

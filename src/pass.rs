@@ -42,8 +42,15 @@ const REVIEW: &str = "architecture-review";
 /// the pass's Base branch `base`, whatever the Launch directory has checked
 /// out.
 pub enum Dispatch<'a> {
+    SecurityFix {
+        ticket: &'a IssueUrl,
+        base: &'a str,
+    },
     /// An Architect run's Architect plan.
-    ArchitectPlan { plan: &'a IssueUrl, base: &'a str },
+    ArchitectPlan {
+        plan: &'a IssueUrl,
+        base: &'a str,
+    },
     /// The Ready issue a Pickup run took, a Spec or not, as `is_spec` says.
     ReadyIssue {
         issue: &'a IssueUrl,
@@ -123,6 +130,13 @@ pub trait Outside {
         record: &SecurityRecord,
         reproduction: &Reproduction,
     ) -> Result<()>;
+    fn publish_security_fix(
+        &mut self,
+        base: &str,
+        record: &SecurityRecord,
+        url: &str,
+    ) -> (Result<IssueUrl>, Option<PathBuf>);
+    fn link_security_fix(&mut self, record: &SecurityRecord, ticket: &IssueUrl) -> Result<()>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
 }
@@ -265,6 +279,11 @@ impl Outside for LaunchAndGitHub<'_> {
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
         let (issue, asks, base) = match dispatch {
+            Dispatch::SecurityFix { ticket, base } => (
+                ticket,
+                Asks::of_ready_issue(ticket, false, self.flags, self.config),
+                base,
+            ),
             Dispatch::ArchitectPlan { plan, base } => (
                 plan,
                 Asks::of_architect_plan(plan, self.flags, self.config),
@@ -285,6 +304,26 @@ impl Outside for LaunchAndGitHub<'_> {
             ..asks
         };
         run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base })
+    }
+
+    fn publish_security_fix(
+        &mut self,
+        base: &str,
+        record: &SecurityRecord,
+        url: &str,
+    ) -> (Result<IssueUrl>, Option<PathBuf>) {
+        crate::security::fixing::publish(
+            self.launch.git(),
+            self.repo,
+            base,
+            record,
+            url,
+            self.harness,
+        )
+    }
+
+    fn link_security_fix(&mut self, record: &SecurityRecord, ticket: &IssueUrl) -> Result<()> {
+        GitHub::new().link_security_fix(&self.repo.slug(), record, ticket)
     }
 }
 
@@ -348,6 +387,12 @@ mod in_memory {
         Reproduce(String),
         /// It wrote a completed reproduction to this private record.
         UpdateSecurityRecord(String),
+        PublishSecurityFix(String),
+        LinkSecurityFix(u64),
+        DispatchSecurityFix {
+            ticket: u64,
+            base: String,
+        },
         /// It recorded that it started work: on this issue, for a Pickup
         /// run, or on its repository, for an Architect run.
         Started(Option<u64>),
@@ -355,7 +400,10 @@ mod in_memory {
         Pull,
         /// It ran the Architecture review session of this Base branch on
         /// this prompt, handing on its starting line next.
-        Review { base: String, prompt: String },
+        Review {
+            base: String,
+            prompt: String,
+        },
         /// It dispatched this Ready issue, a Spec or not, on this Base
         /// branch.
         DispatchReadyIssue {
@@ -364,7 +412,10 @@ mod in_memory {
             base: String,
         },
         /// It dispatched this Architect plan on this Base branch.
-        DispatchPlan { plan: u64, base: String },
+        DispatchPlan {
+            plan: u64,
+            base: String,
+        },
     }
 
     /// A repository in memory: its issues, filed by label, open or
@@ -747,6 +798,10 @@ mod in_memory {
 
         fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
             self.calls.push(match dispatch {
+                Dispatch::SecurityFix { ticket, base } => Call::DispatchSecurityFix {
+                    ticket: ticket.number,
+                    base: base.into(),
+                },
                 Dispatch::ArchitectPlan { plan, base } => Call::DispatchPlan {
                     plan: plan.number,
                     base: base.to_string(),
@@ -764,6 +819,24 @@ mod in_memory {
             self.ending
                 .take()
                 .expect("a dispatch, with no ending scripted for it")
+        }
+
+        fn publish_security_fix(
+            &mut self,
+            _base: &str,
+            record: &SecurityRecord,
+            _url: &str,
+        ) -> (Result<IssueUrl>, Option<PathBuf>) {
+            self.calls.push(Call::PublishSecurityFix(record.name()));
+            (
+                Ok(IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap()),
+                self.session_log.clone(),
+            )
+        }
+
+        fn link_security_fix(&mut self, _record: &SecurityRecord, ticket: &IssueUrl) -> Result<()> {
+            self.calls.push(Call::LinkSecurityFix(ticket.number));
+            Ok(())
         }
     }
 

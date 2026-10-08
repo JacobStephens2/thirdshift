@@ -45,6 +45,8 @@ pub struct UserConfig {
     /// `security.harness`: the Harness a Security run uses ahead of
     /// `harness.default`, unless its command names one.
     pub security_harness: Option<Harness>,
+    /// `security.fix`: off by default; None leaves the decision unmade.
+    pub security_fix: Option<bool>,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -87,6 +89,7 @@ impl UserConfig {
             pickup_limit: NonZeroUsize::new(3).unwrap(),
             harness: harness::Settings::default(),
             security_harness: None,
+            security_fix: None,
         }
     }
 
@@ -156,6 +159,8 @@ impl UserConfig {
                     ("pickup", "limit", value) => {
                         config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
                     }
+                    ("security", "fix", Value::Boolean(fix)) => config.security_fix = Some(*fix),
+                    ("security", "fix", _) => bail!("security.fix must be true or false in {file}"),
                     ("security", "harness", Value::String(name)) => {
                         let name = name.trim();
                         if !name.is_empty() {
@@ -669,6 +674,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 
 [security]
+fix = false   # Security runs may fix reproduced findings; default false
 harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
 
 [harness]
@@ -792,6 +798,8 @@ mod tests {
         config.email.from = None;
         assert_eq!(config.harness.default, Some(Harness::Claude));
         config.harness.default = None;
+        assert_eq!(config.security_fix, Some(false));
+        config.security_fix = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
     }
 
@@ -824,6 +832,7 @@ mod tests {
                 "activity.quiet_skips",
                 "spec.parallel",
                 "pickup.limit",
+                "security.fix",
                 "security.harness",
                 "harness.default",
                 "harness.claude.model",
@@ -1218,6 +1227,10 @@ mod tests {
         if before.harness.default.is_none() {
             assert_eq!(after.harness.default, Some(Harness::Claude));
             after.harness.default = None;
+        }
+        if before.security_fix.is_none() {
+            assert_eq!(after.security_fix, Some(false));
+            after.security_fix = None;
         }
         assert_eq!(after, before, "{completed}");
         let again = document(&completed).render(None);

@@ -196,6 +196,13 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::conflict_repair(&issue, BASE, BRANCH, PR_URL),
         },
         Prompt {
+            id: "prompt-security-fix",
+            title: "Security fix publishing",
+            when: "With fixing allowed, publishes one terse Ticket for the most severe reproduced finding. thirdshift checks and marks it ready before dispatching its Run.",
+            sender: SecurityRun,
+            text: prompt::security_fix(BASE, "<private record URL>", "<recorded Security finding>"),
+        },
+        Prompt {
             id: "prompt-foreign-conflict-repair",
             title: "Conflict Repair, on Foreign commits",
             when: "In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.",

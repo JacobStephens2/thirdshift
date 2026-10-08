@@ -118,6 +118,7 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
         started_by.child(),
         asks.base_fix.clone(),
         asks.harness.clone(),
+        asks.security_fix,
     );
     let outcome = run(issue, asks, started_by, &mut base_fix);
     Ended {
@@ -163,6 +164,7 @@ fn run(
         directory: &directory,
         issue,
         goal: asks.goal,
+        security_fix: asks.security_fix,
         base_fix,
         logs: Logs::of_run(issue),
         harness: &asks.harness,
@@ -355,6 +357,7 @@ struct LaunchAndGitHub<'a> {
     directory: &'a LaunchDirectory,
     issue: &'a IssueUrl,
     goal: Goal,
+    security_fix: bool,
     base_fix: &'a mut BaseFix,
     logs: Logs,
     harness: &'a Choice,
@@ -365,6 +368,7 @@ impl LaunchAndGitHub<'_> {
     /// The Delivery of the issue into the Base branch `base`.
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
+            security_fix: self.security_fix,
             issue: self.issue,
             base,
             goal: self.goal,
@@ -690,6 +694,7 @@ mod tests {
     /// What a Run started by its command is asked, by default.
     fn asks() -> Asks {
         Asks {
+            security_fix: false,
             goal: Goal::ReadyForReview,
             notification: NotificationAsk::Skip,
             tickets_at_once: NonZeroUsize::new(1).unwrap(),

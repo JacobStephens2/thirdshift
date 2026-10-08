@@ -71,6 +71,7 @@ pub struct Given {
     pub stamp: String,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
+    pub security_fix: bool,
     /// The Harness, Model and Effort its sessions run on: the command's
     /// that started it.
     pub harness: Choice,
@@ -91,6 +92,7 @@ const STAMP: &str = "--stamp";
 
 /// The hidden argument that asks a child Run [`BaseFixAsk::Allow`].
 const ALLOW_BASE_FIX: &str = "--allow-base-fix";
+const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
 
 /// The hidden argument followed by the command that starts the Spec run
 /// again with a Base fix allowed, for the child Run to offer: it asks
@@ -125,6 +127,9 @@ impl Given {
             BaseFixAsk::Forbid => {}
             BaseFixAsk::Undecided { retry } => args.extend([OFFER_BASE_FIX, retry]),
         }
+        if self.security_fix {
+            args.push(ALLOW_SECURITY_FIX);
+        }
         args.extend([SESSIONS_HARNESS, self.harness.harness.name()]);
         if let Some(model) = &self.harness.model {
             args.extend([SESSIONS_MODEL, model]);
@@ -144,6 +149,7 @@ pub struct Reader {
     kind: Option<Kind>,
     stamp: Option<String>,
     base_fix: Option<BaseFixAsk>,
+    security_fix: bool,
     harness: Option<Harness>,
     model: Option<String>,
     effort: Option<String>,
@@ -163,6 +169,12 @@ impl Reader {
             None => bail!("missing {missing}"),
         };
         match arg {
+            ALLOW_SECURITY_FIX => {
+                if self.security_fix {
+                    bail!("repeated argument: {arg}");
+                }
+                self.security_fix = true;
+            }
             SPEC_BRANCH | BASE_FIX_INTO => {
                 not_yet_given(&self.kind, arg)?;
                 let base = value("Base branch")?;
@@ -218,6 +230,7 @@ impl Reader {
         let Some(kind) = self.kind else {
             if self.stamp.is_some()
                 || self.base_fix.is_some()
+                || self.security_fix
                 || self.harness.is_some()
                 || self.model.is_some()
                 || self.effort.is_some()
@@ -237,6 +250,7 @@ impl Reader {
             kind,
             stamp,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
+            security_fix: self.security_fix,
             harness: Choice {
                 harness,
                 model: self.model,
@@ -298,12 +312,14 @@ pub fn start(
     issue: &IssueUrl,
     kind: Kind,
     base_fix: BaseFixAsk,
+    security_fix: bool,
     harness: &Choice,
 ) -> Result<Handle> {
     let given = Given {
         kind,
         stamp: logs::stamp(),
         base_fix,
+        security_fix,
         harness: harness.clone(),
     };
     start_from(&own_executable()?, issue, &given)
@@ -681,6 +697,7 @@ mod tests {
             kind: ticket(),
             stamp: STAMPED.to_string(),
             base_fix: BaseFixAsk::Forbid,
+            security_fix: false,
             harness: Choice::default(),
         };
         let Err(error) = start_from(executable, &issue, &given) else {
@@ -738,6 +755,7 @@ mod tests {
                     kind: kind.clone(),
                     stamp: STAMPED.to_string(),
                     base_fix,
+                    security_fix: false,
                     harness: harness.clone(),
                 };
                 let written = given.to_args();

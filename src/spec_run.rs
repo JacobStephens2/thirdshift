@@ -195,6 +195,7 @@ struct ChildRunsAndGitHub<'a> {
     /// Held until it starts.
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
+    security_fix: bool,
     harness: &'a Choice,
     spec_pr: PullRequest,
 }
@@ -208,6 +209,7 @@ impl<'a> ChildRunsAndGitHub<'a> {
             children: Runs::default(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
+            security_fix: delivery.security_fix,
             harness: delivery.harness,
             delivery: Some(delivery),
             spec_pr,
@@ -232,8 +234,13 @@ impl Outside for ChildRunsAndGitHub<'_> {
             spec_branch: self.worktree().branch().to_string(),
         };
         let ticket = self.spec.sibling(number);
-        self.children
-            .start(&ticket, kind, self.base_fix.clone(), self.harness)
+        self.children.start(
+            &ticket,
+            kind,
+            self.base_fix.clone(),
+            self.security_fix,
+            self.harness,
+        )
     }
 
     fn next_ending(&mut self) -> (u64, Result<Ended>) {

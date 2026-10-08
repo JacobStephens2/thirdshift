@@ -210,6 +210,24 @@ Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
       </article>
+      <article class="job-sheet" id="prompt-security-fix" aria-labelledby="prompt-security-fix-title">
+        <h3 id="prompt-security-fix-title">Security fix publishing</h3>
+        <p>With fixing allowed, publishes one terse Ticket for the most severe reproduced finding. thirdshift checks and marks it ready before dispatching its Run.</p>
+        <p class="sent-by">Sent by a Security run, before any unit</p>
+        <pre class="job-text"><code>Publish the fix for this reproduced Security finding on Base branch `<mark class="ph">&lt;base&gt;</mark>`.
+Read the private record at &lt;private record URL&gt; and the record below.
+Publish exactly one new, terse Ticket in this repository, labelled `needs-triage`. Create that label if missing.
+The Ticket says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record.
+For now every fix is a single Ticket, even if the reproduction suggested a Spec. Publish no Spec or sub-issues.
+This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks the Ticket, marks it ready, labels it security-fix and dispatches its Run.
+End your final message with exactly `Security fix Ticket: <mark class="ph">&lt;Issue URL&gt;</mark>`.
+
+Private record:
+&lt;recorded Security finding&gt;
+
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
+</code></pre>
+      </article>
       <article class="job-sheet" id="prompt-foreign-conflict-repair" aria-labelledby="prompt-foreign-conflict-repair-title">
         <h3 id="prompt-foreign-conflict-repair-title">Conflict Repair, on Foreign commits</h3>
         <p>In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.</p>
