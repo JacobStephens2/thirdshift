@@ -726,8 +726,7 @@ fn an_origin_that_is_not_on_github_stops_the_pass_before_any_label_changes() {
 
 /// What a skipped Pickup run or Architect run says when another of either is
 /// running on the scenario's repository.
-const ALREADY_RUNNING: &str =
-    "thirdshift: an Architect run or a Pickup run is already running on acme/widgets\n";
+const ALREADY_RUNNING: &str = "thirdshift: another Pass is already running on acme/widgets\n";
 
 /// A script in which the agent touches `started` in the scenario root, then
 /// waits there until the test touches `release`, or until the scenario is

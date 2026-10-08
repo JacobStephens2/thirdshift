@@ -75,8 +75,7 @@ pub enum StartedBy<'a> {
     /// `thirdshift <Issue URL>`: the Base branch is the branch checked out
     /// in the Launch directory.
     Command,
-    /// An Architect run, dispatching its plan, or a Pickup run, dispatching
-    /// the Ready issue it took: the Base branch is that run's, whatever the
+    /// A Pass, dispatching an issue: the Base branch is that Pass's, whatever the
     /// Launch directory has checked out.
     Dispatch { base: &'a str },
     /// Another thirdshift, as this child Run, a Ticket's Run in a Spec run or
@@ -184,7 +183,7 @@ fn run(
 /// The Base branch `started_by` gave the Run, if it gave one, stands in for
 /// the checked-out branch as the Base branch: the Spec branch or the Base
 /// branch of the Run that started a child Run, or the Base branch of the
-/// Architect run or the Pickup run that dispatched this one. A Continuation's
+/// Pass that dispatched this one. A Continuation's
 /// open pull request's base beats either. Unless the Run is a child Run, an
 /// issue with sub-issues is a Spec, taken on by a Spec run instead, whose
 /// Spec branch is picked like an Issue branch, running as many Tickets at

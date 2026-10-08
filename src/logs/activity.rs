@@ -8,6 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use super::Pass;
 use super::effects::Tail;
 
 pub(super) const FILE: &str = "activity.log";
@@ -19,18 +20,16 @@ const TIME_FORMAT_LENGTH: usize = "2026-10-03 10:41:01".len();
 pub(super) enum Kind {
     Run,
     SpecRun,
-    ArchitectRun,
-    PickupRun,
+    Pass(Pass),
 }
 
 impl Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self {
-            Kind::Run => "Run",
-            Kind::SpecRun => "Spec run",
-            Kind::ArchitectRun => "Architect run",
-            Kind::PickupRun => "Pickup run",
-        })
+        match self {
+            Kind::Run => f.write_str("Run"),
+            Kind::SpecRun => f.write_str("Spec run"),
+            Kind::Pass(pass) => pass.fmt(f),
+        }
     }
 }
 

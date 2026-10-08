@@ -1,4 +1,4 @@
-//! The Pass seam: what an Architect run's or a Pickup run's gates, which
+//! The Pass seam: what a Pass's gates, which
 //! decide before any work whether it is skipped, read and change of GitHub,
 //! what an Architect run's conclusion after its Architecture review does,
 //! viewing and labelling the issue the review ended on, and what a pass

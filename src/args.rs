@@ -1,5 +1,5 @@
 //! The command line: which command, and for a Run, its Issue URL and flags,
-//! for an Architect run, its focus and flags, or for a Pickup run, its flags.
+//! or for a Pass, its flags and any arguments its own kind takes.
 
 use std::iter::Peekable;
 use std::mem::discriminant;
@@ -148,7 +148,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     let mut flags = Flags::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        if take_flag(&mut flags, arg, &mut args)? {
+        if take_pass_flag(&mut base, &mut flags, arg, &mut args)? {
             continue;
         }
         match arg.as_str() {
@@ -158,7 +158,6 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
                 }
                 plan_only = true;
             }
-            "base" | "--base" => ask_word(&mut base, arg, args.next(), "a branch")?,
             _ if arg.starts_with('-') => bail!("unexpected argument after architect: {arg}"),
             _ if focus.is_some() => bail!("unexpected argument after the focus: {arg}"),
             _ if arg.trim().is_empty() => bail!("the focus is empty"),
@@ -186,19 +185,33 @@ fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
     let mut flags = Flags::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        if take_flag(&mut flags, arg, &mut args)? {
-            continue;
-        }
-        match arg.as_str() {
-            "base" | "--base" => ask_word(&mut base, arg, args.next(), "a branch")?,
-            _ => bail!("unexpected argument after pickup: {arg}"),
+        if !take_pass_flag(&mut base, &mut flags, arg, &mut args)? {
+            bail!("unexpected argument after pickup: {arg}");
         }
     }
     Ok(PickupArgs { base, flags })
 }
 
-/// Record in `flags` what `arg` asks for, if it is one of the flags a Run,
-/// an Architect run and a Pickup run all take, with or without its dashes,
+/// Take a Pass's shared words: its Base branch and the flags for its
+/// dispatched run and its own Run notification. Each kind's parser handles
+/// only the arguments specific to that kind.
+fn take_pass_flag<'a>(
+    base: &mut Option<String>,
+    flags: &mut Flags,
+    arg: &str,
+    rest: &mut Peekable<impl Iterator<Item = &'a String>>,
+) -> Result<bool> {
+    match arg {
+        "base" | "--base" => {
+            ask_word(base, arg, rest.next(), "a branch")?;
+            Ok(true)
+        }
+        _ => take_flag(flags, arg, rest),
+    }
+}
+
+/// Record in `flags` what `arg` asks for, if it is one of the flags a Run
+/// and a Pass both take, with or without its dashes,
 /// taking from `rest` the address after `email`, if one is there, the
 /// number after `parallel`, and the name or level after `harness`, `model`
 /// and `effort`. False, taking nothing, if `arg` is none of them.

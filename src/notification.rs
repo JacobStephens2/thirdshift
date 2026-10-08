@@ -1,5 +1,5 @@
-//! The Run notification: one email when a Run, a Spec run or an Architect run
-//! ends, whatever its outcome, or when a Pickup run that took an issue does,
+//! The Run notification: one email when a Run, a Spec run or a Pass ends,
+//! whatever its outcome, unless the Pass was skipped,
 //! through the same checks and the same send as `email-test`.
 
 use std::path::Path;
@@ -18,7 +18,7 @@ use crate::logs;
 use crate::progress;
 use crate::run_ending::Account;
 
-/// What a Run, an Architect run or a Pickup run asks about its Run
+/// What a Run or a Pass asks about its Run
 /// notification, by its command or, without `email` or `no-email`, by the
 /// User config.
 #[derive(Debug, Clone, PartialEq, Eq)]

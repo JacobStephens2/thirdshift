@@ -14,7 +14,7 @@ use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
 
-/// The flags a Run, an Architect run and a Pickup run share, as the command
+/// The flags a Run and a Pass share, as the command
 /// gave them: each is none if the command said nothing about it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Flags {
@@ -130,7 +130,7 @@ impl Asks {
         Asks::dispatched(issue, &flags, config)
     }
 
-    /// What the Spec run or Run that an Architect run or a Pickup run
+    /// What the Spec run or Run that a Pass
     /// dispatches `issue` as is asked: what [`Asks::of_run`] would ask a Run
     /// started on the Issue URL with `flags`, except that it sends no Run
     /// notification of its own. The run that dispatched it sends the one, as
@@ -144,8 +144,8 @@ impl Asks {
 }
 
 impl Flags {
-    /// Whether any flag here is for the Spec run or Run that an Architect
-    /// run or a Pickup run dispatches: every one but `email` and `no-email`,
+    /// Whether any flag here is for the Spec run or Run that a Pass
+    /// dispatches: every one but `email` and `no-email`,
     /// which ask that run for its own Run notification.
     pub fn any_for_dispatched_run(&self) -> bool {
         let for_dispatched_run = Flags {
@@ -157,7 +157,7 @@ impl Flags {
 
     /// What a run with these flags is asked about its own Run notification:
     /// what `email` or `no-email` asked for, else what `config` says. It is
-    /// a Run's ask, and an Architect run's or a Pickup run's for the one
+    /// a Run's ask, and a Pass's for the one
     /// notification it sends itself.
     pub fn notification(&self, config: &UserConfig) -> NotificationAsk {
         self.email.clone().unwrap_or(if config.email.always {
@@ -169,7 +169,7 @@ impl Flags {
 
     /// The Harness, Model and Effort a command with these flags runs its
     /// sessions on: each as its flag asked, else as `config` sets it, else
-    /// the default. It is a Run's, and an Architect run's or a Pickup run's
+    /// the default. It is a Run's, and a Pass's
     /// for its own sessions as for the run it dispatches.
     pub fn harness(&self, config: &UserConfig) -> Choice {
         Choice::of(&self.harness, &config.harness)
@@ -460,7 +460,7 @@ mod tests {
         }
     }
 
-    /// Every flag an Architect run or a Pickup run takes for the run it
+    /// Every flag a Pass takes for the run it
     /// dispatches, with `email` for its own Run notification.
     fn dispatch_flags() -> Flags {
         Flags {

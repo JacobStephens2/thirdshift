@@ -7,9 +7,9 @@
 //! candidate published no plan, and the Architect run ends on the issue it
 //! named instead, labelled an
 //! Architect idea: the idea issue it filed for its top recommendation, or the
-//! open issue that already covers it. Only one Architect run or Pickup run
-//! per repository runs at a time on a machine: an Architect run started while
-//! another of either is still running is skipped, before any review. So is
+//! open issue that already covers it. Only one Pass per repository runs at a
+//! time on a machine: an Architect run started while another Pass is still
+//! running is skipped, before any review. So is
 //! one that finds an Architect plan still open on the repository: it never
 //! retries or dispatches an Architect plan that is already there. And so is
 //! one that finds an Architect idea there waiting for triage: the factory has
@@ -67,7 +67,7 @@ pub enum Outcome {
 /// skipped run's progress line gives it.
 #[derive(Debug)]
 pub enum Skipped {
-    /// Another Architect run on this repository, or a Pickup run, is still
+    /// Another Pass on this repository is still
     /// running on this machine, the Spec run or Run it dispatched included.
     AlreadyRunning(AlreadyRunning),
     /// These Architect plans are still open on this repository: at least

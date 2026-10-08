@@ -1,9 +1,9 @@
 //! The Activity log: `<logs.dir>/<owner>/<repo>/activity.log`, one running
 //! record per repository of what the factory did there. A Run, a Spec run,
-//! an Architect run or a Pickup run writes a line when it starts work,
+//! or a Pass writes a line when it starts work,
 //! naming its Command log, and one when it ends, with its outcome; the run a
-//! command dispatched or started writes none of its own. A skipped Pickup
-//! run or Architect run writes a line only when its reason differs from the
+//! command dispatched or started writes none of its own. A skipped Pass
+//! writes a line only when its reason differs from the
 //! last line of its own kind. With `activity.quiet_skips`, a skipped pass
 //! prints nothing at all, its Activity log line its only trace.
 
@@ -241,7 +241,7 @@ while [ -d "$root" ] && [ ! -e "$root/release" ]; do sleep 0.05; done
         assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     }
     let lines = activity(&scenario);
-    let running = "skipped: an Architect run or a Pickup run is already running on acme/widgets";
+    let running = "skipped: another Pass is already running on acme/widgets";
     assert_eq!(lines.len(), 4, "{lines:?}");
     assert!(lines[0].starts_with("Pickup run #7 started: "), "{lines:?}");
     assert_eq!(lines[1], format!("Pickup run {running}"));
