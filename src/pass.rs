@@ -103,6 +103,8 @@ pub trait Outside {
     fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>);
     /// Private advisory or issue records in every state.
     fn security_records(&mut self) -> Result<SecurityRecords>;
+    /// Whether origin's prepared Base branch is the last completed audit's commit.
+    fn base_unchanged_since_security_audit(&mut self) -> Result<bool>;
     /// Record one finding in the repository's private storage.
     fn create_security_record(
         &mut self,
@@ -222,6 +224,13 @@ impl Outside for LaunchAndGitHub<'_> {
         GitHub::new().security_records(&self.repo.slug())
     }
 
+    fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
+        Ok(
+            crate::security::audit::last_commit(self.repo, self.base.name())?.as_deref()
+                == Some(self.base.origin_commit()),
+        )
+    }
+
     fn create_security_record(
         &mut self,
         records: &SecurityRecords,
@@ -331,6 +340,8 @@ mod in_memory {
         SecurityAudit(String),
         /// It listed private advisories in every state.
         AdvisoryList,
+        /// It compared the Base branch with the completed audit history.
+        AuditHistory,
         /// It recorded this fingerprint privately.
         CreateAdvisory(String),
         /// It tried to reproduce this private record, in sequence.
@@ -381,6 +392,8 @@ mod in_memory {
         audit_findings: Vec<DraftAdvisory>,
         audit_error: Option<String>,
         advisories: Vec<Value>,
+        finding_issues: Option<Vec<Value>>,
+        unchanged_base: bool,
         /// The Architecture review session's final message, if it has one,
         /// or the cause it fails with.
         review: Result<Option<String>, String>,
@@ -409,6 +422,8 @@ mod in_memory {
                 audit_findings: Vec::new(),
                 audit_error: None,
                 advisories: Vec::new(),
+                finding_issues: None,
+                unchanged_base: false,
                 review: Ok(None),
                 session_log: None,
                 ending: None,
@@ -500,6 +515,16 @@ mod in_memory {
 
         pub fn advisories(mut self, advisories: Vec<Value>) -> Self {
             self.advisories = advisories;
+            self
+        }
+
+        pub fn finding_issues(mut self, issues: Vec<Value>) -> Self {
+            self.finding_issues = Some(issues);
+            self
+        }
+
+        pub fn unchanged_base(mut self) -> Self {
+            self.unchanged_base = true;
             self
         }
 
@@ -666,7 +691,15 @@ mod in_memory {
 
         fn security_records(&mut self) -> Result<SecurityRecords> {
             self.calls.push(Call::AdvisoryList);
-            Ok(SecurityRecords::Advisories(self.advisories.clone()))
+            Ok(match &self.finding_issues {
+                Some(issues) => SecurityRecords::Issues(issues.clone()),
+                None => SecurityRecords::Advisories(self.advisories.clone()),
+            })
+        }
+
+        fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
+            self.calls.push(Call::AuditHistory);
+            Ok(self.unchanged_base)
         }
 
         fn create_security_record(

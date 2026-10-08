@@ -21,6 +21,27 @@ pub enum SecurityRecords {
 }
 
 impl SecurityRecords {
+    /// An unreproduced, untriaged finding still needs the Day shift's call.
+    pub fn waiting_for_day_shift(&self) -> bool {
+        match self {
+            Self::Advisories(records) => records
+                .iter()
+                .any(|record| record["state"] == "draft" && record["severity"].is_null()),
+            Self::Issues(records) => records.iter().any(|record| {
+                record["state"]
+                    .as_str()
+                    .is_some_and(|state| state.eq_ignore_ascii_case("open"))
+                    && record["labels"].as_array().is_some_and(|labels| {
+                        labels.iter().any(|label| {
+                            label["name"]
+                                .as_str()
+                                .is_some_and(|name| NEEDS_TRIAGE.is_named(name))
+                        })
+                    })
+            }),
+        }
+    }
+
     pub fn remember(&mut self, record: Value) {
         match self {
             Self::Advisories(records) | Self::Issues(records) => records.push(record),
@@ -68,7 +89,7 @@ impl SecurityRecords {
                         labels.iter().any(|label| {
                             label["name"]
                                 .as_str()
-                                .is_some_and(|name| name.eq_ignore_ascii_case(NEEDS_TRIAGE.name()))
+                                .is_some_and(|name| NEEDS_TRIAGE.is_named(name))
                         })
                     }),
             },
