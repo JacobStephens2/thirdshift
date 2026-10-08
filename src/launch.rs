@@ -194,6 +194,11 @@ impl BaseBranch {
         &self.name
     }
 
+    /// The head on origin sampled while preparing this Base branch.
+    pub fn origin_commit(&self) -> &str {
+        &self.origin_commit
+    }
+
     /// The `launch.pull` fast-forward toward the sampled origin commit,
     /// only while the Base branch is still checked out as at preparation.
     /// No run depends on this, so a failure is only a warning and local
