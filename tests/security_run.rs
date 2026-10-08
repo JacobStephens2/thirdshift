@@ -118,6 +118,352 @@ printf '%s\n' 'Local command: bounded-fixture; harmless local evidence and likel
     )
 }
 
+fn with_reproduced_findings(severities: &[&str]) -> Scenario {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    let commit = scenario.origin_git(&["rev-parse", "main"]);
+    let mut state = scenario.gh_state();
+    state["advisories"] = json!(severities.iter().enumerate().map(|(index, severity)| {
+        json!({
+            "ghsa_id": format!("GHSA-finding-{index}"), "state": "draft",
+            "summary": format!("Finding {index}"), "severity": severity,
+            "html_url": format!("https://github.com/acme/widgets/security/advisories/GHSA-finding-{index}"),
+            "description": format!("Fingerprint: `finding-{index}`\nAudited commit: `{commit}`\nPrivate candidate write-up.\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: reproduced {severity} single\nSeverity: {severity}\nFix size: single\n\nPrivate reproduction notes.\n\n### Proof-of-concept test\n\n```\nbounded_fixture();\n```\n")
+        })
+    }).collect::<Vec<_>>());
+    scenario.write_gh_state(&state);
+    scenario
+}
+
+fn publish_fix(record: &str) -> String {
+    format!(
+        r#"
+url=$(gh issue create --title "Bound accepted input" --body "Reject oversized input. Private record: https://github.com/acme/widgets/security/advisories/{record}" --label needs-triage)
+printf 'Security fix Ticket: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
+fn implement_fix() -> &'static str {
+    r#"
+echo bounded > bounded.txt
+git add bounded.txt
+git commit -q -m 'Bound accepted input'
+gh pr create --base main --head issue-8 --title 'Bound accepted input' --body 'Closes #8'
+"#
+}
+
+#[test]
+fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_auditing() {
+    let scenario = with_reproduced_findings(&["low", "critical", "critical", "high"]);
+    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-1"));
+    scenario.agent_does_for(8, implement_fix());
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert!(
+        result
+            .stderr
+            .ends_with("PR https://github.com/acme/widgets/pull/1 is ready for review\n"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert_eq!(state["labels"]["8"], json!(["security-fix", "in-progress"]));
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2);
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("GHSA-finding-1"), "{prompt}");
+    assert!(!prompt.contains("GHSA-finding-2"));
+    assert!(!prompt.contains("Security audit: complete"));
+    let ticket = state["bodies"]["8"].as_str().unwrap();
+    assert!(ticket.contains("GHSA-finding-1"));
+    assert!(!ticket.contains("Private candidate write-up"));
+    assert!(
+        state["advisories"][1]["description"]
+            .as_str()
+            .unwrap()
+            .contains("https://github.com/acme/widgets/issues/8")
+    );
+}
+
+#[test]
+fn a_fix_ticket_title_cannot_copy_the_private_write_up() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(
+        1,
+        &publish_fix("GHSA-finding-0")
+            .replace("Bound accepted input", "Private candidate write-up."),
+    );
+    scenario.agent_does_for(8, implement_fix());
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("includes private write-up text"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["labels"]["8"], json!(["needs-triage"]));
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn a_dispatched_fix_still_waits_without_permission_until_its_ticket_is_closed() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    let fixed = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(fixed.code, Some(0), "{}", fixed.stderr);
+    let waiting = scenario.run(&["secure"]);
+    assert_eq!(waiting.code, Some(0), "{}", waiting.stderr);
+    assert!(
+        waiting
+            .stderr
+            .contains("a Security finding is waiting for the Day shift"),
+        "{}",
+        waiting.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 2);
+    let mut state = scenario.gh_state();
+    state["issues"]["8"] = json!("CLOSED");
+    scenario.write_gh_state(&state);
+    // Once fixed, the next run may audit the Base branch again.
+    scenario.agent_does(&audit_script("[]"));
+    let after = scenario.run(&["secure"]);
+    assert_eq!(after.code, Some(0), "{}", after.stderr);
+    assert!(
+        !after
+            .stderr
+            .contains("a Security finding is waiting for the Day shift")
+    );
+}
+
+#[test]
+fn reproduced_findings_wait_without_permission_even_after_severity_is_written() {
+    for config in ["", "[security]\nfix = false\n", "[security]\nfix = true\n"] {
+        let scenario = with_reproduced_findings(&["high"]);
+        scenario.user_config_is(config);
+        let args = if config.contains("true") {
+            vec!["secure", "no-security-fix"]
+        } else {
+            vec!["secure"]
+        };
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result
+                .stderr
+                .contains("a Security finding is waiting for the Day shift"),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn a_private_finding_dispatches_a_terse_ticket_and_keeps_its_write_up_in_the_record() {
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["private"] = json!(true);
+    state["bodies"]["7"] = state["advisories"][0]["description"].clone();
+    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_in_session(
+        1,
+        &publish_fix("GHSA-finding-0").replace("security/advisories/GHSA-finding-0", "issues/7"),
+    );
+    scenario.agent_does_for(8, implement_fix());
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert!(
+        state["bodies"]["8"]
+            .as_str()
+            .unwrap()
+            .contains("https://github.com/acme/widgets/issues/7")
+    );
+    assert!(
+        !state["bodies"]["8"]
+            .as_str()
+            .unwrap()
+            .contains("Private candidate write-up")
+    );
+    assert!(
+        state["bodies"]["7"]
+            .as_str()
+            .unwrap()
+            .contains("Private candidate write-up")
+    );
+    assert!(
+        state["bodies"]["7"]
+            .as_str()
+            .unwrap()
+            .contains("Fix Ticket: https://github.com/acme/widgets/issues/8")
+    );
+}
+
+#[test]
+fn the_setting_allows_a_merge_fix_and_the_command_can_override_either_setting() {
+    for (config, word, merged) in [
+        (
+            "[security]\nfix = true\n[merge]\nalways = true\n",
+            None,
+            true,
+        ),
+        ("[security]\nfix = false\n", Some("security-fix"), false),
+        (
+            "[security]\nfix = true\n[merge]\nalways = true\n",
+            Some("no-merge"),
+            false,
+        ),
+    ] {
+        let scenario = with_reproduced_findings(&["medium"]);
+        scenario.user_config_is(config);
+        scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+        scenario.agent_does_for(8, implement_fix());
+        let mut args = vec!["secure"];
+        args.extend(word);
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(
+            scenario.gh_state()["prs"][0]["state"],
+            if merged { "MERGED" } else { "OPEN" }
+        );
+        assert_eq!(scenario.claude_calls().len(), 2);
+    }
+}
+
+#[test]
+fn an_audit_goes_on_to_one_reproduced_fix_when_fixing_is_allowed() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("first"), finding("second")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+    scenario.agent_does_in_session(3, &reproduction_script("reproduced critical spec"));
+    scenario.agent_does_in_session(4, &publish_fix("GHSA-test-test-0002"));
+    scenario.agent_does_for(8, implement_fix());
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(scenario.claude_calls().len(), 5);
+    assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 2);
+    assert!(
+        scenario.gh_state()["bodies"]["8"]
+            .as_str()
+            .unwrap()
+            .contains("GHSA-test-test-0002")
+    );
+}
+
+#[test]
+fn the_security_run_ends_as_a_failed_fix_and_sends_one_private_metadata_notification() {
+    let scenario = with_reproduced_findings(&["critical"]);
+    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, &format!("{}exit 1\n", implement_fix()));
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "day@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("claude exited 1"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.gh_state()["labels"]["8"],
+        json!(["security-fix", "in-progress"])
+    );
+    let (subject, body) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Security run: failed");
+    assert!(body.contains("critical"));
+    assert!(body.contains("GHSA-finding-0"));
+    assert!(!body.contains("Private candidate write-up"));
+    assert!(!body.contains("bounded_fixture"));
+}
+
+#[test]
+fn invalid_fix_tickets_are_not_marked_ready_or_dispatched() {
+    for script in [
+        "printf '%s\\n' 'No protocol line' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n".to_string(),
+        publish_fix("GHSA-finding-0")
+            .replace("\"$url\"", "\"https://github.com/other/widgets/issues/8\""),
+        publish_fix("GHSA-finding-0")
+            .replace("Reject oversized input.", "Private candidate write-up."),
+        publish_fix("GHSA-finding-0").replace("GHSA-finding-0", "GHSA-other"),
+        format!(
+            "{}gh fake sub-issues 8 '[7]'\n",
+            publish_fix("GHSA-finding-0")
+        ),
+        format!("{}gh issue close 8\n", publish_fix("GHSA-finding-0")),
+        format!(
+            "{}gh fake created 8 '2020-01-01T00:00:00Z'\n",
+            publish_fix("GHSA-finding-0")
+        ),
+    ] {
+        let scenario = with_reproduced_findings(&["high"]);
+        scenario.agent_does_in_session(1, &script);
+        let result = scenario.run(&["secure", "security-fix"]);
+        assert_eq!(result.code, Some(1), "{script}: {}", result.stderr);
+        assert_eq!(scenario.claude_calls().len(), 1);
+        assert!(
+            !scenario.gh_state()["labels"]["8"]
+                .as_array()
+                .is_some_and(|labels| labels.contains(&json!("ready-for-agent")))
+        );
+        assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn security_fix_words_are_accepted_once_on_every_command_that_starts_runs() {
+    for prefix in [
+        vec!["https://github.com/acme/widgets/issues/7"],
+        vec!["architect"],
+        vec!["pickup"],
+        vec!["secure"],
+    ] {
+        for word in [
+            "security-fix",
+            "--security-fix",
+            "no-security-fix",
+            "--no-security-fix",
+        ] {
+            let scenario = Scenario::new();
+            scenario.user_config_is("[security]\nfix = 'invalid'\n");
+            let mut args = prefix.clone();
+            args.push(word);
+            let result = scenario.run(&args);
+            assert_eq!(result.code, Some(1), "{args:?}: {}", result.stderr);
+            assert!(
+                result.stderr.contains("security.fix must be true or false"),
+                "{}",
+                result.stderr
+            );
+        }
+        for (words, error) in [
+            (
+                vec!["security-fix", "no-security-fix"],
+                "can't be used together",
+            ),
+            (vec!["security-fix", "--security-fix"], "repeated argument"),
+        ] {
+            let scenario = Scenario::new();
+            let mut args = prefix.clone();
+            args.extend(words);
+            let result = scenario.run(&args);
+            assert_eq!(result.code, Some(2), "{args:?}: {}", result.stderr);
+            assert!(result.stderr.contains(error));
+        }
+    }
+}
+
 #[test]
 fn reproductions_are_sequential_fresh_and_pinned_to_the_audited_commit() {
     let scenario = Scenario::new();

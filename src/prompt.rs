@@ -328,3 +328,18 @@ pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path
         test = test.display(),
     )
 }
+
+pub const SECURITY_FIX_LINE: &str = "Security fix Ticket: ";
+
+pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
+    format!(
+        "Publish the fix for this reproduced Security finding on Base branch `{base}`.\n\
+         Read the private record at {url} and the record below.\n\
+         Publish exactly one new, terse Ticket in this repository, labelled `needs-triage`. Create that label if missing.\n\
+         The Ticket says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record.\n\
+         For now every fix is a single Ticket, even if the reproduction suggested a Spec. Publish no Spec or sub-issues.\n\
+         This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks the Ticket, marks it ready, labels it security-fix and dispatches its Run.\n\
+         End your final message with exactly `{SECURITY_FIX_LINE}<Issue URL>`.\n\n\
+         Private record:\n{finding}\n\n{HEADLESS}"
+    )
+}

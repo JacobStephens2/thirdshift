@@ -33,6 +33,10 @@ const BASE_FIX: &str = "Base fix: ";
 pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
     match ending {
         Ending::Run(ended) => Ok(Account::of_run(ended)),
+        Ending::SecurityFix { ended, findings } => Ok(Account {
+            security_findings: Some(findings),
+            ..Account::of_run(ended)
+        }),
         Ending::Architect { review, dispatched } => {
             Ok(Account::of_architect(review, dispatched.as_ref()))
         }

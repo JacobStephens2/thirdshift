@@ -17,11 +17,22 @@ use crate::logs::{self, Pass, Work};
 use crate::pass::{LaunchAndGitHub, Outside};
 
 pub mod audit;
+pub(crate) mod fixing;
 pub mod reproduction;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixAsk {
+    Allow,
+    Forbid,
+}
 
 pub enum Outcome {
     Skipped(Skipped),
     Audited(Ended),
+    Fixed {
+        ended: crate::run::Ended,
+        findings: Vec<RecordedFinding>,
+    },
 }
 
 /// The audit's outcome and the private records it reached, including before a failure.
@@ -48,7 +59,7 @@ pub struct RecordedFinding {
 }
 
 impl RecordedFinding {
-    fn of_record(record: &Value) -> Result<Self> {
+    pub(crate) fn of_record(record: &Value) -> Result<Self> {
         Ok(Self {
             severity: record["severity"].as_str().map(String::from),
             title: record["summary"]
@@ -133,10 +144,11 @@ pub fn run(
         },
         &repo,
         base.name(),
+        flags.security_fix_allowed(config),
     )
 }
 
-fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str) -> Outcome {
+fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str, fixing: bool) -> Outcome {
     match outside.ready_issue() {
         Ok(Some(ready)) => {
             let skipped = Skipped::ReadyIssue(ready.listed);
@@ -150,7 +162,14 @@ fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str) -> Outcome {
         Ok(records) => records,
         Err(error) => return Outcome::Audited(error.into()),
     };
-    if records.waiting_for_day_shift() {
+    if fixing {
+        match records.next_fix() {
+            Ok(Some((record, metadata))) => return fix(outside, repo, base, record, metadata),
+            Ok(None) => {}
+            Err(error) => return Outcome::Audited(error.into()),
+        }
+    }
+    if records.waiting_for_day_shift(fixing) {
         let skipped = Skipped::FindingWaiting;
         outside.skipped(Pass::Security, &skipped);
         return Outcome::Skipped(skipped);
@@ -164,7 +183,65 @@ fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str) -> Outcome {
         Ok(false) => {}
         Err(error) => return Outcome::Audited(error.into()),
     }
-    Outcome::Audited(audit_and_record(outside, repo, base))
+    let audited = audit_and_record(outside, repo, base);
+    if fixing && audited.outcome.is_ok() {
+        match outside
+            .security_records()
+            .and_then(|records| records.next_fix())
+        {
+            Ok(Some((record, metadata))) => {
+                let outcome = fix(outside, repo, base, record, metadata);
+                if let Outcome::Fixed { ended, .. } = outcome {
+                    return Outcome::Fixed {
+                        ended,
+                        findings: audited.findings,
+                    };
+                }
+                return outcome;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Outcome::Audited(Ended {
+                    outcome: Err(error.into()),
+                    ..audited
+                });
+            }
+        }
+    }
+    Outcome::Audited(audited)
+}
+
+fn fix(
+    outside: &mut impl Outside,
+    repo: &Repo,
+    base: &str,
+    record: crate::github::SecurityRecord,
+    metadata: RecordedFinding,
+) -> Outcome {
+    let mut log = None;
+    let ended = (|| -> Result<crate::run::Ended> {
+        outside.check_harness()?;
+        outside.started(Work::SecurityRun(repo));
+        let (published, session_log) = outside.publish_security_fix(base, &record, &metadata.url);
+        log = session_log;
+        let ticket = published?;
+        outside.link_security_fix(&record, &ticket)?;
+        Ok(outside.dispatch(crate::pass::Dispatch::SecurityFix {
+            ticket: &ticket,
+            base,
+        }))
+    })();
+    Outcome::Fixed {
+        ended: ended.unwrap_or_else(|error| crate::run::Ended {
+            outcome: Err(FailedRun {
+                log,
+                ..error.into()
+            }),
+            base_fix: None,
+            advice: Vec::new(),
+        }),
+        findings: vec![metadata],
+    }
 }
 
 fn audit_and_record(outside: &mut impl Outside, repo: &Repo, base: &str) -> Ended {
@@ -250,6 +327,55 @@ mod tests {
     use crate::pass::{Call, InMemory, widgets};
 
     #[test]
+    fn a_reproduced_fix_precedes_waiting_and_unchanged_but_yields_to_a_ready_issue() {
+        for ready in [false, true] {
+            let mut outside = InMemory::default().advisories(vec![
+                serde_json::json!({"state":"draft", "severity":null}),
+                serde_json::json!({
+                    "state":"draft", "severity":"critical", "ghsa_id":"GHSA-first",
+                    "summary":"Bound input", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-first",
+                    "description":"Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
+                }),
+                serde_json::json!({
+                    "state":"draft", "severity":"critical", "ghsa_id":"GHSA-second",
+                    "summary":"Other bound", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-second",
+                    "description":"Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
+                }),
+            ]).unchanged_base().dispatched_ending(crate::pass::ready_for_review());
+            if ready {
+                outside = outside.ready(7, false);
+            }
+            let outcome = run_through(&mut outside, &widgets(), "main", true);
+            if ready {
+                assert!(matches!(outcome, Outcome::Skipped(Skipped::ReadyIssue(_))));
+                assert!(matches!(
+                    &outside.calls[..],
+                    [Call::ReadySearch, Call::Skipped(_)]
+                ));
+            } else {
+                assert!(matches!(
+                    outcome,
+                    Outcome::Fixed {
+                        ended: crate::run::Ended { outcome: Ok(_), .. },
+                        ..
+                    }
+                ));
+                assert!(
+                    outside
+                        .calls
+                        .contains(&Call::PublishSecurityFix("GHSA-first".into()))
+                );
+                assert!(outside.calls.contains(&Call::DispatchSecurityFix {
+                    ticket: 8,
+                    base: "main".into()
+                }));
+                assert!(!outside.calls.contains(&Call::AuditHistory));
+                assert!(!outside.calls.contains(&Call::NodeCheck));
+            }
+        }
+    }
+
+    #[test]
     fn a_draft_without_severity_waits_before_prerequisites_or_audit() {
         let mut outside = InMemory::default()
             .advisories(vec![serde_json::json!({
@@ -257,7 +383,7 @@ mod tests {
                 "ghsa_id": "GHSA-test", "summary": "Unchecked input size"
             })])
             .harness_failing();
-        let outcome = run_through(&mut outside, &widgets(), "main");
+        let outcome = run_through(&mut outside, &widgets(), "main", false);
         assert!(matches!(outcome, Outcome::Skipped(_)));
         assert_eq!(
             outside.calls,
@@ -282,7 +408,7 @@ mod tests {
             let mut outside = InMemory::default().advisories(vec![serde_json::json!({
                 "state": state, "severity": severity
             })]);
-            let outcome = run_through(&mut outside, &widgets(), "main");
+            let outcome = run_through(&mut outside, &widgets(), "main", false);
             assert_eq!(
                 matches!(outcome, Outcome::Skipped(_)),
                 waits,
@@ -308,7 +434,7 @@ mod tests {
                 "state": state,
                 "labels": labels.iter().map(|name| serde_json::json!({"name":name})).collect::<Vec<_>>()
             })]);
-            let outcome = run_through(&mut outside, &widgets(), "main");
+            let outcome = run_through(&mut outside, &widgets(), "main", false);
             assert_eq!(
                 matches!(outcome, Outcome::Skipped(_)),
                 waits,
@@ -324,7 +450,7 @@ mod tests {
     #[test]
     fn checks_prerequisites_then_audits_without_pulling() {
         let mut outside = InMemory::default();
-        let outcome = run_through(&mut outside, &widgets(), "main");
+        let outcome = run_through(&mut outside, &widgets(), "main", false);
         assert!(matches!(
             outcome,
             Outcome::Audited(Ended { outcome: Ok(_), .. })
@@ -351,7 +477,7 @@ mod tests {
             .node_failing()
             .harness_failing();
         assert!(matches!(
-            run_through(&mut outside, &widgets(), "main"),
+            run_through(&mut outside, &widgets(), "main", false),
             Outcome::Skipped(Skipped::ReadyIssue(_))
         ));
         assert!(matches!(
@@ -377,7 +503,7 @@ mod tests {
                     if unchanged {
                         outside = outside.unchanged_base();
                     }
-                    let outcome = run_through(&mut outside, &widgets(), "main");
+                    let outcome = run_through(&mut outside, &widgets(), "main", false);
                     let expected = if ready {
                         "Ready issue #7"
                     } else if waiting {
@@ -431,7 +557,7 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                run_through(&mut outside, &widgets(), "main"),
+                run_through(&mut outside, &widgets(), "main", false),
                 Outcome::Audited(Ended {
                     outcome: Err(_),
                     ..
@@ -449,7 +575,7 @@ mod tests {
         let Outcome::Audited(Ended {
             outcome: Err(failed),
             ..
-        }) = run_through(&mut outside, &widgets(), "main")
+        }) = run_through(&mut outside, &widgets(), "main", false)
         else {
             panic!("audit should fail");
         };
@@ -491,7 +617,7 @@ mod tests {
         let Outcome::Audited(Ended {
             outcome: Ok(recorded),
             ..
-        }) = run_through(&mut outside, &widgets(), "main")
+        }) = run_through(&mut outside, &widgets(), "main", false)
         else {
             panic!("audit should succeed");
         };

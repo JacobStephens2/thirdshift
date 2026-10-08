@@ -36,6 +36,7 @@ use repair_loop::{Repair, Upstream};
 /// A Delivery of the pull request for `issue`, the Run's issue or the Spec,
 /// into the Base branch `base`, to `goal`.
 pub struct Delivery<'a> {
+    pub security_fix: bool,
     pub issue: &'a IssueUrl,
     pub base: &'a str,
     pub goal: Goal,

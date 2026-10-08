@@ -42,6 +42,10 @@ pub enum Ending {
     },
     /// A Security run completed its audit, or failed.
     Security(crate::security::Ended),
+    SecurityFix {
+        ended: Ended,
+        findings: Vec<crate::security::RecordedFinding>,
+    },
     /// A Pass was skipped before any work.
     Skipped(Skip),
 }

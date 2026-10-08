@@ -26,6 +26,8 @@ pub struct Flags {
     pub parallel: Option<NonZeroUsize>,
     /// What `base-fix` or `no-base-fix` asked for.
     pub base_fix: Option<BaseFixAsk>,
+    /// What `security-fix` or `no-security-fix` asked for.
+    pub security_fix: Option<crate::security::FixAsk>,
     /// What `harness <name>`, `model <name>` and `effort <level>` asked for.
     pub harness: harness::Asked,
 }
@@ -44,6 +46,8 @@ pub struct Asks {
     pub parallel_asked: bool,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
+    /// Whether a Security run may fix reproduced findings, passed to child Runs.
+    pub security_fix: bool,
     /// Whether it first brings the Launch directory's checkout of the Base
     /// branch up to date with origin.
     pub launch_pull: bool,
@@ -77,6 +81,7 @@ impl Asks {
             tickets_at_once: flags.parallel.unwrap_or(config.spec_parallel),
             parallel_asked: flags.parallel.is_some(),
             base_fix,
+            security_fix: flags.security_fix_allowed(config),
             launch_pull: config.launch_pull,
             harness: flags.harness(config),
         }
@@ -96,6 +101,7 @@ impl Asks {
             tickets_at_once: config.spec_parallel,
             parallel_asked: false,
             base_fix: given.base_fix.clone(),
+            security_fix: given.security_fix,
             launch_pull: false,
             harness: given.harness.clone(),
         }
@@ -144,6 +150,13 @@ impl Asks {
 }
 
 impl Flags {
+    pub fn security_fix_allowed(&self, config: &UserConfig) -> bool {
+        match self.security_fix {
+            Some(crate::security::FixAsk::Allow) => true,
+            Some(crate::security::FixAsk::Forbid) => false,
+            None => config.security_fix.unwrap_or(false),
+        }
+    }
     /// Whether any flag here is for the Spec run or Run that a Pass
     /// dispatches: every one but `email` and `no-email`,
     /// which ask that run for its own Run notification.
@@ -208,6 +221,11 @@ fn retry_with_base_fix(issue: &IssueUrl, flags: &Flags) -> String {
     if let Some(parallel) = flags.parallel {
         command += &format!(" parallel {parallel}");
     }
+    match flags.security_fix {
+        Some(crate::security::FixAsk::Allow) => command += " security-fix",
+        Some(crate::security::FixAsk::Forbid) => command += " no-security-fix",
+        None => {}
+    }
     let asked = &flags.harness;
     if let Some(harness) = asked.harness {
         command += &format!(" harness {}", harness.name());
@@ -258,6 +276,7 @@ mod tests {
             pickup_limit: n(3),
             harness: harness::Settings::default(),
             security_harness: None,
+            security_fix: None,
         }
     }
 
@@ -337,6 +356,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
                 goal: Goal::ReadyForReview,
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(3),
@@ -355,6 +375,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Send(None),
                 tickets_at_once: n(5),
@@ -369,6 +390,7 @@ mod tests {
     #[test]
     fn each_flag_decides_its_ask_whatever_the_user_config_says() {
         let against = Flags {
+            security_fix: None,
             goal: Some(Goal::ReadyForReview),
             email: Some(NotificationAsk::Skip),
             parallel: Some(n(2)),
@@ -379,6 +401,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
                 goal: Goal::ReadyForReview,
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(2),
@@ -391,6 +414,7 @@ mod tests {
         );
 
         let for_it = Flags {
+            security_fix: None,
             goal: Some(Goal::Merged),
             email: Some(to("flag@example.com")),
             parallel: Some(n(2)),
@@ -401,6 +425,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
                 goal: Goal::Merged,
                 notification: to("flag@example.com"),
                 tickets_at_once: n(2),
@@ -416,6 +441,7 @@ mod tests {
     /// fix, its sessions on Claude's `sonnet`.
     fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
         Given {
+            security_fix: false,
             kind,
             stamp: "20261003T120000-0400".to_string(),
             base_fix,
@@ -479,6 +505,7 @@ mod tests {
     /// dispatches, with `email` for its own Run notification.
     fn dispatch_flags() -> Flags {
         Flags {
+            security_fix: None,
             goal: Some(Goal::Merged),
             email: Some(to("flag@example.com")),
             parallel: Some(n(2)),
@@ -493,6 +520,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(2),
@@ -509,6 +537,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
                 goal: Goal::Merged,
                 // Whatever `email.always` says: the Architect run sends it.
                 notification: NotificationAsk::Skip,
@@ -527,6 +556,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(2),
@@ -543,6 +573,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
                 goal: Goal::Merged,
                 // Whatever `email.always` says: the Pickup run sends it.
                 notification: NotificationAsk::Skip,
@@ -627,6 +658,7 @@ mod tests {
     #[test]
     fn the_retry_command_is_the_issue_url_and_the_flags_as_given_with_base_fix_added() {
         let flags = |goal, email, parallel| Flags {
+            security_fix: None,
             goal,
             email,
             parallel,
