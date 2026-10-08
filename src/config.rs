@@ -212,6 +212,7 @@ pub struct UserConfigChanges {
     pub merge_always: bool,
     pub base_fix: bool,
     pub launch_pull: bool,
+    pub security_fix: bool,
     /// None disables Run notifications while retaining their addresses.
     pub notifications: Option<NotificationAddresses>,
     /// None retains every Harness setting. Unset Model/Effort writes blank.
@@ -260,6 +261,7 @@ impl UserConfigDocument {
             set(&mut document, "merge", "always", changes.merge_always);
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
+            set(&mut document, "security", "fix", changes.security_fix);
             set(
                 &mut document,
                 "email",
@@ -1185,6 +1187,7 @@ mod tests {
             merge_always: true,
             base_fix: true,
             launch_pull: true,
+            security_fix: false,
             notifications: Some(NotificationAddresses {
                 to: "me@example.com".to_string(),
                 from: "ts@example.com".to_string(),
@@ -1338,6 +1341,7 @@ mod tests {
             merge_always: false,
             base_fix: false,
             launch_pull: false,
+            security_fix: false,
             notifications: Some(NotificationAddresses {
                 to: to.to_string(),
                 from: crate::email::DEFAULT_FROM.to_string(),
@@ -1430,6 +1434,7 @@ mod tests {
             merge_always: true,
             base_fix: false,
             launch_pull: false,
+            security_fix: false,
             notifications: None,
             harness: Some((
                 Harness::Codex,
@@ -1473,6 +1478,7 @@ mod tests {
                 merge_always: true,
                 base_fix: true,
                 launch_pull: true,
+                security_fix: false,
                 notifications: Some(NotificationAddresses {
                     to: "o\"brien@example.com".to_string(),
                     from: "ts@example.com".to_string(),
@@ -1557,6 +1563,7 @@ mod tests {
             merge_always: true,
             base_fix: false,
             launch_pull: true,
+            security_fix: false,
             notifications: None,
             harness: None,
         };
