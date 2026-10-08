@@ -1071,6 +1071,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
     if let Some((repo, rest)) = repo_prefix(path)
         && let Some(n) = rest.strip_prefix("issues/")
+        && n.parse::<u64>().is_ok()
     {
         check_repo_is(state, Some(repo));
         println!("{}", issue_fields(state, n, state.at("issues").at(n)));
@@ -1938,14 +1939,19 @@ pub fn main(args: Vec<String>) {
         }
         ["api", "graphql", rest @ ..] => graphql(&state, rest),
         ["api", "--method", "PATCH", rest @ ..]
-            if rest.iter().any(|word| word.contains("/issues/")) =>
+            if rest.first().is_some_and(|path| {
+                repo_prefix(path).is_some_and(|(_, path)| {
+                    path.strip_prefix("issues/")
+                        .is_some_and(|number| number.parse::<u64>().is_ok())
+                })
+            }) =>
         {
             finding_issue_patch(&mut state, rest)
         }
         ["api", "--method", "PATCH", rest @ ..]
             if !rest
-                .iter()
-                .any(|word| word.contains("/security-advisories")) =>
+                .first()
+                .is_some_and(|path| path.contains("/security-advisories")) =>
         {
             pr_patch(&mut state, rest)
         }
