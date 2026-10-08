@@ -14,7 +14,7 @@
 use std::fmt::Display;
 use std::path::PathBuf;
 
-use crate::github::DraftAdvisory;
+use crate::github::{DraftAdvisory, SecurityRecords};
 use anyhow::Result;
 use serde_json::Value;
 
@@ -100,10 +100,14 @@ pub trait Outside {
     fn check_node(&mut self) -> Result<()>;
     /// Audit the Base branch in a disposable checkout and validate its artifacts.
     fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>);
-    /// Private records in every advisory state.
-    fn security_advisories(&mut self) -> Result<Vec<Value>>;
-    /// Record one finding privately as a draft.
-    fn create_security_advisory(&mut self, finding: &DraftAdvisory) -> Result<Value>;
+    /// Private advisory or issue records in every state.
+    fn security_records(&mut self) -> Result<SecurityRecords>;
+    /// Record one finding in the repository's private storage.
+    fn create_security_record(
+        &mut self,
+        records: &SecurityRecords,
+        finding: &DraftAdvisory,
+    ) -> Result<Value>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
 }
@@ -201,12 +205,16 @@ impl Outside for LaunchAndGitHub<'_> {
         crate::security::audit::run(self.launch.git(), self.repo, base, self.harness)
     }
 
-    fn security_advisories(&mut self) -> Result<Vec<Value>> {
-        GitHub::new().security_advisories(&self.repo.slug())
+    fn security_records(&mut self) -> Result<SecurityRecords> {
+        GitHub::new().security_records(&self.repo.slug())
     }
 
-    fn create_security_advisory(&mut self, finding: &DraftAdvisory) -> Result<Value> {
-        GitHub::new().create_security_advisory(&self.repo.slug(), finding)
+    fn create_security_record(
+        &mut self,
+        records: &SecurityRecords,
+        finding: &DraftAdvisory,
+    ) -> Result<Value> {
+        GitHub::new().create_security_record(&self.repo.slug(), records, finding)
     }
 
     /// The run's asks are the Architect plan's or the Ready issue's, from
@@ -247,7 +255,7 @@ mod in_memory {
     use anyhow::{Result, anyhow, bail};
 
     use super::{Dispatch, Outside};
-    use crate::github::DraftAdvisory;
+    use crate::github::{DraftAdvisory, SecurityRecords};
     use crate::github::{Issue, ListedIssue};
     use crate::issue::{IssueUrl, Repo};
     use crate::labels::{Edit, Label, Labels};
@@ -616,12 +624,16 @@ mod in_memory {
             (audited, self.session_log.clone())
         }
 
-        fn security_advisories(&mut self) -> Result<Vec<Value>> {
+        fn security_records(&mut self) -> Result<SecurityRecords> {
             self.calls.push(Call::AdvisoryList);
-            Ok(self.advisories.clone())
+            Ok(SecurityRecords::Advisories(self.advisories.clone()))
         }
 
-        fn create_security_advisory(&mut self, finding: &DraftAdvisory) -> Result<Value> {
+        fn create_security_record(
+            &mut self,
+            _records: &SecurityRecords,
+            finding: &DraftAdvisory,
+        ) -> Result<Value> {
             self.calls
                 .push(Call::CreateAdvisory(finding.fingerprint.clone()));
             let advisory = json!({"description": finding.description, "state": "draft"});
