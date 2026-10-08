@@ -3,6 +3,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -99,12 +100,16 @@ impl SessionCommand {
         unsafe { libc::kill(self.0, 0) == 0 }
     }
 
-    fn assert_stopped(&self, message: &str) {
+    fn wait_for_stop(&self) -> bool {
         let deadline = Instant::now() + Duration::from_secs(2);
         while self.exists() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(!self.exists(), "{message}");
+        !self.exists()
+    }
+
+    fn assert_stopped(&self, message: &str) {
+        assert!(self.wait_for_stop(), "{message}");
     }
 }
 
@@ -159,9 +164,14 @@ fn interrupting_a_muse_check_after_cli_exit_stops_the_command_holding_its_stream
 #[test]
 fn interrupting_a_live_session_after_cli_exit_stops_the_command_holding_stdout() {
     let scenario = Scenario::new();
+    // Failed run preservation may be slow even when the session stops promptly.
+    let hook = scenario.origin_dir().join("hooks/pre-receive");
+    fs::write(&hook, "#!/bin/sh\nsleep 3\n").unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
     let pid = scenario.path("stdout-holder-pid");
     scenario.agent_does(&format!(
-        r#"bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
+        r#"printf 'interrupted work\n' > interrupted-work.txt
+bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
 echo $$ > "$2"
 touch "$3"
 exec sleep 5' holder "$PPID" "{pid}" "{started}" &
@@ -172,17 +182,27 @@ exec sleep 5' holder "$PPID" "{pid}" "{started}" &
     let url = scenario.issue_url(7);
     let mut held = scenario.run_until(&[&url], &[], "cli-exited");
     let command = SessionCommand(fs::read_to_string(pid).unwrap().trim().parse().unwrap());
-    let interrupted_at = Instant::now();
+    assert!(command.exists(), "the stdout holder never started");
     held.signal("INT");
+    // Observe stopping before waiting for the Run's preservation and cleanup.
+    // Finish the exact Run before asserting, so a failure leaves no Run behind.
+    let stopped = command.wait_for_stop();
     let result = held.finish();
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
     assert!(
-        interrupted_at.elapsed() < Duration::from_secs(2),
+        stopped,
         "interruption waited for the stdout holder's natural expiry"
     );
     command.assert_stopped("the stdout holder survived interruption");
+    assert_eq!(
+        scenario
+            .origin_file("issue-7", "interrupted-work.txt")
+            .as_deref(),
+        Some("interrupted work\n"),
+        "the slow push did not preserve the interrupted work"
+    );
 }
 
 #[test]
