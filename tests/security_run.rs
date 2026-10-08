@@ -331,6 +331,117 @@ gh pr create --base main --head issue-8 --title 'Bound accepted input' --body 'C
 "#
 }
 
+fn publish_spec(record: &str) -> String {
+    format!(
+        r#"
+url=$(gh issue create --title "Bound accepted input" --body "Bound input across storage and transport. Private record: {record}" --label needs-triage)
+gh issue create --title "Bound storage input" --body "Bound storage input. Private record: {record}" --label ready-for-agent
+gh issue create --title "Bound transport input" --body "Bound transport input. Private record: {record}" --label ready-for-agent
+gh fake sub-issues 8 '[9,10]'
+printf 'Security fix Spec: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
+fn implement_spec_ticket(ticket: u32, spec: u32) -> String {
+    format!(
+        r#"
+echo bounded > bounded-{ticket}.txt
+git add bounded-{ticket}.txt
+git commit -q -m 'Bound accepted input'
+gh pr create --base issue-{spec} --head issue-{ticket} --title 'Bound accepted input' --body 'Closes #{ticket}'
+"#
+    )
+}
+
+#[test]
+fn a_bigger_public_fix_publishes_tickets_and_ends_as_the_spec_run() {
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["advisories"][0]["description"] = json!(
+        state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .replace("high single", "high spec")
+            .replace("Fix size: single", "Fix size: spec")
+    );
+    state["blocked_by"]["10"] = json!([9]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_in_session(
+        1,
+        &publish_spec("https://github.com/acme/widgets/security/advisories/GHSA-finding-0"),
+    );
+    scenario.agent_does_for(9, &implement_spec_ticket(9, 8));
+    scenario.agent_does_for(
+        10,
+        &format!("test -f bounded-9.txt\n{}", implement_spec_ticket(10, 8)),
+    );
+    let result = scenario.run(&["secure", "security-fix", "parallel", "1"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let spec_pr = state["prs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pr| pr["head"] == "issue-8")
+        .unwrap();
+    assert_eq!(
+        result.stdout,
+        format!("{}\n", spec_pr["url"].as_str().unwrap())
+    );
+    assert_eq!(spec_pr["base"], "main");
+    assert_eq!(spec_pr["state"], "OPEN");
+    assert_eq!(spec_pr["isDraft"], false);
+    for ticket in [9, 10] {
+        assert_eq!(state["issues"][ticket.to_string()], "CLOSED");
+        assert_eq!(
+            state["labels"][ticket.to_string()],
+            json!(["ready-for-agent", "security-fix"])
+        );
+    }
+    assert_eq!(state["labels"]["8"], json!(["security-fix", "in-progress"]));
+    let calls = scenario.claude_calls();
+    assert!(
+        calls[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("thirdshift-to-spec")
+    );
+    assert!(
+        calls[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("thirdshift-to-tickets")
+    );
+    assert_eq!(calls.len(), 4);
+}
+
+#[test]
+fn invalid_security_fix_specs_are_not_marked_ready_or_dispatched() {
+    let record = "https://github.com/acme/widgets/security/advisories/GHSA-finding-0";
+    for script in [
+        format!("{}gh fake sub-issues 8 '[]'\n", publish_spec(record)),
+        publish_spec(record).replace("Security fix Spec:", "Security fix Ticket:"),
+        publish_spec(record).replace("Bound storage input. Private record:", "Private candidate write-up. Private record:"),
+        publish_spec(record).replace("Bound storage input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0", "Bound storage input."),
+        format!("{}gh fake created 9 '2020-01-01T00:00:00Z'\n", publish_spec(record)),
+        format!("{}gh issue close 9\n", publish_spec(record)),
+        format!("{}gh fake labels 9 '[\"ready-for-human\"]'\n", publish_spec(record)),
+        format!("{}gh fake sub-issues 9 '[7]'\n", publish_spec(record)),
+    ] {
+        let scenario = with_reproduced_findings(&["high"]);
+        let mut state = scenario.gh_state();
+        state["advisories"][0]["description"] = json!(state["advisories"][0]["description"].as_str().unwrap().replace("high single", "high spec"));
+        scenario.write_gh_state(&state);
+        scenario.agent_does_in_session(1, &script);
+        let result = scenario.run(&["secure", "security-fix"]);
+        assert_eq!(result.code, Some(1), "{script}: {}", result.stderr);
+        assert_eq!(scenario.gh_state()["labels"]["8"], json!(["needs-triage"]));
+        assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
+        assert_eq!(scenario.claude_calls().len(), 1);
+    }
+}
+
 #[test]
 fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_auditing() {
     let scenario = with_reproduced_findings(&["low", "critical", "critical", "high"]);
@@ -441,45 +552,114 @@ fn reproduced_findings_wait_without_permission_even_after_severity_is_written() 
 }
 
 #[test]
-fn a_private_finding_dispatches_a_terse_ticket_and_keeps_its_write_up_in_the_record() {
+fn a_private_one_session_fix_reuses_the_findings_issue_and_preserves_its_evidence() {
     let scenario = with_reproduced_findings(&["high"]);
     let mut state = scenario.gh_state();
     state["private"] = json!(true);
     state["bodies"]["7"] = state["advisories"][0]["description"].clone();
-    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    state["labels"]["7"] = json!(["security-finding", "needs-triage", "bug"]);
+    let evidence = state["bodies"]["7"].as_str().unwrap().to_string();
     scenario.write_gh_state(&state);
-    scenario.agent_does_in_session(
-        1,
-        &publish_fix("GHSA-finding-0").replace("security/advisories/GHSA-finding-0", "issues/7"),
+    scenario.agent_does_for(
+        7,
+        &implement_fix()
+            .replace("issue-8", "issue-7")
+            .replace("#8", "#7"),
     );
-    scenario.agent_does_for(8, implement_fix());
     let result = scenario.run(&["secure", "security-fix"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let state = scenario.gh_state();
+    assert_eq!(state["issues"].as_object().unwrap().len(), 1);
     assert!(
-        state["bodies"]["8"]
+        state["bodies"]["7"]
             .as_str()
             .unwrap()
-            .contains("https://github.com/acme/widgets/issues/7")
-    );
-    assert!(
-        !state["bodies"]["8"]
-            .as_str()
-            .unwrap()
-            .contains("Private candidate write-up")
+            .starts_with(&evidence)
     );
     assert!(
         state["bodies"]["7"]
             .as_str()
             .unwrap()
-            .contains("Private candidate write-up")
+            .contains("Fix Ticket: https://github.com/acme/widgets/issues/7")
+    );
+    assert_eq!(
+        state["labels"]["7"],
+        json!(["security-finding", "bug", "security-fix", "in-progress"])
+    );
+    assert_eq!(state["prs"][0]["head"], "issue-7");
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn a_bigger_private_fix_adds_tickets_to_the_findings_issue() {
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["private"] = json!(true);
+    state["bodies"]["7"] = json!(
+        state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .replace("high single", "high spec")
+            .replace("Fix size: single", "Fix size: spec")
+    );
+    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    state["blocked_by"]["9"] = json!([8]);
+    let evidence = state["bodies"]["7"].as_str().unwrap().to_string();
+    scenario.write_gh_state(&state);
+    scenario.agent_does_for_in_session(7, 1, r#"
+gh issue create --title 'Bound storage input' --body 'Bound storage input. Private record: https://github.com/acme/widgets/issues/7' --label ready-for-agent
+gh issue create --title 'Bound transport input' --body 'Bound transport input. Private record: https://github.com/acme/widgets/issues/7' --label ready-for-agent
+gh fake sub-issues 7 '[8,9]'
+printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+    scenario.agent_does_for_in_session(7, 2, "true");
+    scenario.agent_does_for(8, &implement_spec_ticket(8, 7));
+    scenario.agent_does_for(
+        9,
+        &format!("test -f bounded-8.txt\n{}", implement_spec_ticket(9, 7)),
+    );
+    let result = scenario.run(&["secure", "security-fix", "merge", "parallel", "1"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["issues"].as_object().unwrap().len(), 3);
+    assert_eq!(state["sub_issues"]["7"], json!([8, 9]));
+    assert!(
+        state["bodies"]["7"]
+            .as_str()
+            .unwrap()
+            .starts_with(&evidence)
     );
     assert!(
         state["bodies"]["7"]
             .as_str()
             .unwrap()
-            .contains("Fix Ticket: https://github.com/acme/widgets/issues/8")
+            .contains("Fix Ticket: https://github.com/acme/widgets/issues/7")
     );
+    assert_eq!(state["issues"]["7"], "CLOSED");
+    let spec_pr = state["prs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pr| pr["head"] == "issue-7")
+        .unwrap();
+    assert_eq!(spec_pr["state"], "MERGED");
+    assert_eq!(spec_pr["base"], "main");
+    assert_eq!(
+        result.stdout,
+        format!("{}\n", spec_pr["url"].as_str().unwrap())
+    );
+    for ticket in [8, 9] {
+        assert!(
+            state["bodies"][ticket.to_string()]
+                .as_str()
+                .unwrap()
+                .contains("https://github.com/acme/widgets/issues/7")
+        );
+        assert_eq!(
+            state["labels"][ticket.to_string()],
+            json!(["ready-for-agent", "security-fix"])
+        );
+    }
 }
 
 #[test]
@@ -523,13 +703,27 @@ fn an_audit_goes_on_to_one_reproduced_fix_when_fixing_is_allowed() {
     );
     scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
     scenario.agent_does_in_session(3, &reproduction_script("reproduced critical spec"));
-    scenario.agent_does_in_session(4, &publish_fix("GHSA-test-test-0002"));
-    scenario.agent_does_for(8, implement_fix());
+    scenario.agent_does_in_session(
+        4,
+        &publish_spec("https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002"),
+    );
+    scenario.agent_does_for(9, &implement_spec_ticket(9, 8));
+    scenario.agent_does_for(10, &implement_spec_ticket(10, 8));
     let result = scenario.run(&["secure", "security-fix"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
-    assert_eq!(scenario.claude_calls().len(), 5);
-    assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 2);
+    let state = scenario.gh_state();
+    let spec_pr = state["prs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pr| pr["head"] == "issue-8")
+        .unwrap();
+    assert_eq!(
+        result.stdout,
+        format!("{}\n", spec_pr["url"].as_str().unwrap())
+    );
+    assert_eq!(scenario.claude_calls().len(), 7);
+    assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 4);
     assert!(
         scenario.gh_state()["bodies"]["8"]
             .as_str()
@@ -2417,10 +2611,12 @@ fn a_later_audit_keeps_the_link_to_a_successfully_dispatched_private_fix() {
     state["bodies"]["7"] = state["advisories"][0]["description"].clone();
     state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
     scenario.write_gh_state(&state);
-    let publish =
-        publish_fix("GHSA-finding-0").replace("security/advisories/GHSA-finding-0", "issues/7");
-    scenario.agent_does_in_session(1, &publish);
-    scenario.agent_does_for(8, implement_fix());
+    scenario.agent_does_for(
+        7,
+        &implement_fix()
+            .replace("issue-8", "issue-7")
+            .replace("#8", "#7"),
+    );
     let first = scenario.run(&["secure", "security-fix"]);
     assert_eq!(first.code, Some(0), "{}", first.stderr);
     let state = scenario.gh_state();
@@ -2429,9 +2625,9 @@ fn a_later_audit_keeps_the_link_to_a_successfully_dispatched_private_fix() {
         state["bodies"]["7"]
             .as_str()
             .unwrap()
-            .contains("Fix Ticket: https://github.com/acme/widgets/issues/8")
+            .contains("Fix Ticket: https://github.com/acme/widgets/issues/7")
     );
-    assert_eq!(state["issues"].as_object().unwrap().len(), 2);
+    assert_eq!(state["issues"].as_object().unwrap().len(), 1);
 
     scenario.origin_has_commit(
         "main",
@@ -2439,29 +2635,21 @@ fn a_later_audit_keeps_the_link_to_a_successfully_dispatched_private_fix() {
         "other work",
         "Advance Base branch",
     );
-    scenario.agent_does_in_session(3, &audit_script(&json!([finding("finding-0")]).to_string()));
-    scenario.agent_does_in_session(4, &reproduction_script("reproduced high single"));
-    scenario.agent_does_for_in_session(8, 2, &reproduction_script("reproduced high single"));
-    scenario.agent_does_in_session(5, &publish);
-    scenario.agent_does_for(
-        9,
-        &implement_fix()
-            .replace("issue-8", "issue-9")
-            .replace("#8", "#9"),
-    );
+    scenario.agent_does_in_session(2, &audit_script(&json!([finding("finding-0")]).to_string()));
+    scenario.agent_does_for_in_session(7, 2, &reproduction_script("reproduced high single"));
     let second = scenario.run(&["secure", "security-fix"]);
     assert_eq!(second.code, Some(0), "{}", second.stderr);
     let state = scenario.gh_state();
     assert_eq!(
         state["issues"].as_object().unwrap().len(),
-        2,
+        1,
         "another fix Ticket was published for a finding whose first fix succeeded: {state}"
     );
     assert!(
         state["bodies"]["7"]
             .as_str()
             .unwrap()
-            .contains("Fix Ticket: https://github.com/acme/widgets/issues/8")
+            .contains("Fix Ticket: https://github.com/acme/widgets/issues/7")
     );
 }
 

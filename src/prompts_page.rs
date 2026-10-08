@@ -198,7 +198,7 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-security-fix",
             title: "Security fix publishing",
-            when: "With fixing allowed, publishes one terse Ticket for the most severe reproduced finding. thirdshift checks and marks it ready before dispatching its Run.",
+            when: "With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run.",
             sender: SecurityRun,
             text: prompt::security_fix(BASE, "<private record URL>", "<recorded Security finding>"),
         },
@@ -367,11 +367,11 @@ fn skill_used_by(skill: &str) -> String {
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
         }
-        "thirdshift-improve-codebase-architecture"
-        | "thirdshift-to-spec"
-        | "thirdshift-to-tickets"
-        | "thirdshift-codebase-design" => {
+        "thirdshift-improve-codebase-architecture" | "thirdshift-codebase-design" => {
             "the Architecture review, in an Architect run".to_string()
+        }
+        "thirdshift-to-spec" | "thirdshift-to-tickets" => {
+            "the Architecture review, in an Architect run, or Security fix publishing, in a Security run".to_string()
         }
         "thirdshift-security-audit" => {
             "the Security audit, in a Security run, or a Security review".to_string()
@@ -655,6 +655,23 @@ mod tests {
             page_path.display(),
             diff(checked_in, &rendered, before.lines().count() + 2),
         );
+    }
+
+    #[test]
+    fn publishing_skills_show_security_fix_publishing_as_a_user() {
+        let html = render();
+        for name in ["thirdshift-to-spec", "thirdshift-to-tickets"] {
+            let (_, card) = html
+                .split_once(&format!("id=\"skill-{name}\""))
+                .expect("the page lists the publishing skill");
+            let (card, _) = card.split_once("</article>").unwrap();
+            let (_, usage) = card
+                .split_once("Used by ")
+                .expect("the card names its users");
+            let (usage, _) = usage.split_once("</p>").unwrap();
+            assert!(usage.contains("Security fix publishing"), "{name}: {usage}");
+            assert!(usage.contains("Architecture review"), "{name}: {usage}");
+        }
     }
 
     #[test]

@@ -212,15 +212,16 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
       </article>
       <article class="job-sheet" id="prompt-security-fix" aria-labelledby="prompt-security-fix-title">
         <h3 id="prompt-security-fix-title">Security fix publishing</h3>
-        <p>With fixing allowed, publishes one terse Ticket for the most severe reproduced finding. thirdshift checks and marks it ready before dispatching its Run.</p>
+        <p>With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run.</p>
         <p class="sent-by">Sent by a Security run, before any unit</p>
         <pre class="job-text"><code>Publish the fix for this reproduced Security finding on Base branch `<mark class="ph">&lt;base&gt;</mark>`.
 Read the private record at &lt;private record URL&gt; and the record below.
-Publish exactly one new, terse Ticket in this repository, labelled `needs-triage`. Create that label if missing.
-The Ticket says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record.
-For now every fix is a single Ticket, even if the reproduction suggested a Spec. Publish no Spec or sub-issues.
-This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks the Ticket, marks it ready, labels it security-fix and dispatches its Run.
-End your final message with exactly `Security fix Ticket: <mark class="ph">&lt;Issue URL&gt;</mark>`.
+Follow the completed reproduction's fix size: single publishes one Ticket; spec publishes a Spec with Tickets using `thirdshift-to-spec` and `thirdshift-to-tickets`.
+On a public repository, publish one new top issue labelled `needs-triage`. Create that label if missing. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues.
+Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.
+A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. Read the links back before finishing.
+This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.
+End your final message with exactly `Security fix Ticket: <mark class="ph">&lt;Issue URL&gt;</mark>` for single or `Security fix Spec: <mark class="ph">&lt;Issue URL&gt;</mark>` for spec, naming the top issue.
 
 Private record:
 &lt;recorded Security finding&gt;
@@ -6678,11 +6679,11 @@ test("calculateTotal sums line items", () =&gt; {
       </article>
       <article class="job-sheet" id="skill-thirdshift-to-spec" aria-labelledby="skill-thirdshift-to-spec-title">
         <h3 id="skill-thirdshift-to-spec-title">thirdshift-to-spec</h3>
-        <p class="sent-by">Used by the Architecture review, in an Architect run</p>
+        <p class="sent-by">Used by the Architecture review, in an Architect run, or Security fix publishing, in a Security run</p>
         <h4 id="file-thirdshift-to-spec-skill-md"><code>thirdshift-to-spec/SKILL.md</code></h4>
         <pre class="job-text"><code>---
 name: thirdshift-to-spec
-description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled. Only for an Architecture review."
+description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled. For an Architecture review or Security fix publishing."
 disable-model-invocation: false
 ---
 
@@ -6691,6 +6692,8 @@ This skill takes the current session context and codebase understanding and prod
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to `gh issue create`. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
 
 The spec is all this skill writes. Write nothing to the repository: no spec file, commits or branches. A `CONTEXT.md` or ADR change the spec needs is work for one of its tickets.
+
+For **Security fix publishing**, the Session prompt overrides the template: keep the Spec terse, saying only what the fix changes and linking the private record. Keep all finding evidence in that record. On a private repository, use the finding's existing issue as the Spec and preserve its body and evidence; publish its Tickets with `thirdshift-to-tickets`.
 
 ## Process
 
@@ -6768,11 +6771,11 @@ policy:
       </article>
       <article class="job-sheet" id="skill-thirdshift-to-tickets" aria-labelledby="skill-thirdshift-to-tickets-title">
         <h3 id="skill-thirdshift-to-tickets-title">thirdshift-to-tickets</h3>
-        <p class="sent-by">Used by the Architecture review, in an Architect run</p>
+        <p class="sent-by">Used by the Architecture review, in an Architect run, or Security fix publishing, in a Security run</p>
         <h4 id="file-thirdshift-to-tickets-skill-md"><code>thirdshift-to-tickets/SKILL.md</code></h4>
         <pre class="job-text"><code>---
 name: thirdshift-to-tickets
-description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links. Only for an Architecture review.
+description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links. For an Architecture review or Security fix publishing.
 disable-model-invocation: false
 ---
 
@@ -6783,6 +6786,8 @@ Break a plan, spec, or session into a set of **tickets**: tracer-bullet vertical
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to the `gh` CLI. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
 
 The tickets are all this skill writes. Write nothing to the repository: no ticket files, commits or branches. A `CONTEXT.md` or ADR change the work needs is part of a ticket's work, named in its acceptance criteria.
+
+For **Security fix publishing**, keep every Ticket terse: say only what the fix changes and link the private record. Keep all finding evidence in that record. A private finding's issue is the parent Spec, and its existing body and evidence stay unchanged.
 
 ## Process
 
