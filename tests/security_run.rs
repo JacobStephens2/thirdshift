@@ -580,6 +580,161 @@ fn an_explicit_base_and_harness_audit_origin_without_pulling_local_work() {
 }
 
 #[test]
+fn the_security_harness_overrides_the_default_and_uses_its_own_model_and_effort() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[security]\nharness = \"codex\"\n\
+         [harness]\ndefault = \"claude\"\n\
+         [harness.claude]\nmodel = \"opus\"\neffort = \"low\"\n\
+         [harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"xhigh\"\n",
+    );
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    let calls = scenario.codex_calls();
+    assert_eq!(calls.len(), 1);
+    let args = calls[0]["argv"].as_array().unwrap();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == [json!("-m"), json!("gpt-6.1-sol")])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == [json!("-c"), json!("model_reasoning_effort=\"xhigh\"")])
+    );
+}
+
+#[test]
+fn codex_security_sessions_and_their_resumes_raise_the_thread_cap_and_request_fresh_sub_agents() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{}\necho '{{\"type\":\"item.started\",\"item\":{{\"id\":\"pending\",\"type\":\"collab_tool_call\",\"tool\":\"spawn_agent\",\"prompt\":\"Verify finding\",\"status\":\"in_progress\"}}}}'\n",
+            audit_script("[]")
+        ),
+    );
+    scenario
+        .agent_does("printf '%s\\n' 'Security audit: complete' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n");
+    let result = scenario.run(&["secure", "harness", "codex"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.codex_calls();
+    assert_eq!(calls.len(), 2);
+    for call in &calls {
+        let args = call["argv"].as_array().unwrap();
+        assert!(
+            args.windows(2).any(|pair| pair
+                == [
+                    json!("-c"),
+                    json!("agents.max_concurrent_threads_per_session=8")
+                ]),
+            "missing Security thread cap: {args:?}"
+        );
+        let prompt = call["prompt"].as_str().unwrap();
+        assert!(prompt.contains("fork_turns: \"none\""), "{prompt}");
+        assert!(prompt.contains("fresh sub-agents"), "{prompt}");
+    }
+    let resumed = calls[1]["argv"].as_array().unwrap();
+    assert!(
+        resumed
+            .windows(2)
+            .any(|pair| pair == [json!("resume"), json!("fake-thread-1")])
+    );
+}
+
+#[test]
+fn the_command_harness_wins_over_security_and_default_settings_and_uses_claudes_settings() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[security]\nharness = \"codex\"\n\
+         [harness]\ndefault = \"agy\"\n\
+         [harness.claude]\nmodel = \"opus\"\neffort = \"high\"\n\
+         [harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"xhigh\"\n",
+    );
+    // Claude's Model check is its first call; the second runs the audit.
+    scenario.agent_does_in_session(1, "true\n");
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure", "harness", "claude"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.codex_calls().is_empty());
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2);
+    let args = calls[1]["argv"].as_array().unwrap();
+    for pair in [
+        [json!("--model"), json!("opus")],
+        [json!("--effort"), json!("high")],
+    ] {
+        assert!(args.windows(2).any(|actual| actual == pair), "{args:?}");
+    }
+    let prompt = calls[1]["prompt"].as_str().unwrap();
+    assert!(!prompt.contains("fork_turns"), "{prompt}");
+    assert!(
+        !args
+            .iter()
+            .any(|arg| arg.as_str().unwrap().contains("max_concurrent_threads"))
+    );
+}
+
+#[test]
+fn a_blank_or_missing_security_harness_preserves_the_default_harness_and_its_settings() {
+    for security in [
+        "",
+        "[security]\n",
+        "[security]\nharness = \"\"\n",
+        "[security]\nharness = \"  \"\n",
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!(
+            "{security}[harness]\ndefault = \"codex\"\n\
+             [harness.codex]\nmodel = \"gpt-6-luna\"\neffort = \"high\"\n"
+        ));
+        scenario.agent_does(&audit_script("[]"));
+        let result = scenario.run(&["secure"]);
+        assert_eq!(result.code, Some(0), "{security}: {}", result.stderr);
+        assert!(scenario.claude_calls().is_empty());
+        let calls = scenario.codex_calls();
+        let args = calls[0]["argv"].as_array().unwrap();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == [json!("-m"), json!("gpt-6-luna")])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == [json!("-c"), json!("model_reasoning_effort=\"high\"")])
+        );
+    }
+    let scenario = Scenario::new();
+    scenario.user_config_is("[security]\nharness = \"\"\n");
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(scenario.codex_calls().is_empty());
+}
+
+#[test]
+fn invalid_security_harness_settings_name_the_key_and_stop_before_any_work() {
+    for config in [
+        "[security]\nharness = \"unknown\"\n",
+        "[security]\nharness = true\n",
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        let result = scenario.run(&["secure"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("security.harness"),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.gh_calls().is_empty());
+        assert!(scenario.claude_calls().is_empty());
+        assert!(scenario.codex_calls().is_empty());
+    }
+}
+
+#[test]
 fn a_ready_issue_skips_before_any_session_and_keeps_only_the_activity_log() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["ready-for-agent"]);

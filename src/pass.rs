@@ -31,7 +31,7 @@ use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, ReadyIssue};
 use crate::run::{self, Ended, StartedBy};
-use crate::session::{Logs, Sessions};
+use crate::session::{Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
 
 /// The Architecture review session's kind, in its progress lines and log
@@ -202,7 +202,7 @@ impl Outside for LaunchAndGitHub<'_> {
         let harness = self.harness.clone();
         let concluded = Sessions::within(&logs, worktree.path(), &harness, |sessions| {
             progress::step(starting);
-            let final_message = sessions.run_to_final_message(REVIEW, prompt)?;
+            let final_message = sessions.run_to_final_message(Purpose::Ordinary, REVIEW, prompt)?;
             conclude(self, final_message.as_deref())
         });
         // Removed once the review is concluded.

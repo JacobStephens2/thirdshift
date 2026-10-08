@@ -42,6 +42,9 @@ pub struct UserConfig {
     /// The `[harness]` section: the Harness every Command runs its sessions
     /// on, and a Model and Effort for each Harness.
     pub harness: harness::Settings,
+    /// `security.harness`: the Harness a Security run uses ahead of
+    /// `harness.default`, unless its command names one.
+    pub security_harness: Option<Harness>,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -83,6 +86,7 @@ impl UserConfig {
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
             harness: harness::Settings::default(),
+            security_harness: None,
         }
     }
 
@@ -108,6 +112,7 @@ impl UserConfig {
                     | "spec"
                     | "pickup"
                     | "harness"
+                    | "security"
             );
             let settings = match value {
                 Value::Table(settings) if known => settings,
@@ -150,6 +155,19 @@ impl UserConfig {
                     }
                     ("pickup", "limit", value) => {
                         config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
+                    }
+                    ("security", "harness", Value::String(name)) => {
+                        let name = name.trim();
+                        if !name.is_empty() {
+                            config.security_harness = Some(Harness::named(name).with_context(|| {
+                                format!("security.harness must be {}, or blank, not {name:?}, in {file}", harness::names())
+                            })?);
+                        }
+                    }
+                    ("security", "harness", _) => {
+                        bail!(
+                            "security.harness must be a quoted name, blank for the default Harness, in {file}"
+                        )
                     }
                     ("harness", "default", Value::String(name)) => match Harness::named(name) {
                         Some(harness) => config.harness.default = Some(harness),
@@ -650,6 +668,9 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 
+[security]
+harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
+
 [harness]
 default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
@@ -803,6 +824,7 @@ mod tests {
                 "activity.quiet_skips",
                 "spec.parallel",
                 "pickup.limit",
+                "security.harness",
                 "harness.default",
                 "harness.claude.model",
                 "harness.claude.effort",

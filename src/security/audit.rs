@@ -16,7 +16,7 @@ use crate::logs;
 use crate::process::{self, Control, Interruption};
 use crate::progress;
 use crate::prompt;
-use crate::session::{Logs, Sessions};
+use crate::session::{Logs, Purpose, Sessions};
 use crate::skills;
 use crate::worktree::ReviewWorktree;
 
@@ -72,7 +72,8 @@ pub fn run(
     let logs = Logs::of_security_run(repo);
     Sessions::within(&logs, worktree.path(), harness, |sessions| {
         progress::step(format!("starting the Security audit of {base}"));
-        let message = sessions.run_to_final_message("security-audit", &prompt)?;
+        let message =
+            sessions.run_to_final_message(Purpose::Security, "security-audit", &prompt)?;
         let line = message.as_deref().and_then(|message| {
             message
                 .lines()
