@@ -113,7 +113,7 @@ fn execute_session(root: &Path) -> anyhow::Error {
     };
     let prompt = format!("/thirdshift-implement {}", "p".repeat(1024 * 1024));
     let (result, log) = Sessions::within(&logs, &worktree, &choice, |sessions| {
-        sessions.run_to_final_message("implement", &prompt)
+        sessions.run_to_final_message(Purpose::Ordinary, "implement", &prompt)
     });
     assert!(log.unwrap().exists());
     result.unwrap_err()

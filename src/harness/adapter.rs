@@ -23,6 +23,12 @@ pub trait Adapter: Sync {
     /// Arguments for a new session or Resume, and how its prompt reaches
     /// the CLI. The adapter applies its skill-loading style here.
     fn session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation;
+
+    /// A Security session or its Resume. Harnesses can adjust their launch
+    /// and prompt together while ordinary sessions retain their protocol.
+    fn security_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
+        self.session(choice, resume, prompt)
+    }
     fn check(&self, choice: &mut Choice) -> Result<()>;
     fn ask_settings(
         &self,

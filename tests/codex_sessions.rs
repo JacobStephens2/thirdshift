@@ -479,6 +479,28 @@ fn a_merge_run_on_codex_merges_the_pr() {
     assert!(scenario.claude_calls().is_empty());
 }
 
+#[test]
+fn ordinary_runs_ignore_the_security_harness_and_keep_codexs_ordinary_session_protocol() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[security]\nharness = \"claude\"\n\
+         [harness]\ndefault = \"codex\"\n\
+         [harness.codex]\nmodel = \"gpt-6-luna\"\neffort = \"high\"\n",
+    );
+    scenario.agent_does_for(7, AGENT_OPENS_PR);
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_sessions_on_codex(&scenario, "gpt-6-luna", "high");
+    for call in scenario.codex_calls() {
+        assert!(
+            !argv(&call)
+                .iter()
+                .any(|arg| arg.contains("max_concurrent_threads"))
+        );
+        assert!(!call["prompt"].as_str().unwrap().contains("fork_turns"));
+    }
+}
+
 /// Assert the Run failed with `error` before any work: no Claim, no
 /// worktree, no session and no Command log.
 fn assert_failed_before_any_work(scenario: &Scenario, result: &RunResult, error: &str) {

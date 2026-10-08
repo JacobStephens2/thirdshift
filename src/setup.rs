@@ -1125,6 +1125,9 @@ parallel = 5
 [pickup]
 limit = 5
 
+[security]
+harness = \"codex\"
+
 [harness]
 default = \"claude\"
 
