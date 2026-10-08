@@ -794,7 +794,7 @@ A Ready issue is an open issue that:
 - has none of the labels that make an **Unready Ticket**, `ready-for-human`, `needs-info`, `wontfix` and `needs-triage`, so a contradictory label errs on the side of not running;
 - carries no [Claim](#the-claim): it is not labelled `in-progress`;
 - is not a sub-issue. A sub-issue is a **Ticket** of a **Spec**, and is never run on its own, whatever the Spec's labels: it is reached through its Spec, when the Spec is itself a Ready issue, so its work always goes through the **Spec branch**. Labelling one Ticket never promotes its Spec, either;
-- is not labelled `base-fix`: the Run that opened a [Base fix](#base-fix)'s issue owns it;
+- is not labelled `base-fix` or `security-fix`: the Run that opened a [Base fix](#base-fix)'s issue, or the Security run that dispatched a fix, owns it. A failed Security fix is still passed over if GitHub prevented its Claim from being made;
 - has no open blocker, by GitHub's "blocked by" links, never the text of its body. Once every blocker is closed, it can be taken;
 - was never started: no **Issue branch** for it is on `origin`, and no pull request from one exists, open, merged or closed. So a Pickup run never does a [Continuation](#continuation), and an issue whose Run failed waits for you;
 - is not a **Spec** whose **Tickets** are all closed. With nothing started on it, such a Spec was done some other way, and the [Spec run](#spec-runs) it would be dispatched as stops with nothing to do, so a Pickup run passes it over rather than take it on every pass. Waiting never makes it a Ready issue, so this comes before the next condition, however lately the Spec was labelled: close it, or take its `ready-for-agent` off. A Spec with at least one open Ticket is taken;

@@ -137,11 +137,12 @@ pub trait Outside {
         url: &str,
     ) -> (Result<IssueUrl>, Option<PathBuf>);
     fn link_security_fix(&mut self, record: &SecurityRecord, ticket: &IssueUrl) -> Result<()>;
-    /// Keep a failed dispatch in its private record, even after interruption.
-    fn record_failed_security_fix(
+    /// Record the dispatch's ending in its private record, even after interruption.
+    fn record_security_fix_ending(
         &mut self,
         record: &SecurityRecord,
         ticket: &IssueUrl,
+        succeeded: bool,
     ) -> Result<()>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
@@ -332,14 +333,18 @@ impl Outside for LaunchAndGitHub<'_> {
         GitHub::new().link_security_fix(&self.repo.slug(), record, ticket)
     }
 
-    fn record_failed_security_fix(
+    fn record_security_fix_ending(
         &mut self,
         record: &SecurityRecord,
         ticket: &IssueUrl,
+        succeeded: bool,
     ) -> Result<()> {
-        GitHub::new()
-            .completion()
-            .record_failed_security_fix(&self.repo.slug(), record, ticket)
+        GitHub::new().completion().record_security_fix_ending(
+            &self.repo.slug(),
+            record,
+            ticket,
+            succeeded,
+        )
     }
 }
 
@@ -405,7 +410,10 @@ mod in_memory {
         UpdateSecurityRecord(String),
         PublishSecurityFix(String),
         LinkSecurityFix(u64),
-        FailedSecurityFix(u64),
+        SecurityFixEnding {
+            ticket: u64,
+            succeeded: bool,
+        },
         DispatchSecurityFix {
             ticket: u64,
             base: String,
@@ -856,12 +864,16 @@ mod in_memory {
             Ok(())
         }
 
-        fn record_failed_security_fix(
+        fn record_security_fix_ending(
             &mut self,
             _record: &SecurityRecord,
             ticket: &IssueUrl,
+            succeeded: bool,
         ) -> Result<()> {
-            self.calls.push(Call::FailedSecurityFix(ticket.number));
+            self.calls.push(Call::SecurityFixEnding {
+                ticket: ticket.number,
+                succeeded,
+            });
             Ok(())
         }
     }

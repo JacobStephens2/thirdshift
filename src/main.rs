@@ -146,7 +146,8 @@ labels and creating the label if the repository lacks it. A Ticket's Run in a Sp
 Base fix make none, and an issue already in-progress is left as it is. A Run whose Claim
 can't be made stops there, naming the cause. The Claim is released, the issue's labels put
 back as they were, when the Run or the Spec run fails with nothing on origin to take over:
-no Issue branch or Spec branch and no pull request. It is removed once a Self-merge has left
+no Issue branch or Spec branch and no pull request. A failed Security fix keeps its Claim
+even with nothing on origin, for the Day shift. It is removed once a Self-merge has left
 the issue closed, and otherwise stays: a failure to release or remove it is a warning naming
 the command to run by hand.
 
@@ -247,7 +248,8 @@ pickup starts a Pickup run from the clone, with no Issue URL: one pass, which ta
 lowest-numbered Ready issue in the repository and dispatches it as thirdshift <Issue URL>
 would: a Spec run on a Spec, a Run otherwise. A Ready issue is an open issue labelled
 ready-for-agent that has none of ready-for-human, needs-info, wontfix and needs-triage, is
-not in-progress, is not a sub-issue, is not labelled base-fix, has no open blocker, and was
+not in-progress, is not a sub-issue, is not labelled base-fix or security-fix, has no open
+blocker, and was
 never started: no Issue branch for it is on origin, and no pull request from one exists,
 open, merged or closed. A Spec whose Tickets are all closed is not one either: a Spec run
 would find nothing to do. It must also be settled: ten minutes have passed since
@@ -324,7 +326,12 @@ merge when requested. Fixing is off by default. [security] fix = true also allow
 no-security-fix overrides the setting. Both words, with or without dashes, are accepted
 on Run, Spec run, Architect run, Pickup run and Security run commands, and passed to their
 Runs. Without permission, a reproduced finding waits until its record is closed or
-published, or its fix Ticket is closed.
+published, or its fix Ticket is closed. A failed fix keeps its Claim even without a push,
+and Security runs pause while its issue is open. Pickup never retries a Security fix,
+even if its Claim could not be made. Closing the issue lets Security runs go on.
+When neither the command nor the User config decided against fixing, a run that left a
+reproduced finding unfixed offers security-fix and fix under [security] on stderr and in
+its notification. The README's Fencing section shows the scheduled command.
 
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.

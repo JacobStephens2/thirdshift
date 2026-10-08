@@ -109,7 +109,7 @@ A **Pickup run**'s removal of `in-progress` from every closed issue in the repos
 _Avoid_: cleanup, garbage collection
 
 **Ready issue**:
-An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no label that makes an **Unready Ticket** and no **Claim**, not a sub-issue, not a **Base fix**'s issue, with no open blocker, never started (no **Issue branch** and no pull request), not a **Spec** whose **Tickets** are all closed, and left untouched long enough that whoever is shaping it has finished. On a Spec, the label says its Tickets are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
+An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no label that makes an **Unready Ticket** and no **Claim**, not a sub-issue, not a **Base fix**'s or a **Security run**'s fix issue, with no open blocker, never started (no **Issue branch** and no pull request), not a **Spec** whose **Tickets** are all closed, and left untouched long enough that whoever is shaping it has finished. On a Spec, the label says its Tickets are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
 _Avoid_: queued issue, backlog item
 
 **Architecture review**:

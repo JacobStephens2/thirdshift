@@ -17,7 +17,9 @@ const SECURITY_FINDING: Label = Label::new(
 
 pub(crate) const FIX_TICKET_MARKER: &str = "\n<!-- thirdshift:security-fix -->\nFix Ticket: ";
 
+const FIX_PENDING: &str = "Fix Run: pending";
 const FIX_FAILED: &str = "Fix Run: failed";
+const FIX_SUCCEEDED: &str = "Fix Run: succeeded";
 
 pub enum SecurityRecords {
     Advisories(Vec<Value>),
@@ -25,6 +27,20 @@ pub enum SecurityRecords {
 }
 
 impl SecurityRecords {
+    /// The record layout belongs to its storage, not each rule that reads it.
+    fn entries(&self) -> (&[Value], &'static str, &'static str) {
+        match self {
+            Self::Advisories(records) => (records, "description", "draft"),
+            Self::Issues(records) => (records, "body", "open"),
+        }
+    }
+
+    fn values_mut(&mut self) -> &mut Vec<Value> {
+        match self {
+            Self::Advisories(records) | Self::Issues(records) => records,
+        }
+    }
+
     /// An unreproduced, untriaged finding still needs the Day shift's call.
     pub fn waiting_for_day_shift(&self, fixing: bool) -> bool {
         match self {
@@ -57,10 +73,7 @@ impl SecurityRecords {
 
     /// A dispatched fix that failed and whose issue the Day shift has not closed.
     pub fn failed_fix(&self) -> Result<Option<IssueUrl>> {
-        let (records, field) = match self {
-            Self::Advisories(records) => (records, "description"),
-            Self::Issues(records) => (records, "body"),
-        };
+        let (records, field, _) = self.entries();
         for record in records {
             if record["security_fix_closed"] == true {
                 continue;
@@ -68,7 +81,10 @@ impl SecurityRecords {
             if let Some((_, fix)) = record[field]
                 .as_str()
                 .and_then(|text| text.rsplit_once(FIX_TICKET_MARKER))
-                && fix.lines().any(|line| line == FIX_FAILED)
+                // The Pass lock rules out an active dispatch here. A pending
+                // ending is also a failed/incomplete fix until success is recorded.
+                && fix.lines().rev().find(|line| line.starts_with("Fix Run: "))
+                    .is_some_and(|line| line == FIX_PENDING || line == FIX_FAILED)
             {
                 return Ok(Some(IssueUrl::parse(
                     fix.lines().next().unwrap_or_default(),
@@ -81,10 +97,7 @@ impl SecurityRecords {
     /// Most severe reproduced finding still awaiting a fix, ties in record order.
     /// A recorded Ticket has already been dispatched; its Run owns that fix.
     pub fn next_fix(&self) -> Result<Option<(SecurityRecord, crate::security::RecordedFinding)>> {
-        let (records, description, state) = match self {
-            Self::Advisories(records) => (records, "description", "draft"),
-            Self::Issues(records) => (records, "body", "open"),
-        };
+        let (records, description, state) = self.entries();
         let mut next = None;
         for value in records {
             if !value["state"]
@@ -118,16 +131,11 @@ impl SecurityRecords {
     }
 
     pub fn remember(&mut self, record: Value) {
-        match self {
-            Self::Advisories(records) | Self::Issues(records) => records.push(record),
-        }
+        self.values_mut().push(record);
     }
 
     pub fn finding(&self, draft: &DraftAdvisory) -> Option<&Value> {
-        let (records, field) = match self {
-            Self::Advisories(records) => (records, "description"),
-            Self::Issues(records) => (records, "body"),
-        };
+        let (records, field, _) = self.entries();
         let marker = format!("Fingerprint: `{}`", draft.fingerprint);
         records.iter().find(|record| {
             record[field]
@@ -250,17 +258,23 @@ impl GitHub {
         record: &SecurityRecord,
         ticket: &IssueUrl,
     ) -> Result<()> {
-        self.write_security_fix(repo, record, ticket, false)
+        self.write_security_fix(repo, record, ticket, FIX_PENDING)
     }
 
-    /// Preserve a failed fix's ending in its private record for later Passes.
-    pub fn record_failed_security_fix(
+    /// Record the dispatch's ending, preserving any private edits made during it.
+    pub fn record_security_fix_ending(
         &self,
         repo: &str,
         record: &SecurityRecord,
         ticket: &IssueUrl,
+        succeeded: bool,
     ) -> Result<()> {
-        self.write_security_fix(repo, record, ticket, true)
+        self.write_security_fix(
+            repo,
+            record,
+            ticket,
+            if succeeded { FIX_SUCCEEDED } else { FIX_FAILED },
+        )
     }
 
     fn write_security_fix(
@@ -268,7 +282,7 @@ impl GitHub {
         repo: &str,
         record: &SecurityRecord,
         ticket: &IssueUrl,
-        failed: bool,
+        ending: &str,
     ) -> Result<()> {
         let (path, field) = match record {
             SecurityRecord::Advisory { id, .. } => (
@@ -288,23 +302,29 @@ impl GitHub {
         }
         let current: Value =
             serde_json::from_slice(&output.stdout).context("private record is invalid JSON")?;
-        let linked = format!(
-            "{}{FIX_TICKET_MARKER}{}\n",
-            record.description().trim_end(),
-            ticket.url
-        );
-        let expected = if failed {
-            linked.as_str()
+        let current = current[field]
+            .as_str()
+            .context("the private record has no description")?;
+        let description = if ending == FIX_PENDING {
+            if current != record.description() {
+                bail!("the private record changed while publishing its fix; leaving it unchanged");
+            }
+            // Persist before dispatch: a later write failure cannot reopen Fencing.
+            format!(
+                "{}{FIX_TICKET_MARKER}{}\n{ending}\n",
+                current.trim_end(),
+                ticket.url
+            )
         } else {
-            record.description()
-        };
-        if current[field].as_str() != Some(expected) {
-            bail!("the private record changed while publishing its fix; leaving it unchanged");
-        }
-        let description = if failed {
-            format!("{linked}{FIX_FAILED}\n")
-        } else {
-            linked
+            let link = current
+                .rsplit_once(FIX_TICKET_MARKER)
+                .and_then(|(_, fix)| fix.lines().next());
+            if link != Some(ticket.url.as_str()) {
+                bail!(
+                    "the private record's fix Ticket changed during its Run; leaving it unchanged"
+                );
+            }
+            format!("{}\n{ending}\n", current.trim_end())
         };
         let body = serde_json::to_vec(&json!({field: description}))?;
         let output = self.output_with_input(
@@ -359,11 +379,8 @@ impl GitHub {
             Err(error) => Err(error),
         };
         let mut records = records?;
-        let (values, field) = match &mut records {
-            SecurityRecords::Advisories(values) => (values, "description"),
-            SecurityRecords::Issues(values) => (values, "body"),
-        };
-        for record in values {
+        let (_, field, _) = records.entries();
+        for record in records.values_mut() {
             if let Some((_, link)) = record[field]
                 .as_str()
                 .and_then(|text| text.rsplit_once(FIX_TICKET_MARKER))

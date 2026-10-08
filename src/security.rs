@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::asks::Flags;
+use crate::base_fix::Advice;
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
@@ -39,7 +40,7 @@ pub enum Outcome {
 pub struct Ended {
     pub outcome: Result<Recorded, FailedRun>,
     pub findings: Vec<RecordedFinding>,
-    pub offer: Option<FixOffer>,
+    pub advice: Vec<Advice>,
 }
 
 impl From<anyhow::Error> for Ended {
@@ -47,23 +48,8 @@ impl From<anyhow::Error> for Ended {
         Self {
             outcome: Err(error.into()),
             findings: Vec::new(),
-            offer: None,
+            advice: Vec::new(),
         }
-    }
-}
-
-/// The two ways an undecided operator can allow fixing, shared by stderr and email.
-#[derive(Debug, PartialEq, Eq)]
-pub struct FixOffer {
-    command: String,
-}
-
-impl FixOffer {
-    pub fn lines(&self) -> [String; 2] {
-        [
-            format!("Allow fixing: {}", self.command),
-            "Or set: fix = true under [security] in ~/.thirdshift/config.toml".to_string(),
-        ]
     }
 }
 
@@ -290,11 +276,25 @@ fn fix(
             ticket: &ticket,
             base,
         });
-        if let Err(failed) = &mut ended.outcome
-            && let Err(error) = outside.record_failed_security_fix(&record, &ticket)
+        if let Err(error) =
+            outside.record_security_fix_ending(&record, &ticket, ended.outcome.is_ok())
         {
-            let cause = format!("could not record the failed Security fix's ending: {error:#}");
-            failed.error = std::mem::replace(&mut failed.error, error).context(cause);
+            ended.outcome = Err(match ended.outcome {
+                Err(mut failed) => {
+                    let cause =
+                        format!("could not record the failed Security fix's ending: {error:#}");
+                    failed.error = std::mem::replace(&mut failed.error, error).context(cause);
+                    failed
+                }
+                Ok(reached) => FailedRun {
+                    log: reached.log,
+                    pr_url: Some(reached.pr_url),
+                    ticket_lines: reached.ticket_lines,
+                    ..error
+                        .context("could not record the successful Security fix's ending")
+                        .into()
+                },
+            });
         }
         Ok(ended)
     })();
@@ -317,7 +317,7 @@ fn audit_and_record(
     base: &str,
     offer_command: Option<&str>,
 ) -> Ended {
-    let mut offer = None;
+    let mut advice = Vec::new();
     let mut findings = Vec::new();
     let mut log = None;
     let recorded = (|| -> Result<Recorded> {
@@ -373,10 +373,20 @@ fn audit_and_record(
             }
             let reproduced = reproduced?;
             outside.update_security_record(record, &reproduced)?;
-            if reproduced.severity().is_some() {
-                offer = offer_command.map(|command| FixOffer {
-                    command: command.to_string(),
-                });
+            if reproduced.severity().is_some()
+                && let Some(command) = offer_command
+            {
+                advice = vec![
+                    Advice {
+                        label: "Allow fixing",
+                        value: command.to_string(),
+                    },
+                    Advice {
+                        label: "Or set",
+                        value: "fix = true under [security] in ~/.thirdshift/config.toml"
+                            .to_string(),
+                    },
+                ];
             }
             for finding in findings.iter_mut().filter(|finding| finding.url == *url) {
                 finding.severity = reproduced
@@ -396,7 +406,7 @@ fn audit_and_record(
             ..error.into()
         }),
         findings,
-        offer,
+        advice,
     }
 }
 

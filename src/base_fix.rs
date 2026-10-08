@@ -61,11 +61,10 @@ const RETRY_WITH: &str = "Retry with";
 /// What starts the line of [`Advice`] naming the User config's `base.fix`.
 const OR_SET: &str = "Or set";
 
-/// A line of the advice a Run gives after its cause when Inherited failures
-/// fail it with no Base fix taken: each check where it fails on the Base
-/// branch, then, if nobody decided against a Base fix, how to allow one. It
-/// reads `<label>: <value>` on stderr, and the Run notification lays it out
-/// like its other lines.
+/// A line of advice shared by stderr and the Run notification. A Base fix's
+/// advice names the failing checks and how to allow fixing; a Security run's
+/// offers fixing when the operator left it undecided. Each line reads
+/// `<label>: <value>` on stderr; the notification lays it out like its other lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Advice {
     /// What the line starts with, saying what its value is.
