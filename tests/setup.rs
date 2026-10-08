@@ -75,6 +75,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
+    assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
     for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
@@ -187,6 +188,7 @@ const EFFORT: &str = "Effort for claude";
 const MERGE: &str = "Merge run?";
 const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
+const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const NOTIFY: &str = "Run notifications, an email";
 const TO: &str = "Send Run notifications to";
 const FROM: &str = "Send them from";
@@ -195,6 +197,67 @@ const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip):";
 const KEPT: &str = "Resend API key (input hidden, Enter keeps the saved one):";
 const WROTE_CREDENTIALS: &str = "wrote the Credentials";
 const KEY: &str = "re_secret_123";
+
+#[test]
+fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes() {
+    let scenario = Scenario::new();
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &[
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
+            (MERGE, ""),
+            (PULL, ""),
+            (SECURITY_FIX, "y"),
+            (NOTIFY, ""),
+        ],
+    );
+    assert_eq!(result.stderr.matches(SECURITY_FIX).count(), 1);
+    assert!(result.stderr.contains(&format!("{SECURITY_FIX} [y/N]")));
+    let text = result.user_config.unwrap();
+    let config: toml::Table = text.parse().unwrap();
+    assert_eq!(config["security"]["fix"].as_bool(), Some(true));
+    assert_eq!(config["security"]["harness"].as_str(), Some(""));
+    assert!(text.contains("# the Harness a Security run uses unless its command names one"));
+}
+
+#[test]
+fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() {
+    let scenario = Scenario::new();
+    let saved = "# my Security settings\n[security]\nfix = true # keep this choice\nharness = 'codex' # use Codex\n";
+    scenario.user_config_is(saved);
+
+    for (answer, enabled, choices) in [
+        ("", true, "[Y/n]"),
+        ("n", false, "[Y/n]"),
+        ("", false, "[y/N]"),
+    ] {
+        let result = setup_on_terminal(
+            &scenario,
+            &[],
+            &[
+                (HARNESS, ""),
+                (MODEL, ""),
+                (EFFORT, ""),
+                (MERGE, ""),
+                (PULL, ""),
+                (SECURITY_FIX, answer),
+                (NOTIFY, ""),
+            ],
+        );
+        assert!(result.stderr.contains(&format!("{SECURITY_FIX} {choices}")));
+        assert_eq!(result.stderr.matches(SECURITY_FIX).count(), 1);
+        let text = result.user_config.unwrap();
+        let config: toml::Table = text.parse().unwrap();
+        assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
+        assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
+        assert!(text.starts_with("# my Security settings\n[security]\n"));
+        assert!(text.contains("# keep this choice\n"));
+        assert!(text.contains("harness = 'codex' # use Codex\n"));
+    }
+}
 
 #[test]
 fn cancelling_a_claude_setup_check_cleans_up_without_writing_or_retrying() {
@@ -343,6 +406,7 @@ fn cancelling_later_questions_after_successful_or_repeated_checks_restores_echo_
                 keys.extend([
                     TerminalStep::line(MERGE, ""),
                     TerminalStep::line(PULL, ""),
+                    TerminalStep::line(SECURITY_FIX, ""),
                     TerminalStep::line(NOTIFY, "y"),
                     TerminalStep::line(TO, "me@example.com"),
                     TerminalStep::line(FROM, ""),
@@ -384,7 +448,7 @@ fn pasted_answers_are_left_available_to_later_terminal_questions() {
     let result = setup_on_terminal(
         &scenario,
         &[],
-        &[(HARNESS, "  claude  \n\n\n\n\ny\n  café@example.com  \n\n")],
+        &[(HARNESS, "  claude  \n\n\n\n\n\ny\n  café@example.com  \n\n")],
     );
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
@@ -425,6 +489,7 @@ fn a_partial_final_terminal_answer_is_trimmed_and_accepted_before_eof() {
             TerminalStep::line(EFFORT, ""),
             TerminalStep::line(MERGE, ""),
             TerminalStep::line(PULL, ""),
+            TerminalStep::line(SECURITY_FIX, ""),
             // Queue EOF for both the partial answer and the next question.
             // macOS can finish both reads before another input action runs.
             TerminalStep::bytes(NOTIFY, b"  y  \x04\x04\x04"),
@@ -464,6 +529,7 @@ fn notifications_on<'a>(rest: &[Keystrokes<'a>]) -> Vec<Keystrokes<'a>> {
         (EFFORT, ""),
         (MERGE, ""),
         (PULL, ""),
+        (SECURITY_FIX, ""),
         (NOTIFY, "y"),
         (TO, "me@example.com"),
         (FROM, ""),
@@ -489,18 +555,23 @@ fn on_a_terminal_pressing_enter_throughout_writes_what_setup_with_no_terminal_wr
             (EFFORT, ""),
             (MERGE, ""),
             (PULL, ""),
+            (SECURITY_FIX, ""),
             (NOTIFY, ""),
         ],
     );
 
     assert_eq!(result.user_config, user_config(&unattended));
-    for prompt in [MERGE, PULL, NOTIFY] {
+    for prompt in [MERGE, PULL, SECURITY_FIX, NOTIFY] {
         assert!(
             result.stderr.contains(prompt),
             "terminal: {}",
             result.stderr
         );
     }
+    assert_eq!(result.stderr.matches(SECURITY_FIX).count(), 1);
+    assert!(result.stderr.contains(&format!("{SECURITY_FIX} [y/N]")));
+    let config: toml::Table = result.user_config.unwrap().parse().unwrap();
+    assert_eq!(config["security"]["fix"].as_bool(), Some(false));
 }
 
 #[test]
@@ -573,7 +644,8 @@ fn ctrl_c_during_the_questions_writes_no_user_config() {
             (EFFORT, ""),
             (MERGE, "y"),
             (BASE_FIX, ""),
-            (PULL, CTRL_C),
+            (PULL, ""),
+            (SECURITY_FIX, CTRL_C),
         ],
     );
 
@@ -598,6 +670,7 @@ fn ctrl_c_during_the_questions_leaves_an_existing_user_config_unchanged() {
             (EFFORT, ""),
             (MERGE, "n"),
             (PULL, "y"),
+            (SECURITY_FIX, ""),
             (NOTIFY, "y"),
             (TO, CTRL_C),
         ],

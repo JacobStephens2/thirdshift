@@ -28,6 +28,7 @@ const EFFORT: &str = "Effort for claude";
 const MERGE: &str = "Merge run?";
 const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
+const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const NOTIFY: &str = "Run notifications, an email";
 const KEY: &str = "re_secret_123";
 
@@ -82,6 +83,7 @@ fn accepting_and_choosing_merge_always_makes_that_run_a_merge_run() {
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
+            (SECURITY_FIX, ""),
             (NOTIFY, ""),
         ],
     );
