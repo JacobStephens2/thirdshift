@@ -76,7 +76,8 @@ pub fn publish(
         // instructed to publish only what the fix changes, never a paraphrase.
         for line in record.description().lines().filter(|line| {
             let line = line.trim();
-            line.len() >= 16
+            line.chars().any(char::is_alphanumeric)
+                && !line.starts_with("```")
                 && !line.starts_with("Fingerprint:")
                 && !line.starts_with("Audited commit:")
                 && !line.starts_with("Outcome:")

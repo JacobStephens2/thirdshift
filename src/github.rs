@@ -13,6 +13,7 @@ use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
 mod advisories;
+pub(crate) use advisories::FIX_TICKET_MARKER;
 pub use advisories::{DraftAdvisory, Package, SecurityRecord, SecurityRecords};
 
 #[cfg(test)]

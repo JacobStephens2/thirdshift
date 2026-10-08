@@ -15,6 +15,8 @@ const SECURITY_FINDING: Label = Label::new(
     "A Security finding recorded privately for the Day shift",
 );
 
+pub(crate) const FIX_TICKET_MARKER: &str = "\n<!-- thirdshift:security-fix -->\nFix Ticket: ";
+
 pub enum SecurityRecords {
     Advisories(Vec<Value>),
     Issues(Vec<Value>),
@@ -59,7 +61,6 @@ impl SecurityRecords {
             Self::Issues(records) => (records, "body", "open"),
         };
         let mut next = None;
-        let mut highest = 0;
         for value in records {
             if !value["state"]
                 .as_str()
@@ -69,23 +70,26 @@ impl SecurityRecords {
                 continue;
             }
             if let Some(severity) = reproduced_severity(&value[description]) {
-                let rank = match severity {
-                    "critical" => 5,
-                    "high" => 4,
-                    "medium" => 3,
-                    "low" => 2,
-                    "informational" => 1,
-                    _ => continue,
-                };
-                if rank > highest {
-                    let mut metadata = crate::security::RecordedFinding::of_record(value)?;
-                    metadata.severity = Some(severity.into());
-                    next = Some((self.record(value)?, metadata));
-                    highest = rank;
+                // The Day shift's current advisory grade takes precedence
+                // over the historical proof-of-concept's score.
+                let severity = value["severity"]
+                    .as_str()
+                    .and_then(Severity::parse)
+                    .unwrap_or(severity);
+                if next
+                    .as_ref()
+                    .is_none_or(|(most_severe, _)| severity < *most_severe)
+                {
+                    next = Some((severity, value));
                 }
             }
         }
-        Ok(next)
+        next.map(|(severity, value)| {
+            let mut metadata = crate::security::RecordedFinding::of_record(value)?;
+            metadata.severity = Some(severity.name().into());
+            Ok((self.record(value)?, metadata))
+        })
+        .transpose()
     }
 
     pub fn remember(&mut self, record: Value) {
@@ -143,7 +147,7 @@ impl SecurityRecords {
     }
 }
 
-fn reproduced_severity(description: &Value) -> Option<&str> {
+fn reproduced_severity(description: &Value) -> Option<Severity> {
     let (_, reproduction) = description
         .as_str()?
         .split_once("\n<!-- thirdshift:security-reproduction -->\n")?;
@@ -151,7 +155,7 @@ fn reproduced_severity(description: &Value) -> Option<&str> {
         .lines()
         .find_map(|line| line.strip_prefix("Outcome: "))?;
     match outcome.split_whitespace().collect::<Vec<_>>().as_slice() {
-        ["reproduced", severity, "single" | "spec"] => Some(*severity),
+        ["reproduced", severity, "single" | "spec"] => Severity::parse(severity),
         _ => None,
     }
 }
@@ -159,7 +163,7 @@ fn reproduced_severity(description: &Value) -> Option<&str> {
 fn has_fix_ticket(description: &Value) -> bool {
     description
         .as_str()
-        .is_some_and(|text| text.contains("\n<!-- thirdshift:security-fix -->\nFix Ticket: "))
+        .is_some_and(|text| text.contains(FIX_TICKET_MARKER))
 }
 
 /// A finding read from the private storage selected for this repository.
@@ -243,7 +247,7 @@ impl GitHub {
             bail!("the private record changed while publishing its fix; leaving it unchanged");
         }
         let description = format!(
-            "{}\n<!-- thirdshift:security-fix -->\nFix Ticket: {}\n",
+            "{}{FIX_TICKET_MARKER}{}\n",
             record.description().trim_end(),
             ticket.url
         );
@@ -305,9 +309,10 @@ impl GitHub {
             SecurityRecords::Issues(values) => (values, "body"),
         };
         for record in values {
-            if let Some((_, link)) = record[field].as_str().and_then(|text| {
-                text.rsplit_once("\n<!-- thirdshift:security-fix -->\nFix Ticket: ")
-            }) {
+            if let Some((_, link)) = record[field]
+                .as_str()
+                .and_then(|text| text.rsplit_once(FIX_TICKET_MARKER))
+            {
                 let ticket = IssueUrl::parse(link.lines().next().unwrap_or_default())
                     .context("the private record has an invalid fix Ticket link")?;
                 if !ticket.repo_slug().eq_ignore_ascii_case(repo) {

@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::git::Git;
-use crate::github::SecurityRecord;
+use crate::github::{FIX_TICKET_MARKER, SecurityRecord};
 use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::logs;
@@ -17,7 +17,8 @@ use crate::prompt;
 use crate::session::{Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
 
-#[derive(Clone, Copy, Serialize)]
+// Declaration order is severity order, most severe first.
+#[derive(Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Critical,
@@ -28,7 +29,18 @@ pub enum Severity {
 }
 
 impl Severity {
-    pub(super) fn name(self) -> &'static str {
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        match name {
+            "critical" => Some(Self::Critical),
+            "high" => Some(Self::High),
+            "medium" => Some(Self::Medium),
+            "low" => Some(Self::Low),
+            "informational" => Some(Self::Informational),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Critical => "critical",
             Self::High => "high",
@@ -84,6 +96,12 @@ impl Reproduction {
     }
 
     pub fn description(&self, original: &str) -> String {
+        // Replacing reproduction evidence must keep the dispatched fix's link.
+        let (original, fix) = original
+            .rsplit_once(FIX_TICKET_MARKER)
+            .map_or((original, String::new()), |(original, ticket)| {
+                (original, format!("{FIX_TICKET_MARKER}{ticket}"))
+            });
         let original = original
             .split_once("\n<!-- thirdshift:security-reproduction -->\n")
             .map_or(original, |(original, _)| original);
@@ -107,7 +125,7 @@ impl Reproduction {
                 + 1,
         );
         format!(
-            "{}\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: {}\n{severity}{size}\n{}\n\n### Proof-of-concept test\n\n{fence}\n{}{fence}\n",
+            "{}\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: {}\n{severity}{size}\n{}\n\n### Proof-of-concept test\n\n{fence}\n{}{fence}\n{fix}",
             original.trim_end(),
             self.outcome,
             self.notes,
@@ -166,14 +184,8 @@ pub fn run(
         let outcome = match line.split_whitespace().collect::<Vec<_>>().as_slice() {
             ["Security", "reproduction:", "not", "reproduced"] => Outcome::NotReproduced,
             ["Security", "reproduction:", "reproduced", severity, size] => {
-                let severity = match *severity {
-                    "critical" => Severity::Critical,
-                    "high" => Severity::High,
-                    "medium" => Severity::Medium,
-                    "low" => Severity::Low,
-                    "informational" => Severity::Informational,
-                    _ => bail!("the Security reproduction ended with an invalid severity"),
-                };
+                let severity = Severity::parse(severity)
+                    .context("the Security reproduction ended with an invalid severity")?;
                 let size = match *size {
                     "single" => FixSize::Single,
                     "spec" => FixSize::Spec,
