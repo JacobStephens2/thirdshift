@@ -118,14 +118,15 @@ fn audit_and_record(
         if audited.findings.is_empty() {
             return Ok(recorded);
         }
-        let mut known = outside.security_advisories()?;
+        let mut known = outside.security_records()?;
         for finding in audited.findings {
             if finding.already_recorded(&known) {
                 recorded.existing += 1;
             } else {
-                known.push(outside.create_security_advisory(&finding)?);
+                let record = outside.create_security_record(&known, &finding)?;
+                known.remember(record);
                 recorded.created += 1;
-                outside.step("recorded a Security finding as a private draft advisory".to_string());
+                outside.step("recorded a Security finding privately".to_string());
             }
         }
         Ok(recorded)
