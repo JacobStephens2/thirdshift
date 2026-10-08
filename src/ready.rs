@@ -259,7 +259,8 @@ fn standing_of(
     if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
         return passed_over(Reason::TicketsClosed);
     }
-    if let Some(shaped) = read.last_shaped
+    if wait > TimeDelta::zero()
+        && let Some(shaped) = read.last_shaped
         && now - shaped.at < wait
     {
         return passed_over(Reason::Unsettled(shaped.by));

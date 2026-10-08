@@ -375,6 +375,23 @@ fn pickup_wait_in_the_user_config_shortens_lengthens_or_disables_settling() {
 }
 
 #[test]
+fn zero_pickup_wait_ignores_server_timestamps_ahead_of_local_clock() {
+    let scenario = ready_ticket();
+    scenario.user_config_is("[pickup]\nwait_minutes = 0\n");
+    scenario.issue_timeline(7, &[(TimelineEvent::Labelled(READY_FOR_AGENT), -1)]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "Pickup did not dispatch with zero wait:\n{}",
+        result.stderr
+    );
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+}
+
+#[test]
 fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_thirty_minutes_ago_is_not_taken()
  {
     for (event, changed) in [
