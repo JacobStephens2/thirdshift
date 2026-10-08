@@ -143,6 +143,8 @@ pub enum ChosenBy {
     Command,
     /// The User config's `harness.default`.
     UserConfig,
+    /// The User config's `security.harness`.
+    SecurityConfig,
     /// Neither: Claude Code, the default.
     Default,
 }
@@ -257,6 +259,7 @@ impl fmt::Display for ChosenBy {
         f.write_str(match self {
             ChosenBy::Command => "the harness flag",
             ChosenBy::UserConfig => "harness.default in the User config",
+            ChosenBy::SecurityConfig => "security.harness in the User config",
             ChosenBy::Default => {
                 "the default, as neither the harness flag nor harness.default in the User \
                  config names one"

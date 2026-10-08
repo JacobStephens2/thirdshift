@@ -174,6 +174,20 @@ impl Flags {
     pub fn harness(&self, config: &UserConfig) -> Choice {
         Choice::of(&self.harness, &config.harness)
     }
+
+    /// The Harness of a Security run: command, Security setting, default
+    /// Harness, then Claude Code. Model and Effort follow the chosen Harness.
+    pub fn security_harness(&self, config: &UserConfig) -> Choice {
+        let settings = harness::Settings {
+            default: config.security_harness.or(config.harness.default),
+            ..config.harness.clone()
+        };
+        let mut choice = Choice::of(&self.harness, &settings);
+        if self.harness.harness.is_none() && config.security_harness.is_some() {
+            choice.chosen_by = harness::ChosenBy::SecurityConfig;
+        }
+        choice
+    }
 }
 
 /// The command that starts the Run on `issue` again as `flags` asked for it,
@@ -243,6 +257,7 @@ mod tests {
             spec_parallel: n(3),
             pickup_limit: n(3),
             harness: harness::Settings::default(),
+            security_harness: None,
         }
     }
 

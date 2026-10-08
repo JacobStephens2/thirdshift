@@ -202,6 +202,9 @@ parallel = 2   # how many Tickets a Spec run runs at once, instead of 3
 [pickup]
 limit = 5   # how many open issues labelled in-progress stop a Pickup run taking another, instead of 3
 
+[security]
+harness = "claude"   # the Harness for Security runs; blank or missing follows harness.default
+
 [harness]
 default = "claude"   # the Harness every session runs on; claude unless set
 
@@ -246,6 +249,9 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
+
+[security]
+harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
 
 [harness]
 default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
@@ -738,6 +744,10 @@ thirdshift secure base main harness codex model gpt-6.1-sol effort high
 ```
 
 The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email` and `no-email`, with or without dashes). This first step dispatches no fix and sends no Run notification; those options are reserved for later Security run work. It reproduces and fixes nothing, and never commits, pushes, publishes or closes an advisory.
+
+A Security run chooses its Harness from the command's `harness` word, then `[security] harness` in the User config, then `harness.default`, then Claude Code. A blank or missing Security setting keeps that default. Model and Effort come from the chosen Harness's own `[harness.<name>]` section, with command words taking precedence. For example, `harness claude` overrides `[security] harness = "codex"` and uses `[harness.claude]`.
+
+Codex security sessions and their Resumes set `agents.max_concurrent_threads_per_session=8` and ask for fresh sub-agents with `fork_turns: "none"`, so the skill's verifiers stay independent.
 
 A Security run checks its gates in order: another **Pass** on the repository running on the machine, a **Ready issue**, a **Security finding** waiting for the **Day shift**, then an unchanged **Base branch** since the last completed Security audit. A draft advisory with no severity waits; closing it, publishing it or assigning severity ends that wait. On a private repository, an open finding issue with `needs-triage` waits until that label is removed or the issue is closed. The audited commit comes from the skill's own `run-metadata.json` under the audit root, with no separate state file. A skip exits `0`, starts no session, keeps no Command log and sends no Run notification; its reason goes into the repository's **Activity log** only when it changes, with the usual `activity.quiet_skips` behavior. Before starting work, thirdshift checks the chosen Harness and that **Node.js** is on `PATH`, since the embedded skill's report validators require it.
 
