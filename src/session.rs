@@ -293,14 +293,16 @@ impl Outside for OnMachine {
         prompt: &str,
         log: &Path,
     ) -> Result<Ended> {
-        let invocation = match purpose {
-            Purpose::Security => self.adapter.security_session(&self.harness, resume, prompt),
-            Purpose::Ordinary => self.adapter.session(&self.harness, resume, prompt),
-        };
         let interpretation = self.adapter.interpretation(&self.worktree, prompt);
-        let interpretation = match purpose {
-            Purpose::Security => interpretation.for_security(self.harness.model.as_deref()),
-            Purpose::Ordinary => interpretation,
+        let (invocation, interpretation) = match purpose {
+            Purpose::Security => (
+                self.adapter.security_session(&self.harness, resume, prompt),
+                interpretation.for_security(self.harness.model.as_deref()),
+            ),
+            Purpose::Ordinary => (
+                self.adapter.session(&self.harness, resume, prompt),
+                interpretation,
+            ),
         };
         run(
             kind,
@@ -364,6 +366,9 @@ fn run(
 
     let completion = executed.state.finish(executed.execution);
     if let Some(report) = completion.report {
+        for model in report.models {
+            progress::step(format_args!("{kind}: Model: {model}"));
+        }
         for warning in report.warnings {
             progress::step(format_args!("{kind}: {warning}"));
         }

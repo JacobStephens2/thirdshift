@@ -2,6 +2,18 @@ use super::*;
 use std::os::unix::process::ExitStatusExt;
 
 #[test]
+fn agy_security_progress_names_the_resolved_model() {
+    let mut interpretation = stream(Harness::Agy, "").for_security(Some("gemini-3.8-flash"));
+    let lines = interpretation.condense(
+        r#"{"event":"init","conversation_id":"s1","init":{"model":"gemini-3.8-flash-high"}}"#,
+    );
+    assert!(
+        lines.contains(&"Model: gemini-3.8-flash-high".to_string()),
+        "{lines:?}"
+    );
+}
+
+#[test]
 fn a_security_session_can_discuss_the_cyber_marker_without_being_refused() {
     let mut interpretation = stream(Harness::Claude, "").for_security(None);
     interpretation.condense(

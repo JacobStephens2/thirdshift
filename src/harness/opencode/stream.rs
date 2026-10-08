@@ -85,6 +85,7 @@ impl Decoder for OpenCodeProgress {
             report: Report {
                 warnings: self.skill_load.warnings(),
                 summary: None,
+                ..Report::default()
             },
             ended: Ended {
                 session_id: self.session_id,

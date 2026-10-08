@@ -11,6 +11,7 @@ pub(in crate::harness) struct SessionExport {
     pub(in crate::harness) message: Option<String>,
     pub(in crate::harness) summary: Option<String>,
     pub(in crate::harness) failure: Option<String>,
+    pub(in crate::harness) models: Vec<String>,
 }
 
 /// OpenCode records uncached input and visible output separately from cache
@@ -64,12 +65,22 @@ impl SessionExport {
             message: None,
             summary: None,
             failure: None,
+            models: Vec::new(),
         };
         let mut usage: Option<Usage> = None;
         for message in messages
             .iter()
             .filter(|message| message["type"] == "assistant")
         {
+            if let Some(id) = message["model"]["id"].as_str().filter(|id| !id.is_empty()) {
+                let model = message["model"]["providerID"]
+                    .as_str()
+                    .filter(|provider| !provider.is_empty())
+                    .map_or_else(|| id.to_string(), |provider| format!("{provider}/{id}"));
+                if result.models.last() != Some(&model) {
+                    result.models.push(model);
+                }
+            }
             result.message = message["content"]
                 .as_array()
                 .and_then(|parts| parts.iter().rev().find(|part| part["type"] == "text"))

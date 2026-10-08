@@ -187,6 +187,7 @@ impl Decoder for CodexProgress {
             report: Report {
                 warnings: Vec::new(),
                 summary,
+                ..Report::default()
             },
             ended: Ended {
                 session_id: self.session_id,

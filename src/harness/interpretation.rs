@@ -29,9 +29,12 @@ pub struct Completion {
     pub outcome: Result<Ended>,
 }
 
+#[derive(Default)]
 pub struct Report {
     pub warnings: Vec<String>,
     pub summary: Option<String>,
+    /// Answering Models recovered from retained records, in response order.
+    pub models: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -97,6 +100,7 @@ impl Retained {
                     if log.message.is_some() {
                         facts.ended.final_message = log.message;
                     }
+                    facts.report.models = log.models;
                 }
             }
             Self::OpenCode(worktree) => {
@@ -106,6 +110,7 @@ impl Retained {
                     // A readable export is authoritative, even without text.
                     facts.ended.final_message = export.message;
                     facts.report.summary = export.summary;
+                    facts.report.models = export.models;
                     if export.failure.is_some() {
                         facts.outcome = TurnOutcome::Failed;
                         facts.diagnostic = facts.diagnostic.take().or(export.failure);
@@ -170,7 +175,7 @@ impl Interpretation {
 
     /// Apply refusal and Model reporting rules independently of the session's log label.
     pub fn for_security(mut self, requested_model: Option<&str>) -> Self {
-        self.security = Some(Security::new(requested_model));
+        self.security = Some(Security::new(self.cli, requested_model));
         self
     }
 
@@ -178,7 +183,7 @@ impl Interpretation {
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
         let mut lines = self.decoder.condense(raw);
         if let Some(security) = &mut self.security
-            && let Some(line) = security.observe(self.cli, raw)
+            && let Some(line) = security.observe(raw)
         {
             lines.push(line);
         }
@@ -213,12 +218,16 @@ impl Interpretation {
         if let Err(error) = interrupt::check() {
             return (None, Err(Failure::Execution(error)));
         }
+        let security_session = self.security.is_some();
         let mut facts = self.decoder.complete();
         let refusal = self.security.and_then(|security| security.refusal);
         if refusal.is_some() {
             facts.outcome = TurnOutcome::Failed;
         }
         let recovered = self.retained.reconcile(&mut facts);
+        if !security_session {
+            facts.report.models.clear();
+        }
         if let Err(error) = interrupt::check() {
             return (None, Err(Failure::Execution(error)));
         }
