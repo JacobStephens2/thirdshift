@@ -13,7 +13,7 @@ use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
 mod advisories;
-pub use advisories::{DraftAdvisory, Package};
+pub use advisories::{DraftAdvisory, Package, SecurityRecords};
 
 #[cfg(test)]
 mod execution_tests;

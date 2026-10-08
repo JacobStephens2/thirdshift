@@ -1,10 +1,31 @@
-//! Private advisory operations. Publishing and closing belong to the Day shift.
+//! Private Security finding records. Public repositories use draft advisories;
+//! private repositories whose advisory endpoint is unavailable use issues.
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::GitHub;
+use crate::issue::IssueUrl;
+use crate::labels::{Label, NEEDS_TRIAGE};
+
+const SECURITY_FINDING: Label = Label::new(
+    "security-finding",
+    "A Security finding recorded privately for the Day shift",
+);
+
+pub enum SecurityRecords {
+    Advisories(Vec<Value>),
+    Issues(Vec<Value>),
+}
+
+impl SecurityRecords {
+    pub fn remember(&mut self, record: Value) {
+        match self {
+            Self::Advisories(records) | Self::Issues(records) => records.push(record),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Package {
@@ -21,10 +42,14 @@ pub struct DraftAdvisory {
 }
 
 impl DraftAdvisory {
-    pub fn already_recorded(&self, advisories: &[Value]) -> bool {
+    pub fn already_recorded(&self, records: &SecurityRecords) -> bool {
         let marker = format!("Fingerprint: `{}`", self.fingerprint);
-        advisories.iter().any(|advisory| {
-            advisory["description"]
+        let (records, field) = match records {
+            SecurityRecords::Advisories(records) => (records, "description"),
+            SecurityRecords::Issues(records) => (records, "body"),
+        };
+        records.iter().any(|record| {
+            record[field]
                 .as_str()
                 .is_some_and(|description| description.lines().any(|line| line == marker))
         })
@@ -32,16 +57,83 @@ impl DraftAdvisory {
 }
 
 impl GitHub {
-    /// Every state and every page, including closed and published records.
-    pub fn security_advisories(&self, repo: &str) -> Result<Vec<Value>> {
-        self.gh_api_items(
+    /// Every state and every page. A 404 selects issues only when repository
+    /// metadata confirms they will be private.
+    pub fn security_records(&self, repo: &str) -> Result<SecurityRecords> {
+        match self.gh_api_items(
             &format!("repos/{repo}/security-advisories?per_page=100"),
             "",
-        )
+        ) {
+            Ok(records) => Ok(SecurityRecords::Advisories(records)),
+            Err(error) if format!("{error:#}").contains("(HTTP 404)") => {
+                let repository = self.gh_json(&["api", &format!("repos/{repo}")])?;
+                if repository["private"].as_bool() != Some(true) {
+                    bail!(
+                        "security advisories unavailable; refusing to record findings in public issues"
+                    );
+                }
+                let records = self.gh_api_items(
+                    &format!("repos/{repo}/issues?state=all&labels=security-finding&per_page=100"),
+                    "",
+                )?;
+                Ok(SecurityRecords::Issues(
+                    records
+                        .into_iter()
+                        .filter(|record| record.get("pull_request").is_none())
+                        .collect(),
+                ))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Use the storage selected while reading the repository's records.
+    pub fn create_security_record(
+        &self,
+        repo: &str,
+        records: &SecurityRecords,
+        draft: &DraftAdvisory,
+    ) -> Result<Value> {
+        match records {
+            SecurityRecords::Advisories(_) => self.create_security_advisory(repo, draft),
+            SecurityRecords::Issues(_) => {
+                self.ensure_labels(repo, &[SECURITY_FINDING, NEEDS_TRIAGE])?;
+                let output = self.output_with_input(
+                    &[
+                        "issue",
+                        "create",
+                        "--repo",
+                        repo,
+                        "--title",
+                        &draft.summary,
+                        "--body-file",
+                        "-",
+                        "--label",
+                        "security-finding,needs-triage",
+                    ],
+                    Some(draft.description.as_bytes()),
+                )?;
+                if !output.status.success() {
+                    // API errors can echo private evidence, so do not relay them.
+                    bail!(
+                        "creating a private Security finding issue failed ({})",
+                        output.status
+                    );
+                }
+                let url = std::str::from_utf8(&output.stdout)
+                    .context("creating a private Security finding issue returned invalid UTF-8")?;
+                IssueUrl::parse(url.trim()).map_err(|_| {
+                    anyhow::anyhow!(
+                        "creating a private Security finding issue returned no issue URL"
+                    )
+                })?;
+                Ok(json!({"body": draft.description}))
+            }
+        }
     }
 
     /// The create endpoint creates a draft. No severity or version claim.
-    pub fn create_security_advisory(&self, repo: &str, draft: &DraftAdvisory) -> Result<Value> {
+    fn create_security_advisory(&self, repo: &str, draft: &DraftAdvisory) -> Result<Value> {
         let body = serde_json::to_vec(&json!({
             "summary": draft.summary,
             "description": draft.description,

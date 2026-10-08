@@ -70,6 +70,146 @@ fn records_a_finding_privately_as_a_draft_without_severity_or_versions() {
 }
 
 #[test]
+fn a_private_repository_records_each_finding_as_a_labelled_issue_with_the_advisory_body() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["private"] = json!(true);
+    scenario.write_gh_state(&github);
+    scenario.agent_does(&audit_script(
+        &json!([finding("input-size"), finding("storage-bound")]).to_string(),
+    ));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert!(state["advisories"].is_null());
+    assert_eq!(state["issues"].as_object().unwrap().len(), 3);
+    let commit = scenario.origin_git(&["rev-parse", "main"]);
+    for (number, fingerprint) in [("8", "input-size"), ("9", "storage-bound")] {
+        assert_eq!(state["titles"][number], "Unchecked input size");
+        assert_eq!(
+            state["labels"][number],
+            json!(["security-finding", "needs-triage"])
+        );
+        let expected = format!(
+            "Found by thirdshift's Security run.\n\nFingerprint: `{fingerprint}`\nAudited commit: `{}`\n\nPrivate candidate write-up.\n\n```json\n{}\n```\n",
+            commit.trim(),
+            serde_json::to_string_pretty(&finding(fingerprint)).unwrap()
+        );
+        assert_eq!(state["bodies"][number], expected);
+    }
+    assert!(!result.stderr.contains("Private candidate write-up."));
+}
+
+#[test]
+fn repeat_private_audits_match_open_and_closed_findings_after_triage_without_duplicates() {
+    for state in ["OPEN", "CLOSED"] {
+        let scenario = Scenario::new();
+        let mut github = scenario.gh_state();
+        github["private"] = json!(true);
+        scenario.write_gh_state(&github);
+        scenario.agent_does(&audit_script(
+            &json!([finding("input-size"), finding("input-size-extra")]).to_string(),
+        ));
+        let first = scenario.run(&["secure"]);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+        assert!(
+            first
+                .stderr
+                .contains("2 new finding(s), 0 already recorded"),
+            "{}",
+            first.stderr
+        );
+        let mut github = scenario.gh_state();
+        for number in ["8", "9"] {
+            github["issues"][number] = json!(state);
+            github["labels"][number] = json!(["Security-Finding"]);
+        }
+        scenario.write_gh_state(&github);
+        let second = scenario.run(&["secure"]);
+        assert_eq!(second.code, Some(0), "{}", second.stderr);
+        assert!(
+            second
+                .stderr
+                .contains("0 new finding(s), 2 already recorded"),
+            "{}",
+            second.stderr
+        );
+        assert_eq!(scenario.gh_state(), github);
+        assert_eq!(scenario.gh_calls_of("issue", "create").len(), 2);
+    }
+}
+
+#[test]
+fn private_finding_labels_are_created_with_descriptions_and_existing_labels_are_kept() {
+    for existing in [
+        vec!["bug"],
+        vec!["bug", "Security-Finding"],
+        vec!["bug", "NEEDS-TRIAGE"],
+        vec!["bug", "Security-Finding", "NEEDS-TRIAGE"],
+    ] {
+        let scenario = Scenario::new();
+        scenario.repo_has_labels(&existing);
+        let mut github = scenario.gh_state();
+        github["private"] = json!(true);
+        scenario.write_gh_state(&github);
+        scenario.agent_does(&audit_script(&json!([finding("input-size")]).to_string()));
+        let result = scenario.run(&["secure"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let created = scenario.gh_calls_of("label", "create");
+        let mut expected_labels: Vec<String> =
+            existing.iter().map(|name| name.to_string()).collect();
+        let mut missing = 0;
+        for (label, description) in [
+            (
+                "security-finding",
+                "A Security finding recorded privately for the Day shift",
+            ),
+            ("needs-triage", "Maintainer needs to evaluate this issue"),
+        ] {
+            if !existing.iter().any(|name| name.eq_ignore_ascii_case(label)) {
+                missing += 1;
+                assert!(
+                    created.iter().any(|call| call[2] == label
+                        && call
+                            .windows(2)
+                            .any(|args| args == ["--description", description])),
+                    "{created:?}"
+                );
+                expected_labels.push(label.to_string());
+            }
+        }
+        assert_eq!(created.len(), missing);
+        assert_eq!(scenario.repo_labels(), expected_labels);
+        assert_eq!(
+            scenario.issue_labels(8),
+            ["security-finding", "needs-triage"]
+        );
+    }
+}
+
+#[test]
+fn advisory_errors_never_record_findings_in_a_public_repository_or_on_non_404_failures() {
+    for (private, error) in [
+        (false, "gh: Not Found (HTTP 404)"),
+        (true, "gh: Forbidden (HTTP 403)"),
+        (true, "gh: Bad Gateway (HTTP 502)"),
+    ] {
+        let scenario = Scenario::new();
+        let mut github = scenario.gh_state();
+        github["private"] = json!(private);
+        github["advisory_error"] = json!(error);
+        scenario.write_gh_state(&github);
+        scenario.agent_does(&audit_script(&json!([finding("input-size")]).to_string()));
+        let result = scenario.run(&["secure"]);
+        assert_ne!(result.code, Some(0), "{}", result.stderr);
+        assert!(scenario.gh_calls_of("issue", "create").is_empty());
+        assert!(scenario.gh_calls_of("label", "create").is_empty());
+        assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
+        assert!(!result.stderr.contains("Private candidate write-up."));
+    }
+}
+
+#[test]
 fn reads_the_package_from_an_npm_manifest() {
     let scenario = Scenario::new();
     scenario.origin_has_commit(
