@@ -41,10 +41,12 @@ impl SecurityRecords {
         }
     }
 
-    pub fn remember(&mut self, record: Value) {
-        match self {
-            Self::Advisories(records) | Self::Issues(records) => records.push(record),
-        }
+    pub fn remember(&mut self, record: Value) -> &Value {
+        let records = match self {
+            Self::Advisories(records) | Self::Issues(records) => records,
+        };
+        records.push(record);
+        records.last().expect("the new record was just added")
     }
 }
 
@@ -63,13 +65,13 @@ pub struct DraftAdvisory {
 }
 
 impl DraftAdvisory {
-    pub fn already_recorded(&self, records: &SecurityRecords) -> bool {
+    pub fn recorded_in<'a>(&self, records: &'a SecurityRecords) -> Option<&'a Value> {
         let marker = format!("Fingerprint: `{}`", self.fingerprint);
         let (records, field) = match records {
             SecurityRecords::Advisories(records) => (records, "description"),
             SecurityRecords::Issues(records) => (records, "body"),
         };
-        records.iter().any(|record| {
+        records.iter().find(|record| {
             record[field]
                 .as_str()
                 .is_some_and(|description| description.lines().any(|line| line == marker))
@@ -148,7 +150,11 @@ impl GitHub {
                         "creating a private Security finding issue returned no issue URL"
                     )
                 })?;
-                Ok(json!({"body": draft.description}))
+                Ok(json!({
+                    "body": draft.description,
+                    "title": draft.summary,
+                    "html_url": url.trim()
+                }))
             }
         }
     }

@@ -669,7 +669,12 @@ mod in_memory {
         ) -> Result<Value> {
             self.calls
                 .push(Call::CreateAdvisory(finding.fingerprint.clone()));
-            let advisory = json!({"description": finding.description, "state": "draft"});
+            let advisory = json!({
+                "description": finding.description, "state": "draft",
+                "summary": finding.summary,
+                "html_url": format!("https://github.com/acme/widgets/security/advisories/{}", finding.fingerprint),
+                "severity": null
+            });
             self.advisories.push(advisory.clone());
             Ok(advisory)
         }
