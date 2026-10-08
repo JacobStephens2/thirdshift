@@ -22,8 +22,12 @@ jobs:
       # which the tests build from tests/fakes.rs with rustc.
       - run: cargo test
 
-  test-macos:
+  test-macos-shard:
     runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - name: Install the Rust version rust-toolchain.toml names
@@ -31,10 +35,25 @@ jobs:
           rustup toolchain install
           rustc --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-macos
+          save-if: ${{ matrix.shard == 1 }}
       # nextest runs tests from every test binary in parallel, where cargo test
       # runs the binaries one after another; that matters on the slower macOS
       # runners. Without a lib target there are no doctests for it to miss.
       # The Linux job keeps plain cargo test, so the suite also runs the way
       # a contributor runs it locally.
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run
+      # Hash partitions cover the same suite once across all four runners.
+      - run: cargo nextest run --partition hash:${{ matrix.shard }}/${{ strategy.job-total }}
+
+  # Keep one stable check name and reject failed, cancelled or skipped shards.
+  test-macos:
+    needs: test-macos-shard
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every macOS shard to pass
+        env:
+          RESULT: ${{ needs.test-macos-shard.result }}
+        run: test "$RESULT" = success
