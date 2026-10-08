@@ -212,8 +212,10 @@ impl Outside for LaunchAndGitHub<'_> {
     }
 
     fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
-        Ok(crate::security::audit::last_commit(self.repo)?.as_deref()
-            == Some(self.base.origin_commit()))
+        Ok(
+            crate::security::audit::last_commit(self.repo, self.base.name())?.as_deref()
+                == Some(self.base.origin_commit()),
+        )
     }
 
     fn create_security_record(

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::git::Git;
 use crate::github::{DraftAdvisory, Package};
@@ -27,7 +27,7 @@ pub struct Audited {
 /// Read the skill's own run records, ignoring unfinished or unreadable records
 /// so a failed audit can be retried. Completion time, rather than the directory's
 /// random suffix, orders audits that started within the same second.
-pub fn last_commit(repo: &Repo) -> Result<Option<String>> {
+pub fn last_commit(repo: &Repo, base: &str) -> Result<Option<String>> {
     let root = logs::root(repo).join("audits");
     let entries = match fs::read_dir(&root) {
         Ok(entries) => entries,
@@ -47,12 +47,15 @@ pub fn last_commit(repo: &Repo) -> Result<Option<String>> {
         else {
             continue;
         };
-        if record["run_status"] != "complete" {
+        if record["run_status"] != "complete" || record["source_ref"]["branch"] != base {
             continue;
         }
         let completed = fs::metadata(&path)?.modified()?;
         if last.as_ref().is_none_or(|(time, _)| completed > *time) {
-            last = Some((completed, record["source_ref"].as_str().map(String::from)));
+            last = Some((
+                completed,
+                record["source_ref"]["commit"].as_str().map(String::from),
+            ));
         }
     }
     Ok(last.and_then(|(_, commit)| commit))
@@ -168,7 +171,7 @@ pub fn run(
     // The session may claim completion before a validator or its final line
     // fails. Keep that attempt incomplete in the same skill record. The source
     // ref comes from the acquired checkout, even if the session wrote it wrong.
-    let recorded = finish_record(&output, &commit, audited.is_ok());
+    let recorded = finish_record(&output, &commit, base, audited.is_ok());
     let audited = match (audited, recorded) {
         (Ok(audited), Ok(())) => Ok(audited),
         (Err(error), _) | (_, Err(error)) => Err(error),
@@ -176,7 +179,7 @@ pub fn run(
     (audited, log)
 }
 
-fn finish_record(output: &Path, commit: &str, complete: bool) -> Result<()> {
+fn finish_record(output: &Path, commit: &str, base: &str, complete: bool) -> Result<()> {
     let path = output.join("run-metadata.json");
     let mut metadata: Value = match fs::read(&path)
         .ok()
@@ -186,7 +189,7 @@ fn finish_record(output: &Path, commit: &str, complete: bool) -> Result<()> {
         _ if !complete => return Ok(()),
         _ => bail!("could not read the completed Security audit's run record"),
     };
-    metadata["source_ref"] = Value::String(commit.to_string());
+    metadata["source_ref"] = json!({"commit": commit, "branch": base, "dirty": false});
     metadata["run_status"] = Value::String(if complete { "complete" } else { "incomplete" }.into());
     if !complete {
         metadata["incomplete_reason"] =

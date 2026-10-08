@@ -242,17 +242,7 @@ printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE"
     )
 }
 
-#[test]
-fn an_unchanged_base_skips_after_a_completed_audit_and_resumes_when_origin_moves() {
-    let scenario = Scenario::new();
-    scenario.user_config_is("[activity]\nquiet_skips = true\n");
-    scenario.agent_does(&audit_script("[]"));
-    let first = scenario.run(&["secure"]);
-    assert_eq!(first.code, Some(0), "{}", first.stderr);
-    let before =
-        fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
-            .unwrap();
-    let commands = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+fn assert_two_quiet_skips_send_no_email(scenario: &Scenario) {
     let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"unused"}"#);
     for _ in 0..2 {
         let skipped = scenario.run_with_env(
@@ -266,8 +256,22 @@ fn an_unchanged_base_skips_after_a_completed_audit_and_resumes_when_origin_moves
         assert_eq!(skipped.stdout, "");
         assert_eq!(skipped.stderr, "");
     }
-    assert_eq!(scenario.claude_calls().len(), 1);
     assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn an_unchanged_base_skips_after_a_completed_audit_and_resumes_when_origin_moves() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[activity]\nquiet_skips = true\n");
+    scenario.agent_does(&audit_script("[]"));
+    let first = scenario.run(&["secure"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let before =
+        fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    let commands = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+    assert_two_quiet_skips_send_no_email(&scenario);
+    assert_eq!(scenario.claude_calls().len(), 1);
     assert_eq!(
         scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure"),
         commands
@@ -307,20 +311,7 @@ fn waiting_findings_skip_quietly_once_and_triage_allows_the_next_audit() {
             github["advisories"] = json!([{"state":"draft", "severity":null, "summary":"Private title", "description":"Private evidence"}]);
         }
         scenario.write_gh_state(&github);
-        let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"unused"}"#);
-        for _ in 0..2 {
-            let skipped = scenario.run_with_env(
-                &["secure", "email", "me@example.com"],
-                &[
-                    ("THIRDSHIFT_RESEND_URL", resend.url()),
-                    ("RESEND_API_KEY", "re_test"),
-                ],
-            );
-            assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
-            assert_eq!(skipped.stdout, "");
-            assert_eq!(skipped.stderr, "");
-        }
-        assert!(resend.requests().is_empty());
+        assert_two_quiet_skips_send_no_email(&scenario);
         assert!(scenario.claude_calls().is_empty());
         assert!(
             !scenario
@@ -721,4 +712,34 @@ fn security_audit_names_the_threat_model_under_docs() {
         prompt.contains("Read the repository's threat-model document `docs/THREAT-MODEL.md`."),
         "the existing threat-model document was not named: {prompt}"
     );
+}
+
+#[test]
+fn unchanged_base_is_remembered_separately_for_each_branch() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("stable", "main", &["Stable branch"]);
+    scenario.agent_does(&audit_script("[]"));
+
+    let main_audit = scenario.run(&["secure", "base", "main"]);
+    assert_eq!(main_audit.code, Some(0), "{}", main_audit.stderr);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    let stable_audit = scenario.run(&["secure", "base", "stable"]);
+    assert_eq!(stable_audit.code, Some(0), "{}", stable_audit.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+
+    let unchanged_main = scenario.run(&["secure", "base", "main"]);
+    assert_eq!(unchanged_main.code, Some(0), "{}", unchanged_main.stderr);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        2,
+        "An unchanged main must skip after stable is audited: {}",
+        unchanged_main.stderr
+    );
+    let activity =
+        fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert!(activity.contains(
+        "Security run skipped: Base branch main hasn't changed since the last completed Security audit"
+    ));
 }
