@@ -356,6 +356,23 @@ pub struct ReviewWorktree {
 }
 
 impl ReviewWorktree {
+    /// Reproduce one finding at its audited commit, without fetching a newer
+    /// Base branch. Uses the review checkout's acquisition and disposal rules.
+    pub fn at_commit(launch: &Git, repo: &str, commit: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
+        let (root, path) = sibling(launch, &format!("{repo}-security-reproduce"))?;
+        ownership::recover_review(launch, &path)?;
+        progress::step(format_args!(
+            "creating worktree {} detached at {commit}",
+            path.display()
+        ));
+        let checkout = acquisition::add(launch, None, &path, commit)?;
+        Ok(Self {
+            launch: Git::new(root),
+            checkout,
+        })
+    }
+
     /// Check out `origin/<base>`, detached, in a new worktree next to the
     /// launch repository's root, named `<repo>-architect`. A worktree left
     /// there by a process that ended before cleanup is removed only with

@@ -178,6 +178,17 @@ fn prompts() -> Vec<Prompt> {
             ),
         },
         Prompt {
+            id: "prompt-security-reproduction",
+            title: "Security reproduction",
+            when: "After a Security audit, tries to reproduce one recorded finding in a fresh throwaway worktree at its audited commit. The test is copied into the private record only after a complete outcome.",
+            sender: SecurityRun,
+            text: prompt::security_reproduction(
+                "<audited commit>",
+                "<recorded Security finding>",
+                std::path::Path::new("<test file>"),
+            ),
+        },
+        Prompt {
             id: "prompt-conflict-repair",
             title: "Conflict Repair",
             when: "Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.",

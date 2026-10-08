@@ -1,5 +1,5 @@
-//! Report-only Security runs: gate before work, audit origin's Base branch,
-//! then record the validated findings privately for the Day shift.
+//! Security runs: gate before work, audit origin's Base branch, then record
+//! and reproduce the findings privately for the Day shift.
 
 use std::fmt;
 
@@ -10,7 +10,6 @@ use crate::asks::Flags;
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
-use crate::github::SecurityRecords;
 use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::launch::{self, AlreadyRunning, Launch, Start};
@@ -18,6 +17,7 @@ use crate::logs::{self, Pass, Work};
 use crate::pass::{LaunchAndGitHub, Outside};
 
 pub mod audit;
+pub mod reproduction;
 
 pub enum Outcome {
     Skipped(Skipped),
@@ -164,15 +164,10 @@ fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str) -> Outcome {
         Ok(false) => {}
         Err(error) => return Outcome::Audited(error.into()),
     }
-    Outcome::Audited(audit_and_record(outside, repo, base, records))
+    Outcome::Audited(audit_and_record(outside, repo, base))
 }
 
-fn audit_and_record(
-    outside: &mut impl Outside,
-    repo: &Repo,
-    base: &str,
-    mut known: SecurityRecords,
-) -> Ended {
+fn audit_and_record(outside: &mut impl Outside, repo: &Repo, base: &str) -> Ended {
     let mut findings = Vec::new();
     let mut log = None;
     let recorded = (|| -> Result<Recorded> {
@@ -189,17 +184,54 @@ fn audit_and_record(
         if audited.findings.is_empty() {
             return Ok(recorded);
         }
+        let mut known = outside.security_records()?;
+        let mut records = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for finding in audited.findings {
-            let record = if let Some(record) = finding.recorded_in(&known) {
+            let (record, metadata) = if let Some(value) = known.finding(&finding) {
                 recorded.existing += 1;
-                record
+                (known.record(value)?, RecordedFinding::of_record(value)?)
             } else {
-                let record = outside.create_security_record(&known, &finding)?;
+                let value = outside.create_security_record(&known, &finding)?;
+                let record = known.record(&value)?;
+                let metadata = RecordedFinding::of_record(&value)?;
+                known.remember(value);
                 recorded.created += 1;
                 outside.step("recorded a Security finding privately".to_string());
-                known.remember(record)
+                (record, metadata)
             };
-            findings.push(RecordedFinding::of_record(record)?);
+            let url = metadata.url.clone();
+            findings.push(metadata);
+            if record.untriaged() && seen.insert(finding.fingerprint) {
+                records.push((record, url));
+            } else if !record.untriaged() {
+                outside.step(format!(
+                    "keeping the Day shift's grade for {}",
+                    record.name()
+                ));
+            }
+        }
+        for (index, (record, url)) in records.iter().enumerate() {
+            let number = index + 1;
+            outside.step(format!(
+                "starting Security reproduction {number} of {}",
+                record.name()
+            ));
+            let (reproduced, session_log) = outside.reproduce(record, number);
+            if session_log.is_some() {
+                log = session_log;
+            }
+            let reproduced = reproduced?;
+            outside.update_security_record(record, &reproduced)?;
+            for finding in findings.iter_mut().filter(|finding| finding.url == *url) {
+                finding.severity = reproduced
+                    .severity()
+                    .map(|severity| severity.name().to_string());
+            }
+            outside.step(format!(
+                "Security reproduction {number}: {}",
+                reproduced.outcome
+            ));
         }
         Ok(recorded)
     })();
@@ -454,7 +486,7 @@ mod tests {
         let mut outside = InMemory::default()
             .audited(vec![draft("old"), draft("new")])
             .advisories(vec![
-                json!({"state":"closed", "description":"Fingerprint: `old`", "summary":"Candidate", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-old"}),
+                json!({"ghsa_id":"old", "state":"closed", "description":"Fingerprint: `old`", "summary":"Candidate", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-old"}),
             ]);
         let Outcome::Audited(Ended {
             outcome: Ok(recorded),
@@ -474,6 +506,21 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec!["new"]
+        );
+        assert_eq!(
+            outside
+                .calls
+                .iter()
+                .filter(|call| matches!(
+                    call,
+                    Call::CreateAdvisory(_) | Call::Reproduce(_) | Call::UpdateSecurityRecord(_)
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                &Call::CreateAdvisory("new".into()),
+                &Call::Reproduce("new".into()),
+                &Call::UpdateSecurityRecord("new".into()),
+            ]
         );
     }
 }
