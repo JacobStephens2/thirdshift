@@ -567,6 +567,175 @@ fn the_security_run_ends_as_a_failed_fix_and_sends_one_private_metadata_notifica
 }
 
 #[test]
+fn a_failed_fix_keeps_its_claim_and_pauses_security_and_pickup_until_closed() {
+    for private in [false, true] {
+        for pushed in [false, true] {
+            let scenario = with_reproduced_findings(&["critical"]);
+            if private {
+                let mut state = scenario.gh_state();
+                state["private"] = json!(true);
+                state["bodies"]["7"] = state["advisories"][0]["description"].clone();
+                state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+                scenario.write_gh_state(&state);
+            }
+            let publishing = publish_fix("GHSA-finding-0");
+            scenario.agent_does_in_session(
+                1,
+                &if private {
+                    publishing.replace("security/advisories/GHSA-finding-0", "issues/7")
+                } else {
+                    publishing
+                },
+            );
+            scenario.agent_does_for(
+                8,
+                &format!("{}exit 1\n", if pushed { implement_fix() } else { "" }),
+            );
+            let failed = scenario.run(&["secure", "security-fix"]);
+            assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+            assert_eq!(
+                scenario.gh_state()["labels"]["8"],
+                json!(["security-fix", "in-progress"])
+            );
+            // Even contradictory ready labelling cannot make Pickup retry a Claim.
+            scenario.issue_labelled(8, &["security-fix", "in-progress", "ready-for-agent"]);
+            let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+            for args in [
+                vec!["secure", "security-fix", "email", "day@example.com"],
+                vec!["secure", "no-security-fix", "email", "day@example.com"],
+                vec!["pickup"],
+            ] {
+                let skipped = scenario.run_with_env(&args, &resend_env(&resend));
+                assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+                assert!(skipped.stdout.is_empty());
+                if args[0] == "secure" {
+                    assert!(
+                        skipped
+                            .stderr
+                            .contains("failed Security fix #8 is still open"),
+                        "{}",
+                        skipped.stderr
+                    );
+                }
+            }
+            assert_eq!(scenario.claude_calls().len(), 2);
+            assert!(resend.requests().is_empty());
+            assert_eq!(
+                scenario
+                    .entries("home/.thirdshift/logs/acme/widgets/commands/secure")
+                    .len(),
+                1
+            );
+            let activity = fs::read_to_string(
+                scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"),
+            )
+            .unwrap();
+            assert!(
+                activity
+                    .matches("Security run skipped: failed Security fix #8 is still open")
+                    .count()
+                    == 1,
+                "{activity}"
+            );
+            let mut state = scenario.gh_state();
+            state["issues"]["8"] = json!("CLOSED");
+            scenario.write_gh_state(&state);
+            scenario.agent_does(&audit_script("[]"));
+            let after = scenario.run(&["secure", "security-fix"]);
+            assert_eq!(after.code, Some(0), "{}", after.stderr);
+            assert!(
+                after
+                    .stderr
+                    .contains("Security audit recorded 0 new finding(s)"),
+                "{}",
+                after.stderr
+            );
+            assert_eq!(scenario.claude_calls().len(), 3);
+        }
+    }
+}
+
+#[test]
+fn a_successful_fix_awaiting_review_does_not_pause_allowed_security_work() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    let fixed = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(fixed.code, Some(0), "{}", fixed.stderr);
+    scenario.agent_does(&audit_script("[]"));
+    let audited = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(audited.code, Some(0), "{}", audited.stderr);
+    assert!(
+        audited
+            .stderr
+            .contains("Security audit recorded 0 new finding(s)"),
+        "{}",
+        audited.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 3);
+}
+
+#[test]
+fn an_undecided_run_offers_both_ways_to_allow_a_reproduced_fix() {
+    for (config, permission, reproduced, offers) in [
+        ("", None, true, true),
+        ("", Some("no-security-fix"), true, false),
+        ("[security]\nfix = false\n", None, true, false),
+        (
+            "[security]\nfix = true\n",
+            Some("no-security-fix"),
+            true,
+            false,
+        ),
+        ("", None, false, false),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        scenario.agent_does_in_session(1, &audit_script(&json!([finding("offer")]).to_string()));
+        scenario.agent_does_in_session(
+            2,
+            &reproduction_script(if reproduced {
+                "reproduced high single"
+            } else {
+                "not reproduced"
+            }),
+        );
+        let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+        let mut args = vec![
+            "secure",
+            "base",
+            "main",
+            "harness",
+            "claude",
+            "email",
+            "day@example.com",
+        ];
+        if let Some(permission) = permission {
+            args.push(permission);
+        }
+        let result = scenario.run_with_env(&args, &resend_env(&resend));
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let (_, body) = the_one_notification(&resend);
+        for text in [&result.stderr, &body] {
+            assert_eq!(
+                text.contains(
+                    "thirdshift secure base main harness claude email day@example.com security-fix"
+                ),
+                offers,
+                "{text}"
+            );
+            assert_eq!(
+                text.contains("fix = true under [security]"),
+                offers,
+                "{text}"
+            );
+            assert!(!text.contains("Private candidate write-up"), "{text}");
+        }
+        assert_eq!(scenario.claude_calls().len(), 2);
+    }
+}
+
+#[test]
 fn invalid_fix_tickets_are_not_marked_ready_or_dispatched() {
     for script in [
         "printf '%s\\n' 'No protocol line' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n".to_string(),

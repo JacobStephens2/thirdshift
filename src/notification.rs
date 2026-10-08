@@ -252,6 +252,11 @@ fn body(
             text += &format!("Cause:        {cause}\n");
         }
     }
+    if let Some(offer) = account.security_fix_offer {
+        for line in offer.lines() {
+            text += &format!("{line}\n");
+        }
+    }
     for line in account.advice {
         text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
     }
@@ -331,6 +336,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_fix_offer: None,
             urls: vec![PR],
         }
     }
@@ -349,6 +355,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_fix_offer: None,
             urls: Vec::new(),
         }
     }

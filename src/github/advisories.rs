@@ -17,6 +17,8 @@ const SECURITY_FINDING: Label = Label::new(
 
 pub(crate) const FIX_TICKET_MARKER: &str = "\n<!-- thirdshift:security-fix -->\nFix Ticket: ";
 
+const FIX_FAILED: &str = "Fix Run: failed";
+
 pub enum SecurityRecords {
     Advisories(Vec<Value>),
     Issues(Vec<Value>),
@@ -51,6 +53,29 @@ impl SecurityRecords {
                             }))
             }),
         }
+    }
+
+    /// A dispatched fix that failed and whose issue the Day shift has not closed.
+    pub fn failed_fix(&self) -> Result<Option<IssueUrl>> {
+        let (records, field) = match self {
+            Self::Advisories(records) => (records, "description"),
+            Self::Issues(records) => (records, "body"),
+        };
+        for record in records {
+            if record["security_fix_closed"] == true {
+                continue;
+            }
+            if let Some((_, fix)) = record[field]
+                .as_str()
+                .and_then(|text| text.rsplit_once(FIX_TICKET_MARKER))
+                && fix.lines().any(|line| line == FIX_FAILED)
+            {
+                return Ok(Some(IssueUrl::parse(
+                    fix.lines().next().unwrap_or_default(),
+                )?));
+            }
+        }
+        Ok(None)
     }
 
     /// Most severe reproduced finding still awaiting a fix, ties in record order.
@@ -225,6 +250,26 @@ impl GitHub {
         record: &SecurityRecord,
         ticket: &IssueUrl,
     ) -> Result<()> {
+        self.write_security_fix(repo, record, ticket, false)
+    }
+
+    /// Preserve a failed fix's ending in its private record for later Passes.
+    pub fn record_failed_security_fix(
+        &self,
+        repo: &str,
+        record: &SecurityRecord,
+        ticket: &IssueUrl,
+    ) -> Result<()> {
+        self.write_security_fix(repo, record, ticket, true)
+    }
+
+    fn write_security_fix(
+        &self,
+        repo: &str,
+        record: &SecurityRecord,
+        ticket: &IssueUrl,
+        failed: bool,
+    ) -> Result<()> {
         let (path, field) = match record {
             SecurityRecord::Advisory { id, .. } => (
                 format!("repos/{repo}/security-advisories/{id}"),
@@ -243,14 +288,24 @@ impl GitHub {
         }
         let current: Value =
             serde_json::from_slice(&output.stdout).context("private record is invalid JSON")?;
-        if current[field].as_str() != Some(record.description()) {
-            bail!("the private record changed while publishing its fix; leaving it unchanged");
-        }
-        let description = format!(
+        let linked = format!(
             "{}{FIX_TICKET_MARKER}{}\n",
             record.description().trim_end(),
             ticket.url
         );
+        let expected = if failed {
+            linked.as_str()
+        } else {
+            record.description()
+        };
+        if current[field].as_str() != Some(expected) {
+            bail!("the private record changed while publishing its fix; leaving it unchanged");
+        }
+        let description = if failed {
+            format!("{linked}{FIX_FAILED}\n")
+        } else {
+            linked
+        };
         let body = serde_json::to_vec(&json!({field: description}))?;
         let output = self.output_with_input(
             &["api", "--method", "PATCH", &path, "--input", "-"],

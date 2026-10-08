@@ -53,12 +53,14 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     ticket_lines: &[],
                     review: None,
                     security_findings: None,
+                    security_fix_offer: None,
                     urls: Vec::new(),
                 },
                 Err(failed) => Account::of_failure(failed, "audit failed"),
             };
             Ok(Account {
                 security_findings: Some(&audited.findings),
+                security_fix_offer: audited.offer.as_ref(),
                 ..account
             })
         }
@@ -103,6 +105,8 @@ pub struct Account<'a> {
     pub review: Option<Review<'a>>,
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
+    /// An offer to allow fixing when no command or setting decided against it.
+    pub security_fix_offer: Option<&'a crate::security::FixOffer>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
@@ -171,6 +175,7 @@ impl<'a> Account<'a> {
                 ticket_lines: &reached.ticket_lines,
                 review: None,
                 security_findings: None,
+                security_fix_offer: None,
                 urls: vec![&reached.pr_url],
             },
             Err(failed) => Account {
@@ -195,6 +200,7 @@ impl<'a> Account<'a> {
             ticket_lines: &failed.ticket_lines,
             review: None,
             security_findings: None,
+            security_fix_offer: None,
             urls: failed.pr_url.as_deref().into_iter().collect(),
         }
     }
@@ -223,6 +229,7 @@ impl<'a> Account<'a> {
                 ticket_lines: &[],
                 review: None,
                 security_findings: None,
+                security_fix_offer: None,
                 urls: vec![reviewed.url()],
             },
             (Err(failed), None) => Account::of_failure(failed, "review failed"),
@@ -304,6 +311,9 @@ impl Shown {
                     steps.push(format!("{COMMAND_LOG}{}", log.display()));
                 }
             }
+        }
+        if let Some(offer) = account.security_fix_offer {
+            steps.extend(offer.lines());
         }
         Shown {
             steps,
@@ -476,6 +486,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_fix_offer: None,
             urls: vec![PR],
         }
     }
@@ -494,6 +505,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_fix_offer: None,
             urls: Vec::new(),
         }
     }
@@ -670,6 +682,7 @@ mod tests {
                         dispatched: None,
                     }),
                     security_findings: None,
+                    security_fix_offer: None,
                     urls: vec![PLAN],
                 }
             );
