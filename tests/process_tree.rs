@@ -3,7 +3,6 @@
 mod support;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -165,9 +164,11 @@ fn interrupting_a_muse_check_after_cli_exit_stops_the_command_holding_its_stream
 fn interrupting_a_live_session_after_cli_exit_stops_the_command_holding_stdout() {
     let scenario = Scenario::new();
     // Failed run preservation may be slow even when the session stops promptly.
-    let hook = scenario.origin_dir().join("hooks/pre-receive");
-    fs::write(&hook, "#!/bin/sh\nsleep 3\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        "#!/bin/sh\nsleep 3\n",
+    );
     let pid = scenario.path("stdout-holder-pid");
     scenario.agent_does(&format!(
         r#"printf 'interrupted work\n' > interrupted-work.txt
