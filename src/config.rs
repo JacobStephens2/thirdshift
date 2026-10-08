@@ -1228,6 +1228,10 @@ mod tests {
             assert_eq!(after.harness.default, Some(Harness::Claude));
             after.harness.default = None;
         }
+        if before.security_fix.is_none() {
+            assert_eq!(after.security_fix, Some(false));
+            after.security_fix = None;
+        }
         assert_eq!(after, before, "{completed}");
         let again = document(&completed).render(None);
         assert_eq!(again, completed, "completing twice changed it");
