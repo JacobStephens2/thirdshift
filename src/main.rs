@@ -520,7 +520,7 @@ fn secure(args: PassArgs) -> ExitCode {
         Ok(started) => started,
         Err(failure) => return failure,
     };
-    let mut harness = args.flags.harness(&config);
+    let mut harness = args.flags.security_harness(&config);
     let outcome = security::run(args.base.as_deref(), &args.flags, &config, &mut harness);
     started.built_with(&harness);
     started.finish(match outcome {
