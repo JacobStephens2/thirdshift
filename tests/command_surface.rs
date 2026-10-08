@@ -202,7 +202,7 @@ fn help_documents_base_for_an_architect_run() {
         "<branch> must exist on origin, with no local copy of it ahead",
         "launch.pull updates the clone only when <branch> is the branch checked out",
         "base goes with --plan-only too",
-        "base is for architect and pickup only",
+        "base is for a Pass only",
         "Without base, the Base branch is the branch checked out",
         "thirdshift architect base main",
     ] {
@@ -235,7 +235,7 @@ fn help_documents_pickup_the_ready_issue_the_dispatch_the_skips_and_the_run_noti
         "pickup takes nothing else: no focus and no --plan-only",
         "A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why, after any lines on issues it passed over",
         "when the repository has no Ready issue",
-        "while an Architect run or another Pickup run on the same repository is still running on this machine",
+        "while another Pass on the same repository is still running on this machine",
         "--email, --email <address> and --no-email ask a Pickup run for its Run notification as they do a Run, and email.always sets the default",
         "A pass that took an issue sends one: the notification the run it dispatched would send by hand, with that run's subject, outcome and body",
         "The dispatched run sends none of its own",

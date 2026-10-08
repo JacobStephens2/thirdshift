@@ -1,5 +1,5 @@
-//! The Run notification: one email when a Run, a Spec run or an Architect run
-//! ends, whatever its outcome, or when a Pickup run that took an issue does,
+//! The Run notification: one email when a Run, a Spec run or a Pass ends,
+//! whatever its outcome, unless the Pass was skipped,
 //! through the same checks and the same send as `email-test`.
 
 use std::path::Path;

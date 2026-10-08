@@ -1,9 +1,9 @@
 //! The Activity log: `<logs.dir>/<owner>/<repo>/activity.log`, one running
 //! record per repository of what the factory did there. A Run, a Spec run,
-//! an Architect run or a Pickup run writes a line when it starts work,
+//! or a Pass writes a line when it starts work,
 //! naming its Command log, and one when it ends, with its outcome; the run a
-//! command dispatched or started writes none of its own. A skipped Pickup
-//! run or Architect run writes a line only when its reason differs from the
+//! command dispatched or started writes none of its own. A skipped Pass
+//! writes a line only when its reason differs from the
 //! last line of its own kind. With `activity.quiet_skips`, a skipped pass
 //! prints nothing at all, its Activity log line its only trace.
 

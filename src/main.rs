@@ -198,7 +198,7 @@ The review starts at <branch>'s head on origin, and the run the plan is dispatch
 off <branch> and targets it with its pull request. <branch> must exist on origin, with no local
 copy of it ahead, and launch.pull updates the clone only when <branch> is the branch checked
 out. base goes with --plan-only too, before or after the focus and the other flags. base is
-for architect and pickup only: thirdshift <Issue URL> doesn't take it. Without base, the Base
+for a Pass only: thirdshift <Issue URL> doesn't take it. Without base, the Base
 branch is the branch checked out.
 
 A review that finds no Strong candidate publishes no plan. It files its top recommendation as
