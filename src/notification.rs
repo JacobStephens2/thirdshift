@@ -55,6 +55,8 @@ pub enum About<'a> {
     ArchitectRun,
     /// A Pickup run, which is about the issue it takes, once it takes one.
     PickupRun,
+    /// A report-only Security run; its notification is added by #539.
+    SecurityRun,
 }
 
 /// What a Run notification's subject names.
@@ -69,7 +71,7 @@ enum Subject {
     /// An Architect run, with the repository the Launch directory's `origin`
     /// names, if it names one.
     ArchitectRun(Option<Repo>),
-    /// A Pickup run that has taken no issue yet, and so has nothing to tell.
+    /// A Pass whose notification subject has not been established yet.
     Pending,
 }
 
@@ -102,6 +104,7 @@ impl RunNotification {
             // run's own preflight reports why.
             About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
             About::PickupRun => Subject::Pending,
+            About::SecurityRun => Subject::Pending,
         };
         Ok(RunNotification {
             checked,

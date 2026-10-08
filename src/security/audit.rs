@@ -51,6 +51,7 @@ pub fn run(
             "THREAT_MODEL.md",
             "THREAT-MODEL.md",
             "docs/threat-model.md",
+            "docs/THREAT-MODEL.md",
             "docs/THREAT_MODEL.md",
         ]
         .into_iter()
@@ -146,29 +147,50 @@ fn node(args: &[&str]) -> Result<()> {
 
 /// Manifest identity only: no affected or patched versions are inferred.
 fn package_in(worktree: &Path) -> Package {
-    let rust = fs::read_to_string(worktree.join("Cargo.toml"))
-        .ok()
-        .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
-        .and_then(|manifest| {
-            manifest
-                .get("package")?
-                .get("name")?
-                .as_str()
-                .map(String::from)
-        });
-    if let Some(name) = rust {
-        return Package {
-            ecosystem: "rust".to_string(),
-            name: Some(name),
-        };
+    for (file, section, ecosystem) in [
+        ("Cargo.toml", "package", "rust"),
+        ("pyproject.toml", "project", "pip"),
+    ] {
+        let name = fs::read_to_string(worktree.join(file))
+            .ok()
+            .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+            .and_then(|manifest| {
+                manifest
+                    .get(section)?
+                    .get("name")?
+                    .as_str()
+                    .map(String::from)
+            });
+        if let Some(name) = name {
+            return Package {
+                ecosystem: ecosystem.to_string(),
+                name: Some(name),
+            };
+        }
     }
     let npm = fs::read(worktree.join("package.json"))
         .ok()
         .and_then(|text| serde_json::from_slice::<Value>(&text).ok())
         .and_then(|manifest| manifest["name"].as_str().map(String::from));
-    match npm {
-        Some(name) => Package {
+    if let Some(name) = npm {
+        return Package {
             ecosystem: "npm".to_string(),
+            name: Some(name),
+        };
+    }
+    let go = fs::read_to_string(worktree.join("go.mod"))
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let mut words = line.split_whitespace();
+                (words.next()? == "module")
+                    .then(|| words.next().map(|name| name.trim_matches('"').to_string()))
+                    .flatten()
+            })
+        });
+    match go {
+        Some(name) => Package {
+            ecosystem: "go".to_string(),
             name: Some(name),
         },
         None => Package {

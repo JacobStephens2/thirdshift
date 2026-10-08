@@ -383,3 +383,52 @@ fn audits_origins_base_without_changing_the_launch_directory() {
     }
     scenario.assert_every_session_found_the_factory_skills();
 }
+
+#[test]
+fn security_advisories_preserve_python_and_go_manifest_identity() {
+    for (manifest, contents, package) in [
+        (
+            "pyproject.toml",
+            "[project]\nname = \"widgets\"\nversion = \"1.0.0\"\n",
+            json!({"ecosystem":"pip", "name":"widgets"}),
+        ),
+        (
+            "go.mod",
+            "module example.com/acme/widgets\n\ngo 1.24\n",
+            json!({"ecosystem":"go", "name":"example.com/acme/widgets"}),
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.origin_has_commit("main", manifest, contents, "Add manifest");
+        scenario.agent_does(&audit_script(&json!([finding("input-size")]).to_string()));
+        let result = scenario.run(&["secure"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(
+            scenario.gh_state()["advisories"][0]["vulnerabilities"][0]["package"],
+            package,
+            "package identity was lost for {manifest}"
+        );
+    }
+}
+
+#[test]
+fn security_audit_names_the_threat_model_under_docs() {
+    let scenario = Scenario::new();
+    fs::create_dir_all(scenario.launch_dir().join("docs")).unwrap();
+    fs::write(
+        scenario.launch_dir().join("docs/THREAT-MODEL.md"),
+        "# Threat model\nAll callers are authenticated; tenant isolation is the boundary.\n",
+    )
+    .unwrap();
+    scenario.launch_git(&["add", "docs/THREAT-MODEL.md"]);
+    scenario.launch_git(&["commit", "-m", "Document threat model"]);
+    scenario.launch_git(&["push", "origin", "main"]);
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let prompt = scenario.first_prompt();
+    assert!(
+        prompt.contains("Read the repository's threat-model document `docs/THREAT-MODEL.md`."),
+        "the existing threat-model document was not named: {prompt}"
+    );
+}

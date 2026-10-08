@@ -47,7 +47,7 @@ mod worktree;
 use std::process::ExitCode;
 
 use architect::Outcome;
-use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
+use args::{ArchitectArgs, Command, PassArgs, RunArgs};
 use asks::Asks;
 use command::{Ending, failure};
 use config::UserConfig;
@@ -480,7 +480,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// The repository's Activity log records the skip, if it differs from the
 /// last, or the start and end of its work. With `activity.quiet_skips` set, a
 /// skipped pass prints nothing at all.
-fn pickup(args: PickupArgs) -> ExitCode {
+fn pickup(args: PassArgs) -> ExitCode {
     let ask = |config: &UserConfig| args.flags.notification(config);
     let (config, mut started) = match command::start(Begin::PickupRun, ask, About::PickupRun) {
         Ok(started) => started,
@@ -504,11 +504,11 @@ fn pickup(args: PickupArgs) -> ExitCode {
 }
 
 /// A report-only Security run. Notification delivery is added by #539.
-fn secure(args: PickupArgs) -> ExitCode {
+fn secure(args: PassArgs) -> ExitCode {
     let (config, started) = match command::start(
         Begin::SecurityRun,
         |_| notification::NotificationAsk::Skip,
-        About::PickupRun,
+        About::SecurityRun,
     ) {
         Ok(started) => started,
         Err(failure) => return failure,

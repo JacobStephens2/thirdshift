@@ -24,8 +24,8 @@ pub enum Command {
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
-    Pickup(PickupArgs),
-    Secure(PickupArgs),
+    Pickup(PassArgs),
+    Secure(PassArgs),
     Run(RunArgs),
 }
 
@@ -52,13 +52,13 @@ pub struct ArchitectArgs {
 
 /// A Pickup run or Security run's shared Pass arguments.
 #[derive(Debug, PartialEq, Eq)]
-pub struct PickupArgs {
+pub struct PassArgs {
     /// The Base branch `base <branch>` named, if given; without it, the
     /// branch checked out in the Launch directory is the Base branch.
     pub base: Option<String>,
     /// The flags it shares with a Run: `email` and `no-email` for its own
-    /// Run notification, the rest for the Spec run or Run the Ready issue is
-    /// dispatched as.
+    /// Run notification, the rest for a run the Pass dispatches. The
+    /// report-only Security run reserves them until those stages are built.
     pub flags: Flags,
 }
 
@@ -182,7 +182,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 
 /// Parse the arguments after `pickup` or `secure`: shared flags, at most once, in any
 /// order, and nothing else. `base` must be followed by the Base branch.
-fn parse_pass(args: &[String], command: &str) -> Result<PickupArgs> {
+fn parse_pass(args: &[String], command: &str) -> Result<PassArgs> {
     let mut base = None;
     let mut flags = Flags::default();
     let mut args = args.iter().peekable();
@@ -191,7 +191,7 @@ fn parse_pass(args: &[String], command: &str) -> Result<PickupArgs> {
             bail!("unexpected argument after {command}: {arg}");
         }
     }
-    Ok(PickupArgs { base, flags })
+    Ok(PassArgs { base, flags })
 }
 
 /// Take a Pass's shared words: its Base branch and the flags for its
@@ -706,7 +706,7 @@ mod tests {
     }
 
     /// The Pickup run `args` parse to.
-    fn pickup_args(args: &[&str]) -> PickupArgs {
+    fn pickup_args(args: &[&str]) -> PassArgs {
         match parse_strs(args) {
             Ok(Command::Pickup(pickup_args)) => pickup_args,
             Ok(_) => panic!("{args:?}: not a Pickup run"),
@@ -716,12 +716,12 @@ mod tests {
 
     #[test]
     fn pickup_takes_each_of_its_flags_with_or_without_dashes_in_any_order() {
-        let none = PickupArgs {
+        let none = PassArgs {
             base: None,
             flags: Flags::default(),
         };
         assert_eq!(pickup_args(&["pickup"]), none);
-        let all = PickupArgs {
+        let all = PassArgs {
             base: Some("develop".to_string()),
             flags: Flags {
                 goal: Some(Goal::Merged),
@@ -775,7 +775,7 @@ mod tests {
         ] {
             assert_eq!(pickup_args(&args), all, "{args:?}");
         }
-        let cautious = PickupArgs {
+        let cautious = PassArgs {
             base: None,
             flags: Flags {
                 goal: Some(Goal::ReadyForReview),
