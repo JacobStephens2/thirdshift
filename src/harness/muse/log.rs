@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 #[derive(Default)]
 pub(in crate::harness) struct SessionLog {
     pub(in crate::harness) message: Option<String>,
+    pub(in crate::harness) models: Vec<String>,
     tokens: Option<Tokens>,
 }
 
@@ -46,6 +47,11 @@ impl SessionLog {
                 self.message = event["text"].as_str().map(String::from);
             }
             Some("model_completed") => {
+                if let Some(model) = event["model"].as_str().filter(|model| !model.is_empty())
+                    && self.models.last().map(String::as_str) != Some(model)
+                {
+                    self.models.push(model.to_string());
+                }
                 if let Some(usage) = event["usage"].as_object() {
                     let tokens = self.tokens.get_or_insert_default();
                     tokens.input += usage
