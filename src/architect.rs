@@ -227,7 +227,7 @@ pub fn run(
     } = match launch::start(base) {
         Ok(Start::Clear(launch)) => launch,
         Ok(Start::AlreadyRunning(running)) => {
-            logs::skipped(Pass::ArchitectRun, &running.0, &running);
+            logs::skipped(Pass::Architect, &running.0, &running);
             return Outcome::Skipped(Skipped::AlreadyRunning(running));
         }
         Err(error) => return failed(error.into()),
@@ -285,7 +285,7 @@ fn run_through(outside: &mut impl Outside, architect_run: &ArchitectRun) -> Outc
     match gates(outside) {
         Ok(Decision::GoAhead) => {}
         Ok(Decision::Skip(skipped)) => {
-            outside.skipped(Pass::ArchitectRun, &skipped);
+            outside.skipped(Pass::Architect, &skipped);
             return Outcome::Skipped(skipped);
         }
         Err(error) => return failed(error.into()),

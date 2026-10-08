@@ -943,8 +943,84 @@ fn repo_prefix(path: &str) -> Option<(&str, &str)> {
 /// per run with `--jq` set to `WORKFLOW_RUN_LINES`, and for the PRs one
 /// `<merge commit> <number>` line per PR with `--jq` set to
 /// `COMMIT_PR_LINES`.
+/// Advisory create/list/update endpoints, backed by private JSON state.
+fn advisory_api(state: &mut Json, positional: &[String], flags: &Flags) {
+    use std::io::Read;
+    let (path, query) = positional[0]
+        .split_once('?')
+        .unwrap_or((&positional[0], ""));
+    let (repo, rest) = repo_prefix(path).unwrap();
+    check_repo_is(state, Some(repo));
+    let method = flag(flags, "method").unwrap_or("GET");
+    if method == "GET" {
+        let wanted = query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("state="));
+        let advisories = state.get("advisories").map(Json::items).unwrap_or_default();
+        let listed: Vec<Json> = advisories
+            .iter()
+            .filter(|record| {
+                wanted.is_none_or(|wanted| record.at("state").as_str() == Some(wanted))
+            })
+            .cloned()
+            .collect();
+        if flag(flags, "jq") == Some(".[]") {
+            for record in listed {
+                println!("{record}");
+            }
+        } else {
+            println!("{}", Array(listed));
+        }
+        return;
+    }
+    let mut input = String::new();
+    let mut body = if flag(flags, "input") == Some("-") {
+        std::io::stdin().read_to_string(&mut input).unwrap();
+        parse_json(&input)
+    } else {
+        object([])
+    };
+    let advisories = state.entry("advisories", Array(Vec::new())).items_mut();
+    if method == "POST" && rest == "security-advisories" {
+        if !body.has("summary") || !body.has("description") || !body.has("vulnerabilities") {
+            die("HTTP 422: required advisory fields missing", 1);
+        }
+        let id = format!("GHSA-test-test-{:04}", advisories.len() + 1);
+        body.set("ghsa_id", string(&id));
+        body.set(
+            "html_url",
+            string(format!(
+                "https://github.com/{repo}/security/advisories/{id}"
+            )),
+        );
+        body.set("state", string("draft"));
+        advisories.push(body.clone());
+    } else if method == "PATCH" {
+        let id = rest.strip_prefix("security-advisories/").unwrap();
+        let advisory = advisories
+            .iter_mut()
+            .find(|advisory| advisory.at("ghsa_id").as_str() == Some(id))
+            .unwrap();
+        let Json::Object(fields) = body else {
+            panic!("advisory update must be an object");
+        };
+        for (key, value) in fields {
+            advisory.set(&key, value);
+        }
+        body = advisory.clone();
+    } else {
+        die("fake gh: unsupported advisory operation", 2);
+    }
+    save(state);
+    println!("{body}");
+}
+
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
+    if path.contains("/security-advisories") {
+        advisory_api(state, positional, flags);
+        return;
+    }
     if path == "user" && flags.is_empty() {
         let email = state.get("user_email").cloned().unwrap_or(Null);
         println!(
@@ -1770,7 +1846,13 @@ pub fn main(args: Vec<String>) {
             release_view(&state, &positional, &flags);
         }
         ["api", "graphql", rest @ ..] => graphql(&state, rest),
-        ["api", "--method", "PATCH", rest @ ..] => pr_patch(&mut state, rest),
+        ["api", "--method", "PATCH", rest @ ..]
+            if !rest
+                .iter()
+                .any(|word| word.contains("/security-advisories")) =>
+        {
+            pr_patch(&mut state, rest)
+        }
         ["api", "--method", "PUT", rest @ ..] => issue_labels_put(&mut state, rest),
         ["api", "--method", "DELETE", rest @ ..] => issue_label_delete(&mut state, rest),
         ["api", path, ..] if generate_notes_repo(path).is_some() => {

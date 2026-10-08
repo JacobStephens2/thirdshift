@@ -431,8 +431,9 @@ fn output_and_start_without_a_factory_beginning_keep_no_command_log() {
 fn skip(memory: &Scripted, pass: Pass, reason: &str) {
     let mut record = Record::new(memory.clone());
     record.begin(match pass {
-        Pass::PickupRun => Begin::PickupRun,
-        Pass::ArchitectRun => Begin::ArchitectRun,
+        Pass::Pickup => Begin::PickupRun,
+        Pass::Architect => Begin::ArchitectRun,
+        Pass::Security => Begin::SecurityRun,
     });
     record.configured(&config(true));
     record.eprint(reason);
@@ -445,28 +446,28 @@ fn skip(memory: &Scripted, pass: Pass, reason: &str) {
 #[test]
 fn separate_recordings_suppress_skips_from_shared_history_until_their_kind_changes() {
     let memory = Scripted::default();
-    skip(&memory, Pass::PickupRun, "idle");
-    skip(&memory, Pass::ArchitectRun, "a plan is open");
-    skip(&memory, Pass::PickupRun, "idle");
+    skip(&memory, Pass::Pickup, "idle");
+    skip(&memory, Pass::Architect, "a plan is open");
+    skip(&memory, Pass::Pickup, "idle");
     // A Run's lines do not reset the Pickup run's skip.
     let mut run = Record::new(memory.clone());
     run.begin(Begin::Run(&issue()));
     run.configured(&config(false));
     run.started(Work::Run(&issue()), &harness());
     run.ended("ready");
-    skip(&memory, Pass::PickupRun, "idle");
-    skip(&memory, Pass::PickupRun, "at the Claim limit");
-    skip(&memory, Pass::PickupRun, "at the Claim limit");
-    skip(&memory, Pass::PickupRun, "idle");
+    skip(&memory, Pass::Pickup, "idle");
+    skip(&memory, Pass::Pickup, "at the Claim limit");
+    skip(&memory, Pass::Pickup, "at the Claim limit");
+    skip(&memory, Pass::Pickup, "idle");
     let mut pickup = Record::new(memory.clone());
     pickup.begin(Begin::PickupRun);
     pickup.configured(&config(true));
     pickup.started(Work::PickupRun(&issue()), &harness());
     // Even just an intervening start permits the same skip again.
-    skip(&memory, Pass::PickupRun, "idle");
+    skip(&memory, Pass::Pickup, "idle");
     pickup.ended("ready");
-    skip(&memory, Pass::PickupRun, "idle");
-    skip(&memory, Pass::ArchitectRun, "a plan is open");
+    skip(&memory, Pass::Pickup, "idle");
+    skip(&memory, Pass::Architect, "a plan is open");
     assert_eq!(
         memory.file(ACTIVITY),
         "2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Architect run skipped: a plan is open\n2026-10-03 12:00:00 Run #7 started: commands/issue/7-20261003T120000-0400.log, on claude · opus · high\n2026-10-03 12:00:00 Run #7 ended: ready\n2026-10-03 12:00:00 Pickup run skipped: at the Claim limit\n2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Pickup run #7 started: commands/pickup/7-20261003T120000-0400.log, on claude · opus · high\n2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Pickup run #7 ended: ready\n2026-10-03 12:00:00 Pickup run skipped: idle\n"
@@ -487,14 +488,14 @@ fn skip_history_uses_the_last_64_kib_and_discards_a_cut_first_line() {
             .unwrap()
             .files
             .insert(PathBuf::from(ACTIVITY), seed.clone());
-        skip(&memory, Pass::PickupRun, "idle");
+        skip(&memory, Pass::Pickup, "idle");
         let expected = if prefix.is_empty() {
             seed
         } else {
             format!("{seed}{line}")
         };
         assert_eq!(memory.file(ACTIVITY), expected);
-        skip(&memory, Pass::PickupRun, "idle");
+        skip(&memory, Pass::Pickup, "idle");
         assert_eq!(memory.file(ACTIVITY), expected);
     }
     let memory = Scripted::default();
@@ -505,7 +506,7 @@ fn skip_history_uses_the_last_64_kib_and_discards_a_cut_first_line() {
         .unwrap()
         .files
         .insert(PathBuf::from(ACTIVITY), seed.into());
-    skip(&memory, Pass::PickupRun, "idle");
+    skip(&memory, Pass::Pickup, "idle");
     assert_eq!(memory.file(ACTIVITY), format!("{seed}{line}"));
 }
 
@@ -642,8 +643,8 @@ fn activity_read_and_append_warnings_reveal_quiet_output_and_reset_in_fresh_inst
     for read_failure in [false, true] {
         let memory = Scripted::default();
         for (begin, pass, kind) in [
-            (Begin::PickupRun, Pass::PickupRun, "Pickup run"),
-            (Begin::ArchitectRun, Pass::ArchitectRun, "Architect run"),
+            (Begin::PickupRun, Pass::Pickup, "Pickup run"),
+            (Begin::ArchitectRun, Pass::Architect, "Architect run"),
         ] {
             {
                 let mut faults = memory.0.lock().unwrap();

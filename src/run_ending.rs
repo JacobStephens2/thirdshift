@@ -36,6 +36,21 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
         Ending::Architect { review, dispatched } => {
             Ok(Account::of_architect(review, dispatched.as_ref()))
         }
+        Ending::Security(audited) => Ok(match audited {
+            Ok(recorded) => Account {
+                outcome: "findings recorded",
+                ended: Ok(recorded.to_string()),
+                interrupted: false,
+                pr_url: None,
+                advice: &[],
+                base_fix: None,
+                log: None,
+                ticket_lines: &[],
+                review: None,
+                urls: Vec::new(),
+            },
+            Err(failed) => Account::of_failure(failed, "audit failed"),
+        }),
         Ending::Skipped(skip) => Err(skip),
     }
 }

@@ -58,6 +58,14 @@ impl Logs {
         }
     }
 
+    /// The logs of the Security run on `repo`.
+    pub fn of_security_run(repo: &Repo) -> Self {
+        Logs {
+            name: "secure".to_string(),
+            dir: logs::root(repo).join("sessions"),
+        }
+    }
+
     /// Where a session's stream is logged:
     /// `<root>/sessions/<name>-<stamp>-<kind>.jsonl`.
     pub fn path(&self, kind: &str) -> PathBuf {

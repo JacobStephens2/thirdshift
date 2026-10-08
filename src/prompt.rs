@@ -292,3 +292,24 @@ pub fn resume(killed: &[&str]) -> String {
         killed = killed.join("; "),
     )
 }
+
+/// The Security audit's terminal protocol: only these final lines are read.
+pub const AUDIT_COMPLETE_LINE: &str = "Security audit: complete";
+pub const AUDIT_INCOMPLETE_LINE: &str = "Security audit: incomplete";
+
+pub fn security_audit(
+    base: &str,
+    commit: &str,
+    root: &std::path::Path,
+    output: &std::path::Path,
+    threat_model: Option<&str>,
+) -> String {
+    let threat_model = threat_model
+        .map(|file| format!("Read the repository's threat-model document `{file}`.\n"))
+        .unwrap_or_default();
+    format!(
+        "/thirdshift-security-audit\nUse the `thirdshift-security-audit` skill in full audit mode with report artifacts and the `quick` profile.\nAudit the whole repository at commit `{commit}`, the head of Base branch `{base}` on origin. All vendored and third-party code are out of scope.\n{threat_model}Output directory: `{output}`.\nAudit root: `{root}`.\nRead compatible earlier runs under the audit root before planning this audit.\nThis session commits, pushes, opens and publishes nothing, changes no repository source, and touches no deployed site. It reproduces and fixes nothing.\nIf a decision or missing prerequisite would require asking, record run_status incomplete with the reason, and end incomplete rather than asking.\nWrite the skill's report artifacts and run-metadata.json; mark run_status complete only when all required artifacts are written. Run both skill validators before finishing.\nEnd your final message with exactly `{AUDIT_COMPLETE_LINE}` after writing valid artifacts, or `{AUDIT_INCOMPLETE_LINE}` when incomplete.\n\n{HEADLESS}",
+        output = output.display(),
+        root = root.display()
+    )
+}

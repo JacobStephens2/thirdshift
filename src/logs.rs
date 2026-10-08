@@ -40,6 +40,7 @@ pub enum Begin<'a> {
     ArchitectRun,
     /// `thirdshift pickup`, a pass.
     PickupRun,
+    SecurityRun,
 }
 
 /// The work a command starts.
@@ -53,20 +54,24 @@ pub enum Work<'a> {
     PickupRun(&'a IssueUrl),
     /// An Architect run, on its repository.
     ArchitectRun(&'a Repo),
+    /// A Security run, on its repository.
+    SecurityRun(&'a Repo),
 }
 
 /// A Pass, a command that may be skipped before it starts work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pass {
-    ArchitectRun,
-    PickupRun,
+    Architect,
+    Pickup,
+    Security,
 }
 
 impl Display for Pass {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
-            Pass::ArchitectRun => "Architect run",
-            Pass::PickupRun => "Pickup run",
+            Pass::Architect => "Architect run",
+            Pass::Pickup => "Pickup run",
+            Pass::Security => "Security run",
         })
     }
 }
@@ -170,7 +175,7 @@ impl Work<'_> {
     fn repo(self) -> Repo {
         match self {
             Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => issue.repo(),
-            Work::ArchitectRun(repo) => repo.clone(),
+            Work::ArchitectRun(repo) | Work::SecurityRun(repo) => repo.clone(),
         }
     }
 
@@ -179,8 +184,9 @@ impl Work<'_> {
         match self {
             Work::Run(_) => Kind::Run,
             Work::SpecRun(_) => Kind::SpecRun,
-            Work::PickupRun(_) => Kind::Pass(Pass::PickupRun),
-            Work::ArchitectRun(_) => Kind::Pass(Pass::ArchitectRun),
+            Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
+            Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
+            Work::SecurityRun(_) => Kind::Pass(Pass::Security),
         }
     }
 
@@ -188,7 +194,7 @@ impl Work<'_> {
     fn issue(self) -> Option<u64> {
         match self {
             Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => Some(issue.number),
-            Work::ArchitectRun(_) => None,
+            Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
         }
     }
 
@@ -204,6 +210,7 @@ impl Work<'_> {
             Work::Run(issue) | Work::SpecRun(issue) => ("issue", format!("{}-", issue.number)),
             Work::PickupRun(issue) => ("pickup", format!("{}-", issue.number)),
             Work::ArchitectRun(_) => ("architect", String::new()),
+            Work::SecurityRun(_) => ("secure", String::new()),
         };
         root.join("commands")
             .join(folder)

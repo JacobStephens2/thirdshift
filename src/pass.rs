@@ -14,7 +14,9 @@
 use std::fmt::Display;
 use std::path::PathBuf;
 
+use crate::github::DraftAdvisory;
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::asks::{Asks, Flags};
 use crate::config::UserConfig;
@@ -94,6 +96,14 @@ pub trait Outside {
         prompt: &str,
         conclude: impl FnOnce(&mut Self, Option<&str>) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>);
+    /// Check Node.js before a Security audit needs its validators.
+    fn check_node(&mut self) -> Result<()>;
+    /// Audit the Base branch in a disposable checkout and validate its artifacts.
+    fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>);
+    /// Private records in every advisory state.
+    fn security_advisories(&mut self) -> Result<Vec<Value>>;
+    /// Record one finding privately as a draft.
+    fn create_security_advisory(&mut self, finding: &DraftAdvisory) -> Result<Value>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
 }
@@ -183,6 +193,22 @@ impl Outside for LaunchAndGitHub<'_> {
         concluded
     }
 
+    fn check_node(&mut self) -> Result<()> {
+        crate::security::audit::check_node()
+    }
+
+    fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+        crate::security::audit::run(self.launch.git(), self.repo, base, self.harness)
+    }
+
+    fn security_advisories(&mut self) -> Result<Vec<Value>> {
+        GitHub::new().security_advisories(&self.repo.slug())
+    }
+
+    fn create_security_advisory(&mut self, finding: &DraftAdvisory) -> Result<Value> {
+        GitHub::new().create_security_advisory(&self.repo.slug(), finding)
+    }
+
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
@@ -221,12 +247,14 @@ mod in_memory {
     use anyhow::{Result, anyhow, bail};
 
     use super::{Dispatch, Outside};
+    use crate::github::DraftAdvisory;
     use crate::github::{Issue, ListedIssue};
     use crate::issue::{IssueUrl, Repo};
     use crate::labels::{Edit, Label, Labels};
     use crate::logs::{Pass, Work};
     use crate::ready::ReadyIssue;
     use crate::run::{Ended, Goal, Reached};
+    use serde_json::{Value, json};
 
     /// A call a pass made outside itself, in the order it made it.
     #[derive(Debug, PartialEq, Eq)]
@@ -253,6 +281,14 @@ mod in_memory {
         Skipped(String),
         /// It checked its Harness, Model and Effort.
         HarnessCheck,
+        /// It checked Node.js for the Security audit validators.
+        NodeCheck,
+        /// It ran and validated the Security audit of this Base branch.
+        SecurityAudit(String),
+        /// It listed private advisories in every state.
+        AdvisoryList,
+        /// It recorded this fingerprint privately.
+        CreateAdvisory(String),
         /// It recorded that it started work: on this issue, for a Pickup
         /// run, or on its repository, for an Architect run.
         Started(Option<u64>),
@@ -293,6 +329,10 @@ mod in_memory {
         ready: Option<(ListedIssue, bool)>,
         /// Whether the Harness check fails.
         harness_failing: bool,
+        node_failing: bool,
+        audit_findings: Vec<DraftAdvisory>,
+        audit_error: Option<String>,
+        advisories: Vec<Value>,
         /// The Architecture review session's final message, if it has one,
         /// or the cause it fails with.
         review: Result<Option<String>, String>,
@@ -317,6 +357,10 @@ mod in_memory {
                 failing_edits: Vec::new(),
                 ready: None,
                 harness_failing: false,
+                node_failing: false,
+                audit_findings: Vec::new(),
+                audit_error: None,
+                advisories: Vec::new(),
                 review: Ok(None),
                 session_log: None,
                 ending: None,
@@ -388,6 +432,26 @@ mod in_memory {
         /// Make the Harness check fail.
         pub fn harness_failing(mut self) -> Self {
             self.harness_failing = true;
+            self
+        }
+
+        pub fn node_failing(mut self) -> Self {
+            self.node_failing = true;
+            self
+        }
+
+        pub fn audited(mut self, findings: Vec<DraftAdvisory>) -> Self {
+            self.audit_findings = findings;
+            self
+        }
+
+        pub fn audit_failing(mut self, cause: &str) -> Self {
+            self.audit_error = Some(cause.to_string());
+            self
+        }
+
+        pub fn advisories(mut self, advisories: Vec<Value>) -> Self {
+            self.advisories = advisories;
             self
         }
 
@@ -502,7 +566,7 @@ mod in_memory {
                 Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => {
                     Some(issue.number)
                 }
-                Work::ArchitectRun(_) => None,
+                Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
             };
             self.calls.push(Call::Started(issue));
         }
@@ -528,6 +592,41 @@ mod in_memory {
                 Ok(final_message) => (conclude(self, final_message.as_deref()), log),
                 Err(cause) => (Err(anyhow!(cause)), log),
             }
+        }
+
+        fn check_node(&mut self) -> Result<()> {
+            self.calls.push(Call::NodeCheck);
+            if self.node_failing {
+                bail!("Node.js is required");
+            }
+            Ok(())
+        }
+
+        fn audit(
+            &mut self,
+            base: &str,
+        ) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+            self.calls.push(Call::SecurityAudit(base.to_string()));
+            let audited = match self.audit_error.take() {
+                Some(cause) => Err(anyhow!(cause)),
+                None => Ok(crate::security::audit::Audited {
+                    findings: std::mem::take(&mut self.audit_findings),
+                }),
+            };
+            (audited, self.session_log.clone())
+        }
+
+        fn security_advisories(&mut self) -> Result<Vec<Value>> {
+            self.calls.push(Call::AdvisoryList);
+            Ok(self.advisories.clone())
+        }
+
+        fn create_security_advisory(&mut self, finding: &DraftAdvisory) -> Result<Value> {
+            self.calls
+                .push(Call::CreateAdvisory(finding.fingerprint.clone()));
+            let advisory = json!({"description": finding.description, "state": "draft"});
+            self.advisories.push(advisory.clone());
+            Ok(advisory)
         }
 
         fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
