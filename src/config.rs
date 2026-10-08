@@ -28,7 +28,7 @@ pub struct UserConfig {
     /// each repository's in `<owner>/<repo>/`, by default
     /// `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
-    /// `activity.quiet_skips`: a skipped Architect run or Pickup run prints
+    /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
     pub quiet_skips: bool,
     /// The `[email]` section.
@@ -642,7 +642,7 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 
 [activity]
-quiet_skips = false   # a skipped Architect run or Pickup run prints nothing, leaving only its Activity log line; default false
+quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3

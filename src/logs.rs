@@ -16,7 +16,7 @@ mod command_log;
 mod effects;
 mod recording;
 
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
@@ -55,11 +55,20 @@ pub enum Work<'a> {
     ArchitectRun(&'a Repo),
 }
 
-/// A pass, a command that may be skipped before it starts work.
-#[derive(Clone, Copy)]
+/// A Pass, a command that may be skipped before it starts work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pass {
     ArchitectRun,
     PickupRun,
+}
+
+impl Display for Pass {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Pass::ArchitectRun => "Architect run",
+            Pass::PickupRun => "Pickup run",
+        })
+    }
 }
 
 /// The production command's complete record, shared with reader threads.
@@ -89,7 +98,7 @@ pub fn configured(config: &UserConfig) {
 /// Command log, showing any lines held from the terminal, with a line naming
 /// the Harness, Model and Effort, then write the Activity log's line that it
 /// started, naming that log and those. Only the outermost command's first
-/// call does anything: the work a Pickup run or an Architect run started
+/// call does anything: the work a Pass started
 /// covers the Run it dispatches, and a child Run records nothing, as the
 /// command that started it does.
 pub fn started(work: Work, harness: &Choice) {
@@ -170,8 +179,8 @@ impl Work<'_> {
         match self {
             Work::Run(_) => Kind::Run,
             Work::SpecRun(_) => Kind::SpecRun,
-            Work::PickupRun(_) => Kind::PickupRun,
-            Work::ArchitectRun(_) => Kind::ArchitectRun,
+            Work::PickupRun(_) => Kind::Pass(Pass::PickupRun),
+            Work::ArchitectRun(_) => Kind::Pass(Pass::ArchitectRun),
         }
     }
 
