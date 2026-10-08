@@ -2818,79 +2818,12 @@ fn review_failed_fix_before_claim_is_not_retried_by_pickup() {
 
 #[test]
 fn review_failed_fix_marker_write_error_still_pauses_security() {
-    let scenario = with_reproduced_findings(&["high"]);
-    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
-    scenario.agent_does_for(
-        8,
-        "gh fake fails 'api --method PATCH repos/acme/widgets/security-advisories/GHSA-finding-0'\nexit 1\n",
-    );
-
-    let failed = scenario.run(&["secure", "security-fix"]);
-    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
-    assert!(
-        failed
-            .stderr
-            .contains("could not record the failed Security fix's ending"),
-        "{}",
-        failed.stderr
-    );
-    assert_eq!(scenario.gh_state()["issues"]["8"], "OPEN");
-    assert_eq!(
-        scenario.issue_labels(8),
-        vec!["security-fix", "in-progress"]
-    );
-
-    let mut state = scenario.gh_state();
-    state["failing"] = json!([]);
-    scenario.write_gh_state(&state);
-    scenario.agent_does(&audit_script("[]"));
-
-    let next = scenario.run(&["secure", "security-fix"]);
-    assert_eq!(next.code, Some(0), "{}", next.stderr);
-    assert!(
-        next.stderr.contains("failed Security fix #8 is still open"),
-        "Security resumed with an open failed fix: {}",
-        next.stderr
-    );
-    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_a_failed_fix_record_outage_pauses_security("high");
 }
 
 #[test]
 fn a_failed_fix_still_pauses_after_its_failure_record_patch_is_rejected() {
-    let scenario = with_reproduced_findings(&["critical"]);
-    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
-    scenario.agent_does_for(
-        8,
-        "gh fake fails 'api --method PATCH repos/acme/widgets/security-advisories/GHSA-finding-0'\nexit 1\n",
-    );
-
-    let failed = scenario.run(&["secure", "security-fix"]);
-    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
-    assert!(
-        failed
-            .stderr
-            .contains("could not record the failed Security fix's ending"),
-        "{}",
-        failed.stderr
-    );
-    assert_eq!(
-        scenario.gh_state()["labels"]["8"],
-        json!(["security-fix", "in-progress"])
-    );
-
-    let mut recovered = scenario.gh_state();
-    recovered["failing"] = json!([]);
-    scenario.write_gh_state(&recovered);
-    scenario.agent_does(&audit_script("[]"));
-
-    let next = scenario.run(&["secure", "security-fix"]);
-    assert_eq!(next.code, Some(0), "{}", next.stderr);
-    assert!(
-        next.stderr.contains("failed Security fix #8 is still open"),
-        "{}",
-        next.stderr
-    );
-    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_a_failed_fix_record_outage_pauses_security("critical");
 }
 
 #[test]
@@ -2952,4 +2885,42 @@ fn a_failed_fix_preserves_private_edits_made_during_its_run_and_still_pauses() {
         );
         assert_eq!(scenario.claude_calls().len(), 2);
     }
+}
+
+fn assert_a_failed_fix_record_outage_pauses_security(severity: &str) {
+    let scenario = with_reproduced_findings(&[severity]);
+    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_for(
+        8,
+        "gh fake fails 'api --method PATCH repos/acme/widgets/security-advisories/GHSA-finding-0'\nexit 1\n",
+    );
+
+    let failed = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    assert!(
+        failed
+            .stderr
+            .contains("could not record the failed Security fix's ending"),
+        "{}",
+        failed.stderr
+    );
+    assert_eq!(scenario.gh_state()["issues"]["8"], "OPEN");
+    assert_eq!(
+        scenario.issue_labels(8),
+        vec!["security-fix", "in-progress"]
+    );
+
+    let mut state = scenario.gh_state();
+    state["failing"] = json!([]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does(&audit_script("[]"));
+
+    let next = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(next.code, Some(0), "{}", next.stderr);
+    assert!(
+        next.stderr.contains("failed Security fix #8 is still open"),
+        "Security resumed with an open failed fix: {}",
+        next.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 2);
 }
