@@ -1,6 +1,6 @@
 # Security review mode trial
 
-Research date: 2026-10-08. Implements [#549](https://github.com/JacobStephens2/thirdshift/issues/549), the report-only trial in [#427](https://github.com/JacobStephens2/thirdshift/issues/427). The Day shift grades the private findings and chooses the Security review's mode; this note records measurements, not that decision.
+Research date: 2026-10-08. Implements [#549](https://github.com/JacobStephens2/thirdshift/issues/549), the report-only trial in [#427](https://github.com/JacobStephens2/thirdshift/issues/427). At Jacob's request, Codex graded the private results on 2026-10-09. This note records the measurements and grading summary; the operator's choice of Security review mode remains separate.
 
 ## Method
 
@@ -83,7 +83,7 @@ The `exec --json` stream in this installed CLI omitted the newer delegation call
 
 Guidance was faster and used less reported cost or fewer tokens on each of these three PRs. Full audit added reconnaissance, a coverage ledger, independent agents and validated native artifacts. Each Harness made its own coverage plan, so the same `quick` profile did not impose identical ledger granularity.
 
-There are no independently confirmed vulnerabilities or seeded ground-truth defects in this source-only sample. Counts alone therefore establish neither recall nor precision, and an empty final array is not evidence that the code is secure. Grades remain blank; the Day shift’s assessment is still needed. One run per cell, one Rust repository, small related diffs and fixed execution order limit generalization. Shared provider caches and other machine activity were not controlled. Dollar estimates and raw tokens are different measures and are not a cross-Harness price comparison. The trial supports a discussion of overhead and unattended operation; it does not choose the Security review’s mode.
+There are no independently confirmed vulnerabilities or seeded ground-truth defects in this source-only sample. Counts alone therefore establish neither recall nor precision, and an empty final array is not evidence that the code is secure. The private results have now been graded by AI source review at the operator’s request; the grading summary below does not establish runtime detection accuracy. One run per cell, one Rust repository, small related diffs and fixed execution order limit generalization. Shared provider caches and other machine activity were not controlled. Dollar estimates and raw tokens are different measures and are not a cross-Harness price comparison. The trial supports a discussion of overhead and unattended operation; it does not choose the Security review’s mode.
 
 ## Private grading record
 
@@ -91,4 +91,23 @@ Every reported finding, including rejected candidates, is grouped by PR, mode an
 
 `/home/jacob/.local/state/thirdshift/security-review-trial-549-7451fsff/findings.md`
 
-The file has mode **600**, inside a directory with mode **700**, and a blank `Grade:` line under each finding. Raw session transcripts and native audit artifacts remain private on this machine. Finding titles, details, fingerprints, source traces and validation plans are absent from this note and from the pull request. No advisory, issue or label was created for the trial, and nothing was pushed to another repository.
+The file has mode **600**, inside a directory with mode **700**. Grades now accompany each finding and each empty-result cell, with the original finding JSON preserved. Raw session transcripts and native audit artifacts remain private on this machine. Finding titles, details, fingerprints, source traces and validation plans are absent from this note and from the pull request. No advisory, issue or label was created for the trial, and nothing was pushed to another repository.
+
+## Grading summary (2026-10-09)
+
+Codex compared the two submitted candidates against the original merge base and reviewed head, read the relevant ownership contracts and ADR, and checked all twelve private analysis records and the six full-audit validator results. This was source review; no target code was built or executed, and it was not a new exhaustive audit of the three PRs. Candidate details and grading rationales remain in the private record.
+
+| Dimension | Assessment |
+|---|---|
+| Operational feasibility | Pass within the sample: all twelve sessions completed, and all six full-audit artifact validations passed. |
+| Submitted candidates | Both were correctly rejected as introduced vulnerabilities under the trial's documented scope, with a rationale caveat retained privately. Neither is a detected vulnerability or an actionable false positive. |
+| Empty-result cells | No actionable candidate submitted; no false-negative rate or security-assurance score can be assigned. |
+| Detection efficacy | Inconclusive: there were no seeded defects or independently established positive cases. Precision and recall are unmeasured. |
+| Coverage process | Full audit provides a coverage ledger and independent review artifacts; guidance does not provide that artifact contract. Passing validators does not prove adequate coverage. |
+| Efficiency | Guidance was faster and used less reported cost or aggregate tokens on all three PRs. |
+
+**Recommendation:** use guidance provisionally for the opt-in Security review of a change, based on its lower overhead and no demonstrated additional actionable yield from full audit in this sample. This is an engineering recommendation, not evidence of equivalent coverage or detection ability. The separate whole-repository Security audit retains its full-audit workflow.
+
+The existing Spec evidence requirements still apply: fixes require a failing proof-of-concept test, unaddressed introduced findings hold Self-merge, and pre-existing vulnerabilities stay in private records. A future effectiveness comparison should include known positive and negative cases with safe independent validation.
+
+**Mode decision:** pending the operator's choice. Tickets #550–#552 remain gated until that choice is recorded in their specifications.
