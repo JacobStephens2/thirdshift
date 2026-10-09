@@ -253,11 +253,6 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
 
-[security]
-fix = false   # Security runs may fix reproduced findings; default false
-review = false   # Runs review their change for Security findings; default false
-harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
-
 [harness]
 default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
@@ -284,6 +279,11 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 [harness.opencode]
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
+
+[security]
+fix = false   # Security runs may fix reproduced findings; default false
+review = false   # Runs review their change for Security findings; default false
+harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
 ```
 
 Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:

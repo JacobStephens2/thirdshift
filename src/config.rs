@@ -704,11 +704,6 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
 
-[security]
-fix = false   # Security runs may fix reproduced findings; default false
-review = false   # Runs review their change for Security findings; default false
-harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
-
 [harness]
 default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
@@ -735,6 +730,11 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 [harness.opencode]
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
+
+[security]
+fix = false   # Security runs may fix reproduced findings; default false
+review = false   # Runs review their change for Security findings; default false
+harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -865,9 +865,6 @@ mod tests {
                 "spec.parallel",
                 "pickup.limit",
                 "pickup.wait_minutes",
-                "security.fix",
-                "security.review",
-                "security.harness",
                 "harness.default",
                 "harness.claude.model",
                 "harness.claude.effort",
@@ -880,7 +877,10 @@ mod tests {
                 "harness.muse.model",
                 "harness.muse.effort",
                 "harness.opencode.model",
-                "harness.opencode.effort"
+                "harness.opencode.effort",
+                "security.fix",
+                "security.review",
+                "security.harness",
             ]
         );
         let commented_out: Vec<&str> = DEFAULTS
