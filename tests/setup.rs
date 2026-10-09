@@ -164,6 +164,52 @@ effort = 'high' # my Effort
 }
 
 #[test]
+fn setup_keeps_existing_security_outside_completed_harness_settings() {
+    for later_harness in ["", "\n[harness.agy]\nmodel = ''\neffort = ''\n"] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!(
+            "[harness]\ndefault = 'codex'\n\
+             [harness.codex]\nmodel = 'gpt-6.1-sol'\neffort = 'high'\n\n\
+             # my Security settings\n[security] # separate area\n\
+             fix = true # allow fixes\nreview = true # review changes\n\
+             harness = 'codex' # Security Harness\n{later_harness}"
+        ));
+
+        let result = scenario.run(&["setup"]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        let text = user_config(&scenario).unwrap();
+        let sections: Vec<&str> = text.lines().filter(|line| line.starts_with('[')).collect();
+        assert_eq!(
+            sections.last(),
+            Some(&"[security] # separate area"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "# my Security settings\n[security] # separate area\n\
+                 fix = true # allow fixes\nreview = true # review changes\n\
+                 harness = 'codex' # Security Harness\n"
+            ),
+            "{text}"
+        );
+        let config: toml::Table = text.parse().unwrap();
+        assert_eq!(config["security"]["fix"].as_bool(), Some(true));
+        assert_eq!(config["security"]["review"].as_bool(), Some(true));
+        assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
+        assert_eq!(
+            config["harness"]["codex"]["model"].as_str(),
+            Some("gpt-6.1-sol")
+        );
+        assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("high"));
+
+        let again = scenario.run(&["setup"]);
+        assert_eq!(again.code, Some(0), "stderr: {}", again.stderr);
+        assert_eq!(user_config(&scenario).unwrap(), text);
+    }
+}
+
+#[test]
 fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then_avoids_replacement()
  {
     let scenario = Scenario::new();
