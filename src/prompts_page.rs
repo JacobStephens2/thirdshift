@@ -165,6 +165,13 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::architecture_review(BASE, Some(FOCUS)),
         },
         Prompt {
+            id: "prompt-security-review",
+            title: "Security review",
+            when: "When enabled, runs one guidance review after a Run's opening session and before Delivery pushes and enters the Repair loop. Base fixes get one too; introduced findings or incomplete reviews hold Self-merge.",
+            sender: Units(&[REVIEW]),
+            text: prompt::security_review(&issue, BASE, BRANCH),
+        },
+        Prompt {
             id: "prompt-security-audit",
             title: "Security audit",
             when: "Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root.",

@@ -20,6 +20,14 @@ use crate::pass::{LaunchAndGitHub, Outside};
 pub mod audit;
 pub(crate) mod fixing;
 pub mod reproduction;
+pub(crate) mod review;
+
+/// Resolved security choices passed together to child Runs and Base fixes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    pub fix: bool,
+    pub review: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixAsk {

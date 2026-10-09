@@ -28,6 +28,7 @@ pub struct Answers {
     pub launch_pull: bool,
     /// `security.fix`: Security runs may fix reproduced findings.
     pub security_fix: bool,
+    pub security_review: bool,
     /// With Run notifications on, `email.always`, their settings; with them
     /// off, `None`, and the email settings stay as they were.
     pub notifications: Option<Notifications>,
@@ -41,6 +42,7 @@ impl Answers {
             base_fix: self.base_fix,
             launch_pull: self.launch_pull,
             security_fix: self.security_fix,
+            security_review: self.security_review,
             notifications: self
                 .notifications
                 .as_ref()
@@ -126,6 +128,11 @@ pub fn ask(
         "Security runs may fix reproduced findings?",
         current.security_fix.unwrap_or(false),
     )?;
+    let security_review = yes_or_no(
+        outside,
+        "Runs review their change for Security findings?",
+        current.security_review,
+    )?;
     if !yes_or_no(
         outside,
         "Run notifications, an email as each Run ends?",
@@ -137,6 +144,7 @@ pub fn ask(
             base_fix,
             launch_pull,
             security_fix,
+            security_review,
             notifications: None,
         });
     }
@@ -179,6 +187,7 @@ pub fn ask(
         base_fix,
         launch_pull,
         security_fix,
+        security_review,
         notifications: Some(Notifications {
             to,
             from,

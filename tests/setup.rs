@@ -188,6 +188,7 @@ const EFFORT: &str = "Effort for claude";
 const MERGE: &str = "Merge run?";
 const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
+const SECURITY_REVIEW: &str = "Runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const NOTIFY: &str = "Run notifications, an email";
 const TO: &str = "Send Run notifications to";
@@ -197,6 +198,34 @@ const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip):";
 const KEPT: &str = "Resend API key (input hidden, Enter keeps the saved one):";
 const WROTE_CREDENTIALS: &str = "wrote the Credentials";
 const KEY: &str = "re_secret_123";
+
+#[test]
+fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
+    let scenario = Scenario::new();
+    for (answer, choices) in [("y", "[y/N]"), ("", "[Y/n]")] {
+        let result = setup_on_terminal(
+            &scenario,
+            &[],
+            &[
+                (HARNESS, ""),
+                (MODEL, ""),
+                (EFFORT, ""),
+                (MERGE, ""),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, answer),
+                (NOTIFY, ""),
+            ],
+        );
+        assert!(
+            result
+                .stderr
+                .contains(&format!("{SECURITY_REVIEW} {choices}"))
+        );
+        let config: toml::Table = result.user_config.unwrap().parse().unwrap();
+        assert_eq!(config["security"]["review"].as_bool(), Some(true));
+    }
+}
 
 #[test]
 fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes() {
@@ -211,6 +240,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
             (MERGE, ""),
             (PULL, ""),
             (SECURITY_FIX, "y"),
+            (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
         ],
     );
@@ -244,6 +274,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
                 (MERGE, ""),
                 (PULL, ""),
                 (SECURITY_FIX, answer),
+                (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
             ],
         );
@@ -407,6 +438,7 @@ fn cancelling_later_questions_after_successful_or_repeated_checks_restores_echo_
                     TerminalStep::line(MERGE, ""),
                     TerminalStep::line(PULL, ""),
                     TerminalStep::line(SECURITY_FIX, ""),
+                    TerminalStep::line(SECURITY_REVIEW, ""),
                     TerminalStep::line(NOTIFY, "y"),
                     TerminalStep::line(TO, "me@example.com"),
                     TerminalStep::line(FROM, ""),
@@ -448,7 +480,10 @@ fn pasted_answers_are_left_available_to_later_terminal_questions() {
     let result = setup_on_terminal(
         &scenario,
         &[],
-        &[(HARNESS, "  claude  \n\n\n\n\n\ny\n  café@example.com  \n\n")],
+        &[(
+            HARNESS,
+            "  claude  \n\n\n\n\n\n\ny\n  café@example.com  \n\n",
+        )],
     );
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
@@ -490,6 +525,7 @@ fn a_partial_final_terminal_answer_is_trimmed_and_accepted_before_eof() {
             TerminalStep::line(MERGE, ""),
             TerminalStep::line(PULL, ""),
             TerminalStep::line(SECURITY_FIX, ""),
+            TerminalStep::line(SECURITY_REVIEW, ""),
             // Queue EOF for both the partial answer and the next question.
             // macOS can finish both reads before another input action runs.
             TerminalStep::bytes(NOTIFY, b"  y  \x04\x04\x04"),
@@ -530,6 +566,7 @@ fn notifications_on<'a>(rest: &[Keystrokes<'a>]) -> Vec<Keystrokes<'a>> {
         (MERGE, ""),
         (PULL, ""),
         (SECURITY_FIX, ""),
+        (SECURITY_REVIEW, ""),
         (NOTIFY, "y"),
         (TO, "me@example.com"),
         (FROM, ""),
@@ -556,6 +593,7 @@ fn on_a_terminal_pressing_enter_throughout_writes_what_setup_with_no_terminal_wr
             (MERGE, ""),
             (PULL, ""),
             (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
         ],
     );
@@ -671,6 +709,7 @@ fn ctrl_c_during_the_questions_leaves_an_existing_user_config_unchanged() {
             (MERGE, "n"),
             (PULL, "y"),
             (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),
             (TO, CTRL_C),
         ],

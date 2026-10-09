@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use anyhow::bail;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 #[cfg(test)]
 pub(crate) use crate::harness::claude::claude_args;
@@ -214,6 +214,11 @@ impl<'a> Sessions<'a> {
         }
         if !ended.killed.is_empty() {
             let ending = ending_with(&ended.killed_work());
+            if matches!(purpose, Purpose::Security) {
+                return Err(anyhow!(
+                    "{kind}: the {ended_last} {ending}; Security session incomplete"
+                ));
+            }
             self.step(format!(
                 "{kind}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
             ));
@@ -584,6 +589,31 @@ mod tests {
             ]
         );
         assert_eq!(log, Some(logs().path("implement-resume")));
+    }
+
+    #[test]
+    fn a_security_session_cannot_claim_completion_with_killed_work() {
+        for id in [None, Some("s1")] {
+            let mut endings = vec![ended(
+                id,
+                &["cargo test"],
+                "Security review: {\"unaddressed_count\":0,\"findings\":[]}",
+            )];
+            if id.is_some() {
+                endings.push(ended(
+                    id,
+                    &["cargo test"],
+                    "Security review: {\"unaddressed_count\":0,\"findings\":[]}",
+                ));
+            }
+            let (taken, _, _) = take(endings, |sessions| {
+                sessions.run_to_final_message(Purpose::Security, "security-review", "review")
+            });
+            assert!(
+                taken.is_err(),
+                "unfinished security work must hold Self-merge"
+            );
+        }
     }
 
     #[test]

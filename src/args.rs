@@ -258,6 +258,18 @@ fn take_flag<'a>(
             arg,
             SECURITY_FIX_FLAGS,
         )?,
+        "security-review" | "--security-review" => ask_once(
+            &mut flags.security_review,
+            crate::security::review::Ask::Allow,
+            arg,
+            SECURITY_REVIEW_FLAGS,
+        )?,
+        "no-security-review" | "--no-security-review" => ask_once(
+            &mut flags.security_review,
+            crate::security::review::Ask::Forbid,
+            arg,
+            SECURITY_REVIEW_FLAGS,
+        )?,
         "harness" | "--harness" => ask_harness(&mut flags.harness.harness, arg, rest.next())?,
         "model" | "--model" => {
             let model = &mut flags.harness.model_and_effort.model;
@@ -275,6 +287,7 @@ fn take_flag<'a>(
 const MERGE_FLAGS: &str = "merge and no-merge";
 const EMAIL_FLAGS: &str = "email and no-email";
 const BASE_FIX_FLAGS: &str = "base-fix and no-base-fix";
+const SECURITY_REVIEW_FLAGS: &str = "security-review and no-security-review";
 const SECURITY_FIX_FLAGS: &str = "security-fix and no-security-fix";
 
 /// Record in `given` what the flag `arg` asked for: the same kind of ask
@@ -354,6 +367,22 @@ mod tests {
     use crate::harness::ModelAndEffort;
 
     const URL: &str = "https://github.com/acme/widgets/issues/7";
+
+    #[test]
+    fn security_review_words_are_accepted_on_commands_that_start_runs() {
+        for command in [URL, "pickup", "architect", "secure"] {
+            for word in [
+                "security-review",
+                "--security-review",
+                "no-security-review",
+                "--no-security-review",
+            ] {
+                assert!(parse_strs(&[command, word]).is_ok(), "{command} {word}");
+            }
+        }
+        assert!(parse_strs(&[URL, "security-review", "no-security-review"]).is_err());
+        assert!(parse_strs(&[URL, "security-review", "--security-review"]).is_err());
+    }
 
     fn parse_strs(args: &[&str]) -> Result<Command> {
         let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
@@ -738,6 +767,7 @@ mod tests {
             base: Some("develop".to_string()),
             flags: Flags {
                 security_fix: None,
+                security_review: None,
                 goal: Some(Goal::Merged),
                 email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
                 parallel: NonZeroUsize::new(2),
@@ -793,6 +823,7 @@ mod tests {
             base: None,
             flags: Flags {
                 security_fix: None,
+                security_review: None,
                 goal: Some(Goal::ReadyForReview),
                 email: Some(NotificationAsk::Skip),
                 parallel: None,
