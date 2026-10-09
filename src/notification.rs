@@ -212,10 +212,27 @@ fn body(
     let mut text = format!("Result:       {}\n", account.outcome);
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
+            Err(_) if account.failed_reproduction.is_some() => "audit complete",
             Ok(line) => line.as_str(),
             Err(_) => account.outcome,
         };
         text += &format!("Audit:        {audit}\n");
+        if let Some(number) = account.failed_reproduction {
+            let status = if account.interrupted {
+                "interrupted"
+            } else if account
+                .ended
+                .as_ref()
+                .err()
+                .and_then(|cause| cause.safeguard_refusal())
+                .is_some()
+            {
+                "refused"
+            } else {
+                "failed"
+            };
+            text += &format!("Reproduction: {number} {status}\n");
+        }
         if !findings.is_empty() {
             text += "\nSecurity findings:\n";
             for finding in findings {
@@ -331,6 +348,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            failed_reproduction: None,
             urls: vec![PR],
         }
     }
@@ -349,6 +367,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            failed_reproduction: None,
             urls: Vec::new(),
         }
     }
