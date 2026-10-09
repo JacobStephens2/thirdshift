@@ -1897,14 +1897,15 @@ fn a_blank_or_missing_security_harness_preserves_the_default_harness_and_its_set
             args.windows(2)
                 .any(|pair| pair == [json!("-c"), json!("model_reasoning_effort=\"high\"")])
         );
+
+        let scenario = Scenario::new();
+        scenario.user_config_is(security);
+        scenario.agent_does(&audit_script("[]"));
+        let result = scenario.run(&["secure"]);
+        assert_eq!(result.code, Some(0), "{security}: {}", result.stderr);
+        assert_eq!(scenario.claude_calls().len(), 1, "{security}");
+        assert!(scenario.codex_calls().is_empty(), "{security}");
     }
-    let scenario = Scenario::new();
-    scenario.user_config_is("[security]\nharness = \"\"\n");
-    scenario.agent_does(&audit_script("[]"));
-    let result = scenario.run(&["secure"]);
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_eq!(scenario.claude_calls().len(), 1);
-    assert!(scenario.codex_calls().is_empty());
 }
 
 #[test]

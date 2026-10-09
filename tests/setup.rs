@@ -371,7 +371,12 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["security"]["fix"].as_bool(), Some(true));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
-    assert!(text.contains("# the Harness a Security run uses unless its command names one"));
+    assert!(
+        text.contains(
+            "# the Harness a Security run uses unless its command names one; default blank; blank or missing uses harness.default, or Claude Code if harness.default is missing"
+        ),
+        "{text}"
+    );
 }
 
 #[test]
