@@ -167,7 +167,7 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-security-review",
             title: "Security review",
-            when: "When enabled, runs one guidance review after a Run's opening session and before Delivery pushes and enters the Repair loop. Base fixes get one too; introduced findings or incomplete reviews hold Self-merge.",
+            when: "When enabled, runs one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Ticket Runs get none; Base fixes get one too. Introduced findings, refusals or incomplete reviews hold Self-merge.",
             sender: Units(&[REVIEW]),
             text: prompt::security_review(&issue, BASE, BRANCH),
         },

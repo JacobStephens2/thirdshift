@@ -121,7 +121,7 @@ Review with the `thirdshift-code-review` skill using <mark class="ph">&lt;base&g
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.
 Write the reviewers' reports, with each axis's final files-read list, to `<mark class="ph">&lt;review reports directory&gt;</mark>/standards.md` (Standards) and `<mark class="ph">&lt;review reports directory&gt;</mark>/spec.md` (Spec).
 
-Push branch <mark class="ph">&lt;Spec branch&gt;</mark>. Do not rebase or force-push.
+Do not push: thirdshift pushes branch <mark class="ph">&lt;Spec branch&gt;</mark> after the optional Security review. Do not rebase or force-push.
 
 Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.
 
@@ -160,7 +160,7 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
       </article>
       <article class="job-sheet" id="prompt-security-review" aria-labelledby="prompt-security-review-title">
         <h3 id="prompt-security-review-title">Security review</h3>
-        <p>When enabled, runs one guidance review after a Run's opening session and before Delivery pushes and enters the Repair loop. Base fixes get one too; introduced findings or incomplete reviews hold Self-merge.</p>
+        <p>When enabled, runs one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Ticket Runs get none; Base fixes get one too. Introduced findings, refusals or incomplete reviews hold Self-merge.</p>
         <p class="sent-by">Sent by <a href="/#unit-3">3 · Y · Review</a></p>
         <pre class="job-text"><code>Use the `thirdshift-security-audit` skill in guidance mode.
 Review the change for <mark class="ph">&lt;Issue URL&gt;</mark> on branch <mark class="ph">&lt;branch&gt;</mark> with `git diff <mark class="ph">&lt;base&gt;</mark>...HEAD`, including supporting code.

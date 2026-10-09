@@ -1,6 +1,6 @@
 //! A Spec run: each of a Spec's Tickets, in dependency order and several at
 //! once, taken by a Ticket's Run, a Merge run into the Spec branch in a child `thirdshift`
-//! (ADR-0006), then the Spec review and the Spec PR from the Spec branch into
+//! (ADR-0006), then the Spec review, optional Security review and the Spec PR from the Spec branch into
 //! the Base branch, kept mergeable and green like a Run's PR, and Self-merged
 //! when the Spec run was asked to merge.
 //!
@@ -204,10 +204,8 @@ struct ChildRunsAndGitHub<'a> {
 impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
-    fn new(worktree: Worktree, mut delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
+    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
         let security_review = delivery.security_review;
-        // The Spec PR review is implemented by #551; Base fixes inherit the choice.
-        delivery.security_review = false;
         Self {
             spec: delivery.issue,
             children: Runs::default(),
