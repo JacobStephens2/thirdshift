@@ -204,6 +204,14 @@ impl Worktree {
             .ordinary(&self.launch, |operation| operation.head())
     }
 
+    /// Observe the merge base against the published Base branch only while
+    /// this is still the acquired checkout on the selected Issue branch.
+    pub fn merge_base_commit(&self, base: &str) -> Result<String> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            operation.run(&["merge-base", &format!("refs/remotes/origin/{base}"), "HEAD"])
+        })
+    }
+
     /// Fetch and sample `origin/<base>`, then merge that commit into the
     /// Issue branch. A clean outcome includes the selected commit for CI
     /// comparison, including when the merge had nothing to do.

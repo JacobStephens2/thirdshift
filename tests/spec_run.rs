@@ -109,6 +109,24 @@ fn assert_contains(text: &str, part: &str) {
     assert!(text.contains(part), "expected {part:?} in: {text}");
 }
 
+/// A complete Security review with no old findings writes its empty private
+/// report as well as the public introduced-finding outcome.
+fn security_review_script(introduced: &[&str]) -> String {
+    format!(
+        r#"
+report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+test -n "$report"
+printf '%s\n' '[]' > "$report"
+printf '%s\n' 'Security review: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+        outcome = serde_json::json!({
+            "unaddressed_count": introduced.len(),
+            "findings": introduced,
+            "pre_existing_count": 0
+        })
+    )
+}
+
 #[test]
 fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
     let scenario = linear_spec();
@@ -154,6 +172,7 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
 #[test]
 fn security_review_runs_once_after_spec_review_over_the_whole_spec_branch() {
     let scenario = linear_spec();
+    let base_commit = scenario.launch_git(&["rev-parse", "main"]);
     scenario.agent_does_for_in_session(
         SPEC,
         1,
@@ -166,13 +185,16 @@ git commit -q -m 'Complete Spec review'
     scenario.agent_does_for_in_session(
         SPEC,
         2,
-        r#"
+        &format!(
+            r#"
 test -f first.txt
 test -f second.txt
 test -f spec-reviewed.txt
 gh pr view issue-20 --json isDraft | grep -q '"isDraft": true'
 ! git cat-file -e origin/issue-20:spec-reviewed.txt
-git diff main...HEAD --name-only > changed.txt
+merge_base=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Merge base commit: `\(.*\)`\.$/\1/p')
+test "$merge_base" = "$(git rev-parse refs/remotes/origin/main)"
+git diff "$merge_base"...HEAD --name-only > changed.txt
 grep -qx first.txt changed.txt
 grep -qx second.txt changed.txt
 grep -qx spec-reviewed.txt changed.txt
@@ -180,8 +202,10 @@ rm changed.txt
 echo fixed > security-fixed.txt
 git add security-fixed.txt
 git commit -q -m 'Fix reproduced Security finding'
-printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[]}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+{review}
 "#,
+            review = security_review_script(&[])
+        ),
     );
 
     let result = scenario.run(&[&spec_url(&scenario), "security-review", "merge"]);
@@ -197,7 +221,13 @@ printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[]}' > "$FAKE_
     assert_contains(prompt, "guidance mode");
     assert_contains(prompt, "Do not delegate auditors");
     assert_contains(prompt, "https://github.com/acme/widgets/issues/20");
-    assert_contains(prompt, "branch issue-20 with `git diff main...HEAD`");
+    assert_contains(
+        prompt,
+        &format!(
+            "branch issue-20 against Base branch main with `git diff {}...HEAD`",
+            base_commit.trim()
+        ),
+    );
     assert_eq!(calls[3]["branch"], "issue-20");
     assert_eq!(spec_pr(&scenario)["state"], "MERGED");
     for file in [
@@ -249,7 +279,7 @@ fn security_review_on_a_spec_obeys_config_and_command_overrides() {
     ] {
         let scenario = linear_spec();
         scenario.user_config_is(config);
-        scenario.agent_does_for_in_session(SPEC, 2, r#"printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#);
+        scenario.agent_does_for_in_session(SPEC, 2, &security_review_script(&[]));
         let url = spec_url(&scenario);
         let mut args = vec![url.as_str(), "merge"];
         args.extend(word);
@@ -271,9 +301,10 @@ fn security_review_on_a_spec_obeys_config_and_command_overrides() {
 
 #[test]
 fn security_findings_refusals_and_incomplete_reviews_hold_only_the_spec_self_merge() {
+    let introduced = security_review_script(&["Cross-tenant read"]);
     for (script, cause) in [
         (
-            r#"printf '%s\n' 'Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+            introduced.as_str(),
             "Security review left 1 unaddressed introduced finding(s): Cross-tenant read",
         ),
         (
@@ -334,7 +365,7 @@ fn security_findings_refusals_and_incomplete_reviews_hold_only_the_spec_self_mer
 fn a_spec_security_hold_still_repairs_ci_without_repeating_the_review() {
     let scenario = linear_spec();
     scenario.agent_does_for_in_session(SPEC, 1, &checks_on_head(RED));
-    scenario.agent_does_for_in_session(SPEC, 2, r#"printf '%s\n' 'Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#);
+    scenario.agent_does_for_in_session(SPEC, 2, &security_review_script(&["Cross-tenant read"]));
     scenario.agent_does_for_in_session(
         SPEC,
         3,

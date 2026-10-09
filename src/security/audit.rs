@@ -219,7 +219,7 @@ fn node(args: &[&str]) -> Result<()> {
 }
 
 /// Manifest identity only: no affected or patched versions are inferred.
-fn package_in(worktree: &Path) -> Package {
+pub(super) fn package_in(worktree: &Path) -> Package {
     for (file, section, ecosystem) in [
         ("Cargo.toml", "package", "rust"),
         ("pyproject.toml", "project", "pip"),

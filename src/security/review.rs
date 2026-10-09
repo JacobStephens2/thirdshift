@@ -2,10 +2,151 @@
 //! appear here; pre-existing vulnerability details stay out of public text.
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
-use std::fmt;
+use serde::{Deserialize, Serialize};
+use std::{fmt, fs};
 
+use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction, Severity};
+use crate::github::{DraftAdvisory, GitHub};
 use crate::harness::interpretation::SafeguardRefusal;
+use crate::issue::IssueUrl;
+use crate::session::{Purpose, Sessions};
+use crate::worktree::Worktree;
+use crate::{logs, progress, prompt};
+
+/// A fresh report outside the worktree, retained even when the session or
+/// private recording fails. Only the introduced titles reach Delivery.
+pub(crate) fn run(
+    sessions: &Sessions<'_>,
+    worktree: &Worktree,
+    issue: &IssueUrl,
+    base: &str,
+    text: &str,
+) -> Result<Review> {
+    let merge_base = worktree.merge_base_commit(base)?;
+    let root = logs::root(&issue.repo()).join("security-reviews");
+    fs::create_dir_all(&root)?;
+    let directory = tempfile::Builder::new()
+        .prefix(&format!("{}-{}-", issue.number, logs::stamp()))
+        .tempdir_in(root)?
+        .keep();
+    let report = directory.join("pre-existing.json");
+    let text = text
+        .replace(
+            prompt::SECURITY_REVIEW_REPORT_FILE,
+            &report.to_string_lossy(),
+        )
+        .replace(prompt::SECURITY_REVIEW_MERGE_BASE, &merge_base);
+    progress::step(format!(
+        "Security review private report: {}",
+        report.display()
+    ));
+    let message = sessions.run_to_final_message(Purpose::Security, "security-review", &text)?;
+    // A session may change commits on the Issue branch, but it cannot hand
+    // us a replacement checkout to observe or publish findings from.
+    worktree.head()?;
+    let review = Review::from_final_message(message.as_deref())?;
+    let findings: Vec<OldFinding> = serde_json::from_slice(&fs::read(report)?)?;
+    if findings.len() != review.pre_existing_count {
+        bail!("Security review's private report does not match its final count");
+    }
+    // Validate the entire report before creating any record. Malformed report
+    // diagnostics are never passed into the public outcome.
+    let findings = findings
+        .into_iter()
+        .map(|finding| {
+            let reproduction = finding.reproduction()?;
+            Ok((finding, reproduction))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !findings.is_empty() {
+        let github = GitHub::new();
+        let repo = issue.repo_slug();
+        let mut known = github.security_records(&repo)?;
+        let package = super::audit::package_in(worktree.path());
+        for (finding, reproduction) in findings {
+            let draft = DraftAdvisory {
+                fingerprint: finding.fingerprint.clone(),
+                summary: finding.title.clone(),
+                description: reproduction.description(&format!(
+                    "Found by thirdshift's Security review.\n\nFingerprint: `{}`\nAudited commit: `{merge_base}`\nReview issue: {}\n\n{}\n\n```json\n{}\n```\n",
+                    finding.fingerprint,
+                    issue.url,
+                    finding.description,
+                    serde_json::to_string_pretty(&finding)?
+                )),
+                package: package.clone(),
+            };
+            // Reuse every record state and preserve the Day shift's grade.
+            if known.finding(&draft).is_none() {
+                let record = github.create_security_record(&repo, &known, &draft)?;
+                known.remember(record);
+                progress::step("recorded a pre-existing Security finding privately");
+            }
+        }
+    }
+    Ok(review)
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OldFinding {
+    fingerprint: String,
+    title: String,
+    description: String,
+    proof_of_concept: ProofOfConcept,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProofOfConcept {
+    test: String,
+    command: String,
+    head_exit_code: i32,
+    merge_base_exit_code: i32,
+    notes: String,
+    severity: String,
+    fix_size: String,
+}
+
+impl OldFinding {
+    fn reproduction(&self) -> Result<Reproduction> {
+        let proof = &self.proof_of_concept;
+        if [
+            &self.fingerprint,
+            &self.title,
+            &self.description,
+            &proof.test,
+            &proof.command,
+            &proof.notes,
+        ]
+        .iter()
+        .any(|text| text.trim().is_empty())
+            || self.fingerprint.contains(['\r', '\n', '`'])
+            || self.title.contains(['\r', '\n'])
+            || proof.head_exit_code <= 0
+            || proof.merge_base_exit_code <= 0
+        {
+            bail!(
+                "Security review's private report lacks a valid old finding and failing proof-of-concept runs"
+            );
+        }
+        let severity = Severity::parse(&proof.severity)
+            .context("Security review's private report has an invalid reproduced severity")?;
+        let size = match proof.fix_size.as_str() {
+            "single" => FixSize::Single,
+            "spec" => FixSize::Spec,
+            _ => bail!("Security review's private report has an invalid reproduced fix size"),
+        };
+        Ok(Reproduction {
+            outcome: ReproductionOutcome::Reproduced { severity, size },
+            notes: format!(
+                "Command: {}\nHEAD exit code: {}\nMerge base exit code: {}\n\n{}",
+                proof.command, proof.head_exit_code, proof.merge_base_exit_code, proof.notes
+            ),
+            test: proof.test.clone(),
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ask {
@@ -73,6 +214,7 @@ impl std::error::Error for Hold {}
 pub(crate) struct Review {
     unaddressed_count: usize,
     pub findings: Vec<String>,
+    pre_existing_count: usize,
 }
 
 impl Review {

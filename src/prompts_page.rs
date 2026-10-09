@@ -60,7 +60,7 @@ const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
 const MODEL: &str = "<model>";
 const EFFORT: &str = "<effort>";
-const PLACEHOLDERS: [&str; 18] = [
+const PLACEHOLDERS: [&str; 20] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -79,6 +79,8 @@ const PLACEHOLDERS: [&str; 18] = [
     MODEL,
     EFFORT,
     prompt::REVIEW_REPORTS_DIRECTORY,
+    prompt::SECURITY_REVIEW_REPORT_FILE,
+    prompt::SECURITY_REVIEW_MERGE_BASE,
 ];
 
 /// Who sends a prompt.

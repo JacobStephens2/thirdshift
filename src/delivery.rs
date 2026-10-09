@@ -376,12 +376,7 @@ impl Outside for InWorktree<'_> {
     }
 
     fn security_review(&mut self, prompt: &str) -> Result<Review> {
-        let message = self.sessions.run_to_final_message(
-            crate::session::Purpose::Security,
-            "security-review",
-            prompt,
-        )?;
-        Review::from_final_message(message.as_deref())
+        crate::security::review::run(self.sessions, self.worktree, self.issue, self.base, prompt)
     }
 
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()> {
@@ -634,7 +629,7 @@ mod tests {
         }
         fn security_review(&mut self, _: &str) -> Result<Review> {
             Review::from_final_message(Some(
-                "Security review: {\"unaddressed_count\":0,\"findings\":[]}",
+                "Security review: {\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}",
             ))
         }
         fn catch_up(&mut self) -> Result<()> {
