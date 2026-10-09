@@ -251,13 +251,15 @@ impl Work<'_> {
     /// `thirdshift architect` in `architect/`.
     fn command_log(self, root: &Path, stamp: &str) -> PathBuf {
         let (folder, prefix) = match self {
-            Work::Run(issue) | Work::SpecRun(issue) => ("issue", format!("{}-", issue.number)),
-            Work::PickupRun(issue) => ("pickup", format!("{}-", issue.number)),
-            Work::ArchitectRun(_) => ("architect", String::new()),
-            Work::SecurityRun(_) => ("secure", String::new()),
+            Work::Run(issue) | Work::SpecRun(issue) => {
+                (CommandKind::Issue, format!("{}-", issue.number))
+            }
+            Work::PickupRun(issue) => (CommandKind::Pickup, format!("{}-", issue.number)),
+            Work::ArchitectRun(_) => (CommandKind::Architect, String::new()),
+            Work::SecurityRun(_) => (CommandKind::Secure, String::new()),
         };
         root.join("commands")
-            .join(folder)
+            .join(folder.folder())
             .join(format!("{prefix}{stamp}.log"))
     }
 }
