@@ -319,10 +319,13 @@ only a warning and never changes the run's outcome.
 
 security-fix allows a Security run to fix one reproduced finding: the most severe first,
 ties in private-record order, before auditing or after an audit reproduces a finding.
-The publishing session creates one terse Ticket that says what the fix changes and links
-the private record; thirdshift checks it, swaps needs-triage for ready-for-agent, adds
-security-fix and dispatches its Run. The Security run ends as that Run ends, including
-merge when requested. Fixing is off by default. [security] fix = true also allows it;
+The publishing session follows the reproduction's fix size: one terse Ticket, or a Spec
+with Tickets. Every new issue says what the fix changes and links the private record.
+On a private repository the finding's own issue is the fix's Ticket or Spec; a single
+fix needs no publishing session. thirdshift checks the issues, swaps the top issue's
+needs-triage for ready-for-agent, adds security-fix to every fix issue and dispatches its
+Run or Spec run. The Security run ends as that run ends, including merge when requested.
+Fixing is off by default. [security] fix = true also allows it;
 no-security-fix overrides the setting. Both words, with or without dashes, are accepted
 on Run, Spec run, Architect run, Pickup run and Security run commands, and passed to their
 Runs. Without permission, a reproduced finding waits until its record is closed or

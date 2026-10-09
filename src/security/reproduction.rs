@@ -51,6 +51,7 @@ impl Severity {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FixSize {
     Single,
     Spec,

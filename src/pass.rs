@@ -43,14 +43,12 @@ const REVIEW: &str = "architecture-review";
 /// out.
 pub enum Dispatch<'a> {
     SecurityFix {
-        ticket: &'a IssueUrl,
+        issue: &'a IssueUrl,
+        is_spec: bool,
         base: &'a str,
     },
     /// An Architect run's Architect plan.
-    ArchitectPlan {
-        plan: &'a IssueUrl,
-        base: &'a str,
-    },
+    ArchitectPlan { plan: &'a IssueUrl, base: &'a str },
     /// The Ready issue a Pickup run took, a Spec or not, as `is_spec` says.
     ReadyIssue {
         issue: &'a IssueUrl,
@@ -136,12 +134,12 @@ pub trait Outside {
         record: &SecurityRecord,
         url: &str,
     ) -> (Result<IssueUrl>, Option<PathBuf>);
-    fn link_security_fix(&mut self, record: &SecurityRecord, ticket: &IssueUrl) -> Result<()>;
+    fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()>;
     /// Record the dispatch's ending in its private record, even after interruption.
     fn record_security_fix_ending(
         &mut self,
         record: &SecurityRecord,
-        ticket: &IssueUrl,
+        issue: &IssueUrl,
         succeeded: bool,
     ) -> Result<()>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
@@ -286,23 +284,23 @@ impl Outside for LaunchAndGitHub<'_> {
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
         let (issue, asks, base) = match dispatch {
-            Dispatch::SecurityFix { ticket, base } => (
-                ticket,
-                Asks::of_ready_issue(ticket, false, self.flags, self.config),
+            Dispatch::SecurityFix {
+                issue,
+                is_spec,
                 base,
-            ),
-            Dispatch::ArchitectPlan { plan, base } => (
-                plan,
-                Asks::of_architect_plan(plan, self.flags, self.config),
-                base,
-            ),
-            Dispatch::ReadyIssue {
+            }
+            | Dispatch::ReadyIssue {
                 issue,
                 is_spec,
                 base,
             } => (
                 issue,
                 Asks::of_ready_issue(issue, is_spec, self.flags, self.config),
+                base,
+            ),
+            Dispatch::ArchitectPlan { plan, base } => (
+                plan,
+                Asks::of_architect_plan(plan, self.flags, self.config),
                 base,
             ),
         };
@@ -329,20 +327,20 @@ impl Outside for LaunchAndGitHub<'_> {
         )
     }
 
-    fn link_security_fix(&mut self, record: &SecurityRecord, ticket: &IssueUrl) -> Result<()> {
-        GitHub::new().link_security_fix(&self.repo.slug(), record, ticket)
+    fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()> {
+        GitHub::new().link_security_fix(&self.repo.slug(), record, issue)
     }
 
     fn record_security_fix_ending(
         &mut self,
         record: &SecurityRecord,
-        ticket: &IssueUrl,
+        issue: &IssueUrl,
         succeeded: bool,
     ) -> Result<()> {
         GitHub::new().completion().record_security_fix_ending(
             &self.repo.slug(),
             record,
-            ticket,
+            issue,
             succeeded,
         )
     }
@@ -411,11 +409,12 @@ mod in_memory {
         PublishSecurityFix(String),
         LinkSecurityFix(u64),
         SecurityFixEnding {
-            ticket: u64,
+            issue: u64,
             succeeded: bool,
         },
         DispatchSecurityFix {
-            ticket: u64,
+            issue: u64,
+            is_spec: bool,
             base: String,
         },
         /// It recorded that it started work: on this issue, for a Pickup
@@ -823,8 +822,13 @@ mod in_memory {
 
         fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
             self.calls.push(match dispatch {
-                Dispatch::SecurityFix { ticket, base } => Call::DispatchSecurityFix {
-                    ticket: ticket.number,
+                Dispatch::SecurityFix {
+                    issue,
+                    is_spec,
+                    base,
+                } => Call::DispatchSecurityFix {
+                    issue: issue.number,
+                    is_spec,
                     base: base.into(),
                 },
                 Dispatch::ArchitectPlan { plan, base } => Call::DispatchPlan {
@@ -859,19 +863,19 @@ mod in_memory {
             )
         }
 
-        fn link_security_fix(&mut self, _record: &SecurityRecord, ticket: &IssueUrl) -> Result<()> {
-            self.calls.push(Call::LinkSecurityFix(ticket.number));
+        fn link_security_fix(&mut self, _record: &SecurityRecord, issue: &IssueUrl) -> Result<()> {
+            self.calls.push(Call::LinkSecurityFix(issue.number));
             Ok(())
         }
 
         fn record_security_fix_ending(
             &mut self,
             _record: &SecurityRecord,
-            ticket: &IssueUrl,
+            issue: &IssueUrl,
             succeeded: bool,
         ) -> Result<()> {
             self.calls.push(Call::SecurityFixEnding {
-                ticket: ticket.number,
+                issue: issue.number,
                 succeeded,
             });
             Ok(())

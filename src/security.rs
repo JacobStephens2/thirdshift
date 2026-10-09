@@ -270,14 +270,15 @@ fn fix(
         outside.started(Work::SecurityRun(repo));
         let (published, session_log) = outside.publish_security_fix(base, &record, &metadata.url);
         log = session_log;
-        let ticket = published?;
-        outside.link_security_fix(&record, &ticket)?;
+        let issue = published?;
+        outside.link_security_fix(&record, &issue)?;
         let mut ended = outside.dispatch(crate::pass::Dispatch::SecurityFix {
-            ticket: &ticket,
+            issue: &issue,
+            is_spec: record.fix_size()? == reproduction::FixSize::Spec,
             base,
         });
         if let Err(error) =
-            outside.record_security_fix_ending(&record, &ticket, ended.outcome.is_ok())
+            outside.record_security_fix_ending(&record, &issue, ended.outcome.is_ok())
         {
             ended.outcome = Err(match ended.outcome {
                 Err(mut failed) => {
@@ -455,7 +456,8 @@ mod tests {
                         .contains(&Call::PublishSecurityFix("GHSA-first".into()))
                 );
                 assert!(outside.calls.contains(&Call::DispatchSecurityFix {
-                    ticket: 8,
+                    issue: 8,
+                    is_spec: false,
                     base: "main".into()
                 }));
                 assert!(!outside.calls.contains(&Call::AuditHistory));

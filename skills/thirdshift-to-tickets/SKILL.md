@@ -1,6 +1,6 @@
 ---
 name: thirdshift-to-tickets
-description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links. Only for an Architecture review.
+description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links. For an Architecture review or Security fix publishing.
 disable-model-invocation: false
 ---
 
@@ -11,6 +11,8 @@ Break a plan, spec, or session into a set of **tickets**: tracer-bullet vertical
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to the `gh` CLI. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
 
 The tickets are all this skill writes. Write nothing to the repository: no ticket files, commits or branches. A `CONTEXT.md` or ADR change the work needs is part of a ticket's work, named in its acceptance criteria.
+
+For **Security fix publishing**, keep every Ticket terse: say only what the fix changes and link the private record. Keep all finding evidence in that record. A private finding's issue is the parent Spec, and its existing body and evidence stay unchanged.
 
 ## Process
 
