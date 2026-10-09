@@ -3,25 +3,26 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{fmt, fs, path::Path};
+use std::{fmt, fs};
 
-use crate::git::Git;
+use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction, Severity};
 use crate::github::{DraftAdvisory, GitHub};
 use crate::harness::interpretation::SafeguardRefusal;
 use crate::issue::IssueUrl;
 use crate::session::{Purpose, Sessions};
+use crate::worktree::Worktree;
 use crate::{logs, progress, prompt};
 
 /// A fresh report outside the worktree, retained even when the session or
 /// private recording fails. Only the introduced titles reach Delivery.
 pub(crate) fn run(
     sessions: &Sessions<'_>,
-    worktree: &Path,
+    worktree: &Worktree,
     issue: &IssueUrl,
     base: &str,
     text: &str,
 ) -> Result<Review> {
-    let merge_base = Git::new(worktree).run(&["merge-base", &format!("origin/{base}"), "HEAD"])?;
+    let merge_base = worktree.merge_base_commit(base)?;
     let root = logs::root(&issue.repo()).join("security-reviews");
     fs::create_dir_all(&root)?;
     let directory = tempfile::Builder::new()
@@ -40,6 +41,9 @@ pub(crate) fn run(
         report.display()
     ));
     let message = sessions.run_to_final_message(Purpose::Security, "security-review", &text)?;
+    // A session may change commits on the Issue branch, but it cannot hand
+    // us a replacement checkout to observe or publish findings from.
+    worktree.head()?;
     let review = Review::from_final_message(message.as_deref())?;
     let findings: Vec<OldFinding> = serde_json::from_slice(&fs::read(report)?)?;
     if findings.len() != review.pre_existing_count {
@@ -47,25 +51,29 @@ pub(crate) fn run(
     }
     // Validate the entire report before creating any record. Malformed report
     // diagnostics are never passed into the public outcome.
-    for finding in &findings {
-        finding.validate()?;
-    }
+    let findings = findings
+        .into_iter()
+        .map(|finding| {
+            let reproduction = finding.reproduction()?;
+            Ok((finding, reproduction))
+        })
+        .collect::<Result<Vec<_>>>()?;
     if !findings.is_empty() {
         let github = GitHub::new();
         let repo = issue.repo_slug();
         let mut known = github.security_records(&repo)?;
-        let package = super::audit::package_in(worktree);
-        for finding in findings {
+        let package = super::audit::package_in(worktree.path());
+        for (finding, reproduction) in findings {
             let draft = DraftAdvisory {
                 fingerprint: finding.fingerprint.clone(),
                 summary: finding.title.clone(),
-                description: format!(
+                description: reproduction.description(&format!(
                     "Found by thirdshift's Security review.\n\nFingerprint: `{}`\nAudited commit: `{merge_base}`\nReview issue: {}\n\n{}\n\n```json\n{}\n```\n",
                     finding.fingerprint,
                     issue.url,
                     finding.description,
                     serde_json::to_string_pretty(&finding)?
-                ),
+                )),
                 package: package.clone(),
             };
             // Reuse every record state and preserve the Day shift's grade.
@@ -96,10 +104,12 @@ struct ProofOfConcept {
     head_exit_code: i32,
     merge_base_exit_code: i32,
     notes: String,
+    severity: String,
+    fix_size: String,
 }
 
 impl OldFinding {
-    fn validate(&self) -> Result<()> {
+    fn reproduction(&self) -> Result<Reproduction> {
         let proof = &self.proof_of_concept;
         if [
             &self.fingerprint,
@@ -120,7 +130,21 @@ impl OldFinding {
                 "Security review's private report lacks a valid old finding and failing proof-of-concept runs"
             );
         }
-        Ok(())
+        let severity = Severity::parse(&proof.severity)
+            .context("Security review's private report has an invalid reproduced severity")?;
+        let size = match proof.fix_size.as_str() {
+            "single" => FixSize::Single,
+            "spec" => FixSize::Spec,
+            _ => bail!("Security review's private report has an invalid reproduced fix size"),
+        };
+        Ok(Reproduction {
+            outcome: ReproductionOutcome::Reproduced { severity, size },
+            notes: format!(
+                "Command: {}\nHEAD exit code: {}\nMerge base exit code: {}\n\n{}",
+                proof.command, proof.head_exit_code, proof.merge_base_exit_code, proof.notes
+            ),
+            test: proof.test.clone(),
+        })
     }
 }
 

@@ -376,13 +376,7 @@ impl Outside for InWorktree<'_> {
     }
 
     fn security_review(&mut self, prompt: &str) -> Result<Review> {
-        crate::security::review::run(
-            self.sessions,
-            self.worktree.path(),
-            self.issue,
-            self.base,
-            prompt,
-        )
+        crate::security::review::run(self.sessions, self.worktree, self.issue, self.base, prompt)
     }
 
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()> {

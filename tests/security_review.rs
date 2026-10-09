@@ -20,7 +20,9 @@ fn old_finding() -> serde_json::Value {
             "command": "cargo test bounded_input",
             "head_exit_code": 101,
             "merge_base_exit_code": 101,
-            "notes": "The bounded local fixture fails at both commits."
+            "notes": "The bounded local fixture fails at both commits. Low likelihood and low impact; one session can add a bound.",
+            "severity": "low",
+            "fix_size": "single"
         }
     })
 }
@@ -589,4 +591,92 @@ git commit -q -m 'Fix the previously reported finding'
         1,
         "{body}"
     );
+}
+
+#[test]
+fn review_old_finding_can_be_taken_by_next_security_run() {
+    for private in [false, true] {
+        let scenario = Scenario::new();
+        let mut state = scenario.gh_state();
+        state["private"] = json!(private);
+        scenario.write_gh_state(&state);
+        scenario.agent_does_in_session(1, OPENS_PR);
+        scenario.agent_does_in_session(2, &review_script(&json!([old_finding()]), &[]));
+        let first = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+        let before = scenario.claude_calls().len();
+        if !private {
+            let record = scenario.gh_state()["advisories"][0]["html_url"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            scenario.agent_does_in_session(3, &format!(r#"
+gh label create needs-triage --description 'Needs triage'
+issue=$(gh issue create --title 'Bound input' --body 'Add a bound. Private record: {record}' --label needs-triage)
+printf '%s\n' "Security fix Ticket: $issue" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#));
+        }
+        scenario.agent_does_for(
+            8,
+            r#"
+echo bounded > bounded.txt
+git add bounded.txt
+git commit -q -m 'Bound input'
+gh pr create --base main --head issue-8 --title 'Bound input' --body 'Closes #8'
+"#,
+        );
+        let next = scenario.run(&["secure", "base", "main", "security-fix"]);
+        assert!(
+            scenario.claude_calls().len() > before,
+            "Security run must take the reproduced review finding when fixing is allowed; private={private}, stderr={}",
+            next.stderr
+        );
+        assert_eq!(next.code, Some(0), "{private}: {}", next.stderr);
+        let state = scenario.gh_state();
+        assert_eq!(state["prs"][1]["head"], "issue-8");
+        assert_eq!(state["prs"][1]["isDraft"], false);
+        assert_eq!(
+            scenario.origin_file("issue-8", "bounded.txt").as_deref(),
+            Some("bounded\n")
+        );
+        assert!(
+            !state["prs"][1]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Private old vulnerability evidence.")
+        );
+    }
+}
+
+#[test]
+fn switched_checkout_is_rejected_before_private_recording() {
+    for before_review in [true, false] {
+        let scenario = Scenario::new();
+        let switch = "\ngit switch -c replacement-branch\n";
+        scenario.agent_does_in_session(
+            1,
+            &format!("{OPENS_PR}{}", if before_review { switch } else { "" }),
+        );
+        scenario.agent_does_in_session(
+            2,
+            &format!(
+                "{}{}",
+                review_script(&json!([old_finding()]), &[]),
+                if before_review { "" } else { switch }
+            ),
+        );
+        let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let records = scenario.gh_state()["advisories"].clone();
+        assert!(
+            records.is_null() || records.as_array().is_some_and(|records| records.is_empty()),
+            "A changed checkout must be rejected before private recording: {records}; {}",
+            result.stderr
+        );
+        assert_eq!(
+            scenario.claude_calls().len(),
+            if before_review { 1 } else { 2 },
+            "A checkout replaced by the opening session must not start a Security review"
+        );
+    }
 }
