@@ -24,6 +24,12 @@ pub trait Adapter: Sync {
     /// the CLI. The adapter applies its skill-loading style here.
     fn session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation;
 
+    /// A one-shot release summary, interpreted through the same protocol.
+    /// Harnesses with a tool-free mode specialize it here.
+    fn summary(&self, choice: &Choice, prompt: &str) -> Invocation {
+        self.session(choice, None, prompt)
+    }
+
     /// A Security session or its Resume. Guidance reviews do not permit
     /// delegation; other security sessions request fresh sub-agents.
     fn security_session(

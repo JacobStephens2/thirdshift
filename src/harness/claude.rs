@@ -49,6 +49,14 @@ impl Adapter for Claude {
     fn check(&self, choice: &mut Choice) -> Result<()> {
         test_call(choice)
     }
+    fn summary(&self, choice: &Choice, prompt: &str) -> Invocation {
+        let mut invocation = self.session(choice, None, prompt);
+        invocation.args.splice(
+            1..1,
+            ["--tools", "", "--strict-mcp-config"].map(String::from),
+        );
+        invocation
+    }
     fn ask_settings(
         &self,
         outside: &mut dyn Terminal,
