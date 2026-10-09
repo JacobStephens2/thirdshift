@@ -196,6 +196,7 @@ struct ChildRunsAndGitHub<'a> {
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
     security_fix: bool,
+    security_review: bool,
     harness: &'a Choice,
     spec_pr: PullRequest,
 }
@@ -203,13 +204,17 @@ struct ChildRunsAndGitHub<'a> {
 impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
-    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
+    fn new(worktree: Worktree, mut delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
+        let security_review = delivery.security_review;
+        // The Spec PR review is implemented by #551; Base fixes inherit the choice.
+        delivery.security_review = false;
         Self {
             spec: delivery.issue,
             children: Runs::default(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
             security_fix: delivery.security_fix,
+            security_review,
             harness: delivery.harness,
             delivery: Some(delivery),
             spec_pr,
@@ -239,6 +244,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
             kind,
             self.base_fix.clone(),
             self.security_fix,
+            self.security_review,
             self.harness,
         )
     }

@@ -116,6 +116,7 @@ pub struct BaseFix {
     /// on: the Run's.
     harness: Choice,
     security_fix: bool,
+    security_review: bool,
 }
 
 /// The Base fix a Run took as its one: one it started, or one it found
@@ -141,7 +142,13 @@ impl BaseFix {
     /// that asked `ask` about a Base fix, and whose sessions run on
     /// `harness`, as a Base fix it starts does. A Base fix starts none of
     /// its own, whatever it asked.
-    pub fn new(child: Option<&Kind>, ask: BaseFixAsk, harness: Choice, security_fix: bool) -> Self {
+    pub fn new(
+        child: Option<&Kind>,
+        ask: BaseFixAsk,
+        harness: Choice,
+        security_fix: bool,
+        security_review: bool,
+    ) -> Self {
         let (on_inherited_failures, retry) = match (child, ask) {
             (Some(Kind::BaseFix { .. }), _) => (OnInheritedFailures::IsBaseFix, None),
             (_, BaseFixAsk::Allow) => (OnInheritedFailures::StartBaseFix, None),
@@ -155,6 +162,7 @@ impl BaseFix {
             advice: Vec::new(),
             harness,
             security_fix,
+            security_review,
         }
     }
 
@@ -220,6 +228,7 @@ impl BaseFix {
             issue,
             harness: &harness,
             security_fix: self.security_fix,
+            security_review: self.security_review,
         };
         self.fix_through(&mut outside, issue, pr_url, base, base_commit, failed)
     }
@@ -473,6 +482,7 @@ struct LaunchAndGitHub<'a> {
     issue: &'a IssueUrl,
     harness: &'a Choice,
     security_fix: bool,
+    security_review: bool,
 }
 
 impl Outside for LaunchAndGitHub<'_> {
@@ -535,6 +545,7 @@ impl Outside for LaunchAndGitHub<'_> {
             kind,
             BaseFixAsk::Forbid,
             self.security_fix,
+            self.security_review,
             self.harness,
         )?
         .wait()
@@ -885,7 +896,7 @@ mod tests {
 
     /// A Run's Base fix as asked `ask`, not itself a Base fix.
     fn asked(ask: BaseFixAsk) -> BaseFix {
-        BaseFix::new(None, ask, Choice::default(), false)
+        BaseFix::new(None, ask, Choice::default(), false, false)
     }
 
     fn undecided() -> BaseFixAsk {
@@ -1332,7 +1343,7 @@ mod tests {
             base: "main".to_string(),
         };
         for ask in [BaseFixAsk::Allow, BaseFixAsk::Forbid, undecided()] {
-            let base_fix = BaseFix::new(Some(&child), ask, Choice::default(), false);
+            let base_fix = BaseFix::new(Some(&child), ask, Choice::default(), false, false);
             assert!(!base_fix.sees_inherited_failures());
             assert_eq!(base_fix.ask_of_tickets(), BaseFixAsk::Forbid);
         }
@@ -1340,8 +1351,14 @@ mod tests {
             spec_branch: "spec-3".to_string(),
         };
         assert!(
-            BaseFix::new(Some(&ticket), BaseFixAsk::Allow, Choice::default(), false)
-                .sees_inherited_failures()
+            BaseFix::new(
+                Some(&ticket),
+                BaseFixAsk::Allow,
+                Choice::default(),
+                false,
+                false
+            )
+            .sees_inherited_failures()
         );
         assert!(asked(BaseFixAsk::Forbid).sees_inherited_failures());
     }

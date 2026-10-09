@@ -317,6 +317,14 @@ known, title and private link, never its write-up. A skipped Security run sends 
 The address and Resend API key checks come before skip checks or work; a failed send is
 only a warning and never changes the run's outcome.
 
+security-review enables one guidance review after a Run's opening session, before Delivery
+pushes and enters the Repair loop. [security] review = true also enables it;
+no-security-review overrides the setting. Both words are accepted on commands that start
+Runs and follow dispatched Runs and Base fixes. Setup asks; the default is off.
+Only reproduced findings are fixed, with their failing tests kept. Unaddressed introduced
+findings, a refused review or an incomplete review hold Self-merge, leaving the PR ready
+for review and naming the reason. Other Runs record the Security outcome and continue.
+
 security-fix allows a Security run to fix one reproduced finding: the most severe first,
 ties in private-record order, before auditing or after an audit reproduces a finding.
 The publishing session follows the reproduction's fix size: one terse Ticket, or a Spec

@@ -179,6 +179,27 @@ impl<A: Adapter> PullRequest<A> {
         Ok(())
     }
 
+    /// Retain a deterministic review outcome even if the session refused
+    /// before it could edit the body. Keep the agent's detailed evidence.
+    pub fn record_security_review(&mut self, entry: &str) -> Result<()> {
+        let snapshot = self.observe(false)?.context("no PR found")?;
+        self.validate(&snapshot, true)?;
+        let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
+        let section = "## Unaddressed findings";
+        let summary = format!("### Security review outcome\n\n{entry}\n");
+        let updated = if let Some(at) = body.find(section) {
+            let after = at + section.len();
+            let end = body[after..]
+                .find("\n## ")
+                .map_or(body.len(), |next| after + next);
+            format!("{}\n\n{summary}\n{}", body[..end].trim_end(), &body[end..])
+        } else {
+            format!("{}\n\n{section}\n\n{summary}", body.trim_end())
+        };
+        self.adapter
+            .set_body(&self.issue, snapshot.pr.number, &updated, false)
+    }
+
     /// Observe afresh and validate the expected branches and open state
     /// before marking this number ready. Already-ready PRs need no request.
     pub fn mark_ready(&mut self, checklist: Option<&str>) -> Result<Identified> {

@@ -27,10 +27,18 @@ impl Runs {
         kind: Kind,
         base_fix: BaseFixAsk,
         security_fix: bool,
+        security_review: bool,
         harness: &Choice,
     ) -> Result<()> {
         self.start_using(issue.number, || {
-            super::start(issue, kind, base_fix, security_fix, harness)
+            super::start(
+                issue,
+                kind,
+                base_fix,
+                security_fix,
+                security_review,
+                harness,
+            )
         })
     }
 

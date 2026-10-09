@@ -20,6 +20,7 @@ use crate::pass::{LaunchAndGitHub, Outside};
 pub mod audit;
 pub(crate) mod fixing;
 pub mod reproduction;
+pub(crate) mod review;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixAsk {

@@ -29,6 +29,7 @@ use crate::progress;
 use crate::prompt;
 use crate::run::{Goal, Reached};
 use crate::run_ending::Cause;
+use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
 use crate::session::{Logs, Sessions};
 use crate::worktree::{ForeignCommits, Merge, PendingMerge, Worktree};
 
@@ -37,6 +38,7 @@ use repair_loop::{Repair, Upstream};
 /// into the Base branch `base`, to `goal`.
 pub struct Delivery<'a> {
     pub security_fix: bool,
+    pub security_review: bool,
     pub issue: &'a IssueUrl,
     pub base: &'a str,
     pub goal: Goal,
@@ -83,6 +85,7 @@ impl Delivery<'_> {
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
         let route = Route {
+            security_review: self.security_review,
             issue: self.issue,
             base: self.base,
             branch: worktree.branch(),
@@ -124,6 +127,7 @@ impl Delivery<'_> {
 /// The steps of a Delivery of the pull request for `issue`, from `branch`
 /// into the Base branch `base`, to `goal`, its sessions run on `harness`.
 struct Route<'a> {
+    security_review: bool,
     issue: &'a IssueUrl,
     base: &'a str,
     branch: &'a str,
@@ -147,9 +151,25 @@ impl Route<'_> {
             outside.catch_up()?;
         }
         outside.session(opening.kind, &opening.prompt)?;
+        let review = self.security_review.then(|| {
+            SecurityOutcome::of(outside.security_review(&prompt::security_review(
+                self.issue,
+                self.base,
+                self.branch,
+            )))
+        });
         outside.push()?;
         self.write_built_with(outside);
         let pr = outside.mark_pr_ready(checklist)?;
+        if let Some(review) = review {
+            outside.record_security_review(&review)?;
+            if let Some(hold) = review.hold() {
+                outside.step(hold.to_string());
+                if self.goal == Goal::Merged {
+                    return Err(hold.into());
+                }
+            }
+        }
         outside.take_to_goal(&pr.url, self.goal)?;
         if self.goal == Goal::Merged {
             self.after_merge(outside, &pr);
@@ -249,7 +269,7 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
     // to its first line: the reason goes in the failure commit's subject.
     let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
-    let keep_ready = error.is::<PolicyRefusal>();
+    let keep_ready = error.is::<PolicyRefusal>() || error.is::<SecurityHold>();
     if !keep_ready && let Err(problem) = outside.preserve_failed_run(&reason) {
         outside.step(format!(
             "could not push the failed run's work, so it may exist only locally: {problem:#}"
@@ -278,6 +298,8 @@ trait Outside {
     fn catch_up(&mut self) -> Result<()>;
     /// Run the session `kind` given `prompt`.
     fn session(&mut self, kind: &str, prompt: &str) -> Result<()>;
+    fn security_review(&mut self, prompt: &str) -> Result<Review>;
+    fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()>;
     /// Push the Issue branch.
     fn push(&mut self) -> Result<()>;
     /// Write the annotation through the captured pull request module.
@@ -334,6 +356,19 @@ impl Outside for InWorktree<'_> {
 
     fn session(&mut self, kind: &str, prompt: &str) -> Result<()> {
         self.sessions.run(kind, prompt)
+    }
+
+    fn security_review(&mut self, prompt: &str) -> Result<Review> {
+        let message = self.sessions.run_to_final_message(
+            crate::session::Purpose::Security,
+            "security-review",
+            prompt,
+        )?;
+        Review::from_final_message(message.as_deref())
+    }
+
+    fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()> {
+        self.pull_request.record_security_review(&review.entry())
     }
 
     fn push(&mut self) -> Result<()> {
@@ -577,6 +612,14 @@ mod tests {
     }
 
     impl Outside for Scripted {
+        fn record_security_review(&mut self, _: &SecurityOutcome) -> Result<()> {
+            Ok(())
+        }
+        fn security_review(&mut self, _: &str) -> Result<Review> {
+            Review::from_final_message(Some(
+                "Security review: {\"unaddressed_count\":0,\"findings\":[]}",
+            ))
+        }
         fn catch_up(&mut self) -> Result<()> {
             self.calls.push(Call::CatchUp);
             self.check(Fails::CatchUp)
@@ -656,6 +699,7 @@ mod tests {
     fn deliver(outside: &mut Scripted, goal: Goal, spec: bool) -> Result<String, FailedRun> {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
         let route = Route {
+            security_review: false,
             issue: &issue,
             base: "main",
             branch: "issue-7",

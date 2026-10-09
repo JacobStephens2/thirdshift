@@ -47,6 +47,7 @@ pub struct UserConfig {
     pub security_harness: Option<Harness>,
     /// `security.fix`: off by default; None leaves the decision unmade.
     pub security_fix: Option<bool>,
+    pub security_review: bool,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -90,6 +91,7 @@ impl UserConfig {
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,
+            security_review: false,
         }
     }
 
@@ -159,6 +161,12 @@ impl UserConfig {
                     ("pickup", "limit", value) => {
                         config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
                     }
+                    ("security", "review", Value::Boolean(review)) => {
+                        config.security_review = *review
+                    }
+                    ("security", "review", _) => {
+                        bail!("security.review must be true or false in {file}")
+                    }
                     ("security", "fix", Value::Boolean(fix)) => config.security_fix = Some(*fix),
                     ("security", "fix", _) => bail!("security.fix must be true or false in {file}"),
                     ("security", "harness", Value::String(name)) => {
@@ -213,6 +221,7 @@ pub struct UserConfigChanges {
     pub base_fix: bool,
     pub launch_pull: bool,
     pub security_fix: bool,
+    pub security_review: bool,
     /// None disables Run notifications while retaining their addresses.
     pub notifications: Option<NotificationAddresses>,
     /// None retains every Harness setting. Unset Model/Effort writes blank.
@@ -262,6 +271,7 @@ impl UserConfigDocument {
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
             set(&mut document, "security", "fix", changes.security_fix);
+            set(&mut document, "security", "review", changes.security_review);
             set(
                 &mut document,
                 "email",
@@ -677,6 +687,7 @@ limit = 3   # how many open issues labelled in-progress stop a Pickup run taking
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
+review = false   # Runs review their change for Security findings; default false
 harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
 
 [harness]
@@ -835,6 +846,7 @@ mod tests {
                 "spec.parallel",
                 "pickup.limit",
                 "security.fix",
+                "security.review",
                 "security.harness",
                 "harness.default",
                 "harness.claude.model",
@@ -1188,6 +1200,7 @@ mod tests {
             base_fix: true,
             launch_pull: true,
             security_fix: false,
+            security_review: false,
             notifications: Some(NotificationAddresses {
                 to: "me@example.com".to_string(),
                 from: "ts@example.com".to_string(),
@@ -1342,6 +1355,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             security_fix: false,
+            security_review: false,
             notifications: Some(NotificationAddresses {
                 to: to.to_string(),
                 from: crate::email::DEFAULT_FROM.to_string(),
@@ -1435,6 +1449,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             security_fix: false,
+            security_review: false,
             notifications: None,
             harness: Some((
                 Harness::Codex,
@@ -1479,6 +1494,7 @@ mod tests {
                 base_fix: true,
                 launch_pull: true,
                 security_fix: false,
+                security_review: false,
                 notifications: Some(NotificationAddresses {
                     to: "o\"brien@example.com".to_string(),
                     from: "ts@example.com".to_string(),
@@ -1564,6 +1580,7 @@ mod tests {
             base_fix: false,
             launch_pull: true,
             security_fix: false,
+            security_review: false,
             notifications: None,
             harness: None,
         };

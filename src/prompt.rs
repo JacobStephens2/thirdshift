@@ -314,6 +314,26 @@ pub fn security_audit(
     )
 }
 
+/// One guidance session on the Run's change, before Delivery pushes and
+/// enters the Repair loop. The separate Security audit remains a full audit.
+pub fn security_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
+    format!(
+        "Use the `thirdshift-security-audit` skill in guidance mode.\n\
+         Review the change for {url} on branch {branch} with `git diff {base}...HEAD`, including supporting code.\n\
+         Read the relevant security attack-class guidance and the repository's SECURITY.md or threat model when present.\n\
+         Use one session. Do not delegate auditors or run the full six-phase audit, validators, coverage ledger or audit artifacts.\n\
+         Fix only a Security finding you can show with a failing proof-of-concept test; run it before fixing, keep it as a regression test, and rerun it afterward. Use harmless local payloads; touch no deployed site or real third-party service. Commit each fix.\n\
+         Classify introduced findings against the merge base: a proof-of-concept that also fails there is pre-existing. Never include pre-existing vulnerability details in the pull request or final message, and do not fix those here.\n\
+         Update this branch's pull request: list each unaddressed introduced finding under Security in its Unaddressed findings, with evidence and why it is unaddressed. Preserve Standards and Spec entries and the rest of the body. Do not merge. Delivery pushes any new commits and marks the PR ready after this session.\n\
+         If refused, incomplete, or missing a prerequisite, say so and do not claim completion.\n\
+         After a complete review, end your final message with exactly one line of the form:\n\
+         Security review: {{\"unaddressed_count\":0,\"findings\":[]}}\n\
+         Count only unaddressed findings introduced by this change; findings is an array of their short titles, with one title per finding. No old-finding details belong in it.\n\n\
+         {HEADLESS}",
+        url = issue.url,
+    )
+}
+
 pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path) -> String {
     format!(
         "Reproduce this recorded Security finding at audited commit `{commit}`.\n\
