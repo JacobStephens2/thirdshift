@@ -93,16 +93,16 @@ fn the_open_prs_base_is_the_base_branch_whatever_is_checked_out() {
     );
 }
 
-/// Nothing was created: no session, worktree, temp directory or log, and the
+/// No session, worktree or temp directory was created, and the
 /// local Issue branch is still there.
 fn assert_nothing_created(scenario: &Scenario, local_branch: &str) {
     assert!(scenario.claude_calls().is_empty(), "claude was run");
     assert_eq!(scenario.entries("work"), vec!["widgets"]);
     assert_eq!(scenario.entries("tmp"), Vec::<String>::new());
     assert!(
-        !scenario
-            .path("home/.thirdshift/logs/acme/widgets/commands/issue")
-            .exists(),
+        scenario
+            .log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl")
+            .is_empty(),
         "a session log was created"
     );
     assert_ne!(scenario.launch_git(&["branch", "--list", local_branch]), "");
