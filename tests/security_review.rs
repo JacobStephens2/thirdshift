@@ -680,3 +680,22 @@ fn switched_checkout_is_rejected_before_private_recording() {
         );
     }
 }
+
+#[test]
+fn review_merge_base_uses_remote_ref_when_local_tag_shadows_it() {
+    let scenario = Scenario::new();
+    scenario.launch_git(&["tag", "origin/main"]);
+    scenario.origin_has_commit("main", "base-new.txt", "base change", "Advance Base branch");
+    let published_base = scenario.origin_git(&["rev-parse", "refs/heads/main"]);
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(2, &review_script(&json!([]), &[]));
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.claude_calls();
+    let prompt = calls[1]["prompt"].as_str().unwrap();
+    let expected = format!("Merge base commit: `{}`.", published_base.trim());
+    assert!(
+        prompt.contains(&expected),
+        "Security review used a local tag instead of published Base branch merge base; expected {expected}, got {prompt}"
+    );
+}

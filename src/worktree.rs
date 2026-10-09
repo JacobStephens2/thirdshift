@@ -208,7 +208,7 @@ impl Worktree {
     /// this is still the acquired checkout on the selected Issue branch.
     pub fn merge_base_commit(&self, base: &str) -> Result<String> {
         self.checkout.ordinary(&self.launch, |operation| {
-            operation.run(&["merge-base", &format!("origin/{base}"), "HEAD"])
+            operation.run(&["merge-base", &format!("refs/remotes/origin/{base}"), "HEAD"])
         })
     }
 
