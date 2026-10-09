@@ -224,7 +224,7 @@ fn help_documents_pickup_the_ready_issue_the_dispatch_the_skips_and_the_run_noti
         "A Ready issue is an open issue labelled ready-for-agent",
         "none of ready-for-human, needs-info, wontfix and needs-triage",
         "is not in-progress",
-        "is not a sub-issue, is not labelled base-fix, has no open blocker",
+        "is not a sub-issue, is not labelled base-fix or security-fix, has no open blocker",
         "was never started: no Issue branch for it is on origin, and no pull request from one exists, open, merged or closed",
         "A Spec whose Tickets are all closed is not one either: a Spec run would find nothing to do",
         "It must also be settled: ten minutes have passed since ready-for-agent was applied to it, and since a sub-issue or a \"blocked by\" link of its was last added or removed",

@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::asks::Flags;
+use crate::base_fix::Advice;
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
@@ -39,6 +40,7 @@ pub enum Outcome {
 pub struct Ended {
     pub outcome: Result<Recorded, FailedRun>,
     pub findings: Vec<RecordedFinding>,
+    pub advice: Vec<Advice>,
 }
 
 impl From<anyhow::Error> for Ended {
@@ -46,8 +48,28 @@ impl From<anyhow::Error> for Ended {
         Self {
             outcome: Err(error.into()),
             findings: Vec::new(),
+            advice: Vec::new(),
         }
     }
+}
+
+/// Preserve the typed command, quoting its words so the offered command can be run.
+fn command_with_fixing() -> String {
+    let words = std::env::args()
+        .skip(1)
+        .map(|word| {
+            if word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_/.:@=".contains(c))
+                && !word.is_empty()
+            {
+                word
+            } else {
+                format!("'{}'", word.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>();
+    format!("thirdshift {} security-fix", words.join(" "))
 }
 
 /// Only the metadata allowed in a Run notification; no private write-up.
@@ -79,6 +101,7 @@ pub enum Skipped {
     AlreadyRunning(AlreadyRunning),
     ReadyIssue(ListedIssue),
     FindingWaiting,
+    FailedFix(crate::issue::IssueUrl),
     UnchangedBase(String),
 }
 
@@ -90,6 +113,11 @@ impl fmt::Display for Skipped {
                 f,
                 "Ready issue #{} \"{}\" goes first: {}",
                 listed.issue.number, listed.title, listed.issue.url
+            ),
+            Self::FailedFix(ticket) => write!(
+                f,
+                "failed Security fix #{} is still open for the Day shift: {}",
+                ticket.number, ticket.url
             ),
             Self::FindingWaiting => f.write_str("a Security finding is waiting for the Day shift"),
             Self::UnchangedBase(base) => write!(
@@ -133,6 +161,8 @@ pub fn run(
         }
         Err(error) => return Outcome::Audited(error.into()),
     };
+    let offer_command =
+        (flags.security_fix.is_none() && config.security_fix.is_none()).then(command_with_fixing);
     run_through(
         &mut LaunchAndGitHub {
             launch: &directory,
@@ -145,10 +175,17 @@ pub fn run(
         &repo,
         base.name(),
         flags.security_fix_allowed(config),
+        offer_command.as_deref(),
     )
 }
 
-fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str, fixing: bool) -> Outcome {
+fn run_through(
+    outside: &mut impl Outside,
+    repo: &Repo,
+    base: &str,
+    fixing: bool,
+    offer_command: Option<&str>,
+) -> Outcome {
     match outside.ready_issue() {
         Ok(Some(ready)) => {
             let skipped = Skipped::ReadyIssue(ready.listed);
@@ -162,6 +199,15 @@ fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str, fixing: bool
         Ok(records) => records,
         Err(error) => return Outcome::Audited(error.into()),
     };
+    match records.failed_fix() {
+        Ok(Some(ticket)) => {
+            let skipped = Skipped::FailedFix(ticket);
+            outside.skipped(Pass::Security, &skipped);
+            return Outcome::Skipped(skipped);
+        }
+        Ok(None) => {}
+        Err(error) => return Outcome::Audited(error.into()),
+    }
     if fixing {
         match records.next_fix() {
             Ok(Some((record, metadata))) => return fix(outside, repo, base, record, metadata),
@@ -183,7 +229,7 @@ fn run_through(outside: &mut impl Outside, repo: &Repo, base: &str, fixing: bool
         Ok(false) => {}
         Err(error) => return Outcome::Audited(error.into()),
     }
-    let audited = audit_and_record(outside, repo, base);
+    let audited = audit_and_record(outside, repo, base, offer_command);
     if fixing && audited.outcome.is_ok() {
         match outside
             .security_records()
@@ -226,11 +272,32 @@ fn fix(
         log = session_log;
         let issue = published?;
         outside.link_security_fix(&record, &issue)?;
-        Ok(outside.dispatch(crate::pass::Dispatch::SecurityFix {
+        let mut ended = outside.dispatch(crate::pass::Dispatch::SecurityFix {
             issue: &issue,
             is_spec: record.fix_size()? == reproduction::FixSize::Spec,
             base,
-        }))
+        });
+        if let Err(error) =
+            outside.record_security_fix_ending(&record, &issue, ended.outcome.is_ok())
+        {
+            ended.outcome = Err(match ended.outcome {
+                Err(mut failed) => {
+                    let cause =
+                        format!("could not record the failed Security fix's ending: {error:#}");
+                    failed.error = std::mem::replace(&mut failed.error, error).context(cause);
+                    failed
+                }
+                Ok(reached) => FailedRun {
+                    log: reached.log,
+                    pr_url: Some(reached.pr_url),
+                    ticket_lines: reached.ticket_lines,
+                    ..error
+                        .context("could not record the successful Security fix's ending")
+                        .into()
+                },
+            });
+        }
+        Ok(ended)
     })();
     Outcome::Fixed {
         ended: ended.unwrap_or_else(|error| crate::run::Ended {
@@ -245,7 +312,13 @@ fn fix(
     }
 }
 
-fn audit_and_record(outside: &mut impl Outside, repo: &Repo, base: &str) -> Ended {
+fn audit_and_record(
+    outside: &mut impl Outside,
+    repo: &Repo,
+    base: &str,
+    offer_command: Option<&str>,
+) -> Ended {
+    let mut advice = Vec::new();
     let mut findings = Vec::new();
     let mut log = None;
     let recorded = (|| -> Result<Recorded> {
@@ -301,6 +374,21 @@ fn audit_and_record(outside: &mut impl Outside, repo: &Repo, base: &str) -> Ende
             }
             let reproduced = reproduced?;
             outside.update_security_record(record, &reproduced)?;
+            if reproduced.severity().is_some()
+                && let Some(command) = offer_command
+            {
+                advice = vec![
+                    Advice {
+                        label: "Allow fixing",
+                        value: command.to_string(),
+                    },
+                    Advice {
+                        label: "Or set",
+                        value: "fix = true under [security] in ~/.thirdshift/config.toml"
+                            .to_string(),
+                    },
+                ];
+            }
             for finding in findings.iter_mut().filter(|finding| finding.url == *url) {
                 finding.severity = reproduced
                     .severity()
@@ -319,6 +407,7 @@ fn audit_and_record(outside: &mut impl Outside, repo: &Repo, base: &str) -> Ende
             ..error.into()
         }),
         findings,
+        advice,
     }
 }
 
@@ -346,7 +435,7 @@ mod tests {
             if ready {
                 outside = outside.ready(7, false);
             }
-            let outcome = run_through(&mut outside, &widgets(), "main", true);
+            let outcome = run_through(&mut outside, &widgets(), "main", true, None);
             if ready {
                 assert!(matches!(outcome, Outcome::Skipped(Skipped::ReadyIssue(_))));
                 assert!(matches!(
@@ -385,7 +474,7 @@ mod tests {
                 "ghsa_id": "GHSA-test", "summary": "Unchecked input size"
             })])
             .harness_failing();
-        let outcome = run_through(&mut outside, &widgets(), "main", false);
+        let outcome = run_through(&mut outside, &widgets(), "main", false, None);
         assert!(matches!(outcome, Outcome::Skipped(_)));
         assert_eq!(
             outside.calls,
@@ -410,7 +499,7 @@ mod tests {
             let mut outside = InMemory::default().advisories(vec![serde_json::json!({
                 "state": state, "severity": severity
             })]);
-            let outcome = run_through(&mut outside, &widgets(), "main", false);
+            let outcome = run_through(&mut outside, &widgets(), "main", false, None);
             assert_eq!(
                 matches!(outcome, Outcome::Skipped(_)),
                 waits,
@@ -436,7 +525,7 @@ mod tests {
                 "state": state,
                 "labels": labels.iter().map(|name| serde_json::json!({"name":name})).collect::<Vec<_>>()
             })]);
-            let outcome = run_through(&mut outside, &widgets(), "main", false);
+            let outcome = run_through(&mut outside, &widgets(), "main", false, None);
             assert_eq!(
                 matches!(outcome, Outcome::Skipped(_)),
                 waits,
@@ -452,7 +541,7 @@ mod tests {
     #[test]
     fn checks_prerequisites_then_audits_without_pulling() {
         let mut outside = InMemory::default();
-        let outcome = run_through(&mut outside, &widgets(), "main", false);
+        let outcome = run_through(&mut outside, &widgets(), "main", false, None);
         assert!(matches!(
             outcome,
             Outcome::Audited(Ended { outcome: Ok(_), .. })
@@ -479,7 +568,7 @@ mod tests {
             .node_failing()
             .harness_failing();
         assert!(matches!(
-            run_through(&mut outside, &widgets(), "main", false),
+            run_through(&mut outside, &widgets(), "main", false, None),
             Outcome::Skipped(Skipped::ReadyIssue(_))
         ));
         assert!(matches!(
@@ -505,7 +594,7 @@ mod tests {
                     if unchanged {
                         outside = outside.unchanged_base();
                     }
-                    let outcome = run_through(&mut outside, &widgets(), "main", false);
+                    let outcome = run_through(&mut outside, &widgets(), "main", false, None);
                     let expected = if ready {
                         "Ready issue #7"
                     } else if waiting {
@@ -536,6 +625,55 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_fix_yields_to_ready_work_but_precedes_waiting_and_audit_history() {
+        for private in [false, true] {
+            for ready in [false, true] {
+                for closed in [false, true] {
+                    for fixing in [false, true] {
+                        let body = "Private record\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/8\nFix Run: failed\n";
+                        let values = vec![
+                            serde_json::json!({
+                                "state": if private { "open" } else { "draft" },
+                                "severity": null, "description": body, "body": body,
+                                "security_fix_closed": closed,
+                            }),
+                            serde_json::json!({
+                                "state": if private { "open" } else { "draft" },
+                                "severity": null, "labels": [{"name":"needs-triage"}],
+                            }),
+                        ];
+                        let mut outside = if private {
+                            InMemory::default().finding_issues(values)
+                        } else {
+                            InMemory::default().advisories(values)
+                        }
+                        .unchanged_base();
+                        if ready {
+                            outside = outside.ready(7, false);
+                        }
+                        let Outcome::Skipped(skipped) =
+                            run_through(&mut outside, &widgets(), "main", fixing, None)
+                        else {
+                            panic!("Security run should skip");
+                        };
+                        let expected = if ready {
+                            "Ready issue #7"
+                        } else if !closed {
+                            "failed Security fix #8 is still open"
+                        } else {
+                            "a Security finding is waiting for the Day shift"
+                        };
+                        assert!(skipped.to_string().starts_with(expected), "{skipped}");
+                        assert!(!outside.calls.contains(&Call::HarnessCheck));
+                        assert!(!outside.calls.contains(&Call::AuditHistory));
+                        assert_eq!(outside.calls.contains(&Call::AdvisoryList), !ready);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn each_failed_prerequisite_prevents_later_operations() {
         for (mut outside, expected) in [
             (
@@ -559,7 +697,7 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                run_through(&mut outside, &widgets(), "main", false),
+                run_through(&mut outside, &widgets(), "main", false, None),
                 Outcome::Audited(Ended {
                     outcome: Err(_),
                     ..
@@ -577,7 +715,7 @@ mod tests {
         let Outcome::Audited(Ended {
             outcome: Err(failed),
             ..
-        }) = run_through(&mut outside, &widgets(), "main", false)
+        }) = run_through(&mut outside, &widgets(), "main", false, None)
         else {
             panic!("audit should fail");
         };
@@ -619,7 +757,7 @@ mod tests {
         let Outcome::Audited(Ended {
             outcome: Ok(recorded),
             ..
-        }) = run_through(&mut outside, &widgets(), "main", false)
+        }) = run_through(&mut outside, &widgets(), "main", false, None)
         else {
             panic!("audit should succeed");
         };

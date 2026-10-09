@@ -59,6 +59,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
             };
             Ok(Account {
                 security_findings: Some(&audited.findings),
+                advice: &audited.advice,
                 ..account
             })
         }
@@ -291,18 +292,17 @@ impl Shown {
             steps.push(format!("{BASE_FIX}{report}"));
         }
         match &account.ended {
-            // Also on stderr, so the outcome shows even when stdout is
-            // captured.
+            // Also on stderr, so the outcome shows even when stdout is captured.
             Ok(line) => steps.push(line.clone()),
-            Err(cause) => {
-                steps.push(cause.full().to_string());
-                steps.extend(account.advice.iter().map(Advice::to_string));
-                if let Some(log) = account.log {
-                    steps.push(format!("{SESSION_LOG}{}", log.display()));
-                }
-                if let Some(log) = logs::command_log_path() {
-                    steps.push(format!("{COMMAND_LOG}{}", log.display()));
-                }
+            Err(cause) => steps.push(cause.full().to_string()),
+        }
+        steps.extend(account.advice.iter().map(Advice::to_string));
+        if account.ended.is_err() {
+            if let Some(log) = account.log {
+                steps.push(format!("{SESSION_LOG}{}", log.display()));
+            }
+            if let Some(log) = logs::command_log_path() {
+                steps.push(format!("{COMMAND_LOG}{}", log.display()));
             }
         }
         Shown {

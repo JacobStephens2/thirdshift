@@ -135,6 +135,13 @@ pub trait Outside {
         url: &str,
     ) -> (Result<IssueUrl>, Option<PathBuf>);
     fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()>;
+    /// Record the dispatch's ending in its private record, even after interruption.
+    fn record_security_fix_ending(
+        &mut self,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        succeeded: bool,
+    ) -> Result<()>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
 }
@@ -323,6 +330,20 @@ impl Outside for LaunchAndGitHub<'_> {
     fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()> {
         GitHub::new().link_security_fix(&self.repo.slug(), record, issue)
     }
+
+    fn record_security_fix_ending(
+        &mut self,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        succeeded: bool,
+    ) -> Result<()> {
+        GitHub::new().completion().record_security_fix_ending(
+            &self.repo.slug(),
+            record,
+            issue,
+            succeeded,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -387,6 +408,10 @@ mod in_memory {
         UpdateSecurityRecord(String),
         PublishSecurityFix(String),
         LinkSecurityFix(u64),
+        SecurityFixEnding {
+            issue: u64,
+            succeeded: bool,
+        },
         DispatchSecurityFix {
             issue: u64,
             is_spec: bool,
@@ -840,6 +865,19 @@ mod in_memory {
 
         fn link_security_fix(&mut self, _record: &SecurityRecord, issue: &IssueUrl) -> Result<()> {
             self.calls.push(Call::LinkSecurityFix(issue.number));
+            Ok(())
+        }
+
+        fn record_security_fix_ending(
+            &mut self,
+            _record: &SecurityRecord,
+            issue: &IssueUrl,
+            succeeded: bool,
+        ) -> Result<()> {
+            self.calls.push(Call::SecurityFixEnding {
+                issue: issue.number,
+                succeeded,
+            });
             Ok(())
         }
     }
