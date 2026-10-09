@@ -1,6 +1,6 @@
 //! A Spec run: each of a Spec's Tickets, in dependency order and several at
 //! once, taken by a Ticket's Run, a Merge run into the Spec branch in a child `thirdshift`
-//! (ADR-0006), then the Spec review and the Spec PR from the Spec branch into
+//! (ADR-0006), then the Spec review, optional Security review and the Spec PR from the Spec branch into
 //! the Base branch, kept mergeable and green like a Run's PR, and Self-merged
 //! when the Spec run was asked to merge.
 //!
@@ -195,6 +195,8 @@ struct ChildRunsAndGitHub<'a> {
     /// Held until it starts.
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
+    security_fix: bool,
+    security_review: bool,
     harness: &'a Choice,
     spec_pr: PullRequest,
 }
@@ -203,11 +205,14 @@ impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
     fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
+        let security_review = delivery.security_review;
         Self {
             spec: delivery.issue,
             children: Runs::default(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
+            security_fix: delivery.security_fix,
+            security_review,
             harness: delivery.harness,
             delivery: Some(delivery),
             spec_pr,
@@ -232,8 +237,16 @@ impl Outside for ChildRunsAndGitHub<'_> {
             spec_branch: self.worktree().branch().to_string(),
         };
         let ticket = self.spec.sibling(number);
-        self.children
-            .start(&ticket, kind, self.base_fix.clone(), self.harness)
+        self.children.start(
+            &ticket,
+            kind,
+            self.base_fix.clone(),
+            crate::security::Options {
+                fix: self.security_fix,
+                review: self.security_review,
+            },
+            self.harness,
+        )
     }
 
     fn next_ending(&mut self) -> (u64, Result<Ended>) {

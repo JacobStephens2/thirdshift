@@ -14,7 +14,7 @@ use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
 
-/// The flags a Run, an Architect run and a Pickup run share, as the command
+/// The flags a Run and a Pass share, as the command
 /// gave them: each is none if the command said nothing about it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Flags {
@@ -26,6 +26,10 @@ pub struct Flags {
     pub parallel: Option<NonZeroUsize>,
     /// What `base-fix` or `no-base-fix` asked for.
     pub base_fix: Option<BaseFixAsk>,
+    /// What `security-fix` or `no-security-fix` asked for.
+    pub security_fix: Option<crate::security::FixAsk>,
+    /// What security-review or no-security-review asked for.
+    pub security_review: Option<crate::security::review::Ask>,
     /// What `harness <name>`, `model <name>` and `effort <level>` asked for.
     pub harness: harness::Asked,
 }
@@ -44,6 +48,10 @@ pub struct Asks {
     pub parallel_asked: bool,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
+    /// Whether a Security run may fix reproduced findings, passed to child Runs.
+    pub security_fix: bool,
+    /// Whether Delivery runs the optional guidance Security review.
+    pub security_review: bool,
     /// Whether it first brings the Launch directory's checkout of the Base
     /// branch up to date with origin.
     pub launch_pull: bool,
@@ -77,6 +85,11 @@ impl Asks {
             tickets_at_once: flags.parallel.unwrap_or(config.spec_parallel),
             parallel_asked: flags.parallel.is_some(),
             base_fix,
+            security_fix: flags.security_fix_allowed(config),
+            security_review: flags
+                .security_review
+                .map(|ask| ask == crate::security::review::Ask::Allow)
+                .unwrap_or(config.security_review),
             launch_pull: config.launch_pull,
             harness: flags.harness(config),
         }
@@ -96,6 +109,8 @@ impl Asks {
             tickets_at_once: config.spec_parallel,
             parallel_asked: false,
             base_fix: given.base_fix.clone(),
+            security_fix: given.security.fix,
+            security_review: given.security.review,
             launch_pull: false,
             harness: given.harness.clone(),
         }
@@ -130,7 +145,7 @@ impl Asks {
         Asks::dispatched(issue, &flags, config)
     }
 
-    /// What the Spec run or Run that an Architect run or a Pickup run
+    /// What the Spec run or Run that a Pass
     /// dispatches `issue` as is asked: what [`Asks::of_run`] would ask a Run
     /// started on the Issue URL with `flags`, except that it sends no Run
     /// notification of its own. The run that dispatched it sends the one, as
@@ -144,8 +159,15 @@ impl Asks {
 }
 
 impl Flags {
-    /// Whether any flag here is for the Spec run or Run that an Architect
-    /// run or a Pickup run dispatches: every one but `email` and `no-email`,
+    pub fn security_fix_allowed(&self, config: &UserConfig) -> bool {
+        match self.security_fix {
+            Some(crate::security::FixAsk::Allow) => true,
+            Some(crate::security::FixAsk::Forbid) => false,
+            None => config.security_fix.unwrap_or(false),
+        }
+    }
+    /// Whether any flag here is for the Spec run or Run that a Pass
+    /// dispatches: every one but `email` and `no-email`,
     /// which ask that run for its own Run notification.
     pub fn any_for_dispatched_run(&self) -> bool {
         let for_dispatched_run = Flags {
@@ -157,7 +179,7 @@ impl Flags {
 
     /// What a run with these flags is asked about its own Run notification:
     /// what `email` or `no-email` asked for, else what `config` says. It is
-    /// a Run's ask, and an Architect run's or a Pickup run's for the one
+    /// a Run's ask, and a Pass's for the one
     /// notification it sends itself.
     pub fn notification(&self, config: &UserConfig) -> NotificationAsk {
         self.email.clone().unwrap_or(if config.email.always {
@@ -169,10 +191,24 @@ impl Flags {
 
     /// The Harness, Model and Effort a command with these flags runs its
     /// sessions on: each as its flag asked, else as `config` sets it, else
-    /// the default. It is a Run's, and an Architect run's or a Pickup run's
+    /// the default. It is a Run's, and a Pass's
     /// for its own sessions as for the run it dispatches.
     pub fn harness(&self, config: &UserConfig) -> Choice {
         Choice::of(&self.harness, &config.harness)
+    }
+
+    /// The Harness of a Security run: command, Security setting, default
+    /// Harness, then Claude Code. Model and Effort follow the chosen Harness.
+    pub fn security_harness(&self, config: &UserConfig) -> Choice {
+        let settings = harness::Settings {
+            default: config.security_harness.or(config.harness.default),
+            ..config.harness.clone()
+        };
+        let mut choice = Choice::of(&self.harness, &settings);
+        if self.harness.harness.is_none() && config.security_harness.is_some() {
+            choice.chosen_by = harness::ChosenBy::SecurityConfig;
+        }
+        choice
     }
 }
 
@@ -193,6 +229,16 @@ fn retry_with_base_fix(issue: &IssueUrl, flags: &Flags) -> String {
     }
     if let Some(parallel) = flags.parallel {
         command += &format!(" parallel {parallel}");
+    }
+    match flags.security_fix {
+        Some(crate::security::FixAsk::Allow) => command += " security-fix",
+        Some(crate::security::FixAsk::Forbid) => command += " no-security-fix",
+        None => {}
+    }
+    match flags.security_review {
+        Some(crate::security::review::Ask::Allow) => command += " security-review",
+        Some(crate::security::review::Ask::Forbid) => command += " no-security-review",
+        None => {}
     }
     let asked = &flags.harness;
     if let Some(harness) = asked.harness {
@@ -244,6 +290,9 @@ mod tests {
             pickup_limit: n(3),
             pickup_wait: chrono::TimeDelta::minutes(30),
             harness: harness::Settings::default(),
+            security_harness: None,
+            security_fix: None,
+            security_review: false,
         }
     }
 
@@ -323,6 +372,8 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
+                security_review: false,
                 goal: Goal::ReadyForReview,
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(3),
@@ -341,6 +392,8 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
+                security_review: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Send(None),
                 tickets_at_once: n(5),
@@ -355,6 +408,8 @@ mod tests {
     #[test]
     fn each_flag_decides_its_ask_whatever_the_user_config_says() {
         let against = Flags {
+            security_fix: None,
+            security_review: None,
             goal: Some(Goal::ReadyForReview),
             email: Some(NotificationAsk::Skip),
             parallel: Some(n(2)),
@@ -365,6 +420,8 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
+                security_review: false,
                 goal: Goal::ReadyForReview,
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(2),
@@ -377,6 +434,8 @@ mod tests {
         );
 
         let for_it = Flags {
+            security_fix: None,
+            security_review: None,
             goal: Some(Goal::Merged),
             email: Some(to("flag@example.com")),
             parallel: Some(n(2)),
@@ -387,6 +446,8 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
+                security_review: false,
                 goal: Goal::Merged,
                 notification: to("flag@example.com"),
                 tickets_at_once: n(2),
@@ -402,6 +463,7 @@ mod tests {
     /// fix, its sessions on Claude's `sonnet`.
     fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
         Given {
+            security: crate::security::Options::default(),
             kind,
             stamp: "20261003T120000-0400".to_string(),
             base_fix,
@@ -461,10 +523,12 @@ mod tests {
         }
     }
 
-    /// Every flag an Architect run or a Pickup run takes for the run it
+    /// Every flag a Pass takes for the run it
     /// dispatches, with `email` for its own Run notification.
     fn dispatch_flags() -> Flags {
         Flags {
+            security_fix: None,
+            security_review: None,
             goal: Some(Goal::Merged),
             email: Some(to("flag@example.com")),
             parallel: Some(n(2)),
@@ -479,6 +543,8 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
+                security_review: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(2),
@@ -495,6 +561,8 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
+                security_review: false,
                 goal: Goal::Merged,
                 // Whatever `email.always` says: the Architect run sends it.
                 notification: NotificationAsk::Skip,
@@ -513,6 +581,8 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
+                security_review: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Skip,
                 tickets_at_once: n(2),
@@ -529,6 +599,8 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_fix: false,
+                security_review: false,
                 goal: Goal::Merged,
                 // Whatever `email.always` says: the Pickup run sends it.
                 notification: NotificationAsk::Skip,
@@ -613,6 +685,8 @@ mod tests {
     #[test]
     fn the_retry_command_is_the_issue_url_and_the_flags_as_given_with_base_fix_added() {
         let flags = |goal, email, parallel| Flags {
+            security_fix: None,
+            security_review: None,
             goal,
             email,
             parallel,

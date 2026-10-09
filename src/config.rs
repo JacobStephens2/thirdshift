@@ -29,7 +29,7 @@ pub struct UserConfig {
     /// each repository's in `<owner>/<repo>/`, by default
     /// `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
-    /// `activity.quiet_skips`: a skipped Architect run or Pickup run prints
+    /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
     pub quiet_skips: bool,
     /// The `[email]` section.
@@ -47,6 +47,12 @@ pub struct UserConfig {
     /// The `[harness]` section: the Harness every Command runs its sessions
     /// on, and a Model and Effort for each Harness.
     pub harness: harness::Settings,
+    /// `security.harness`: the Harness a Security run uses ahead of
+    /// `harness.default`, unless its command names one.
+    pub security_harness: Option<Harness>,
+    /// `security.fix`: off by default; None leaves the decision unmade.
+    pub security_fix: Option<bool>,
+    pub security_review: bool,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -89,6 +95,9 @@ impl UserConfig {
             pickup_limit: NonZeroUsize::new(3).unwrap(),
             pickup_wait: TimeDelta::minutes(30),
             harness: harness::Settings::default(),
+            security_harness: None,
+            security_fix: None,
+            security_review: false,
         }
     }
 
@@ -114,6 +123,7 @@ impl UserConfig {
                     | "spec"
                     | "pickup"
                     | "harness"
+                    | "security"
             );
             let settings = match value {
                 Value::Table(settings) if known => settings,
@@ -169,6 +179,27 @@ impl UserConfig {
                                 )
                             })?;
                     }
+                    ("security", "review", Value::Boolean(review)) => {
+                        config.security_review = *review
+                    }
+                    ("security", "review", _) => {
+                        bail!("security.review must be true or false in {file}")
+                    }
+                    ("security", "fix", Value::Boolean(fix)) => config.security_fix = Some(*fix),
+                    ("security", "fix", _) => bail!("security.fix must be true or false in {file}"),
+                    ("security", "harness", Value::String(name)) => {
+                        let name = name.trim();
+                        if !name.is_empty() {
+                            config.security_harness = Some(Harness::named(name).with_context(|| {
+                                format!("security.harness must be {}, or blank, not {name:?}, in {file}", harness::names())
+                            })?);
+                        }
+                    }
+                    ("security", "harness", _) => {
+                        bail!(
+                            "security.harness must be a quoted name, blank for the default Harness, in {file}"
+                        )
+                    }
                     ("harness", "default", Value::String(name)) => match Harness::named(name) {
                         Some(harness) => config.harness.default = Some(harness),
                         None => bail!(
@@ -207,6 +238,8 @@ pub struct UserConfigChanges {
     pub merge_always: bool,
     pub base_fix: bool,
     pub launch_pull: bool,
+    pub security_fix: bool,
+    pub security_review: bool,
     /// None disables Run notifications while retaining their addresses.
     pub notifications: Option<NotificationAddresses>,
     /// None retains every Harness setting. Unset Model/Effort writes blank.
@@ -255,6 +288,8 @@ impl UserConfigDocument {
             set(&mut document, "merge", "always", changes.merge_always);
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
+            set(&mut document, "security", "fix", changes.security_fix);
+            set(&mut document, "security", "review", changes.security_review);
             set(
                 &mut document,
                 "email",
@@ -660,7 +695,7 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 
 [activity]
-quiet_skips = false   # a skipped Architect run or Pickup run prints nothing, leaving only its Activity log line; default false
+quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
@@ -668,6 +703,11 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
+
+[security]
+fix = false   # Security runs may fix reproduced findings; default false
+review = false   # Runs review their change for Security findings; default false
+harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
 
 [harness]
 default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
@@ -790,6 +830,8 @@ mod tests {
         config.email.from = None;
         assert_eq!(config.harness.default, Some(Harness::Claude));
         config.harness.default = None;
+        assert_eq!(config.security_fix, Some(false));
+        config.security_fix = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
     }
 
@@ -823,6 +865,9 @@ mod tests {
                 "spec.parallel",
                 "pickup.limit",
                 "pickup.wait_minutes",
+                "security.fix",
+                "security.review",
+                "security.harness",
                 "harness.default",
                 "harness.claude.model",
                 "harness.claude.effort",
@@ -1174,6 +1219,8 @@ mod tests {
             merge_always: true,
             base_fix: true,
             launch_pull: true,
+            security_fix: false,
+            security_review: false,
             notifications: Some(NotificationAddresses {
                 to: "me@example.com".to_string(),
                 from: "ts@example.com".to_string(),
@@ -1216,6 +1263,10 @@ mod tests {
         if before.harness.default.is_none() {
             assert_eq!(after.harness.default, Some(Harness::Claude));
             after.harness.default = None;
+        }
+        if before.security_fix.is_none() {
+            assert_eq!(after.security_fix, Some(false));
+            after.security_fix = None;
         }
         assert_eq!(after, before, "{completed}");
         let again = document(&completed).render(None);
@@ -1323,6 +1374,8 @@ mod tests {
             merge_always: false,
             base_fix: false,
             launch_pull: false,
+            security_fix: false,
+            security_review: false,
             notifications: Some(NotificationAddresses {
                 to: to.to_string(),
                 from: crate::email::DEFAULT_FROM.to_string(),
@@ -1415,6 +1468,8 @@ mod tests {
             merge_always: true,
             base_fix: false,
             launch_pull: false,
+            security_fix: false,
+            security_review: false,
             notifications: None,
             harness: Some((
                 Harness::Codex,
@@ -1458,6 +1513,8 @@ mod tests {
                 merge_always: true,
                 base_fix: true,
                 launch_pull: true,
+                security_fix: false,
+                security_review: false,
                 notifications: Some(NotificationAddresses {
                     to: "o\"brien@example.com".to_string(),
                     from: "ts@example.com".to_string(),
@@ -1542,6 +1599,8 @@ mod tests {
             merge_always: true,
             base_fix: false,
             launch_pull: true,
+            security_fix: false,
+            security_review: false,
             notifications: None,
             harness: None,
         };

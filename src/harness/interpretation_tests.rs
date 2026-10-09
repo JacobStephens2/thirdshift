@@ -2,6 +2,79 @@ use super::*;
 use std::os::unix::process::ExitStatusExt;
 
 #[test]
+fn agy_security_progress_names_the_resolved_model() {
+    let mut interpretation = stream(Harness::Agy, "").for_security(Some("gemini-3.8-flash"));
+    let lines = interpretation.condense(
+        r#"{"event":"init","conversation_id":"s1","init":{"model":"gemini-3.8-flash-high"}}"#,
+    );
+    assert!(
+        lines.contains(&"Model: gemini-3.8-flash-high".to_string()),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_security_session_can_discuss_the_cyber_marker_without_being_refused() {
+    let mut interpretation = stream(Harness::Claude, "").for_security(None);
+    interpretation.condense(
+        r#"{"type":"result","subtype":"success","result":"The [cyber] refusal test passed.\nSecurity audit: complete"}"#,
+    );
+    let ended = finish(interpretation).outcome.unwrap();
+    assert_eq!(
+        ended.final_message.as_deref(),
+        Some("The [cyber] refusal test passed.\nSecurity audit: complete")
+    );
+}
+
+#[test]
+fn a_terminal_claude_cyber_refusal_overrides_a_successful_security_result() {
+    let event = r#"{"type":"system","subtype":"model_refusal_no_fallback","api_refusal_category":"cyber","content":"Private safeguard explanation."}"#;
+    for security in [false, true] {
+        let mut interpretation = stream(Harness::Claude, "");
+        if security {
+            interpretation = interpretation.for_security(None);
+        }
+        interpretation.condense(event);
+        interpretation.condense(
+            r#"{"type":"result","subtype":"success","result":"Security audit: complete"}"#,
+        );
+        let completion = finish(interpretation);
+        if security {
+            let error = completion.outcome.unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<interpretation::SafeguardRefusal>(),
+                Some(&interpretation::SafeguardRefusal::ClaudeCyber)
+            );
+        } else {
+            assert!(completion.outcome.is_ok());
+        }
+    }
+}
+
+#[test]
+fn security_model_progress_names_only_new_main_loop_answers() {
+    let mut interpretation = stream(Harness::Claude, "").for_security(Some("opus"));
+    for ignored in [
+        r#"{"type":"system","subtype":"init","model":"requested-model"}"#,
+        r#"{"type":"assistant","parent_tool_use_id":"child","message":{"model":"child-model","content":[]}}"#,
+        r#"{"type":"result","subtype":"success","modelUsage":{"child-model":{"inputTokens":100}}}"#,
+    ] {
+        assert!(
+            interpretation
+                .condense(ignored)
+                .iter()
+                .all(|line| !line.starts_with("Model:"))
+        );
+    }
+    let answer = r#"{"type":"assistant","message":{"model":"claude-opus-4-8","content":[]}}"#;
+    assert_eq!(
+        interpretation.condense(answer),
+        vec!["Model: claude-opus-4-8"]
+    );
+    assert!(interpretation.condense(answer).is_empty());
+}
+
+#[test]
 fn claude_completion_keeps_the_last_result_and_the_last_complete_usage() {
     let mut interpretation = Harness::Claude
         .adapter()

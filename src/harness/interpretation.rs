@@ -10,6 +10,9 @@ use crate::interrupt;
 
 mod stream;
 pub(super) use stream::Stream;
+mod security;
+pub use security::SafeguardRefusal;
+use security::Security;
 
 /// Live interpretation has only line condensation. Consume it after the
 /// process owner has stopped or waited for the child and joined its workers.
@@ -17,6 +20,7 @@ pub struct Interpretation {
     cli: &'static str,
     decoder: Box<dyn Decoder>,
     retained: Retained,
+    security: Option<Security>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -25,9 +29,12 @@ pub struct Completion {
     pub outcome: Result<Ended>,
 }
 
+#[derive(Default)]
 pub struct Report {
     pub warnings: Vec<String>,
     pub summary: Option<String>,
+    /// Answering Models recovered from retained records, in response order.
+    pub models: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -93,6 +100,7 @@ impl Retained {
                     if log.message.is_some() {
                         facts.ended.final_message = log.message;
                     }
+                    facts.report.models = log.models;
                 }
             }
             Self::OpenCode(worktree) => {
@@ -102,6 +110,7 @@ impl Retained {
                     // A readable export is authoritative, even without text.
                     facts.ended.final_message = export.message;
                     facts.report.summary = export.summary;
+                    facts.report.models = export.models;
                     if export.failure.is_some() {
                         facts.outcome = TurnOutcome::Failed;
                         facts.diagnostic = facts.diagnostic.take().or(export.failure);
@@ -118,6 +127,7 @@ enum Failure {
     Rejected {
         status: ExitStatus,
         diagnostic: Option<String>,
+        refusal: Option<SafeguardRefusal>,
     },
 }
 
@@ -125,7 +135,11 @@ impl Failure {
     fn session_error(self, cli: &str) -> anyhow::Error {
         match self {
             Self::Execution(error) => error,
-            Self::Rejected { status, diagnostic } => {
+            Self::Rejected {
+                status,
+                diagnostic,
+                refusal,
+            } => {
                 let ended = if status.success() {
                     "'s turn failed".to_string()
                 } else {
@@ -136,9 +150,13 @@ impl Failure {
                             .map_or("by signal".to_string(), |code| code.to_string())
                     )
                 };
-                match diagnostic {
+                let error = match diagnostic {
                     Some(error) => anyhow!("{cli}{ended}: {error}"),
                     None => anyhow!("{cli}{ended}"),
+                };
+                match refusal {
+                    Some(refusal) => error.context(refusal),
+                    None => error,
                 }
             }
         }
@@ -151,12 +169,25 @@ impl Interpretation {
             cli,
             decoder,
             retained,
+            security: None,
         }
+    }
+
+    /// Apply refusal and Model reporting rules independently of the session's log label.
+    pub fn for_security(mut self, requested_model: Option<&str>) -> Self {
+        self.security = Some(Security::new(self.cli, requested_model));
+        self
     }
 
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
-        self.decoder.condense(raw)
+        let mut lines = self.decoder.condense(raw);
+        if let Some(security) = &mut self.security
+            && let Some(line) = security.observe(raw)
+        {
+            lines.push(line);
+        }
+        lines
     }
 
     pub fn finish(self, execution: Result<ExitStatus>) -> Completion {
@@ -187,8 +218,16 @@ impl Interpretation {
         if let Err(error) = interrupt::check() {
             return (None, Err(Failure::Execution(error)));
         }
+        let security_session = self.security.is_some();
         let mut facts = self.decoder.complete();
+        let refusal = self.security.and_then(|security| security.refusal);
+        if refusal.is_some() {
+            facts.outcome = TurnOutcome::Failed;
+        }
         let recovered = self.retained.reconcile(&mut facts);
+        if !security_session {
+            facts.report.models.clear();
+        }
         if let Err(error) = interrupt::check() {
             return (None, Err(Failure::Execution(error)));
         }
@@ -200,6 +239,7 @@ impl Interpretation {
                     Err(Failure::Rejected {
                         status,
                         diagnostic: facts.diagnostic,
+                        refusal,
                     })
                 } else {
                     Ok(facts.ended)

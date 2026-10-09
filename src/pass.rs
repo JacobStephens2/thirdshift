@@ -1,4 +1,4 @@
-//! The Pass seam: what an Architect run's or a Pickup run's gates, which
+//! The Pass seam: what a Pass's gates, which
 //! decide before any work whether it is skipped, read and change of GitHub,
 //! what an Architect run's conclusion after its Architecture review does,
 //! viewing and labelling the issue the review ended on, and what a pass
@@ -14,7 +14,10 @@
 use std::fmt::Display;
 use std::path::PathBuf;
 
+use crate::github::{DraftAdvisory, SecurityRecord, SecurityRecords};
+use crate::security::reproduction::Reproduction;
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::asks::{Asks, Flags};
 use crate::config::UserConfig;
@@ -28,7 +31,7 @@ use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, ReadyIssue};
 use crate::run::{self, Ended, StartedBy};
-use crate::session::{Logs, Sessions};
+use crate::session::{Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
 
 /// The Architecture review session's kind, in its progress lines and log
@@ -39,6 +42,11 @@ const REVIEW: &str = "architecture-review";
 /// the pass's Base branch `base`, whatever the Launch directory has checked
 /// out.
 pub enum Dispatch<'a> {
+    SecurityFix {
+        issue: &'a IssueUrl,
+        is_spec: bool,
+        base: &'a str,
+    },
     /// An Architect run's Architect plan.
     ArchitectPlan { plan: &'a IssueUrl, base: &'a str },
     /// The Ready issue a Pickup run took, a Spec or not, as `is_spec` says.
@@ -94,6 +102,46 @@ pub trait Outside {
         prompt: &str,
         conclude: impl FnOnce(&mut Self, Option<&str>) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>);
+    /// Check Node.js before a Security audit needs its validators.
+    fn check_node(&mut self) -> Result<()>;
+    /// Audit the Base branch in a disposable checkout and validate its artifacts.
+    fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>);
+    /// Private advisory or issue records in every state.
+    fn security_records(&mut self) -> Result<SecurityRecords>;
+    /// Whether origin's prepared Base branch is the last completed audit's commit.
+    fn base_unchanged_since_security_audit(&mut self) -> Result<bool>;
+    /// Record one finding in the repository's private storage.
+    fn create_security_record(
+        &mut self,
+        records: &SecurityRecords,
+        finding: &DraftAdvisory,
+    ) -> Result<Value>;
+    /// Reproduce the finding read from this record, in a fresh checkout.
+    fn reproduce(
+        &mut self,
+        record: &SecurityRecord,
+        number: usize,
+    ) -> (Result<Reproduction>, Option<PathBuf>);
+    /// Write only a completed reproduction to its private record.
+    fn update_security_record(
+        &mut self,
+        record: &SecurityRecord,
+        reproduction: &Reproduction,
+    ) -> Result<()>;
+    fn publish_security_fix(
+        &mut self,
+        base: &str,
+        record: &SecurityRecord,
+        url: &str,
+    ) -> (Result<IssueUrl>, Option<PathBuf>);
+    fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()>;
+    /// Record the dispatch's ending in its private record, even after interruption.
+    fn record_security_fix_ending(
+        &mut self,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        succeeded: bool,
+    ) -> Result<()>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
 }
@@ -175,7 +223,7 @@ impl Outside for LaunchAndGitHub<'_> {
         let harness = self.harness.clone();
         let concluded = Sessions::within(&logs, worktree.path(), &harness, |sessions| {
             progress::step(starting);
-            let final_message = sessions.run_to_final_message(REVIEW, prompt)?;
+            let final_message = sessions.run_to_final_message(Purpose::Ordinary, REVIEW, prompt)?;
             conclude(self, final_message.as_deref())
         });
         // Removed once the review is concluded.
@@ -183,16 +231,65 @@ impl Outside for LaunchAndGitHub<'_> {
         concluded
     }
 
+    fn check_node(&mut self) -> Result<()> {
+        crate::security::audit::check_node()
+    }
+
+    fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+        crate::security::audit::run(self.launch.git(), self.repo, base, self.harness)
+    }
+
+    fn security_records(&mut self) -> Result<SecurityRecords> {
+        GitHub::new().security_records(&self.repo.slug())
+    }
+
+    fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
+        Ok(
+            crate::security::audit::last_commit(self.repo, self.base.name())?.as_deref()
+                == Some(self.base.origin_commit()),
+        )
+    }
+
+    fn create_security_record(
+        &mut self,
+        records: &SecurityRecords,
+        finding: &DraftAdvisory,
+    ) -> Result<Value> {
+        GitHub::new().create_security_record(&self.repo.slug(), records, finding)
+    }
+
+    fn reproduce(
+        &mut self,
+        record: &SecurityRecord,
+        number: usize,
+    ) -> (Result<Reproduction>, Option<PathBuf>) {
+        crate::security::reproduction::run(
+            self.launch.git(),
+            self.repo,
+            record,
+            number,
+            self.harness,
+        )
+    }
+
+    fn update_security_record(
+        &mut self,
+        record: &SecurityRecord,
+        reproduction: &Reproduction,
+    ) -> Result<()> {
+        GitHub::new().update_security_record(&self.repo.slug(), record, reproduction)
+    }
+
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
         let (issue, asks, base) = match dispatch {
-            Dispatch::ArchitectPlan { plan, base } => (
-                plan,
-                Asks::of_architect_plan(plan, self.flags, self.config),
+            Dispatch::SecurityFix {
+                issue,
+                is_spec,
                 base,
-            ),
-            Dispatch::ReadyIssue {
+            }
+            | Dispatch::ReadyIssue {
                 issue,
                 is_spec,
                 base,
@@ -201,12 +298,51 @@ impl Outside for LaunchAndGitHub<'_> {
                 Asks::of_ready_issue(issue, is_spec, self.flags, self.config),
                 base,
             ),
+            Dispatch::ArchitectPlan { plan, base } => (
+                plan,
+                Asks::of_architect_plan(plan, self.flags, self.config),
+                base,
+            ),
         };
         let mut asks = Asks {
             harness: self.harness.clone(),
             ..asks
         };
         run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base })
+    }
+
+    fn publish_security_fix(
+        &mut self,
+        base: &str,
+        record: &SecurityRecord,
+        url: &str,
+    ) -> (Result<IssueUrl>, Option<PathBuf>) {
+        crate::security::fixing::publish(
+            self.launch.git(),
+            self.repo,
+            base,
+            record,
+            url,
+            self.harness,
+        )
+    }
+
+    fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()> {
+        GitHub::new().link_security_fix(&self.repo.slug(), record, issue)
+    }
+
+    fn record_security_fix_ending(
+        &mut self,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        succeeded: bool,
+    ) -> Result<()> {
+        GitHub::new().completion().record_security_fix_ending(
+            &self.repo.slug(),
+            record,
+            issue,
+            succeeded,
+        )
     }
 }
 
@@ -221,12 +357,15 @@ mod in_memory {
     use anyhow::{Result, anyhow, bail};
 
     use super::{Dispatch, Outside};
+    use crate::github::{DraftAdvisory, SecurityRecord, SecurityRecords};
     use crate::github::{Issue, ListedIssue};
     use crate::issue::{IssueUrl, Repo};
     use crate::labels::{Edit, Label, Labels};
     use crate::logs::{Pass, Work};
     use crate::ready::ReadyIssue;
     use crate::run::{Ended, Goal, Reached};
+    use crate::security::reproduction::{Outcome, Reproduction};
+    use serde_json::{Value, json};
 
     /// A call a pass made outside itself, in the order it made it.
     #[derive(Debug, PartialEq, Eq)]
@@ -253,6 +392,31 @@ mod in_memory {
         Skipped(String),
         /// It checked its Harness, Model and Effort.
         HarnessCheck,
+        /// It checked Node.js for the Security audit validators.
+        NodeCheck,
+        /// It ran and validated the Security audit of this Base branch.
+        SecurityAudit(String),
+        /// It listed private advisories in every state.
+        AdvisoryList,
+        /// It compared the Base branch with the completed audit history.
+        AuditHistory,
+        /// It recorded this fingerprint privately.
+        CreateAdvisory(String),
+        /// It tried to reproduce this private record, in sequence.
+        Reproduce(String),
+        /// It wrote a completed reproduction to this private record.
+        UpdateSecurityRecord(String),
+        PublishSecurityFix(String),
+        LinkSecurityFix(u64),
+        SecurityFixEnding {
+            issue: u64,
+            succeeded: bool,
+        },
+        DispatchSecurityFix {
+            issue: u64,
+            is_spec: bool,
+            base: String,
+        },
         /// It recorded that it started work: on this issue, for a Pickup
         /// run, or on its repository, for an Architect run.
         Started(Option<u64>),
@@ -260,7 +424,10 @@ mod in_memory {
         Pull,
         /// It ran the Architecture review session of this Base branch on
         /// this prompt, handing on its starting line next.
-        Review { base: String, prompt: String },
+        Review {
+            base: String,
+            prompt: String,
+        },
         /// It dispatched this Ready issue, a Spec or not, on this Base
         /// branch.
         DispatchReadyIssue {
@@ -269,7 +436,10 @@ mod in_memory {
             base: String,
         },
         /// It dispatched this Architect plan on this Base branch.
-        DispatchPlan { plan: u64, base: String },
+        DispatchPlan {
+            plan: u64,
+            base: String,
+        },
     }
 
     /// A repository in memory: its issues, filed by label, open or
@@ -293,6 +463,12 @@ mod in_memory {
         ready: Option<(ListedIssue, bool)>,
         /// Whether the Harness check fails.
         harness_failing: bool,
+        node_failing: bool,
+        audit_findings: Vec<DraftAdvisory>,
+        audit_error: Option<String>,
+        advisories: Vec<Value>,
+        finding_issues: Option<Vec<Value>>,
+        unchanged_base: bool,
         /// The Architecture review session's final message, if it has one,
         /// or the cause it fails with.
         review: Result<Option<String>, String>,
@@ -317,6 +493,12 @@ mod in_memory {
                 failing_edits: Vec::new(),
                 ready: None,
                 harness_failing: false,
+                node_failing: false,
+                audit_findings: Vec::new(),
+                audit_error: None,
+                advisories: Vec::new(),
+                finding_issues: None,
+                unchanged_base: false,
                 review: Ok(None),
                 session_log: None,
                 ending: None,
@@ -388,6 +570,36 @@ mod in_memory {
         /// Make the Harness check fail.
         pub fn harness_failing(mut self) -> Self {
             self.harness_failing = true;
+            self
+        }
+
+        pub fn node_failing(mut self) -> Self {
+            self.node_failing = true;
+            self
+        }
+
+        pub fn audited(mut self, findings: Vec<DraftAdvisory>) -> Self {
+            self.audit_findings = findings;
+            self
+        }
+
+        pub fn audit_failing(mut self, cause: &str) -> Self {
+            self.audit_error = Some(cause.to_string());
+            self
+        }
+
+        pub fn advisories(mut self, advisories: Vec<Value>) -> Self {
+            self.advisories = advisories;
+            self
+        }
+
+        pub fn finding_issues(mut self, issues: Vec<Value>) -> Self {
+            self.finding_issues = Some(issues);
+            self
+        }
+
+        pub fn unchanged_base(mut self) -> Self {
+            self.unchanged_base = true;
             self
         }
 
@@ -502,7 +714,7 @@ mod in_memory {
                 Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => {
                     Some(issue.number)
                 }
-                Work::ArchitectRun(_) => None,
+                Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
             };
             self.calls.push(Call::Started(issue));
         }
@@ -530,8 +742,95 @@ mod in_memory {
             }
         }
 
+        fn check_node(&mut self) -> Result<()> {
+            self.calls.push(Call::NodeCheck);
+            if self.node_failing {
+                bail!("Node.js is required");
+            }
+            Ok(())
+        }
+
+        fn audit(
+            &mut self,
+            base: &str,
+        ) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+            self.calls.push(Call::SecurityAudit(base.to_string()));
+            let audited = match self.audit_error.take() {
+                Some(cause) => Err(anyhow!(cause)),
+                None => Ok(crate::security::audit::Audited {
+                    findings: std::mem::take(&mut self.audit_findings),
+                }),
+            };
+            (audited, self.session_log.clone())
+        }
+
+        fn security_records(&mut self) -> Result<SecurityRecords> {
+            self.calls.push(Call::AdvisoryList);
+            Ok(match &self.finding_issues {
+                Some(issues) => SecurityRecords::Issues(issues.clone()),
+                None => SecurityRecords::Advisories(self.advisories.clone()),
+            })
+        }
+
+        fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
+            self.calls.push(Call::AuditHistory);
+            Ok(self.unchanged_base)
+        }
+
+        fn create_security_record(
+            &mut self,
+            _records: &SecurityRecords,
+            finding: &DraftAdvisory,
+        ) -> Result<Value> {
+            self.calls
+                .push(Call::CreateAdvisory(finding.fingerprint.clone()));
+            let advisory = json!({
+                "ghsa_id": finding.fingerprint,
+                "description": finding.description, "state": "draft",
+                "summary": finding.summary,
+                "html_url": format!("https://github.com/acme/widgets/security/advisories/{}", finding.fingerprint),
+                "severity": null
+            });
+            self.advisories.push(advisory.clone());
+            Ok(advisory)
+        }
+
+        fn reproduce(
+            &mut self,
+            record: &SecurityRecord,
+            _number: usize,
+        ) -> (Result<Reproduction>, Option<PathBuf>) {
+            self.calls.push(Call::Reproduce(record.name()));
+            (
+                Ok(Reproduction {
+                    outcome: Outcome::NotReproduced,
+                    notes: "Not reproduced with a local fixture".into(),
+                    test: "bounded_fixture()".into(),
+                }),
+                self.session_log.clone(),
+            )
+        }
+
+        fn update_security_record(
+            &mut self,
+            record: &SecurityRecord,
+            _reproduction: &Reproduction,
+        ) -> Result<()> {
+            self.calls.push(Call::UpdateSecurityRecord(record.name()));
+            Ok(())
+        }
+
         fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
             self.calls.push(match dispatch {
+                Dispatch::SecurityFix {
+                    issue,
+                    is_spec,
+                    base,
+                } => Call::DispatchSecurityFix {
+                    issue: issue.number,
+                    is_spec,
+                    base: base.into(),
+                },
                 Dispatch::ArchitectPlan { plan, base } => Call::DispatchPlan {
                     plan: plan.number,
                     base: base.to_string(),
@@ -549,6 +848,37 @@ mod in_memory {
             self.ending
                 .take()
                 .expect("a dispatch, with no ending scripted for it")
+        }
+
+        fn publish_security_fix(
+            &mut self,
+            _base: &str,
+            record: &SecurityRecord,
+            _url: &str,
+        ) -> (Result<IssueUrl>, Option<PathBuf>) {
+            self.calls.push(Call::PublishSecurityFix(record.name()));
+            (
+                Ok(IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap()),
+                self.session_log.clone(),
+            )
+        }
+
+        fn link_security_fix(&mut self, _record: &SecurityRecord, issue: &IssueUrl) -> Result<()> {
+            self.calls.push(Call::LinkSecurityFix(issue.number));
+            Ok(())
+        }
+
+        fn record_security_fix_ending(
+            &mut self,
+            _record: &SecurityRecord,
+            issue: &IssueUrl,
+            succeeded: bool,
+        ) -> Result<()> {
+            self.calls.push(Call::SecurityFixEnding {
+                issue: issue.number,
+                succeeded,
+            });
+            Ok(())
         }
     }
 

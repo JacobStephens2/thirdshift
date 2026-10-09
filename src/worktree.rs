@@ -204,6 +204,14 @@ impl Worktree {
             .ordinary(&self.launch, |operation| operation.head())
     }
 
+    /// Observe the merge base against the published Base branch only while
+    /// this is still the acquired checkout on the selected Issue branch.
+    pub fn merge_base_commit(&self, base: &str) -> Result<String> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            operation.run(&["merge-base", &format!("refs/remotes/origin/{base}"), "HEAD"])
+        })
+    }
+
     /// Fetch and sample `origin/<base>`, then merge that commit into the
     /// Issue branch. A clean outcome includes the selected commit for CI
     /// comparison, including when the merge had nothing to do.
@@ -356,6 +364,23 @@ pub struct ReviewWorktree {
 }
 
 impl ReviewWorktree {
+    /// Reproduce one finding at its audited commit, without fetching a newer
+    /// Base branch. Uses the review checkout's acquisition and disposal rules.
+    pub fn at_commit(launch: &Git, repo: &str, commit: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
+        let (root, path) = sibling(launch, &format!("{repo}-security-reproduce"))?;
+        ownership::recover_review(launch, &path)?;
+        progress::step(format_args!(
+            "creating worktree {} detached at {commit}",
+            path.display()
+        ));
+        let checkout = acquisition::add(launch, None, &path, commit)?;
+        Ok(Self {
+            launch: Git::new(root),
+            checkout,
+        })
+    }
+
     /// Check out `origin/<base>`, detached, in a new worktree next to the
     /// launch repository's root, named `<repo>-architect`. A worktree left
     /// there by a process that ended before cleanup is removed only with

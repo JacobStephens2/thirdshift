@@ -1716,8 +1716,7 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
 
 /// What a skipped Architect run says when another is running on the
 /// scenario's repository.
-const ALREADY_RUNNING: &str =
-    "thirdshift: an Architect run or a Pickup run is already running on acme/widgets\n";
+const ALREADY_RUNNING: &str = "thirdshift: another Pass is already running on acme/widgets\n";
 
 /// Assert the Architect run was skipped as one is already running: exit 0,
 /// that line alone on stderr, and nothing on stdout.

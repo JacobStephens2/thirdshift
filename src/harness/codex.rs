@@ -45,6 +45,31 @@ impl Adapter for Codex {
             stdin: None,
         }
     }
+    fn security_session(
+        &self,
+        choice: &Choice,
+        resume: Option<&str>,
+        prompt: &str,
+        fresh_sub_agents: bool,
+    ) -> Invocation {
+        let prompt = if fresh_sub_agents {
+            format!(
+                "{prompt}\nStart fresh sub-agents with `fork_turns: \"none\"`, giving each only its own task and necessary evidence, so the skill's verifiers stay independent.\n"
+            )
+        } else {
+            prompt.to_string()
+        };
+        let mut invocation = self.session(choice, resume, &prompt);
+        // After `exec`, before any Resume subcommand: repeated on each launch.
+        invocation.args.splice(
+            1..1,
+            [
+                "-c".to_string(),
+                "agents.max_concurrent_threads_per_session=8".to_string(),
+            ],
+        );
+        invocation
+    }
     fn check(&self, choice: &mut Choice) -> Result<()> {
         check_model_and_effort(choice)
     }

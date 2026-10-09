@@ -1,5 +1,5 @@
 //! The command line: which command, and for a Run, its Issue URL and flags,
-//! for an Architect run, its focus and flags, or for a Pickup run, its flags.
+//! or for a Pass, its flags and any arguments its own kind takes.
 
 use std::iter::Peekable;
 use std::mem::discriminant;
@@ -24,7 +24,8 @@ pub enum Command {
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
-    Pickup(PickupArgs),
+    Pickup(PassArgs),
+    Secure(PassArgs),
     Run(RunArgs),
 }
 
@@ -49,15 +50,15 @@ pub struct ArchitectArgs {
     pub plan_only: bool,
 }
 
-/// A Pickup run's arguments.
+/// A Pickup run or Security run's shared Pass arguments.
 #[derive(Debug, PartialEq, Eq)]
-pub struct PickupArgs {
+pub struct PassArgs {
     /// The Base branch `base <branch>` named, if given; without it, the
     /// branch checked out in the Launch directory is the Base branch.
     pub base: Option<String>,
     /// The flags it shares with a Run: `email` and `no-email` for its own
-    /// Run notification, the rest for the Spec run or Run the Ready issue is
-    /// dispatched as.
+    /// Run notification, the rest for a run the Pass dispatches. The
+    /// Security run also uses `security-fix` for its own choice of work.
     pub flags: Flags,
 }
 
@@ -77,7 +78,7 @@ pub struct RunArgs {
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
-/// `setup`, `email-test`, `architect` and `pickup` are commands only as the
+/// `setup`, `email-test`, `architect`, `pickup` and `secure` are commands only as the
 /// first argument. Otherwise it is a Run: one Issue URL, with each Run flag at
 /// most once, before or after it.
 /// `email` may be followed by the address to send the Run notification to,
@@ -105,7 +106,8 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("architect") => return parse_architect(&args[1..]).map(Command::Architect),
-        Some("pickup") => return parse_pickup(&args[1..]).map(Command::Pickup),
+        Some("pickup") => return parse_pass(&args[1..], "pickup").map(Command::Pickup),
+        Some("secure") => return parse_pass(&args[1..], "secure").map(Command::Secure),
         _ => {}
     }
     let mut issue = None;
@@ -148,7 +150,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     let mut flags = Flags::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        if take_flag(&mut flags, arg, &mut args)? {
+        if take_pass_flag(&mut base, &mut flags, arg, &mut args)? {
             continue;
         }
         match arg.as_str() {
@@ -158,7 +160,6 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
                 }
                 plan_only = true;
             }
-            "base" | "--base" => ask_word(&mut base, arg, args.next(), "a branch")?,
             _ if arg.starts_with('-') => bail!("unexpected argument after architect: {arg}"),
             _ if focus.is_some() => bail!("unexpected argument after the focus: {arg}"),
             _ if arg.trim().is_empty() => bail!("the focus is empty"),
@@ -179,26 +180,40 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     })
 }
 
-/// Parse the arguments after `pickup`: its flags, each at most once, in any
+/// Parse the arguments after `pickup` or `secure`: shared flags, at most once, in any
 /// order, and nothing else. `base` must be followed by the Base branch.
-fn parse_pickup(args: &[String]) -> Result<PickupArgs> {
+fn parse_pass(args: &[String], command: &str) -> Result<PassArgs> {
     let mut base = None;
     let mut flags = Flags::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
-        if take_flag(&mut flags, arg, &mut args)? {
-            continue;
-        }
-        match arg.as_str() {
-            "base" | "--base" => ask_word(&mut base, arg, args.next(), "a branch")?,
-            _ => bail!("unexpected argument after pickup: {arg}"),
+        if !take_pass_flag(&mut base, &mut flags, arg, &mut args)? {
+            bail!("unexpected argument after {command}: {arg}");
         }
     }
-    Ok(PickupArgs { base, flags })
+    Ok(PassArgs { base, flags })
 }
 
-/// Record in `flags` what `arg` asks for, if it is one of the flags a Run,
-/// an Architect run and a Pickup run all take, with or without its dashes,
+/// Take a Pass's shared words: its Base branch and the flags for its
+/// dispatched run and its own Run notification. Each kind's parser handles
+/// only the arguments specific to that kind.
+fn take_pass_flag<'a>(
+    base: &mut Option<String>,
+    flags: &mut Flags,
+    arg: &str,
+    rest: &mut Peekable<impl Iterator<Item = &'a String>>,
+) -> Result<bool> {
+    match arg {
+        "base" | "--base" => {
+            ask_word(base, arg, rest.next(), "a branch")?;
+            Ok(true)
+        }
+        _ => take_flag(flags, arg, rest),
+    }
+}
+
+/// Record in `flags` what `arg` asks for, if it is one of the flags a Run
+/// and a Pass both take, with or without its dashes,
 /// taking from `rest` the address after `email`, if one is there, the
 /// number after `parallel`, and the name or level after `harness`, `model`
 /// and `effort`. False, taking nothing, if `arg` is none of them.
@@ -231,6 +246,30 @@ fn take_flag<'a>(
         "no-base-fix" | "--no-base-fix" => {
             ask_once(&mut flags.base_fix, BaseFixAsk::Forbid, arg, BASE_FIX_FLAGS)?
         }
+        "security-fix" | "--security-fix" => ask_once(
+            &mut flags.security_fix,
+            crate::security::FixAsk::Allow,
+            arg,
+            SECURITY_FIX_FLAGS,
+        )?,
+        "no-security-fix" | "--no-security-fix" => ask_once(
+            &mut flags.security_fix,
+            crate::security::FixAsk::Forbid,
+            arg,
+            SECURITY_FIX_FLAGS,
+        )?,
+        "security-review" | "--security-review" => ask_once(
+            &mut flags.security_review,
+            crate::security::review::Ask::Allow,
+            arg,
+            SECURITY_REVIEW_FLAGS,
+        )?,
+        "no-security-review" | "--no-security-review" => ask_once(
+            &mut flags.security_review,
+            crate::security::review::Ask::Forbid,
+            arg,
+            SECURITY_REVIEW_FLAGS,
+        )?,
         "harness" | "--harness" => ask_harness(&mut flags.harness.harness, arg, rest.next())?,
         "model" | "--model" => {
             let model = &mut flags.harness.model_and_effort.model;
@@ -248,6 +287,8 @@ fn take_flag<'a>(
 const MERGE_FLAGS: &str = "merge and no-merge";
 const EMAIL_FLAGS: &str = "email and no-email";
 const BASE_FIX_FLAGS: &str = "base-fix and no-base-fix";
+const SECURITY_REVIEW_FLAGS: &str = "security-review and no-security-review";
+const SECURITY_FIX_FLAGS: &str = "security-fix and no-security-fix";
 
 /// Record in `given` what the flag `arg` asked for: the same kind of ask
 /// twice is a repeated argument, and a different one contradicts the first,
@@ -326,6 +367,22 @@ mod tests {
     use crate::harness::ModelAndEffort;
 
     const URL: &str = "https://github.com/acme/widgets/issues/7";
+
+    #[test]
+    fn security_review_words_are_accepted_on_commands_that_start_runs() {
+        for command in [URL, "pickup", "architect", "secure"] {
+            for word in [
+                "security-review",
+                "--security-review",
+                "no-security-review",
+                "--no-security-review",
+            ] {
+                assert!(parse_strs(&[command, word]).is_ok(), "{command} {word}");
+            }
+        }
+        assert!(parse_strs(&[URL, "security-review", "no-security-review"]).is_err());
+        assert!(parse_strs(&[URL, "security-review", "--security-review"]).is_err());
+    }
 
     fn parse_strs(args: &[&str]) -> Result<Command> {
         let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
@@ -691,7 +748,7 @@ mod tests {
     }
 
     /// The Pickup run `args` parse to.
-    fn pickup_args(args: &[&str]) -> PickupArgs {
+    fn pickup_args(args: &[&str]) -> PassArgs {
         match parse_strs(args) {
             Ok(Command::Pickup(pickup_args)) => pickup_args,
             Ok(_) => panic!("{args:?}: not a Pickup run"),
@@ -701,14 +758,16 @@ mod tests {
 
     #[test]
     fn pickup_takes_each_of_its_flags_with_or_without_dashes_in_any_order() {
-        let none = PickupArgs {
+        let none = PassArgs {
             base: None,
             flags: Flags::default(),
         };
         assert_eq!(pickup_args(&["pickup"]), none);
-        let all = PickupArgs {
+        let all = PassArgs {
             base: Some("develop".to_string()),
             flags: Flags {
+                security_fix: None,
+                security_review: None,
                 goal: Some(Goal::Merged),
                 email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
                 parallel: NonZeroUsize::new(2),
@@ -760,9 +819,11 @@ mod tests {
         ] {
             assert_eq!(pickup_args(&args), all, "{args:?}");
         }
-        let cautious = PickupArgs {
+        let cautious = PassArgs {
             base: None,
             flags: Flags {
+                security_fix: None,
+                security_review: None,
                 goal: Some(Goal::ReadyForReview),
                 email: Some(NotificationAsk::Skip),
                 parallel: None,

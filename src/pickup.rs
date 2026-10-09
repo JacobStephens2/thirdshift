@@ -1,9 +1,9 @@
 //! A Pickup run: from the Launch directory with no Issue URL, the search
 //! for the lowest-numbered Ready issue in the repository, saying why it
 //! passed over each issue labelled `ready-for-agent` before it, then that
-//! issue dispatched as a Spec run or a Run. Only one Pickup run or Architect
-//! run per repository runs at a time on a machine: one started while another
-//! is still running is skipped, before any search. One that runs first makes
+//! issue dispatched as a Spec run or a Run. Only one Pass per repository
+//! runs at a time on a machine: one started while another Pass is still
+//! running is skipped, before any search. One that runs first makes
 //! the Sweep, and is then skipped if it finds the repository at its Claim
 //! limit, or with no Ready issue.
 
@@ -45,7 +45,7 @@ pub struct Took {
 /// Why a Pickup run was skipped. Its `Display` is the reason, as the skipped
 /// run's one line gives it.
 pub enum Skipped {
-    /// An Architect run or another Pickup run on this repository is still
+    /// Another Pass on this repository is still
     /// running on this machine, the Spec run or Run it dispatched included.
     AlreadyRunning(AlreadyRunning),
     /// The repository is at its Claim limit: `claimed` open issues carry a
@@ -90,7 +90,7 @@ impl fmt::Display for Skipped {
 /// Claim.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
-/// skipped if an Architect run or another Pickup run on the same repository
+/// skipped if another Pass on the same repository
 /// is still running on this machine. Otherwise this process is that
 /// repository's one such run until it exits, through whatever it dispatches.
 /// A skip is recorded in the repository's Activity log. The rest, from the
@@ -111,7 +111,7 @@ pub fn run(
     } = match launch::start(base)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
-            logs::skipped(Pass::PickupRun, &running.0, &running);
+            logs::skipped(Pass::Pickup, &running.0, &running);
             return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
@@ -142,7 +142,7 @@ fn run_through(
     let ReadyIssue { listed, is_spec } = match gates(outside, repo, limit)? {
         Decision::Take(ready) => ready,
         Decision::Skip(skipped) => {
-            outside.skipped(Pass::PickupRun, &skipped);
+            outside.skipped(Pass::Pickup, &skipped);
             return Ok(Outcome::Skipped(skipped));
         }
     };

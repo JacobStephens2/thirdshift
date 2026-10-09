@@ -3,7 +3,8 @@
 //! Run or a Spec run is working on. It is made before the run's work, and
 //! ended once with how the run ended: removed once its Self-merge has left the
 //! issue closed, kept while its pull request waits for review, and released
-//! when the run failed with nothing on origin to take over.
+//! when the run failed with nothing on origin to take over, except a failed
+//! Security fix, which stays with the Day shift.
 //!
 //! What it reads and changes of GitHub and origin, whether the run is
 //! interrupted, and its progress lines all go through [`Outside`]:
@@ -63,7 +64,7 @@ impl Claim<'_> {
     ///   closed.
     /// - Ready for review: the Claim stays while the pull request waits.
     /// - Failed: the Claim is released if nothing of the run is on origin to
-    ///   take over.
+    ///   take over, except a Security fix, whose Claim stays.
     ///
     /// The run has ended as it has, so this never fails: a failure is a
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
@@ -156,6 +157,8 @@ struct Claimed<'a> {
     added_in_progress: bool,
     /// Whether making it took `ready-for-agent` off the issue.
     removed_ready_for_agent: bool,
+    /// A failed Security fix stays with the Day shift even without a push.
+    security_fix: bool,
 }
 
 impl<'a> Claimed<'a> {
@@ -177,6 +180,7 @@ impl<'a> Claimed<'a> {
             issue,
             added_in_progress: edit.puts_on(IN_PROGRESS),
             removed_ready_for_agent: edit.takes_off(READY_FOR_AGENT),
+            security_fix: edit.labels().has(crate::security::fixing::SECURITY_FIX),
         };
         if !claimed.changed_any() {
             return Ok(claimed);
@@ -198,6 +202,7 @@ impl<'a> Claimed<'a> {
         match reached {
             Some(Goal::Merged) => self.remove_if_closed(outside),
             Some(Goal::ReadyForReview) => {}
+            None if self.security_fix => {}
             None => self.release_if_nothing_on_origin(outside),
         }
     }

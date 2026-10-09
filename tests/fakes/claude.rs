@@ -226,6 +226,7 @@ pub fn main(argv: Vec<String>) {
     let after_result = format!("{}.after-result.{session}", record_path.display());
     let final_message = format!("{}.final-message.{session}", record_path.display());
     let status = bash()
+        .env("FAKE_CLAUDE_PROMPT", argv.last().unwrap())
         .env("FAKE_CLAUDE_AFTER_RESULT", &after_result)
         .env("FAKE_CLAUDE_FINAL_MESSAGE", &final_message)
         .status()

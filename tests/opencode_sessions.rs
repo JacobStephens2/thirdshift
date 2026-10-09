@@ -406,6 +406,8 @@ fn setup_proposes_no_model_and_checks_the_answer_standalone() {
             ("Effort for opencode", "high"),
             ("Every Run a Merge run", ""),
             ("Every Run first fast-forwards", ""),
+            ("Security runs may fix reproduced findings?", ""),
+            ("Runs review their change for Security findings?", ""),
             ("Run notifications", ""),
         ],
     );
@@ -482,6 +484,8 @@ fn setup_retries_a_refused_model_and_effort_with_the_same_preflight_check() {
             ("Effort for opencode", "low"),
             ("Every Run a Merge run", ""),
             ("Every Run first fast-forwards", ""),
+            ("Security runs may fix reproduced findings?", ""),
+            ("Runs review their change for Security findings?", ""),
             ("Run notifications", ""),
         ],
     );

@@ -4,6 +4,8 @@
 //!
 //! ```text
 //! {"repo": "owner/repo",
+//!  "private"?: true,
+//!  "advisory_error"?: "<stderr>",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
 //!  "titles"?: {"<number>": "<title>"},
 //!  "created"?: {"<number>": "<ISO 8601 time>"},
@@ -24,6 +26,7 @@
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
 //!  "failing"?: ["<command> <subcommand>", ...],
+//!  "advisory_create_fails_after"?: <number of records>,
 //!  "user_email"?: "<address>" | null,
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
 //!  "labels"?: {"<number>": ["<label>", ...]},
@@ -651,6 +654,14 @@ fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
         ("url", string(url)),
         ("labels", Array(labels)),
         ("createdAt", created),
+        (
+            "body",
+            state
+                .get("bodies")
+                .and_then(|bodies| bodies.get(n))
+                .cloned()
+                .unwrap_or_else(|| string("")),
+        ),
     ])
 }
 
@@ -808,6 +819,7 @@ fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
 /// Open an issue with `--title`, `--body` and the comma-separated `--label`s,
 /// numbered one past the highest issue, and print its URL.
 fn issue_create(state: &mut Json, flags: &Flags) {
+    use std::io::Read;
     let labels: Vec<&str> = flag(flags, "label")
         .map(|labels| labels.split(',').collect())
         .unwrap_or_default();
@@ -827,7 +839,13 @@ fn issue_create(state: &mut Json, flags: &Flags) {
     state.at_mut("issues").set(&n, string("OPEN"));
     let title = flag(flags, "title").expect("no --title");
     state.entry("titles", object([])).set(&n, string(title));
-    let body = flag(flags, "body").expect("no --body");
+    let mut input = String::new();
+    let body = if flag(flags, "body-file") == Some("-") {
+        std::io::stdin().read_to_string(&mut input).unwrap();
+        &input
+    } else {
+        flag(flags, "body").expect("no --body")
+    };
     state.entry("bodies", object([])).set(&n, string(body));
     let labels = labels.into_iter().map(string).collect();
     state.entry("labels", object([])).set(&n, Array(labels));
@@ -943,8 +961,174 @@ fn repo_prefix(path: &str) -> Option<(&str, &str)> {
 /// per run with `--jq` set to `WORKFLOW_RUN_LINES`, and for the PRs one
 /// `<merge commit> <number>` line per PR with `--jq` set to
 /// `COMMIT_PR_LINES`.
+/// Advisory create/list/update endpoints, backed by private JSON state.
+fn advisory_api(state: &mut Json, positional: &[String], flags: &Flags) {
+    use std::io::Read;
+    let (path, query) = positional[0]
+        .split_once('?')
+        .unwrap_or((&positional[0], ""));
+    let (repo, rest) = repo_prefix(path).unwrap();
+    check_repo_is(state, Some(repo));
+    if let Some(error) = state.get("advisory_error") {
+        die(error.str(), 1);
+    }
+    if state.get("private").is_some_and(Json::truthy) {
+        die("gh: Not Found (HTTP 404)", 1);
+    }
+    let method = flag(flags, "method").unwrap_or("GET");
+    if method == "GET" {
+        if let Some(id) = rest.strip_prefix("security-advisories/") {
+            let advisory = state
+                .at("advisories")
+                .items()
+                .iter()
+                .find(|advisory| advisory.at("ghsa_id").as_str() == Some(id))
+                .unwrap();
+            println!("{advisory}");
+            return;
+        }
+        let wanted = query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("state="));
+        let advisories = state.get("advisories").map(Json::items).unwrap_or_default();
+        let listed: Vec<Json> = advisories
+            .iter()
+            .filter(|record| {
+                wanted.is_none_or(|wanted| record.at("state").as_str() == Some(wanted))
+            })
+            .cloned()
+            .collect();
+        if flag(flags, "jq") == Some(".[]") {
+            for record in listed {
+                println!("{record}");
+            }
+        } else {
+            println!("{}", Array(listed));
+        }
+        return;
+    }
+    let mut input = String::new();
+    let mut body = if flag(flags, "input") == Some("-") {
+        std::io::stdin().read_to_string(&mut input).unwrap();
+        parse_json(&input)
+    } else {
+        object([])
+    };
+    if method == "POST"
+        && state
+            .get("advisory_create_fails_after")
+            .and_then(Json::as_i64)
+            .is_some_and(|limit| {
+                state
+                    .get("advisories")
+                    .map_or(0, |records| records.items().len())
+                    >= limit as usize
+            })
+    {
+        die("HTTP 422: Private candidate write-up.", 1);
+    }
+    let advisories = state.entry("advisories", Array(Vec::new())).items_mut();
+    if method == "POST" && rest == "security-advisories" {
+        if !body.has("summary") || !body.has("description") || !body.has("vulnerabilities") {
+            die("HTTP 422: required advisory fields missing", 1);
+        }
+        let id = format!("GHSA-test-test-{:04}", advisories.len() + 1);
+        body.set("ghsa_id", string(&id));
+        body.set(
+            "html_url",
+            string(format!(
+                "https://github.com/{repo}/security/advisories/{id}"
+            )),
+        );
+        body.set("state", string("draft"));
+        advisories.push(body.clone());
+    } else if method == "PATCH" {
+        let id = rest.strip_prefix("security-advisories/").unwrap();
+        let advisory = advisories
+            .iter_mut()
+            .find(|advisory| advisory.at("ghsa_id").as_str() == Some(id))
+            .unwrap();
+        let Json::Object(fields) = body else {
+            panic!("advisory update must be an object");
+        };
+        for (key, value) in fields {
+            advisory.set(&key, value);
+        }
+        body = advisory.clone();
+    } else {
+        die("fake gh: unsupported advisory operation", 2);
+    }
+    save(state);
+    println!("{body}");
+}
+
+/// Update a finding issue's body through the private-record operation.
+fn finding_issue_patch(state: &mut Json, rest: &[&str]) {
+    use std::io::Read;
+    let (positional, flags) = parse(rest);
+    let (repo, path) = repo_prefix(&positional[0]).unwrap();
+    check_repo_is(state, Some(repo));
+    let n = path.strip_prefix("issues/").unwrap();
+    assert_eq!(flag(&flags, "input"), Some("-"));
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input).unwrap();
+    let body = parse_json(&input);
+    let issue_state = state.at("issues").at(n).clone();
+    state
+        .entry("bodies", object([]))
+        .set(n, body.at("body").clone());
+    save(state);
+    println!("{}", issue_fields(state, n, &issue_state));
+}
+
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(n) = rest.strip_prefix("issues/")
+        && n.parse::<u64>().is_ok()
+    {
+        check_repo_is(state, Some(repo));
+        println!("{}", issue_fields(state, n, state.at("issues").at(n)));
+        return;
+    }
+    if path == &format!("repos/{}", state.at("repo").str()) {
+        println!(
+            "{}",
+            object([(
+                "private",
+                Bool(state.get("private").is_some_and(Json::truthy))
+            )])
+        );
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && rest.starts_with("issues?")
+    {
+        check_repo_is(state, Some(repo));
+        assert!(rest.contains("state=all"));
+        assert!(rest.contains("labels=security-finding"));
+        assert!(rest.contains("per_page=100"));
+        assert!(flags.contains_key("paginate"));
+        assert_eq!(flag(flags, "jq"), Some(".[]"));
+        let Json::Object(issues) = state.at("issues") else {
+            panic!("issues is an object")
+        };
+        for (n, issue_state) in issues {
+            if issue_labels(state, n)
+                .iter()
+                .any(|label| label.str().eq_ignore_ascii_case("security-finding"))
+            {
+                let mut issue = issue_fields(state, n, issue_state);
+                issue.set("html_url", issue.at("url").clone());
+                println!("{issue}");
+            }
+        }
+        return;
+    }
+    if path.contains("/security-advisories") {
+        advisory_api(state, positional, flags);
+        return;
+    }
     if path == "user" && flags.is_empty() {
         let email = state.get("user_email").cloned().unwrap_or(Null);
         println!(
@@ -1770,7 +1954,23 @@ pub fn main(args: Vec<String>) {
             release_view(&state, &positional, &flags);
         }
         ["api", "graphql", rest @ ..] => graphql(&state, rest),
-        ["api", "--method", "PATCH", rest @ ..] => pr_patch(&mut state, rest),
+        ["api", "--method", "PATCH", rest @ ..]
+            if rest.first().is_some_and(|path| {
+                repo_prefix(path).is_some_and(|(_, path)| {
+                    path.strip_prefix("issues/")
+                        .is_some_and(|number| number.parse::<u64>().is_ok())
+                })
+            }) =>
+        {
+            finding_issue_patch(&mut state, rest)
+        }
+        ["api", "--method", "PATCH", rest @ ..]
+            if !rest
+                .first()
+                .is_some_and(|path| path.contains("/security-advisories")) =>
+        {
+            pr_patch(&mut state, rest)
+        }
         ["api", "--method", "PUT", rest @ ..] => issue_labels_put(&mut state, rest),
         ["api", "--method", "DELETE", rest @ ..] => issue_label_delete(&mut state, rest),
         ["api", path, ..] if generate_notes_repo(path).is_some() => {

@@ -1,6 +1,6 @@
 //! A command's lifecycle, from its start to its exit code, for every command
-//! that does factory work: a Run or Spec run started on an Issue URL, an
-//! Architect run or a Pickup run. A child Run goes through it too, as part
+//! that does factory work: a Run or Spec run started on an Issue URL,
+//! or a Pass. A child Run goes through it too, as part
 //! of the command that started it.
 //!
 //! A command [`start`]s: it begins its record in the logs, loads the User
@@ -40,8 +40,13 @@ pub enum Ending {
         review: Result<Reviewed, FailedRun>,
         dispatched: Option<Ended>,
     },
-    /// A pass, an Architect run or a Pickup run, was skipped before any
-    /// work.
+    /// A Security run completed its audit, or failed.
+    Security(crate::security::Ended),
+    SecurityFix {
+        ended: Ended,
+        findings: Vec<crate::security::RecordedFinding>,
+    },
+    /// A Pass was skipped before any work.
     Skipped(Skip),
 }
 

@@ -719,6 +719,8 @@ mod tests {
     const MERGE: &str = "Every Run a Merge run?";
     const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
     const PULL: &str = "fast-forward";
+    const SECURITY_REVIEW: &str = "Runs review their change for Security findings?";
+    const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
     const NOTIFY: &str = "Run notifications, an email";
     const TO: &str = "Send Run notifications to";
     const FROM: &str = "Send them from";
@@ -733,7 +735,13 @@ mod tests {
     const KEY: &str = "re_secret_123";
 
     /// The answers that take every default and turn nothing on.
-    const ENTER_THROUGHOUT: [(&str, &str); 3] = [(MERGE, ""), (PULL, ""), (NOTIFY, "")];
+    const ENTER_THROUGHOUT: [(&str, &str); 5] = [
+        (MERGE, ""),
+        (PULL, ""),
+        (SECURITY_FIX, ""),
+        (SECURITY_REVIEW, ""),
+        (NOTIFY, ""),
+    ];
 
     /// The answers that turn Run notifications on, to `me@example.com` from
     /// the default sender, then `rest`.
@@ -743,6 +751,8 @@ mod tests {
         let mut answers = vec![
             (MERGE, ""),
             (PULL, ""),
+            (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),
             (TO, "me@example.com"),
             (FROM, ""),
@@ -1044,6 +1054,8 @@ to = \"me@example.com\"  # my inbox
             [
                 "Every Run a Merge run? [y/N] ",
                 "Every Run first fast-forwards your checkout of the Base branch? [y/N] ",
+                "Security runs may fix reproduced findings? [y/N] ",
+                "Runs review their change for Security findings? [y/N] ",
                 "Run notifications, an email as each Run ends? [y/N] ",
             ]
         );
@@ -1057,6 +1069,8 @@ to = \"me@example.com\"  # my inbox
                 (MERGE, "y"),
                 (BASE_FIX, "y"),
                 (PULL, "yes"),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
                 (NOTIFY, "y"),
                 (TO, "me@example.com"),
                 (FROM, "ts@acme.dev"),
@@ -1126,6 +1140,11 @@ parallel = 5
 limit = 5
 wait_minutes = 60
 
+[security]
+harness = \"codex\"
+fix = false
+review = false
+
 [harness]
 default = \"claude\"
 
@@ -1161,6 +1180,8 @@ effort = \"\"
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
                 (TO, ""),
                 (FROM, ""),
@@ -1181,6 +1202,8 @@ effort = \"\"
                 "Every Run a Merge run? [Y/n] ",
                 "Every Run may start a Base fix when the Base branch's CI is red? [Y/n] ",
                 "Every Run first fast-forwards your checkout of the Base branch? [Y/n] ",
+                "Security runs may fix reproduced findings? [y/N] ",
+                "Runs review their change for Security findings? [y/N] ",
                 "Run notifications, an email as each Run ends? [Y/n] ",
                 "Send Run notifications to [mine@example.net]: ",
                 "Send them from [ts@acme.dev]: ",
@@ -1193,7 +1216,13 @@ effort = \"\"
     fn on_a_terminal_changed_answers_are_written_over_the_user_config() {
         let mut outside = Scripted {
             user_config: Some(DEFAULTS.to_string()),
-            ..Scripted::answering(&[(MERGE, ""), (PULL, "y"), (NOTIFY, "")])
+            ..Scripted::answering(&[
+                (MERGE, ""),
+                (PULL, "y"),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, ""),
+            ])
         };
 
         let done = setup(&mut outside).unwrap();
@@ -1224,6 +1253,8 @@ always = false # quiet, please
                 (MERGE, "y"),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
                 (NOTIFY, "y"),
                 (TO, "me@example.com"),
                 (FROM, ""),
@@ -1325,8 +1356,14 @@ always = false # quiet, please
     #[test]
     fn with_merging_on_setup_asks_about_base_fixes_and_writes_the_answer() {
         for (answer, allowed) in [("y", true), ("", false), ("n", false)] {
-            let mut outside =
-                Scripted::answering(&[(MERGE, "y"), (BASE_FIX, answer), (PULL, ""), (NOTIFY, "")]);
+            let mut outside = Scripted::answering(&[
+                (MERGE, "y"),
+                (BASE_FIX, answer),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, ""),
+            ]);
 
             setup(&mut outside).unwrap();
 
@@ -1346,7 +1383,13 @@ always = false # quiet, please
     #[test]
     fn with_merging_off_setup_asks_nothing_about_base_fixes_and_writes_the_default() {
         for answer in ["", "n"] {
-            let mut outside = Scripted::answering(&[(MERGE, answer), (PULL, ""), (NOTIFY, "")]);
+            let mut outside = Scripted::answering(&[
+                (MERGE, answer),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, ""),
+            ]);
 
             setup(&mut outside).unwrap();
 
@@ -1360,7 +1403,14 @@ always = false # quiet, please
     fn the_base_fix_question_defaults_to_the_user_configs_base_fix() {
         let mut outside = Scripted {
             user_config: Some("[merge]\nalways = true\n\n[base]\nfix = true # mine\n".to_string()),
-            ..Scripted::answering(&[(MERGE, ""), (BASE_FIX, ""), (PULL, ""), (NOTIFY, "")])
+            ..Scripted::answering(&[
+                (MERGE, ""),
+                (BASE_FIX, ""),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, ""),
+            ])
         };
 
         setup(&mut outside).unwrap();
@@ -1380,7 +1430,13 @@ always = false # quiet, please
     fn turning_merging_off_writes_base_fix_at_its_default() {
         let mut outside = Scripted {
             user_config: Some("[merge]\nalways = true\n\n[base]\nfix = true  # mine\n".to_string()),
-            ..Scripted::answering(&[(MERGE, "n"), (PULL, ""), (NOTIFY, "")])
+            ..Scripted::answering(&[
+                (MERGE, "n"),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, ""),
+            ])
         };
 
         setup(&mut outside).unwrap();
@@ -1397,6 +1453,8 @@ always = false # quiet, please
             (MERGE, "YES"),
             (BASE_FIX, "No"),
             (PULL, ""),
+            (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
         ]);
 
@@ -1410,6 +1468,8 @@ always = false # quiet, please
         let mut outside = Scripted::answering(&[
             (MERGE, ""),
             (PULL, ""),
+            (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),
             (TO, ""),
             (TO, "me.example.com"),
@@ -1438,7 +1498,13 @@ always = false # quiet, please
         let mut outside = Scripted {
             key: Ok(Some(Source::Credentials(CREDENTIALS.into()))),
             github_email: Ok(Some("octo@example.com")),
-            ..Scripted::answering(&[(MERGE, ""), (PULL, ""), (NOTIFY, "n")])
+            ..Scripted::answering(&[
+                (MERGE, ""),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, "n"),
+            ])
         };
 
         setup(&mut outside).unwrap();
@@ -1680,6 +1746,8 @@ always = false # quiet, please
             ..Scripted::answering(&[
                 (MERGE, ""),
                 (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
                 (NOTIFY, "y"),
                 (TO, ""),
                 (FROM, ""),
@@ -1780,6 +1848,8 @@ always = false # quiet, please
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
+            (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
         ]);
 
@@ -1798,6 +1868,8 @@ always = false # quiet, please
             (OFFER, "y"),
             (MERGE, ""),
             (PULL, ""),
+            (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),
             (TO, "me@example.com"),
             (FROM, ""),
@@ -1895,6 +1967,8 @@ always = false # quiet, please
                 (OFFER, "y"),
                 (MERGE, ""),
                 (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
                 (NOTIFY, "y"),
                 (TO, "me@example.com"),
                 (FROM, ""),

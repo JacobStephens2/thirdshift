@@ -90,6 +90,8 @@ enum Reason {
     Ticket(IssueUrl),
     /// It is a Base fix issue, which the Run that opened it owns.
     BaseFix,
+    /// It belongs to a Security run, even if Claim creation failed.
+    SecurityFix,
     /// It is blocked by these open issues.
     Blocked(Vec<u64>),
     /// It was started, as this shows.
@@ -177,6 +179,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         let why = match reason {
             Reason::Unready(label) => format!("labelled {label}"),
             Reason::Claimed => format!("labelled {}", claim::IN_PROGRESS),
+            Reason::SecurityFix => "a Security fix: its Security run owns it".to_string(),
             Reason::Ticket(spec) => {
                 let listed = self.candidates.iter().position(|candidate| {
                     candidate.issue.number == spec.number && candidate.issue.in_same_repo(spec)
@@ -225,9 +228,9 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
 /// Where `candidate`, an open issue labelled `ready-for-agent`, stands at
 /// `now`, reading what its listing doesn't give through `reads`. It is a
 /// Ready issue when it has no label that makes an Unready Ticket and no
-/// Claim, is not a sub-issue, has no `base-fix` label and no open blocker,
-/// was never started, is not a Spec whose Tickets are all closed, and is
-/// settled: `wait` has passed since it was last labelled
+/// Claim, is not a sub-issue, has no `base-fix` or `security-fix` label and no
+/// open blocker, was never started, is not a Spec whose Tickets are all
+/// closed, and is settled: `wait` has passed since it was last labelled
 /// `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
 /// last added or removed.
 fn standing_of(
@@ -242,6 +245,9 @@ fn standing_of(
     }
     if claim::is_on(&candidate.labels) {
         return passed_over(Reason::Claimed);
+    }
+    if candidate.labels.has(crate::security::fixing::SECURITY_FIX) {
+        return passed_over(Reason::SecurityFix);
     }
     let read = reads.candidate(&candidate.issue)?;
     if let Some(spec) = read.parent {

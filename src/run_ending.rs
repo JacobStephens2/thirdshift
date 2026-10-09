@@ -33,8 +33,35 @@ const BASE_FIX: &str = "Base fix: ";
 pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
     match ending {
         Ending::Run(ended) => Ok(Account::of_run(ended)),
+        Ending::SecurityFix { ended, findings } => Ok(Account {
+            security_findings: Some(findings),
+            ..Account::of_run(ended)
+        }),
         Ending::Architect { review, dispatched } => {
             Ok(Account::of_architect(review, dispatched.as_ref()))
+        }
+        Ending::Security(audited) => {
+            let account = match &audited.outcome {
+                Ok(recorded) => Account {
+                    outcome: "findings recorded",
+                    ended: Ok(recorded.to_string()),
+                    interrupted: false,
+                    pr_url: None,
+                    advice: &[],
+                    base_fix: None,
+                    log: None,
+                    ticket_lines: &[],
+                    review: None,
+                    security_findings: None,
+                    urls: Vec::new(),
+                },
+                Err(failed) => Account::of_failure(failed, "audit failed"),
+            };
+            Ok(Account {
+                security_findings: Some(&audited.findings),
+                advice: &audited.advice,
+                ..account
+            })
         }
         Ending::Skipped(skip) => Err(skip),
     }
@@ -75,6 +102,8 @@ pub struct Account<'a> {
     pub ticket_lines: &'a [String],
     /// In an Architect run, how its Architecture review ended.
     pub review: Option<Review<'a>>,
+    /// Safe metadata from a Security run's private records, even if the audit failed.
+    pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
@@ -93,22 +122,33 @@ pub struct Review<'a> {
 /// A failure's cause, as stderr gives it, down to what a session left
 /// running.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Cause(String);
+pub struct Cause {
+    full: String,
+    safeguard_refusal: Option<crate::harness::interpretation::SafeguardRefusal>,
+}
 
 impl Cause {
     /// The cause of a failure that failed with `error`.
     pub fn of(error: &anyhow::Error) -> Self {
-        Cause(format!("{error:#}"))
+        Self {
+            full: format!("{error:#}"),
+            safeguard_refusal: error.downcast_ref().copied(),
+        }
     }
 
     /// The whole cause, of as many lines as it has.
     pub fn full(&self) -> &str {
-        &self.0
+        &self.full
     }
 
     /// Its first line, all of it that a short account gives.
     pub fn first_line(&self) -> &str {
-        self.0.lines().next().unwrap_or_default()
+        self.full.lines().next().unwrap_or_default()
+    }
+
+    /// A fixed refusal category safe to send without the Harness's private diagnostic.
+    pub fn safeguard_refusal(&self) -> Option<&'static str> {
+        self.safeguard_refusal.map(|refusal| refusal.description())
     }
 }
 
@@ -131,6 +171,7 @@ impl<'a> Account<'a> {
                 log: reached.log.as_deref(),
                 ticket_lines: &reached.ticket_lines,
                 review: None,
+                security_findings: None,
                 urls: vec![&reached.pr_url],
             },
             Err(failed) => Account {
@@ -154,6 +195,7 @@ impl<'a> Account<'a> {
             log: failed.log.as_deref(),
             ticket_lines: &failed.ticket_lines,
             review: None,
+            security_findings: None,
             urls: failed.pr_url.as_deref().into_iter().collect(),
         }
     }
@@ -181,6 +223,7 @@ impl<'a> Account<'a> {
                 log: None,
                 ticket_lines: &[],
                 review: None,
+                security_findings: None,
                 urls: vec![reviewed.url()],
             },
             (Err(failed), None) => Account::of_failure(failed, "review failed"),
@@ -249,18 +292,17 @@ impl Shown {
             steps.push(format!("{BASE_FIX}{report}"));
         }
         match &account.ended {
-            // Also on stderr, so the outcome shows even when stdout is
-            // captured.
+            // Also on stderr, so the outcome shows even when stdout is captured.
             Ok(line) => steps.push(line.clone()),
-            Err(cause) => {
-                steps.push(cause.full().to_string());
-                steps.extend(account.advice.iter().map(Advice::to_string));
-                if let Some(log) = account.log {
-                    steps.push(format!("{SESSION_LOG}{}", log.display()));
-                }
-                if let Some(log) = logs::command_log_path() {
-                    steps.push(format!("{COMMAND_LOG}{}", log.display()));
-                }
+            Err(cause) => steps.push(cause.full().to_string()),
+        }
+        steps.extend(account.advice.iter().map(Advice::to_string));
+        if account.ended.is_err() {
+            if let Some(log) = account.log {
+                steps.push(format!("{SESSION_LOG}{}", log.display()));
+            }
+            if let Some(log) = logs::command_log_path() {
+                steps.push(format!("{COMMAND_LOG}{}", log.display()));
             }
         }
         Shown {
@@ -400,7 +442,7 @@ mod tests {
     }
 
     fn cause(cause: &str) -> Cause {
-        Cause(cause.to_string())
+        Cause::of(&anyhow!("{cause}"))
     }
 
     fn strings(lines: &[&str]) -> Vec<String> {
@@ -433,6 +475,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            security_findings: None,
             urls: vec![PR],
         }
     }
@@ -442,7 +485,7 @@ mod tests {
     fn failed_account(cause: &str) -> Account<'static> {
         Account {
             outcome: "failed",
-            ended: Err(Cause(cause.to_string())),
+            ended: Err(Cause::of(&anyhow!("{cause}"))),
             interrupted: false,
             pr_url: None,
             advice: &[],
@@ -450,6 +493,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            security_findings: None,
             urls: Vec::new(),
         }
     }
@@ -625,6 +669,7 @@ mod tests {
                         line: format!("{outcome}: {PLAN}"),
                         dispatched: None,
                     }),
+                    security_findings: None,
                     urls: vec![PLAN],
                 }
             );

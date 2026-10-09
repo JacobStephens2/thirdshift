@@ -83,6 +83,7 @@ impl<O: Outside> Record<O> {
             Begin::Run(issue) => (format!("starting on {}", issue.url), false),
             Begin::ArchitectRun => ("Architect run starting".into(), true),
             Begin::PickupRun => ("Pickup run starting".into(), true),
+            Begin::SecurityRun => ("Security run starting".into(), true),
         };
         let now = self.outside.now();
         self.stamp
@@ -132,10 +133,7 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn skipped(&mut self, pass: Pass, repo: &Repo, reason: impl Display) {
-        let kind = match pass {
-            Pass::ArchitectRun => Kind::ArchitectRun,
-            Pass::PickupRun => Kind::PickupRun,
-        };
+        let kind = Kind::Pass(pass);
         self.activity_write(
             &self.root(repo),
             &format!("{kind} skipped: {reason}"),

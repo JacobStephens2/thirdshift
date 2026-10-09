@@ -19,7 +19,7 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Units};
+use Sender::{ArchitectRun, SecurityRun, Units};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -60,7 +60,7 @@ const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
 const MODEL: &str = "<model>";
 const EFFORT: &str = "<effort>";
-const PLACEHOLDERS: [&str; 18] = [
+const PLACEHOLDERS: [&str; 20] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -79,6 +79,8 @@ const PLACEHOLDERS: [&str; 18] = [
     MODEL,
     EFFORT,
     prompt::REVIEW_REPORTS_DIRECTORY,
+    prompt::SECURITY_REVIEW_REPORT_FILE,
+    prompt::SECURITY_REVIEW_MERGE_BASE,
 ];
 
 /// Who sends a prompt.
@@ -87,6 +89,8 @@ enum Sender {
     Units(&'static [Unit]),
     /// An Architect run, which the press units, a Run's, don't cover.
     ArchitectRun,
+    /// A Security run, before any dispatched Run.
+    SecurityRun,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -163,11 +167,49 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::architecture_review(BASE, Some(FOCUS)),
         },
         Prompt {
+            id: "prompt-security-review",
+            title: "Security review",
+            when: "When enabled, runs one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Ticket Runs get none; Base fixes get one too. Introduced findings, refusals or incomplete reviews hold Self-merge.",
+            sender: Units(&[REVIEW]),
+            text: prompt::security_review(&issue, BASE, BRANCH),
+        },
+        Prompt {
+            id: "prompt-security-audit",
+            title: "Security audit",
+            when: "Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root.",
+            sender: SecurityRun,
+            text: prompt::security_audit(
+                BASE,
+                "<audited commit>",
+                std::path::Path::new("<audit root>"),
+                std::path::Path::new("<output directory>"),
+                Some("SECURITY.md"),
+            ),
+        },
+        Prompt {
+            id: "prompt-security-reproduction",
+            title: "Security reproduction",
+            when: "After a Security audit, tries to reproduce one recorded finding in a fresh throwaway worktree at its audited commit. The test is copied into the private record only after a complete outcome.",
+            sender: SecurityRun,
+            text: prompt::security_reproduction(
+                "<audited commit>",
+                "<recorded Security finding>",
+                std::path::Path::new("<test file>"),
+            ),
+        },
+        Prompt {
             id: "prompt-conflict-repair",
             title: "Conflict Repair",
             when: "Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.",
             sender: Units(&[FINISH]),
             text: prompt::conflict_repair(&issue, BASE, BRANCH, PR_URL),
+        },
+        Prompt {
+            id: "prompt-security-fix",
+            title: "Security fix publishing",
+            when: "With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run.",
+            sender: SecurityRun,
+            text: prompt::security_fix(BASE, "<private record URL>", "<recorded Security finding>"),
         },
         Prompt {
             id: "prompt-foreign-conflict-repair",
@@ -334,11 +376,14 @@ fn skill_used_by(skill: &str) -> String {
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
         }
-        "thirdshift-improve-codebase-architecture"
-        | "thirdshift-to-spec"
-        | "thirdshift-to-tickets"
-        | "thirdshift-codebase-design" => {
+        "thirdshift-improve-codebase-architecture" | "thirdshift-codebase-design" => {
             "the Architecture review, in an Architect run".to_string()
+        }
+        "thirdshift-to-spec" | "thirdshift-to-tickets" => {
+            "the Architecture review, in an Architect run, or Security fix publishing, in a Security run".to_string()
+        }
+        "thirdshift-security-audit" => {
+            "the Security audit, in a Security run, or a Security review".to_string()
         }
         _ => panic!("the Factory skill {skill} has no user: add it to skill_used_by"),
     }
@@ -481,7 +526,7 @@ fn licence_section(html: &mut String) {
         r##"<section class="sec" aria-labelledby="licence-title">
   <div class="wrap">
     <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
-    <p class="lede">The Factory skills are adapted from Matt Pocock's skills, under this licence. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>.</p>
+    <p class="lede">Most Factory skills are adapted from Matt Pocock's skills, under the licence below. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>. The <a href="#skill-thirdshift-security-audit">thirdshift-security-audit</a> skill is copied from <a href="https://github.com/cloudflare/security-audit-skill">Cloudflare's security-audit-skill</a>, under its own <a href="#file-thirdshift-security-audit-license">MIT licence</a>, with its upstream repository and commit recorded in <a href="#file-thirdshift-security-audit-credits-md">CREDITS.md</a>.</p>
 "##,
     );
     let mut files: Vec<&File> = SKILLS.files().collect();
@@ -529,6 +574,7 @@ fn sent_by(sender: &Sender) -> String {
     match sender {
         Units(units) => unit_links(units),
         ArchitectRun => "an Architect run, before any unit".to_string(),
+        SecurityRun => "a Security run, before any unit".to_string(),
     }
 }
 
@@ -618,6 +664,38 @@ mod tests {
             page_path.display(),
             diff(checked_in, &rendered, before.lines().count() + 2),
         );
+    }
+
+    #[test]
+    fn publishing_skills_show_security_fix_publishing_as_a_user() {
+        let html = render();
+        for name in ["thirdshift-to-spec", "thirdshift-to-tickets"] {
+            let (_, card) = html
+                .split_once(&format!("id=\"skill-{name}\""))
+                .expect("the page lists the publishing skill");
+            let (card, _) = card.split_once("</article>").unwrap();
+            let (_, usage) = card
+                .split_once("Used by ")
+                .expect("the card names its users");
+            let (usage, _) = usage.split_once("</p>").unwrap();
+            assert!(usage.contains("Security fix publishing"), "{name}: {usage}");
+            assert!(usage.contains("Architecture review"), "{name}: {usage}");
+        }
+    }
+
+    #[test]
+    fn prompts_page_shows_cloudflares_security_audit_and_its_mit_license() {
+        let html = render();
+        let (_, skill) = html
+            .split_once("id=\"skill-thirdshift-security-audit\"")
+            .expect("the page lists thirdshift-security-audit");
+        let (skill, _) = skill.split_once("</article>").unwrap();
+        assert!(skill.contains("Security run") && skill.contains("Security review"));
+        assert!(skill.contains("MIT License"));
+        assert!(skill.contains("Copyright (c) 2025-2026 Cloudflare, Inc."));
+        assert!(skill.contains("https://github.com/cloudflare/security-audit-skill"));
+        assert!(skill.contains("c1c8a8c1471069fb0e188eeaff69b8e8db6564a8"));
+        assert!(html.contains("href=\"#file-thirdshift-security-audit-license\""));
     }
 
     /// The golden-file test for `prompts/`: a file for each prompt and the

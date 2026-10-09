@@ -9,6 +9,7 @@ use super::{Ended, Handle, Kind, POLL};
 use crate::base_fix::BaseFixAsk;
 use crate::harness::Choice;
 use crate::issue::IssueUrl;
+use crate::security::Options;
 
 /// Own child Runs until their numbered endings are delivered or cleanup finishes.
 #[derive(Default)]
@@ -26,10 +27,11 @@ impl Runs {
         issue: &IssueUrl,
         kind: Kind,
         base_fix: BaseFixAsk,
+        security: Options,
         harness: &Choice,
     ) -> Result<()> {
         self.start_using(issue.number, || {
-            super::start(issue, kind, base_fix, harness)
+            super::start(issue, kind, base_fix, security, harness)
         })
     }
 

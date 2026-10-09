@@ -145,7 +145,7 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          \n\
          {address_findings}\n\
          \n\
-         Push branch {branch}. Do not rebase or force-push.\n\
+         Do not push: thirdshift pushes branch {branch} after the optional Security review. Do not rebase or force-push.\n\
          \n\
          Update PR {pr_url} using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.\n\
          \n\
@@ -290,5 +290,84 @@ pub fn resume(killed: &[&str]) -> String {
          \n\
          {HEADLESS}",
         killed = killed.join("; "),
+    )
+}
+
+/// The Security audit's terminal protocol: only these final lines are read.
+pub const AUDIT_COMPLETE_LINE: &str = "Security audit: complete";
+pub const AUDIT_INCOMPLETE_LINE: &str = "Security audit: incomplete";
+
+pub fn security_audit(
+    base: &str,
+    commit: &str,
+    root: &std::path::Path,
+    output: &std::path::Path,
+    threat_model: Option<&str>,
+) -> String {
+    let threat_model = threat_model
+        .map(|file| format!("Read the repository's threat-model document `{file}`.\n"))
+        .unwrap_or_default();
+    format!(
+        "/thirdshift-security-audit\nUse the `thirdshift-security-audit` skill in full audit mode with report artifacts and the `quick` profile.\nAudit the whole repository at commit `{commit}`, the head of Base branch `{base}` on origin. All vendored and third-party code are out of scope.\n{threat_model}Output directory: `{output}`.\nAudit root: `{root}`.\nRead compatible earlier runs under the audit root before planning this audit.\nThis session commits, pushes, opens and publishes nothing, changes no repository source, and touches no deployed site. It reproduces and fixes nothing.\nIf a decision or missing prerequisite would require asking, record run_status incomplete with the reason, and end incomplete rather than asking.\nWrite the skill's report artifacts and run-metadata.json; mark run_status complete only when all required artifacts are written. Run both skill validators before finishing.\nEnd your final message with exactly `{AUDIT_COMPLETE_LINE}` after writing valid artifacts, or `{AUDIT_INCOMPLETE_LINE}` when incomplete.\n\n{HEADLESS}",
+        output = output.display(),
+        root = root.display()
+    )
+}
+
+/// One guidance session on the Run's change, before Delivery pushes and
+/// enters the Repair loop. The separate Security audit remains a full audit.
+pub const SECURITY_REVIEW_REPORT_FILE: &str = "<private report file>";
+pub const SECURITY_REVIEW_MERGE_BASE: &str = "<merge base commit>";
+
+pub fn security_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
+    format!(
+        "Use the `thirdshift-security-audit` skill in guidance mode.\n\
+         Review the change for {url} on branch {branch} against Base branch {base} with `git diff {SECURITY_REVIEW_MERGE_BASE}...HEAD`, including supporting code.\n\
+         Read the relevant security attack-class guidance and the repository's SECURITY.md or threat model when present.\n\
+         Use one session. Do not delegate auditors or run the full six-phase audit, validators, coverage ledger or audit artifacts.\n\
+         Fix only a Security finding you can show with a failing proof-of-concept test; run it before fixing, keep it as a regression test, and rerun it afterward. Use harmless local payloads; touch no deployed site or real third-party service. Commit each fix.\n\
+         Merge base commit: `{SECURITY_REVIEW_MERGE_BASE}`.\n\
+         Classify introduced findings against this pinned merge base: run each proof-of-concept on HEAD and the untouched merge base; a test that also fails there is pre-existing. Never include pre-existing vulnerability details, titles, fingerprints, tests or private-record links in the pull request or final message, and do not fix those here.\n\
+         Private report file: `{SECURITY_REVIEW_REPORT_FILE}`.\n\
+         Write a JSON array to that file, even when empty ([]). Each entry is an old finding with exactly these fields: fingerprint (stable across reviews and audits, no newlines or backticks), title (one line), description (the private write-up and evidence), proof_of_concept (test: full test text, command: exact command run at both commits, head_exit_code: positive failing exit code, merge_base_exit_code: positive failing exit code, notes: reproduction evidence and scoring rationale, severity: critical/high/medium/low/informational scored with the skill's likelihood-and-impact rubric, fix_size: single/spec judged from whether one session can hold the fix). All text fields are nonempty. Do not commit or copy this report into the worktree. thirdshift records it privately with the Security run's fingerprint matching and reproduced-outcome format so a later Security run can fix it when allowed; existing records and the Day shift's grades are preserved. Fixing old findings belongs to a separate Security run.\n\
+         Update this branch's pull request: list each unaddressed introduced finding under Security in its Unaddressed findings, with evidence and why it is unaddressed. Preserve Standards and Spec entries and the rest of the body. Do not merge. Delivery pushes any new commits and marks the PR ready after this session.\n\
+         If refused, incomplete, or missing a prerequisite, say so and do not claim completion.\n\
+         After a complete review, end your final message with exactly one line of the form:\n\
+         Security review: {{\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}}\n\
+         unaddressed_count counts only unaddressed findings introduced by this change; findings is an array of their short titles, with one title per finding. pre_existing_count is the number of entries in the private report. No old-finding details belong in this line.\n\n\
+         {HEADLESS}",
+        url = issue.url,
+    )
+}
+
+pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path) -> String {
+    format!(
+        "Reproduce this recorded Security finding at audited commit `{commit}`.\n\
+         Read the `thirdshift-security-audit` skill's likelihood-and-impact severity rubric.\n\
+         Write a proof-of-concept test from the finding's validation plan, then run it against the untouched code in this throwaway worktree. Use harmless payloads only, never a deployed site or a real third-party service. Do not fix or change repository source.\n\
+         If the test reproduces the finding, score its severity with the skill's rubric and judge whether one session can hold the fix (single) or it needs a Spec (spec).\n\
+         Test file: `{test}`.\n\
+         Write the test's full text to this file, even when not reproduced. In your final message, give reproduction notes: the exact command, its result, and, when reproduced, likelihood, impact and the fix-size reasoning.\n\
+         End your final message with exactly `Security reproduction: reproduced <severity> <size>`, where severity is critical, high, medium, low or informational and size is single or spec, or `Security reproduction: not reproduced`.\n\
+         This session commits, pushes, opens and publishes nothing.\n\n\
+         Recorded finding:\n{finding}\n\n{HEADLESS}",
+        test = test.display(),
+    )
+}
+
+pub const SECURITY_FIX_LINE: &str = "Security fix Ticket: ";
+pub const SECURITY_FIX_SPEC_LINE: &str = "Security fix Spec: ";
+
+pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
+    format!(
+        "Publish the fix for this reproduced Security finding on Base branch `{base}`.\n\
+         Read the private record at {url} and the record below.\n\
+         Follow the completed reproduction's fix size: single publishes one Ticket; spec publishes a Spec with Tickets using `thirdshift-to-spec` and `thirdshift-to-tickets`.\n\
+         On a public repository, publish one new top issue labelled `needs-triage`. Create that label if missing. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues.\n\
+         Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.\n\
+         A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. Read the links back before finishing.\n\
+         This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.\n\
+         End your final message with exactly `{SECURITY_FIX_LINE}<Issue URL>` for single or `{SECURITY_FIX_SPEC_LINE}<Issue URL>` for spec, naming the top issue.\n\n\
+         Private record:\n{finding}\n\n{HEADLESS}"
     )
 }

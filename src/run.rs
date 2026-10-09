@@ -75,8 +75,7 @@ pub enum StartedBy<'a> {
     /// `thirdshift <Issue URL>`: the Base branch is the branch checked out
     /// in the Launch directory.
     Command,
-    /// An Architect run, dispatching its plan, or a Pickup run, dispatching
-    /// the Ready issue it took: the Base branch is that run's, whatever the
+    /// A Pass, dispatching an issue: the Base branch is that Pass's, whatever the
     /// Launch directory has checked out.
     Dispatch { base: &'a str },
     /// Another thirdshift, as this child Run, a Ticket's Run in a Spec run or
@@ -119,6 +118,10 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
         started_by.child(),
         asks.base_fix.clone(),
         asks.harness.clone(),
+        crate::security::Options {
+            fix: asks.security_fix,
+            review: asks.security_review,
+        },
     );
     let outcome = run(issue, asks, started_by, &mut base_fix);
     Ended {
@@ -164,6 +167,9 @@ fn run(
         directory: &directory,
         issue,
         goal: asks.goal,
+        security_fix: asks.security_fix,
+        security_review: asks.security_review
+            && !matches!(started_by, StartedBy::Child(Kind::Ticket { .. })),
         base_fix,
         logs: Logs::of_run(issue),
         harness: &asks.harness,
@@ -184,7 +190,7 @@ fn run(
 /// The Base branch `started_by` gave the Run, if it gave one, stands in for
 /// the checked-out branch as the Base branch: the Spec branch or the Base
 /// branch of the Run that started a child Run, or the Base branch of the
-/// Architect run or the Pickup run that dispatched this one. A Continuation's
+/// Pass that dispatched this one. A Continuation's
 /// open pull request's base beats either. Unless the Run is a child Run, an
 /// issue with sub-issues is a Spec, taken on by a Spec run instead, whose
 /// Spec branch is picked like an Issue branch, running as many Tickets at
@@ -356,6 +362,8 @@ struct LaunchAndGitHub<'a> {
     directory: &'a LaunchDirectory,
     issue: &'a IssueUrl,
     goal: Goal,
+    security_fix: bool,
+    security_review: bool,
     base_fix: &'a mut BaseFix,
     logs: Logs,
     harness: &'a Choice,
@@ -366,6 +374,8 @@ impl LaunchAndGitHub<'_> {
     /// The Delivery of the issue into the Base branch `base`.
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
+            security_fix: self.security_fix,
+            security_review: self.security_review,
             issue: self.issue,
             base,
             goal: self.goal,
@@ -561,7 +571,9 @@ mod tests {
             let spec_run = match work {
                 Work::Run(_) => false,
                 Work::SpecRun(_) => true,
-                Work::PickupRun(_) | Work::ArchitectRun(_) => panic!("not a Run's work"),
+                Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
+                    panic!("not a Run's work")
+                }
             };
             self.calls.push(Call::Started { spec_run });
         }
@@ -689,6 +701,8 @@ mod tests {
     /// What a Run started by its command is asked, by default.
     fn asks() -> Asks {
         Asks {
+            security_fix: false,
+            security_review: false,
             goal: Goal::ReadyForReview,
             notification: NotificationAsk::Skip,
             tickets_at_once: NonZeroUsize::new(1).unwrap(),

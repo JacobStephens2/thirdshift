@@ -167,6 +167,7 @@ impl Fixture {
                 },
                 stamp: "20261003T120000-0400".to_string(),
                 base_fix: BaseFixAsk::Forbid,
+                security: crate::security::Options::default(),
                 harness: Choice::default(),
             },
             startup,

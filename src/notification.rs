@@ -1,5 +1,5 @@
-//! The Run notification: one email when a Run, a Spec run or an Architect run
-//! ends, whatever its outcome, or when a Pickup run that took an issue does,
+//! The Run notification: one email when a Run, a Spec run or a Pass ends,
+//! whatever its outcome, unless the Pass was skipped,
 //! through the same checks and the same send as `email-test`.
 
 use std::path::Path;
@@ -18,7 +18,7 @@ use crate::logs;
 use crate::progress;
 use crate::run_ending::Account;
 
-/// What a Run, an Architect run or a Pickup run asks about its Run
+/// What a Run or a Pass asks about its Run
 /// notification, by its command or, without `email` or `no-email`, by the
 /// User config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +55,8 @@ pub enum About<'a> {
     ArchitectRun,
     /// A Pickup run, which is about the issue it takes, once it takes one.
     PickupRun,
+    /// A Security run, from the Launch directory.
+    SecurityRun,
 }
 
 /// What a Run notification's subject names.
@@ -69,7 +71,9 @@ enum Subject {
     /// An Architect run, with the repository the Launch directory's `origin`
     /// names, if it names one.
     ArchitectRun(Option<Repo>),
-    /// A Pickup run that has taken no issue yet, and so has nothing to tell.
+    /// A Security run, with its repository if origin names one.
+    SecurityRun(Option<Repo>),
+    /// A Pass whose notification subject has not been established yet.
     Pending,
 }
 
@@ -102,6 +106,7 @@ impl RunNotification {
             // run's own preflight reports why.
             About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
             About::PickupRun => Subject::Pending,
+            About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
         };
         Ok(RunNotification {
             checked,
@@ -159,6 +164,13 @@ fn subject_line(subject: &Subject, outcome: &str) -> Option<String> {
     match subject {
         Subject::Issue { issue, title } => Some(issue_subject(issue, title.as_deref(), outcome)),
         Subject::ArchitectRun(repo) => Some(architect_subject(repo.as_ref(), outcome)),
+        Subject::SecurityRun(repo) => {
+            let repo = repo
+                .as_ref()
+                .map(|repo| format!(" {}", repo.slug()))
+                .unwrap_or_default();
+            Some(format!("[thirdshift]{repo} Security run: {outcome}"))
+        }
         Subject::Pending => None,
     }
 }
@@ -198,6 +210,25 @@ fn body(
     took: Duration,
 ) -> String {
     let mut text = format!("Result:       {}\n", account.outcome);
+    if let Some(findings) = account.security_findings {
+        let audit = match &account.ended {
+            Ok(line) => line.as_str(),
+            Err(_) => account.outcome,
+        };
+        text += &format!("Audit:        {audit}\n");
+        if !findings.is_empty() {
+            text += "\nSecurity findings:\n";
+            for finding in findings {
+                let severity = finding
+                    .severity
+                    .as_ref()
+                    .map(|severity| format!("{severity}: "))
+                    .unwrap_or_default();
+                text += &format!("- {severity}{}: {}\n", finding.title, finding.url);
+            }
+            text += "\n";
+        }
+    }
     if let Some(review) = &account.review {
         text += &format!("Review:       {}\n", review.line);
         if review.dispatched.is_some() {
@@ -207,10 +238,19 @@ fn body(
     if let Some(pr_url) = account.pr_url {
         text += &format!("Pull request: {pr_url}\n");
     }
+    // Security failure causes can quote private verifier work or Harness
+    // diagnostics. Only the fixed safeguard category is safe to send.
     if let Err(cause) = &account.ended
         && !account.interrupted
     {
-        text += &format!("Cause:        {}\n", cause.full());
+        let cause = if account.security_findings.is_some() {
+            cause.safeguard_refusal()
+        } else {
+            Some(cause.full())
+        };
+        if let Some(cause) = cause {
+            text += &format!("Cause:        {cause}\n");
+        }
     }
     for line in account.advice {
         text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
@@ -290,6 +330,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            security_findings: None,
             urls: vec![PR],
         }
     }
@@ -307,6 +348,7 @@ mod tests {
             log: None,
             ticket_lines: &[],
             review: None,
+            security_findings: None,
             urls: Vec::new(),
         }
     }

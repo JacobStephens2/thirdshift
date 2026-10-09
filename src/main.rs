@@ -34,6 +34,7 @@ mod ready;
 mod resend_key;
 mod run;
 mod run_ending;
+mod security;
 mod session;
 mod setup;
 mod skills;
@@ -46,7 +47,7 @@ mod worktree;
 use std::process::ExitCode;
 
 use architect::Outcome;
-use args::{ArchitectArgs, Command, PickupArgs, RunArgs};
+use args::{ArchitectArgs, Command, PassArgs, RunArgs};
 use asks::Asks;
 use command::{Ending, failure};
 use config::UserConfig;
@@ -67,6 +68,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift architect base <branch> [<focus>]   Do either with <branch> as the Base branch, from a clone on any branch
        thirdshift pickup                              Take the lowest-numbered Ready issue in the repository and run it
        thirdshift pickup base <branch>                Do that with <branch> as the Base branch, from a clone on any branch
+       thirdshift secure                              Audit the Base branch and record findings privately
+       thirdshift secure base <branch>                Do that with <branch> as the Base branch
        thirdshift email-test [<address>]              Send a test email through Resend, to check the email setup
        thirdshift setup                               Choose your defaults, then write the User config with every setting
        thirdshift update                              Update thirdshift to the latest release
@@ -143,7 +146,8 @@ labels and creating the label if the repository lacks it. A Ticket's Run in a Sp
 Base fix make none, and an issue already in-progress is left as it is. A Run whose Claim
 can't be made stops there, naming the cause. The Claim is released, the issue's labels put
 back as they were, when the Run or the Spec run fails with nothing on origin to take over:
-no Issue branch or Spec branch and no pull request. It is removed once a Self-merge has left
+no Issue branch or Spec branch and no pull request. A failed Security fix keeps its Claim
+even with nothing on origin, for the Day shift. It is removed once a Self-merge has left
 the issue closed, and otherwise stays: a failure to release or remove it is a warning naming
 the command to run by hand.
 
@@ -198,7 +202,7 @@ The review starts at <branch>'s head on origin, and the run the plan is dispatch
 off <branch> and targets it with its pull request. <branch> must exist on origin, with no local
 copy of it ahead, and launch.pull updates the clone only when <branch> is the branch checked
 out. base goes with --plan-only too, before or after the focus and the other flags. base is
-for architect and pickup only: thirdshift <Issue URL> doesn't take it. Without base, the Base
+for a Pass only: thirdshift <Issue URL> doesn't take it. Without base, the Base
 branch is the branch checked out.
 
 A review that finds no Strong candidate publishes no plan. It files its top recommendation as
@@ -213,12 +217,12 @@ A review that fails, is interrupted, or ends without naming one of these issues 
 Architect run and leaves any plan it published labelled needs-triage. One that finds no
 deepening opportunity at all has no issue to name, so it fails the Architect run too.
 
-Only one Architect run or Pickup run per repository runs at a time on a machine. An Architect
-run started while another on the same repository, or a Pickup run, is still running, the Spec
-run or Run it dispatched included, is skipped: it prints an Architect run or a Pickup run is
-already running on <owner>/<repo>, does nothing else and exits 0. Nothing is left to clear
-once that other run ends, however it ends. Runs started on an Issue URL are never skipped
-this way.
+A Pass is a command started with no Issue URL that decides before any work whether it is skipped.
+Only one Pass per repository runs at a time on a machine. A Pass started while another Pass
+on the same repository is still running, the Spec run or Run it dispatched included, is skipped:
+it prints another Pass is already running on <owner>/<repo>, does nothing else and exits 0.
+Nothing is left to clear once that other run ends, however it ends. Runs started on an Issue
+URL are never skipped this way.
 
 An Architect run that finds an open issue labelled architect-plan is skipped too, before
 any review, with or without --plan-only: the last Architect plan is not finished. It names
@@ -244,7 +248,8 @@ pickup starts a Pickup run from the clone, with no Issue URL: one pass, which ta
 lowest-numbered Ready issue in the repository and dispatches it as thirdshift <Issue URL>
 would: a Spec run on a Spec, a Run otherwise. A Ready issue is an open issue labelled
 ready-for-agent that has none of ready-for-human, needs-info, wontfix and needs-triage, is
-not in-progress, is not a sub-issue, is not labelled base-fix, has no open blocker, and was
+not in-progress, is not a sub-issue, is not labelled base-fix or security-fix, has no open
+blocker, and was
 never started: no Issue branch for it is on origin, and no pull request from one exists,
 open, merged or closed. A Spec whose Tickets are all closed is not one either: a Spec run
 would find nothing to do. It must also be settled: by default, thirty minutes have passed since
@@ -272,7 +277,7 @@ pickup takes nothing else: no focus and no --plan-only.
 
 A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why,
 after any lines on issues it passed over, when the repository has no Ready issue, when the
-repository is at its Claim limit, and while an Architect run or another Pickup run on the same
+repository is at its Claim limit, and while another Pass on the same
 repository is still running on this machine.
 
 A Pickup run takes nothing while as many open issues are labelled in-progress, whoever
@@ -310,6 +315,40 @@ none, even when asked, so a scheduler can start one every few minutes. The notif
 checks, an address and a Resend API key, are made before any other work on every run, so
 one that would be skipped fails on them too, with exit 1.
 
+--email, --email <address> and --no-email ask a Security run for its Run notification as
+they do a Run, and email.always sets the default. It sends one when its audit ends, whether
+it succeeded, failed or was interrupted, listing each recorded finding's severity when
+known, title and private link, never its write-up. A skipped Security run sends none.
+The address and Resend API key checks come before skip checks or work; a failed send is
+only a warning and never changes the run's outcome.
+
+security-review enables one guidance review after a Run's opening session, before Delivery
+pushes and enters the Repair loop. [security] review = true also enables it;
+no-security-review overrides the setting. Both words are accepted on commands that start
+Runs and follow dispatched Runs and Base fixes. Setup asks; the default is off.
+Only reproduced findings are fixed, with their failing tests kept. Unaddressed introduced
+findings, a refused review or an incomplete review hold Self-merge, leaving the PR ready
+for review and naming the reason. Other Runs record the Security outcome and continue.
+
+security-fix allows a Security run to fix one reproduced finding: the most severe first,
+ties in private-record order, before auditing or after an audit reproduces a finding.
+The publishing session follows the reproduction's fix size: one terse Ticket, or a Spec
+with Tickets. Every new issue says what the fix changes and links the private record.
+On a private repository the finding's own issue is the fix's Ticket or Spec; a single
+fix needs no publishing session. thirdshift checks the issues, swaps the top issue's
+needs-triage for ready-for-agent, adds security-fix to every fix issue and dispatches its
+Run or Spec run. The Security run ends as that run ends, including merge when requested.
+Fixing is off by default. [security] fix = true also allows it;
+no-security-fix overrides the setting. Both words, with or without dashes, are accepted
+on Run, Spec run, Architect run, Pickup run and Security run commands, and passed to their
+Runs. Without permission, a reproduced finding waits until its record is closed or
+published, or its fix Ticket is closed. A failed fix keeps its Claim even without a push,
+and Security runs pause while its issue is open. Pickup never retries a Security fix,
+even if its Claim could not be made. Closing the issue lets Security runs go on.
+When neither the command nor the User config decided against fixing, a run that left a
+reproduced finding unfixed offers security-fix and fix under [security] on stderr and in
+its notification. The README's Fencing section shows the scheduled command.
+
 The User config, ~/.thirdshift/config.toml, sets defaults for every Run on this machine;
 thirdshift setup asks for your defaults and writes one listing every setting, to edit.
 With merge.always set, every Run is a Merge run unless given --no-merge:
@@ -332,21 +371,21 @@ logs.dir sets the root of the logs instead of ~/.thirdshift/logs: an absolute pa
 Each repository's logs go in <owner>/<repo>/ under it, named for the GitHub repository, in
 folders thirdshift creates as it needs them. Session logs go in sessions/, as
 <n>-<stamp>-<kind>.jsonl for a Run and architect-<stamp>-<kind>.jsonl for an Architect run.
-Command logs, everything a Run, a Spec run, an Architect run or a Pickup run printed, go in
+Command logs, everything a Run, a Spec run or a Pass printed, go in
 commands/issue/<n>-<stamp>.log, commands/pickup/<n>-<stamp>.log, named for the issue taken,
-and commands/architect/<stamp>.log. A Pickup run or Architect run skipped before any work
+and commands/architect/<stamp>.log. A Pass skipped before any work
 keeps no Command log, nor does a Run that fails before any work, as on the Origin match.
 
     [logs]
     dir = \"~/elsewhere/logs\"
 
 Each repository's Activity log, activity.log, is a short record of what the factory did there:
-a line when a Run, a Spec run, an Architect run or a Pickup run starts work, naming its Command
+a line when a Run, a Spec run or a Pass starts work, naming its Command
 log, and one when it ends, with its outcome, each starting with the local date and time. A
-skipped Pickup run or Architect run writes a line only when its reason differs from the last
+skipped Pass writes a line only when its reason differs from the last
 line of its own kind, so a repository that sits idle shows one line, not one per pass.
 
-With activity.quiet_skips set, a skipped Pickup run or Architect run prints nothing on stdout
+With activity.quiet_skips set, a skipped Pass prints nothing on stdout
 or stderr, its starting line included, leaving only its Activity log line; a pass that does
 work prints as ever. A crontab line can then send its output to one file, which catches only
 what failed:
@@ -396,6 +435,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Architect(architect_args)) => return architect(architect_args),
         Ok(Command::Pickup(pickup_args)) => return pickup(pickup_args),
+        Ok(Command::Secure(args)) => return secure(args),
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
@@ -431,8 +471,8 @@ fn main() -> ExitCode {
 /// it ended on on stdout: the plan, the idea issue the review filed, or the
 /// issue that already covers its top recommendation. One whose review or
 /// plan fails puts the cause and the session log on stderr. One that is
-/// skipped says why on stderr, and is no failure: as another on its
-/// repository, or a Pickup run, is still running, it puts nothing on stdout,
+/// skipped says why on stderr, and is no failure: as another Pass on its
+/// repository is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, or Architect ideas wait for
 /// triage there, the URL of each, or as it has a Ready issue, that issue's
 /// URL. If asked, by the command or the User config, it sends one Run
@@ -481,7 +521,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// The repository's Activity log records the skip, if it differs from the
 /// last, or the start and end of its work. With `activity.quiet_skips` set, a
 /// skipped pass prints nothing at all.
-fn pickup(args: PickupArgs) -> ExitCode {
+fn pickup(args: PassArgs) -> ExitCode {
     let ask = |config: &UserConfig| args.flags.notification(config);
     let (config, mut started) = match command::start(Begin::PickupRun, ask, About::PickupRun) {
         Ok(started) => started,
@@ -502,6 +542,29 @@ fn pickup(args: PickupArgs) -> ExitCode {
         Ok(pickup::Outcome::Skipped(skipped)) => started.finish(Ending::Skipped(skipped.into())),
         Err(error) => failure(&error),
     }
+}
+
+/// A Security run, with one notification when asked, unless skipped.
+fn secure(args: PassArgs) -> ExitCode {
+    let (config, mut started) = match command::start(
+        Begin::SecurityRun,
+        |config| args.flags.notification(config),
+        About::SecurityRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = args.flags.security_harness(&config);
+    let outcome = security::run(args.base.as_deref(), &args.flags, &config, &mut harness);
+    started.built_with(&harness);
+    started.finish(match outcome {
+        security::Outcome::Skipped(skipped) => Ending::Skipped(command::Skip {
+            reason: skipped.to_string(),
+            urls: Vec::new(),
+        }),
+        security::Outcome::Audited(audited) => Ending::Security(audited),
+        security::Outcome::Fixed { ended, findings } => Ending::SecurityFix { ended, findings },
+    })
 }
 
 /// The end of a command other than a Run: the line that says how it went,

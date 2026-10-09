@@ -234,6 +234,7 @@ impl Decoder for Stream {
             report: Report {
                 warnings: Vec::new(),
                 summary,
+                ..Report::default()
             },
             ended,
             outcome: TurnOutcome::from_failed(failed),

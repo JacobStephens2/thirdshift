@@ -16,7 +16,7 @@ mod command_log;
 mod effects;
 mod recording;
 
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
@@ -40,6 +40,7 @@ pub enum Begin<'a> {
     ArchitectRun,
     /// `thirdshift pickup`, a pass.
     PickupRun,
+    SecurityRun,
 }
 
 /// The work a command starts.
@@ -53,13 +54,26 @@ pub enum Work<'a> {
     PickupRun(&'a IssueUrl),
     /// An Architect run, on its repository.
     ArchitectRun(&'a Repo),
+    /// A Security run, on its repository.
+    SecurityRun(&'a Repo),
 }
 
-/// A pass, a command that may be skipped before it starts work.
-#[derive(Clone, Copy)]
+/// A Pass, a command that may be skipped before it starts work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pass {
-    ArchitectRun,
-    PickupRun,
+    Architect,
+    Pickup,
+    Security,
+}
+
+impl Display for Pass {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Pass::Architect => "Architect run",
+            Pass::Pickup => "Pickup run",
+            Pass::Security => "Security run",
+        })
+    }
 }
 
 /// The production command's complete record, shared with reader threads.
@@ -89,7 +103,7 @@ pub fn configured(config: &UserConfig) {
 /// Command log, showing any lines held from the terminal, with a line naming
 /// the Harness, Model and Effort, then write the Activity log's line that it
 /// started, naming that log and those. Only the outermost command's first
-/// call does anything: the work a Pickup run or an Architect run started
+/// call does anything: the work a Pass started
 /// covers the Run it dispatches, and a child Run records nothing, as the
 /// command that started it does.
 pub fn started(work: Work, harness: &Choice) {
@@ -161,7 +175,7 @@ impl Work<'_> {
     fn repo(self) -> Repo {
         match self {
             Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => issue.repo(),
-            Work::ArchitectRun(repo) => repo.clone(),
+            Work::ArchitectRun(repo) | Work::SecurityRun(repo) => repo.clone(),
         }
     }
 
@@ -170,8 +184,9 @@ impl Work<'_> {
         match self {
             Work::Run(_) => Kind::Run,
             Work::SpecRun(_) => Kind::SpecRun,
-            Work::PickupRun(_) => Kind::PickupRun,
-            Work::ArchitectRun(_) => Kind::ArchitectRun,
+            Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
+            Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
+            Work::SecurityRun(_) => Kind::Pass(Pass::Security),
         }
     }
 
@@ -179,7 +194,7 @@ impl Work<'_> {
     fn issue(self) -> Option<u64> {
         match self {
             Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => Some(issue.number),
-            Work::ArchitectRun(_) => None,
+            Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
         }
     }
 
@@ -195,6 +210,7 @@ impl Work<'_> {
             Work::Run(issue) | Work::SpecRun(issue) => ("issue", format!("{}-", issue.number)),
             Work::PickupRun(issue) => ("pickup", format!("{}-", issue.number)),
             Work::ArchitectRun(_) => ("architect", String::new()),
+            Work::SecurityRun(_) => ("secure", String::new()),
         };
         root.join("commands")
             .join(folder)
