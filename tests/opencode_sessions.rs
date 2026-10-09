@@ -386,7 +386,7 @@ fn a_missing_skill_warns_in_the_progress_and_command_log_without_retrying() {
     assert_eq!(result.stderr.matches(warning).count(), 1);
     assert_eq!(records(&scenario, "json").len(), 1);
     let dir = "home/.thirdshift/logs/acme/widgets/commands/issue";
-    let name = scenario.entries(dir).pop().unwrap();
+    let name = scenario.log_files(dir, "log").pop().unwrap();
     let log = std::fs::read_to_string(scenario.path(&format!("{dir}/{name}"))).unwrap();
     assert_eq!(log.matches(warning).count(), 1);
 }

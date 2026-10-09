@@ -369,11 +369,13 @@ With launch.pull set, every Run first fast-forwards the checked-out Base branch 
 
 logs.dir sets the root of the logs instead of ~/.thirdshift/logs: an absolute path, or one under ~/.
 Each repository's logs go in <owner>/<repo>/ under it, named for the GitHub repository, in
-folders thirdshift creates as it needs them. Session logs go in sessions/, as
-<n>-<stamp>-<kind>.jsonl for a Run and architect-<stamp>-<kind>.jsonl for an Architect run.
+folders thirdshift creates as it needs them. Session logs go beside their Command log in
+commands/<command>/, as <n>-<stamp>-<kind>.jsonl for a Run, architect-<stamp>-<kind>.jsonl
+for an Architect run and secure-<stamp>-<kind>.jsonl for a Security run. Dispatched Runs,
+Tickets and Base fixes share the command's folder. Existing logs are not moved.
 Command logs, everything a Run, a Spec run or a Pass printed, go in
 commands/issue/<n>-<stamp>.log, commands/pickup/<n>-<stamp>.log, named for the issue taken,
-and commands/architect/<stamp>.log. A Pass skipped before any work
+commands/architect/<stamp>.log and commands/secure/<stamp>.log. A Pass skipped before any work
 keeps no Command log, nor does a Run that fails before any work, as on the Origin match.
 
     [logs]
@@ -440,7 +442,7 @@ fn main() -> ExitCode {
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
     let begin = match &given {
-        Some(given) => Begin::ChildRun(&given.stamp),
+        Some(given) => Begin::ChildRun(&given.stamp, given.command),
         None => Begin::Run(&issue),
     };
     let asks_of = |config: &UserConfig| match &given {

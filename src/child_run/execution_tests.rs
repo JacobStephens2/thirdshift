@@ -166,6 +166,7 @@ impl Fixture {
                     spec_branch: "issue-237".to_string(),
                 },
                 stamp: "20261003T120000-0400".to_string(),
+                command: logs::CommandKind::Issue,
                 base_fix: BaseFixAsk::Forbid,
                 security: crate::security::Options::default(),
                 harness: Choice::default(),

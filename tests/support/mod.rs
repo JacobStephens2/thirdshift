@@ -1268,6 +1268,18 @@ test -f {root}/{COPY_REPLACED}
         names
     }
 
+    /// Log file names in a command folder, excluding other log formats and reports.
+    pub fn log_files(&self, relative: &str, extension: &str) -> Vec<String> {
+        self.entries(relative)
+            .into_iter()
+            .filter(|name| {
+                Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext == extension)
+            })
+            .collect()
+    }
+
     /// Point the launch clone's origin at `url`, another spelling of the
     /// GitHub URL, which git also redirects to the bare repo.
     pub fn set_origin_url(&self, url: &str) {

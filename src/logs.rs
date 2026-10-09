@@ -28,6 +28,36 @@ use activity::Kind;
 use effects::OnMachine;
 use recording::Record;
 
+/// The command typed, which owns its Session logs and all child Runs' logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandKind {
+    Issue,
+    Architect,
+    Pickup,
+    Secure,
+}
+
+impl CommandKind {
+    pub fn folder(self) -> &'static str {
+        match self {
+            Self::Issue => "issue",
+            Self::Architect => "architect",
+            Self::Pickup => "pickup",
+            Self::Secure => "secure",
+        }
+    }
+
+    pub fn named(name: &str) -> Option<Self> {
+        match name {
+            "issue" => Some(Self::Issue),
+            "architect" => Some(Self::Architect),
+            "pickup" => Some(Self::Pickup),
+            "secure" => Some(Self::Secure),
+            _ => None,
+        }
+    }
+}
+
 /// How a command begins.
 pub enum Begin<'a> {
     /// `thirdshift <Issue URL>`, a Run or a Spec run on this issue.
@@ -35,7 +65,7 @@ pub enum Begin<'a> {
     /// A child Run, a Ticket's Run or a Base fix, with the stamp the command
     /// that started it gave it. It keeps no Command log and writes no
     /// Activity log line: the command that started it does.
-    ChildRun(&'a str),
+    ChildRun(&'a str, CommandKind),
     /// `thirdshift architect`, a pass.
     ArchitectRun,
     /// `thirdshift pickup`, a pass.
@@ -142,6 +172,20 @@ pub fn show_held() {
 /// Before [`configured`], which is a programming error.
 pub fn root(repo: &Repo) -> PathBuf {
     record().root(repo)
+}
+
+/// The command whose folder holds this process's Session logs.
+pub fn command_kind() -> CommandKind {
+    record().command_kind()
+}
+
+/// Where this command and all its child Runs keep Session logs on `repo`.
+pub fn session_dir(repo: &Repo) -> PathBuf {
+    let record = record();
+    record
+        .root(repo)
+        .join("commands")
+        .join(record.command_kind().folder())
 }
 
 /// The command's start stamp, as in `20261003T120000-0400`, which names its

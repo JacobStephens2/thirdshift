@@ -70,6 +70,8 @@ pub struct Given {
     /// The start stamp of the command that started it, which its Session
     /// logs take.
     pub stamp: String,
+    /// The owning command, whose folder its Session logs inherit.
+    pub command: logs::CommandKind,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
     pub security: Options,
@@ -90,6 +92,9 @@ const BASE_FIX_INTO: &str = "--base-fix-into";
 
 /// The hidden argument followed by the command's start stamp.
 const STAMP: &str = "--stamp";
+
+/// The hidden argument followed by the owning command's log folder.
+const LOGS_COMMAND: &str = "--logs-command";
 
 /// The hidden argument that asks a child Run [`BaseFixAsk::Allow`].
 const ALLOW_BASE_FIX: &str = "--allow-base-fix";
@@ -123,6 +128,8 @@ impl Given {
             self.kind.base(),
             STAMP,
             &self.stamp,
+            LOGS_COMMAND,
+            self.command.folder(),
         ];
         match &self.base_fix {
             BaseFixAsk::Allow => args.push(ALLOW_BASE_FIX),
@@ -153,6 +160,7 @@ impl Given {
 pub struct Reader {
     kind: Option<Kind>,
     stamp: Option<String>,
+    command: Option<logs::CommandKind>,
     base_fix: Option<BaseFixAsk>,
     security: Options,
     harness: Option<Harness>,
@@ -199,6 +207,13 @@ impl Reader {
                 not_yet_given(&self.stamp, arg)?;
                 self.stamp = Some(value("stamp")?);
             }
+            LOGS_COMMAND => {
+                not_yet_given(&self.command, arg)?;
+                let name = value("logs command")?;
+                self.command = Some(logs::CommandKind::named(&name).with_context(|| {
+                    format!("{arg} must name issue, pickup, architect or secure, not {name}")
+                })?);
+            }
             ALLOW_BASE_FIX | OFFER_BASE_FIX => {
                 if let Some(given) = &self.base_fix
                     && matches!(given, BaseFixAsk::Allow) != (arg == ALLOW_BASE_FIX)
@@ -239,7 +254,8 @@ impl Reader {
     /// arguments a kind.
     pub fn finish(self) -> Result<Option<Given>> {
         let Some(kind) = self.kind else {
-            if self.stamp.is_some()
+            if self.command.is_some()
+                || self.stamp.is_some()
                 || self.base_fix.is_some()
                 || self.security.review
                 || self.security.fix
@@ -249,7 +265,7 @@ impl Reader {
             {
                 bail!(
                     "only a child Run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
-                     {SESSIONS_HARNESS}, {SESSIONS_MODEL} or {SESSIONS_EFFORT}"
+                     {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT} or {LOGS_COMMAND}"
                 );
             }
             return Ok(None);
@@ -261,6 +277,9 @@ impl Reader {
         Ok(Some(Given {
             kind,
             stamp,
+            command: self
+                .command
+                .with_context(|| format!("missing {LOGS_COMMAND}"))?,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
             security: self.security,
             harness: Choice {
@@ -330,6 +349,7 @@ pub fn start(
     let given = Given {
         kind,
         stamp: logs::stamp(),
+        command: logs::command_kind(),
         base_fix,
         security,
         harness: harness.clone(),
@@ -708,6 +728,7 @@ mod tests {
         let given = Given {
             kind: ticket(),
             stamp: STAMPED.to_string(),
+            command: logs::CommandKind::Issue,
             base_fix: BaseFixAsk::Forbid,
             security: Options::default(),
             harness: Choice::default(),
@@ -766,6 +787,7 @@ mod tests {
                 let given = Given {
                     kind: kind.clone(),
                     stamp: STAMPED.to_string(),
+                    command: logs::CommandKind::Issue,
                     base_fix,
                     security: Options::default(),
                     harness: harness.clone(),
@@ -792,7 +814,7 @@ mod tests {
     /// What a Run given a hidden argument only a child Run is given, without
     /// a kind, is rejected with.
     const ONLY_A_CHILD_RUN: &str = "only a child Run is given --stamp, --allow-base-fix, \
-        --offer-base-fix, --sessions-harness, --sessions-model or --sessions-effort";
+        --offer-base-fix, --sessions-harness, --sessions-model, --sessions-effort or --logs-command";
 
     #[test]
     fn hidden_arguments_that_are_repeated_have_no_value_or_lack_a_kind_or_stamp_are_rejected() {

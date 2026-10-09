@@ -92,7 +92,10 @@ impl Drop for Fixture {
 
 fn execute_session(root: &Path) -> anyhow::Error {
     interrupt::install().unwrap();
-    logs::begin(logs::Begin::ChildRun("fixture"));
+    logs::begin(logs::Begin::ChildRun(
+        "fixture",
+        crate::logs::CommandKind::Issue,
+    ));
     let worktree = root.join("worktree");
     fs::create_dir(&worktree).unwrap();
     assert!(
@@ -304,7 +307,10 @@ fn with_review_sessions(
     harness: Harness,
     steps: impl FnOnce(&Sessions) -> Result<()>,
 ) -> (Result<()>, PathBuf) {
-    logs::begin(logs::Begin::ChildRun("fixture"));
+    logs::begin(logs::Begin::ChildRun(
+        "fixture",
+        crate::logs::CommandKind::Issue,
+    ));
     let worktree = root.join("worktree");
     fs::create_dir(&worktree).unwrap();
     assert!(

@@ -122,7 +122,7 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
             "Initial commit".to_string(),
         ])
     );
-    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
+    let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert!(
         logs.iter().any(|name| name.ends_with("-repair-1.jsonl")),
         "logs: {logs:?}"

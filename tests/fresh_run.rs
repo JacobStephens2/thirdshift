@@ -63,9 +63,9 @@ fn a_clean_failed_acquisition_releases_its_claim_and_can_retry_without_starting_
     assert_eq!(failed.stdout, "");
     assert!(scenario.claude_calls().is_empty());
     assert!(
-        !scenario
-            .path("home/.thirdshift/logs/acme/widgets/sessions")
-            .exists()
+        scenario
+            .log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl")
+            .is_empty()
     );
     assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
     assert_eq!(scenario.origin_log("issue-7"), None);
@@ -295,7 +295,7 @@ fn logs_the_session_stream_under_the_home_directory() {
 
     scenario.run(&[&scenario.issue_url(7)]);
 
-    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
+    let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let name = &logs[0];
     assert!(
@@ -304,7 +304,7 @@ fn logs_the_session_stream_under_the_home_directory() {
     );
     let log = std::fs::read_to_string(
         scenario
-            .path("home/.thirdshift/logs/acme/widgets/sessions")
+            .path("home/.thirdshift/logs/acme/widgets/commands/issue")
             .join(name),
     )
     .unwrap();

@@ -144,7 +144,7 @@ fn logs_the_conflict_repair_with_the_runs_shared_timestamp() {
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
+    let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert_eq!(logs.len(), 2, "logs: {logs:?}");
     let implement = logs
         .iter()

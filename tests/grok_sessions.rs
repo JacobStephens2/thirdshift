@@ -133,9 +133,9 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"ru
         assert_eq!(call["GROK_FOLDER_TRUST"], "0");
     }
     scenario.assert_every_grok_session_found_the_factory_skills();
-    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
+    let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     let log = std::fs::read_to_string(scenario.path(&format!(
-        "home/.thirdshift/logs/acme/widgets/sessions/{}",
+        "home/.thirdshift/logs/acme/widgets/commands/issue/{}",
         logs[0]
     )))
     .unwrap();
@@ -173,9 +173,9 @@ fn groks_error_is_in_the_failure_cause_even_when_the_cli_exits_zero() {
         let result = scenario.run(&["harness", "grok", &scenario.issue_url(7)]);
         assert_eq!(result.code, Some(1), "{}", result.stderr);
         assert!(result.stderr.contains(cause), "{}", result.stderr);
-        let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
+        let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
         let log = std::fs::read_to_string(scenario.path(&format!(
-            "home/.thirdshift/logs/acme/widgets/sessions/{}",
+            "home/.thirdshift/logs/acme/widgets/commands/issue/{}",
             logs[0]
         )))
         .unwrap();

@@ -420,24 +420,26 @@ Everything thirdshift logs goes under `~/.thirdshift/logs/`, or the `logs.dir` s
 ```
 ~/.thirdshift/logs/<owner>/<repo>/
 ├── activity.log              the Activity log
-├── sessions/                 Session logs
 └── commands/
-    ├── architect/            <stamp>.log
-    ├── pickup/               <n>-<stamp>.log
-    └── issue/                <n>-<stamp>.log
+    ├── architect/            <stamp>.log and Session logs
+    ├── pickup/               <n>-<stamp>.log and Session logs
+    ├── secure/               <stamp>.log and Session logs
+    └── issue/                <n>-<stamp>.log and Session logs
 ```
 
 The folder already names the repository, so no file name repeats it. A **Session log** is one session's full transcript, as Claude Code's `stream-json` output:
 
 ```
-~/.thirdshift/logs/<owner>/<repo>/sessions/<n>-<stamp>-implement.jsonl
-~/.thirdshift/logs/<owner>/<repo>/sessions/<n>-<stamp>-repair-<i>.jsonl
-~/.thirdshift/logs/<owner>/<repo>/sessions/architect-<stamp>-architecture-review.jsonl
+~/.thirdshift/logs/<owner>/<repo>/commands/issue/<n>-<stamp>-implement.jsonl
+~/.thirdshift/logs/<owner>/<repo>/commands/issue/<n>-<stamp>-repair-<i>.jsonl
+~/.thirdshift/logs/<owner>/<repo>/commands/architect/architect-<stamp>-architecture-review.jsonl
 ```
+
+Session logs share the owning command's folder: a Pickup run's dispatched Run logs in `commands/pickup/`, an Architect run's in `commands/architect/`, and a Security run's in `commands/secure/`. Tickets and Base fixes inherit that folder too.
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.jsonl`.
 
-A **Command log** is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: `thirdshift <Issue URL>`, a Run or a Spec run, in `issue/`, `thirdshift pickup` in `pickup/`, named for the issue it took, and `thirdshift architect` in `architect/`. A Spec run's covers its Tickets' Runs, a Run's covers its [Base fix](#base-fix), and a Pass's covers the Spec run or Run it dispatched: none of those keeps one of its own. So `ls -t ~/.thirdshift/logs/acme/widgets/commands/pickup | head` lists the recent passes on acme/widgets that took an issue. A command keeps its Command log once it starts work: a Pass skipped before doing any work keeps none, nor does a Run that fails before it starts work, as on the [Origin match](#what-a-run-does), and `setup`, `email-test`, `update`, `version` and `help` never keep one. Lines printed before the Command log's name is known, such as a Pickup run's lines on the issues it [passed over](#why-an-issue-was-passed-over) before it took one, are written first, and once it is created a progress line says `logging this command to <path>`. A Command log that can't be written, as when its folder can't be created or the disk is full, is one `warning:` line on stderr, and the command carries on with the same outcome, stdout and exit code.
+A **Command log** is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: `thirdshift <Issue URL>`, a Run or a Spec run, in `issue/`, `thirdshift pickup` in `pickup/`, named for the issue it took, and `thirdshift architect` in `architect/`. A Spec run's covers its Tickets' Runs, a Run's covers its [Base fix](#base-fix), and a Pass's covers the Spec run or Run it dispatched: none of those keeps one of its own. So `ls -t ~/.thirdshift/logs/acme/widgets/commands/pickup/*.log | head` lists the recent passes on acme/widgets that took an issue. A command keeps its Command log once it starts work: a Pass skipped before doing any work keeps none, nor does a Run that fails before it starts work, as on the [Origin match](#what-a-run-does), and `setup`, `email-test`, `update`, `version` and `help` never keep one. Lines printed before the Command log's name is known, such as a Pickup run's lines on the issues it [passed over](#why-an-issue-was-passed-over) before it took one, are written first, and once it is created a progress line says `logging this command to <path>`. A Command log that can't be written produces one `warning:` line on stderr. A failure confined to the Command log leaves the outcome, stdout and exit code unchanged; if the shared folder also prevents writing a Session log, the Run fails before starting that session.
 
 The stamp is the local time the command started, with its UTC offset, as in `20261003T120000-0400`, in the machine's time zone, or `TZ`'s if set, so it agrees with `date` and `ls -l`. A command's Command log and all of its Session logs, its Tickets' Runs' and its Base fix's included, share that one stamp, so they sort together and each can be found from the other. When a Run fails, stderr ends with the path of its most recent Session log, the place to start looking, then that of its Command log.
 
@@ -450,7 +452,7 @@ The **Activity log**, `activity.log`, is a short running record of what the fact
 2026-10-03 10:00:01 Pickup run skipped: no Ready issue on acme/widgets
 ```
 
-Each line is appended whole, so passes that run at once on one repository never garble it. One that can't be written is one `warning:` line on stderr, and the command carries on as for a Command log. thirdshift never rotates it: collapsed skips keep it small. Logs written before this layout, under `sessions/` and `commands/` at the root of the logs, are not moved.
+Each line is appended whole, so passes that run at once on one repository never garble it. One that can't be written is one `warning:` line on stderr, and the command carries on as for a Command log. thirdshift never rotates it: collapsed skips keep it small. Existing logs, including Session logs in `<owner>/<repo>/sessions/` and logs from before the per-repository layout, are not moved.
 
 With `quiet_skips = true` in the `[activity]` section of the [User config](#user-config), a skipped Pass prints nothing on stdout or stderr, its dated first line included, and leaves only its Activity log line. A pass that does work, or fails, prints as ever, so a scheduler's log file catches only what went wrong. Without it, a skipped pass prints as it always has, for a pass you type by hand.
 
@@ -536,7 +538,7 @@ thirdshift: 03:12:40 CI red on test, which also fails on main at 362b9ca; fix ma
 thirdshift: 03:12:40 Base check: test: https://github.com/acme/widgets/actions/runs/1/job/2
 thirdshift: 03:12:40 Retry with: thirdshift https://github.com/acme/widgets/issues/7 base-fix
 thirdshift: 03:12:40 Or set: base.fix = true in ~/.thirdshift/config.toml, to allow a Base fix for every Run on this machine
-thirdshift: 03:12:40 session log: ~/.thirdshift/logs/acme/widgets/sessions/7-….jsonl
+thirdshift: 03:12:40 session log: ~/.thirdshift/logs/acme/widgets/commands/issue/7-….jsonl
 thirdshift: 03:12:40 command log: ~/.thirdshift/logs/acme/widgets/commands/issue/7-….log
 ```
 
@@ -572,7 +574,7 @@ thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a tim
 When nothing is left to run and any Ticket is not done, the Spec run is a **Failed spec run**: it leaves the Spec PR a draft, its checklist showing what's missing, prints its URL on stdout (if any Ticket has landed, so there is one), exits `1`, and lists on stderr each Ticket that landed, with its pull request, and each one not done, with why:
 
 ```
-thirdshift: 03:12:40 #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme/widgets/sessions/21-….jsonl)
+thirdshift: 03:12:40 #21 failed: claude exited 1 (session log: ~/.thirdshift/logs/acme/widgets/commands/issue/21-….jsonl)
 thirdshift: 03:12:40 #22 blocked by #21
 thirdshift: 03:12:40 #23 landed with https://github.com/acme/widgets/pull/1
 thirdshift: 03:12:40 #24 unready: labelled needs-info
@@ -770,7 +772,7 @@ A Security run checks its gates in order: another **Pass** on the repository run
 
 The Security audit runs in a throwaway worktree detached at origin's Base branch head, leaving the Launch directory and local work untouched, including when `launch.pull` is set. Its Session prompt runs `thirdshift-security-audit` in full audit mode with the `quick` profile, auditing the whole repository except vendored and third-party code. It names a `SECURITY.md` or conventional threat-model document when present, reads compatible earlier runs and ends `incomplete` instead of asking for input.
 
-Each audit keeps a new output directory under `<logs.dir>/<owner>/<repo>/audits/`, outside the worktree. The audit artifacts and private advisory descriptions contain evidence; keep the logs directory private. thirdshift runs both embedded validators before recording anything. A missing final line, an incomplete session or an invalid report fails the run and names its Session log. Command logs are in `commands/secure/`; Session logs are named `secure-<stamp>-security-audit.jsonl`; the Activity log records the start and ending as for other Passes.
+Each audit keeps a new output directory under `<logs.dir>/<owner>/<repo>/audits/`, outside the worktree. The audit artifacts and private advisory descriptions contain evidence; keep the logs directory private. thirdshift runs both embedded validators before recording anything. A missing final line, an incomplete session or an invalid report fails the run and names its Session log. Command logs and Session logs are in `commands/secure/`; Session logs are named `secure-<stamp>-security-audit.jsonl`; the Activity log records the start and ending as for other Passes.
 
 A finding's title becomes the advisory summary. Its description preserves its write-up, trace, evidence and validation plan, with the fingerprint and audited commit. thirdshift claims no severity, CWE or affected version range. It uses the package in the repository's manifest, or the `other` ecosystem when none is identified. Matching fingerprints in any advisory state are kept rather than recorded again. Rejected candidates stay in the local report and produce no advisory. Draft advisories require GitHub repository security manager or administrator access. On a private repository whose advisory endpoint is unavailable, the private record is an issue labelled `security-finding` and `needs-triage`. It is never replaced by a public finding issue.
 

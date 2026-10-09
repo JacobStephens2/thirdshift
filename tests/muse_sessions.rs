@@ -188,7 +188,7 @@ fn missing_log_uses_stream_text_without_usage_and_a_missing_skill_warns_once_in_
     assert_eq!(result.stderr.matches(warning).count(), 1);
     assert!(!result.stderr.contains("input tokens"));
     let dir = "home/.thirdshift/logs/acme/widgets/commands/issue";
-    let name = scenario.entries(dir).pop().unwrap();
+    let name = scenario.log_files(dir, "log").pop().unwrap();
     let log = std::fs::read_to_string(scenario.path(&format!("{dir}/{name}"))).unwrap();
     assert_eq!(log.matches(warning).count(), 1);
 }

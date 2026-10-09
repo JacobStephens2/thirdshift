@@ -101,7 +101,7 @@ fn assert_nothing_created(scenario: &Scenario, local_branch: &str) {
     assert_eq!(scenario.entries("tmp"), Vec::<String>::new());
     assert!(
         !scenario
-            .path("home/.thirdshift/logs/acme/widgets/sessions")
+            .path("home/.thirdshift/logs/acme/widgets/commands/issue")
             .exists(),
         "a session log was created"
     );

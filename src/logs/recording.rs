@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
 use super::effects::{Outside, Stream};
-use super::{Begin, Pass, Work, root_under};
+use super::{Begin, CommandKind, Pass, Work, root_under};
 use crate::config::UserConfig;
 use crate::harness::Choice;
 use crate::issue::Repo;
@@ -23,6 +23,7 @@ pub(super) struct Record<O: Outside> {
     stamp: Option<String>,
     logs_dir: Option<PathBuf>,
     child: bool,
+    command: CommandKind,
     started: bool,
     command_log: Log<O::CommandLog>,
     activity_started: Option<Started>,
@@ -66,6 +67,7 @@ impl<O: Outside> Record<O> {
             stamp: None,
             logs_dir: None,
             child: false,
+            command: CommandKind::Issue,
             started: false,
             command_log: Log::NotKept,
             activity_started: None,
@@ -74,8 +76,15 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn begin(&mut self, begin: Begin) {
+        self.command = match &begin {
+            Begin::Run(_) => CommandKind::Issue,
+            Begin::ChildRun(_, command) => *command,
+            Begin::ArchitectRun => CommandKind::Architect,
+            Begin::PickupRun => CommandKind::Pickup,
+            Begin::SecurityRun => CommandKind::Secure,
+        };
         let (starting, quiet) = match begin {
-            Begin::ChildRun(stamp) => {
+            Begin::ChildRun(stamp, _) => {
                 self.child = true;
                 self.stamp.get_or_insert_with(|| stamp.to_string());
                 return;
@@ -166,6 +175,10 @@ impl<O: Outside> Record<O> {
             "the root of a repository's logs is asked for before the User config is loaded",
         );
         root_under(logs_dir, repo)
+    }
+
+    pub(super) fn command_kind(&self) -> CommandKind {
+        self.command
     }
 
     pub(super) fn stamp(&mut self) -> String {

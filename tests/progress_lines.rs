@@ -187,10 +187,10 @@ fn still_logs_the_whole_stream() {
     let result = scenario.run(&[&scenario.issue_url(7)]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
 
-    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
+    let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     let log = std::fs::read(
         scenario
-            .path("home/.thirdshift/logs/acme/widgets/sessions")
+            .path("home/.thirdshift/logs/acme/widgets/commands/issue")
             .join(&logs[0]),
     )
     .unwrap();
@@ -228,8 +228,8 @@ for log in "{logs}/commands/issue/"*.log; do
     stamp=${{name#7-}}
     stamp=${{stamp%.log}}
 done
-mkdir -p "{logs}/sessions"
-ln -s "{pipe}" "{logs}/sessions/7-$stamp-implement.jsonl"
+mkdir -p "{logs}/commands/issue"
+ln -s "{pipe}" "{logs}/commands/issue/7-$stamp-implement.jsonl"
 touch "{ready}"
 "#,
             logs = logs.display(),
