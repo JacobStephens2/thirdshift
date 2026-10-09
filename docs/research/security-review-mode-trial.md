@@ -1,6 +1,6 @@
 # Security review mode trial
 
-Research date: 2026-10-08. Implements [#549](https://github.com/JacobStephens2/thirdshift/issues/549), the report-only trial in [#427](https://github.com/JacobStephens2/thirdshift/issues/427). At Jacob's request, Codex graded the private results on 2026-10-09. This note records the measurements and grading summary; the operator's choice of Security review mode remains separate.
+Research date: 2026-10-08. Implements [#549](https://github.com/JacobStephens2/thirdshift/issues/549), the report-only trial in [#427](https://github.com/JacobStephens2/thirdshift/issues/427). At Jacob's request, Codex graded the private results on 2026-10-09. Jacob adopted guidance for the optional Security review on 2026-10-09. This note records the measurements, grading summary, and mode decision.
 
 ## Method
 
@@ -110,4 +110,4 @@ Codex compared the two submitted candidates against the original merge base and 
 
 The existing Spec evidence requirements still apply: fixes require a failing proof-of-concept test, unaddressed introduced findings hold Self-merge, and pre-existing vulnerabilities stay in private records. A future effectiveness comparison should include known positive and negative cases with safe independent validation.
 
-**Mode decision:** pending the operator's choice. Tickets #550–#552 remain gated until that choice is recorded in their specifications.
+**Mode decision (2026-10-09):** Jacob adopted guidance for the opt-in Security review in a Run or a Spec run. The review uses one session to apply the relevant attack-class guidance to the change and supporting code, without the full six-phase audit workflow or delegated auditors. This choice unblocks Tickets #550–#552 once recorded in their specifications. It does not change the separate whole-repository Security audit's full-audit workflow or the evidence and merge requirements above.
