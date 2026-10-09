@@ -227,6 +227,7 @@ impl UserConfig {
 
 /// A validated User config with every setting present, ready for Setup.
 /// Preparation and edits preserve the user's TOML spelling and comments.
+/// A Security section between Harness sections moves after them.
 pub struct UserConfigDocument {
     document: DocumentMut,
     settings: UserConfig,
@@ -271,7 +272,8 @@ impl UserConfigDocument {
         let settings = UserConfig::parse(&completed, path, home)?;
         // Completion appends missing implicit sections after the original
         // text. Reparse that text so subsequent edits keep their placement.
-        let document = completed.parse().context("can't parse the User config")?;
+        let mut document = completed.parse().context("can't parse the User config")?;
+        separate_security_from_harness(&mut document);
         Ok(Self { document, settings })
     }
 
@@ -309,6 +311,41 @@ impl UserConfigDocument {
             }
         }
         document.to_string()
+    }
+}
+
+/// Keep Security in its own area when completion or an earlier Setup put
+/// it between Harness sections. Moving only its table preserves its keys,
+/// comments and values, and every other section's relative order.
+fn separate_security_from_harness(document: &mut DocumentMut) {
+    let Some(security_position) = document
+        .get("security")
+        .and_then(Item::as_table)
+        .filter(|table| !table.is_implicit() && !table.is_dotted())
+        .and_then(toml_edit::Table::position)
+    else {
+        return;
+    };
+    let Some(harness) = document.get("harness").and_then(Item::as_table) else {
+        return;
+    };
+    let positions: Vec<isize> = std::iter::once(harness)
+        .chain(harness.iter().filter_map(|(_, item)| item.as_table()))
+        .filter(|table| !table.is_implicit() && !table.is_dotted())
+        .filter_map(toml_edit::Table::position)
+        .collect();
+    let (Some(first), Some(last)) = (positions.iter().min(), positions.iter().max()) else {
+        return;
+    };
+    if security_position > *first && security_position < *last {
+        let mut end = *last;
+        while let Some(next) = following_section(document.as_table(), end) {
+            end = next.position().expect("a written section has a position");
+        }
+        document["security"]
+            .as_table_mut()
+            .expect("Security has a section")
+            .set_position(Some(end + 1));
     }
 }
 
@@ -704,11 +741,6 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
 
-[security]
-fix = false   # Security runs may fix reproduced findings; default false
-review = false   # Runs review their change for Security findings; default false
-harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
-
 [harness]
 default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
@@ -735,6 +767,11 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 [harness.opencode]
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
+
+[security]
+fix = false   # Security runs may fix reproduced findings; default false
+review = false   # Runs review their change for Security findings; default false
+harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -865,9 +902,6 @@ mod tests {
                 "spec.parallel",
                 "pickup.limit",
                 "pickup.wait_minutes",
-                "security.fix",
-                "security.review",
-                "security.harness",
                 "harness.default",
                 "harness.claude.model",
                 "harness.claude.effort",
@@ -880,7 +914,10 @@ mod tests {
                 "harness.muse.model",
                 "harness.muse.effort",
                 "harness.opencode.model",
-                "harness.opencode.effort"
+                "harness.opencode.effort",
+                "security.fix",
+                "security.review",
+                "security.harness",
             ]
         );
         let commented_out: Vec<&str> = DEFAULTS

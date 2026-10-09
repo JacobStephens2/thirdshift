@@ -38,7 +38,8 @@ use questions::Answers;
 /// An existing User config is edited in place, once it parses as a Run would
 /// parse it: its comments and key order stay, as do the values Setup didn't
 /// ask about, and each key it lacks is added at its default, so Setup with no
-/// terminal never resets a configured machine. A Resend API key the user
+/// terminal never resets a configured machine. A Security section between
+/// Harness sections moves after them. A Resend API key the user
 /// gave is saved in the Credentials once the User config is written; with no
 /// terminal, the Credentials are never read or written. Nothing is written
 /// until the last answer is in. A test email, if the user asked for one, goes
@@ -96,10 +97,7 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
             if asked {
                 format!("wrote your answers to the User config {}", path.display())
             } else {
-                format!(
-                    "added the missing settings to the User config {}",
-                    path.display()
-                )
+                format!("updated the User config {}", path.display())
             }
         }
     };
@@ -956,10 +954,7 @@ to = \"me@example.com\"  # my inbox
 
         let done = setup(&mut outside).unwrap();
 
-        assert_eq!(
-            done,
-            format!("added the missing settings to the User config {PATH}")
-        );
+        assert_eq!(done, format!("updated the User config {PATH}"));
         let completed = UserConfigDocument::existing(partial, Path::new(PATH), Path::new(HOME))
             .unwrap()
             .render(None);

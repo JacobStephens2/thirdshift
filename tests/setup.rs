@@ -51,14 +51,14 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[activity]",
             "[spec]",
             "[pickup]",
-            "[security]",
             "[harness]",
             "[harness.claude]",
             "[harness.codex]",
             "[harness.agy]",
             "[harness.grok]",
             "[harness.muse]",
-            "[harness.opencode]"
+            "[harness.opencode]",
+            "[security]"
         ],
         "{text}"
     );
@@ -89,6 +89,124 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         "stderr: {}",
         result.stderr
     );
+}
+
+#[test]
+fn upgrading_setup_puts_security_after_all_harness_settings() {
+    let scenario = Scenario::new();
+    let original = "\
+[merge]
+always = false
+[base]
+fix = false
+[launch]
+pull = false
+[email]
+always = false
+from = 'onboarding@resend.dev'
+[logs]
+dir = '~/.thirdshift/logs'
+[activity]
+quiet_skips = false
+[spec]
+parallel = 3
+[pickup]
+limit = 3
+wait_minutes = 30
+[harness]
+default = 'codex'
+[harness.claude]
+model = ''
+effort = ''
+[harness.codex]
+model = 'gpt-6.1-sol' # my Model
+effort = 'high' # my Effort
+";
+    scenario.user_config_is(original);
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let text = user_config(&scenario).unwrap();
+    let sections: Vec<&str> = text.lines().filter(|line| line.starts_with('[')).collect();
+    let harness = sections
+        .iter()
+        .position(|section| *section == "[harness]")
+        .unwrap();
+    assert_eq!(
+        &sections[harness..],
+        [
+            "[harness]",
+            "[harness.claude]",
+            "[harness.codex]",
+            "[harness.agy]",
+            "[harness.grok]",
+            "[harness.muse]",
+            "[harness.opencode]",
+            "[security]",
+        ],
+        "{text}"
+    );
+    assert!(
+        text.contains("model = 'gpt-6.1-sol' # my Model\n"),
+        "{text}"
+    );
+    assert!(text.contains("effort = 'high' # my Effort\n"), "{text}");
+    let config: toml::Table = text.parse().unwrap();
+    assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
+    assert_eq!(config["security"]["fix"].as_bool(), Some(false));
+    assert_eq!(config["security"]["review"].as_bool(), Some(false));
+    assert_eq!(config["security"]["harness"].as_str(), Some(""));
+
+    let again = scenario.run(&["setup"]);
+    assert_eq!(again.code, Some(0), "stderr: {}", again.stderr);
+    assert_eq!(user_config(&scenario).unwrap(), text);
+}
+
+#[test]
+fn setup_keeps_existing_security_outside_completed_harness_settings() {
+    for later_harness in ["", "\n[harness.agy]\nmodel = ''\neffort = ''\n"] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!(
+            "[harness]\ndefault = 'codex'\n\
+             [harness.codex]\nmodel = 'gpt-6.1-sol'\neffort = 'high'\n\n\
+             # my Security settings\n[security] # separate area\n\
+             fix = true # allow fixes\nreview = true # review changes\n\
+             harness = 'codex' # Security Harness\n{later_harness}"
+        ));
+
+        let result = scenario.run(&["setup"]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        let text = user_config(&scenario).unwrap();
+        let sections: Vec<&str> = text.lines().filter(|line| line.starts_with('[')).collect();
+        assert_eq!(
+            sections.last(),
+            Some(&"[security] # separate area"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "# my Security settings\n[security] # separate area\n\
+                 fix = true # allow fixes\nreview = true # review changes\n\
+                 harness = 'codex' # Security Harness\n"
+            ),
+            "{text}"
+        );
+        let config: toml::Table = text.parse().unwrap();
+        assert_eq!(config["security"]["fix"].as_bool(), Some(true));
+        assert_eq!(config["security"]["review"].as_bool(), Some(true));
+        assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
+        assert_eq!(
+            config["harness"]["codex"]["model"].as_str(),
+            Some("gpt-6.1-sol")
+        );
+        assert_eq!(config["harness"]["codex"]["effort"].as_str(), Some("high"));
+
+        let again = scenario.run(&["setup"]);
+        assert_eq!(again.code, Some(0), "stderr: {}", again.stderr);
+        assert_eq!(user_config(&scenario).unwrap(), text);
+    }
 }
 
 #[test]
