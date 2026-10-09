@@ -99,6 +99,13 @@ fn safeguard_refusals_notify_the_cause_without_private_diagnostics() {
             subject,
             "[thirdshift] acme/widgets Security run: audit failed"
         );
+        assert!(text.contains("Audit:        audit failed"), "{text}");
+        assert!(!text.contains("audit complete"), "{text}");
+        assert!(!text.contains("Reproduction:"), "{text}");
+        assert_eq!(
+            scenario.claude_calls().len() + scenario.codex_calls().len(),
+            1
+        );
         assert!(text.contains(&format!("Cause:        {cause}")), "{text}");
         assert!(!text.contains("Private refusal evidence."), "{text}");
     }
@@ -197,38 +204,85 @@ fn codex_logs_the_requested_model_for_each_security_session_and_resume() {
 #[test]
 fn refused_security_reproductions_keep_the_record_and_stop_before_the_next_finding() {
     for (harness, script, cause) in safeguard_refusals() {
-        let scenario = Scenario::new();
-        scenario.agent_does_in_session(
-            1,
-            &audit_script(&json!([finding("first"), finding("second")]).to_string()),
-        );
-        scenario.agent_does_in_session(2, script);
-        scenario.agent_does_in_session(3, "exit 99\n");
-        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
-        let result = scenario.run_with_env(
-            &["secure", "harness", harness, "email", "me@example.com"],
-            &resend_env(&resend),
-        );
-        assert_eq!(result.code, Some(1), "{}", result.stderr);
-        assert!(result.stderr.contains(cause), "{}", result.stderr);
-        let (_, text) = the_one_notification(&resend);
-        assert!(text.contains(cause), "{text}");
-        assert!(!text.contains("Private refusal evidence."), "{text}");
-        let state = scenario.gh_state();
-        for record in state["advisories"].as_array().unwrap() {
-            assert!(record["severity"].is_null());
-            assert!(
-                !record["description"]
-                    .as_str()
-                    .unwrap()
-                    .contains("## Reproduction")
+        for private in [false, true] {
+            let scenario = Scenario::new();
+            let mut github = scenario.gh_state();
+            github["private"] = json!(private);
+            scenario.write_gh_state(&github);
+            scenario.agent_does_in_session(
+                1,
+                &audit_script(&json!([finding("first"), finding("second")]).to_string()),
             );
+            scenario.agent_does_in_session(2, script);
+            scenario.agent_does_in_session(3, "exit 99\n");
+            let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+            let result = scenario.run_with_env(
+                &[
+                    "secure",
+                    "security-fix",
+                    "harness",
+                    harness,
+                    "email",
+                    "me@example.com",
+                ],
+                &resend_env(&resend),
+            );
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(result.stderr.contains(cause), "{}", result.stderr);
+            let (subject, text) = the_one_notification(&resend);
+            assert!(subject.ends_with(": reproduction failed"), "{subject}");
+            for line in [
+                "Result:       reproduction failed",
+                "Audit:        audit complete",
+                "Reproduction: 1 refused",
+                "Session log:",
+                "security-reproduction-1.jsonl",
+                "Command log:",
+            ] {
+                assert!(text.contains(line), "missing {line}: {text}");
+            }
+            assert!(text.contains(cause), "{text}");
+            assert!(!text.contains("Private refusal evidence."), "{text}");
+            let state = scenario.gh_state();
+            let records = if private {
+                state["bodies"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                let advisories = state["advisories"].as_array().unwrap();
+                assert_eq!(advisories.len(), 2);
+                assert!(advisories.iter().all(|record| record["severity"].is_null()));
+                advisories
+                    .iter()
+                    .map(|record| record["description"].clone())
+                    .collect()
+            };
+            assert_eq!(records.len(), 2);
+            for record in records {
+                assert!(!record.as_str().unwrap().contains("## Reproduction"));
+            }
+            assert_eq!(
+                scenario.claude_calls().len() + scenario.codex_calls().len(),
+                2
+            );
+            assert_eq!(scenario.entries("work"), vec![REPO]);
+            assert!(state["prs"].as_array().unwrap().is_empty());
+            for private_detail in [
+                "Private candidate write-up.",
+                "Private trace.",
+                "Private evidence.",
+            ] {
+                assert!(
+                    !resend.requests()[0]
+                        .body
+                        .to_string()
+                        .contains(private_detail)
+                );
+            }
         }
-        assert_eq!(
-            scenario.claude_calls().len() + scenario.codex_calls().len(),
-            2
-        );
-        assert_eq!(scenario.entries("work"), vec![REPO]);
     }
 }
 
@@ -2625,6 +2679,8 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
             "[thirdshift] acme/widgets Security run: audit failed"
         );
         assert!(text.contains("Audit:        audit failed"), "{text}");
+        assert!(!text.contains("audit complete"), "{text}");
+        assert!(!text.contains("Reproduction:"), "{text}");
         assert!(
             result.stderr.contains(cause),
             "expected {cause}: {}",
@@ -2786,53 +2842,93 @@ fn security_notification_omits_private_background_trace() {
 #[test]
 fn a_reproduction_failure_notifies_recorded_metadata_without_private_evidence() {
     for private in [false, true] {
-        let scenario = Scenario::new();
-        let mut github = scenario.gh_state();
-        github["private"] = json!(private);
-        scenario.write_gh_state(&github);
-        let mut first = finding("first");
-        first["title"] = json!("First recorded finding");
-        let mut second = finding("second");
-        second["title"] = json!("Second recorded finding");
-        scenario.agent_does_in_session(1, &audit_script(&json!([first, second]).to_string()));
-        scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
-        scenario.agent_does_in_session(3, &reproduction_script("incomplete"));
-        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
-        let result =
-            scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
-        assert_eq!(result.code, Some(1), "{}", result.stderr);
-        assert!(
-            result
-                .stderr
-                .contains("Security reproduction ended without the final line"),
-            "{}",
-            result.stderr
-        );
-        let (subject, text) = the_one_notification(&resend);
-        assert!(subject.ends_with(": audit failed"), "{subject}");
-        assert!(text.contains("high: First recorded finding"), "{text}");
-        assert!(text.contains("Second recorded finding"), "{text}");
-        assert!(!text.contains("high: Second recorded finding"), "{text}");
-        let url = if private {
-            "https://github.com/acme/widgets/issues/"
-        } else {
-            "https://github.com/acme/widgets/security/advisories/"
-        };
-        assert_eq!(text.matches(url).count(), 2, "{text}");
-        for evidence in [
-            "Private candidate write-up.",
-            "Private trace.",
-            "Private evidence.",
-            "Local command: bounded-fixture",
-            "bounded_fixture();",
-            "Cause:",
+        for failed_script in [
+            reproduction_script("incomplete"),
+            "printf '%s\\n' 'Private provider diagnostic.' >&2\nexit 3\n".to_string(),
         ] {
-            assert!(
-                !resend.requests()[0].body.to_string().contains(evidence),
-                "leaked {evidence}: {text}"
+            let scenario = Scenario::new();
+            let mut github = scenario.gh_state();
+            github["private"] = json!(private);
+            scenario.write_gh_state(&github);
+            let mut first = finding("first");
+            first["title"] = json!("First recorded finding");
+            let mut second = finding("second");
+            second["title"] = json!("Second recorded finding");
+            scenario.agent_does_in_session(
+                1,
+                &audit_script(&json!([first, second, finding("third")]).to_string()),
             );
+            scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+            scenario.agent_does_in_session(3, &failed_script);
+            let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+            let result = scenario.run_with_env(
+                &["secure", "security-fix", "email", "me@example.com"],
+                &resend_env(&resend),
+            );
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            if failed_script.contains("incomplete") {
+                assert!(
+                    result
+                        .stderr
+                        .contains("Security reproduction ended without the final line"),
+                    "{}",
+                    result.stderr
+                );
+            }
+            let (subject, text) = the_one_notification(&resend);
+            assert!(subject.ends_with(": reproduction failed"), "{subject}");
+            for line in [
+                "Result:       reproduction failed",
+                "Audit:        audit complete",
+                "Reproduction: 2 failed",
+                "Session log:",
+                "security-reproduction-2.jsonl",
+                "Command log:",
+            ] {
+                assert!(text.contains(line), "missing {line}: {text}");
+            }
+            assert!(text.contains("high: First recorded finding"), "{text}");
+            assert!(text.contains("Second recorded finding"), "{text}");
+            assert!(!text.contains("high: Second recorded finding"), "{text}");
+            let url = if private {
+                "https://github.com/acme/widgets/issues/"
+            } else {
+                "https://github.com/acme/widgets/security/advisories/"
+            };
+            assert_eq!(text.matches(url).count(), 3, "{text}");
+            for evidence in [
+                "Private candidate write-up.",
+                "Private trace.",
+                "Private evidence.",
+                "Local command: bounded-fixture",
+                "bounded_fixture();",
+                "Cause:",
+                "Private provider diagnostic.",
+            ] {
+                assert!(
+                    !resend.requests()[0].body.to_string().contains(evidence),
+                    "leaked {evidence}: {text}"
+                );
+            }
+            assert_eq!(scenario.claude_calls().len(), 3);
+            let state = scenario.gh_state();
+            assert!(state["prs"].as_array().unwrap().is_empty());
+            if private {
+                assert_eq!(state["bodies"].as_object().unwrap().len(), 3);
+                assert!(
+                    state["bodies"]["8"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Severity: high")
+                );
+            } else {
+                let records = state["advisories"].as_array().unwrap();
+                assert_eq!(records.len(), 3);
+                assert_eq!(records[0]["severity"], "high");
+                assert!(records[1]["severity"].is_null());
+                assert!(records[2]["severity"].is_null());
+            }
         }
-        assert_eq!(scenario.claude_calls().len(), 3);
     }
 }
 
