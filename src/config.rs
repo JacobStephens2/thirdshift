@@ -771,7 +771,7 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
 review = false   # Runs review their change for Security findings; default false
-harness = ""   # the Harness a Security run uses unless its command names one; default blank, for harness.default or Claude Code
+harness = ""   # the Harness a Security run uses unless its command names one; default blank; blank or missing uses harness.default, or Claude Code if harness.default is missing
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
