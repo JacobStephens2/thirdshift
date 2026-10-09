@@ -6,16 +6,19 @@ When enabled, runs one guidance review after a Run's opening session and before 
 
 ```
 Use the `thirdshift-security-audit` skill in guidance mode.
-Review the change for <Issue URL> on branch <branch> with `git diff <base>...HEAD`, including supporting code.
+Review the change for <Issue URL> on branch <branch> against Base branch <base> with `git diff <merge base commit>...HEAD`, including supporting code.
 Read the relevant security attack-class guidance and the repository's SECURITY.md or threat model when present.
 Use one session. Do not delegate auditors or run the full six-phase audit, validators, coverage ledger or audit artifacts.
 Fix only a Security finding you can show with a failing proof-of-concept test; run it before fixing, keep it as a regression test, and rerun it afterward. Use harmless local payloads; touch no deployed site or real third-party service. Commit each fix.
-Classify introduced findings against the merge base: a proof-of-concept that also fails there is pre-existing. Never include pre-existing vulnerability details in the pull request or final message, and do not fix those here.
+Merge base commit: `<merge base commit>`.
+Classify introduced findings against this pinned merge base: run each proof-of-concept on HEAD and the untouched merge base; a test that also fails there is pre-existing. Never include pre-existing vulnerability details, titles, fingerprints, tests or private-record links in the pull request or final message, and do not fix those here.
+Private report file: `<private report file>`.
+Write a JSON array to that file, even when empty ([]). Each entry is an old finding with exactly these fields: fingerprint (stable across reviews and audits, no newlines or backticks), title (one line), description (the private write-up and evidence), proof_of_concept (test: full test text, command: exact command run at both commits, head_exit_code: positive failing exit code, merge_base_exit_code: positive failing exit code, notes: reproduction evidence). All text fields are nonempty. Do not commit or copy this report into the worktree. thirdshift records it privately with the Security run's fingerprint matching; existing records and the Day shift's grades are preserved. Fixing old findings belongs to a separate Security run.
 Update this branch's pull request: list each unaddressed introduced finding under Security in its Unaddressed findings, with evidence and why it is unaddressed. Preserve Standards and Spec entries and the rest of the body. Do not merge. Delivery pushes any new commits and marks the PR ready after this session.
 If refused, incomplete, or missing a prerequisite, say so and do not claim completion.
 After a complete review, end your final message with exactly one line of the form:
-Security review: {"unaddressed_count":0,"findings":[]}
-Count only unaddressed findings introduced by this change; findings is an array of their short titles, with one title per finding. No old-finding details belong in it.
+Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}
+unaddressed_count counts only unaddressed findings introduced by this change; findings is an array of their short titles, with one title per finding. pre_existing_count is the number of entries in the private report. No old-finding details belong in this line.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 ```

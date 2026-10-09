@@ -1,5 +1,6 @@
 mod support;
 
+use serde_json::json;
 use support::Scenario;
 
 const OPENS_PR: &str = r#"
@@ -9,7 +10,270 @@ git commit -q -m 'Add feature'
 gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'
 "#;
 
-const CLEAN: &str = r#"printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#;
+fn old_finding() -> serde_json::Value {
+    json!({
+        "fingerprint": "old-input-bound",
+        "title": "Old unchecked bound",
+        "description": "Private old vulnerability evidence.",
+        "proof_of_concept": {
+            "test": "assert_bounded_input();",
+            "command": "cargo test bounded_input",
+            "head_exit_code": 101,
+            "merge_base_exit_code": 101,
+            "notes": "The bounded local fixture fails at both commits."
+        }
+    })
+}
+
+fn review_script(old: &serde_json::Value, introduced: &[&str]) -> String {
+    format!(
+        r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" > review-prompt.txt
+report=$(sed -n 's/^Private report file: `\(.*\)`\.$/\1/p' review-prompt.txt)
+test -n "$report"
+printf '%s\n' '{old}' > "$report"
+printf '%s\n' 'Security review: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+        outcome = json!({
+            "unaddressed_count": introduced.len(),
+            "findings": introduced,
+            "pre_existing_count": old.as_array().unwrap().len()
+        })
+    )
+}
+
+#[test]
+fn an_old_finding_is_recorded_privately_without_holding_self_merge() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(2, &review_script(&json!([old_finding()]), &[]));
+    let result = scenario.run(&[
+        &scenario.issue_url(7),
+        "security-review",
+        "merge",
+        "security-fix",
+    ]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let records = state["advisories"]
+        .as_array()
+        .expect("private draft advisory");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["state"], "draft");
+    assert!(records[0]["severity"].is_null());
+    let description = records[0]["description"].as_str().unwrap();
+    assert!(description.contains("Fingerprint: `old-input-bound`"));
+    assert!(description.contains("Private old vulnerability evidence."));
+    assert!(description.contains("assert_bounded_input();"));
+    assert!(description.contains(scenario.launch_git(&["rev-parse", "main"]).trim()));
+    assert_eq!(state["prs"][0]["state"], "MERGED");
+    assert_eq!(
+        scenario.claude_calls().len(),
+        2,
+        "old findings belong to a Security run"
+    );
+    for private in [
+        "Old unchecked bound",
+        "old-input-bound",
+        "Private old vulnerability evidence.",
+        "assert_bounded_input();",
+    ] {
+        assert!(!state["prs"][0]["body"].as_str().unwrap().contains(private));
+        assert!(!result.stderr.contains(private));
+        assert!(!result.stdout.contains(private));
+    }
+    let reports = scenario.entries("home/.thirdshift/logs/acme/widgets/security-reviews");
+    assert_eq!(reports.len(), 1);
+    let kept: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(scenario.path(&format!(
+            "home/.thirdshift/logs/acme/widgets/security-reviews/{}/pre-existing.json",
+            reports[0]
+        )))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(kept, json!([old_finding()]));
+}
+
+#[test]
+fn mixed_old_and_introduced_findings_keep_the_introduced_hold_and_old_details_private() {
+    for harness in ["claude", "codex"] {
+        let scenario = Scenario::new();
+        scenario.agent_does_in_session(1, OPENS_PR);
+        scenario.agent_does_in_session(
+            2,
+            &review_script(&json!([old_finding()]), &["Introduced cross-tenant read"]),
+        );
+        let result = scenario.run(&[
+            &scenario.issue_url(7),
+            "security-review",
+            "merge",
+            "harness",
+            harness,
+        ]);
+        assert_eq!(result.code, Some(1), "{harness}: {}", result.stderr);
+        let state = scenario.gh_state();
+        assert_eq!(state["advisories"].as_array().unwrap().len(), 1);
+        assert_eq!(state["prs"][0]["state"], "OPEN");
+        assert_eq!(state["prs"][0]["isDraft"], false);
+        let body = state["prs"][0]["body"].as_str().unwrap();
+        assert!(body.contains("Introduced cross-tenant read"));
+        assert!(result.stderr.contains("Introduced cross-tenant read"));
+        for private in [
+            "Old unchecked bound",
+            "old-input-bound",
+            "Private old vulnerability evidence.",
+            "assert_bounded_input();",
+        ] {
+            assert!(!body.contains(private));
+            assert!(!result.stderr.contains(private));
+        }
+    }
+}
+
+#[test]
+fn repeated_fingerprints_reuse_private_records_and_preserve_day_shift_grades() {
+    for (private, record_state) in [
+        (false, "draft"),
+        (false, "published"),
+        (false, "closed"),
+        (true, "OPEN"),
+        (true, "CLOSED"),
+    ] {
+        let scenario = Scenario::new();
+        let mut state = scenario.gh_state();
+        state["private"] = json!(private);
+        scenario.write_gh_state(&state);
+        scenario.agent_does_in_session(1, OPENS_PR);
+        // Duplicates within one report must match just as later reviews do.
+        scenario.agent_does_in_session(
+            2,
+            &review_script(&json!([old_finding(), old_finding()]), &[]),
+        );
+        let first = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
+        assert_eq!(
+            first.code,
+            Some(0),
+            "{private} {record_state}: {}",
+            first.stderr
+        );
+        let mut state = scenario.gh_state();
+        if private {
+            assert!(state["advisories"].is_null());
+            assert_eq!(state["issues"].as_object().unwrap().len(), 2);
+            assert_eq!(
+                state["labels"]["8"],
+                json!(["security-finding", "needs-triage"])
+            );
+            assert!(
+                state["bodies"]["8"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Private old vulnerability evidence.")
+            );
+            state["issues"]["8"] = json!(record_state);
+            state["labels"]["8"] = json!(["security-finding"]);
+        } else {
+            assert_eq!(state["advisories"].as_array().unwrap().len(), 1);
+            state["advisories"][0]["state"] = json!(record_state);
+            state["advisories"][0]["severity"] = json!("low");
+        }
+        scenario.write_gh_state(&state);
+        scenario.agent_does_in_session(3, "true");
+        let mut repeated = old_finding();
+        repeated["description"] = json!("A later review must not replace the grade or write-up.");
+        scenario.agent_does_in_session(4, &review_script(&json!([repeated]), &[]));
+        let second = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+        assert_eq!(
+            second.code,
+            Some(0),
+            "{private} {record_state}: {}",
+            second.stderr
+        );
+        let after = scenario.gh_state();
+        assert_eq!(after["prs"][0]["state"], "MERGED");
+        if private {
+            assert_eq!(after["issues"]["8"], state["issues"]["8"]);
+            assert_eq!(after["labels"]["8"], state["labels"]["8"]);
+            assert_eq!(after["bodies"]["8"], state["bodies"]["8"]);
+            assert_eq!(after["issues"].as_object().unwrap().len(), 2);
+        } else {
+            assert_eq!(after["advisories"], state["advisories"]);
+        }
+        let body = after["prs"][0]["body"].as_str().unwrap();
+        assert!(!body.contains("Old unchecked bound"));
+        assert!(!body.contains("old-input-bound"));
+    }
+}
+
+#[test]
+fn incomplete_private_reports_hold_self_merge_without_publishing_report_diagnostics() {
+    let valid = review_script(&json!([old_finding()]), &[]);
+    let mut passes_at_base = old_finding();
+    passes_at_base["proof_of_concept"]["merge_base_exit_code"] = json!(0);
+    let mut no_test = old_finding();
+    no_test["proof_of_concept"]["test"] = json!("");
+    for script in [
+        valid.replace("\"pre_existing_count\":1", "\"pre_existing_count\":0"),
+        format!("{valid}\nrm \"$report\"\n"),
+        format!("{valid}\nprintf '%s' 'Private old vulnerability evidence.' > \"$report\"\n"),
+        review_script(&json!([passes_at_base]), &[]),
+        review_script(&json!([no_test]), &[]),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does_in_session(1, OPENS_PR);
+        scenario.agent_does_in_session(2, &script);
+        let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let state = scenario.gh_state();
+        assert!(state["advisories"].is_null());
+        assert_eq!(state["prs"][0]["state"], "OPEN");
+        assert_eq!(state["prs"][0]["isDraft"], false);
+        let body = state["prs"][0]["body"].as_str().unwrap();
+        assert!(body.contains("Security review incomplete"));
+        assert!(!body.contains("Private old vulnerability evidence."));
+        assert!(
+            !result
+                .stderr
+                .contains("Private old vulnerability evidence.")
+        );
+    }
+}
+
+#[test]
+fn review_uses_the_published_base_when_the_local_base_is_stale() {
+    let scenario = Scenario::new();
+    scenario.origin_has_commit(
+        "main",
+        "base-new.txt",
+        "base change",
+        "Advance the Base branch",
+    );
+    let base = scenario.origin_git(&["rev-parse", "main"]);
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" > review-prompt.txt
+merge_base=$(sed -n 's/^Merge base commit: `\(.*\)`\.$/\1/p' review-prompt.txt)
+test "$merge_base" = "$(git rev-parse origin/main)"
+{}
+"#,
+            review_script(&json!([old_finding()]), &[])
+        ),
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert!(
+        state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .contains(base.trim())
+    );
+    assert_eq!(state["prs"][0]["state"], "MERGED");
+}
 
 #[test]
 fn command_words_override_the_config_and_review_is_off_by_default() {
@@ -30,7 +294,7 @@ fn command_words_override_the_config_and_review_is_off_by_default() {
         let scenario = Scenario::new();
         scenario.user_config_is(config);
         scenario.agent_does_in_session(1, OPENS_PR);
-        scenario.agent_does_in_session(2, CLEAN);
+        scenario.agent_does_in_session(2, &review_script(&json!([]), &[]));
         let url = scenario.issue_url(7);
         let mut args = vec![url.as_str(), "merge"];
         args.extend(word);
@@ -46,9 +310,9 @@ fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue(
     for final_message in [
         "Review incomplete",
         "Security review: {}",
-        r#"Security review: {"unaddressed_count":0,"findings":["Cross-tenant read"]}"#,
-        r#"Security review: {"unaddressed_count":1,"findings":[""]}"#,
-        r#"Security review: {"unaddressed_count":0,"findings":[]}\nMore text"#,
+        r#"Security review: {"unaddressed_count":0,"findings":["Cross-tenant read"],"pre_existing_count":0}"#,
+        r#"Security review: {"unaddressed_count":1,"findings":[""],"pre_existing_count":0}"#,
+        r#"Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}\nMore text"#,
     ] {
         for merge in [true, false] {
             let scenario = Scenario::new();
@@ -134,7 +398,7 @@ gh fake checks "$(git rev-parse origin/main)" '[{{"name":"test","conclusion":"fa
 "#
         ),
     );
-    scenario.agent_does_for_in_session(7, 2, CLEAN);
+    scenario.agent_does_for_in_session(7, 2, &review_script(&json!([]), &[]));
     scenario.agent_does_for_in_session(
         8,
         1,
@@ -146,7 +410,7 @@ gh pr create --base main --head issue-8 --title 'Fix base CI' --body 'Closes #8'
 gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
 "#,
     );
-    scenario.agent_does_for_in_session(8, 2, CLEAN);
+    scenario.agent_does_for_in_session(8, 2, &review_script(&json!([]), &[]));
     let result = scenario.run(&[&scenario.issue_url(7), "security-review", "base-fix"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let calls = scenario.claude_calls();
@@ -155,7 +419,7 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
         calls[3]["prompt"]
             .as_str()
             .unwrap()
-            .contains("git diff main...HEAD")
+            .contains("against Base branch main")
     );
     assert_eq!(scenario.gh_state()["prs"][1]["state"], "MERGED");
 }
@@ -164,7 +428,7 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
 fn an_unaddressed_introduced_finding_holds_self_merge_with_the_pr_ready() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, OPENS_PR);
-    scenario.agent_does_in_session(2, r#"printf '%s\n' 'Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#);
+    scenario.agent_does_in_session(2, &review_script(&json!([]), &["Cross-tenant read"]));
     let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(
@@ -190,8 +454,9 @@ fn enabled_review_fixes_reach_origin_before_delivery_finishes() {
 echo checked > security-fix.txt
 git add security-fix.txt
 git commit -q -m 'Fix reproduced finding'
-{CLEAN}
-"#
+{clean}
+"#,
+            clean = review_script(&json!([]), &[])
         ),
     );
     let result = scenario.run(&[&scenario.issue_url(7), "security-review"]);
@@ -207,7 +472,10 @@ git commit -q -m 'Fix reproduced finding'
     let prompt = calls[1]["prompt"].as_str().unwrap();
     assert!(prompt.contains("guidance mode"));
     assert!(prompt.contains("Do not delegate"));
-    assert!(prompt.contains("git diff main...HEAD"));
+    assert!(prompt.contains(&format!(
+        "git diff {}...HEAD",
+        scenario.launch_git(&["rev-parse", "main"]).trim()
+    )));
 }
 
 // Regression A.
@@ -224,10 +492,7 @@ gh fake checks "$(git rev-parse origin/main)" '[{"name":"test","conclusion":"suc
 "#
         ),
     );
-    scenario.agent_does_in_session(
-        2,
-        r#"printf '%s\n' 'Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
-    );
+    scenario.agent_does_in_session(2, &review_script(&json!([]), &["Cross-tenant read"]));
     scenario.agent_does_in_session(
         3,
         r#"
@@ -292,10 +557,7 @@ printf '%s\n' 'API Error: [cyber] Private refusal evidence' > "$FAKE_CLAUDE_FINA
 fn review_regression_c_continuation_replaces_the_previous_security_outcome() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, OPENS_PR);
-    scenario.agent_does_in_session(
-        2,
-        r#"printf '%s\n' 'Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
-    );
+    scenario.agent_does_in_session(2, &review_script(&json!([]), &["Cross-tenant read"]));
     let first = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
     assert_eq!(first.code, Some(0), "{}", first.stderr);
     assert!(
@@ -312,7 +574,7 @@ git add feature.txt
 git commit -q -m 'Fix the previously reported finding'
 "#,
     );
-    scenario.agent_does_in_session(4, CLEAN);
+    scenario.agent_does_in_session(4, &review_script(&json!([]), &[]));
     let second = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
     assert_eq!(second.code, Some(0), "{}", second.stderr);
     let state = scenario.gh_state();
