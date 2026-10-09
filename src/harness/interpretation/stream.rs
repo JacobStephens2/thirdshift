@@ -4,7 +4,7 @@
 //! can resume it. Only the first init sets shared session fields, and only
 //! completion supplies the last result and any work killed since that result.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::Value;
 
@@ -33,9 +33,19 @@ enum Dialect {
 #[derive(Default)]
 struct Claude {
     failed: bool,
+    diagnostic: Option<String>,
+    /// The latest root API error, only until this turn's result.
+    api_error: Option<ClaudeApiError>,
     tasks: HashMap<String, String>,
     /// Task id and description, in order of the first kill since the result.
     killed: Vec<(String, String)>,
+}
+
+#[derive(Default)]
+struct ClaudeApiError {
+    message: Option<String>,
+    /// Only diagnostic fields, never unrelated raw event content.
+    facts: BTreeMap<&'static str, String>,
 }
 
 #[derive(Default)]
@@ -136,13 +146,20 @@ impl Decoder for Stream {
                 });
                 vec!["session started".to_string()]
             }
-            Some("assistant") => event["message"]["content"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|block| block["type"] == "tool_use")
-                .filter_map(|block| Some(self.tool_use(block["name"].as_str()?, &block["input"])))
-                .collect(),
+            Some("assistant") => {
+                if let Dialect::Claude(claude) = &mut self.dialect {
+                    claude.assistant(&event);
+                }
+                event["message"]["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|block| block["type"] == "tool_use")
+                    .filter_map(|block| {
+                        Some(self.tool_use(block["name"].as_str()?, &block["input"]))
+                    })
+                    .collect()
+            }
             Some("system") => {
                 if let Dialect::Claude(claude) = &mut self.dialect {
                     claude.track_task(&event);
@@ -150,6 +167,11 @@ impl Decoder for Stream {
                 Vec::new()
             }
             Some("result") => {
+                if matches!(self.dialect, Dialect::Claude(_))
+                    && !event["parent_tool_use_id"].is_null()
+                {
+                    return Vec::new();
+                }
                 self.final_message = event["result"].as_str().map(String::from);
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),
@@ -160,8 +182,7 @@ impl Decoder for Stream {
                 let failed = event["subtype"] != "success" || event["is_error"] == true;
                 match &mut self.dialect {
                     Dialect::Claude(claude) => {
-                        claude.failed = failed;
-                        claude.killed.clear();
+                        claude.result(&event, failed);
                     }
                     Dialect::Grok(grok) => grok.result(&event, failed),
                 }
@@ -198,7 +219,7 @@ impl Decoder for Stream {
         let (failed, diagnostic) = match self.dialect {
             Dialect::Claude(claude) => {
                 ended.killed = claude.killed.into_iter().map(|(_, text)| text).collect();
-                (claude.failed, None)
+                (claude.failed, claude.diagnostic)
             }
             Dialect::Grok(grok) => {
                 ended.session_id = ended.session_id.or(grok.fallback_id);
@@ -218,6 +239,38 @@ impl Decoder for Stream {
 }
 
 impl Claude {
+    fn assistant(&mut self, event: &Value) {
+        if !event["parent_tool_use_id"].is_null() {
+            return;
+        }
+        self.api_error = (event["is_api_error_message"] == true
+            || nonempty_text(&event["error"]).is_some()
+            || nonempty_text(&event["api_error"]).is_some())
+        .then(|| ClaudeApiError::read(event));
+    }
+
+    fn result(&mut self, event: &Value, failed: bool) {
+        self.failed = failed;
+        self.killed.clear();
+        let api_error = self.api_error.take().unwrap_or_default();
+        self.diagnostic = if failed {
+            let errors: Vec<_> = event["errors"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(nonempty_text)
+                .collect();
+            let message = if errors.is_empty() {
+                nonempty_text(&event["result"]).map(String::from)
+            } else {
+                Some(errors.join("\n"))
+            };
+            api_error.diagnostic(event, message)
+        } else {
+            None
+        };
+    }
+
     fn track_task(&mut self, event: &Value) {
         let Some(id) = event["task_id"].as_str() else {
             return;
@@ -244,6 +297,72 @@ impl Claude {
             self.killed.push((id.to_string(), description));
         }
     }
+}
+
+impl ClaudeApiError {
+    fn read(event: &Value) -> Self {
+        let text: Vec<_> = event["message"]["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|block| block["type"] == "text")
+            .filter_map(|block| nonempty_text(&block["text"]))
+            .collect();
+        Self {
+            message: (!text.is_empty()).then(|| text.join("\n")),
+            facts: Self::facts(event),
+        }
+    }
+
+    fn facts(event: &Value) -> BTreeMap<&'static str, String> {
+        let mut facts = BTreeMap::new();
+        if let Some(kind) = nonempty_text(&event["api_error"]) {
+            facts.insert("api_error", kind.to_string());
+        }
+        if let Some(status) = event["api_error_status"].as_u64() {
+            facts.insert("api_error_status", status.to_string());
+        }
+        let limit = &event["api_error_params"]["rate_limit_info"];
+        for key in [
+            "status",
+            "rateLimitType",
+            "overageStatus",
+            "overageDisabledReason",
+        ] {
+            if let Some(text) = nonempty_text(&limit[key]) {
+                facts.insert(key, text.to_string());
+            }
+        }
+        for key in ["resetsAt", "overageResetsAt"] {
+            if let Some(timestamp) = limit[key].as_u64() {
+                facts.insert(key, timestamp.to_string());
+            }
+        }
+        facts
+    }
+
+    fn diagnostic(mut self, terminal: &Value, message: Option<String>) -> Option<String> {
+        // Terminal facts replace only the fields they actually supply.
+        self.facts.extend(Self::facts(terminal));
+        let message = message.or(self.message);
+        if self.facts.is_empty() {
+            return message;
+        }
+        let facts = self
+            .facts
+            .into_iter()
+            .map(|(key, value)| format!("{key}: {value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Some(format!(
+            "{}\n{facts}",
+            message.as_deref().unwrap_or("Claude's turn failed")
+        ))
+    }
+}
+
+fn nonempty_text(value: &Value) -> Option<&str> {
+    value.as_str().filter(|text| !text.trim().is_empty())
 }
 
 impl Grok {

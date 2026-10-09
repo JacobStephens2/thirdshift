@@ -6,6 +6,220 @@ use serde_json::json;
 use std::os::unix::process::ExitStatusExt;
 
 #[test]
+fn claude_terminal_failure_keeps_the_captured_spend_limit_message_for_either_exit() {
+    const MESSAGE: &str = "You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message · your weekly limit resets Oct 10, 2am (UTC)";
+    for exit in [0, 1] {
+        let mut interpretation = stream(Harness::Claude, "");
+        interpretation.condense(r#"{"type":"result","subtype":"success","result":"Earlier work completed.","num_turns":17,"total_cost_usd":1.25}"#);
+        interpretation.condense(&json!({"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":MESSAGE}).to_string());
+        let completion = interpretation.finish(Ok(std::process::ExitStatus::from_raw(exit << 8)));
+        let prefix = if exit == 0 {
+            "claude's turn failed"
+        } else {
+            "claude exited 1"
+        };
+        let cause = completion.outcome.unwrap_err().to_string();
+        assert!(
+            cause.starts_with(&format!("{prefix}: {MESSAGE}")),
+            "{cause}"
+        );
+        assert!(cause.contains("api_error_status: 429"), "{cause}");
+        assert_eq!(
+            completion.report.unwrap().summary.as_deref(),
+            Some("17 turns, $1.25")
+        );
+    }
+}
+
+#[test]
+fn claude_terminal_diagnostics_prefer_meaningful_errors_and_tolerate_malformed_fields() {
+    for (errors, result, expected) in [
+        (
+            json!([null, "", " \n", 7, "first", "second"]),
+            json!("result text"),
+            "claude's turn failed: first\nsecond",
+        ),
+        (
+            json!([null, 7, " "]),
+            json!("result text"),
+            "claude's turn failed: result text",
+        ),
+        (
+            json!("malformed"),
+            json!("result text"),
+            "claude's turn failed: result text",
+        ),
+        (json!([""]), json!(" \n"), "claude's turn failed"),
+        (
+            json!({"message":"malformed"}),
+            json!(42),
+            "claude's turn failed",
+        ),
+    ] {
+        let (completion, _) = lines(
+            Harness::Claude,
+            &[json!({"type":"result","subtype":"error","errors":errors,"result":result})],
+        );
+        assert_eq!(completion.outcome.unwrap_err().to_string(), expected);
+    }
+}
+
+#[test]
+fn claude_failed_results_keep_root_api_fallback_and_supplied_limit_facts() {
+    let api_error = json!({
+        "type":"assistant", "parent_tool_use_id":null, "is_api_error_message":true,
+        "api_error":"usage_limit_reached", "api_error_status":429,
+        "api_error_params":{"rate_limit_info":{
+            "status":"rejected", "rateLimitType":"seven_day", "resetsAt":1791597600,
+            "overageStatus":"rejected", "overageDisabledReason":"org_level_disabled_until",
+            "unrelated":"private raw event content"
+        }},
+        "message":{"content":[{"type":"text","text":"Provider's limit message."}]}
+    });
+    for (terminal, message) in [
+        (
+            json!({"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"Monthly spend limit; weekly reset Oct 10."}),
+            "Monthly spend limit; weekly reset Oct 10.",
+        ),
+        (
+            json!({"type":"result","subtype":"error","errors":["terminal error"],"result":"ignored"}),
+            "terminal error",
+        ),
+        (
+            json!({"type":"result","subtype":"error","errors":[null, " "],"result":""}),
+            "Provider's limit message.",
+        ),
+    ] {
+        let (completion, _) = lines(Harness::Claude, &[api_error.clone(), terminal]);
+        let cause = completion.outcome.unwrap_err().to_string();
+        assert!(
+            cause.starts_with(&format!("claude's turn failed: {message}")),
+            "{cause}"
+        );
+        for fact in [
+            "api_error: usage_limit_reached",
+            "api_error_status: 429",
+            "rateLimitType: seven_day",
+            "resetsAt: 1791597600",
+            "overageStatus: rejected",
+            "overageDisabledReason: org_level_disabled_until",
+        ] {
+            assert!(cause.contains(fact), "missing {fact:?}: {cause}");
+        }
+        assert!(!cause.contains("private raw event content"), "{cause}");
+        assert!(!cause.contains("overageResetsAt"), "{cause}");
+    }
+}
+
+#[test]
+fn claude_child_errors_cannot_replace_the_successful_parent_result() {
+    for exit in [0, 1] {
+        let mut interpretation = stream(Harness::Claude, "");
+        for event in [
+            json!({"type":"result","subtype":"success","result":"Parent done.","num_turns":2,"total_cost_usd":0.3}),
+            json!({"type":"assistant","parent_tool_use_id":"child","is_api_error_message":true,"api_error":"usage_limit_reached","message":{"content":[{"type":"text","text":"child failure"}]}}),
+            json!({"type":"result","parent_tool_use_id":"child","subtype":"error","errors":["child failure"],"result":"child result","num_turns":99,"total_cost_usd":99}),
+        ] {
+            interpretation.condense(&event.to_string());
+        }
+        let completion = interpretation.finish(Ok(std::process::ExitStatus::from_raw(exit << 8)));
+        if exit == 0 {
+            assert_eq!(
+                completion.outcome.unwrap().final_message.as_deref(),
+                Some("Parent done.")
+            );
+        } else {
+            assert_eq!(
+                completion.outcome.unwrap_err().to_string(),
+                "claude exited 1"
+            );
+        }
+        assert_eq!(
+            completion.report.unwrap().summary.as_deref(),
+            Some("2 turns, $0.30")
+        );
+    }
+}
+
+#[test]
+fn claude_parent_success_clears_recovered_errors_and_never_supplies_an_exit_diagnostic() {
+    for exit in [0, 1] {
+        let mut interpretation = stream(Harness::Claude, "");
+        for event in [
+            json!({"type":"assistant","parent_tool_use_id":null,"is_api_error_message":true,"api_error":"usage_limit_reached","api_error_params":{"rate_limit_info":{"rateLimitType":"seven_day","resetsAt":1791597600}},"message":{"content":[{"type":"text","text":"retried root error"}]}}),
+            json!({"type":"result","subtype":"error","errors":["earlier failed turn"]}),
+            json!({"type":"result","subtype":"success","errors":["not a failure"],"result":"Parent done."}),
+        ] {
+            interpretation.condense(&event.to_string());
+        }
+        let completion = interpretation.finish(Ok(std::process::ExitStatus::from_raw(exit << 8)));
+        if exit == 0 {
+            assert_eq!(
+                completion.outcome.unwrap().final_message.as_deref(),
+                Some("Parent done.")
+            );
+        } else {
+            assert_eq!(
+                completion.outcome.unwrap_err().to_string(),
+                "claude exited 1"
+            );
+        }
+    }
+}
+
+#[test]
+fn claude_recovered_root_api_errors_do_not_contaminate_a_later_failure() {
+    for recovery in [
+        json!({"type":"assistant","message":{"content":[{"type":"text","text":"Recovered."}]}}),
+        json!({"type":"result","subtype":"success","result":"Recovered."}),
+    ] {
+        let (completion, _) = lines(
+            Harness::Claude,
+            &[
+                json!({"type":"assistant","is_api_error_message":true,"api_error":"usage_limit_reached","api_error_params":{"rate_limit_info":{"rateLimitType":"seven_day","resetsAt":1791597600}},"message":{"content":[{"type":"text","text":"earlier limit"}]}}),
+                recovery,
+                json!({"type":"assistant","parent_tool_use_id":"child","error":"rate_limit","message":{"content":[{"type":"text","text":"child limit"}]}}),
+                json!({"type":"result","subtype":"error"}),
+            ],
+        );
+        assert_eq!(
+            completion.outcome.unwrap_err().to_string(),
+            "claude's turn failed"
+        );
+    }
+}
+
+#[test]
+fn claude_reports_only_supplied_limit_facts_and_never_classifies_a_bare_429() {
+    for params in [
+        json!(null),
+        json!({"rate_limit_info":"malformed"}),
+        json!({"rate_limit_info":{"rateLimitType":4,"resetsAt":"tomorrow","overageResetsAt":-1,"overageStatus":false}}),
+    ] {
+        let (completion, _) = lines(
+            Harness::Claude,
+            &[
+                json!({"type":"result","subtype":"success","is_error":true,"api_error_status":429,"api_error_params":params}),
+            ],
+        );
+        assert_eq!(
+            completion.outcome.unwrap_err().to_string(),
+            "claude's turn failed: Claude's turn failed\napi_error_status: 429"
+        );
+    }
+    let (completion, _) = lines(
+        Harness::Claude,
+        &[
+            json!({"type":"result","subtype":"error","result":"Extra usage rejected.","api_error_params":{"rate_limit_info":{"overageStatus":"rejected","overageResetsAt":1792000000}}}),
+        ],
+    );
+    assert_eq!(
+        completion.outcome.unwrap_err().to_string(),
+        "claude's turn failed: Extra usage rejected.\noverageResetsAt: 1792000000; overageStatus: rejected"
+    );
+}
+
+#[test]
 fn first_init_alone_sets_the_directory_subscription_and_init_id() {
     for harness in [Harness::Claude, Harness::Grok] {
         for id in [json!("first"), json!(""), json!(null), json!(7)] {
