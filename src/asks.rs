@@ -109,8 +109,8 @@ impl Asks {
             tickets_at_once: config.spec_parallel,
             parallel_asked: false,
             base_fix: given.base_fix.clone(),
-            security_fix: given.security_fix,
-            security_review: given.security_review,
+            security_fix: given.security.fix,
+            security_review: given.security.review,
             launch_pull: false,
             harness: given.harness.clone(),
         }
@@ -462,8 +462,7 @@ mod tests {
     /// fix, its sessions on Claude's `sonnet`.
     fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
         Given {
-            security_fix: false,
-            security_review: false,
+            security: crate::security::Options::default(),
             kind,
             stamp: "20261003T120000-0400".to_string(),
             base_fix,

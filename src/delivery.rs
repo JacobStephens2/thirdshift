@@ -1,5 +1,6 @@
 //! Delivery: what a Run, or a Spec run for its Spec PR, does from its
-//! worktree once its work begins. The opening session, the push after it,
+//! worktree once its work begins. The opening session, the optional guidance
+//! Security review, the push after it,
 //! marking the pull request ready, the Repair loop that keeps it mergeable
 //! and green, the Self-merge in a Merge run and its steps after the merge,
 //! and the Failed run path when any of these fails.
@@ -38,6 +39,7 @@ use repair_loop::{Repair, Upstream};
 /// into the Base branch `base`, to `goal`.
 pub struct Delivery<'a> {
     pub security_fix: bool,
+    /// Whether the opening session is followed by a guidance Security review.
     pub security_review: bool,
     pub issue: &'a IssueUrl,
     pub base: &'a str,
@@ -66,7 +68,8 @@ pub struct Opening<'a> {
 impl Delivery<'_> {
     /// Take the pull request from the branch checked out in `worktree` to the
     /// goal. With `opening.catch_up_from_origin`, first fast-forward the
-    /// branch to origin. Then run the opening session, push the branch, for
+    /// branch to origin. Then run the opening session and optional Security
+    /// review, push the branch, for
     /// any commit the session left unpushed, write the line that says what it
     /// was built with in the pull request's body, only warning if that fails,
     /// restore the optional Tickets checklist, and mark the pull request ready,
@@ -161,16 +164,30 @@ impl Route<'_> {
         outside.push()?;
         self.write_built_with(outside);
         let pr = outside.mark_pr_ready(checklist)?;
-        if let Some(review) = review {
-            outside.record_security_review(&review)?;
-            if let Some(hold) = review.hold() {
-                outside.step(hold.to_string());
-                if self.goal == Goal::Merged {
-                    return Err(hold.into());
-                }
+        let hold = review.as_ref().and_then(SecurityOutcome::hold);
+        if let Some(review) = &review
+            && let Err(error) = outside.record_security_review(review)
+        {
+            outside.warn(
+                &error,
+                "could not write the Security review outcome in the pull request's body"
+                    .to_string(),
+            );
+        }
+        // A Security hold prevents Self-merge, while ordinary readiness still
+        // includes repairing conflicts and watching the branch's CI.
+        let goal = if hold.is_some() {
+            Goal::ReadyForReview
+        } else {
+            self.goal
+        };
+        outside.take_to_goal(&pr.url, goal)?;
+        if let Some(hold) = hold {
+            outside.step(hold.to_string());
+            if self.goal == Goal::Merged {
+                return Err(hold.into());
             }
         }
-        outside.take_to_goal(&pr.url, self.goal)?;
         if self.goal == Goal::Merged {
             self.after_merge(outside, &pr);
         }
@@ -257,7 +274,7 @@ fn retry_if_interrupted<O: Outside>(
 /// sessions have ended with `error`: commit and push the work, and send an
 /// open PR back to draft. An interrupt, if one was requested, is the error
 /// instead: it can surface as some other error, such as a killed git. A
-/// `PolicyRefusal` neither pushes nor converts, so the PR stays ready on the
+/// `PolicyRefusal` or `SecurityHold` neither pushes nor converts, so the PR stays ready on the
 /// head whose CI was watched. Problems along the way are reported, not
 /// raised, so the error is what the Run fails with. Worktree owns preservation
 /// and retains work that may not have reached origin. `log` is the most recent

@@ -1142,6 +1142,7 @@ limit = 5
 [security]
 harness = \"codex\"
 fix = false
+review = false
 
 [harness]
 default = \"claude\"

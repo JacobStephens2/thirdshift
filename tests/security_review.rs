@@ -209,3 +209,122 @@ git commit -q -m 'Fix reproduced finding'
     assert!(prompt.contains("Do not delegate"));
     assert!(prompt.contains("git diff main...HEAD"));
 }
+
+// Regression A.
+#[test]
+fn review_regression_a_security_hold_still_repairs_red_ci() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{OPENS_PR}\n{}",
+            r#"
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name":"test","conclusion":"success"}]'
+"#
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"printf '%s\n' 'Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+    );
+    scenario.agent_does_in_session(
+        3,
+        r#"
+echo fixed > ci-fixed.txt
+git add ci-fixed.txt
+git commit -q -m 'Fix branch CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#,
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Cross-tenant read"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        3,
+        "The held Merge run should repair red CI before handing over its PR: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.origin_file("issue-7", "ci-fixed.txt").as_deref(),
+        Some("fixed\n")
+    );
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "OPEN");
+    assert_eq!(state["prs"][0]["isDraft"], false);
+}
+
+// Regression B.
+#[test]
+fn review_regression_b_body_write_failure_preserves_refusal_and_readiness() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(
+        2,
+        r#"
+gh fake fails 'api --method PATCH repos/acme/widgets/pulls/1'
+printf '%s\n' 'API Error: [cyber] Private refusal evidence' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "OPEN");
+    assert_eq!(
+        state["prs"][0]["isDraft"], false,
+        "A refused review must leave the already-ready PR ready when only its summary PATCH fails: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("Security review refused"),
+        "The failure must retain the Security refusal cause: {}",
+        result.stderr
+    );
+}
+
+// Regression C.
+#[test]
+fn review_regression_c_continuation_replaces_the_previous_security_outcome() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(
+        2,
+        r#"printf '%s\n' 'Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"]}' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+    );
+    let first = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    assert!(
+        scenario.gh_state()["prs"][0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("Cross-tenant read")
+    );
+    scenario.agent_does_in_session(
+        3,
+        r#"
+echo fixed > feature.txt
+git add feature.txt
+git commit -q -m 'Fix the previously reported finding'
+"#,
+    );
+    scenario.agent_does_in_session(4, CLEAN);
+    let second = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "MERGED");
+    let body = state["prs"][0]["body"].as_str().unwrap();
+    assert!(
+        !body.contains("Cross-tenant read"),
+        "The fixed finding remains falsely listed as unaddressed after a clean review: {body}"
+    );
+    assert_eq!(
+        body.matches("### Security review outcome").count(),
+        1,
+        "{body}"
+    );
+}

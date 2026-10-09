@@ -243,8 +243,10 @@ impl Outside for ChildRunsAndGitHub<'_> {
             &ticket,
             kind,
             self.base_fix.clone(),
-            self.security_fix,
-            self.security_review,
+            crate::security::Options {
+                fix: self.security_fix,
+                review: self.security_review,
+            },
             self.harness,
         )
     }

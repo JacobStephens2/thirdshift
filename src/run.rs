@@ -118,8 +118,10 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
         started_by.child(),
         asks.base_fix.clone(),
         asks.harness.clone(),
-        asks.security_fix,
-        asks.security_review,
+        crate::security::Options {
+            fix: asks.security_fix,
+            review: asks.security_review,
+        },
     );
     let outcome = run(issue, asks, started_by, &mut base_fix);
     Ended {

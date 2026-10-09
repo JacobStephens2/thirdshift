@@ -24,6 +24,7 @@ use crate::issue::IssueUrl;
 use crate::logs;
 use crate::progress;
 use crate::run_ending;
+use crate::security::Options;
 
 #[cfg(test)]
 use execution_tests::Fault;
@@ -71,8 +72,7 @@ pub struct Given {
     pub stamp: String,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
-    pub security_fix: bool,
-    pub security_review: bool,
+    pub security: Options,
     /// The Harness, Model and Effort its sessions run on: the command's
     /// that started it.
     pub harness: Choice,
@@ -129,10 +129,10 @@ impl Given {
             BaseFixAsk::Forbid => {}
             BaseFixAsk::Undecided { retry } => args.extend([OFFER_BASE_FIX, retry]),
         }
-        if self.security_fix {
+        if self.security.fix {
             args.push(ALLOW_SECURITY_FIX);
         }
-        if self.security_review {
+        if self.security.review {
             args.push(SECURITY_REVIEW);
         }
         args.extend([SESSIONS_HARNESS, self.harness.harness.name()]);
@@ -154,8 +154,7 @@ pub struct Reader {
     kind: Option<Kind>,
     stamp: Option<String>,
     base_fix: Option<BaseFixAsk>,
-    security_fix: bool,
-    security_review: bool,
+    security: Options,
     harness: Option<Harness>,
     model: Option<String>,
     effort: Option<String>,
@@ -176,16 +175,16 @@ impl Reader {
         };
         match arg {
             SECURITY_REVIEW => {
-                if self.security_review {
+                if self.security.review {
                     bail!("repeated argument: {arg}");
                 }
-                self.security_review = true;
+                self.security.review = true;
             }
             ALLOW_SECURITY_FIX => {
-                if self.security_fix {
+                if self.security.fix {
                     bail!("repeated argument: {arg}");
                 }
-                self.security_fix = true;
+                self.security.fix = true;
             }
             SPEC_BRANCH | BASE_FIX_INTO => {
                 not_yet_given(&self.kind, arg)?;
@@ -242,8 +241,8 @@ impl Reader {
         let Some(kind) = self.kind else {
             if self.stamp.is_some()
                 || self.base_fix.is_some()
-                || self.security_review
-                || self.security_fix
+                || self.security.review
+                || self.security.fix
                 || self.harness.is_some()
                 || self.model.is_some()
                 || self.effort.is_some()
@@ -263,8 +262,7 @@ impl Reader {
             kind,
             stamp,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
-            security_fix: self.security_fix,
-            security_review: self.security_review,
+            security: self.security,
             harness: Choice {
                 harness,
                 model: self.model,
@@ -326,16 +324,14 @@ pub fn start(
     issue: &IssueUrl,
     kind: Kind,
     base_fix: BaseFixAsk,
-    security_fix: bool,
-    security_review: bool,
+    security: Options,
     harness: &Choice,
 ) -> Result<Handle> {
     let given = Given {
         kind,
         stamp: logs::stamp(),
         base_fix,
-        security_fix,
-        security_review,
+        security,
         harness: harness.clone(),
     };
     start_from(&own_executable()?, issue, &given)
@@ -713,8 +709,7 @@ mod tests {
             kind: ticket(),
             stamp: STAMPED.to_string(),
             base_fix: BaseFixAsk::Forbid,
-            security_fix: false,
-            security_review: false,
+            security: Options::default(),
             harness: Choice::default(),
         };
         let Err(error) = start_from(executable, &issue, &given) else {
@@ -772,8 +767,7 @@ mod tests {
                     kind: kind.clone(),
                     stamp: STAMPED.to_string(),
                     base_fix,
-                    security_fix: false,
-                    security_review: false,
+                    security: Options::default(),
                     harness: harness.clone(),
                 };
                 let written = given.to_args();

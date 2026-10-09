@@ -78,12 +78,7 @@ pub(crate) struct Review {
 impl Review {
     pub fn from_final_message(message: Option<&str>) -> Result<Self> {
         let json = message
-            .and_then(|message| {
-                message
-                    .lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .next_back()
-            })
+            .and_then(|message| message.lines().rfind(|line| !line.trim().is_empty()))
             .and_then(|line| line.strip_prefix("Security review: "))
             .context("Security review ended without its required final line")?;
         let review: Self = serde_json::from_str(json)

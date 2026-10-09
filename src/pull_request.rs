@@ -186,8 +186,15 @@ impl<A: Adapter> PullRequest<A> {
         self.validate(&snapshot, true)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
         let section = "## Unaddressed findings";
-        let summary = format!("### Security review outcome\n\n{entry}\n");
-        let updated = if let Some(at) = body.find(section) {
+        let start = "<!-- thirdshift:security-review -->";
+        let end = "<!-- /thirdshift:security-review -->";
+        let summary = format!("{start}\n### Security review outcome\n\n{entry}\n{end}\n");
+        let previous = body
+            .find(start)
+            .and_then(|at| body[at..].find(end).map(|last| (at, at + last + end.len())));
+        let updated = if let Some((first, last)) = previous {
+            format!("{}{}{}", &body[..first], summary.trim_end(), &body[last..])
+        } else if let Some(at) = body.find(section) {
             let after = at + section.len();
             let end = body[after..]
                 .find("\n## ")
@@ -196,8 +203,11 @@ impl<A: Adapter> PullRequest<A> {
         } else {
             format!("{}\n\n{section}\n\n{summary}", body.trim_end())
         };
-        self.adapter
-            .set_body(&self.issue, snapshot.pr.number, &updated, false)
+        if updated != body {
+            self.adapter
+                .set_body(&self.issue, snapshot.pr.number, &updated, false)?;
+        }
+        Ok(())
     }
 
     /// Observe afresh and validate the expected branches and open state
