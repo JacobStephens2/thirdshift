@@ -35,6 +35,8 @@ mod execution_tests;
 pub enum Purpose {
     Ordinary,
     Security,
+    /// A guidance review retains security checks without delegating auditors.
+    SecurityReview,
 }
 
 /// Where a Run's or an Architect run's Session logs go: in `sessions/` under
@@ -214,7 +216,7 @@ impl<'a> Sessions<'a> {
         }
         if !ended.killed.is_empty() {
             let ending = ending_with(&ended.killed_work());
-            if matches!(purpose, Purpose::Security) {
+            if matches!(purpose, Purpose::Security | Purpose::SecurityReview) {
                 return Err(anyhow!(
                     "{kind}: the {ended_last} {ending}; Security session incomplete"
                 ));
@@ -300,8 +302,13 @@ impl Outside for OnMachine {
     ) -> Result<Ended> {
         let interpretation = self.adapter.interpretation(&self.worktree, prompt);
         let (invocation, interpretation) = match purpose {
-            Purpose::Security => (
-                self.adapter.security_session(&self.harness, resume, prompt),
+            Purpose::Security | Purpose::SecurityReview => (
+                self.adapter.security_session(
+                    &self.harness,
+                    resume,
+                    prompt,
+                    matches!(purpose, Purpose::Security),
+                ),
                 interpretation.for_security(self.harness.model.as_deref()),
             ),
             Purpose::Ordinary => (

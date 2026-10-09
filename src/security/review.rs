@@ -40,7 +40,8 @@ pub(crate) fn run(
         "Security review private report: {}",
         report.display()
     ));
-    let message = sessions.run_to_final_message(Purpose::Security, "security-review", &text)?;
+    let message =
+        sessions.run_to_final_message(Purpose::SecurityReview, "security-review", &text)?;
     // A session may change commits on the Issue branch, but it cannot hand
     // us a replacement checkout to observe or publish findings from.
     worktree.head()?;
@@ -67,18 +68,19 @@ pub(crate) fn run(
             let draft = DraftAdvisory {
                 fingerprint: finding.fingerprint.clone(),
                 summary: finding.title.clone(),
-                description: reproduction.description(&format!(
+                description: format!(
                     "Found by thirdshift's Security review.\n\nFingerprint: `{}`\nAudited commit: `{merge_base}`\nReview issue: {}\n\n{}\n\n```json\n{}\n```\n",
                     finding.fingerprint,
                     issue.url,
                     finding.description,
                     serde_json::to_string_pretty(&finding)?
-                )),
+                ),
                 package: package.clone(),
             };
             // Reuse every record state and preserve the Day shift's grade.
             if known.finding(&draft).is_none() {
                 let record = github.create_security_record(&repo, &known, &draft)?;
+                github.update_security_record(&repo, &known.record(&record)?, &reproduction)?;
                 known.remember(record);
                 progress::step("recorded a pre-existing Security finding privately");
             }

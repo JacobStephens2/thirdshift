@@ -62,7 +62,7 @@ fn an_old_finding_is_recorded_privately_without_holding_self_merge() {
         .expect("private draft advisory");
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["state"], "draft");
-    assert!(records[0]["severity"].is_null());
+    assert_eq!(records[0]["severity"], "low");
     let description = records[0]["description"].as_str().unwrap();
     assert!(description.contains("Fingerprint: `old-input-bound`"));
     assert!(description.contains("Private old vulnerability evidence."));
@@ -697,5 +697,70 @@ fn review_merge_base_uses_remote_ref_when_local_tag_shadows_it() {
     assert!(
         prompt.contains(&expected),
         "Security review used a local tag instead of published Base branch merge base; expected {expected}, got {prompt}"
+    );
+}
+
+#[test]
+fn guidance_security_review_on_codex_does_not_request_delegated_auditors() {
+    for resumed in [false, true] {
+        let scenario = Scenario::new();
+        scenario.agent_does_in_session(1, OPENS_PR);
+        let mut review = review_script(&json!([]), &[]);
+        if resumed {
+            review.push_str(
+                r#"printf '%s\n' '{"type":"item.started","item":{"id":"pending","type":"command_execution","command":"bounded-fixture","status":"in_progress"}}'
+"#,
+            );
+            scenario.agent_does_in_session(
+                3,
+                r#"printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+            );
+        }
+        scenario.agent_does_in_session(2, &review);
+        let result = scenario.run(&[
+            &scenario.issue_url(7),
+            "security-review",
+            "harness",
+            "codex",
+        ]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let calls = scenario.codex_calls();
+        assert_eq!(calls.len(), if resumed { 3 } else { 2 });
+        assert!(
+            calls[1]["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Use one session. Do not delegate auditors")
+        );
+        for call in &calls[1..] {
+            let prompt = call["prompt"].as_str().unwrap();
+            assert!(
+                !prompt.contains("Start fresh sub-agents"),
+                "The chosen guidance review and its Resume must not request delegated auditors: {prompt}"
+            );
+            let args = call["argv"].as_array().unwrap();
+            assert!(args.windows(2).any(|pair| pair
+                == [
+                    json!("-c"),
+                    json!("agents.max_concurrent_threads_per_session=8")
+                ]));
+        }
+    }
+}
+
+#[test]
+fn reproduced_old_review_finding_sets_the_private_advisory_severity() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(2, &review_script(&json!([old_finding()]), &[]));
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "MERGED");
+    assert_eq!(state["advisories"][0]["state"], "draft");
+    assert_eq!(
+        state["advisories"][0]["severity"], "low",
+        "The validated old finding already has a failing proof of concept and scored severity; record it as a Security run does"
     );
 }
