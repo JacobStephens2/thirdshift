@@ -1008,16 +1008,16 @@ fi
                     fs::read_to_string(path.join("work.txt")).unwrap(),
                     "capture work\n"
                 );
-                assert!(
-                    error.contains("retaining checkout") && error.contains(&head),
-                    "{error}"
-                );
                 assert!(registration(&launch).contains(path.to_str().unwrap()));
             } else {
-                assert!(!path.exists());
-                assert_eq!(registration(&launch).matches("worktree ").count(), 1);
+                assert!(path.exists(), "{kind}: {error}");
+                assert_eq!(registration(&launch).matches("worktree ").count(), 2);
             }
-            if (work && kind != "review") || kind == "equal" {
+            assert!(
+                error.contains("retaining checkout") && error.contains(&head),
+                "{kind}: {error}"
+            );
+            if kind != "review" {
                 assert_eq!(
                     local_head(&launch, BRANCH).unwrap().as_deref(),
                     Some(head.as_str())

@@ -28,7 +28,7 @@ pub(super) struct Checkout {
 impl Checkout {
     /// Called while acquisition recovery is armed and its lock is held.
     pub(super) fn capture(launch: &Git, path: &Path, branch: Option<&str>) -> Result<Self> {
-        let git = Git::new(path);
+        let git = Git::new(path).completion();
         let owner = Self {
             root: Directory::open(path.to_path_buf())?,
             admin: Directory::open(PathBuf::from(
@@ -65,12 +65,7 @@ impl Checkout {
     }
 
     fn verify_repository(&self, launch: &Git) -> Result<()> {
-        self.common.verify().context("common repository identity")?;
-        if launch.common_dir()?.canonicalize()? != self.common.path {
-            bail!("launch no longer belongs to the captured common repository");
-        }
-        self.common.verify()?;
-        Ok(())
+        self.common.verify_repository(launch)
     }
 
     /// A confirmed Self-merge authorizes completion in the captured repository,
@@ -222,11 +217,16 @@ impl Checkout {
 
     /// Directory handles distinguish recreation even at the same paths and HEAD.
     /// The current commit is observed here, never pinned to the acquisition HEAD.
-    fn inspect(&self, launch: &Git) -> Result<String> {
+    pub(super) fn verify_directory_identity(&self) -> Result<()> {
         self.root.verify().context("checkout directory identity")?;
         self.admin
             .verify()
             .context("administrative directory identity")?;
+        self.common.verify().context("common repository identity")
+    }
+
+    pub(super) fn inspect(&self, launch: &Git) -> Result<String> {
+        self.verify_directory_identity()?;
         self.verify_repository(launch)?;
         let entries = registrations(launch)?;
         let entry = entries
@@ -280,10 +280,42 @@ impl Checkout {
             bail!("attached Issue ref does not match checkout HEAD");
         }
         // Recheck after Git observations, before permitting a destructive step.
-        self.root.verify()?;
-        self.admin.verify()?;
         self.verify_repository(launch)?;
+        self.verify_directory_identity()?;
         Ok(head)
+    }
+
+    pub(super) fn verify_removed(
+        &self,
+        launch: &Git,
+    ) -> Result<Vec<super::acquisition::Registration>> {
+        self.verify_repository(launch)?;
+        self.verify_removed_paths()?;
+        let entries = registrations(launch)?;
+        if entries.iter().any(|entry| entry.path == self.root.path) {
+            bail!("removed checkout registration still exists");
+        }
+        self.verify_repository(launch)?;
+        self.verify_removed_paths()?;
+        Ok(entries)
+    }
+
+    pub(super) fn verify_removed_paths(&self) -> Result<()> {
+        for path in [&self.root.path, &self.admin.path] {
+            match fs::symlink_metadata(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("cannot inspect removed path {}", path.display())
+                    });
+                }
+                Ok(_) => bail!(
+                    "removed path {} exists; remaining resources retained",
+                    path.display()
+                ),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -336,7 +368,7 @@ impl<'a> Disposal<'a> {
                 || self.verify_checkout(),
                 |result| {
                     if result.as_ref().is_ok_and(|output| output.status.success()) {
-                        self.verify_removed().map(|_| ())
+                        self.checkout.verify_removed(self.launch).map(|_| ())
                     } else {
                         self.verify_checkout()
                     }
@@ -357,35 +389,8 @@ impl<'a> Disposal<'a> {
         self.checkout.verify_repository(self.launch)
     }
 
-    fn verify_removed(&self) -> Result<Vec<super::acquisition::Registration>> {
-        self.checkout.verify_repository(self.launch)?;
-        for path in [&self.checkout.root.path, &self.checkout.admin.path] {
-            match fs::symlink_metadata(path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!("cannot inspect removed path {}", path.display())
-                    });
-                }
-                Ok(_) => bail!(
-                    "removed path {} exists; remaining resources retained",
-                    path.display()
-                ),
-            }
-        }
-        let entries = registrations(self.launch)?;
-        if entries
-            .iter()
-            .any(|entry| entry.path == self.checkout.root.path)
-        {
-            bail!("removed checkout registration still exists");
-        }
-        self.checkout.verify_repository(self.launch)?;
-        Ok(entries)
-    }
-
     fn verify_branch(&self, branch: &str, expected: Option<&str>) -> Result<()> {
-        let entries = self.verify_removed()?;
+        let entries = self.checkout.verify_removed(self.launch)?;
         let reference = format!("refs/heads/{branch}");
         if let Some(entry) = entries
             .iter()
@@ -408,23 +413,9 @@ impl<'a> Disposal<'a> {
     }
 
     fn remove_branch(&self, branch: &str) -> Result<()> {
-        let launch = self.launch;
-        let head = &self.head;
-        let reference = format!("refs/heads/{branch}");
-        launch
-            .run_transition(
-                &["update-ref", "--no-deref", "-d", &reference, head],
-                || self.verify_branch(branch, Some(head)),
-                |result| {
-                    let expected = if result.as_ref().is_ok_and(|output| output.status.success()) {
-                        None
-                    } else {
-                        Some(head.as_str())
-                    };
-                    self.verify_branch(branch, expected)
-                },
-            )
-            .with_context(|| format!("conditional removal failed; last observed head {head}"))?;
+        remove_local_ref(self.launch, branch, &self.head, |expected| {
+            self.verify_branch(branch, expected)
+        })?;
         self.remove_configuration(branch)
     }
 
@@ -465,6 +456,32 @@ impl<'a> Disposal<'a> {
         )?;
         Ok(())
     }
+}
+
+/// Each caller supplies its stage authority; Git still compares the old value
+/// atomically, and success requires verified absence rather than exit status.
+pub(super) fn remove_local_ref(
+    launch: &Git,
+    branch: &str,
+    head: &str,
+    verify: impl Fn(Option<&str>) -> Result<()>,
+) -> Result<()> {
+    let reference = format!("refs/heads/{branch}");
+    launch
+        .run_transition(
+            &["update-ref", "--no-deref", "-d", &reference, head],
+            || verify(Some(head)),
+            |result| {
+                let expected = if result.as_ref().is_ok_and(|output| output.status.success()) {
+                    None
+                } else {
+                    Some(head)
+                };
+                verify(expected)
+            },
+        )
+        .with_context(|| format!("conditional removal failed; last observed head {head}"))?;
+    Ok(())
 }
 
 /// Git execution cannot escape this acquired operation. Inspection before and
@@ -578,13 +595,13 @@ impl<'a> Operation<'a> {
     }
 }
 
-struct Directory {
+pub(super) struct Directory {
     path: PathBuf,
     handle: File,
 }
 
 impl Directory {
-    fn open(path: PathBuf) -> Result<Self> {
+    pub(super) fn open(path: PathBuf) -> Result<Self> {
         let handle = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
@@ -593,6 +610,14 @@ impl Directory {
         let directory = Self { path, handle };
         directory.verify()?;
         Ok(directory)
+    }
+
+    pub(super) fn verify_repository(&self, launch: &Git) -> Result<()> {
+        self.verify().context("common repository identity")?;
+        if launch.common_dir()?.canonicalize()? != self.path {
+            bail!("launch no longer belongs to the captured common repository");
+        }
+        self.verify()
     }
 
     fn verify(&self) -> Result<()> {

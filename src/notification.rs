@@ -198,10 +198,10 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 /// The plain-text body of the notification for a command that ended as
 /// `account` tells, with the line that says what its sessions were
 /// `built_with`, if known, naming `command_log`, if the command keeps one,
-/// and `host`, for a command that `took` so long. An Architect run's starts
-/// with how its review ended, and the outcome of the run it dispatched, if
-/// any. The cause is left out of an interrupted command's, whose outcome says
-/// so.
+/// and `host`, for a command that `took` so long. It starts with the command's
+/// outcome, as the subject gives it. An Architect run's then tells how its
+/// review ended, and the outcome of the run it dispatched, if any. The cause
+/// is left out of an interrupted command's, whose outcome says so.
 fn body(
     account: &Account,
     built_with: Option<&str>,
@@ -209,7 +209,7 @@ fn body(
     host: &str,
     took: Duration,
 ) -> String {
-    let mut text = String::new();
+    let mut text = format!("Result:       {}\n", account.outcome);
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
             Ok(line) => line.as_str(),
@@ -372,7 +372,8 @@ mod tests {
             Some((
                 "[thirdshift] acme/widgets#123 Add export button: merged".to_string(),
                 format!(
-                    "Pull request: {PR}\n\
+                    "Result:       merged\n\
+                     Pull request: {PR}\n\
                      Session log:  {LOG}\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -390,7 +391,8 @@ mod tests {
             Some((
                 "[thirdshift] acme/widgets#123 Add export button: failed".to_string(),
                 format!(
-                    "Cause:        claude exited 1\n\
+                    "Result:       failed\n\
+                     Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session log:  {LOG}\n\
                      Host:         droplet-1\n\
@@ -411,7 +413,8 @@ mod tests {
             told(&about_issue(), &account),
             Some((
                 "[thirdshift] acme/widgets#123 Add export button: interrupted".to_string(),
-                "Host:         droplet-1\n\
+                "Result:       interrupted\n\
+                 Host:         droplet-1\n\
                  Took:         4s\n"
                     .to_string()
             ))
@@ -432,7 +435,8 @@ mod tests {
             Some((
                 "[thirdshift] acme/widgets Architect run: merged".to_string(),
                 format!(
-                    "Review:       plan published: {PLAN}\n\
+                    "Result:       merged\n\
+                     Review:       plan published: {PLAN}\n\
                      Dispatched:   merged\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
@@ -464,7 +468,8 @@ mod tests {
             Some((
                 "[thirdshift] acme/widgets Architect run: idea filed".to_string(),
                 format!(
-                    "Review:       idea filed: {PLAN}\n\
+                    "Result:       idea filed\n\
+                     Review:       idea filed: {PLAN}\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -488,7 +493,8 @@ mod tests {
             Some((
                 "[thirdshift] Architect run: review failed".to_string(),
                 format!(
-                    "Review:       failed\n\
+                    "Result:       review failed\n\
+                     Review:       failed\n\
                      Cause:        claude exited 1\n\
                      Session log:  {LOG}\n\
                      Host:         droplet-1\n\
@@ -519,7 +525,8 @@ mod tests {
     fn the_body_leaves_out_what_the_run_does_not_have() {
         assert_eq!(
             body_of(&failed("origin mismatch")),
-            "Cause:        origin mismatch\n\
+            "Result:       failed\n\
+             Cause:        origin mismatch\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -535,7 +542,8 @@ mod tests {
                 "droplet-1",
                 Duration::from_secs(4)
             ),
-            "Pull request: https://github.com/acme/widgets/pull/1\n\
+            "Result:       merged\n\
+             Pull request: https://github.com/acme/widgets/pull/1\n\
              Session log:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
              Command log:  /home/me/.thirdshift/logs/commands/issue/x.log\n\
              Built with claude · opus · high\n\
@@ -553,7 +561,8 @@ mod tests {
         };
         assert_eq!(
             body_of(&account),
-            "Pull request: https://github.com/acme/widgets/pull/1\n\
+            "Result:       failed\n\
+             Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        claude exited 1\n\
              Base fix:     https://github.com/acme/widgets/issues/8 merged\n\
              Host:         droplet-1\n\
@@ -581,7 +590,8 @@ mod tests {
         };
         assert_eq!(
             body_of(&account),
-            "Pull request: https://github.com/acme/widgets/pull/1\n\
+            "Result:       failed\n\
+             Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        CI red on test, which also fails on main at 362b9ca; fix main first\n\
              Base check:   test: https://ci.example/main/test\n\
              Or set:       base.fix = true\n\
@@ -603,7 +613,8 @@ mod tests {
         };
         assert_eq!(
             body_of(&account),
-            "Cause:        Tickets not done: #21, #22\n\
+            "Result:       failed\n\
+             Cause:        Tickets not done: #21, #22\n\
              Host:         droplet-1\n\
              Took:         4s\n\
              \n\

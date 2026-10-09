@@ -3,6 +3,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -162,6 +163,15 @@ fn interrupting_a_muse_check_after_cli_exit_stops_the_command_holding_its_stream
 
 #[test]
 fn interrupting_a_live_session_after_cli_exit_stops_the_command_holding_stdout() {
+    assert_live_session_stdout_holder_stopped(false);
+}
+
+#[test]
+fn interrupting_a_live_session_stops_its_stdout_holder_before_slow_cleanup() {
+    assert_live_session_stdout_holder_stopped(true);
+}
+
+fn assert_live_session_stdout_holder_stopped(slow_cleanup: bool) {
     let scenario = Scenario::new();
     // Failed run preservation may be slow even when the session stops promptly.
     scenario.repo_has_hook(
@@ -170,15 +180,50 @@ fn interrupting_a_live_session_after_cli_exit_stops_the_command_holding_stdout()
         "#!/bin/sh\nsleep 3\n",
     );
     let pid = scenario.path("stdout-holder-pid");
+    let cleanup_started = scenario.path("cleanup-started");
+    let holder_at_cleanup = scenario.path("stdout-holder-at-cleanup");
+    if slow_cleanup {
+        // Scenario prepends bin to PATH; delegate past this shim after
+        // delaying only the finishing worktree removal.
+        let git = scenario.path("bin/git");
+        fs::write(
+            &git,
+            format!(
+                r#"#!/bin/sh
+if test "$1" = worktree && test "$2" = remove; then
+    touch "{cleanup_started}"
+    if read -r holder < "{pid}" && kill -0 "$holder" 2>/dev/null; then
+        touch "{holder_at_cleanup}"
+    fi
+    sleep 3
+fi
+PATH="${{PATH#*:}}" exec git "$@"
+"#,
+                cleanup_started = cleanup_started.display(),
+                pid = pid.display(),
+                holder_at_cleanup = holder_at_cleanup.display(),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(git, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let expired = scenario.path("stdout-holder-expired");
+    // Bash waits on its own FIFO so a child sleep cannot outlive the holder
+    // and keep stdout open without writing the natural-expiry marker.
     scenario.agent_does(&format!(
         r#"printf 'interrupted work\n' > interrupted-work.txt
 bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
+mkfifo "$5"
+exec 9<>"$5"
 echo $$ > "$2"
 touch "$3"
-exec sleep 5' holder "$PPID" "{pid}" "{started}" &
+read -r -t 30 -u 9
+touch "$4"' holder "$PPID" "{pid}" "{started}" "{expired}" "{wait_pipe}" &
 "#,
         pid = pid.display(),
         started = scenario.path("cli-exited").display(),
+        expired = expired.display(),
+        wait_pipe = scenario.path("stdout-holder-wait").display(),
     ));
     let url = scenario.issue_url(7);
     let mut held = scenario.run_until(&[&url], &[], "cli-exited");
@@ -192,8 +237,10 @@ exec sleep 5' holder "$PPID" "{pid}" "{started}" &
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+    // Observe whether the holder expired: timing the whole Run also counts
+    // finishing Git work and Claim release, which can be slow under CI load.
     assert!(
-        stopped,
+        stopped && !expired.exists(),
         "interruption waited for the stdout holder's natural expiry"
     );
     command.assert_stopped("the stdout holder survived interruption");
@@ -204,6 +251,13 @@ exec sleep 5' holder "$PPID" "{pid}" "{started}" &
         Some("interrupted work\n"),
         "the slow push did not preserve the interrupted work"
     );
+    if slow_cleanup {
+        assert!(cleanup_started.exists(), "the delayed cleanup never ran");
+        assert!(
+            !holder_at_cleanup.exists(),
+            "the stdout holder was still running when cleanup started"
+        );
+    }
 }
 
 #[test]

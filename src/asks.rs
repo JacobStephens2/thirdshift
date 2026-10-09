@@ -288,6 +288,7 @@ mod tests {
             email: EmailSettings::default(),
             spec_parallel: n(3),
             pickup_limit: n(3),
+            pickup_wait: chrono::TimeDelta::minutes(30),
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,
