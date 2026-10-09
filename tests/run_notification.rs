@@ -169,6 +169,55 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
 }
 
 #[test]
+fn a_claude_limit_failure_has_the_same_meaningful_cause_in_terminal_and_notification() {
+    const MESSAGE: &str = "You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message · your weekly limit resets Oct 10, 2am (UTC)";
+    const SCRIPT: &str = r#"
+echo '{"type":"result","subtype":"success","result":"Earlier work completed."}'
+cat > "$FAKE_CLAUDE_AFTER_RESULT" <<'EVENTS'
+{"type":"assistant","parent_tool_use_id":null,"is_api_error_message":true,"api_error":"usage_limit_reached","api_error_status":429,"api_error_params":{"rate_limit_info":{"status":"rejected","rateLimitType":"seven_day","resetsAt":1791597600,"overageStatus":"rejected","overageDisabledReason":"org_level_disabled_until","unrelated":"private raw event content"}},"message":{"content":[{"type":"text","text":"Provider's limit message."}]}}
+{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message · your weekly limit resets Oct 10, 2am (UTC)"}
+EVENTS
+"#;
+    for exit in [0, 1] {
+        let scenario = Scenario::new();
+        scenario.issue_titled(7, "Add export button");
+        scenario.agent_does(&format!("{SCRIPT}\nexit {exit}\n"));
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+        let result = run(
+            &scenario,
+            &resend,
+            &["--email", "me@example.com", &scenario.issue_url(7)],
+            Some(KEY),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let request = the_one_request(&resend);
+        assert!(subject(&request).ends_with(": failed"), "{request:?}");
+        let prefix = if exit == 0 {
+            "claude's turn failed"
+        } else {
+            "claude exited 1"
+        };
+        let cause = format!("{prefix}: {MESSAGE}");
+        assert_contains(&result.stderr, &cause);
+        assert_contains(text(&request), &format!("Cause:        {cause}"));
+        for output in [result.stderr.as_str(), text(&request)] {
+            for fact in [
+                "api_error: usage_limit_reached",
+                "api_error_status: 429",
+                "rateLimitType: seven_day",
+                "resetsAt: 1791597600",
+                "overageStatus: rejected",
+                "overageDisabledReason: org_level_disabled_until",
+            ] {
+                assert_contains(output, fact);
+            }
+            assert!(!output.contains("private raw event content"), "{output}");
+        }
+        assert_eq!(scenario.claude_calls().len(), 1, "unexpected Resume");
+    }
+}
+
+#[test]
 fn a_run_that_fails_after_killed_background_work_names_that_work_in_its_notification() {
     let scenario = Scenario::new();
     // The session, and its Resume, end with a task still running, and no PR.
