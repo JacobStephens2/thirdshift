@@ -109,6 +109,24 @@ fn assert_contains(text: &str, part: &str) {
     assert!(text.contains(part), "expected {part:?} in: {text}");
 }
 
+/// A complete Security review with no old findings writes its empty private
+/// report as well as the public introduced-finding outcome.
+fn security_review_script(introduced: &[&str]) -> String {
+    format!(
+        r#"
+report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+test -n "$report"
+printf '%s\n' '[]' > "$report"
+printf '%s\n' 'Security review: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+        outcome = serde_json::json!({
+            "unaddressed_count": introduced.len(),
+            "findings": introduced,
+            "pre_existing_count": 0
+        })
+    )
+}
+
 #[test]
 fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
     let scenario = linear_spec();
@@ -149,6 +167,226 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
     );
     assert_eq!(scenario.origin_file("main", "first.txt"), None);
     scenario.assert_cleaned_up("issue-20");
+}
+
+#[test]
+fn security_review_runs_once_after_spec_review_over_the_whole_spec_branch() {
+    let scenario = linear_spec();
+    let base_commit = scenario.launch_git(&["rev-parse", "main"]);
+    scenario.agent_does_for_in_session(
+        SPEC,
+        1,
+        r#"
+echo reviewed > spec-reviewed.txt
+git add spec-reviewed.txt
+git commit -q -m 'Complete Spec review'
+"#,
+    );
+    scenario.agent_does_for_in_session(
+        SPEC,
+        2,
+        &format!(
+            r#"
+test -f first.txt
+test -f second.txt
+test -f spec-reviewed.txt
+gh pr view issue-20 --json isDraft | grep -q '"isDraft": true'
+! git cat-file -e origin/issue-20:spec-reviewed.txt
+merge_base=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Merge base commit: `\(.*\)`\.$/\1/p')
+test "$merge_base" = "$(git rev-parse refs/remotes/origin/main)"
+git diff "$merge_base"...HEAD --name-only > changed.txt
+grep -qx first.txt changed.txt
+grep -qx second.txt changed.txt
+grep -qx spec-reviewed.txt changed.txt
+rm changed.txt
+echo fixed > security-fixed.txt
+git add security-fixed.txt
+git commit -q -m 'Fix reproduced Security finding'
+{review}
+"#,
+            review = security_review_script(&[])
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "security-review", "merge"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20", "20"]);
+    let calls = scenario.claude_calls();
+    assert_contains(
+        calls[2]["prompt"].as_str().unwrap(),
+        "/thirdshift-code-review main",
+    );
+    let prompt = calls[3]["prompt"].as_str().unwrap();
+    assert_contains(prompt, "guidance mode");
+    assert_contains(prompt, "Do not delegate auditors");
+    assert_contains(prompt, "https://github.com/acme/widgets/issues/20");
+    assert_contains(
+        prompt,
+        &format!(
+            "branch issue-20 against Base branch main with `git diff {}...HEAD`",
+            base_commit.trim()
+        ),
+    );
+    assert_eq!(calls[3]["branch"], "issue-20");
+    assert_eq!(spec_pr(&scenario)["state"], "MERGED");
+    for file in [
+        "first.txt",
+        "second.txt",
+        "spec-reviewed.txt",
+        "security-fixed.txt",
+    ] {
+        assert!(
+            scenario.origin_file("main", file).is_some(),
+            "missing {file}"
+        );
+    }
+    let reviewed = result.stderr.find("spec-review: session ended").unwrap();
+    let security = result
+        .stderr
+        .find("security-review: session started")
+        .unwrap();
+    assert!(reviewed < security, "{}", result.stderr);
+}
+
+#[test]
+fn spec_review_leaves_the_push_to_delivery_after_the_optional_security_review() {
+    let scenario = linear_spec();
+    let result = scenario.run(&[&spec_url(&scenario)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let call = spec_review_call(&scenario);
+    assert_contains(
+        call["prompt"].as_str().unwrap(),
+        "Do not push: thirdshift pushes branch issue-20 after the optional Security review.",
+    );
+}
+
+#[test]
+fn security_review_on_a_spec_obeys_config_and_command_overrides() {
+    for (config, word, enabled) in [
+        ("", None, false),
+        ("[security]\nreview = true\n", None, true),
+        (
+            "[security]\nreview = true\n",
+            Some("no-security-review"),
+            false,
+        ),
+        (
+            "[security]\nreview = false\n",
+            Some("security-review"),
+            true,
+        ),
+    ] {
+        let scenario = linear_spec();
+        scenario.user_config_is(config);
+        scenario.agent_does_for_in_session(SPEC, 2, &security_review_script(&[]));
+        let url = spec_url(&scenario);
+        let mut args = vec![url.as_str(), "merge"];
+        args.extend(word);
+
+        let result = scenario.run(&args);
+
+        assert_eq!(result.code, Some(0), "{config} {word:?}: {}", result.stderr);
+        assert_eq!(
+            sessions_by_issue(&scenario),
+            if enabled {
+                vec!["21", "22", "20", "20"]
+            } else {
+                vec!["21", "22", "20"]
+            }
+        );
+        assert_eq!(spec_pr(&scenario)["state"], "MERGED");
+    }
+}
+
+#[test]
+fn security_findings_refusals_and_incomplete_reviews_hold_only_the_spec_self_merge() {
+    let introduced = security_review_script(&["Cross-tenant read"]);
+    for (script, cause) in [
+        (
+            introduced.as_str(),
+            "Security review left 1 unaddressed introduced finding(s): Cross-tenant read",
+        ),
+        (
+            r#"printf '%s\n' 'API Error: [cyber] Private refusal evidence' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+            "Security review refused: Claude Code's [cyber] safeguard refusal",
+        ),
+        (
+            r#"printf '%s\n' 'Review incomplete' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+            "Security review incomplete",
+        ),
+        ("exit 1\n", "Security review incomplete"),
+    ] {
+        for merge in [true, false] {
+            let scenario = linear_spec();
+            scenario.agent_does_for_in_session(SPEC, 2, script);
+
+            let result = scenario.run(&[
+                &spec_url(&scenario),
+                "security-review",
+                if merge { "merge" } else { "no-merge" },
+            ]);
+
+            assert_eq!(
+                result.code,
+                Some(i32::from(merge)),
+                "{cause}: {}",
+                result.stderr
+            );
+            assert_contains(&result.stderr, cause);
+            assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20", "20"]);
+            let pr = spec_pr(&scenario);
+            assert_eq!(pr["state"], "OPEN");
+            assert_eq!(pr["isDraft"], false);
+            let body = pr["body"].as_str().unwrap();
+            assert_contains(body, "### Security");
+            // Introduced finding titles and sanitized refusal/incomplete causes.
+            assert_contains(
+                body,
+                if cause.contains("Cross-tenant read") {
+                    "Cross-tenant read"
+                } else {
+                    cause
+                },
+            );
+            assert!(!body.contains("Private refusal evidence"));
+            assert_contains(body, "#21 landed");
+            assert_contains(body, "#22 landed");
+            assert_eq!(scenario.gh_state()["issues"]["20"], "OPEN");
+            assert_eq!(scenario.origin_file("main", "first.txt"), None);
+            for ticket in ["issue-21", "issue-22"] {
+                assert_eq!(pr_from(&scenario, ticket).unwrap()["state"], "MERGED");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_spec_security_hold_still_repairs_ci_without_repeating_the_review() {
+    let scenario = linear_spec();
+    scenario.agent_does_for_in_session(SPEC, 1, &checks_on_head(RED));
+    scenario.agent_does_for_in_session(SPEC, 2, &security_review_script(&["Cross-tenant read"]));
+    scenario.agent_does_for_in_session(
+        SPEC,
+        3,
+        &format!("{}{}", commits_fix(1), checks_on_head(GREEN)),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "security-review", "merge"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(&result.stderr, "Cross-tenant read");
+    let prompts = spec_prompts(&scenario);
+    assert_eq!(prompts.len(), 3);
+    assert_contains(&prompts[0], "/thirdshift-code-review main");
+    assert_contains(&prompts[1], "guidance mode");
+    assert_contains(&prompts[2], "CI");
+    assert_eq!(
+        scenario.origin_file("issue-20", "fix-1.txt").as_deref(),
+        Some("fix\n")
+    );
+    assert_eq!(spec_pr(&scenario)["state"], "OPEN");
+    assert_eq!(spec_pr(&scenario)["isDraft"], false);
 }
 
 #[test]

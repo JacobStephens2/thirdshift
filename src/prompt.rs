@@ -145,7 +145,7 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          \n\
          {address_findings}\n\
          \n\
-         Push branch {branch}. Do not rebase or force-push.\n\
+         Do not push: thirdshift pushes branch {branch} after the optional Security review. Do not rebase or force-push.\n\
          \n\
          Update PR {pr_url} using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.\n\
          \n\
