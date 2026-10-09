@@ -72,6 +72,15 @@ impl Adapter for Grok {
         choice.effort = settled.effort;
         Ok(())
     }
+    fn summary(&self, choice: &Choice, prompt: &str, prompt_file: &Path) -> Invocation {
+        let mut invocation = self.session(choice, None, prompt);
+        invocation.args.truncate(invocation.args.len() - 2);
+        invocation.args.extend([
+            "--prompt-file".into(),
+            prompt_file.to_string_lossy().into_owned(),
+        ]);
+        invocation
+    }
     fn ask_settings(
         &self,
         outside: &mut dyn Terminal,

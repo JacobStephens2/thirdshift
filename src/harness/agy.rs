@@ -70,6 +70,21 @@ impl Adapter for Agy {
         choice.effort = settled.effort;
         Ok(())
     }
+    fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
+        let mut invocation = self.session(choice, None, prompt);
+        invocation.args.pop();
+        invocation.args[0] = "-p=".into();
+        invocation
+            .args
+            .extend(["--input-format", "stream-json"].map(String::from));
+        invocation.stdin = Some(format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user", "message": {"role": "user", "content": prompt}
+            })
+        ));
+        invocation
+    }
     fn ask_settings(
         &self,
         outside: &mut dyn Terminal,

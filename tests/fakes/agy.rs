@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::process::Command;
 
-use crate::claude::{exit_code, git_here, script_for, skills_snapshot};
+use crate::claude::{exit_code, git_here, script_for, skills_snapshot, transported_prompt};
 use crate::json::{Array, Bool, Json, Null, number, object, string};
 use crate::stdin_is_null;
 
@@ -23,6 +23,7 @@ pub fn main(argv: Vec<String>) {
         "FAKE_AGY_RECORD"
     });
     let lock = crate::lock_beside(&record_path);
+    let input = transported_prompt(&argv);
     let (branch, _) = git_here(&["branch", "--show-current"]);
     let (status, _) = git_here(&["status", "--porcelain"]);
     let records = crate::append_record(
@@ -34,7 +35,11 @@ pub fn main(argv: Vec<String>) {
                 if catalog {
                     Null
                 } else {
-                    argv.last().map(string).unwrap_or(Null)
+                    input
+                        .as_ref()
+                        .or_else(|| argv.last())
+                        .map(string)
+                        .unwrap_or(Null)
                 },
             ),
             ("branch", string(branch)),
@@ -81,7 +86,7 @@ pub fn main(argv: Vec<String>) {
         print!("{CATALOG}");
         crate::exit(0);
     }
-    assert!(argv.iter().any(|arg| arg == "-p"));
+    assert!(argv.iter().any(|arg| arg == "-p" || arg == "-p="));
     let records = records.items();
     let session = records.len();
     let conversation = argv

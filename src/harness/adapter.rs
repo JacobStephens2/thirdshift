@@ -24,9 +24,10 @@ pub trait Adapter: Sync {
     /// the CLI. The adapter applies its skill-loading style here.
     fn session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation;
 
-    /// A one-shot release summary, interpreted through the same protocol.
-    /// Harnesses with a tool-free mode specialize it here.
-    fn summary(&self, choice: &Choice, prompt: &str) -> Invocation {
+    /// A one-shot release summary, using stdin or `prompt_file` so release
+    /// input never exceeds the operating system's argument-size limit.
+    /// The file contains `prompt` and remains available until the CLI exits.
+    fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
         self.session(choice, None, prompt)
     }
 

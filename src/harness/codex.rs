@@ -73,8 +73,9 @@ impl Adapter for Codex {
     fn check(&self, choice: &mut Choice) -> Result<()> {
         check_model_and_effort(choice)
     }
-    fn summary(&self, choice: &Choice, prompt: &str) -> Invocation {
-        let mut invocation = self.session(choice, None, prompt);
+    fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
+        let mut invocation = self.session(choice, None, "-");
+        invocation.stdin = Some(prompt.to_string());
         // Summary generation runs in a temporary directory, outside Git.
         invocation.args.insert(1, "--skip-git-repo-check".into());
         invocation

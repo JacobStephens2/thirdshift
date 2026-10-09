@@ -15,8 +15,10 @@ pub fn write(settings: &Settings, prompt: &str) -> Result<String> {
     choice.check()?;
     progress::step(format_args!("writing the release summary with {choice}"));
     let directory = tempfile::tempdir().context("could not prepare the summary directory")?;
+    let prompt_file = directory.path().join("release-summary.md");
+    std::fs::write(&prompt_file, prompt).context("could not write the summary input")?;
     let adapter = choice.harness.adapter();
-    let invocation = adapter.summary(&choice, prompt);
+    let invocation = adapter.summary(&choice, prompt, &prompt_file);
     let output = process::output(
         adapter,
         Command::new(adapter.name())

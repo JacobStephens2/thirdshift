@@ -4,7 +4,9 @@ use std::fs;
 use std::io::Write;
 use std::process::Command;
 
-use crate::claude::{beside_skills_snapshot, exit_code, git_here, script_for, skills_snapshot};
+use crate::claude::{
+    beside_skills_snapshot, exit_code, git_here, script_for, skills_snapshot, transported_prompt,
+};
 use crate::json::{Array, Bool, Json, Null, object, string};
 use crate::{outlast_interrupts, stdin_is_null};
 
@@ -76,6 +78,7 @@ pub fn main(argv: Vec<String>) {
         );
         crate::exit(0);
     }
+    let input = transported_prompt(&argv);
     let (branch, _) = git_here(&["branch", "--show-current"]);
     let (status, _) = git_here(&["status", "--porcelain"]);
     let record_path = &crate::env_path("FAKE_MUSE_RECORD");
@@ -87,7 +90,14 @@ pub fn main(argv: Vec<String>) {
         record_path,
         object([
             ("argv", Array(argv.iter().map(string).collect())),
-            ("prompt", argv.last().map(string).unwrap_or(Null)),
+            (
+                "prompt",
+                input
+                    .as_ref()
+                    .or_else(|| argv.last())
+                    .map(string)
+                    .unwrap_or(Null),
+            ),
             ("cwd", string(cwd)),
             ("branch", string(branch)),
             ("stdin_null", Bool(stdin_is_null())),

@@ -49,8 +49,10 @@ impl Adapter for Claude {
     fn check(&self, choice: &mut Choice) -> Result<()> {
         test_call(choice)
     }
-    fn summary(&self, choice: &Choice, prompt: &str) -> Invocation {
+    fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
         let mut invocation = self.session(choice, None, prompt);
+        invocation.args.pop();
+        invocation.stdin = Some(prompt.to_string());
         invocation.args.splice(
             1..1,
             ["--tools", "", "--strict-mcp-config"].map(String::from),

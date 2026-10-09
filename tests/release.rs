@@ -313,25 +313,15 @@ impl Release {
     /// Runs the script with `args`, with `stdin` on its standard input and
     /// `env` added to its environment.
     fn run_script_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
-        let mut child = self
-            .command(
+        with_input(
+            self.command(
                 &manifest_dir().join("scripts/release.sh"),
                 &self.maintainer(),
             )
             .args(args)
-            .envs(env.iter().copied())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("could not run release.sh");
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
+            .envs(env.iter().copied()),
+            stdin,
+        )
     }
 
     /// Runs the Release notes script for `tag` in the maintainer's clone,
@@ -471,6 +461,18 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn with_input(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("could not start command");
+    // A rejected command may close stdin before a large input has been written.
+    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+    child.wait_with_output().unwrap()
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).unwrap()
 }
@@ -597,11 +599,7 @@ fn the_release_summary_uses_the_user_configs_default_harness_model_and_effort() 
     assert_eq!(calls.as_array().unwrap().len(), 1, "{calls:#?}");
     let argv = calls[0]["argv"].as_array().unwrap();
     assert!(argv.contains(&json!("--skip-git-repo-check")), "{argv:?}");
-    assert!(
-        !Path::new(calls[0]["cwd"].as_str().unwrap())
-            .join(".git")
-            .exists()
-    );
+    assert_ne!(calls[0]["cwd"], release.maintainer().display().to_string());
     assert!(
         argv.windows(2)
             .any(|pair| pair == [json!("-m"), json!("gpt-6-luna")]),
@@ -615,6 +613,43 @@ fn the_release_summary_uses_the_user_configs_default_harness_model_and_effort() 
         summary_and_rest(&release.pr_body("release-0.2.0")).0,
         format!("{AGENT_SUMMARY}\n")
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn every_harness_receives_the_complete_release_input_above_the_argument_limit() {
+    let prompt = format!("Summarize the release.\n{}", "x".repeat(150_000));
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+        let release = Release::new();
+        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
+        fs::write(
+            release.root().join("home/.thirdshift/config.toml"),
+            format!("[harness]\ndefault = '{harness}'\n"),
+        )
+        .unwrap();
+
+        let output = with_input(
+            release
+                .command(
+                    Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+                    &release.maintainer(),
+                )
+                .arg("--release-summary"),
+            &prompt,
+        );
+
+        assert!(output.status.success(), "{harness}: {}", stderr(&output));
+        assert_eq!(stdout(&output).trim(), AGENT_SUMMARY, "{harness}");
+        let calls: Value = serde_json::from_str(
+            &fs::read_to_string(release.root().join(format!("{harness}-calls.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            calls.as_array().unwrap().last().unwrap()["prompt"],
+            prompt,
+            "{harness}"
+        );
+    }
 }
 
 #[test]
