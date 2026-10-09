@@ -966,3 +966,63 @@ mod grok {
         }
     }
 }
+
+#[test]
+fn claude_root_api_error_is_a_fallback_when_process_exits_without_a_result() {
+    for earlier_success in [true, false] {
+        for exit in [0, 1] {
+            let mut interpretation = stream(Harness::Claude, "");
+            if earlier_success {
+                interpretation.condense(
+                    &json!({
+                        "type":"result", "subtype":"success",
+                        "result":"Earlier work completed."
+                    })
+                    .to_string(),
+                );
+            }
+            interpretation.condense(
+                &json!({
+                    "type":"assistant", "parent_tool_use_id":null,
+                    "is_api_error_message":true,
+                    "api_error":"usage_limit_reached", "api_error_status":429,
+                    "api_error_params":{"rate_limit_info":{
+                        "rateLimitType":"seven_day", "resetsAt":1791597600,
+                        "overageStatus":"rejected",
+                        "overageDisabledReason":"org_level_disabled_until",
+                        "unrelated":"private raw event content"
+                    }},
+                    "message":{"content":[{
+                        "type":"text", "text":"Provider's limit message."
+                    }]}
+                })
+                .to_string(),
+            );
+            let completion =
+                interpretation.finish(Ok(std::process::ExitStatus::from_raw(exit << 8)));
+            if exit == 0 {
+                assert_eq!(
+                    completion.outcome.unwrap().final_message.as_deref(),
+                    earlier_success.then_some("Earlier work completed."),
+                );
+            } else {
+                let cause = completion.outcome.unwrap_err().to_string();
+                assert!(
+                    cause.starts_with("claude exited 1: Provider's limit message."),
+                    "{cause}",
+                );
+                for fact in [
+                    "api_error: usage_limit_reached",
+                    "api_error_status: 429",
+                    "rateLimitType: seven_day",
+                    "resetsAt: 1791597600",
+                    "overageStatus: rejected",
+                    "overageDisabledReason: org_level_disabled_until",
+                ] {
+                    assert!(cause.contains(fact), "missing {fact:?}: {cause}");
+                }
+                assert!(!cause.contains("private raw event content"), "{cause}");
+            }
+        }
+    }
+}

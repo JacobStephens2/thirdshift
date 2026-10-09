@@ -30,6 +30,10 @@ use support::{REPO, RunResult, Scenario, TimelineEvent, before_command_log, leav
 /// The first issue the fake agent creates: the scenario starts with issue #7.
 const PLAN_URL: &str = "https://github.com/acme/widgets/issues/8";
 
+/// The fake marks its terminal result failed when the script exits 3, so
+/// its supplied result text belongs in the failure cause.
+const FAILED_REVIEW_CAUSE: &str = "claude exited 3: Published the plan.\n\nArchitecture review plan: https://github.com/acme/widgets/issues/8\n";
+
 /// The first pull request opened on the fake GitHub.
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
@@ -454,7 +458,7 @@ fn a_failing_session_fails_the_architect_run_and_leaves_the_plan_needing_triage(
 
     let result = scenario.run(&["architect", "--plan-only"]);
 
-    assert_failed(&scenario, &result, "claude exited 3");
+    assert_failed(&scenario, &result, FAILED_REVIEW_CAUSE);
     assert_eq!(scenario.issue_labels(8), ["needs-triage"]);
 }
 
@@ -1455,7 +1459,7 @@ fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
         &["architect", "--email", "me@example.com"],
     );
 
-    assert_failed(&scenario, &result, "claude exited 3");
+    assert_failed(&scenario, &result, FAILED_REVIEW_CAUSE);
     let (subject, text) = the_one_notification(&resend);
     assert_eq!(
         subject,
@@ -1468,7 +1472,7 @@ fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
         text.starts_with(&format!(
             "Result:       review failed\n\
              Review:       failed\n\
-             Cause:        claude exited 3\n\
+             Cause:        {FAILED_REVIEW_CAUSE}\n\
              Session log:  {log}\n\
              Command log:  {command_log}\n"
         )),

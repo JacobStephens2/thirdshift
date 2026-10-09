@@ -219,7 +219,11 @@ impl Decoder for Stream {
         let (failed, diagnostic) = match self.dialect {
             Dialect::Claude(claude) => {
                 ended.killed = claude.killed.into_iter().map(|(_, text)| text).collect();
-                (claude.failed, claude.diagnostic)
+                let diagnostic = claude
+                    .api_error
+                    .and_then(|error| error.diagnostic(None))
+                    .or(claude.diagnostic);
+                (claude.failed, diagnostic)
             }
             Dialect::Grok(grok) => {
                 ended.session_id = ended.session_id.or(grok.fallback_id);
@@ -252,8 +256,10 @@ impl Claude {
     fn result(&mut self, event: &Value, failed: bool) {
         self.failed = failed;
         self.killed.clear();
-        let api_error = self.api_error.take().unwrap_or_default();
+        let mut api_error = self.api_error.take().unwrap_or_default();
         self.diagnostic = if failed {
+            // Terminal facts replace only the fields they actually supply.
+            api_error.facts.extend(ClaudeApiError::facts(event));
             let errors: Vec<_> = event["errors"]
                 .as_array()
                 .into_iter()
@@ -265,7 +271,7 @@ impl Claude {
             } else {
                 Some(errors.join("\n"))
             };
-            api_error.diagnostic(event, message)
+            api_error.diagnostic(message)
         } else {
             None
         };
@@ -341,9 +347,7 @@ impl ClaudeApiError {
         facts
     }
 
-    fn diagnostic(mut self, terminal: &Value, message: Option<String>) -> Option<String> {
-        // Terminal facts replace only the fields they actually supply.
-        self.facts.extend(Self::facts(terminal));
+    fn diagnostic(self, message: Option<String>) -> Option<String> {
         let message = message.or(self.message);
         if self.facts.is_empty() {
             return message;
