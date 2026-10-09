@@ -187,12 +187,13 @@ fn a_runs_implement_session_and_its_repair_run_on_codex_with_the_model_and_effor
         body.ends_with("Built with codex · gpt-6.1-sol · max <!-- thirdshift:built-with -->\n"),
         "{body}"
     );
-    let logs = scenario.entries(&format!("{LOGS}/sessions"));
+    let logs = scenario.log_files(&format!("{LOGS}/commands/issue"), "jsonl");
     let implement = logs
         .iter()
         .find(|log| log.ends_with("-implement.jsonl"))
         .unwrap_or_else(|| panic!("no implement session log: {logs:?}"));
-    let log = fs::read_to_string(scenario.path(&format!("{LOGS}/sessions/{implement}"))).unwrap();
+    let log =
+        fs::read_to_string(scenario.path(&format!("{LOGS}/commands/issue/{implement}"))).unwrap();
     assert!(
         log.starts_with(r#"{"type": "thread.started", "thread_id": "fake-thread-1"}"#),
         "{log}"

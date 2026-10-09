@@ -39,8 +39,8 @@ pub enum Purpose {
     SecurityReview,
 }
 
-/// Where a Run's or an Architect run's Session logs go: in `sessions/` under
-/// the root of its repository's logs, under the User config's `logs.dir` or
+/// Where Session logs go: beside the owning Command log in
+/// `commands/<command>/` under the repository's logs, under the User config's `logs.dir` or
 /// `~/.thirdshift/logs`, each named for what is run and stamped with the
 /// command's start stamp, which its Command log shares. Only once the logs
 /// are [`logs::configured`].
@@ -56,7 +56,7 @@ impl Logs {
     pub fn of_run(issue: &IssueUrl) -> Self {
         Logs {
             name: issue.number.to_string(),
-            dir: logs::root(&issue.repo()).join("sessions"),
+            dir: logs::session_dir(&issue.repo()),
         }
     }
 
@@ -64,7 +64,7 @@ impl Logs {
     pub fn of_architect_run(repo: &Repo) -> Self {
         Logs {
             name: "architect".to_string(),
-            dir: logs::root(repo).join("sessions"),
+            dir: logs::session_dir(repo),
         }
     }
 
@@ -72,12 +72,12 @@ impl Logs {
     pub fn of_security_run(repo: &Repo) -> Self {
         Logs {
             name: "secure".to_string(),
-            dir: logs::root(repo).join("sessions"),
+            dir: logs::session_dir(repo),
         }
     }
 
     /// Where a session's stream is logged:
-    /// `<root>/sessions/<name>-<stamp>-<kind>.jsonl`.
+    /// `<root>/commands/<command>/<name>-<stamp>-<kind>.jsonl`.
     pub fn path(&self, kind: &str) -> PathBuf {
         self.dir
             .join(format!("{}-{}-{kind}.jsonl", self.name, logs::stamp()))

@@ -285,7 +285,7 @@ fn the_command_log_the_activity_log_and_the_pr_body_name_the_harness_model_and_e
     let result = scenario.run(&[&scenario.issue_url(7), "model", "opus", "effort", "high"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let commands = scenario.entries(&format!("{LOGS}/commands/issue"));
+    let commands = scenario.log_files(&format!("{LOGS}/commands/issue"), "log");
     assert_eq!(commands.len(), 1, "{commands:?}");
     let command_log =
         fs::read_to_string(scenario.path(&format!("{LOGS}/commands/issue/{}", commands[0])))

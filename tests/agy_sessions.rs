@@ -93,8 +93,8 @@ echo '{{"event":"step_update","step_update":{{"step_index":2,"state":"DONE","ste
             .unwrap()
             .contains("Built with agy · gemini-3.8-flash · medium")
     );
-    let sessions = "home/.thirdshift/logs/acme/widgets/sessions";
-    let logs = scenario.entries(sessions);
+    let sessions = "home/.thirdshift/logs/acme/widgets/commands/issue";
+    let logs = scenario.log_files(sessions, "jsonl");
     let log = std::fs::read_to_string(scenario.path(&format!("{sessions}/{}", logs[0]))).unwrap();
     assert!(log.contains("\"event\": \"init\""), "{log}");
     assert!(log.contains("\"status\": \"SUCCESS\""), "{log}");

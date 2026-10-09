@@ -268,7 +268,7 @@ fn a_run_with_the_written_user_config_behaves_as_with_none() {
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
     assert_eq!(
         scenario
-            .entries("home/.thirdshift/logs/acme/widgets/sessions")
+            .log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl")
             .len(),
         1
     );

@@ -52,7 +52,7 @@ exit 1"#,
 }
 
 fn security_command_log(scenario: &Scenario) -> String {
-    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+    let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/secure", "log");
     fs::read_to_string(scenario.path(&format!(
         "home/.thirdshift/logs/acme/widgets/commands/secure/{}",
         logs[0]
@@ -131,6 +131,26 @@ printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-4-8","conte
     let result = scenario.run(&["secure", "model", "opus"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let command_log = security_command_log(&scenario);
+    let session_logs = scenario.log_files(
+        "home/.thirdshift/logs/acme/widgets/commands/secure",
+        "jsonl",
+    );
+    assert_eq!(session_logs.len(), 2, "{session_logs:?}");
+    assert!(
+        session_logs
+            .iter()
+            .any(|name| name.ends_with("-security-audit.jsonl"))
+    );
+    assert!(
+        session_logs
+            .iter()
+            .any(|name| name.ends_with("-security-reproduction-1.jsonl"))
+    );
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/sessions")
+            .exists()
+    );
     for line in [
         "security-audit: Model: claude-opus-5-5",
         "security-audit: Model: claude-opus-4-8",
@@ -827,7 +847,7 @@ fn a_failed_fix_keeps_its_claim_and_pauses_security_and_pickup_until_closed() {
             assert!(resend.requests().is_empty());
             assert_eq!(
                 scenario
-                    .entries("home/.thirdshift/logs/acme/widgets/commands/secure")
+                    .log_files("home/.thirdshift/logs/acme/widgets/commands/secure", "log")
                     .len(),
                 1
             );
@@ -1578,11 +1598,11 @@ fn an_unchanged_base_skips_after_a_completed_audit_and_resumes_when_origin_moves
     let before =
         fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
             .unwrap();
-    let commands = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+    let commands = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/secure", "log");
     assert_two_quiet_skips_send_no_email(&scenario);
     assert_eq!(scenario.claude_calls().len(), 1);
     assert_eq!(
-        scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure"),
+        scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/secure", "log"),
         commands
     );
     let after =
@@ -1980,7 +2000,7 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     assert_eq!(scenario.claude_calls().len(), 1);
     assert_eq!(
         scenario
-            .entries("home/.thirdshift/logs/acme/widgets/commands/secure")
+            .log_files("home/.thirdshift/logs/acme/widgets/commands/secure", "log")
             .len(),
         1
     );
@@ -2052,7 +2072,7 @@ fn missing_final_line_or_invalid_reports_fail_without_recording() {
                 .unwrap();
         assert!(log.contains("Security run started"));
         assert!(log.contains("Security run ended: failed:"), "{log}");
-        let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/commands/secure");
+        let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/secure", "log");
         let command_log = fs::read_to_string(scenario.path(&format!(
             "home/.thirdshift/logs/acme/widgets/commands/secure/{}",
             logs[0]

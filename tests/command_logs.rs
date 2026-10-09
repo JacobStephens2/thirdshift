@@ -1,7 +1,7 @@
 //! Command logs: each Run, Spec run, Architect run and Pickup run keeps a file
 //! of everything it printed, stderr and stdout in order, under
 //! `<logs.dir>/<owner>/<repo>/commands/<command>/`, with its Session logs
-//! under `<logs.dir>/<owner>/<repo>/sessions/`, all stamped with the
+//! beside them in that folder, all stamped with the
 //! command's start in local time and its UTC offset. A child Run keeps none: its lines are in the
 //! Command log of what started it. A Pickup run or Architect run skipped
 //! before doing any work keeps none, nor does a Run that fails before it
@@ -64,7 +64,10 @@ fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
 /// The one Command log in `commands/<folder>`, which must be named
 /// `<prefix><stamp>.log`, and its stamp.
 fn the_one_command_log(scenario: &Scenario, folder: &str, prefix: &str) -> (PathBuf, String) {
-    let logs = logs_in(scenario, &format!("commands/{folder}"));
+    let logs: Vec<_> = logs_in(scenario, &format!("commands/{folder}"))
+        .into_iter()
+        .filter(|name| name.ends_with(".log"))
+        .collect();
     assert_eq!(logs.len(), 1, "Command logs: {logs:?}");
     let stamp = logs[0]
         .strip_prefix(prefix)
@@ -130,13 +133,13 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
         result.stderr
     );
     assert_eq!(
-        logs_in(&scenario, "sessions"),
-        [format!("7-{stamp}-implement.jsonl")]
+        logs_in(&scenario, "commands/issue"),
+        [
+            format!("7-{stamp}-implement.jsonl"),
+            format!("7-{stamp}.log")
+        ]
     );
-    assert_eq!(
-        logs_in(&scenario, ""),
-        ["activity.log", "commands", "sessions"]
-    );
+    assert_eq!(logs_in(&scenario, ""), ["activity.log", "commands"]);
     assert_eq!(
         fs::read_dir(scenario.path(LOGS_DIR))
             .unwrap()
@@ -166,7 +169,7 @@ fn a_spec_runs_command_log_has_its_tickets_lines_and_its_tickets_keep_none() {
         );
     }
     assert_eq!(
-        logs_in(&scenario, "sessions"),
+        scenario.log_files(&format!("{LOGS}/commands/issue"), "jsonl"),
         [
             format!("20-{stamp}-spec-review.jsonl"),
             format!("21-{stamp}-implement.jsonl"),
@@ -195,9 +198,37 @@ fn a_pickup_run_that_takes_an_issue_keeps_a_command_log_from_its_first_line() {
     let logging = log.find("logging this command to").expect(&log);
     assert!(passed_over < logging, "log: {log}");
     assert_eq!(
-        logs_in(&scenario, "sessions"),
-        [format!("7-{stamp}-implement.jsonl")]
+        logs_in(&scenario, "commands/pickup"),
+        [
+            format!("7-{stamp}-implement.jsonl"),
+            format!("7-{stamp}.log")
+        ]
     );
+}
+
+#[test]
+fn a_pickup_spec_keeps_its_tickets_session_logs_beside_its_command_log() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(20, &[(21, &[]), (22, &[21])]);
+    scenario.issue_labelled(20, &["ready-for-agent"]);
+    scenario.agent_does_for(21, &agent_opens_pr(21, "issue-20"));
+    scenario.agent_does_for(22, &agent_opens_pr(22, "issue-20"));
+
+    let result = run_in_zone(&scenario, &["pickup"], &[]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let (_, stamp) = the_one_command_log(&scenario, "pickup", "20-");
+    assert_eq!(
+        logs_in(&scenario, "commands/pickup"),
+        [
+            format!("20-{stamp}-spec-review.jsonl"),
+            format!("20-{stamp}.log"),
+            format!("21-{stamp}-implement.jsonl"),
+            format!("22-{stamp}-implement.jsonl"),
+        ]
+    );
+    assert!(!scenario.path(LOGS).join("sessions").exists());
+    assert!(!scenario.path(LOGS).join("commands/issue").exists());
 }
 
 #[test]
@@ -225,7 +256,7 @@ printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
         "log: {log}"
     );
     assert_eq!(
-        logs_in(&scenario, "sessions"),
+        scenario.log_files(&format!("{LOGS}/commands/architect"), "jsonl"),
         [
             format!("8-{stamp}-implement.jsonl"),
             format!("architect-{stamp}-architecture-review.jsonl"),
@@ -244,7 +275,7 @@ fn a_failed_run_ends_by_naming_its_session_log_then_its_command_log() {
     let (path, stamp) = the_one_command_log(&scenario, "issue", "7-");
     let session = scenario
         .path(LOGS)
-        .join(format!("sessions/7-{stamp}-implement.jsonl"));
+        .join(format!("commands/issue/7-{stamp}-implement.jsonl"));
     let ending: Vec<_> = result.stderr.lines().rev().take(2).collect();
     assert_eq!(
         ending,
@@ -283,34 +314,31 @@ fn a_run_notification_names_the_command_log() {
 }
 
 #[test]
-fn a_command_log_that_cannot_be_written_is_one_warning_and_changes_nothing_else() {
+fn an_obstructed_commands_folder_warns_and_prevents_session_logging() {
     let scenario = Scenario::new();
     scenario.agent_does(&agent_opens_pr(7, "main"));
-    // A file where the folder of Command logs would go.
+    // Command and Session logs now share this folder.
     fs::create_dir_all(scenario.path(LOGS)).unwrap();
     fs::write(scenario.path(LOGS).join("commands"), "").unwrap();
 
     let result = run_in_zone(&scenario, &[&scenario.issue_url(7)], &[]);
 
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(result.stdout, format!("{PR_URL}\n"));
-    let warnings: Vec<_> = result
-        .stderr
-        .lines()
-        .filter(|line| line.contains("warning:"))
-        .collect();
-    assert_eq!(warnings.len(), 1, "stderr: {}", result.stderr);
-    assert!(
-        warnings[0].starts_with("thirdshift: warning: could not keep the Command log: "),
-        "{}",
-        warnings[0]
-    );
-    assert!(!result.stderr.contains("logging this command to"));
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "");
     assert_eq!(
-        result.stderr.lines().last(),
-        Some(format!("thirdshift: PR {PR_URL} is ready for review").as_str())
+        result
+            .stderr
+            .matches("warning: could not keep the Command log:")
+            .count(),
+        1
     );
-    assert_eq!(logs_in(&scenario, "sessions").len(), 1);
+    assert!(
+        result.stderr.contains("could not create"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(!scenario.path(LOGS).join("sessions").exists());
 }
 
 #[test]
@@ -377,8 +405,10 @@ gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "
         "log: {log}"
     );
     assert!(
-        logs_in(&scenario, "sessions").contains(&format!("8-{stamp}-implement.jsonl")),
+        scenario
+            .log_files(&format!("{LOGS}/commands/issue"), "jsonl")
+            .contains(&format!("8-{stamp}-implement.jsonl")),
         "{:?}",
-        logs_in(&scenario, "sessions")
+        scenario.log_files(&format!("{LOGS}/commands/issue"), "jsonl")
     );
 }

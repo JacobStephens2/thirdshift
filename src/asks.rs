@@ -463,6 +463,7 @@ mod tests {
     /// fix, its sessions on Claude's `sonnet`.
     fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
         Given {
+            command: crate::logs::CommandKind::Issue,
             security: crate::security::Options::default(),
             kind,
             stamp: "20261003T120000-0400".to_string(),

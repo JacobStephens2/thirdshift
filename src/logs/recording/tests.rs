@@ -337,7 +337,10 @@ fn a_child_inherits_its_parent_stamp_and_relays_output_without_a_beginning_or_lo
     let mut record = Record::new(memory.clone());
     let issue = issue();
     let repo = issue.repo();
-    record.begin(Begin::ChildRun("parent-stamp"));
+    record.begin(Begin::ChildRun(
+        "parent-stamp",
+        crate::logs::CommandKind::Issue,
+    ));
     assert_eq!(record.stamp(), "parent-stamp");
     // Child starts are ignored even before configuration.
     for work in [
@@ -384,7 +387,10 @@ fn lazy_stamps_are_owned_stable_and_independent_of_other_recordings() {
 
     let mut second = Record::new(memory.clone());
     assert_eq!(second.stamp(), "20261004T130102+0530");
-    second.begin(Begin::ChildRun("ignored-after-lazy-query"));
+    second.begin(Begin::ChildRun(
+        "ignored-after-lazy-query",
+        crate::logs::CommandKind::Issue,
+    ));
     assert_eq!(second.stamp(), "20261004T130102+0530");
     assert_eq!(second.command_log_path(), None);
     let mut other_config = config(true);

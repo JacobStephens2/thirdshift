@@ -68,7 +68,7 @@ fn activity(scenario: &Scenario) -> Vec<String> {
 
 /// The name of the one Command log in `commands/<folder>`.
 fn the_one_command_log(scenario: &Scenario, folder: &str) -> String {
-    let names = scenario.entries(&format!("{LOGS_DIR}/acme/widgets/commands/{folder}"));
+    let names = scenario.log_files(&format!("{LOGS_DIR}/acme/widgets/commands/{folder}"), "log");
     assert_eq!(names.len(), 1, "{names:?}");
     format!("commands/{folder}/{}", names[0])
 }

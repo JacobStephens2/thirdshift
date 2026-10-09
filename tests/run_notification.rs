@@ -57,10 +57,10 @@ fn text(request: &Request) -> &str {
 
 /// The path of the one session log the Run wrote.
 fn the_one_log(scenario: &Scenario) -> String {
-    let logs = scenario.entries("home/.thirdshift/logs/acme/widgets/sessions");
+    let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let log = scenario
-        .path("home/.thirdshift/logs/acme/widgets/sessions")
+        .path("home/.thirdshift/logs/acme/widgets/commands/issue")
         .join(&logs[0]);
     log.to_str().unwrap().to_string()
 }
