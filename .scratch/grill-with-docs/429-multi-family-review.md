@@ -562,6 +562,7 @@ The options:
   - #490: thirdshift keeps each reviewer's report beside the Session log. Blocked by #489.
 - **#429's body rewritten** with the decisions, the record and the replay plan, linking #486. It stays open until the replays report. (Q22)
 - **#616, Codex sessions that run the code review ask for fresh sub-agents:** Q28's Ticket, filed with `/to-tickets` on 9 October as a sub-issue of #429, labelled `ready-for-agent`. (Q28, Q33)
+- **#429's body rewritten again on 9 October** around the revised replay plan, with a reply to the 8 October comment on Codex sub-agents. This log went in as #618. (Q32)
 
 ## Waiting on research
 
