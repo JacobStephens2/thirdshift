@@ -36,13 +36,6 @@ fn assert_help_text(text: &str) {
     }
 }
 
-/// The help text with each run of whitespace as one space, so that a mention
-/// is found however the lines are wrapped.
-fn unwrapped_help(scenario: &Scenario) -> String {
-    let help = scenario.run(&["help"]).stdout;
-    help.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 #[test]
 fn help_lists_every_form_of_the_command_on_stdout() {
     let scenario = Scenario::new();
@@ -81,41 +74,31 @@ fn help_does_not_mention_the_flag_aliases() {
 }
 
 #[test]
-fn help_documents_architect_its_focus_the_dispatch_plan_only_and_when_an_architect_run_is_skipped()
-{
+fn help_is_a_compact_reference_with_a_link_to_the_details() {
     let scenario = Scenario::new();
 
-    let help = unwrapped_help(&scenario);
+    let help = scenario.run(&["help"]).stdout;
 
-    for mention in [
-        "<focus> is free text",
-        "dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run on a single Ticket",
-        "merge, --no-merge, base-fix, --no-base-fix, parallel <n>, harness, model and effort apply to that run",
-        "as do the User config's defaults",
-        "With --plan-only, the Architect run prints the plan's URL and stops instead",
-        "thirdshift architect \"the Spec run\"",
-        "A review that finds no Strong candidate publishes no plan",
-        "thirdshift prints that issue's URL instead",
-        "Either way thirdshift labels that issue an Architect idea: architect-idea and needs-triage",
-        "an Architect run that finds an Architect idea open and still labelled needs-triage is skipped as well",
-        "Any triage decision lets the next Architect run go ahead",
-        "Last, an Architect run is skipped while the repository has a Ready issue, by the search a Pickup run makes",
-        "one with no Pickup run to take it keeps Architect runs from starting",
-        "Only one Pass per repository runs at a time on a machine",
-        "is skipped: it prints another Pass is already running on <owner>/<repo>, does nothing else and exits 0",
-        "A skipped run sends none, even when asked",
-        "swaps its needs-triage label for ready-for-agent, labels it architect-plan",
-        "creating the label if the repository lacks it",
-        "An Architect run that finds an open issue labelled architect-plan is skipped too, before any review, with or without --plan-only",
-        "prints its URL on stdout, gives the command that picks it up, thirdshift <plan URL>, and exits 0",
-        "No flag overrides this: finish or close the Architect plan, or remove its label",
-        "An Architect run never retries or dispatches an existing Architect plan",
-        "--email, --email <address> and --no-email ask an Architect run for its Run notification",
-        "It sends one for the whole Architect run, however it ends",
-        "The run the plan is dispatched as sends none of its own",
+    assert!(
+        help.lines().count() <= 65,
+        "help should fit in a short reference, got {} lines",
+        help.lines().count()
+    );
+    assert!(help.contains("https://github.com/JacobStephens2/thirdshift#readme"));
+    for detail in [
+        "[harness.claude]",
+        "[pickup]",
+        "[resend]",
+        "codex exec",
+        "Unready Ticket",
     ] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+        assert!(
+            !help.contains(detail),
+            "help repeats detailed documentation: {detail}"
+        );
     }
+    assert!(scenario.gh_calls().is_empty(), "help contacted GitHub");
+    assert!(scenario.claude_calls().is_empty(), "help started a session");
 }
 
 const PLAN_ONLY_DISPATCHES_NOTHING: &str = "merge, no-merge, parallel, base-fix, no-base-fix, harness, model and \
@@ -190,89 +173,6 @@ fn architect_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr()
 }
 
 #[test]
-fn help_documents_base_for_an_architect_run() {
-    let scenario = Scenario::new();
-
-    let help = unwrapped_help(&scenario);
-
-    for mention in [
-        "base <branch> (or --base <branch>) names the Architect run's Base branch",
-        "whatever branch the clone has checked out",
-        "on a detached HEAD or with uncommitted changes",
-        "The review starts at <branch>'s head on origin",
-        "the run the plan is dispatched as branches off <branch> and targets it with its pull request",
-        "<branch> must exist on origin, with no local copy of it ahead",
-        "launch.pull updates the clone only when <branch> is the branch checked out",
-        "base goes with --plan-only too",
-        "base is for a Pass only",
-        "Without base, the Base branch is the branch checked out",
-        "thirdshift architect base main",
-    ] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-}
-
-#[test]
-fn help_documents_pickup_the_ready_issue_the_dispatch_the_skips_and_the_run_notification() {
-    let scenario = Scenario::new();
-
-    let help = unwrapped_help(&scenario);
-
-    for mention in [
-        "pickup starts a Pickup run from the clone, with no Issue URL",
-        "takes the lowest-numbered Ready issue in the repository and dispatches it as thirdshift <Issue URL> would: a Spec run on a Spec, a Run otherwise",
-        "A Ready issue is an open issue labelled ready-for-agent",
-        "none of ready-for-human, needs-info, wontfix and needs-triage",
-        "is not in-progress",
-        "is not a sub-issue, is not labelled base-fix or security-fix, has no open blocker",
-        "was never started: no Issue branch for it is on origin, and no pull request from one exists, open, merged or closed",
-        "A Spec whose Tickets are all closed is not one either: a Spec run would find nothing to do",
-        "It must also be settled: by default, thirty minutes have passed since ready-for-agent was applied to it, and since a sub-issue or a \"blocked by\" link of its was last added or removed",
-        "pickup.wait_minutes in the User config sets that settling window in whole minutes from 0 up",
-        "0 disables waiting",
-        "[pickup] wait_minutes = 30",
-        "A sub-issue is reached through its Spec, when the Spec is itself a Ready issue",
-        "Each ready-for-agent issue a pass looks at and does not take gets one line on stderr with the first reason that applies, such as #21 is a Ticket of #20, which is not ready or #30 blocked by #29, before the line that says what the pass did",
-        "The Pickup run ends as that run does, with its exit code and its PR's URL",
-        "merge, --no-merge, base-fix, --no-base-fix, parallel <n>, harness, model and effort apply to that run, as do the User config's defaults",
-        "parallel <n> is ignored when the issue is not a Spec",
-        "base <branch> names the Pickup run's Base branch as it does an Architect run's",
-        "pickup takes nothing else: no focus and no --plan-only",
-        "A Pickup run is skipped, exiting 0 with nothing on stdout and one line on stderr saying why, after any lines on issues it passed over",
-        "when the repository has no Ready issue",
-        "while another Pass on the same repository is still running on this machine",
-        "--email, --email <address> and --no-email ask a Pickup run for its Run notification as they do a Run, and email.always sets the default",
-        "A pass that took an issue sends one: the notification the run it dispatched would send by hand, with that run's subject, outcome and body",
-        "The dispatched run sends none of its own",
-        "A skipped pass sends none, even when asked",
-        "The notification's checks, an address and a Resend API key, are made before any other work on every pass, so one that would be skipped fails on them too, with exit 1",
-    ] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-}
-
-#[test]
-fn help_documents_the_claim_limit_and_taking_in_progress_off_closed_issues() {
-    let scenario = Scenario::new();
-
-    let help = unwrapped_help(&scenario);
-
-    for mention in [
-        "when the repository is at its Claim limit",
-        "A Pickup run takes nothing while as many open issues are labelled in-progress, whoever started them, as the Claim limit, 3 unless set",
-        "so a broken Base branch can't fail every Ready issue in turn, and pull requests can't pile up unreviewed",
-        "pickup.limit in the User config sets the Claim limit, a whole number from 1 up",
-        "[pickup] limit = 5",
-        "There is no flag for it",
-        "Each Pickup run that gets the lock first makes the Sweep: it takes in-progress off every closed issue that still has it",
-        "so an issue merged by hand doesn't look taken",
-        "A label it can't take off is a warning: line, and the pass carries on",
-    ] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-}
-
-#[test]
 fn pickup_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["ready-for-agent"]);
@@ -339,59 +239,6 @@ fn pickup_is_a_command_only_as_the_first_argument() {
     let result = scenario.run(&["merge", "pickup"]);
 
     assert_argument_error(&scenario, &result, "not a GitHub issue URL: pickup");
-}
-
-#[test]
-fn help_documents_the_claim() {
-    let scenario = Scenario::new();
-
-    let help = unwrapped_help(&scenario);
-
-    for mention in [
-        "A Run or a Spec run makes the Claim on its issue once its checks pass, before any work: it labels the issue in-progress, in place of ready-for-agent if it has that",
-        "creating the label if the repository lacks it",
-        "A Ticket's Run in a Spec run and a Base fix make none",
-        "A Run whose Claim can't be made stops there",
-        "The Claim is released, the issue's labels put back as they were, when the Run or the Spec run fails with nothing on origin to take over: no Issue branch or Spec branch and no pull request",
-        "It is removed once a Self-merge has left the issue closed, and otherwise stays",
-        "That run makes the Claim on the plan, which keeps architect-plan",
-    ] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-}
-
-#[test]
-fn help_points_to_running_an_architect_run_on_a_schedule_without_the_recipe() {
-    let scenario = Scenario::new();
-
-    let help = unwrapped_help(&scenario);
-
-    for mention in [
-        "To run an Architect run on a schedule, have the operating system's scheduler, such as cron, run thirdshift architect base main from the clone",
-        "the README's \"On a schedule\" has a crontab entry",
-    ] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-    for recipe in ["PATH=", "* * *", "architect-cron.log"] {
-        assert!(!help.contains(recipe), "help repeats {recipe:?}: {help}");
-    }
-}
-
-#[test]
-fn help_points_to_running_a_pickup_run_on_a_schedule_without_the_recipe() {
-    let scenario = Scenario::new();
-
-    let help = unwrapped_help(&scenario);
-
-    for mention in [
-        "To run a Pickup run on a schedule, have a scheduler, such as cron, run thirdshift pickup base main from the clone",
-        "the README's \"A Pickup run on a schedule\" has a crontab entry",
-    ] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-    for recipe in ["PATH=", "* * *", "pickup-cron.log"] {
-        assert!(!help.contains(recipe), "help repeats {recipe:?}: {help}");
-    }
 }
 
 #[test]
@@ -634,48 +481,6 @@ fn no_merge_without_an_issue_url_prints_an_error_and_the_help_to_stderr() {
 }
 
 #[test]
-fn help_lists_no_merge_and_the_user_config() {
-    let scenario = Scenario::new();
-
-    let help = scenario.run(&["help"]).stdout;
-
-    for mention in ["--no-merge", "~/.thirdshift/config.toml", "merge.always"] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-}
-
-#[test]
-fn help_lists_the_email_settings() {
-    let scenario = Scenario::new();
-
-    let help = scenario.run(&["help"]).stdout;
-
-    for mention in [
-        "email.to",
-        "email.from",
-        "Run notification",
-        "--email <address>",
-        "email.always",
-        "--no-email",
-        "onboarding@resend.dev",
-        "RESEND_API_KEY",
-    ] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-}
-
-#[test]
-fn help_lists_no_base_fix_and_base_fix_in_the_user_config() {
-    let scenario = Scenario::new();
-
-    let help = scenario.run(&["help"]).stdout;
-
-    for mention in ["--no-base-fix", "base.fix", "[base]\n    fix = true\n"] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
-    }
-}
-
-#[test]
 fn parallel_without_a_positive_whole_number_prints_an_error_and_the_help_to_stderr() {
     let scenario = Scenario::new();
     let url = scenario.issue_url(7);
@@ -710,12 +515,45 @@ fn parallel_without_a_positive_whole_number_prints_an_error_and_the_help_to_stde
 }
 
 #[test]
-fn help_lists_parallel_and_spec_parallel() {
+fn help_lists_shared_options_and_the_context_needed_to_use_them() {
     let scenario = Scenario::new();
 
     let help = scenario.run(&["help"]).stdout;
 
-    for mention in ["parallel <n>", "spec.parallel", "Spec"] {
-        assert!(help.contains(mention), "help lacks {mention:?}: {help}");
+    for option in [
+        "merge",
+        "no-merge",
+        "email [<address>]",
+        "no-email",
+        "base-fix",
+        "no-base-fix",
+        "parallel <n>",
+        "harness <name>",
+        "model <name>",
+        "effort <level>",
+        "security-review",
+        "no-security-review",
+        "security-fix",
+        "no-security-fix",
+        "base <branch>",
+        "--plan-only",
+    ] {
+        assert!(help.contains(option), "help lacks {option:?}: {help}");
+    }
+    for context in [
+        "before or after the Issue URL",
+        "Spec run",
+        "sub-issues",
+        "Base branch",
+        "branch checked out",
+        "Pass",
+        "<focus>",
+        "claude, codex, agy, grok, muse, opencode",
+        "~/.thirdshift/config.toml",
+        "thirdshift setup",
+        "User config",
+        "README",
+    ] {
+        assert!(help.contains(context), "help lacks {context:?}: {help}");
     }
 }
