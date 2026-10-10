@@ -731,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn only_new_fingerprints_get_a_private_record() {
+    fn repeated_fingerprints_preserve_counts_metadata_order_and_reproduce_once() {
         use crate::github::{DraftAdvisory, Package};
         use serde_json::json;
         let draft = |fingerprint: &str| DraftAdvisory {
@@ -744,18 +744,30 @@ mod tests {
             },
         };
         let mut outside = InMemory::default()
-            .audited(vec![draft("old"), draft("new")])
+            .audited(vec![draft("old"), draft("new"), draft("new")])
             .advisories(vec![
                 json!({"ghsa_id":"old", "state":"closed", "description":"Fingerprint: `old`", "summary":"Candidate", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-old"}),
             ]);
         let Outcome::Audited(Ended {
             outcome: Ok(recorded),
+            findings,
             ..
         }) = run_through(&mut outside, &widgets(), "main", false, None)
         else {
             panic!("audit should succeed");
         };
-        assert_eq!((recorded.created, recorded.existing), (1, 1));
+        assert_eq!((recorded.created, recorded.existing), (1, 2));
+        assert_eq!(
+            findings
+                .iter()
+                .map(|finding| finding.url.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://github.com/acme/widgets/security/advisories/GHSA-old",
+                "https://github.com/acme/widgets/security/advisories/new",
+                "https://github.com/acme/widgets/security/advisories/new",
+            ]
+        );
         assert_eq!(
             outside
                 .calls
@@ -771,16 +783,12 @@ mod tests {
             outside
                 .calls
                 .iter()
-                .filter(|call| matches!(
-                    call,
-                    Call::CreateAdvisory(_) | Call::Reproduce(_) | Call::UpdateSecurityRecord(_)
-                ))
+                .filter_map(|call| match call {
+                    Call::Reproduce(record) => Some(record.as_str()),
+                    _ => None,
+                })
                 .collect::<Vec<_>>(),
-            vec![
-                &Call::CreateAdvisory("new".into()),
-                &Call::Reproduce("new".into()),
-                &Call::UpdateSecurityRecord("new".into()),
-            ]
+            vec!["new"]
         );
     }
 }

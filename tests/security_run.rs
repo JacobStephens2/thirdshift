@@ -3333,19 +3333,39 @@ fn assert_a_failed_fix_record_outage_pauses_security(severity: &str) {
 }
 
 #[test]
-fn duplicate_audit_findings_reproduce_once_and_keep_notification_order_and_counts() {
+fn audit_notifications_keep_record_order_and_reproduce_only_untriaged_records() {
     for private in [false, true] {
         let scenario = Scenario::new();
         let mut state = scenario.gh_state();
         state["private"] = json!(private);
+        for (number, fingerprint, title) in [
+            (8, "first-bound", "First bound"),
+            (9, "third-bound", "Third bound"),
+        ] {
+            let description = format!("Day shift write-up\nFingerprint: `{fingerprint}`\n");
+            if private {
+                let number = number.to_string();
+                state["issues"][&number] = json!("OPEN");
+                state["labels"][&number] = json!(["security-finding"]);
+                state["titles"][&number] = json!(title);
+                state["bodies"][&number] = json!(description);
+            } else {
+                if !state["advisories"].is_array() {
+                    state["advisories"] = json!([]);
+                }
+                state["advisories"].as_array_mut().unwrap().push(json!({
+                    "ghsa_id": format!("GHSA-{number}"), "description": description,
+                    "state": "draft", "severity": "low", "summary": title,
+                    "html_url": format!("https://github.com/acme/widgets/security/advisories/GHSA-{number}")
+                }));
+            }
+        }
         scenario.write_gh_state(&state);
-        let mut first = finding("first-bound");
-        first["title"] = json!("First bound");
+        let first = finding("first-bound");
         let mut second = finding("second-bound");
         second["title"] = json!("Second bound");
-        let mut repeated = finding("first-bound");
-        repeated["title"] = json!("A repeated title must not replace the record");
-        scenario.agent_does(&audit_script(&json!([first, second, repeated]).to_string()));
+        let third = finding("third-bound");
+        scenario.agent_does(&audit_script(&json!([first, second, third]).to_string()));
         let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
         let result =
             scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
@@ -3353,39 +3373,25 @@ fn duplicate_audit_findings_reproduce_once_and_keep_notification_order_and_count
         assert!(
             result
                 .stderr
-                .contains("2 new finding(s), 1 already recorded"),
+                .contains("1 new finding(s), 2 already recorded"),
             "{}",
             result.stderr
         );
         assert_eq!(
             scenario.claude_calls().len(),
-            3,
-            "audit and two reproductions"
+            2,
+            "audit and the new finding's reproduction"
         );
-        let state = scenario.gh_state();
-        if private {
-            assert_eq!(
-                state["issues"].as_object().unwrap().len(),
-                3,
-                "original issue and two findings"
-            );
-        } else {
-            assert_eq!(state["advisories"].as_array().unwrap().len(), 2);
-        }
         let (_, text) = the_one_notification(&resend);
-        assert_eq!(text.matches("First bound").count(), 2, "{text}");
-        assert_eq!(text.matches("Second bound").count(), 1, "{text}");
-        let first_position = text.find("First bound").unwrap();
-        let second_position = text.find("Second bound").unwrap();
-        let repeated_position = text.rfind("First bound").unwrap();
+        for title in ["First bound", "Second bound", "Third bound"] {
+            assert_eq!(text.matches(title).count(), 1, "{text}");
+        }
         assert!(
-            first_position < second_position && second_position < repeated_position,
+            text.find("First bound").unwrap() < text.find("Second bound").unwrap()
+                && text.find("Second bound").unwrap() < text.find("Third bound").unwrap(),
             "{text}"
         );
-        assert!(
-            !text.contains("A repeated title must not replace the record"),
-            "{text}"
-        );
+        assert!(!text.contains("Day shift write-up"), "{text}");
         assert!(!text.contains("Private candidate write-up."), "{text}");
     }
 }
