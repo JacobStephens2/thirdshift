@@ -484,6 +484,17 @@ fn a_bigger_public_fix_publishes_tickets_and_ends_as_the_spec_run() {
     // thirdshift created the Spec's native links from the staged text.
     assert_eq!(state["sub_issues"]["8"], json!([9, 10]));
     assert_eq!(state["blocked_by"]["10"], json!([9]));
+    // The post-publish window sweep must leave the staged issues alone.
+    assert_eq!(
+        state["issues"]["8"], "OPEN",
+        "the staged spec must survive the window sweep: {}",
+        state["issues"]
+    );
+    assert!(
+        !result.stderr.contains("outside the staged path"),
+        "{}",
+        result.stderr
+    );
     let spec_body = state["bodies"]["8"].as_str().unwrap();
     assert!(spec_body.contains("storage and transport"), "{spec_body}");
     assert!(!spec_body.contains("Private candidate write-up"));
