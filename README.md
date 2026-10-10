@@ -986,7 +986,7 @@ cargo test
 
 ## Releasing
 
-From a clone of this repo, signed in to `gh` and with `claude` logged in, run the release script with the new version:
+From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
 ```sh
 scripts/release.sh 0.4.0
