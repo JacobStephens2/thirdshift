@@ -22,16 +22,7 @@ impl Models {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
             return;
         };
-        let model = match self.harness {
-            Some(Harness::Claude | Harness::Grok)
-                if event["type"] == "assistant" && event["is_api_error_message"] != true =>
-            {
-                event["message"]["model"].as_str()
-            }
-            Some(Harness::Agy) if event["event"] == "init" => event["init"]["model"].as_str(),
-            _ => None,
-        };
-        if let Some(model) = model {
+        if let Some(model) = reported_model(self.harness, &event) {
             self.include(model);
         }
         if self.harness == Some(Harness::Claude)
@@ -56,4 +47,22 @@ impl Models {
     pub fn into_names(self) -> Vec<String> {
         self.names
     }
+
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+}
+
+/// Shared protocol evidence. Callers choose whether delegated answers count.
+pub(super) fn reported_model(harness: Option<Harness>, event: &Value) -> Option<&str> {
+    let model = match harness {
+        Some(Harness::Claude | Harness::Grok)
+            if event["type"] == "assistant" && event["is_api_error_message"] != true =>
+        {
+            event["message"]["model"].as_str()
+        }
+        Some(Harness::Agy) if event["event"] == "init" => event["init"]["model"].as_str(),
+        _ => None,
+    };
+    model.filter(|model| !model.is_empty() && *model != "<synthetic>")
 }

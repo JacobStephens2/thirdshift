@@ -75,6 +75,103 @@ fn assert_contains(text: &str, part: &str) {
 }
 
 #[test]
+fn a_notification_excludes_an_unrelated_commands_models_with_the_same_stamp() {
+    let scenario = Scenario::new();
+    let started = scenario.path("agent-started");
+    let release = scenario.path("agent-release");
+    scenario.agent_does(&format!(
+        "printf '%s\\n' '{}'\ntouch '{}'\n\
+         while [ ! -e '{}' ]; do sleep 0.01; done\n{AGENT_OPENS_PR}",
+        r#"{"type":"assistant","message":{"model":"current-model","content":[]}}"#,
+        started.display(),
+        release.display(),
+    ));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let held = scenario.run_until(
+        &[&scenario.issue_url(7), "email", "me@example.com"],
+        &env(&resend, Some(KEY)),
+        "agent-started",
+    );
+
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
+    let command_logs = scenario.log_files(folder, "log");
+    assert_eq!(command_logs.len(), 1, "{command_logs:?}");
+    let stamp = command_logs[0]
+        .strip_prefix("7-")
+        .unwrap()
+        .strip_suffix(".log")
+        .unwrap();
+    let directory = scenario.path(folder);
+
+    // Normal files belonging to an independent issue #8 Command that
+    // started in the same second; #8 is not a child of this Run.
+    std::fs::write(directory.join(format!("8-{stamp}.log")), "").unwrap();
+    std::fs::write(
+        directory.join(format!("8-{stamp}-implement.models.json")),
+        r#"{"kind":"implement","harness":"claude","requested":null,"effort":null,"observed":["unrelated-model"]}"#,
+    ).unwrap();
+    // A record with explicit ownership must also be excluded when its
+    // owning Command differs, even though its timestamp matches.
+    std::fs::write(
+        directory.join(format!("9-{stamp}-implement.models.json")),
+        serde_json::json!({
+            "command_log": directory.join(format!("9-{stamp}.log")),
+            "kind": "implement", "harness": "claude", "requested": null,
+            "effort": null, "observed": ["other-command-model"]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(&release, "").unwrap();
+
+    let result = held.finish();
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_contains(text(&request), "- implement: claude · current-model");
+    assert!(
+        !text(&request).contains("other-command-model"),
+        "{}",
+        text(&request)
+    );
+    assert!(
+        !text(&request).contains("unrelated-model"),
+        "{}",
+        text(&request),
+    );
+}
+
+#[test]
+fn an_interrupted_notification_keeps_models_observed_before_the_signal() {
+    let scenario = Scenario::new();
+    let started = scenario.path("agent-started");
+    scenario.agent_does(&format!(
+        "printf '%s\\n' '{}'\nprintf '%s\\n' '{}'\ntouch '{}'\nsleep 30\n",
+        r#"{"type":"assistant","message":{"model":"claude-opus-5-5","content":[]}}"#,
+        r#"{"type":"assistant","parent_tool_use_id":"child","message":{"model":"claude-sonnet-5","content":[]}}"#,
+        started.display(),
+    ));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_and_signal_with_env(
+        &[&scenario.issue_url(7), "--email", "me@example.com"],
+        &env(&resend, Some(KEY)),
+        "agent-started",
+        "TERM",
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let transcript = std::fs::read_to_string(the_one_log(&scenario)).unwrap();
+    assert_contains(&transcript, "claude-opus-5-5");
+    assert_contains(&transcript, "claude-sonnet-5");
+    let request = the_one_request(&resend);
+    assert!(subject(&request).ends_with(": interrupted"));
+    assert_contains(
+        text(&request),
+        "- implement: claude · claude-opus-5-5, claude-sonnet-5",
+    );
+}
+
+#[test]
 fn a_spec_notification_includes_child_models_and_excludes_an_earlier_commands_models() {
     let scenario = Scenario::new();
     scenario.agent_does_for(7, &format!(

@@ -368,6 +368,7 @@ fn run(
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
     let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
+    let choice_owned = choice.clone();
     let executed = process::streaming(
         adapter,
         Command::new(cli)
@@ -375,7 +376,18 @@ fn run(
             .current_dir(worktree),
         invocation.stdin.as_deref(),
         stream,
-        move |output, stream| follow(&kind_owned, output, &mut log_file, &log_owned, stream),
+        move |output, stream| {
+            let followed = follow(&kind_owned, output, &mut log_file, &log_owned, stream);
+            // The process owner joins this reader before returning, including
+            // on interruption, when it deliberately suppresses state recovery.
+            models::keep(
+                &kind_owned,
+                &log_owned,
+                &choice_owned,
+                stream.observed_models(),
+            );
+            followed
+        },
     )?;
 
     let completion = executed.state.finish(executed.execution);

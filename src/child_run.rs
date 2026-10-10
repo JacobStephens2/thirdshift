@@ -387,6 +387,7 @@ fn start_using(
     startup: impl FnOnce(&mut Handle) -> Result<()>,
 ) -> Result<Handle> {
     let mut command = Command::new(executable);
+    crate::session::models::inherit_command(&mut command);
     // On Linux `executable` is a link, and the child goes by this process's
     // command instead.
     if cfg!(target_os = "linux")

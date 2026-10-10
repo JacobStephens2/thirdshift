@@ -182,6 +182,12 @@ impl Interpretation {
         self
     }
 
+    /// Stream evidence already read, even when interruption suppresses
+    /// completion reporting and retained-record reads.
+    pub fn observed_models(&self) -> Vec<String> {
+        self.models.names().to_vec()
+    }
+
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
         let mut lines = self.decoder.condense(raw);
