@@ -623,6 +623,41 @@ fn a_spec_session_side_effect_public_issue_fails_the_fix_and_is_closed() {
 }
 
 #[test]
+fn a_staged_spec_with_cyclic_blocking_edges_is_rejected_before_creating_anything() {
+    // Ticket 1 names a later Ticket as its blocker and vice versa: no
+    // execution order satisfies both edges, so validation must reject the
+    // staged text before thirdshift creates any public issue.
+    let record = "https://github.com/acme/widgets/security/advisories/GHSA-finding-0";
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["advisories"][0]["description"] = json!(
+        state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .replace("high single", "high spec")
+    );
+    scenario.write_gh_state(&state);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "printf 'Proposed public spec:\\nTitle: Bound accepted input\\nBody:\\nBound input across storage and transport. Private record: {record}\\nTicket: Bound storage input\\nBody:\\nBound storage input. Private record: {record}\\nBlocked by: 2\\nTicket: Bound transport input\\nBody:\\nBound transport input. Private record: {record}\\nBlocked by: 1\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        ),
+    );
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(
+        result.code,
+        Some(1),
+        "cyclic staged spec must be rejected: {}",
+        result.stderr
+    );
+    assert!(
+        scenario.gh_state()["bodies"].get("8").is_none(),
+        "a rejected staged spec must not create a public issue: {}",
+        scenario.gh_state()["bodies"]
+    );
+}
+
+#[test]
 fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_auditing() {
     let scenario = with_reproduced_findings(&["low", "critical", "critical", "high"]);
     scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-1"));

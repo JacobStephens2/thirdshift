@@ -255,10 +255,12 @@ fn parse_staged_spec_proposal(message: &str) -> Option<StagedSpec> {
 
 /// The `Blocked by:` trailer of one staged Ticket as 0-based indices into
 /// its Spec's Tickets: `none` is empty, else comma-separated 1-based
-/// positions on a single line. Anything but blank lines after that first
-/// line is malformed staged text: ignoring it would silently drop a stated
-/// ordering edge, so validation fails closed instead. `None` unless every
-/// position names another Ticket of the `count` staged.
+/// positions of earlier Tickets on a single line, since each later Ticket
+/// names the Tickets that block it. Anything but blank lines after that
+/// first line is malformed staged text: ignoring it would silently drop a
+/// stated ordering edge, so validation fails closed instead. `None` unless
+/// every position names an earlier Ticket of the `count` staged: a forward
+/// or cyclic edge would dispatch Tickets that can never unblock.
 fn parse_blocked_by(blocked: &str, index: usize, count: usize) -> Option<Vec<usize>> {
     let mut lines = blocked.lines();
     let line = lines.next().unwrap_or_default().trim();
@@ -276,7 +278,7 @@ fn parse_blocked_by(blocked: &str, index: usize, count: usize) -> Option<Vec<usi
         .filter(|edge| !edge.is_empty())
     {
         let position: usize = position.parse().ok()?;
-        if position == 0 || position > count || position - 1 == index {
+        if position == 0 || position > count || position > index {
             return None;
         }
         let edge = position - 1;
@@ -464,6 +466,7 @@ mod tests {
         for message in [
             "Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input. Private record: https://example.invalid/advisory\nTicket: Only ticket\nBody:\nOnly ticket. Private record: https://example.invalid/advisory\nBlocked by: 1\n",
             "Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input. Private record: https://example.invalid/advisory\nTicket: Only ticket\nBody:\nOnly ticket. Private record: https://example.invalid/advisory\nBlocked by: 2\n",
+            "Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input. Private record: https://example.invalid/advisory\nTicket: First ticket\nBody:\nFirst ticket. Private record: https://example.invalid/advisory\nBlocked by: 2\nTicket: Second ticket\nBody:\nSecond ticket. Private record: https://example.invalid/advisory\nBlocked by: none\n",
             "Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input. Private record: https://example.invalid/advisory\n",
         ] {
             assert!(
