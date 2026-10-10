@@ -7,11 +7,11 @@
 #
 # Usage: scripts/release.sh [--review] <version>
 #
-# Run it in a clone of this repo, signed in to gh and with claude logged in. It
+# Run it in a clone of this repo, signed in to gh and the default Harness. It
 # works from origin/main in a temporary worktree, so the branch checked out
 # where it runs and any uncommitted changes there are neither used nor changed.
 #
-# claude, with no tools, writes the PR's summary from the prompt in
+# The User config's default Harness writes the PR's summary from the prompt in
 # release-summary.md beside this script. If it fails, the summary is GitHub's
 # generated notes instead, and the script warns and carries on. With --review,
 # it then prints the summary and asks whether to carry on with it, edit it in
@@ -46,6 +46,7 @@ shopt -s inherit_errexit
 
 # The prompt the summary agent gets ahead of the release's input.
 summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
+summary_manifest=$(dirname "$summary_prompt")/../Cargo.toml
 
 # Seconds between reads of the PR's workflow runs and the release workflow run.
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
@@ -166,13 +167,13 @@ commit_bump() {
 }
 
 # write_summary <what stopping leaves undone>
-# Sets diff to the version diff of $head and summary to claude's summary of
+# Sets diff to the version diff of $head and summary to the Harness's summary of
 # it, then with --review, asks about the summary and exits 1 on no, saying
 # <what stopping leaves undone>.
 write_summary() {
 	local base
 	base=$(git merge-base "$head" origin/main)
-	progress "writing the summary with claude"
+	progress "writing the summary with the configured Harness"
 	diff=$(version_diff "$base" "$head")
 	summary=$(release_summary "$base" "$tag" "$diff")
 	if [ -n "$review" ] && ! summary=$(review_summary "$summary"); then
@@ -426,7 +427,7 @@ release_summary() {
 	input=$(summary_input "$1" "$previous" "$3")
 	# In an if, so the agent failing falls back rather than stopping the script.
 	if summary=$({ cat "$summary_prompt" && echo && echo "$input"; } |
-		claude -p --tools '' --strict-mcp-config) &&
+		summary_agent) &&
 		[ -n "${summary//[[:space:]]/}" ]; then
 		echo "$summary"
 		return
@@ -437,6 +438,12 @@ release_summary() {
 	gh api 'repos/{owner}/{repo}/releases/generate-notes' \
 		-f tag_name="$2" -f target_commitish="$1" \
 		${previous:+-f previous_tag_name="$previous"} --jq .body
+}
+
+# Use this checkout's config parser and Harness adapters, not a possibly older
+# installed binary. Prompt on stdin, final assistant text on stdout.
+summary_agent() {
+	cargo run --quiet --manifest-path "$summary_manifest" -- --release-summary
 }
 
 # summary_input <base> <previous tag> <version diff section>

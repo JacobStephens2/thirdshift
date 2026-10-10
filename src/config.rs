@@ -1,6 +1,7 @@
 //! The User config: `~/.thirdshift/config.toml`, this machine's defaults for
-//! every Run. Only a Run, `email-test` and `setup` read it, so a broken one
-//! can't block `update`, `version` or `help`, and only a Run offers Setup
+//! every Run and release summary. Runs, release summaries, `email-test` and
+//! `setup` read it; a broken one can't block `update`, `version` or `help`.
+//! Only a Run offers Setup
 //! when there is none.
 
 use std::io::Write;
