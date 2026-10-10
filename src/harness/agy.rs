@@ -3,7 +3,7 @@ mod catalog;
 pub(crate) mod stream;
 pub use catalog::Catalog;
 
-use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::adapter::{Adapter, Invocation, SkillLoading, without};
 use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
@@ -69,6 +69,36 @@ impl Adapter for Agy {
         choice.model = settled.model;
         choice.effort = settled.effort;
         Ok(())
+    }
+    /// Headless agy auto-denies every tool that needs a permission: commands,
+    /// writes, URLs and MCP, and a denial ends the turn with no summary. Its
+    /// file reads need none, and no flag removes them, so a summary can
+    /// still quote a file the model chose to read.
+    fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
+        let mut invocation = self.session(choice, None, prompt);
+        invocation.args.pop();
+        invocation.args = without(invocation.args, &["--dangerously-skip-permissions"]);
+        invocation.args[0] = "-p=".into();
+        invocation.args.extend(
+            [
+                "--sandbox",
+                "--disable-slash-commands",
+                // A stalled turn fails, so the release falls back to
+                // generated notes rather than waiting forever.
+                "--print-timeout",
+                "10m",
+                "--input-format",
+                "stream-json",
+            ]
+            .map(String::from),
+        );
+        invocation.stdin = Some(format!(
+            "{}\n",
+            serde_json::json!({
+                "event": "user", "message": {"role": "user", "content": prompt}
+            })
+        ));
+        invocation
     }
     fn ask_settings(
         &self,

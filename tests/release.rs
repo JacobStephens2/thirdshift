@@ -1,5 +1,5 @@
 //! The maintainer's release script, `scripts/release.sh`, run as a black box
-//! against a bare local origin with the fake `gh` and `claude` on PATH and
+//! against a bare local origin with the fake `gh` and Harness CLIs on PATH and
 //! the user's git configuration kept out, as the site deploy tests run the
 //! publish script. Where a step has several cases, one goes through the whole
 //! script and the rest call the step's function, with the script sourced.
@@ -81,6 +81,16 @@ impl Release {
         git(root, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
         fs::create_dir(release.bin()).unwrap();
         support::fakes::install(&release.bin());
+        // Execute the built binary through the script's Cargo interface, so
+        // release tests do not rebuild it or depend on the machine's rustup.
+        let cargo = release.bin().join("cargo");
+        fs::write(
+            &cargo,
+            "#!/bin/sh\nexec \"$THIRDSHIFT_TEST_BINARY\" --release-summary\n",
+        )
+        .unwrap();
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir(root.join("home")).unwrap();
         fs::write(
             root.join("gh-state.json"),
             json!({"repo": REPO, "issues": {}, "prs": [], "checks": {}, "statuses": {}})
@@ -114,7 +124,9 @@ impl Release {
             "It frobs.\n\nCloses #7.",
         );
         release.merge_pr("site", "Tidy the site", "");
-        release.agent_runs(&format!("printf '%s\\n' '{AGENT_SUMMARY}'"));
+        release.agent_runs(&format!(
+            "printf '%s' '{AGENT_SUMMARY}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
+        ));
 
         git(root, &["clone", "-q", "origin.git", "maintainer"]);
         release.main_ci("completed", "success");
@@ -275,10 +287,21 @@ impl Release {
         isolated(&mut command)
             .current_dir(dir)
             .env("PATH", path)
+            .env("HOME", self.root().join("home"))
+            .env("XDG_DATA_HOME", self.root().join("home/.local/share"))
+            .env("THIRDSHIFT_TEST_BINARY", env!("CARGO_BIN_EXE_thirdshift"))
             .env("FAKE_GH_STATE", self.root().join("gh-state.json"))
             .env("FAKE_GH_RECORD", self.root().join("gh-calls.json"))
             .env("FAKE_CLAUDE_SCRIPT", self.root().join("claude-script.sh"))
             .env("FAKE_CLAUDE_RECORD", self.root().join("claude-calls.json"))
+            .env("FAKE_CODEX_RECORD", self.root().join("codex-calls.json"))
+            .env("FAKE_AGY_RECORD", self.root().join("agy-calls.json"))
+            .env("FAKE_GROK_RECORD", self.root().join("grok-calls.json"))
+            .env("FAKE_MUSE_RECORD", self.root().join("muse-calls.json"))
+            .env(
+                "FAKE_OPENCODE_RECORD",
+                self.root().join("opencode-calls.json"),
+            )
             .env("RELEASE_POLL_SECONDS", "0");
         command
     }
@@ -290,25 +313,15 @@ impl Release {
     /// Runs the script with `args`, with `stdin` on its standard input and
     /// `env` added to its environment.
     fn run_script_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
-        let mut child = self
-            .command(
+        with_input(
+            self.command(
                 &manifest_dir().join("scripts/release.sh"),
                 &self.maintainer(),
             )
             .args(args)
-            .envs(env.iter().copied())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("could not run release.sh");
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
+            .envs(env.iter().copied()),
+            stdin,
+        )
     }
 
     /// Runs the Release notes script for `tag` in the maintainer's clone,
@@ -448,6 +461,18 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn with_input(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("could not start command");
+    // A rejected command may close stdin before a large input has been written.
+    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+    child.wait_with_output().unwrap()
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).unwrap()
 }
@@ -547,6 +572,299 @@ fn a_release_bumps_only_the_version_merges_the_pr_and_tags_the_merge_commit() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn the_release_summary_uses_the_user_configs_default_harness_model_and_effort() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let home = release.root().join("home");
+    fs::create_dir_all(home.join(".thirdshift")).unwrap();
+    fs::write(
+        home.join(".thirdshift/config.toml"),
+        "[harness]\ndefault = 'codex'\n[harness.codex]\nmodel = 'GPT-6-Luna'\neffort = 'High'\n",
+    )
+    .unwrap();
+    release.agent_runs(&format!(
+        "printf '%s' '{AGENT_SUMMARY}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
+    ));
+
+    let output = release.run_script_with(&["0.2.0"], "", &[("HOME", home.to_str().unwrap())]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        release.agent_calls().is_empty(),
+        "Claude must not be called"
+    );
+    let calls: Value =
+        serde_json::from_str(&fs::read_to_string(release.root().join("codex-calls.json")).unwrap())
+            .unwrap();
+    assert_eq!(calls.as_array().unwrap().len(), 1, "{calls:#?}");
+    let argv = calls[0]["argv"].as_array().unwrap();
+    assert!(argv.contains(&json!("--skip-git-repo-check")), "{argv:?}");
+    // Contributor-editable release input must not reach tools: no bypass, a
+    // read-only sandbox, nothing to approve, and no shell, MCP or browser.
+    assert!(
+        !argv.contains(&json!("--dangerously-bypass-approvals-and-sandbox")),
+        "{argv:?}"
+    );
+    for pair in [
+        ["--sandbox", "read-only"],
+        ["-c", "approval_policy=\"never\""],
+        ["-c", "web_search=\"disabled\""],
+        ["-c", "mcp_servers={}"],
+        ["--disable", "shell_tool"],
+        ["--disable", "unified_exec"],
+        ["--disable", "apps"],
+        ["--disable", "plugins"],
+        ["--disable", "browser_use"],
+        ["--disable", "computer_use"],
+        ["--disable", "hooks"],
+    ] {
+        assert!(
+            argv.windows(2)
+                .any(|window| window == [json!(pair[0]), json!(pair[1])]),
+            "{pair:?} missing from {argv:?}"
+        );
+    }
+    assert_ne!(calls[0]["cwd"], release.maintainer().display().to_string());
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair == [json!("-m"), json!("gpt-6-luna")]),
+        "{argv:?}"
+    );
+    assert!(
+        argv.contains(&json!("model_reasoning_effort=\"high\"")),
+        "{argv:?}"
+    );
+    assert_eq!(
+        summary_and_rest(&release.pr_body("release-0.2.0")).0,
+        format!("{AGENT_SUMMARY}\n")
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn every_harness_receives_the_complete_release_input_above_the_argument_limit() {
+    let prompt = format!("Summarize the release.\n{}", "x".repeat(150_000));
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+        let release = Release::new();
+        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
+        fs::write(
+            release.root().join("home/.thirdshift/config.toml"),
+            format!("[harness]\ndefault = '{harness}'\n"),
+        )
+        .unwrap();
+
+        let output = with_input(
+            release
+                .command(
+                    Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+                    &release.maintainer(),
+                )
+                .arg("--release-summary"),
+            &prompt,
+        );
+
+        assert!(output.status.success(), "{harness}: {}", stderr(&output));
+        assert_eq!(stdout(&output).trim(), AGENT_SUMMARY, "{harness}");
+        let calls: Value = serde_json::from_str(
+            &fs::read_to_string(release.root().join(format!("{harness}-calls.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            calls.as_array().unwrap().last().unwrap()["prompt"],
+            prompt,
+            "{harness}"
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn every_other_harness_summarizes_without_its_session_permission_bypass() {
+    // Release input is contributor-editable, so no summary may run tools
+    // that act on the machine, as Claude's runs with `--tools ''`.
+    // Each Harness, the session flags it must drop, and the runs it must add.
+    type Case = (
+        &'static str,
+        &'static [&'static str],
+        &'static [&'static [&'static str]],
+    );
+    let cases: [Case; 4] = [
+        (
+            "agy",
+            &["--dangerously-skip-permissions"],
+            &[
+                &["--sandbox"],
+                &["--disable-slash-commands"],
+                &["--print-timeout", "10m"],
+            ],
+        ),
+        (
+            "grok",
+            &["--always-approve", "off"],
+            &[
+                &["--tools", "todo_write"],
+                &["--disallowed-tools", "search_tool,use_tool"],
+                &["--disable-web-search"],
+            ],
+        ),
+        (
+            "muse",
+            &["--yolo", "--disable-approval", "--disable-sandbox"],
+            &[
+                &["--disable-shell"],
+                &["--disable-write"],
+                &["--disable-web-tools"],
+                &["--max-model-steps", "1"],
+            ],
+        ),
+        ("opencode", &["--auto"], &[]),
+    ];
+    for (harness, forbidden, required) in cases {
+        let release = Release::new();
+        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
+        fs::write(
+            release.root().join("home/.thirdshift/config.toml"),
+            format!("[harness]\ndefault = '{harness}'\n"),
+        )
+        .unwrap();
+
+        let output = with_input(
+            release
+                .command(
+                    Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+                    &release.maintainer(),
+                )
+                .arg("--release-summary"),
+            "Summarize the release.",
+        );
+
+        assert!(output.status.success(), "{harness}: {}", stderr(&output));
+        let calls: Value = serde_json::from_str(
+            &fs::read_to_string(release.root().join(format!("{harness}-calls.json"))).unwrap(),
+        )
+        .unwrap();
+        let call = calls.as_array().unwrap().last().unwrap();
+        let argv: Vec<&str> = call["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        for flag in forbidden {
+            assert!(!argv.contains(flag), "{harness}: {flag} in {argv:?}");
+        }
+        for run in required {
+            assert!(
+                argv.windows(run.len()).any(|window| window == *run),
+                "{harness}: {run:?} missing from {argv:?}"
+            );
+        }
+        if harness == "opencode" {
+            assert_eq!(
+                call["config_content"], r#"{"permission":{"*":"deny"}}"#,
+                "{call:#?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn every_other_configured_harness_supplies_its_final_text_to_the_release() {
+    for harness in ["agy", "grok", "muse", "opencode"] {
+        let release = Release::new();
+        release.ci_reports(GREEN);
+        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
+        fs::write(
+            release.root().join("home/.thirdshift/config.toml"),
+            format!("[harness]\ndefault = '{harness}'\n"),
+        )
+        .unwrap();
+
+        let output = release.run_script("0.2.0");
+
+        assert!(output.status.success(), "{harness}: {}", stderr(&output));
+        assert!(
+            release.agent_calls().is_empty(),
+            "{harness}: Claude was called"
+        );
+        assert_eq!(
+            summary_and_rest(&release.pr_body("release-0.2.0")).0,
+            format!("{AGENT_SUMMARY}\n"),
+            "{harness}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_failed_or_blank_selected_harness_falls_back_without_trying_claude() {
+    for script in [
+        "exit 1",
+        "printf ' \n\t\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    ] {
+        let release = Release::new();
+        release.ci_reports(GREEN);
+        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
+        fs::write(
+            release.root().join("home/.thirdshift/config.toml"),
+            "[harness]\ndefault = 'codex'\n",
+        )
+        .unwrap();
+        release.agent_runs(script);
+
+        let output = release.run_script("0.2.0");
+
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(release.agent_calls().is_empty());
+        assert!(stderr(&output).contains("release: warning: the agent summary is unavailable"));
+        let body = release.pr_body("release-0.2.0");
+        assert!(
+            summary_and_rest(&body)
+                .0
+                .contains("agent summary was unavailable"),
+            "{body}"
+        );
+        assert!(
+            summary_and_rest(&body).0.contains("Add the frobnicator"),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_bad_user_config_warns_and_uses_generated_notes_without_calling_a_harness() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
+    fs::write(
+        release.root().join("home/.thirdshift/config.toml"),
+        "[harness]\ndefault = 'typo'\n",
+    )
+    .unwrap();
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(release.agent_calls().is_empty());
+    assert!(
+        stderr(&output).contains("harness.default must be"),
+        "{}",
+        stderr(&output)
+    );
+    let body = release.pr_body("release-0.2.0");
+    assert!(
+        summary_and_rest(&body)
+            .0
+            .contains("agent summary was unavailable"),
+        "{body}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn the_agent_gets_the_prompt_file_then_the_version_diff_and_the_prs_merged_since_the_last_tag() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -579,7 +897,7 @@ Closes #7.
 ### #3: Tidy the site
 "
     );
-    assert_eq!(calls[0]["stdin"].as_str().unwrap(), expected);
+    assert_eq!(calls[0]["prompt"].as_str().unwrap(), expected);
 }
 
 #[test]
@@ -674,7 +992,7 @@ fn the_summary_is_the_agents_unless_it_fails_or_prints_only_blank_space() {
             &format!(
                 "summary_input() {{ echo input; }}\n\
                  gh() {{ echo \"notes: $*\"; }}\n\
-                 claude() {{ cat >/dev/null; {agent}; }}\n\
+                 summary_agent() {{ cat >/dev/null; {agent}; }}\n\
                  release_summary main v0.2.0 diff\n"
             ),
         );
@@ -698,7 +1016,7 @@ fn each_step_prints_a_progress_line_on_stderr() {
     let merge = release.origin(&["rev-parse", "main"]);
     let url = format!("https://github.com/{REPO}/pull/4");
     let expected = [
-        "release: writing the summary with claude".to_owned(),
+        "release: writing the summary with the configured Harness".to_owned(),
         format!("release: opened {url}"),
         format!("release: waiting for CI on {url}"),
         format!("release: merged {url} as {}", &merge[..7]),

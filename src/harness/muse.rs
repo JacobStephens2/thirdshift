@@ -9,7 +9,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::adapter::{Adapter, Invocation, SkillLoading, without};
 use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
@@ -64,6 +64,30 @@ impl Adapter for Muse {
         choice.model = settled.model;
         choice.effort = settled.effort;
         Ok(())
+    }
+    /// Muse's approval and sandbox stay on, with no shell, writes or web.
+    /// Its file reads can't be switched off, so the summary gets one model
+    /// step: a step spent reading leaves no step to quote it, and fails.
+    fn summary(&self, choice: &Choice, prompt: &str, prompt_file: &Path) -> Invocation {
+        let mut invocation = self.session(choice, None, prompt);
+        invocation.args.pop();
+        invocation.args = without(invocation.args, &["--yolo"]);
+        invocation.args.extend(
+            [
+                "--disable-shell",
+                "--disable-write",
+                "--disable-web-tools",
+                "--no-foreign-personal-context",
+                "--max-model-steps",
+                "1",
+                "--prompt-file",
+            ]
+            .map(String::from),
+        );
+        invocation
+            .args
+            .push(prompt_file.to_string_lossy().into_owned());
+        invocation
     }
     fn ask_settings(
         &self,
