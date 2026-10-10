@@ -255,6 +255,9 @@ fn body(
     }
     if let Some(review) = &account.review {
         text += &format!("Review:       {}\n", review.line);
+        if let Some(title) = review.title {
+            text += &format!("Description:  {title}\n");
+        }
         if review.dispatched.is_some() {
             text += &format!("Dispatched:   {}\n", account.outcome);
         }
@@ -451,6 +454,7 @@ mod tests {
     fn an_architect_runs_notification_with_its_plan_dispatched_tells_how_both_ended() {
         let account = Account {
             review: Some(Review {
+                title: None,
                 line: format!("plan published: {PLAN}"),
                 dispatched: Some(PLAN),
             }),
@@ -483,6 +487,7 @@ mod tests {
             pr_url: None,
             log: None,
             review: Some(Review {
+                title: None,
                 line: format!("idea filed: {PLAN}"),
                 dispatched: None,
             }),
@@ -509,6 +514,7 @@ mod tests {
             outcome: "review failed",
             log: Some(Path::new(LOG)),
             review: Some(Review {
+                title: None,
                 line: "failed".to_string(),
                 dispatched: None,
             }),

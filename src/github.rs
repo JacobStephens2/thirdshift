@@ -68,13 +68,14 @@ impl GitHub {
             .to_string())
     }
 
-    /// `issue`'s state, labels and when it was created.
+    /// `issue`'s title, state, labels and when it was created.
     pub fn issue(&self, issue: &IssueUrl) -> Result<Issue> {
-        let json = self.issue_view(issue, "state,labels,createdAt")?;
+        let json = self.issue_view(issue, "title,state,labels,createdAt")?;
         let created = json["createdAt"]
             .as_str()
             .context("gh output has no createdAt")?;
         Ok(Issue {
+            title: json["title"].as_str().map(String::from),
             is_open: state_is_open(&json)?,
             labels: labels_of(&json)?,
             created: DateTime::parse_from_rfc3339(created)
@@ -645,6 +646,7 @@ fn state_is_open(json: &Value) -> Result<bool> {
 /// ended on, and as a Claim reads its issue after a Self-merge.
 #[derive(Clone)]
 pub struct Issue {
+    pub title: Option<String>,
     pub is_open: bool,
     pub labels: Labels,
     pub created: DateTime<Utc>,

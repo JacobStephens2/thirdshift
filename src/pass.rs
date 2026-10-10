@@ -66,7 +66,7 @@ pub trait Outside {
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>>;
     /// Every closed issue in the repository labelled `label`.
     fn closed_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>>;
-    /// `issue`'s state, labels and when it was created.
+    /// `issue`'s title, state, labels and when it was created.
     fn issue(&mut self, issue: &IssueUrl) -> Result<Issue>;
     /// Make `edit`.
     fn apply(&mut self, edit: &Edit) -> Result<()>;

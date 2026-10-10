@@ -25,10 +25,10 @@ use chrono::{DateTime, Utc};
 use crate::asks::Flags;
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
-use crate::github::ListedIssue;
+use crate::github::{Issue, ListedIssue};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
-use crate::labels::{Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
+use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
@@ -141,13 +141,13 @@ fn write_joined(
 #[derive(Debug)]
 pub enum Reviewed {
     /// The plan the review published is marked ready.
-    PlanReady(IssueUrl),
+    PlanReady(IssueUrl, Option<String>),
     /// The review found no Strong candidate, and filed its top
     /// recommendation as this issue.
-    IdeaFiled(IssueUrl),
+    IdeaFiled(IssueUrl, Option<String>),
     /// The review found no Strong candidate, and filed nothing: this open
     /// issue already covers its top recommendation.
-    AlreadyFiled(IssueUrl),
+    AlreadyFiled(IssueUrl, Option<String>),
 }
 
 impl Reviewed {
@@ -155,18 +155,27 @@ impl Reviewed {
     /// notification says it.
     pub fn review(&self) -> &'static str {
         match self {
-            Self::PlanReady(_) => "plan published",
-            Self::IdeaFiled(_) => "idea filed",
-            Self::AlreadyFiled(_) => "idea already filed",
+            Self::PlanReady(..) => "plan published",
+            Self::IdeaFiled(..) => "idea filed",
+            Self::AlreadyFiled(..) => "idea already filed",
         }
     }
 
     /// The URL of the issue the Architecture review ended on.
     pub fn url(&self) -> &str {
         match self {
-            Self::PlanReady(issue) | Self::IdeaFiled(issue) | Self::AlreadyFiled(issue) => {
-                &issue.url
-            }
+            Self::PlanReady(issue, _)
+            | Self::IdeaFiled(issue, _)
+            | Self::AlreadyFiled(issue, _) => &issue.url,
+        }
+    }
+
+    /// The issue's title, captured when the review concluded, if known.
+    pub fn title(&self) -> Option<&str> {
+        match self {
+            Self::PlanReady(_, title)
+            | Self::IdeaFiled(_, title)
+            | Self::AlreadyFiled(_, title) => title.as_deref(),
         }
     }
 }
@@ -175,12 +184,12 @@ impl fmt::Display for Reviewed {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let url = self.url();
         match self {
-            Self::PlanReady(_) => write!(f, "plan {url} is ready for an agent"),
-            Self::IdeaFiled(_) => write!(
+            Self::PlanReady(..) => write!(f, "plan {url} is ready for an agent"),
+            Self::IdeaFiled(..) => write!(
                 f,
                 "no Strong candidate: the Architecture review filed the idea {url}"
             ),
-            Self::AlreadyFiled(_) => write!(
+            Self::AlreadyFiled(..) => write!(
                 f,
                 "no Strong candidate: {url} already covers the Architecture review's top recommendation, so it filed nothing"
             ),
@@ -292,7 +301,7 @@ fn run_through(outside: &mut impl Outside, architect_run: &ArchitectRun) -> Outc
     }
     let review = up_to_the_dispatch(outside, architect_run);
     let dispatched = match &review {
-        Ok(Reviewed::PlanReady(plan)) if !architect_run.plan_only => {
+        Ok(Reviewed::PlanReady(plan, _)) if !architect_run.plan_only => {
             outside.step(format!(
                 "dispatching the plan {url}, as thirdshift {url} would",
                 url = plan.url
@@ -434,16 +443,16 @@ fn conclude(
 ) -> Result<Reviewed> {
     match final_message.and_then(Report::read) {
         Some(Report::Plan(plan)) => {
-            mark_plan_ready(outside, &plan, origin, started)?;
-            Ok(Reviewed::PlanReady(plan))
+            let title = mark_plan_ready(outside, &plan, origin, started)?;
+            Ok(Reviewed::PlanReady(plan, title))
         }
         Some(Report::Idea(idea)) => {
-            label_idea(outside, &idea)?;
-            Ok(Reviewed::IdeaFiled(idea))
+            let title = label_idea(outside, &idea)?;
+            Ok(Reviewed::IdeaFiled(idea, title))
         }
         Some(Report::AlreadyFiled(issue)) => {
-            label_idea(outside, &issue)?;
-            Ok(Reviewed::AlreadyFiled(issue))
+            let title = label_idea(outside, &issue)?;
+            Ok(Reviewed::AlreadyFiled(issue, title))
         }
         None => bail!("the Architecture review ended without the final line its prompt asks for"),
     }
@@ -453,18 +462,18 @@ fn conclude(
 /// `ready-for-agent` and label it `architect-plan`, in one request that
 /// keeps its other labels, as viewed for the checks, having added each label
 /// it puts on to the repository if it lacks it. Fails, changing no label, if
-/// the plan fails its checks.
+/// the plan fails its checks. Returns its title, as viewed, if known.
 fn mark_plan_ready(
     outside: &mut impl Outside,
     plan: &IssueUrl,
     origin: &str,
     started: DateTime<Utc>,
-) -> Result<()> {
+) -> Result<Option<String>> {
     outside.step(format!(
         "the Architecture review published the plan {}",
         plan.url
     ));
-    let labels = check_plan(outside, plan, origin, started)?;
+    let issue = check_plan(outside, plan, origin, started)?;
     if outside.interrupted() {
         bail!("interrupted");
     }
@@ -474,18 +483,19 @@ fn mark_plan_ready(
     ));
     outside.apply(&Edit::of(
         plan,
-        labels,
+        issue.labels,
         &[NEEDS_TRIAGE],
         &[READY_FOR_AGENT, ARCHITECT_PLAN],
-    ))
+    ))?;
+    Ok(issue.title)
 }
 
 /// Label `idea` an Architect idea: put `needs-triage` and `architect-idea`
 /// on it, in one request that keeps its other labels, as viewed, having
 /// added each to the repository if it lacks it. `needs-triage` goes back on
 /// an issue that had been triaged: the factory again takes it for the best
-/// next move.
-fn label_idea(outside: &mut impl Outside, idea: &IssueUrl) -> Result<()> {
+/// next move. Returns its title, as viewed, if known.
+fn label_idea(outside: &mut impl Outside, idea: &IssueUrl) -> Result<Option<String>> {
     if outside.interrupted() {
         bail!("interrupted");
     }
@@ -501,7 +511,8 @@ fn label_idea(outside: &mut impl Outside, idea: &IssueUrl) -> Result<()> {
                 viewed.labels,
                 &[],
                 &[NEEDS_TRIAGE, ARCHITECT_IDEA],
-            ))
+            ))?;
+            Ok(viewed.title)
         })
         .with_context(|| format!("could not label the Architect idea #{}", idea.number))
 }
@@ -509,13 +520,13 @@ fn label_idea(outside: &mut impl Outside, idea: &IssueUrl) -> Result<()> {
 /// Check `plan`, viewing it: fails unless it is in the repository at
 /// `origin`, which is checked before the view, open, created since the
 /// Architect run `started`, and has no label but `needs-triage` that makes
-/// an Unready Ticket. Returns its labels, as viewed.
+/// an Unready Ticket. Returns the issue, as viewed.
 fn check_plan(
     outside: &mut impl Outside,
     plan: &IssueUrl,
     origin: &str,
     started: DateTime<Utc>,
-) -> Result<Labels> {
+) -> Result<Issue> {
     if !plan.matches_origin(origin) {
         bail!(
             "the plan {} is not in the repository at origin {origin}",
@@ -536,7 +547,7 @@ fn check_plan(
     if let Some(unready) = issue.labels.swapped(&[NEEDS_TRIAGE], &[]).unready() {
         bail!("the plan {} is labelled {unready}", plan.url);
     }
-    Ok(issue.labels)
+    Ok(issue)
 }
 
 #[cfg(test)]
@@ -747,6 +758,7 @@ mod tests {
     /// Architect run started, labelled `labels`.
     fn viewed(open: bool, after: i64, labels: &[&str]) -> github::Issue {
         github::Issue {
+            title: None,
             is_open: open,
             labels: labels.iter().copied().collect(),
             created: started() + chrono::Duration::seconds(after),
