@@ -3,8 +3,7 @@
 
 use std::fmt;
 
-use anyhow::{Context, Result};
-use serde_json::Value;
+use anyhow::Result;
 
 use crate::asks::Flags;
 use crate::base_fix::Advice;
@@ -83,30 +82,7 @@ fn command_with_fixing() -> String {
     format!("thirdshift {} security-fix", words.join(" "))
 }
 
-/// Only the metadata allowed in a Run notification; no private write-up.
-#[derive(Debug, PartialEq, Eq)]
-pub struct RecordedFinding {
-    pub severity: Option<String>,
-    pub title: String,
-    pub url: String,
-}
-
-impl RecordedFinding {
-    pub(crate) fn of_record(record: &Value) -> Result<Self> {
-        Ok(Self {
-            severity: record["severity"].as_str().map(String::from),
-            title: record["summary"]
-                .as_str()
-                .or_else(|| record["title"].as_str())
-                .context("the Security finding's private record has no title")?
-                .to_string(),
-            url: record["html_url"]
-                .as_str()
-                .context("the Security finding's private record has no link")?
-                .to_string(),
-        })
-    }
-}
+pub use crate::github::RecordedFinding;
 
 pub enum Skipped {
     AlreadyRunning(AlreadyRunning),
@@ -351,18 +327,17 @@ fn audit_and_record(
         let mut records = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for finding in audited.findings {
-            let (record, metadata) = if let Some(value) = known.finding(&finding) {
-                recorded.existing += 1;
-                (known.record(value)?, RecordedFinding::of_record(value)?)
-            } else {
-                let value = outside.create_security_record(&known, &finding)?;
-                let record = known.record(&value)?;
-                let metadata = RecordedFinding::of_record(&value)?;
-                known.remember(value);
+            let resolved = known.record_or_reuse(&finding, |records, draft| {
+                outside.create_security_record(records, draft)
+            })?;
+            if resolved.created {
                 recorded.created += 1;
                 outside.step("recorded a Security finding privately".to_string());
-                (record, metadata)
-            };
+            } else {
+                recorded.existing += 1;
+            }
+            let record = resolved.record;
+            let metadata = record.metadata().clone();
             let url = metadata.url.clone();
             findings.push(metadata);
             if record.untriaged() && seen.insert(finding.fingerprint) {
