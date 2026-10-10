@@ -164,8 +164,10 @@ thirdshift email-test [<address>]   # send a test email through Resend (see Emai
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
-thirdshift help                     # print every form of the command, each with a one-line description
+thirdshift help                     # print a compact command and option reference
 ```
+
+`help` lists commands and shared options, with a link to this README for workflow details, settings, Harness setup, email, logs and scheduling.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped.
 
