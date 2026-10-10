@@ -76,37 +76,37 @@ pub fn publish(
             sessions.run_to_final_message(Purpose::Security, "security-fix-publishing", &prompt)?;
         let github = GitHub::new();
         // A single public fix stages its proposed text for validation;
-        // thirdshift creates the issue from it. Anything else keeps the
+        // thirdshift creates the issue from it, and the session has no
+        // independent public-issue path. Anything else keeps the
         // session-created issue path until staged specs land.
-        let staged = (size == FixSize::Single && record.private_issue_number().is_none())
-            .then(|| message.as_deref().and_then(parse_staged_proposal))
-            .flatten();
-        let issue = match staged {
-            Some((title, body)) => {
-                // Validate the staged text before any public issue exists;
-                // a rejection blocks creation, so no public issue leaks
-                // private write-up text.
-                record.check_public_fix_text(&format!("{title}\n\n{body}"), url)?;
-                github.create_issue_in(repo, &title, &body, &[NEEDS_TRIAGE])?
+        let issue = if size == FixSize::Single && record.private_issue_number().is_none() {
+            let Some((title, body)) = message.as_deref().and_then(parse_staged_proposal) else {
+                bail!(
+                    "the Security fix publishing session did not stage its proposed public issue text"
+                );
+            };
+            // Validate the staged text before any public issue exists;
+            // a rejection blocks creation, so no public issue leaks
+            // private write-up text.
+            record.check_public_fix_text(&format!("{title}\n\n{body}"), url)?;
+            github.create_issue_in(repo, &title, &body, &[NEEDS_TRIAGE])?
+        } else {
+            let line = message
+                .as_deref()
+                .unwrap_or_default()
+                .lines()
+                .map(str::trim)
+                .rfind(|line| !line.is_empty())
+                .unwrap_or_default();
+            let prefix = match size {
+                FixSize::Single => prompt::SECURITY_FIX_LINE,
+                FixSize::Spec => prompt::SECURITY_FIX_SPEC_LINE,
+            };
+            let issue = line.strip_prefix(prefix).and_then(|url| IssueUrl::parse(url).ok()).context("the Security fix publishing session ended without the final line its prompt asks for")?;
+            if !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
+                bail!("the Security fix Ticket is not in this repository");
             }
-            None => {
-                let line = message
-                    .as_deref()
-                    .unwrap_or_default()
-                    .lines()
-                    .map(str::trim)
-                    .rfind(|line| !line.is_empty())
-                    .unwrap_or_default();
-                let prefix = match size {
-                    FixSize::Single => prompt::SECURITY_FIX_LINE,
-                    FixSize::Spec => prompt::SECURITY_FIX_SPEC_LINE,
-                };
-                let issue = line.strip_prefix(prefix).and_then(|url| IssueUrl::parse(url).ok()).context("the Security fix publishing session ended without the final line its prompt asks for")?;
-                if !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
-                    bail!("the Security fix Ticket is not in this repository");
-                }
-                issue
-            }
+            issue
         };
         let private = record.private_issue_number().is_some();
         if let Some(number) = record.private_issue_number()

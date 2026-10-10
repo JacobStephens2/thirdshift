@@ -387,13 +387,12 @@ fn with_reproduced_findings(severities: &[&str]) -> Scenario {
     scenario
 }
 
-fn publish_fix(record: &str) -> String {
-    format!(
-        r#"
-url=$(gh issue create --title "Bound accepted input" --body "Reject oversized input. Private record: https://github.com/acme/widgets/security/advisories/{record}" --label needs-triage)
-printf 'Security fix Ticket: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+/// A session-created URL final line with no staged proposal and no
+/// session-created issue: thirdshift itself must create nothing.
+fn url_line_only() -> &'static str {
+    r#"
+printf 'Security fix Ticket: https://github.com/acme/widgets/issues/8\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#
-    )
 }
 
 fn implement_fix() -> &'static str {
@@ -529,7 +528,7 @@ fn invalid_security_fix_specs_are_not_marked_ready_or_dispatched() {
 #[test]
 fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_auditing() {
     let scenario = with_reproduced_findings(&["low", "critical", "critical", "high"]);
-    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-1"));
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-1"));
     scenario.agent_does_for(8, implement_fix());
     let result = scenario.run(&["secure", "security-fix"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -561,14 +560,12 @@ fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_audit
 }
 
 #[test]
-fn a_fix_ticket_title_cannot_copy_the_private_write_up() {
+fn a_staged_ticket_title_cannot_copy_the_private_write_up() {
     let scenario = with_reproduced_findings(&["high"]);
     scenario.agent_does_in_session(
         1,
-        &publish_fix("GHSA-finding-0")
-            .replace("Bound accepted input", "Private candidate write-up."),
+        "printf 'Proposed public issue:\\nTitle: Private candidate write-up.\\nBody:\\nReject oversized input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
     );
-    scenario.agent_does_for(8, implement_fix());
     let result = scenario.run(&["secure", "security-fix"]);
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(
@@ -576,7 +573,36 @@ fn a_fix_ticket_title_cannot_copy_the_private_write_up() {
         "{}",
         result.stderr
     );
-    assert_eq!(scenario.gh_state()["labels"]["8"], json!(["needs-triage"]));
+    let state = scenario.gh_state();
+    assert!(
+        state["bodies"].get("8").is_none(),
+        "a rejected staged title must not create a public issue: {}",
+        state["bodies"]
+    );
+    assert!(state["prs"].as_array().unwrap().is_empty());
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn a_session_created_ticket_url_is_rejected_for_a_public_single_fix() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, url_line_only());
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("did not stage its proposed public issue text"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert!(
+        state["bodies"].get("8").is_none(),
+        "a session-created URL must not make thirdshift create a public issue: {}",
+        state["bodies"]
+    );
+    assert!(state["prs"].as_array().unwrap().is_empty());
     assert_eq!(scenario.claude_calls().len(), 1);
 }
 
@@ -634,7 +660,7 @@ fn a_staged_proposal_is_validated_before_any_public_issue_is_created() {
 #[test]
 fn a_dispatched_fix_still_waits_without_permission_until_its_ticket_is_closed() {
     let scenario = with_reproduced_findings(&["high"]);
-    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(8, implement_fix());
     let fixed = scenario.run(&["secure", "security-fix"]);
     assert_eq!(fixed.code, Some(0), "{}", fixed.stderr);
@@ -814,7 +840,7 @@ fn the_setting_allows_a_merge_fix_and_the_command_can_override_either_setting() 
     ] {
         let scenario = with_reproduced_findings(&["medium"]);
         scenario.user_config_is(config);
-        scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+        scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
         scenario.agent_does_for(8, implement_fix());
         let mut args = vec!["secure"];
         args.extend(word);
@@ -870,7 +896,7 @@ fn an_audit_goes_on_to_one_reproduced_fix_when_fixing_is_allowed() {
 #[test]
 fn the_security_run_ends_as_a_failed_fix_and_sends_one_private_metadata_notification() {
     let scenario = with_reproduced_findings(&["critical"]);
-    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(8, &format!("{}exit 1\n", implement_fix()));
     let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
     let result = scenario.run_with_env(
@@ -908,7 +934,7 @@ fn a_failed_fix_keeps_its_claim_and_pauses_security_and_pickup_until_closed() {
                 state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
                 scenario.write_gh_state(&state);
             } else {
-                scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+                scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
             }
             scenario.agent_does_for(
                 issue,
@@ -1094,7 +1120,7 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
 #[test]
 fn a_successful_fix_awaiting_review_does_not_pause_allowed_security_work() {
     let scenario = with_reproduced_findings(&["high"]);
-    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(8, implement_fix());
     let fixed = scenario.run(&["secure", "security-fix"]);
     assert_eq!(fixed.code, Some(0), "{}", fixed.stderr);
@@ -1173,22 +1199,14 @@ fn an_undecided_run_offers_both_ways_to_allow_a_reproduced_fix() {
 
 #[test]
 fn invalid_fix_tickets_are_not_marked_ready_or_dispatched() {
+    // A single public fix has no session-created path: every entry here is
+    // either a missing staged proposal or staged text that validation
+    // rejects before thirdshift creates anything.
     for script in [
         "printf '%s\\n' 'No protocol line' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n".to_string(),
-        publish_fix("GHSA-finding-0")
-            .replace("\"$url\"", "\"https://github.com/other/widgets/issues/8\""),
-        publish_fix("GHSA-finding-0")
-            .replace("Reject oversized input.", "Private candidate write-up."),
-        publish_fix("GHSA-finding-0").replace("GHSA-finding-0", "GHSA-other"),
-        format!(
-            "{}gh fake sub-issues 8 '[7]'\n",
-            publish_fix("GHSA-finding-0")
-        ),
-        format!("{}gh issue close 8\n", publish_fix("GHSA-finding-0")),
-        format!(
-            "{}gh fake created 8 '2020-01-01T00:00:00Z'\n",
-            publish_fix("GHSA-finding-0")
-        ),
+        url_line_only().to_string(),
+        "printf 'Proposed public issue:\\nTitle: Bound accepted input\\nBody:\\nPrivate candidate write-up. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n".to_string(),
+        "printf 'Proposed public issue:\\nTitle: Bound accepted input\\nBody:\\nReject oversized input.\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n".to_string(),
     ] {
         let scenario = with_reproduced_findings(&["high"]);
         scenario.agent_does_in_session(1, &script);
@@ -3005,25 +3023,25 @@ fn spec_review_short_private_poc_must_not_be_dispatched() {
     scenario.write_gh_state(&state);
     scenario.agent_does_in_session(
         1,
-        &publish_fix("GHSA-finding-0").replace(
-            "Reject oversized input.",
-            "Reject oversized input. Proof-of-concept: bypass_login();",
-        ),
+        "printf 'Proposed public issue:\\nTitle: Bound accepted input\\nBody:\\nReject oversized input. Proof-of-concept: bypass_login(); Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
     );
-    scenario.agent_does_for(8, implement_fix());
     let result = scenario.run(&["secure", "security-fix"]);
     let state = scenario.gh_state();
-    assert!(
-        state["bodies"]["8"]
-            .as_str()
-            .unwrap()
-            .contains("bypass_login();")
-    );
     assert_eq!(
         result.code,
         Some(1),
-        "a Ticket copying the private proof-of-concept was dispatched: {}",
+        "staged text copying the private proof-of-concept was dispatched: {}",
         result.stderr,
+    );
+    assert!(
+        result.stderr.contains("includes private write-up text"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        state["bodies"].get("8").is_none(),
+        "rejected staged text must not create a public issue: {}",
+        state["bodies"]
     );
     assert_eq!(scenario.claude_calls().len(), 1);
     assert!(state["prs"].as_array().unwrap().is_empty());
@@ -3043,8 +3061,7 @@ case "$FAKE_CLAUDE_PROMPT" in
   *GHSA-finding-0*) record=GHSA-finding-0 ;;
   *) exit 1 ;;
 esac
-url=$(gh issue create --title "Bound accepted input" --body "Reject oversized input. Private record: https://github.com/acme/widgets/security/advisories/$record" --label needs-triage)
-printf 'Security fix Ticket: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+printf 'Proposed public issue:\nTitle: Bound accepted input\nBody:\nReject oversized input. Private record: https://github.com/acme/widgets/security/advisories/%s\n' "$record" > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#);
     scenario.agent_does_for(8, implement_fix());
     let result = scenario.run(&["secure", "security-fix"]);
@@ -3117,7 +3134,7 @@ fn spec_followup_common_poc_token_must_not_block_a_terse_fix_ticket() {
         .replace("bounded_fixture();", "assert (\n    input\n) == 'overflow'");
     state["advisories"][0]["description"] = json!(description);
     scenario.write_gh_state(&state);
-    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(8, implement_fix());
     let result = scenario.run(&["secure", "security-fix"]);
     let state = scenario.gh_state();
@@ -3258,7 +3275,7 @@ fn review_failed_fix_before_claim_is_not_retried_by_pickup() {
         1,
         &format!(
             "{}gh fake fails 'label create in-progress'\n",
-            publish_fix("GHSA-finding-0")
+            stage_fix("GHSA-finding-0")
         ),
     );
     scenario.agent_does_for(8, implement_fix());
@@ -3315,7 +3332,7 @@ fn a_failed_fix_preserves_private_edits_made_during_its_run_and_still_pauses() {
             state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
             scenario.write_gh_state(&state);
         } else {
-            scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+            scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
         }
         let description = format!(
             "{original}\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/{issue}\nFix Run: pending\nDay shift note: keep the input contract.\n"
@@ -3371,7 +3388,7 @@ fn a_changed_fix_link_refuses_completion_without_a_patch() {
             state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
             scenario.write_gh_state(&state);
         } else {
-            scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+            scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
         }
         let changed = format!(
             "{original}\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/9\nFix Run: pending\nDay shift changed the dispatched Ticket.\n"
@@ -3483,7 +3500,7 @@ fn missing_or_malformed_audited_commits_refuse_reproduction_before_worktree_acqu
 
 fn assert_a_failed_fix_record_outage_pauses_security(severity: &str) {
     let scenario = with_reproduced_findings(&[severity]);
-    scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(
         8,
         "gh fake fails 'api --method PATCH repos/acme/widgets/security-advisories/GHSA-finding-0'\nexit 1\n",
