@@ -405,6 +405,16 @@ gh pr create --base main --head issue-8 --title 'Bound accepted input' --body 'C
 "#
 }
 
+/// The #627 staged path: the session returns its proposed public issue text
+/// without running `gh issue create` itself.
+fn stage_fix(record: &str) -> String {
+    format!(
+        r#"
+printf 'Proposed public issue:\nTitle: Bound accepted input\nBody:\nReject oversized input. Private record: https://github.com/acme/widgets/security/advisories/{record}\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
 fn publish_spec(record: &str) -> String {
     format!(
         r#"
@@ -568,6 +578,34 @@ fn a_fix_ticket_title_cannot_copy_the_private_write_up() {
     );
     assert_eq!(scenario.gh_state()["labels"]["8"], json!(["needs-triage"]));
     assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn a_staged_proposal_is_created_by_thirdshift_not_the_session() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    let state = scenario.gh_state();
+    let ticket = state["bodies"]["8"].as_str().unwrap();
+    assert!(ticket.contains("Reject oversized input."), "{ticket}");
+    assert!(ticket.contains("GHSA-finding-0"), "{ticket}");
+    assert!(!ticket.contains("Private candidate write-up"), "{ticket}");
+    assert_eq!(state["labels"]["8"], json!(["security-fix", "in-progress"]));
+    assert!(
+        state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("https://github.com/acme/widgets/issues/8")
+    );
+    let calls = scenario.claude_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("instead of creating the public issue directly"),
+        "{prompt}"
+    );
 }
 
 #[test]

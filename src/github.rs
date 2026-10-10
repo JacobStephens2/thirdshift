@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
@@ -304,9 +304,7 @@ impl GitHub {
     }
 
     /// Open an issue titled `title`, with `body` and `labels`, in the repository
-    /// of `issue`, and return it. Each label is first added to the repository,
-    /// with its description, if the repository lacks it: `gh` refuses a label it
-    /// doesn't know.
+    /// of `issue`, and return it. See [`GitHub::create_issue_in`].
     pub fn create_issue(
         &self,
         issue: &IssueUrl,
@@ -314,7 +312,21 @@ impl GitHub {
         body: &str,
         labels: &[Label],
     ) -> Result<IssueUrl> {
-        let repo = issue.repo_slug();
+        self.create_issue_in(&issue.repo(), title, body, labels)
+    }
+
+    /// Open an issue titled `title`, with `body` and `labels`, in `repo`,
+    /// and return it. Each label is first added to the repository,
+    /// with its description, if the repository lacks it: `gh` refuses a label it
+    /// doesn't know.
+    pub fn create_issue_in(
+        &self,
+        repo: &Repo,
+        title: &str,
+        body: &str,
+        labels: &[Label],
+    ) -> Result<IssueUrl> {
+        let repo = repo.slug();
         self.ensure_labels(&repo, labels)?;
         let names: Vec<&str> = labels.iter().map(|label| label.name()).collect();
         let url = self.gh_stdout(&[
