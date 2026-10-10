@@ -7,17 +7,30 @@ With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most 
 ```
 Publish the fix for this reproduced Security finding on Base branch `<base>`.
 Read the private record at <private record URL> and the record below.
-Follow the completed reproduction's fix size: single stages one Ticket; spec publishes a Spec with Tickets using `thirdshift-to-spec` and `thirdshift-to-tickets`.
-On a public repository with a single fix, stage the proposed public issue text instead of creating the public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. A spec still publishes its issues itself, as before.
+Follow the completed reproduction's fix size: single stages one Ticket; spec stages a Spec with Tickets, drafted with `thirdshift-to-spec` and `thirdshift-to-tickets`.
+On a public repository, stage the proposed public issue text instead of creating any public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue and its Tickets from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. Only a private bigger fix publishes its issues itself.
 Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.
-A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. Read the links back before finishing.
+A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. On a public repository thirdshift makes those links from the staged text; read the staged blocking edges back before finishing.
 This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.
 End your final message for a single public fix with exactly:
 Proposed public issue:
 Title: <title>
 Body:
 <body>
-For a spec, end with exactly `Security fix Spec: <Issue URL>`, naming the top issue.
+For a public spec, end with exactly:
+Proposed public spec:
+Title: <spec title>
+Body:
+<spec body>
+Ticket: <ticket 1 title>
+Body:
+<ticket 1 body>
+Blocked by: none
+Ticket: <ticket 2 title>
+Body:
+<ticket 2 body>
+Blocked by: 1
+with each later Ticket naming the 1-based positions of the Tickets that block it, or none. For a private bigger fix, end with exactly `Security fix Spec: <Issue URL>`, naming the top issue.
 
 Private record:
 <recorded Security finding>
