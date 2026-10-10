@@ -131,12 +131,7 @@ impl Retained for Completion {
             }
             facts.report.models = log.models;
         }
-        facts.report.completion_progress = facts
-            .report
-            .models
-            .iter()
-            .map(|model| format!("Model: {model}"))
-            .collect();
+        facts.report.set_model_progress();
         Ok(())
     }
 }

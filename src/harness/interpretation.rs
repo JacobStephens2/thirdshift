@@ -40,6 +40,17 @@ pub struct Report {
     pub models: Vec<String>,
 }
 
+impl Report {
+    /// Retained adapters opt into completion Model progress after reconciliation.
+    pub(super) fn set_model_progress(&mut self) {
+        self.completion_progress = self
+            .models
+            .iter()
+            .map(|model| format!("Model: {model}"))
+            .collect();
+    }
+}
+
 #[derive(Debug)]
 pub struct Ended {
     pub session_id: Option<String>,
