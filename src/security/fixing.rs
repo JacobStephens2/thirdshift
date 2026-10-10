@@ -74,28 +74,64 @@ pub fn publish(
     Sessions::within(&logs, worktree.path(), harness, |sessions| {
         let message =
             sessions.run_to_final_message(Purpose::Security, "security-fix-publishing", &prompt)?;
-        let line = message
-            .as_deref()
-            .unwrap_or_default()
-            .lines()
-            .map(str::trim)
-            .rfind(|line| !line.is_empty())
-            .unwrap_or_default();
-        let prefix = match size {
-            FixSize::Single => prompt::SECURITY_FIX_LINE,
-            FixSize::Spec => prompt::SECURITY_FIX_SPEC_LINE,
+        let github = GitHub::new();
+        // A single public fix stages its proposed text for validation;
+        // thirdshift creates the issue from it, and the session has no
+        // independent public-issue path. Anything else keeps the
+        // session-created issue path until staged specs land.
+        let issue = if size == FixSize::Single && record.private_issue_number().is_none() {
+            // The session has no independent public-issue path: anything
+            // created during its window is a side-effect leak outside the
+            // validated staged path. Close it to stop further interaction,
+            // then fail loudly so the Day shift triages the exposure.
+            let leaked = github.issues_created_since(&repo.slug(), started)?;
+            if !leaked.is_empty() {
+                for side in &leaked {
+                    github.close_issue(side, "Closed by thirdshift: the Security fix publishing session created this public issue outside the validated staged path.")?;
+                }
+                let numbers = leaked
+                    .iter()
+                    .map(|side| format!("#{}", side.number))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "the Security fix publishing session created public issue(s) outside the staged path: {numbers}"
+                );
+            }
+            let Some((title, body)) = message.as_deref().and_then(parse_staged_proposal) else {
+                bail!(
+                    "the Security fix publishing session did not stage its proposed public issue text"
+                );
+            };
+            // Validate the staged text before any public issue exists;
+            // a rejection blocks creation, so no public issue leaks
+            // private write-up text.
+            record.check_public_fix_text(&format!("{title}\n\n{body}"), url)?;
+            github.create_issue_in(repo, &title, &body, &[NEEDS_TRIAGE])?
+        } else {
+            let line = message
+                .as_deref()
+                .unwrap_or_default()
+                .lines()
+                .map(str::trim)
+                .rfind(|line| !line.is_empty())
+                .unwrap_or_default();
+            let prefix = match size {
+                FixSize::Single => prompt::SECURITY_FIX_LINE,
+                FixSize::Spec => prompt::SECURITY_FIX_SPEC_LINE,
+            };
+            let issue = line.strip_prefix(prefix).and_then(|url| IssueUrl::parse(url).ok()).context("the Security fix publishing session ended without the final line its prompt asks for")?;
+            if !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
+                bail!("the Security fix Ticket is not in this repository");
+            }
+            issue
         };
-        let issue = line.strip_prefix(prefix).and_then(|url| IssueUrl::parse(url).ok()).context("the Security fix publishing session ended without the final line its prompt asks for")?;
-        if !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
-            bail!("the Security fix Ticket is not in this repository");
-        }
         let private = record.private_issue_number().is_some();
         if let Some(number) = record.private_issue_number()
             && issue.number != number
         {
             bail!("a private Security fix must reuse the finding's own issue");
         }
-        let github = GitHub::new();
         let viewed = github.issue(&issue)?;
         if !viewed.is_open {
             bail!("the Security fix Ticket is closed");
@@ -153,6 +189,22 @@ pub fn publish(
     })
 }
 
+/// The single public fix the publishing session staged for validation:
+/// its proposed `(title, body)`, instead of a session-created public issue.
+fn parse_staged_proposal(message: &str) -> Option<(String, String)> {
+    let (_, staged) = message.rsplit_once(prompt::STAGED_PROPOSAL_MARKER)?;
+    let staged = staged.trim_start_matches(['\n', '\r']);
+    let (title, body) = staged.split_once('\n')?;
+    let title = title.strip_prefix(prompt::STAGED_TITLE_MARKER)?.trim();
+    let body = body
+        .strip_prefix(prompt::STAGED_BODY_MARKER)
+        .map(|body| body.trim().to_string())?;
+    if title.is_empty() || body.is_empty() {
+        return None;
+    }
+    Some((title.to_string(), body))
+}
+
 fn check_issue_text(
     github: &GitHub,
     issue: &IssueUrl,
@@ -161,4 +213,23 @@ fn check_issue_text(
 ) -> Result<()> {
     let body = github.security_fix_text(issue)?;
     record.check_public_fix_text(&body, url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staged_proposal_parses_title_and_body() {
+        let message = "Some reasoning\nProposed public issue:\nTitle: Bound accepted input\nBody:\nReject oversized input. Private record: https://example.invalid/advisory\n";
+        let (title, body) = parse_staged_proposal(message).expect("staged proposal parses");
+        assert_eq!(title, "Bound accepted input");
+        assert!(body.contains("Reject oversized input."));
+    }
+
+    #[test]
+    fn staged_proposal_rejects_a_bare_url_final_line() {
+        let message = "Security fix Ticket: https://github.com/acme/widgets/issues/8\n";
+        assert!(parse_staged_proposal(message).is_none());
+    }
 }

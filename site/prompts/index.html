@@ -240,12 +240,17 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <p class="sent-by">Sent by a Security run, before any unit</p>
         <pre class="job-text"><code>Publish the fix for this reproduced Security finding on Base branch `<mark class="ph">&lt;base&gt;</mark>`.
 Read the private record at &lt;private record URL&gt; and the record below.
-Follow the completed reproduction's fix size: single publishes one Ticket; spec publishes a Spec with Tickets using `thirdshift-to-spec` and `thirdshift-to-tickets`.
-On a public repository, publish one new top issue labelled `needs-triage`. Create that label if missing. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues.
+Follow the completed reproduction's fix size: single stages one Ticket; spec publishes a Spec with Tickets using `thirdshift-to-spec` and `thirdshift-to-tickets`.
+On a public repository with a single fix, stage the proposed public issue text instead of creating the public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. A spec still publishes its issues itself, as before.
 Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.
 A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. Read the links back before finishing.
 This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.
-End your final message with exactly `Security fix Ticket: <mark class="ph">&lt;Issue URL&gt;</mark>` for single or `Security fix Spec: <mark class="ph">&lt;Issue URL&gt;</mark>` for spec, naming the top issue.
+End your final message for a single public fix with exactly:
+Proposed public issue:
+Title: &lt;title&gt;
+Body:
+&lt;body&gt;
+For a spec, end with exactly `Security fix Spec: <mark class="ph">&lt;Issue URL&gt;</mark>`, naming the top issue.
 
 Private record:
 &lt;recorded Security finding&gt;

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
@@ -225,6 +225,49 @@ impl GitHub {
             .collect()
     }
 
+    /// Every issue in the repository `repo`, an `owner/repo`, created at or
+    /// after `since`, open or closed. The security-fix publishing session
+    /// must not create public issues outside the staged path, so anything
+    /// dating from its own window is a side-effect leak. Compared at whole
+    /// seconds, as the `created` check on a fix Ticket is.
+    pub fn issues_created_since(&self, repo: &str, since: DateTime<Utc>) -> Result<Vec<IssueUrl>> {
+        let mut found = Vec::new();
+        for state in ["open", "closed"] {
+            let json = self.gh_json(&[
+                "issue",
+                "list",
+                "--state",
+                state,
+                "--repo",
+                repo,
+                "--json",
+                "url,createdAt",
+                "--limit",
+                "1000",
+            ])?;
+            for listed in json
+                .as_array()
+                .context("gh issue list did not return a list")?
+            {
+                let url = listed["url"]
+                    .as_str()
+                    .context("gh issue list output has no url")?;
+                let at = listed["createdAt"]
+                    .as_str()
+                    .context("gh issue list output has no createdAt")?;
+                let at = DateTime::parse_from_rfc3339(at)
+                    .with_context(|| {
+                        format!("gh issue list output has an unreadable createdAt {at}")
+                    })?
+                    .to_utc();
+                if at.timestamp() >= since.timestamp() {
+                    found.push(IssueUrl::parse(url)?);
+                }
+            }
+        }
+        Ok(found)
+    }
+
     /// `issue` as a Pickup run that lists issues by `label` reads it, in one
     /// query.
     pub fn candidate(&self, issue: &IssueUrl, label: Label) -> Result<Candidate> {
@@ -305,9 +348,7 @@ impl GitHub {
     }
 
     /// Open an issue titled `title`, with `body` and `labels`, in the repository
-    /// of `issue`, and return it. Each label is first added to the repository,
-    /// with its description, if the repository lacks it: `gh` refuses a label it
-    /// doesn't know.
+    /// of `issue`, and return it. See [`GitHub::create_issue_in`].
     pub fn create_issue(
         &self,
         issue: &IssueUrl,
@@ -315,7 +356,21 @@ impl GitHub {
         body: &str,
         labels: &[Label],
     ) -> Result<IssueUrl> {
-        let repo = issue.repo_slug();
+        self.create_issue_in(&issue.repo(), title, body, labels)
+    }
+
+    /// Open an issue titled `title`, with `body` and `labels`, in `repo`,
+    /// and return it. Each label is first added to the repository,
+    /// with its description, if the repository lacks it: `gh` refuses a label it
+    /// doesn't know.
+    pub fn create_issue_in(
+        &self,
+        repo: &Repo,
+        title: &str,
+        body: &str,
+        labels: &[Label],
+    ) -> Result<IssueUrl> {
+        let repo = repo.slug();
         self.ensure_labels(&repo, labels)?;
         let names: Vec<&str> = labels.iter().map(|label| label.name()).collect();
         let url = self.gh_stdout(&[
