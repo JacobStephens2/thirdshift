@@ -710,9 +710,7 @@ fn review_old_finding_can_be_taken_by_next_security_run() {
                 .unwrap()
                 .to_string();
             scenario.agent_does_in_session(3, &format!(r#"
-gh label create needs-triage --description 'Needs triage'
-issue=$(gh issue create --title 'Bound input' --body 'Add a bound. Private record: {record}' --label needs-triage)
-printf '%s\n' "Security fix Ticket: $issue" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+printf 'Proposed public issue:\nTitle: Bound input\nBody:\nAdd a bound. Private record: {record}\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#));
         }
         scenario.agent_does_for(
