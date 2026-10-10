@@ -1,29 +1,30 @@
 //! Headless agent sessions on the chosen Harness, and their logs.
 
 use std::cell::RefCell;
+#[cfg(test)]
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(test)]
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use anyhow::bail;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 #[cfg(test)]
 pub(crate) use crate::harness::claude::claude_args;
 #[cfg(test)]
 pub(crate) use crate::harness::codex::{codex_args, codex_prompt};
-use crate::harness::interpretation::{Ended, Interpretation};
-use crate::harness::{Adapter, Choice, Invocation, process};
+use crate::harness::interpretation::Ended;
+use crate::harness::{Adapter, Choice};
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
 use crate::progress;
 use crate::prompt;
 use crate::skills;
 
-pub mod models;
+pub mod recording;
 mod review_reports;
 use review_reports::ReviewReports;
 
@@ -329,11 +330,13 @@ impl Outside for OnMachine {
                 interpretation,
             ),
         };
-        run(
+        recording::Recording::capture().run(
             kind,
             &self.harness,
-            &self.worktree,
-            invocation,
+            Command::new(self.adapter.name())
+                .args(&invocation.args)
+                .current_dir(&self.worktree),
+            invocation.stdin.as_deref(),
             log,
             interpretation,
         )
@@ -353,122 +356,6 @@ fn ending_with(killed: &[&str]) -> String {
             "ended with background tasks still running ({}), which were killed",
             killed.join("; ")
         ),
-    }
-}
-
-/// Run the adapter's CLI with its invocation in
-/// `worktree`, where it finds the Factory skills, streaming its output to
-/// `log` and condensing it through `stream` to progress lines on stderr,
-/// each labelled `kind`. Returns what the stream showed once the CLI has
-/// exited cleanly, its turn not failed. Otherwise fails with the error the
-/// stream gave, if any. An interrupt stops the session, as [`Adapter::stop`] does,
-/// and fails with `interrupted`.
-fn run(
-    kind: &str,
-    choice: &Choice,
-    worktree: &Path,
-    invocation: Invocation,
-    log: &Path,
-    stream: Interpretation,
-) -> Result<Ended> {
-    let adapter = choice.harness.adapter();
-    let cli = adapter.name();
-    if let Some(dir) = log.parent() {
-        fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
-    }
-    let mut log_file =
-        File::create(log).with_context(|| format!("could not create {}", log.display()))?;
-    let started = Instant::now();
-    let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
-    let choice_owned = choice.clone();
-    let executed = process::streaming(
-        adapter,
-        Command::new(cli)
-            .args(&invocation.args)
-            .current_dir(worktree),
-        invocation.stdin.as_deref(),
-        stream,
-        move |output, stream| {
-            let followed = follow(&kind_owned, output, &mut log_file, &log_owned, stream);
-            // The process owner joins this reader before returning, including
-            // on interruption, when it deliberately suppresses state recovery.
-            models::keep(
-                &kind_owned,
-                &log_owned,
-                &choice_owned,
-                stream.observed_models(),
-            );
-            followed
-        },
-    )?;
-
-    let completion = executed.state.finish(executed.execution);
-    let report_models = completion
-        .report
-        .as_ref()
-        .map(|report| report.models.clone())
-        .unwrap_or_default();
-    models::keep(kind, log, choice, report_models);
-    if let Some(report) = completion.report {
-        // Stream models already have security progress lines. Retained records
-        // need theirs here, as before.
-        if matches!(
-            choice.harness,
-            crate::harness::Harness::Muse | crate::harness::Harness::OpenCode
-        ) {
-            for model in report.models {
-                progress::step(format_args!("{kind}: Model: {model}"));
-            }
-        }
-        for warning in report.warnings {
-            progress::step(format_args!("{kind}: {warning}"));
-        }
-        let elapsed = minutes_and_seconds(started.elapsed());
-        let summary = report
-            .summary
-            .map_or(String::new(), |summary| format!(": {summary}"));
-        progress::step(format_args!(
-            "{kind}: session ended after {elapsed}{summary}"
-        ));
-    }
-    completion.outcome
-}
-
-/// Copy every line of `stream` to `log_file` and print the progress lines it
-/// condenses to, until the stream ends.
-fn follow(
-    kind: &str,
-    stream: impl Read,
-    log_file: &mut File,
-    log: &Path,
-    progress: &mut Interpretation,
-) -> Result<()> {
-    let mut stream = BufReader::new(stream);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        if stream
-            .read_until(b'\n', &mut line)
-            .context("could not read the session stream")?
-            == 0
-        {
-            return Ok(());
-        }
-        log_file
-            .write_all(&line)
-            .with_context(|| format!("could not write {}", log.display()))?;
-        for condensed in progress.condense(&String::from_utf8_lossy(&line)) {
-            progress::step(format_args!("{kind}: {condensed}"));
-        }
-    }
-}
-
-/// `5m 32s`, or `8s` under a minute.
-fn minutes_and_seconds(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    match seconds / 60 {
-        0 => format!("{seconds}s"),
-        minutes => format!("{minutes}m {}s", seconds % 60),
     }
 }
 

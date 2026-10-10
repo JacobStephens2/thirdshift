@@ -5,7 +5,9 @@
 //! error the session failed with. See
 //! `docs/research/codex-headless-harness.md`.
 
-use crate::harness::interpretation::{Decoder, Ended, Facts, Report, TurnOutcome};
+use crate::harness::interpretation::{
+    Decoder, Ended, Evidence, Facts, Report, SafeguardRefusal, StreamUpdate, TurnOutcome,
+};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -135,11 +137,8 @@ impl CodexProgress {
     }
 }
 
-impl Decoder for CodexProgress {
-    fn condense(&mut self, raw: &str) -> Vec<String> {
-        let Ok(event) = serde_json::from_str::<Value>(raw) else {
-            return Vec::new();
-        };
+impl CodexProgress {
+    fn progress(&mut self, event: &Value) -> Vec<String> {
         match event["type"].as_str() {
             Some("thread.started") if self.session_id.is_none() => {
                 self.session_id = event["thread_id"].as_str().map(String::from);
@@ -173,10 +172,33 @@ impl Decoder for CodexProgress {
                 Vec::new()
             }
             Some("error") => {
-                self.reported(&event);
+                self.reported(event);
                 Vec::new()
             }
             _ => Vec::new(),
+        }
+    }
+}
+
+impl Decoder for CodexProgress {
+    fn condense(&mut self, raw: &str) -> StreamUpdate {
+        let Ok(event) = serde_json::from_str::<Value>(raw) else {
+            return StreamUpdate::default();
+        };
+        let mut evidence = Vec::new();
+        if event["type"] == "thread.started" {
+            evidence.push(Evidence::RequestedModelFallback);
+        }
+        if event["type"] == "turn.failed"
+            && event["error"]["message"]
+                .as_str()
+                .is_some_and(|text| text.to_ascii_lowercase().contains("cybersecurity"))
+        {
+            evidence.push(Evidence::SafeguardRefusal(SafeguardRefusal::CodexCyber));
+        }
+        StreamUpdate {
+            progress: self.progress(&event),
+            evidence,
         }
     }
 

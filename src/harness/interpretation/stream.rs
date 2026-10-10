@@ -8,7 +8,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::Value;
 
-use super::{Decoder, Ended, Facts, Report, TurnOutcome};
+use super::{
+    Decoder, Ended, Evidence, Facts, ModelScope, Report, SafeguardRefusal, StreamUpdate,
+    TurnOutcome,
+};
 use crate::progress::{bash, shorten};
 
 pub struct Stream {
@@ -55,6 +58,54 @@ struct Grok {
     fallback_id: Option<String>,
     usage: Option<String>,
     cost_known: bool,
+}
+
+impl Dialect {
+    /// Extract live facts before root-result and initialization guards. Grok
+    /// shares assistant framing without Claude's usage or safeguard rules.
+    fn evidence(&self, event: &Value) -> Vec<Evidence> {
+        let mut evidence = Vec::new();
+        if event["type"] == "assistant"
+            && event["is_api_error_message"] != true
+            && let Some(name) = event["message"]["model"].as_str()
+        {
+            let scope = if event["parent_tool_use_id"].is_null() {
+                ModelScope::MainLoop
+            } else {
+                ModelScope::AttributionOnly
+            };
+            evidence.push(Evidence::ObservedModel {
+                name: name.into(),
+                scope,
+            });
+        }
+        if matches!(self, Self::Claude(_)) {
+            if event["type"] == "result"
+                && let Some(usage) = event["modelUsage"].as_object()
+            {
+                evidence.extend(usage.keys().map(|name| Evidence::ObservedModel {
+                    name: name.clone(),
+                    scope: ModelScope::AttributionOnly,
+                }));
+            }
+            let refused = match event["type"].as_str() {
+                Some("system") => {
+                    event["subtype"] == "model_refusal_no_fallback"
+                        && event["api_refusal_category"] == "cyber"
+                }
+                Some("result") => event["result"].as_str().is_some_and(|text| {
+                    let text = text.trim_start();
+                    text.starts_with("[cyber]")
+                        || (text.starts_with("API Error:") && text.contains("[cyber]"))
+                }),
+                _ => false,
+            };
+            if refused {
+                evidence.push(Evidence::SafeguardRefusal(SafeguardRefusal::ClaudeCyber));
+            }
+        }
+        evidence
+    }
 }
 
 impl Stream {
@@ -127,11 +178,8 @@ impl Stream {
     }
 }
 
-impl Decoder for Stream {
-    fn condense(&mut self, raw: &str) -> Vec<String> {
-        let Ok(event) = serde_json::from_str::<Value>(raw) else {
-            return Vec::new();
-        };
+impl Stream {
+    fn progress(&mut self, event: &Value) -> Vec<String> {
         if let Dialect::Grok(grok) = &mut self.dialect
             && let Some(id) = event["session_id"].as_str()
         {
@@ -148,7 +196,7 @@ impl Decoder for Stream {
             }
             Some("assistant") => {
                 if let Dialect::Claude(claude) = &mut self.dialect {
-                    claude.assistant(&event);
+                    claude.assistant(event);
                 }
                 event["message"]["content"]
                     .as_array()
@@ -162,7 +210,7 @@ impl Decoder for Stream {
             }
             Some("system") => {
                 if let Dialect::Claude(claude) = &mut self.dialect {
-                    claude.track_task(&event);
+                    claude.track_task(event);
                 }
                 Vec::new()
             }
@@ -182,9 +230,9 @@ impl Decoder for Stream {
                 let failed = event["subtype"] != "success" || event["is_error"] == true;
                 match &mut self.dialect {
                     Dialect::Claude(claude) => {
-                        claude.result(&event, failed);
+                        claude.result(event, failed);
                     }
-                    Dialect::Grok(grok) => grok.result(&event, failed),
+                    Dialect::Grok(grok) => grok.result(event, failed),
                 }
                 Vec::new()
             }
@@ -207,6 +255,19 @@ impl Decoder for Stream {
             ));
         }
         lines
+    }
+}
+
+impl Decoder for Stream {
+    fn condense(&mut self, raw: &str) -> StreamUpdate {
+        let Ok(event) = serde_json::from_str::<Value>(raw) else {
+            return StreamUpdate::default();
+        };
+        let evidence = self.dialect.evidence(&event);
+        StreamUpdate {
+            progress: self.progress(&event),
+            evidence,
+        }
     }
 
     fn complete(self: Box<Self>) -> Facts {

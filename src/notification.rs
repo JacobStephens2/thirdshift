@@ -150,18 +150,11 @@ impl RunNotification {
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
         );
-        if let Some(log) = &command_log {
-            match crate::session::models::notification_lines(log) {
-                Ok(lines) if !lines.is_empty() => {
-                    text += "\nSession models:\n";
-                    for line in lines {
-                        text += &format!("{line}\n");
-                    }
-                }
-                Ok(_) => {}
-                Err(error) => progress::step(format_args!(
-                    "warning: could not read session models for the Run notification: {error:#}"
-                )),
+        let lines = crate::session::recording::Recording::capture().notification_lines();
+        if !lines.is_empty() {
+            text += "\nSession models:\n";
+            for line in lines {
+                text += &format!("{line}\n");
             }
         }
         if let Err(error) = self.checked.resend.send(&subject, &text) {
@@ -262,6 +255,9 @@ fn body(
     }
     if let Some(review) = &account.review {
         text += &format!("Review:       {}\n", review.line);
+        if let Some(title) = review.title {
+            text += &format!("Description:  {title}\n");
+        }
         if review.dispatched.is_some() {
             text += &format!("Dispatched:   {}\n", account.outcome);
         }
@@ -458,6 +454,7 @@ mod tests {
     fn an_architect_runs_notification_with_its_plan_dispatched_tells_how_both_ended() {
         let account = Account {
             review: Some(Review {
+                title: None,
                 line: format!("plan published: {PLAN}"),
                 dispatched: Some(PLAN),
             }),
@@ -490,6 +487,7 @@ mod tests {
             pr_url: None,
             log: None,
             review: Some(Review {
+                title: None,
                 line: format!("idea filed: {PLAN}"),
                 dispatched: None,
             }),
@@ -516,6 +514,7 @@ mod tests {
             outcome: "review failed",
             log: Some(Path::new(LOG)),
             review: Some(Review {
+                title: None,
                 line: "failed".to_string(),
                 dispatched: None,
             }),

@@ -1,5 +1,5 @@
 //! OpenCode's JSONL progress; final usage is deliberately left to session export.
-use crate::harness::interpretation::{Decoder, Ended, Facts, Report, TurnOutcome};
+use crate::harness::interpretation::{Decoder, Ended, Facts, Report, StreamUpdate, TurnOutcome};
 use crate::harness::skill_load::SkillLoad;
 use crate::progress::{bash, shorten};
 use serde_json::Value;
@@ -23,15 +23,15 @@ impl OpenCodeProgress {
 }
 
 impl Decoder for OpenCodeProgress {
-    fn condense(&mut self, raw: &str) -> Vec<String> {
+    fn condense(&mut self, raw: &str) -> StreamUpdate {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
-            return Vec::new();
+            return StreamUpdate::default();
         };
         if let Some(id) = event["sessionID"].as_str().filter(|id| !id.is_empty()) {
             self.session_id = Some(id.into());
         }
         let part = &event["part"];
-        match event["type"].as_str() {
+        let progress = match event["type"].as_str() {
             Some("step_start") if !self.started => {
                 self.started = true;
                 vec!["session started".into()]
@@ -77,6 +77,10 @@ impl Decoder for OpenCodeProgress {
                 )]
             }
             _ => Vec::new(),
+        };
+        StreamUpdate {
+            progress,
+            evidence: Vec::new(),
         }
     }
     fn complete(self: Box<Self>) -> Facts {

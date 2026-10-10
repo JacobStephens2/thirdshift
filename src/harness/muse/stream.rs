@@ -1,6 +1,6 @@
 //! Muse's JSONL event envelopes. Usage is read from its session log after exit.
 
-use crate::harness::interpretation::{Decoder, Ended, Facts, Report, TurnOutcome};
+use crate::harness::interpretation::{Decoder, Ended, Facts, Report, StreamUpdate, TurnOutcome};
 use crate::harness::skill_load::SkillLoad;
 use crate::progress::{bash, shorten};
 use serde_json::Value;
@@ -56,9 +56,9 @@ impl MuseProgress {
 }
 
 impl Decoder for MuseProgress {
-    fn condense(&mut self, raw: &str) -> Vec<String> {
+    fn condense(&mut self, raw: &str) -> StreamUpdate {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
-            return Vec::new();
+            return StreamUpdate::default();
         };
         if event["stream"]["kind"] == "session"
             && let Some(id) = event["stream"]["id"].as_str()
@@ -66,7 +66,7 @@ impl Decoder for MuseProgress {
             self.session_id = Some(id.to_string());
         }
         let payload = &event["payload"];
-        match event["payload_type"].as_str() {
+        let progress = match event["payload_type"].as_str() {
             Some("run.lifecycle.started") if !self.started => {
                 self.started = true;
                 vec!["session started".into()]
@@ -127,6 +127,10 @@ impl Decoder for MuseProgress {
             }
             Some("tool.result") => self.tool(payload),
             _ => Vec::new(),
+        };
+        StreamUpdate {
+            progress,
+            evidence: Vec::new(),
         }
     }
     fn complete(self: Box<Self>) -> Facts {
