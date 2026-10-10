@@ -21,6 +21,8 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    /// Internal interface for scripts/release.sh: prompt on stdin.
+    ReleaseSummary,
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
@@ -92,6 +94,12 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("--release-summary") => {
+            return match &args[1..] {
+                [] => Ok(Command::ReleaseSummary),
+                [extra, ..] => bail!("unexpected argument after --release-summary: {extra}"),
+            };
+        }
         Some("setup") => {
             return match &args[1..] {
                 [] => Ok(Command::Setup),

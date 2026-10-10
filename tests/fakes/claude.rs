@@ -170,6 +170,36 @@ pub fn exit_code(status: ExitStatus) -> i32 {
         .unwrap_or_else(|| -status.signal().unwrap() & 0xff)
 }
 
+/// Read the summary CLI's documented stdin or prompt-file transport. Ordinary
+/// session prompts remain argv-based; catalog calls have null stdin.
+pub fn transported_prompt(argv: &[String]) -> Option<String> {
+    if let Some(pair) = argv.windows(2).find(|pair| pair[0] == "--prompt-file") {
+        return Some(fs::read_to_string(&pair[1]).unwrap());
+    }
+    if crate::stdin_is_null() {
+        return None;
+    }
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input).unwrap();
+    if argv
+        .windows(2)
+        .any(|pair| pair == ["--input-format", "stream-json"])
+    {
+        let message = crate::json::parse(input.trim()).unwrap();
+        assert_eq!(message.at("event").as_str(), Some("user"));
+        assert_eq!(message.at("message").at("role").as_str(), Some("user"));
+        return Some(
+            message
+                .at("message")
+                .at("content")
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+    Some(input)
+}
+
 pub fn main(argv: Vec<String>) {
     let (branch, _) = git_here(&["branch", "--show-current"]);
     let (_, merging) = git_here(&["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
@@ -178,12 +208,11 @@ pub fn main(argv: Vec<String>) {
 
     let lock = crate::lock_beside(record_path);
 
-    let stdin = if text_mode {
-        let mut stdin = Vec::new();
-        std::io::stdin().read_to_end(&mut stdin).unwrap();
-        string(String::from_utf8_lossy(&stdin))
-    } else {
-        Null
+    let input = transported_prompt(&argv);
+    let stdin = match &input {
+        Some(input) => string(input),
+        None if text_mode => string(""),
+        None => Null,
     };
     let cwd = std::env::current_dir().unwrap();
     let cwd = cwd.to_str().unwrap();
@@ -191,7 +220,14 @@ pub fn main(argv: Vec<String>) {
         record_path,
         object([
             ("argv", Array(argv.iter().map(string).collect())),
-            ("prompt", argv.last().map(string).unwrap_or(Null)),
+            (
+                "prompt",
+                input
+                    .as_ref()
+                    .or_else(|| argv.last())
+                    .map(string)
+                    .unwrap_or(Null),
+            ),
             ("cwd", string(cwd)),
             ("branch", string(branch)),
             ("merging", Bool(merging)),

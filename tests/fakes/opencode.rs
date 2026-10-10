@@ -57,6 +57,10 @@ pub fn main(argv: Vec<String>) {
             "no_auto_update",
             string(std::env::var("OPENCODE_DISABLE_AUTOUPDATE").unwrap_or_default()),
         ),
+        (
+            "config_content",
+            string(std::env::var("OPENCODE_CONFIG_CONTENT").unwrap_or_default()),
+        ),
     ]);
     if prompt == "Reply with OK." {
         crate::append_record(&record_path.with_extension("checks.json"), record);
