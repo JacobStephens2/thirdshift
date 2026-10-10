@@ -255,11 +255,16 @@ fn parse_staged_spec_proposal(message: &str) -> Option<StagedSpec> {
 
 /// The `Blocked by:` trailer of one staged Ticket as 0-based indices into
 /// its Spec's Tickets: `none` is empty, else comma-separated 1-based
-/// positions. Reading stops at the next Ticket section or the message end,
-/// so only the trailer's first line counts. `None` unless every position
-/// names another Ticket of the `count` staged.
+/// positions on a single line. Anything but blank lines after that first
+/// line is malformed staged text: ignoring it would silently drop a stated
+/// ordering edge, so validation fails closed instead. `None` unless every
+/// position names another Ticket of the `count` staged.
 fn parse_blocked_by(blocked: &str, index: usize, count: usize) -> Option<Vec<usize>> {
-    let line = blocked.lines().next().unwrap_or_default().trim();
+    let mut lines = blocked.lines();
+    let line = lines.next().unwrap_or_default().trim();
+    if lines.any(|line| !line.trim().is_empty()) {
+        return None;
+    }
     let line = line.trim_end_matches(['.', ';']);
     if line.eq_ignore_ascii_case("none") {
         return Some(Vec::new());
@@ -352,16 +357,16 @@ fn unlinked_issues(window: Vec<IssueUrl>, spec: &IssueUrl, tickets: &[IssueUrl])
         .collect()
 }
 
-/// Close `sides`, public issues a Security fix publishing session created
+/// Close `leaks`, public issues a Security fix publishing session created
 /// outside the validated staged path, then fail loudly so the Day shift
 /// triages the exposure.
-fn fail_on_side_effects(github: &GitHub, sides: &[IssueUrl]) -> Result<IssueUrl> {
-    for side in sides {
-        github.close_issue(side, "Closed by thirdshift: the Security fix publishing session created this public issue outside the validated staged path.")?;
+fn fail_on_side_effects(github: &GitHub, leaks: &[IssueUrl]) -> Result<IssueUrl> {
+    for leak in leaks {
+        github.close_issue(leak, "Closed by thirdshift: the Security fix publishing session created this public issue outside the validated staged path.")?;
     }
-    let numbers = sides
+    let numbers = leaks
         .iter()
-        .map(|side| format!("#{}", side.number))
+        .map(|leak| format!("#{}", leak.number))
         .collect::<Vec<_>>()
         .join(", ");
     bail!(
@@ -443,6 +448,15 @@ mod tests {
         assert_eq!(unlinked_issues(window, &spec, &tickets), vec![issue(11)]);
         let window = vec![issue(8), issue(9), issue(10)];
         assert!(unlinked_issues(window, &spec, &tickets).is_empty());
+    }
+
+    #[test]
+    fn staged_spec_rejects_a_trailing_blocked_by_edge_on_its_own_line() {
+        let message = "Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input. Private record: https://example.invalid/advisory\nTicket: First ticket\nBody:\nFirst ticket. Private record: https://example.invalid/advisory\nBlocked by: none\nTicket: Second ticket\nBody:\nSecond ticket. Private record: https://example.invalid/advisory\nBlocked by: none\nTicket: Third ticket\nBody:\nThird ticket. Private record: https://example.invalid/advisory\nBlocked by: 1\n2\n";
+        assert!(
+            parse_staged_spec_proposal(message).is_none(),
+            "a second Blocked by edge on its own line was silently dropped instead of rejected"
+        );
     }
 
     #[test]
