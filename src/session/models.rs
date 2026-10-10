@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::harness::Choice;
@@ -79,7 +79,21 @@ pub fn notification_lines(command_log: &Path) -> Result<Vec<String>> {
     paths.sort();
     let mut lines = Vec::new();
     for path in paths {
-        let record: SessionModels = serde_json::from_slice(&fs::read(path)?)?;
+        let read = fs::read(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|json| {
+                serde_json::from_slice::<SessionModels>(&json).map_err(anyhow::Error::from)
+            })
+            .with_context(|| format!("could not read {}", path.display()));
+        let record = match read {
+            Ok(record) => record,
+            Err(error) => {
+                progress::step(format_args!(
+                    "warning: could not read session models for the Run notification: {error:#}"
+                ));
+                continue;
+            }
+        };
         if record.command_log.as_deref() != Some(command_log) {
             continue;
         }

@@ -75,6 +75,54 @@ fn assert_contains(text: &str, part: &str) {
 }
 
 #[test]
+fn a_notification_keeps_current_models_when_an_unrelated_record_is_corrupt() {
+    let scenario = Scenario::new();
+    let started = scenario.path("agent-started");
+    let release = scenario.path("agent-release");
+    scenario.agent_does(&format!(
+        "printf '%s\\n' '{}'\nprintf '%s\\n' '{}'\ntouch '{}'\n\
+         while [ ! -e '{}' ]; do sleep 0.01; done\n{AGENT_OPENS_PR}",
+        r#"{"type":"assistant","message":{"model":"current-model","content":[]}}"#,
+        r#"{"type":"assistant","message":{"model":"second-model","content":[]}}"#,
+        started.display(),
+        release.display(),
+    ));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let held = scenario.run_until(
+        &[&scenario.issue_url(7), "email", "me@example.com"],
+        &env(&resend, Some(KEY)),
+        "agent-started",
+    );
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
+    let command_logs = scenario.log_files(folder, "log");
+    assert_eq!(command_logs.len(), 1, "{command_logs:?}");
+    let stamp = command_logs[0]
+        .strip_prefix("7-")
+        .unwrap()
+        .strip_suffix(".log")
+        .unwrap();
+    std::fs::write(
+        scenario
+            .path(folder)
+            .join(format!("8-{stamp}-implement.models.json")),
+        "{ truncated",
+    )
+    .unwrap();
+    std::fs::write(&release, "").unwrap();
+    let result = held.finish();
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "warning: could not read session models for the Run notification:",
+    );
+    let request = the_one_request(&resend);
+    assert_contains(
+        text(&request),
+        "- implement: claude · current-model, second-model",
+    );
+}
+
+#[test]
 fn a_notification_excludes_an_unrelated_commands_models_with_the_same_stamp() {
     let scenario = Scenario::new();
     let started = scenario.path("agent-started");
