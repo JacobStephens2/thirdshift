@@ -53,6 +53,12 @@
 //! `gh api --method DELETE repos/<repo>/issues/<number>/labels/<label>` takes
 //! that label, whatever its case, off the issue, failing if the issue does
 //! not have it, as GitHub does.
+//! `gh api --method POST repos/<repo>/issues/<parent>/sub_issues -F
+//! sub_issue_id=<id>` links the issue as a native sub-issue of the parent.
+//! `gh api --method POST repos/<repo>/issues/<ticket>/dependencies/blocked_by
+//! -F issue_id=<id>` links the ticket as blocked by the issue. Database ids
+//! are the issue numbers, and `gh api repos/<repo>/issues/<number> --jq .id`
+//! answers with one.
 //!
 //! `gh api user` answers with the signed-in user's profile, whose public
 //! `email` is `user_email`, else null. `gh fake fails 'api user'` makes it
@@ -649,6 +655,8 @@ fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
     };
     object([
         ("number", number(n.parse::<i64>().unwrap())),
+        // The fake's database ids are the issue numbers.
+        ("id", number(n.parse::<i64>().unwrap())),
         ("state", issue_state.clone()),
         ("title", title),
         ("url", string(url)),
@@ -707,6 +715,74 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
         die("gh: Not Found (HTTP 404)", 1);
     }
     state.entry("labels", object([])).set(n, Array(labels));
+    save(state);
+}
+
+/// `gh api --method POST repos/<repo>/issues/<parent>/sub_issues -F
+/// sub_issue_id=<id>`: link the issue as a native sub-issue of the parent.
+/// The fake's database ids are the issue numbers.
+fn api_add_sub_issue(state: &mut Json, args: &[&str]) {
+    let (positional, _) = parse(args);
+    let parent = positional.first().and_then(|path| {
+        let (repo, rest) = repo_prefix(path)?;
+        check_repo_is(state, Some(repo));
+        rest.strip_prefix("issues/")?
+            .strip_suffix("/sub_issues")
+            .filter(|parent| state.at("issues").has(parent))
+    });
+    let child = args
+        .windows(2)
+        .filter(|pair| pair[0] == "-F")
+        .filter_map(|pair| pair[1].strip_prefix("sub_issue_id="))
+        .next()
+        .filter(|child| state.at("issues").has(child));
+    let (Some(parent), Some(child)) = (parent, child) else {
+        die(
+            &format!("fake gh: unsupported api POST {}", python_list(args)),
+            2,
+        )
+    };
+    let mut sub = listed(state, "sub_issues", parent);
+    if !sub.iter().any(|ticket| ticket.python().as_str() == child) {
+        sub.push(number(child.parse::<i64>().unwrap()));
+    }
+    state
+        .entry("sub_issues", object([]))
+        .set(parent, Array(sub));
+    save(state);
+}
+
+/// `gh api --method POST repos/<repo>/issues/<ticket>/dependencies/blocked_by
+/// -F issue_id=<id>`: link the ticket as blocked by the issue. The fake's
+/// database ids are the issue numbers.
+fn api_add_blocked_by(state: &mut Json, args: &[&str]) {
+    let (positional, _) = parse(args);
+    let ticket = positional.first().and_then(|path| {
+        let (repo, rest) = repo_prefix(path)?;
+        check_repo_is(state, Some(repo));
+        rest.strip_prefix("issues/")?
+            .strip_suffix("/dependencies/blocked_by")
+            .filter(|ticket| state.at("issues").has(ticket))
+    });
+    let blocker = args
+        .windows(2)
+        .filter(|pair| pair[0] == "-F")
+        .filter_map(|pair| pair[1].strip_prefix("issue_id="))
+        .next()
+        .filter(|blocker| state.at("issues").has(blocker));
+    let (Some(ticket), Some(blocker)) = (ticket, blocker) else {
+        die(
+            &format!("fake gh: unsupported api POST {}", python_list(args)),
+            2,
+        )
+    };
+    let mut blocked = listed(state, "blocked_by", ticket);
+    if !blocked.iter().any(|edge| edge.python().as_str() == blocker) {
+        blocked.push(number(blocker.parse::<i64>().unwrap()));
+    }
+    state
+        .entry("blocked_by", object([]))
+        .set(ticket, Array(blocked));
     save(state);
 }
 
@@ -1089,6 +1165,10 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         && n.parse::<u64>().is_ok()
     {
         check_repo_is(state, Some(repo));
+        if flag(flags, "jq") == Some(".id") {
+            println!("{n}");
+            return;
+        }
         println!("{}", issue_fields(state, n, state.at("issues").at(n)));
         return;
     }
@@ -1974,6 +2054,20 @@ pub fn main(args: Vec<String>) {
         }
         ["api", "--method", "PUT", rest @ ..] => issue_labels_put(&mut state, rest),
         ["api", "--method", "DELETE", rest @ ..] => issue_label_delete(&mut state, rest),
+        ["api", "--method", "POST", rest @ ..]
+            if rest
+                .first()
+                .is_some_and(|path| path.ends_with("/sub_issues")) =>
+        {
+            api_add_sub_issue(&mut state, rest)
+        }
+        ["api", "--method", "POST", rest @ ..]
+            if rest
+                .first()
+                .is_some_and(|path| path.contains("/dependencies/blocked_by")) =>
+        {
+            api_add_blocked_by(&mut state, rest)
+        }
         ["api", path, ..] if generate_notes_repo(path).is_some() => {
             generate_notes(&state, &args[1..]);
         }

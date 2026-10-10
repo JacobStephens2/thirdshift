@@ -75,11 +75,12 @@ pub fn publish(
         let message =
             sessions.run_to_final_message(Purpose::Security, "security-fix-publishing", &prompt)?;
         let github = GitHub::new();
-        // A single public fix stages its proposed text for validation;
-        // thirdshift creates the issue from it, and the session has no
-        // independent public-issue path. Anything else keeps the
-        // session-created issue path until staged specs land.
-        let issue = if size == FixSize::Single && record.private_issue_number().is_none() {
+        // A public fix stages its proposed text for validation;
+        // thirdshift creates the issues from it, and the session has no
+        // independent public-issue path. A private bigger fix keeps the
+        // session-created issue path: its issues stay private with the
+        // repository.
+        let issue = if record.private_issue_number().is_none() {
             // The session has no independent public-issue path: anything
             // created during its window is a side-effect leak outside the
             // validated staged path. Close it to stop further interaction,
@@ -98,16 +99,20 @@ pub fn publish(
                     "the Security fix publishing session created public issue(s) outside the staged path: {numbers}"
                 );
             }
-            let Some((title, body)) = message.as_deref().and_then(parse_staged_proposal) else {
-                bail!(
-                    "the Security fix publishing session did not stage its proposed public issue text"
-                );
-            };
-            // Validate the staged text before any public issue exists;
-            // a rejection blocks creation, so no public issue leaks
-            // private write-up text.
-            record.check_public_fix_text(&format!("{title}\n\n{body}"), url)?;
-            github.create_issue_in(repo, &title, &body, &[NEEDS_TRIAGE])?
+            if size == FixSize::Single {
+                let Some((title, body)) = message.as_deref().and_then(parse_staged_proposal) else {
+                    bail!(
+                        "the Security fix publishing session did not stage its proposed public issue text"
+                    );
+                };
+                // Validate the staged text before any public issue exists;
+                // a rejection blocks creation, so no public issue leaks
+                // private write-up text.
+                record.check_public_fix_text(&format!("{title}\n\n{body}"), url)?;
+                github.create_issue_in(repo, &title, &body, &[NEEDS_TRIAGE])?
+            } else {
+                publish_staged_spec(&github, repo, record, url, message.as_deref())?
+            }
         } else {
             let line = message
                 .as_deref()
@@ -189,6 +194,147 @@ pub fn publish(
     })
 }
 
+/// One staged Spec Ticket the publishing session proposed: its title, its
+/// body, and the 0-based indices of the Tickets it is blocked by.
+struct StagedTicket {
+    title: String,
+    body: String,
+    blocked_by: Vec<usize>,
+}
+
+/// The public Spec the publishing session staged for validation: its
+/// proposed top-issue `(title, body)` and its Tickets, instead of
+/// session-created public issues.
+struct StagedSpec {
+    title: String,
+    body: String,
+    tickets: Vec<StagedTicket>,
+}
+
+/// The staged Spec the publishing session proposed, with every Ticket's
+/// blocking edges as 0-based indices. `None` when the final message holds
+/// no well-formed staged spec: no marker, no top title or body, no Ticket,
+/// an empty title or body, or a blocking edge that is not `none` or a list
+/// of 1-based Ticket positions naming another Ticket.
+fn parse_staged_spec_proposal(message: &str) -> Option<StagedSpec> {
+    let (_, staged) = message.rsplit_once(prompt::STAGED_SPEC_MARKER)?;
+    let staged = staged.trim_start_matches(['\n', '\r']);
+    let (title_line, rest) = staged.split_once('\n')?;
+    let title = title_line.strip_prefix(prompt::STAGED_TITLE_MARKER)?.trim();
+    let rest = rest.strip_prefix(prompt::STAGED_BODY_MARKER)?;
+    let (spec_body, tickets_text) = match rest.split_once(prompt::STAGED_TICKET_MARKER) {
+        Some((body, tickets)) => (body, Some(tickets)),
+        None => (rest, None),
+    };
+    let tickets_text = tickets_text?;
+    if title.is_empty() || spec_body.trim().is_empty() {
+        return None;
+    }
+    let mut tickets = Vec::new();
+    for section in tickets_text.split(prompt::STAGED_TICKET_MARKER) {
+        let (title_line, rest) = section.split_once('\n')?;
+        let title = title_line.trim();
+        if title.is_empty() {
+            return None;
+        }
+        let rest = rest.strip_prefix(prompt::STAGED_BODY_MARKER)?;
+        let (body, blocked) = rest.split_once(prompt::STAGED_BLOCKED_BY_MARKER)?;
+        if body.trim().is_empty() {
+            return None;
+        }
+        tickets.push((title.to_string(), body.trim().to_string(), blocked));
+    }
+    if tickets.is_empty() {
+        return None;
+    }
+    let count = tickets.len();
+    let mut parsed = Vec::with_capacity(count);
+    for (index, (title, body, blocked)) in tickets.into_iter().enumerate() {
+        parsed.push(StagedTicket {
+            title,
+            body,
+            blocked_by: parse_blocked_by(blocked, index, count)?,
+        });
+    }
+    Some(StagedSpec {
+        title: title.to_string(),
+        body: spec_body.trim().to_string(),
+        tickets: parsed,
+    })
+}
+
+/// The `Blocked by:` trailer of one staged Ticket as 0-based indices into
+/// its Spec's Tickets: `none` is empty, else comma-separated 1-based
+/// positions. Reading stops at the next Ticket section or the message end,
+/// so only the trailer's first line counts. `None` unless every position
+/// names another Ticket of the `count` staged.
+fn parse_blocked_by(blocked: &str, index: usize, count: usize) -> Option<Vec<usize>> {
+    let line = blocked.lines().next().unwrap_or_default().trim();
+    let line = line.trim_end_matches(['.', ';']);
+    if line.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+    let mut edges = Vec::new();
+    for position in line
+        .split(',')
+        .map(str::trim)
+        .filter(|edge| !edge.is_empty())
+    {
+        let position: usize = position.parse().ok()?;
+        if position == 0 || position > count || position - 1 == index {
+            return None;
+        }
+        let edge = position - 1;
+        if !edges.contains(&edge) {
+            edges.push(edge);
+        }
+    }
+    if edges.is_empty() {
+        return None;
+    }
+    Some(edges)
+}
+
+/// Validate the staged Spec proposal and create its public issues: the
+/// `needs-triage` top issue and one `ready-for-agent` Ticket per staged
+/// Ticket, linked as native sub-issues with their staged blocking edges.
+/// Every staged text is validated before any public issue exists, so a
+/// rejection creates nothing and leaks no private write-up text.
+fn publish_staged_spec(
+    github: &GitHub,
+    repo: &Repo,
+    record: &SecurityRecord,
+    url: &str,
+    message: Option<&str>,
+) -> Result<IssueUrl> {
+    let Some(staged) = message.and_then(parse_staged_spec_proposal) else {
+        bail!("the Security fix publishing session did not stage its proposed public spec text");
+    };
+    record.check_public_fix_text(&format!("{}\n\n{}", staged.title, staged.body), url)?;
+    for ticket in &staged.tickets {
+        record.check_public_fix_text(&format!("{}\n\n{}", ticket.title, ticket.body), url)?;
+    }
+    let spec = github.create_issue_in(repo, &staged.title, &staged.body, &[NEEDS_TRIAGE])?;
+    let mut tickets = Vec::with_capacity(staged.tickets.len());
+    for ticket in &staged.tickets {
+        tickets.push(github.create_issue_in(
+            repo,
+            &ticket.title,
+            &ticket.body,
+            &[READY_FOR_AGENT],
+        )?);
+    }
+    for ticket in &tickets {
+        github.add_sub_issue(&spec, ticket)?;
+    }
+    for (ticket, staged) in tickets.iter().zip(&staged.tickets) {
+        for edge in &staged.blocked_by {
+            github.add_blocked_by(ticket, &tickets[*edge])?;
+        }
+    }
+    Ok(spec)
+}
+
 /// The single public fix the publishing session staged for validation:
 /// its proposed `(title, body)`, instead of a session-created public issue.
 fn parse_staged_proposal(message: &str) -> Option<(String, String)> {
@@ -231,5 +377,38 @@ mod tests {
     fn staged_proposal_rejects_a_bare_url_final_line() {
         let message = "Security fix Ticket: https://github.com/acme/widgets/issues/8\n";
         assert!(parse_staged_proposal(message).is_none());
+    }
+
+    #[test]
+    fn staged_spec_parses_top_issue_and_tickets_with_blocking() {
+        let message = "Reasoning\nProposed public spec:\nTitle: Bound accepted input\nBody:\nBound input across storage and transport. Private record: https://example.invalid/advisory\nTicket: Bound storage input\nBody:\nBound storage input. Private record: https://example.invalid/advisory\nBlocked by: none\nTicket: Bound transport input\nBody:\nBound transport input. Private record: https://example.invalid/advisory\nBlocked by: 1\n";
+        let spec = parse_staged_spec_proposal(message).expect("staged spec parses");
+        assert_eq!(spec.title, "Bound accepted input");
+        assert!(spec.body.contains("storage and transport"));
+        assert_eq!(spec.tickets.len(), 2);
+        assert_eq!(spec.tickets[0].title, "Bound storage input");
+        assert!(spec.tickets[0].blocked_by.is_empty());
+        assert_eq!(spec.tickets[1].title, "Bound transport input");
+        assert_eq!(spec.tickets[1].blocked_by, vec![0]);
+    }
+
+    #[test]
+    fn staged_spec_rejects_a_bare_url_final_line() {
+        let message = "Security fix Spec: https://github.com/acme/widgets/issues/8\n";
+        assert!(parse_staged_spec_proposal(message).is_none());
+    }
+
+    #[test]
+    fn staged_spec_rejects_bad_blocking_edges() {
+        for message in [
+            "Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input. Private record: https://example.invalid/advisory\nTicket: Only ticket\nBody:\nOnly ticket. Private record: https://example.invalid/advisory\nBlocked by: 1\n",
+            "Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input. Private record: https://example.invalid/advisory\nTicket: Only ticket\nBody:\nOnly ticket. Private record: https://example.invalid/advisory\nBlocked by: 2\n",
+            "Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input. Private record: https://example.invalid/advisory\n",
+        ] {
+            assert!(
+                parse_staged_spec_proposal(message).is_none(),
+                "bad staged spec parses: {message}"
+            );
+        }
     }
 }

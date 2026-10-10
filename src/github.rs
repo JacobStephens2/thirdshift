@@ -177,6 +177,55 @@ impl GitHub {
         ])
     }
 
+    /// The numeric database id of `issue`, for API calls that take one
+    /// instead of the issue number (sub-issues, dependencies).
+    fn issue_db_id(&self, issue: &IssueUrl) -> Result<u64> {
+        let json = self.gh_json(&[
+            "api",
+            &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
+            "--jq",
+            ".id",
+        ])?;
+        json.as_u64()
+            .context("gh api did not return the issue's database id")
+    }
+
+    /// Link `child` as a native sub-issue of `parent`.
+    pub fn add_sub_issue(&self, parent: &IssueUrl, child: &IssueUrl) -> Result<()> {
+        let child_id = self.issue_db_id(child)?;
+        self.post_by_id(
+            parent,
+            &format!("issues/{}/sub_issues", parent.number),
+            "sub_issue_id",
+            child_id,
+        )
+    }
+
+    /// Add a native "blocked by" edge: `ticket` is blocked by `blocker`.
+    pub fn add_blocked_by(&self, ticket: &IssueUrl, blocker: &IssueUrl) -> Result<()> {
+        let blocker_id = self.issue_db_id(blocker)?;
+        self.post_by_id(
+            ticket,
+            &format!("issues/{}/dependencies/blocked_by", ticket.number),
+            "issue_id",
+            blocker_id,
+        )
+    }
+
+    /// `POST` one database-id field to the `endpoint` below
+    /// `repos/<owner>/<repo>`: the shared shape behind issue links that take
+    /// an id instead of an issue number.
+    fn post_by_id(&self, issue: &IssueUrl, endpoint: &str, field: &str, id: u64) -> Result<()> {
+        self.gh(&[
+            "api",
+            "--method",
+            "POST",
+            &format!("repos/{}/{}", issue.repo_slug(), endpoint),
+            "-F",
+            &format!("{field}={id}"),
+        ])
+    }
+
     /// Every open issue labelled `label` in the repository `repo`, an
     /// `owner/repo`, newest first. They come from GitHub's issue list, not its
     /// search, whose index can be a while behind an issue just opened.

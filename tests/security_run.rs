@@ -414,14 +414,13 @@ printf 'Proposed public issue:\nTitle: Bound accepted input\nBody:\nReject overs
     )
 }
 
-fn publish_spec(record: &str) -> String {
+/// The staged spec path: the session returns its proposed public spec text
+/// without running `gh issue create` itself. thirdshift validates every
+/// staged text before creating any public issue.
+fn stage_spec(record: &str) -> String {
     format!(
         r#"
-url=$(gh issue create --title "Bound accepted input" --body "Bound input across storage and transport. Private record: {record}" --label needs-triage)
-gh issue create --title "Bound storage input" --body "Bound storage input. Private record: {record}" --label ready-for-agent
-gh issue create --title "Bound transport input" --body "Bound transport input. Private record: {record}" --label ready-for-agent
-gh fake sub-issues 8 '[9,10]'
-printf 'Security fix Spec: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+printf 'Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input across storage and transport. Private record: {record}\nTicket: Bound storage input\nBody:\nBound storage input. Private record: {record}\nBlocked by: none\nTicket: Bound transport input\nBody:\nBound transport input. Private record: {record}\nBlocked by: 1\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#
     )
 }
@@ -448,11 +447,10 @@ fn a_bigger_public_fix_publishes_tickets_and_ends_as_the_spec_run() {
             .replace("high single", "high spec")
             .replace("Fix size: single", "Fix size: spec")
     );
-    state["blocked_by"]["10"] = json!([9]);
     scenario.write_gh_state(&state);
     scenario.agent_does_in_session(
         1,
-        &publish_spec("https://github.com/acme/widgets/security/advisories/GHSA-finding-0"),
+        &stage_spec("https://github.com/acme/widgets/security/advisories/GHSA-finding-0"),
     );
     scenario.agent_does_for(9, &implement_spec_ticket(9, 8));
     scenario.agent_does_for(
@@ -483,6 +481,12 @@ fn a_bigger_public_fix_publishes_tickets_and_ends_as_the_spec_run() {
         );
     }
     assert_eq!(state["labels"]["8"], json!(["security-fix", "in-progress"]));
+    // thirdshift created the Spec's native links from the staged text.
+    assert_eq!(state["sub_issues"]["8"], json!([9, 10]));
+    assert_eq!(state["blocked_by"]["10"], json!([9]));
+    let spec_body = state["bodies"]["8"].as_str().unwrap();
+    assert!(spec_body.contains("storage and transport"), "{spec_body}");
+    assert!(!spec_body.contains("Private candidate write-up"));
     let calls = scenario.claude_calls();
     assert!(
         calls[0]["prompt"]
@@ -496,21 +500,53 @@ fn a_bigger_public_fix_publishes_tickets_and_ends_as_the_spec_run() {
             .unwrap()
             .contains("thirdshift-to-tickets")
     );
+    assert!(
+        calls[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("instead of creating any public issue directly"),
+        "{}",
+        calls[0]["prompt"].as_str().unwrap()
+    );
     assert_eq!(calls.len(), 4);
 }
 
 #[test]
 fn invalid_security_fix_specs_are_not_marked_ready_or_dispatched() {
+    // A public spec has no session-created path: every entry here is either
+    // a missing staged spec or staged text that validation rejects before
+    // thirdshift creates anything.
     let record = "https://github.com/acme/widgets/security/advisories/GHSA-finding-0";
+    let staged = stage_spec(record);
     for script in [
-        format!("{}gh fake sub-issues 8 '[]'\n", publish_spec(record)),
-        publish_spec(record).replace("Security fix Spec:", "Security fix Ticket:"),
-        publish_spec(record).replace("Bound storage input. Private record:", "Private candidate write-up. Private record:"),
-        publish_spec(record).replace("Bound storage input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0", "Bound storage input."),
-        format!("{}gh fake created 9 '2020-01-01T00:00:00Z'\n", publish_spec(record)),
-        format!("{}gh issue close 9\n", publish_spec(record)),
-        format!("{}gh fake labels 9 '[\"ready-for-human\"]'\n", publish_spec(record)),
-        format!("{}gh fake sub-issues 9 '[7]'\n", publish_spec(record)),
+        // No staged spec at all.
+        "printf '%s\\n' 'No protocol block' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n".to_string(),
+        // A session-created URL final line stages nothing.
+        "printf 'Security fix Spec: https://github.com/acme/widgets/issues/8\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n".to_string(),
+        // The top issue copies private write-up text.
+        staged.replace(
+            "Bound input across storage and transport. Private record:",
+            "Private candidate write-up. Private record:",
+        ),
+        // A Ticket copies private write-up text.
+        staged.replace(
+            "Bound storage input. Private record:",
+            "Private candidate write-up. Private record:",
+        ),
+        // The top issue omits the private record link.
+        staged.replace(
+            "Bound input across storage and transport. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0",
+            "Bound input across storage and transport.",
+        ),
+        // A Ticket omits the private record link.
+        staged.replace(
+            "Bound transport input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0",
+            "Bound transport input.",
+        ),
+        // A Ticket blocked by itself.
+        staged.replace("Blocked by: 1", "Blocked by: 2"),
+        // A Ticket blocked by no such Ticket.
+        staged.replace("Blocked by: 1", "Blocked by: 3"),
     ] {
         let scenario = with_reproduced_findings(&["high"]);
         let mut state = scenario.gh_state();
@@ -519,10 +555,60 @@ fn invalid_security_fix_specs_are_not_marked_ready_or_dispatched() {
         scenario.agent_does_in_session(1, &script);
         let result = scenario.run(&["secure", "security-fix"]);
         assert_eq!(result.code, Some(1), "{script}: {}", result.stderr);
-        assert_eq!(scenario.gh_state()["labels"]["8"], json!(["needs-triage"]));
+        assert!(
+            scenario.gh_state()["bodies"].get("8").is_none(),
+            "{script}: a rejected staged spec must not create a public issue: {}",
+            scenario.gh_state()["bodies"]
+        );
         assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
         assert_eq!(scenario.claude_calls().len(), 1);
     }
+}
+
+#[test]
+fn a_spec_session_side_effect_public_issue_fails_the_fix_and_is_closed() {
+    // The staged spec path validates before creating: a session that stages
+    // valid spec text but also creates a public issue on the side must fail
+    // loudly, and thirdshift closes the leak instead of reporting success.
+    let record = "https://github.com/acme/widgets/security/advisories/GHSA-finding-0";
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["advisories"][0]["description"] = json!(
+        state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .replace("high single", "high spec")
+    );
+    scenario.write_gh_state(&state);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{}\ngh issue create --title 'Leaked write-up' --body 'Private candidate write-up. Private record: {record}' --label needs-triage > /dev/null\n",
+            stage_spec(record),
+        ),
+    );
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("created public issue(s) outside the staged path: #8"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert_eq!(
+        state["issues"]["8"], "CLOSED",
+        "the session-created side-effect issue must be closed: {}",
+        state["issues"]
+    );
+    assert!(
+        state["bodies"].get("9").is_none(),
+        "no validated issue may follow a side-effect leak: {}",
+        state["bodies"]
+    );
+    assert!(state["prs"].as_array().unwrap().is_empty());
+    assert_eq!(scenario.claude_calls().len(), 1);
 }
 
 #[test]
@@ -670,7 +756,7 @@ fn a_staged_proposal_is_created_by_thirdshift_not_the_session() {
     let calls = scenario.claude_calls();
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(
-        prompt.contains("instead of creating the public issue directly"),
+        prompt.contains("instead of creating any public issue directly"),
         "{prompt}"
     );
 }
@@ -907,7 +993,7 @@ fn an_audit_goes_on_to_one_reproduced_fix_when_fixing_is_allowed() {
     scenario.agent_does_in_session(3, &reproduction_script("reproduced critical spec"));
     scenario.agent_does_in_session(
         4,
-        &publish_spec("https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002"),
+        &stage_spec("https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002"),
     );
     scenario.agent_does_for(9, &implement_spec_ticket(9, 8));
     scenario.agent_does_for(10, &implement_spec_ticket(10, 8));
@@ -1087,10 +1173,14 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
             state["advisories"][0]["description"] = json!(evidence);
             scenario.agent_does_in_session(
                 1,
-                &publish_spec("https://github.com/acme/widgets/security/advisories/GHSA-finding-0"),
+                &stage_spec("https://github.com/acme/widgets/security/advisories/GHSA-finding-0"),
             );
         }
-        state["blocked_by"][(ticket + 1).to_string()] = json!([ticket]);
+        if private {
+            // The private session links its own Tickets; the public staged
+            // path has thirdshift create the blocking edge itself.
+            state["blocked_by"][(ticket + 1).to_string()] = json!([ticket]);
+        }
         scenario.write_gh_state(&state);
         scenario.agent_does_for(ticket, "exit 1\n");
         let failed = scenario.run(&["secure", "security-fix", "parallel", "1"]);
