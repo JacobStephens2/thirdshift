@@ -35,6 +35,7 @@ mod execution_tests;
 #[derive(Clone, Copy)]
 pub enum Purpose {
     Ordinary,
+    CodeReview,
     Security,
     /// A guidance review retains security checks without delegating auditors.
     SecurityReview,
@@ -168,8 +169,14 @@ impl<'a> Sessions<'a> {
     /// abandoned rather than awaited: a progress line names it and this
     /// succeeds, leaving the steps that follow to decide the outcome.
     pub fn run(&self, kind: &str, prompt: &str) -> Result<()> {
-        self.run_to_final_message(Purpose::Ordinary, kind, prompt)
-            .map(drop)
+        // The shared review-report contract identifies code review sessions
+        // before expansion. Retain that policy even if report setup fails.
+        let purpose = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
+            Purpose::CodeReview
+        } else {
+            Purpose::Ordinary
+        };
+        self.run_to_final_message(purpose, kind, prompt).map(drop)
     }
 
     /// Run a session as [`Sessions::run`] does, and return its final message:
@@ -314,6 +321,11 @@ impl Outside for OnMachine {
             ),
             Purpose::Ordinary => (
                 self.adapter.session(&self.harness, resume, prompt),
+                interpretation,
+            ),
+            Purpose::CodeReview => (
+                self.adapter
+                    .code_review_session(&self.harness, resume, prompt),
                 interpretation,
             ),
         };
