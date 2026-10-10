@@ -399,13 +399,21 @@ const OR_SET: &str = "base.fix = true in ~/.thirdshift/config.toml, \
 #[test]
 fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_offers_one() {
     let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, "true\n"); // Requested Model check.
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
     let cause = inherited_failure(&scenario.origin_git(&["rev-parse", "main"]));
     let resend = ResendStandIn::replying(200, ACCEPTED);
     let url = scenario.issue_url(7);
 
     let result = scenario.run_with_env(
-        &["merge", &url, "--email", "me@example.com"],
+        &[
+            "merge",
+            &url,
+            "--email",
+            "me@example.com",
+            "model",
+            "Model Label With Spaces",
+        ],
         &[
             ("THIRDSHIFT_RESEND_URL", resend.url()),
             ("RESEND_API_KEY", "re_test_123"),
@@ -413,7 +421,11 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
     );
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    let retry = format!("thirdshift {url} merge --email me@example.com base-fix");
+    let retry = result
+        .stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("thirdshift: Retry with: "))
+        .expect("Base fix guidance");
     assert!(
         result.stderr.contains(&format!(
             "thirdshift: {cause}\n\
@@ -438,6 +450,29 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
         )),
         "text: {text}"
     );
+    let words = support::guidance::words(retry);
+    assert_eq!(words.iter().filter(|word| word.as_str() == url).count(), 1);
+    assert_eq!(words.len(), 7);
+    for flag in ["merge", "base-fix"] {
+        assert_eq!(
+            words
+                .iter()
+                .filter(|word| word.trim_start_matches('-') == flag)
+                .count(),
+            1
+        );
+    }
+    for pair in [
+        ["email", "me@example.com"],
+        ["model", "Model Label With Spaces"],
+    ] {
+        assert!(
+            words
+                .windows(2)
+                .any(|actual| actual[0].trim_start_matches('-') == pair[0] && actual[1] == pair[1]),
+            "{words:?}"
+        );
+    }
     // The cause alone is the Failed-run commit's message.
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],

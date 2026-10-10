@@ -2,6 +2,8 @@
 //! processes so interruption and fixture environment changes cannot leak into
 //! another test, and write executables other tests can't hold open.
 
+pub(crate) mod guidance;
+
 use std::process::Command;
 
 use crate::interrupt;
