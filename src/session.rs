@@ -23,6 +23,7 @@ use crate::progress;
 use crate::prompt;
 use crate::skills;
 
+pub mod models;
 mod review_reports;
 use review_reports::ReviewReports;
 
@@ -318,7 +319,7 @@ impl Outside for OnMachine {
         };
         run(
             kind,
-            self.adapter,
+            &self.harness,
             &self.worktree,
             invocation,
             log,
@@ -352,12 +353,13 @@ fn ending_with(killed: &[&str]) -> String {
 /// and fails with `interrupted`.
 fn run(
     kind: &str,
-    adapter: &'static dyn Adapter,
+    choice: &Choice,
     worktree: &Path,
     invocation: Invocation,
     log: &Path,
     stream: Interpretation,
 ) -> Result<Ended> {
+    let adapter = choice.harness.adapter();
     let cli = adapter.name();
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
@@ -377,9 +379,22 @@ fn run(
     )?;
 
     let completion = executed.state.finish(executed.execution);
+    let report_models = completion
+        .report
+        .as_ref()
+        .map(|report| report.models.clone())
+        .unwrap_or_default();
+    models::keep(kind, log, choice, report_models);
     if let Some(report) = completion.report {
-        for model in report.models {
-            progress::step(format_args!("{kind}: Model: {model}"));
+        // Stream models already have security progress lines. Retained records
+        // need theirs here, as before.
+        if matches!(
+            choice.harness,
+            crate::harness::Harness::Muse | crate::harness::Harness::OpenCode
+        ) {
+            for model in report.models {
+                progress::step(format_args!("{kind}: Model: {model}"));
+            }
         }
         for warning in report.warnings {
             progress::step(format_args!("{kind}: {warning}"));

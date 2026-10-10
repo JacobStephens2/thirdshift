@@ -10,6 +10,7 @@ use crate::interrupt;
 
 mod stream;
 pub(super) use stream::Stream;
+mod models;
 mod security;
 pub use security::SafeguardRefusal;
 use security::Security;
@@ -21,6 +22,7 @@ pub struct Interpretation {
     decoder: Box<dyn Decoder>,
     retained: Retained,
     security: Option<Security>,
+    models: models::Models,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -33,7 +35,7 @@ pub struct Completion {
 pub struct Report {
     pub warnings: Vec<String>,
     pub summary: Option<String>,
-    /// Answering Models recovered from retained records, in response order.
+    /// Models reported by session output or retained records.
     pub models: Vec<String>,
 }
 
@@ -170,6 +172,7 @@ impl Interpretation {
             decoder,
             retained,
             security: None,
+            models: models::Models::new(cli),
         }
     }
 
@@ -182,6 +185,7 @@ impl Interpretation {
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
         let mut lines = self.decoder.condense(raw);
+        self.models.observe(raw);
         if let Some(security) = &mut self.security
             && let Some(line) = security.observe(raw)
         {
@@ -218,16 +222,13 @@ impl Interpretation {
         if let Err(error) = interrupt::check() {
             return (None, Err(Failure::Execution(error)));
         }
-        let security_session = self.security.is_some();
         let mut facts = self.decoder.complete();
+        facts.report.models = self.models.into_names();
         let refusal = self.security.and_then(|security| security.refusal);
         if refusal.is_some() {
             facts.outcome = TurnOutcome::Failed;
         }
         let recovered = self.retained.reconcile(&mut facts);
-        if !security_session {
-            facts.report.models.clear();
-        }
         if let Err(error) = interrupt::check() {
             return (None, Err(Failure::Execution(error)));
         }

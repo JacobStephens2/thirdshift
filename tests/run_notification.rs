@@ -75,6 +75,163 @@ fn assert_contains(text: &str, part: &str) {
 }
 
 #[test]
+fn a_spec_notification_includes_child_models_and_excludes_an_earlier_commands_models() {
+    let scenario = Scenario::new();
+    scenario.agent_does_for(7, &format!(
+        "printf '%s\\n' '{{\"type\":\"assistant\",\"message\":{{\"model\":\"earlier-model\",\"content\":[]}}}}'\n{AGENT_OPENS_PR}"
+    ));
+    let earlier = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(earlier.code, Some(0), "{}", earlier.stderr);
+    scenario.spec_has_tickets(20, &[(21, &[]), (22, &[])]);
+    for (ticket, model) in [(21, "claude-sonnet-5"), (22, "claude-opus-4-8")] {
+        scenario.agent_does_for(ticket, &format!(r#"
+printf '%s\n' '{{"type":"assistant","message":{{"model":"{model}","content":[]}}}}'
+echo {ticket} > feature-{ticket}.txt
+git add feature-{ticket}.txt
+git commit -q -m 'Ticket {ticket}'
+gh pr create --base issue-20 --head issue-{ticket} --title 'Ticket {ticket}' --body 'Closes #{ticket}'
+"#));
+    }
+    scenario.agent_does_for(20, "true\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            &scenario.issue_url(20),
+            "parallel",
+            "2",
+            "email",
+            "me@example.com",
+        ],
+        Some(KEY),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let request = the_one_request(&resend);
+    let text = text(&request);
+    assert_contains(text, "- implement: claude · claude-sonnet-5");
+    assert_contains(text, "- implement: claude · claude-opus-4-8");
+    assert_contains(
+        text,
+        "- spec-review: claude · Harness default (not reported)",
+    );
+    assert!(!text.contains("earlier-model"), "{text}");
+}
+
+#[test]
+fn a_codex_notification_labels_requested_models_for_the_review_and_its_resume() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, AGENT_OPENS_PR);
+    scenario.agent_does_in_session(2, r#"
+printf '%s\n' '{"type":"item.started","item":{"id":"test","type":"command_execution","command":"cargo test","status":"in_progress"}}'
+"#);
+    scenario.agent_does_in_session(3, "exit 3\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            &scenario.issue_url(7),
+            "harness",
+            "codex",
+            "model",
+            "gpt-6.1-sol",
+            "effort",
+            "high",
+            "security-review",
+            "merge",
+            "email",
+            "me@example.com",
+        ],
+        Some(KEY),
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.codex_calls().len(), 3);
+    let request = the_one_request(&resend);
+    let text = text(&request);
+    for kind in ["implement", "security-review", "security-review-resume"] {
+        assert_contains(
+            text,
+            &format!("- {kind}: codex · gpt-6.1-sol (requested) · session effort: high"),
+        );
+    }
+}
+
+#[test]
+fn a_notification_includes_delegated_models_and_result_usage_without_synthetic_answers() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        r#"
+printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-5-5","content":[]}}}}'
+printf '%s\n' '{{"type":"assistant","parent_tool_use_id":"child","message":{{"model":"claude-sonnet-5","content":[]}}}}'
+printf '%s\n' '{{"type":"assistant","message":{{"model":"<synthetic>","content":[]}}}}'
+printf '%s\n' '{{"type":"assistant","is_api_error_message":true,"message":{{"model":"refused-model","content":[]}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","modelUsage":{{"claude-haiku-4-5":{{"inputTokens":100}}}}}}'
+{AGENT_OPENS_PR}
+"#
+    ));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "email", "me@example.com"],
+        Some(KEY),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let request = the_one_request(&resend);
+    let text = text(&request);
+    assert_contains(text, "claude-opus-5-5, claude-sonnet-5, claude-haiku-4-5");
+    assert!(!text.contains("<synthetic>"), "{text}");
+    assert!(!text.contains("refused-model"), "{text}");
+}
+
+#[test]
+fn a_failed_security_review_notification_names_each_sessions_models() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "printf '%s\\n' '{{\"type\":\"assistant\",\"message\":{{\"model\":\"claude-opus-5-5\",\"content\":[]}}}}'\n{AGENT_OPENS_PR}"
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"
+printf '%s\n' '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[]}}'
+printf '%s\n' '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[]}}'
+exit 3
+"#,
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            &scenario.issue_url(7),
+            "security-review",
+            "merge",
+            "email",
+            "me@example.com",
+        ],
+        Some(KEY),
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let request = the_one_request(&resend);
+    let text = text(&request);
+    assert_contains(text, "Security review incomplete");
+    assert_contains(text, "Built with claude · default model · default effort");
+    assert_contains(
+        text,
+        "- implement: claude · claude-opus-5-5 · session effort: default effort",
+    );
+    assert_contains(
+        text,
+        "- security-review: claude · claude-opus-4-8 · session effort: default effort",
+    );
+    assert_eq!(text.matches("claude-opus-4-8").count(), 1, "{text}");
+}
+
+#[test]
 fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
     let scenario = Scenario::new();
     scenario.issue_titled(7, "Add export button");
