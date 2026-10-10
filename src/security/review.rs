@@ -45,9 +45,18 @@ pub(crate) fn run(
     // A session may change commits on the Issue branch, but it cannot hand
     // us a replacement checkout to observe or publish findings from.
     worktree.head()?;
-    let review = Review::from_final_message(message.as_deref())?;
+    let review = Review::from_final_message(message.as_deref());
+    // A deliberate incomplete still has a private report to validate and
+    // record. Keep its public reason only if that processing succeeds.
+    if let Err(error) = &review
+        && !error.is::<Incomplete>()
+    {
+        return review;
+    }
     let findings: Vec<OldFinding> = serde_json::from_slice(&fs::read(report)?)?;
-    if findings.len() != review.pre_existing_count {
+    if let Ok(review) = &review
+        && findings.len() != review.pre_existing_count
+    {
         bail!("Security review's private report does not match its final count");
     }
     // Validate the entire report before creating any record. Malformed report
@@ -87,7 +96,7 @@ pub(crate) fn run(
             }
         }
     }
-    Ok(review)
+    review
 }
 
 #[derive(Deserialize, Serialize)]
@@ -166,10 +175,15 @@ impl Outcome {
     pub fn of(result: Result<Review>) -> Self {
         match result {
             Ok(review) => Self::Complete(review),
-            Err(error) => Self::Incomplete(match error.downcast_ref::<SafeguardRefusal>() {
-                Some(refusal) => format!("Security review refused: {refusal}"),
-                None => "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log".to_string(),
-            }),
+            Err(error) => Self::Incomplete(
+                if let Some(refusal) = error.downcast_ref::<SafeguardRefusal>() {
+                    format!("Security review refused: {refusal}")
+                } else if let Some(incomplete) = error.downcast_ref::<Incomplete>() {
+                    format!("Security review incomplete: {incomplete}")
+                } else {
+                    "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log".to_string()
+                },
+            ),
         }
     }
 
@@ -212,6 +226,19 @@ impl fmt::Display for Hold {
 
 impl std::error::Error for Hold {}
 
+/// A session's deliberate incomplete, distinct from invalid final lines and
+/// private-report failures whose diagnostics must stay out of public text.
+#[derive(Debug)]
+struct Incomplete(String);
+
+impl fmt::Display for Incomplete {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Incomplete {}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Review {
@@ -226,6 +253,12 @@ impl Review {
             .and_then(|message| message.lines().rfind(|line| !line.trim().is_empty()))
             .and_then(|line| line.strip_prefix("Security review: "))
             .context("Security review ended without its required final line")?;
+        if let Some(reason) = json.strip_prefix("incomplete: ") {
+            if reason.trim().is_empty() || reason.contains(['\r', '\n']) {
+                bail!("Security review ended with an invalid incomplete reason");
+            }
+            return Err(Incomplete(reason.trim().chars().take(500).collect()).into());
+        }
         let review: Self = serde_json::from_str(json)
             .context("Security review ended with an invalid final line")?;
         if review.unaddressed_count != review.findings.len()
