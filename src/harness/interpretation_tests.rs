@@ -358,3 +358,316 @@ pub(crate) fn recording_interpretation(
         retained,
     )
 }
+
+#[test]
+fn assistant_models_keep_attribution_order_without_changing_root_completion() {
+    for harness in [Harness::Claude, Harness::Grok] {
+        for security in [false, true] {
+            let mut interpretation = stream(harness, "");
+            if security {
+                interpretation = interpretation.for_security(Some("requested-model"));
+            }
+            let fixtures = [
+                (
+                    r#"{"type":"system","subtype":"init","session_id":"s1","model":"requested-model"}"#,
+                    vec!["session started"],
+                ),
+                (
+                    r#"{"type":"assistant","parent_tool_use_id":"child","message":{"model":"child-model","content":[]}}"#,
+                    vec![],
+                ),
+                (
+                    r#"{"type":"assistant","parent_tool_use_id":false,"message":{"model":"other-child","content":[]}}"#,
+                    vec![],
+                ),
+                (
+                    r#"{"type":"assistant","is_api_error_message":true,"message":{"model":"api-error-model","content":[]}}"#,
+                    vec![],
+                ),
+                (
+                    r#"{"type":"assistant","message":{"model":"<synthetic>","content":[]}}"#,
+                    vec![],
+                ),
+                (
+                    r#"{"type":"assistant","message":{"model":"","content":[]}}"#,
+                    vec![],
+                ),
+                (
+                    r#"{"type":"assistant","parent_tool_use_id":null,"message":{"model":"root-model","content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo check"}}]}}"#,
+                    if security {
+                        vec!["$ cargo check", "Model: root-model"]
+                    } else {
+                        vec!["$ cargo check"]
+                    },
+                ),
+                (
+                    r#"{"type":"assistant","message":{"model":"root-model","content":[]}}"#,
+                    vec![],
+                ),
+                (
+                    r#"{"type":"assistant","message":{"model":"next-model","content":[]}}"#,
+                    if security {
+                        vec!["Model: next-model"]
+                    } else {
+                        vec![]
+                    },
+                ),
+                (
+                    r#"{"type":"assistant","message":{"model":"root-model","content":[]}}"#,
+                    if security {
+                        vec!["Model: root-model"]
+                    } else {
+                        vec![]
+                    },
+                ),
+                (
+                    r#"{"type":"result","subtype":"success","result":"root reply","num_turns":2,"total_cost_usd":0.25}"#,
+                    vec![],
+                ),
+                (
+                    r#"{"type":"result","parent_tool_use_id":"child","subtype":"success","result":"child reply","modelUsage":{"usage-model":{},"child-model":{},"<synthetic>":{},"":{}}}"#,
+                    vec![],
+                ),
+                ("not JSON", vec![]),
+                ("{}", vec![]),
+            ];
+            for (event, expected) in fixtures {
+                assert_eq!(
+                    interpretation.condense(event),
+                    expected,
+                    "{harness:?}, Security={security}: {event}"
+                );
+            }
+            let mut expected = vec!["child-model", "other-child", "root-model", "next-model"];
+            if harness == Harness::Claude {
+                expected.push("usage-model");
+            }
+            assert_eq!(interpretation.observed_models(), expected);
+            let completion = finish(interpretation);
+            assert_eq!(completion.report.unwrap().models, expected);
+            let ended = completion.outcome.unwrap();
+            assert_eq!(ended.session_id.as_deref(), Some("s1"));
+            assert_eq!(
+                ended.final_message.as_deref(),
+                Some(if harness == Harness::Claude {
+                    "root reply"
+                } else {
+                    "child reply"
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn repeated_agy_initialization_keeps_model_evidence_after_identity_acceptance() {
+    for security in [false, true] {
+        let mut interpretation = stream(Harness::Agy, "");
+        if security {
+            interpretation = interpretation.for_security(Some("requested-model"));
+        }
+        let fixtures = [
+            (
+                r#"{"event":"init","init":{"model":"first-model"}}"#,
+                true,
+                Some("Model: first-model"),
+            ),
+            (
+                r#"{"event":"init","conversation_id":"s1","init":{"model":"second-model"}}"#,
+                true,
+                Some("Model: second-model"),
+            ),
+            (
+                r#"{"event":"init","conversation_id":"s2","parent_tool_use_id":"child","init":{"model":"child-model"}}"#,
+                false,
+                None,
+            ),
+            (
+                r#"{"event":"init","init":{"model":"second-model"}}"#,
+                false,
+                None,
+            ),
+            (
+                r#"{"event":"init","init":{"model":"<synthetic>"}}"#,
+                false,
+                None,
+            ),
+            (r#"{"event":"init","init":{"model":""}}"#, false, None),
+            (
+                r#"{"event":"init","init":{"model":"last-model"}}"#,
+                false,
+                Some("Model: last-model"),
+            ),
+            ("not JSON", false, None),
+        ];
+        for (event, started, model) in fixtures {
+            let mut expected = Vec::new();
+            if started {
+                expected.push("session started");
+            }
+            if security && let Some(model) = model {
+                expected.push(model);
+            }
+            assert_eq!(interpretation.condense(event), expected);
+        }
+        let expected = ["first-model", "second-model", "child-model", "last-model"];
+        assert_eq!(interpretation.observed_models(), expected);
+        let completion = finish(interpretation);
+        assert_eq!(
+            completion.outcome.unwrap().session_id.as_deref(),
+            Some("s1")
+        );
+        assert_eq!(completion.report.unwrap().models, expected);
+    }
+}
+
+#[test]
+fn codex_starts_report_requested_or_default_progress_without_observed_models() {
+    for requested in [None, Some("gpt-requested")] {
+        let mut interpretation = stream(Harness::Codex, "");
+        // Security can start after the decoder has accepted its identity.
+        assert_eq!(
+            interpretation.condense(r#"{"type":"thread.started","thread_id":"s1"}"#),
+            ["session started"]
+        );
+        interpretation = interpretation.for_security(requested);
+        let expected = if requested.is_some() {
+            "Model: gpt-requested (requested)"
+        } else {
+            "Model: Harness default (no Model requested)"
+        };
+        let repeated = r#"{"type":"thread.started","thread_id":"s2","model":"not-evidence"}"#;
+        assert_eq!(interpretation.condense(repeated), [expected]);
+        assert!(interpretation.condense(repeated).is_empty());
+        assert!(interpretation.observed_models().is_empty());
+        interpretation = interpretation.for_security(requested);
+        assert_eq!(interpretation.condense(repeated), [expected]);
+        let completion = finish(interpretation);
+        assert_eq!(
+            completion.outcome.unwrap().session_id.as_deref(),
+            Some("s1")
+        );
+        assert!(completion.report.unwrap().models.is_empty());
+    }
+}
+
+#[test]
+fn enabling_or_resetting_security_does_not_replay_refusals_or_clear_models() {
+    let refusal =
+        r#"{"type":"system","subtype":"model_refusal_no_fallback","api_refusal_category":"cyber"}"#;
+    let answer = r#"{"type":"assistant","message":{"model":"root-model","content":[]}}"#;
+    for reset in [false, true] {
+        let mut interpretation = stream(Harness::Claude, "");
+        if reset {
+            interpretation = interpretation.for_security(None);
+        }
+        interpretation.condense(answer);
+        interpretation.condense(refusal);
+        interpretation = interpretation.for_security(None);
+        assert_eq!(interpretation.observed_models(), ["root-model"]);
+        assert_eq!(interpretation.condense(answer), ["Model: root-model"]);
+        assert_eq!(interpretation.observed_models(), ["root-model"]);
+        interpretation.condense(r#"{"type":"result","subtype":"success","result":"done"}"#);
+        let completion = finish(interpretation);
+        assert!(completion.outcome.is_ok());
+        assert_eq!(completion.report.unwrap().models, ["root-model"]);
+    }
+}
+
+#[test]
+fn claude_refusal_predicates_survive_delegated_results_only_in_security() {
+    for event in [
+        r#"{"type":"system","subtype":"model_refusal_no_fallback","api_refusal_category":"cyber","parent_tool_use_id":"child"}"#,
+        r#"{"type":"result","subtype":"success","parent_tool_use_id":"child","result":"  [cyber] private explanation","modelUsage":{"child-model":{}}}"#,
+        r#"{"type":"result","subtype":"success","parent_tool_use_id":"child","result":"\nAPI Error: [cyber] private explanation","modelUsage":{"child-model":{}}}"#,
+    ] {
+        for harness in [Harness::Claude, Harness::Grok] {
+            for security in [false, true] {
+                let mut interpretation = stream(harness, "");
+                if security {
+                    interpretation = interpretation.for_security(None);
+                }
+                interpretation.condense(event);
+                interpretation
+                    .condense(r#"{"type":"result","subtype":"success","result":"root reply"}"#);
+                let completion = finish(interpretation);
+                if harness == Harness::Claude && security {
+                    assert_eq!(
+                        completion
+                            .outcome
+                            .unwrap_err()
+                            .downcast_ref::<interpretation::SafeguardRefusal>(),
+                        Some(&interpretation::SafeguardRefusal::ClaudeCyber)
+                    );
+                } else {
+                    assert_eq!(
+                        completion.outcome.unwrap().final_message.as_deref(),
+                        Some("root reply")
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn codex_classifies_only_terminal_cybersecurity_errors_and_keeps_refusals_sticky() {
+    for terminal in [false, true] {
+        for security in [false, true] {
+            let mut interpretation = stream(Harness::Codex, "");
+            if security {
+                interpretation = interpretation.for_security(None);
+            }
+            let event = if terminal {
+                r#"{"type":"turn.failed","error":{"message":"Blocked by CYBERSECURITY safeguard"}}"#
+            } else {
+                r#"{"type":"error","message":"Discussion of cybersecurity"}"#
+            };
+            interpretation.condense(event);
+            interpretation.condense(
+                r#"{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}"#,
+            );
+            let completion = finish(interpretation);
+            let report = completion.report.unwrap();
+            assert_eq!(
+                report.summary.as_deref(),
+                Some("10 input tokens (0 cached), 2 output tokens")
+            );
+            assert!(report.models.is_empty());
+            if terminal {
+                let error = completion.outcome.unwrap_err();
+                assert_eq!(
+                    error.downcast_ref::<interpretation::SafeguardRefusal>(),
+                    if security {
+                        Some(&interpretation::SafeguardRefusal::CodexCyber)
+                    } else {
+                        None
+                    }
+                );
+            } else {
+                assert!(completion.outcome.is_ok());
+            }
+        }
+    }
+}
+
+#[test]
+fn retained_harnesses_do_not_invent_live_model_or_safeguard_evidence() {
+    for harness in [Harness::Muse, Harness::OpenCode] {
+        let mut interpretation = stream(harness, "").for_security(Some("requested-model"));
+        for event in [
+            r#"{"type":"assistant","message":{"model":"not-evidence"}}"#,
+            r#"{"event":"init","init":{"model":"not-evidence"}}"#,
+            r#"{"type":"thread.started","model":"not-evidence"}"#,
+            r#"{"type":"system","subtype":"model_refusal_no_fallback","api_refusal_category":"cyber"}"#,
+            r#"{"type":"result","result":"[cyber] not this dialect"}"#,
+            "not JSON",
+        ] {
+            assert!(interpretation.condense(event).is_empty());
+        }
+        assert!(interpretation.observed_models().is_empty());
+        let completion = finish(interpretation);
+        assert!(completion.outcome.is_ok());
+        assert!(completion.report.unwrap().models.is_empty());
+    }
+}

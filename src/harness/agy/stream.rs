@@ -1,6 +1,8 @@
 //! Antigravity CLI's event envelopes. Final text, failure and cumulative
 //! usage come only from the final result, never concatenated text deltas.
-use crate::harness::interpretation::{Decoder, Ended, Facts, Report, TurnOutcome};
+use crate::harness::interpretation::{
+    Decoder, Ended, Evidence, Facts, ModelScope, Report, StreamUpdate, TurnOutcome,
+};
 use crate::progress::{bash, shorten};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -12,11 +14,8 @@ pub struct AgyProgress {
     result: Option<Value>,
 }
 
-impl Decoder for AgyProgress {
-    fn condense(&mut self, raw: &str) -> Vec<String> {
-        let Ok(event) = serde_json::from_str::<Value>(raw) else {
-            return Vec::new();
-        };
+impl AgyProgress {
+    fn progress(&mut self, event: &Value) -> Vec<String> {
         match event["event"].as_str() {
             Some("init") if self.session_id.is_none() => {
                 self.session_id = event["conversation_id"]
@@ -68,6 +67,33 @@ impl Decoder for AgyProgress {
             _ => Vec::new(),
         }
     }
+}
+
+impl Decoder for AgyProgress {
+    fn condense(&mut self, raw: &str) -> StreamUpdate {
+        let Ok(event) = serde_json::from_str::<Value>(raw) else {
+            return StreamUpdate::default();
+        };
+        let mut evidence = Vec::new();
+        if event["event"] == "init"
+            && let Some(name) = event["init"]["model"].as_str()
+        {
+            let scope = if event["parent_tool_use_id"].is_null() {
+                ModelScope::MainLoop
+            } else {
+                ModelScope::AttributionOnly
+            };
+            evidence.push(Evidence::ObservedModel {
+                name: name.into(),
+                scope,
+            });
+        }
+        StreamUpdate {
+            progress: self.progress(&event),
+            evidence,
+        }
+    }
+
     fn complete(self: Box<Self>) -> Facts {
         let summary = self.summary();
         let result = self.result.as_ref();
