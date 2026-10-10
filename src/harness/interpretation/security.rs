@@ -49,7 +49,7 @@ impl Security {
 
     pub fn observe(&mut self, raw: &str) -> Option<String> {
         let event = serde_json::from_str::<Value>(raw).ok()?;
-        let model = match self.harness {
+        match self.harness {
             Some(Harness::Claude) => {
                 let refused = match event["type"].as_str() {
                     Some("system") => {
@@ -66,9 +66,7 @@ impl Security {
                 if refused {
                     self.refusal = Some(SafeguardRefusal::ClaudeCyber);
                 }
-                Self::answer_model(&event)
             }
-            Some(Harness::Grok) => Self::answer_model(&event),
             Some(Harness::Codex) => {
                 if event["type"] == "turn.failed"
                     && event["error"]["message"]
@@ -88,29 +86,18 @@ impl Security {
                     self.last_model = Some(model.to_string());
                     return Some(line);
                 }
-                None
             }
-            Some(Harness::Agy) if event["event"] == "init" => event["init"]["model"].as_str(),
-            _ => None,
-        }?;
-        if model.is_empty() || self.last_model.as_deref() == Some(model) {
+            _ => {}
+        }
+        // Init names the requested Model; result.modelUsage includes sub-agents.
+        // Security progress names only main-loop answers, while notification
+        // attribution also counts delegated answers.
+        let model = super::models::reported_model(self.harness, &event)
+            .filter(|_| event["parent_tool_use_id"].is_null())?;
+        if self.last_model.as_deref() == Some(model) {
             return None;
         }
         self.last_model = Some(model.to_string());
         Some(format!("Model: {model}"))
-    }
-
-    // Init names the requested Model; result.modelUsage includes sub-agents.
-    // Only main-loop assistant messages identify the Model that answered.
-    fn answer_model(event: &Value) -> Option<&str> {
-        if event["type"] != "assistant"
-            || !event["parent_tool_use_id"].is_null()
-            || event["is_api_error_message"] == true
-        {
-            return None;
-        }
-        event["message"]["model"]
-            .as_str()
-            .filter(|model| *model != "<synthetic>")
     }
 }

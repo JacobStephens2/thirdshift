@@ -143,13 +143,27 @@ impl RunNotification {
         };
         let host = host::name();
         let command_log = logs::command_log_path();
-        let text = body(
+        let mut text = body(
             account,
             self.built_with.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
         );
+        if let Some(log) = &command_log {
+            match crate::session::models::notification_lines(log) {
+                Ok(lines) if !lines.is_empty() => {
+                    text += "\nSession models:\n";
+                    for line in lines {
+                        text += &format!("{line}\n");
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => progress::step(format_args!(
+                    "warning: could not read session models for the Run notification: {error:#}"
+                )),
+            }
+        }
         if let Err(error) = self.checked.resend.send(&subject, &text) {
             progress::step(format_args!(
                 "warning: could not send the Run notification: {error:#}"
