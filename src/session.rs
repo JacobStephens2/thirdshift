@@ -23,6 +23,7 @@ use crate::progress;
 use crate::prompt;
 use crate::skills;
 
+pub mod models;
 mod review_reports;
 use review_reports::ReviewReports;
 
@@ -330,7 +331,7 @@ impl Outside for OnMachine {
         };
         run(
             kind,
-            self.adapter,
+            &self.harness,
             &self.worktree,
             invocation,
             log,
@@ -364,12 +365,13 @@ fn ending_with(killed: &[&str]) -> String {
 /// and fails with `interrupted`.
 fn run(
     kind: &str,
-    adapter: &'static dyn Adapter,
+    choice: &Choice,
     worktree: &Path,
     invocation: Invocation,
     log: &Path,
     stream: Interpretation,
 ) -> Result<Ended> {
+    let adapter = choice.harness.adapter();
     let cli = adapter.name();
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
@@ -378,6 +380,7 @@ fn run(
         File::create(log).with_context(|| format!("could not create {}", log.display()))?;
     let started = Instant::now();
     let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
+    let choice_owned = choice.clone();
     let executed = process::streaming(
         adapter,
         Command::new(cli)
@@ -385,13 +388,37 @@ fn run(
             .current_dir(worktree),
         invocation.stdin.as_deref(),
         stream,
-        move |output, stream| follow(&kind_owned, output, &mut log_file, &log_owned, stream),
+        move |output, stream| {
+            let followed = follow(&kind_owned, output, &mut log_file, &log_owned, stream);
+            // The process owner joins this reader before returning, including
+            // on interruption, when it deliberately suppresses state recovery.
+            models::keep(
+                &kind_owned,
+                &log_owned,
+                &choice_owned,
+                stream.observed_models(),
+            );
+            followed
+        },
     )?;
 
     let completion = executed.state.finish(executed.execution);
+    let report_models = completion
+        .report
+        .as_ref()
+        .map(|report| report.models.clone())
+        .unwrap_or_default();
+    models::keep(kind, log, choice, report_models);
     if let Some(report) = completion.report {
-        for model in report.models {
-            progress::step(format_args!("{kind}: Model: {model}"));
+        // Stream models already have security progress lines. Retained records
+        // need theirs here, as before.
+        if matches!(
+            choice.harness,
+            crate::harness::Harness::Muse | crate::harness::Harness::OpenCode
+        ) {
+            for model in report.models {
+                progress::step(format_args!("{kind}: Model: {model}"));
+            }
         }
         for warning in report.warnings {
             progress::step(format_args!("{kind}: {warning}"));
