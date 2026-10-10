@@ -749,22 +749,21 @@ fn issue_view(state: &mut Json, positional: &[String], flags: &Flags) {
     println!("{}", json_fields(&fields, &wanted_fields(flags)));
 }
 
-/// `gh issue list --label <label> --json <fields>`: the open issues with the
+/// `gh issue list [--label <label>] --json <fields>`: the open issues with the
 /// label, whatever its case, newest first, or with `--state closed` the
-/// closed ones.
+/// closed ones. Without `--label`, every issue in that state.
 fn issue_list(state: &Json, flags: &Flags) {
     let supported = ["label", "state", "json", "limit", "repo", "R"];
     let label = flag(flags, "label");
     if flags.keys().any(|name| !supported.contains(&name.as_str()))
         || !matches!(flag(flags, "state"), None | Some("open" | "closed"))
-        || label.is_none_or(|label| label.contains(','))
+        || label.is_some_and(|label| label.contains(','))
     {
         die(
             &format!("fake gh: unsupported issue list flags {flags:?}"),
             2,
         );
     }
-    let label = label.unwrap();
     let wanted_state = flag(flags, "state").unwrap_or("open").to_uppercase();
     let Json::Object(issues) = state.at("issues") else {
         panic!("issues is an object")
@@ -775,11 +774,13 @@ fn issue_list(state: &Json, flags: &Flags) {
         .filter(|(n, issue_state)| {
             let labels = labels.and_then(|labels| labels.get(n));
             issue_state.str() == wanted_state
-                && labels
-                    .map(Json::items)
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|name| name.str().eq_ignore_ascii_case(label))
+                && label.is_none_or(|label| {
+                    labels
+                        .map(Json::items)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|name| name.str().eq_ignore_ascii_case(label))
+                })
         })
         .map(|(n, issue_state)| (n.parse().unwrap(), issue_state))
         .collect();

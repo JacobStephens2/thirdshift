@@ -224,6 +224,49 @@ impl GitHub {
             .collect()
     }
 
+    /// Every issue in the repository `repo`, an `owner/repo`, created at or
+    /// after `since`, open or closed. The security-fix publishing session
+    /// must not create public issues outside the staged path, so anything
+    /// dating from its own window is a side-effect leak. Compared at whole
+    /// seconds, as the `created` check on a fix Ticket is.
+    pub fn issues_created_since(&self, repo: &str, since: DateTime<Utc>) -> Result<Vec<IssueUrl>> {
+        let mut found = Vec::new();
+        for state in ["open", "closed"] {
+            let json = self.gh_json(&[
+                "issue",
+                "list",
+                "--state",
+                state,
+                "--repo",
+                repo,
+                "--json",
+                "url,createdAt",
+                "--limit",
+                "1000",
+            ])?;
+            for listed in json
+                .as_array()
+                .context("gh issue list did not return a list")?
+            {
+                let url = listed["url"]
+                    .as_str()
+                    .context("gh issue list output has no url")?;
+                let at = listed["createdAt"]
+                    .as_str()
+                    .context("gh issue list output has no createdAt")?;
+                let at = DateTime::parse_from_rfc3339(at)
+                    .with_context(|| {
+                        format!("gh issue list output has an unreadable createdAt {at}")
+                    })?
+                    .to_utc();
+                if at.timestamp() >= since.timestamp() {
+                    found.push(IssueUrl::parse(url)?);
+                }
+            }
+        }
+        Ok(found)
+    }
+
     /// `issue` as a Pickup run that lists issues by `label` reads it, in one
     /// query.
     pub fn candidate(&self, issue: &IssueUrl, label: Label) -> Result<Candidate> {

@@ -80,6 +80,24 @@ pub fn publish(
         // independent public-issue path. Anything else keeps the
         // session-created issue path until staged specs land.
         let issue = if size == FixSize::Single && record.private_issue_number().is_none() {
+            // The session has no independent public-issue path: anything
+            // created during its window is a side-effect leak outside the
+            // validated staged path. Close it to stop further interaction,
+            // then fail loudly so the Day shift triages the exposure.
+            let leaked = github.issues_created_since(&repo.slug(), started)?;
+            if !leaked.is_empty() {
+                for side in &leaked {
+                    github.close_issue(side, "Closed by thirdshift: the Security fix publishing session created this public issue outside the validated staged path.")?;
+                }
+                let numbers = leaked
+                    .iter()
+                    .map(|side| format!("#{}", side.number))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "the Security fix publishing session created public issue(s) outside the staged path: {numbers}"
+                );
+            }
             let Some((title, body)) = message.as_deref().and_then(parse_staged_proposal) else {
                 bail!(
                     "the Security fix publishing session did not stage its proposed public issue text"

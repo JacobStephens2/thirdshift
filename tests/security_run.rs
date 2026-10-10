@@ -607,6 +607,47 @@ fn a_session_created_ticket_url_is_rejected_for_a_public_single_fix() {
 }
 
 #[test]
+fn a_session_side_effect_public_issue_fails_the_fix_and_is_closed() {
+    // Ticket #629: the publishing session cannot create public issues on its
+    // own. A session that stages valid text but also creates a public issue
+    // on the side must fail loudly, and thirdshift closes the leak for
+    // Day-shift triage instead of reporting success. Failing closed rather
+    // than succeeding with one issue: stopping the session's `gh issue
+    // create` itself would need harness-level sandboxing, which is Day-shift
+    // scope beyond this review.
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{}\ngh issue create --title 'Leaked write-up' --body 'Private candidate write-up. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0' --label needs-triage > /dev/null\n",
+            stage_fix("GHSA-finding-0"),
+        ),
+    );
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("created public issue(s) outside the staged path: #8"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert_eq!(
+        state["issues"]["8"], "CLOSED",
+        "the session-created side-effect issue must be closed: {}",
+        state["issues"]
+    );
+    assert!(
+        state["bodies"].get("9").is_none(),
+        "no validated issue may follow a side-effect leak: {}",
+        state["bodies"]
+    );
+    assert!(state["prs"].as_array().unwrap().is_empty());
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn a_staged_proposal_is_created_by_thirdshift_not_the_session() {
     let scenario = with_reproduced_findings(&["high"]);
     scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
