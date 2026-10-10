@@ -4,7 +4,7 @@ pub(crate) mod stream;
 pub use catalog::Catalog;
 
 use super::adapter::{Adapter, Invocation, SkillLoading, without};
-use super::interpretation::{Interpretation, Retained};
+use super::interpretation::Interpretation;
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 use crate::progress;
@@ -142,11 +142,7 @@ impl Adapter for Agy {
         super::instructions::link_fallback(worktree, "GEMINI.md", &["AGENTS.md"])
     }
     fn interpretation(&self, _worktree: &Path, _prompt: &str) -> Interpretation {
-        Interpretation::new(
-            self.name(),
-            Box::new(stream::AgyProgress::default()),
-            Retained::None,
-        )
+        Interpretation::new(self.name(), Box::new(stream::AgyProgress::default()))
     }
 }
 

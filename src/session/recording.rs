@@ -107,15 +107,8 @@ impl Recording {
         let completion = executed.state.finish(executed.execution);
         if let Some(report) = completion.report {
             self.keep(kind, log, choice, report.models.clone());
-            // Stream models already have security progress lines. Retained records
-            // need theirs here, as before.
-            if matches!(
-                choice.harness,
-                crate::harness::Harness::Muse | crate::harness::Harness::OpenCode
-            ) {
-                for model in report.models {
-                    progress::step(format_args!("{kind}: Model: {model}"));
-                }
+            for line in report.completion_progress {
+                progress::step(format_args!("{kind}: {line}"));
             }
             for warning in report.warnings {
                 progress::step(format_args!("{kind}: {warning}"));

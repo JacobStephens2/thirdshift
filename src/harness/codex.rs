@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::adapter::{Adapter, Invocation, SkillLoading};
-use super::interpretation::{Interpretation, Retained};
+use super::interpretation::Interpretation;
 use super::settings::{Terminal, ask_checked_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 use crate::progress;
@@ -132,7 +132,6 @@ impl Adapter for Codex {
         Interpretation::new(
             self.name(),
             Box::new(stream::CodexProgress::in_worktree(worktree)),
-            Retained::None,
         )
     }
 }

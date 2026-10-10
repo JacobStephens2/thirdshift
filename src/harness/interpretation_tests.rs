@@ -2,18 +2,6 @@ use super::*;
 use std::os::unix::process::ExitStatusExt;
 
 #[test]
-fn agy_security_progress_names_the_resolved_model() {
-    let mut interpretation = stream(Harness::Agy, "").for_security(Some("gemini-3.8-flash"));
-    let lines = interpretation.condense(
-        r#"{"event":"init","conversation_id":"s1","init":{"model":"gemini-3.8-flash-high"}}"#,
-    );
-    assert!(
-        lines.contains(&"Model: gemini-3.8-flash-high".to_string()),
-        "{lines:?}"
-    );
-}
-
-#[test]
 fn a_security_session_can_discuss_the_cyber_marker_without_being_refused() {
     let mut interpretation = stream(Harness::Claude, "").for_security(None);
     interpretation.condense(
@@ -347,16 +335,12 @@ pub(crate) fn recording_interpretation(
     root: &Path,
     retained_harness: Harness,
 ) -> interpretation::Interpretation {
-    let retained = match retained_harness {
-        Harness::Muse => interpretation::Retained::Muse(Some(root.to_path_buf())),
-        Harness::OpenCode => interpretation::Retained::OpenCode(root.to_path_buf()),
+    let decoder = Box::new(interpretation::Stream::claude());
+    match retained_harness {
+        Harness::Muse => muse::log::recording_interpretation(root, decoder),
+        Harness::OpenCode => opencode::export::recording_interpretation(root, decoder),
         _ => panic!("recording fixtures support only retained Harnesses"),
-    };
-    interpretation::Interpretation::new(
-        "claude",
-        Box::new(interpretation::Stream::claude()),
-        retained,
-    )
+    }
 }
 
 #[test]
@@ -670,4 +654,181 @@ fn retained_harnesses_do_not_invent_live_model_or_safeguard_evidence() {
         assert!(completion.outcome.is_ok());
         assert!(completion.report.unwrap().models.is_empty());
     }
+}
+
+#[test]
+fn muse_completion_reports_retained_model_order_and_multiplicity() {
+    with_muse_data(
+        "muse_completion_reports_retained_model_order_and_multiplicity",
+        |root| {
+            muse_log(root, &[
+            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"first"}}}"#,
+            r#"{"stream":{"id":"child"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"child"}}}"#,
+            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"first"}}}"#,
+            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"second"}}}"#,
+            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"first"}}}"#,
+        ].join("\n"));
+            let report = finish(muse_reply()).report.unwrap();
+            assert_eq!(report.models, ["first", "second", "first"]);
+            assert_eq!(
+                report.completion_progress,
+                ["Model: first", "Model: second", "Model: first"]
+            );
+        },
+    );
+}
+
+fn with_opencode_export(test: &str, run: impl FnOnce(&Path)) {
+    const ROOT: &str = "THIRDSHIFT_TEST_OPENCODE_EXPORT";
+    if let Some(root) = std::env::var_os(ROOT) {
+        run(Path::new(&root));
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    crate::test_support::write_executable(
+        &root.path().join("opencode"),
+        "#!/bin/sh\ncat \"$THIRDSHIFT_TEST_OPENCODE_EXPORT/export.json\"\n",
+    );
+    let path = std::env::join_paths(
+        std::iter::once(root.path().to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &format!("harness::interpretation_tests::{test}")])
+        .env(ROOT, root.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn opencode_completion_reports_retained_model_order_and_multiplicity() {
+    with_opencode_export(
+        "opencode_completion_reports_retained_model_order_and_multiplicity",
+        |root| {
+            std::fs::write(
+                root.join("export.json"),
+                r#"{"info":{"outcome":"succeeded"},"messages":[
+            {"type":"assistant","model":{"providerID":"provider","id":"first"},"content":[]},
+            {"type":"user","model":{"id":"user"}},
+            {"type":"assistant","model":{"providerID":"provider","id":"first"},"content":[]},
+            {"type":"assistant","model":{"providerID":"provider","id":"second"},"content":[]},
+            {"type":"assistant","model":{"providerID":"provider","id":"first"},"content":[]}
+        ]}"#,
+            )
+            .unwrap();
+            let mut interpretation = Harness::OpenCode.adapter().interpretation(root, "");
+            interpretation
+                .condense(r#"{"type":"text","sessionID":"s1","part":{"text":"stream reply"}}"#);
+            let completion = finish(interpretation);
+            assert!(completion.outcome.is_ok());
+            let report = completion.report.unwrap();
+            assert_eq!(
+                report.models,
+                ["provider/first", "provider/second", "provider/first"]
+            );
+            assert_eq!(
+                report.completion_progress,
+                [
+                    "Model: provider/first",
+                    "Model: provider/second",
+                    "Model: provider/first"
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn stream_only_harnesses_leave_completion_progress_empty_after_live_model_progress() {
+    for (harness, event) in [
+        (
+            Harness::Claude,
+            r#"{"type":"assistant","message":{"model":"resolved-model","content":[]}}"#,
+        ),
+        (
+            Harness::Grok,
+            r#"{"type":"assistant","message":{"model":"resolved-model","content":[]}}"#,
+        ),
+        (
+            Harness::Agy,
+            r#"{"event":"init","conversation_id":"s1","init":{"model":"gemini-3.8-flash-high"}}"#,
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"thread.started","thread_id":"s1"}"#,
+        ),
+    ] {
+        let mut interpretation = stream(harness, "").for_security(Some("requested-model"));
+        let live = interpretation.condense(event);
+        assert!(
+            live.iter().any(|line| line.starts_with("Model:")),
+            "{harness:?}: {live:?}"
+        );
+        let completion = finish(interpretation);
+        assert!(completion.outcome.is_ok());
+        assert!(
+            completion.report.unwrap().completion_progress.is_empty(),
+            "{harness:?}"
+        );
+    }
+}
+
+#[test]
+fn retained_completion_reports_stream_fallback_then_authoritative_empty_models_and_usage() {
+    with_opencode_export(
+        "retained_completion_reports_stream_fallback_then_authoritative_empty_models_and_usage",
+        |root| {
+            for harness in [Harness::Muse, Harness::OpenCode] {
+                let file = if harness == Harness::Muse {
+                    let dir = root.join("sessions/s1");
+                    std::fs::create_dir_all(&dir).unwrap();
+                    dir.join("session.jsonl")
+                } else {
+                    root.join("export.json")
+                };
+                let empty = if harness == Harness::Muse {
+                    ""
+                } else {
+                    r#"{"info":{"outcome":"succeeded"},"messages":[]}"#
+                };
+                for retained in [None, Some("not JSON"), Some(empty)] {
+                    if let Some(retained) = retained {
+                        std::fs::write(&file, retained).unwrap();
+                    }
+                    let mut interpretation = recording_interpretation(root, harness);
+                    for event in [
+                        r#"{"type":"system","subtype":"init","session_id":"s1"}"#,
+                        r#"{"type":"assistant","message":{"model":"stream-model","content":[]}}"#,
+                        r#"{"type":"result","subtype":"success","result":"stream reply","num_turns":2,"total_cost_usd":0.25}"#,
+                    ] {
+                        interpretation.condense(event);
+                    }
+                    let completion = finish(interpretation);
+                    let ended = completion.outcome.unwrap();
+                    let report = completion.report.unwrap();
+                    let readable = retained == Some(empty);
+                    assert_eq!(
+                        ended.final_message.as_deref(),
+                        if readable && harness == Harness::OpenCode {
+                            None
+                        } else {
+                            Some("stream reply")
+                        }
+                    );
+                    if readable {
+                        assert!(report.models.is_empty());
+                        assert!(report.completion_progress.is_empty());
+                        assert_eq!(report.summary, None);
+                    } else {
+                        assert_eq!(report.models, ["stream-model"]);
+                        assert_eq!(report.completion_progress, ["Model: stream-model"]);
+                        assert_eq!(report.summary.as_deref(), Some("2 turns, $0.25"));
+                    }
+                }
+            }
+        },
+    );
 }
