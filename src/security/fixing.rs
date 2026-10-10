@@ -30,12 +30,12 @@ pub fn publish(
         Ok(size) => size,
         Err(error) => return (Err(error), None),
     };
-    if let SecurityRecord::Issue { number, .. } = record
+    if let Some(number) = record.private_issue_number()
         && size == FixSize::Single
     {
         let ready = (|| -> Result<IssueUrl> {
             let issue = IssueUrl::parse(url)?;
-            if issue.number != *number || !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
+            if issue.number != number || !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
                 bail!("the private Security finding's issue does not match its record");
             }
             let github = GitHub::new();
@@ -89,9 +89,9 @@ pub fn publish(
         if !issue.repo_slug().eq_ignore_ascii_case(&repo.slug()) {
             bail!("the Security fix Ticket is not in this repository");
         }
-        let private = matches!(record, SecurityRecord::Issue { .. });
-        if let SecurityRecord::Issue { number, .. } = record
-            && issue.number != *number
+        let private = record.private_issue_number().is_some();
+        if let Some(number) = record.private_issue_number()
+            && issue.number != number
         {
             bail!("a private Security fix must reuse the finding's own issue");
         }

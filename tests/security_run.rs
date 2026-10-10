@@ -3331,3 +3331,67 @@ fn assert_a_failed_fix_record_outage_pauses_security(severity: &str) {
     );
     assert_eq!(scenario.claude_calls().len(), 2);
 }
+
+#[test]
+fn audit_notifications_keep_record_order_and_reproduce_only_untriaged_records() {
+    for private in [false, true] {
+        let scenario = Scenario::new();
+        let mut state = scenario.gh_state();
+        state["private"] = json!(private);
+        for (number, fingerprint, title) in [
+            (8, "first-bound", "First bound"),
+            (9, "third-bound", "Third bound"),
+        ] {
+            let description = format!("Day shift write-up\nFingerprint: `{fingerprint}`\n");
+            if private {
+                let number = number.to_string();
+                state["issues"][&number] = json!("OPEN");
+                state["labels"][&number] = json!(["security-finding"]);
+                state["titles"][&number] = json!(title);
+                state["bodies"][&number] = json!(description);
+            } else {
+                if !state["advisories"].is_array() {
+                    state["advisories"] = json!([]);
+                }
+                state["advisories"].as_array_mut().unwrap().push(json!({
+                    "ghsa_id": format!("GHSA-{number}"), "description": description,
+                    "state": "draft", "severity": "low", "summary": title,
+                    "html_url": format!("https://github.com/acme/widgets/security/advisories/GHSA-{number}")
+                }));
+            }
+        }
+        scenario.write_gh_state(&state);
+        let first = finding("first-bound");
+        let mut second = finding("second-bound");
+        second["title"] = json!("Second bound");
+        let third = finding("third-bound");
+        scenario.agent_does(&audit_script(&json!([first, second, third]).to_string()));
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let result =
+            scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+        assert_eq!(result.code, Some(0), "{private}: {}", result.stderr);
+        assert!(
+            result
+                .stderr
+                .contains("1 new finding(s), 2 already recorded"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            scenario.claude_calls().len(),
+            2,
+            "audit and the new finding's reproduction"
+        );
+        let (_, text) = the_one_notification(&resend);
+        for title in ["First bound", "Second bound", "Third bound"] {
+            assert_eq!(text.matches(title).count(), 1, "{text}");
+        }
+        assert!(
+            text.find("First bound").unwrap() < text.find("Second bound").unwrap()
+                && text.find("Second bound").unwrap() < text.find("Third bound").unwrap(),
+            "{text}"
+        );
+        assert!(!text.contains("Day shift write-up"), "{text}");
+        assert!(!text.contains("Private candidate write-up."), "{text}");
+    }
+}

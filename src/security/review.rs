@@ -87,10 +87,11 @@ pub(crate) fn run(
                 package: package.clone(),
             };
             // Reuse every record state and preserve the Day shift's grade.
-            if known.finding(&draft).is_none() {
-                let record = github.create_security_record(&repo, &known, &draft)?;
-                github.update_security_record(&repo, &known.record(&record)?, &reproduction)?;
-                known.remember(record);
+            let resolved = known.record_or_reuse(&draft, |records, draft| {
+                github.create_security_record(&repo, records, draft)
+            })?;
+            if resolved.created {
+                github.update_security_record(&repo, &resolved.record, &reproduction)?;
                 progress::step("recorded a pre-existing Security finding privately");
             }
         }
