@@ -23,6 +23,7 @@ pub fn write(settings: &Settings, prompt: &str) -> Result<String> {
         adapter,
         Command::new(adapter.name())
             .args(invocation.args)
+            .envs(adapter.summary_environment().iter().copied())
             .current_dir(directory.path()),
         invocation.stdin.as_deref(),
     )

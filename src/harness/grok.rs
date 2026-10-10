@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::adapter::{Adapter, Invocation, SkillLoading, without};
 use super::interpretation::{Interpretation, Retained, Stream};
 use super::settings::{Terminal, ask_checked_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
@@ -72,13 +72,27 @@ impl Adapter for Grok {
         choice.effort = settled.effort;
         Ok(())
     }
+    /// Only `todo_write`, which acts on nothing outside the session: no shell,
+    /// files, web, or MCP through `search_tool` and `use_tool`.
     fn summary(&self, choice: &Choice, prompt: &str, prompt_file: &Path) -> Invocation {
         let mut invocation = self.session(choice, None, prompt);
         invocation.args.truncate(invocation.args.len() - 2);
-        invocation.args.extend([
-            "--prompt-file".into(),
-            prompt_file.to_string_lossy().into_owned(),
-        ]);
+        invocation.args = without(invocation.args, &["--always-approve"]);
+        invocation.args = without(invocation.args, &["--sandbox", "off"]);
+        invocation.args.extend(
+            [
+                "--tools",
+                "todo_write",
+                "--disallowed-tools",
+                "search_tool,use_tool",
+                "--disable-web-search",
+                "--prompt-file",
+            ]
+            .map(String::from),
+        );
+        invocation
+            .args
+            .push(prompt_file.to_string_lossy().into_owned());
         invocation
     }
     fn ask_settings(

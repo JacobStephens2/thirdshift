@@ -679,6 +679,97 @@ fn every_harness_receives_the_complete_release_input_above_the_argument_limit() 
 
 #[test]
 #[cfg(target_os = "linux")]
+fn every_other_harness_summarizes_without_its_session_permission_bypass() {
+    // Release input is contributor-editable, so no summary may run tools
+    // that act on the machine, as Claude's runs with `--tools ''`.
+    // Each Harness, the session flags it must drop, and the runs it must add.
+    type Case = (
+        &'static str,
+        &'static [&'static str],
+        &'static [&'static [&'static str]],
+    );
+    let cases: [Case; 4] = [
+        (
+            "agy",
+            &["--dangerously-skip-permissions"],
+            &[
+                &["--sandbox"],
+                &["--disable-slash-commands"],
+                &["--print-timeout", "10m"],
+            ],
+        ),
+        (
+            "grok",
+            &["--always-approve", "off"],
+            &[
+                &["--tools", "todo_write"],
+                &["--disallowed-tools", "search_tool,use_tool"],
+                &["--disable-web-search"],
+            ],
+        ),
+        (
+            "muse",
+            &["--yolo", "--disable-approval", "--disable-sandbox"],
+            &[
+                &["--disable-shell"],
+                &["--disable-write"],
+                &["--disable-web-tools"],
+                &["--max-model-steps", "1"],
+            ],
+        ),
+        ("opencode", &["--auto"], &[]),
+    ];
+    for (harness, forbidden, required) in cases {
+        let release = Release::new();
+        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
+        fs::write(
+            release.root().join("home/.thirdshift/config.toml"),
+            format!("[harness]\ndefault = '{harness}'\n"),
+        )
+        .unwrap();
+
+        let output = with_input(
+            release
+                .command(
+                    Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+                    &release.maintainer(),
+                )
+                .arg("--release-summary"),
+            "Summarize the release.",
+        );
+
+        assert!(output.status.success(), "{harness}: {}", stderr(&output));
+        let calls: Value = serde_json::from_str(
+            &fs::read_to_string(release.root().join(format!("{harness}-calls.json"))).unwrap(),
+        )
+        .unwrap();
+        let call = calls.as_array().unwrap().last().unwrap();
+        let argv: Vec<&str> = call["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        for flag in forbidden {
+            assert!(!argv.contains(flag), "{harness}: {flag} in {argv:?}");
+        }
+        for run in required {
+            assert!(
+                argv.windows(run.len()).any(|window| window == *run),
+                "{harness}: {run:?} missing from {argv:?}"
+            );
+        }
+        if harness == "opencode" {
+            assert_eq!(
+                call["config_content"], r#"{"permission":{"*":"deny"}}"#,
+                "{call:#?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn every_other_configured_harness_supplies_its_final_text_to_the_release() {
     for harness in ["agy", "grok", "muse", "opencode"] {
         let release = Release::new();

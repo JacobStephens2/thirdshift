@@ -186,7 +186,7 @@ pub fn transported_prompt(argv: &[String]) -> Option<String> {
         .any(|pair| pair == ["--input-format", "stream-json"])
     {
         let message = crate::json::parse(input.trim()).unwrap();
-        assert_eq!(message.at("type").as_str(), Some("user"));
+        assert_eq!(message.at("event").as_str(), Some("user"));
         assert_eq!(message.at("message").at("role").as_str(), Some("user"));
         return Some(
             message
