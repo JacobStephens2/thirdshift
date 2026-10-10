@@ -360,19 +360,22 @@ pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path
 pub const SECURITY_FIX_LINE: &str = "Security fix Ticket: ";
 pub const SECURITY_FIX_SPEC_LINE: &str = "Security fix Spec: ";
 pub const STAGED_PROPOSAL_MARKER: &str = "Proposed public issue:";
+pub const STAGED_SPEC_MARKER: &str = "Proposed public spec:";
 pub const STAGED_TITLE_MARKER: &str = "Title:";
 pub const STAGED_BODY_MARKER: &str = "Body:";
+pub const STAGED_TICKET_MARKER: &str = "Ticket:";
+pub const STAGED_BLOCKED_BY_MARKER: &str = "Blocked by:";
 
 pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
     format!(
         "Publish the fix for this reproduced Security finding on Base branch `{base}`.\n\
          Read the private record at {url} and the record below.\n\
-         Follow the completed reproduction's fix size: single stages one Ticket; spec publishes a Spec with Tickets using `thirdshift-to-spec` and `thirdshift-to-tickets`.\n\
-         On a public repository with a single fix, stage the proposed public issue text instead of creating the public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. A spec still publishes its issues itself, as before.\n\
+         Follow the completed reproduction's fix size: single stages one Ticket; spec stages a Spec with Tickets, drafted with `thirdshift-to-spec` and `thirdshift-to-tickets`.\n\
+         On a public repository, stage the proposed public issue text instead of creating any public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue and its Tickets from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. Only a private bigger fix publishes its issues itself.\n\
          Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.\n\
-         A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. Read the links back before finishing.\n\
+         A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. On a public repository thirdshift makes those links from the staged text; read the staged blocking edges back before finishing.\n\
          This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.\n\
-         End your final message for a single public fix with exactly:\n{STAGED_PROPOSAL_MARKER}\n{STAGED_TITLE_MARKER} <title>\n{STAGED_BODY_MARKER}\n<body>\nFor a spec, end with exactly `{SECURITY_FIX_SPEC_LINE}<Issue URL>`, naming the top issue.\n\n\
+         End your final message for a single public fix with exactly:\n{STAGED_PROPOSAL_MARKER}\n{STAGED_TITLE_MARKER} <title>\n{STAGED_BODY_MARKER}\n<body>\nFor a public spec, end with exactly:\n{STAGED_SPEC_MARKER}\n{STAGED_TITLE_MARKER} <spec title>\n{STAGED_BODY_MARKER}\n<spec body>\n{STAGED_TICKET_MARKER} <ticket 1 title>\n{STAGED_BODY_MARKER}\n<ticket 1 body>\n{STAGED_BLOCKED_BY_MARKER} none\n{STAGED_TICKET_MARKER} <ticket 2 title>\n{STAGED_BODY_MARKER}\n<ticket 2 body>\n{STAGED_BLOCKED_BY_MARKER} 1\nwith each later Ticket naming the 1-based positions of the Tickets that block it, or none. For a private bigger fix, end with exactly `{SECURITY_FIX_SPEC_LINE}<Issue URL>`, naming the top issue.\n\n\
          Private record:\n{finding}\n\n{HEADLESS}"
     )
 }

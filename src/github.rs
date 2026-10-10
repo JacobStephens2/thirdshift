@@ -177,6 +177,53 @@ impl GitHub {
         ])
     }
 
+    /// The numeric database id of `issue`, for API calls that take one
+    /// instead of the issue number (sub-issues, dependencies).
+    fn issue_db_id(&self, issue: &IssueUrl) -> Result<u64> {
+        let json = self.gh_json(&[
+            "api",
+            &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
+            "--jq",
+            ".id",
+        ])?;
+        json.as_u64()
+            .context("gh api did not return the issue's database id")
+    }
+
+    /// Link `child` as a native sub-issue of `parent`.
+    pub fn add_sub_issue(&self, parent: &IssueUrl, child: &IssueUrl) -> Result<()> {
+        let child_id = self.issue_db_id(child)?;
+        self.gh(&[
+            "api",
+            "--method",
+            "POST",
+            &format!(
+                "repos/{}/issues/{}/sub_issues",
+                parent.repo_slug(),
+                parent.number
+            ),
+            "-F",
+            &format!("sub_issue_id={child_id}"),
+        ])
+    }
+
+    /// Add a native "blocked by" edge: `ticket` is blocked by `blocker`.
+    pub fn add_blocked_by(&self, ticket: &IssueUrl, blocker: &IssueUrl) -> Result<()> {
+        let blocker_id = self.issue_db_id(blocker)?;
+        self.gh(&[
+            "api",
+            "--method",
+            "POST",
+            &format!(
+                "repos/{}/issues/{}/dependencies/blocked_by",
+                ticket.repo_slug(),
+                ticket.number
+            ),
+            "-F",
+            &format!("issue_id={blocker_id}"),
+        ])
+    }
+
     /// Every open issue labelled `label` in the repository `repo`, an
     /// `owner/repo`, newest first. They come from GitHub's issue list, not its
     /// search, whose index can be a while behind an issue just opened.
