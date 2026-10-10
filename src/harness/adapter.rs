@@ -24,6 +24,17 @@ pub trait Adapter: Sync {
     /// the CLI. The adapter applies its skill-loading style here.
     fn session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation;
 
+    /// A session that runs the code review, or its Resume. Harnesses may
+    /// add their own reviewer-independence instruction.
+    fn code_review_session(
+        &self,
+        choice: &Choice,
+        resume: Option<&str>,
+        prompt: &str,
+    ) -> Invocation {
+        self.session(choice, resume, prompt)
+    }
+
     /// A one-shot release summary, using stdin or `prompt_file` so release
     /// input never exceeds the operating system's argument-size limit.
     /// The file contains `prompt` and remains available until the CLI exits.
