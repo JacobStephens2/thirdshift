@@ -136,6 +136,7 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
         logs_in(&scenario, "commands/issue"),
         [
             format!("7-{stamp}-implement.jsonl"),
+            format!("7-{stamp}-implement.models.json"),
             format!("7-{stamp}.log")
         ]
     );
@@ -201,6 +202,7 @@ fn a_pickup_run_that_takes_an_issue_keeps_a_command_log_from_its_first_line() {
         logs_in(&scenario, "commands/pickup"),
         [
             format!("7-{stamp}-implement.jsonl"),
+            format!("7-{stamp}-implement.models.json"),
             format!("7-{stamp}.log")
         ]
     );
@@ -222,9 +224,12 @@ fn a_pickup_spec_keeps_its_tickets_session_logs_beside_its_command_log() {
         logs_in(&scenario, "commands/pickup"),
         [
             format!("20-{stamp}-spec-review.jsonl"),
+            format!("20-{stamp}-spec-review.models.json"),
             format!("20-{stamp}.log"),
             format!("21-{stamp}-implement.jsonl"),
+            format!("21-{stamp}-implement.models.json"),
             format!("22-{stamp}-implement.jsonl"),
+            format!("22-{stamp}-implement.models.json"),
         ]
     );
     assert!(!scenario.path(LOGS).join("sessions").exists());
