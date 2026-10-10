@@ -3,7 +3,7 @@ pub(super) mod export;
 mod stream;
 
 use super::adapter::{Adapter, Invocation, SkillLoading, without};
-use super::interpretation::{Interpretation, Retained};
+use super::interpretation::Interpretation;
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 use anyhow::{Context, Result, bail};
@@ -107,8 +107,8 @@ impl Adapter for OpenCode {
         Interpretation::new(
             self.name(),
             Box::new(stream::OpenCodeProgress::for_prompt(prompt)),
-            Retained::OpenCode(worktree.to_path_buf()),
         )
+        .with_retained(Box::new(export::Completion::new(worktree.to_path_buf())))
     }
     fn link_instruction_fallback(&self, worktree: &Path) -> Result<()> {
         super::instructions::link_fallback(worktree, "AGENTS.md", &[])

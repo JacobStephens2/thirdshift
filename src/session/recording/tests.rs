@@ -479,3 +479,85 @@ fn startup_failure_keeps_its_cause_without_writing_evidence() {
     );
     assert!(fixture.recording.notification_lines().is_empty());
 }
+#[test]
+fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() {
+    const CHILD: &str = "THIRDSHIFT_RECORDING_PROGRESS";
+    if std::env::var_os(CHILD).is_some() {
+        let fixture = Fixture::new();
+        let dir = fixture.root.path().join("sessions/s1");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("session.jsonl"), [
+            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"first"}}}"#,
+            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"second"}}}"#,
+            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"first"}}}"#,
+        ].join("\n")).unwrap();
+        // Choice controls execution and metadata; Interpretation supplies reporting.
+        fixture
+            .recording
+            .run(
+                "retained",
+                &Choice::default(),
+                Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
+                None,
+                &fixture.log("retained"),
+                crate::harness::interpretation_tests::recording_interpretation(
+                    fixture.root.path(),
+                    Harness::Muse,
+                ),
+            )
+            .unwrap();
+        fs::write(dir.join("session.jsonl"), "").unwrap();
+        fixture
+            .recording
+            .run(
+                "empty",
+                &Choice::default(),
+                Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
+                None,
+                &fixture.log("empty"),
+                crate::harness::interpretation_tests::recording_interpretation(
+                    fixture.root.path(),
+                    Harness::Muse,
+                ),
+            )
+            .unwrap();
+        fixture
+            .recording
+            .run(
+                "live",
+                &Choice::default(),
+                Command::new("/bin/sh").args(["-c", &format!("echo '{MODEL}'; echo '{MODEL}'")]),
+                None,
+                &fixture.log("live"),
+                Harness::Claude
+                    .adapter()
+                    .interpretation(fixture.root.path(), "")
+                    .for_security(None),
+            )
+            .unwrap();
+        return;
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "session::recording::tests::completion_progress_comes_from_interpretation_without_duplicate_live_lines", "--nocapture"])
+        .env(CHILD, "1").output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let models: Vec<_> = stderr
+        .lines()
+        .filter_map(|line| match progress::ChildLine::of(line) {
+            progress::ChildLine::Own(message) if message.contains(": Model:") => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        models,
+        [
+            "retained: Model: first",
+            "retained: Model: second",
+            "retained: Model: first",
+            "live: Model: reported-model"
+        ],
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("session ended after").count(), 3, "{stderr}");
+}

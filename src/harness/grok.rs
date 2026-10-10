@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::adapter::{Adapter, Invocation, SkillLoading, without};
-use super::interpretation::{Interpretation, Retained, Stream};
+use super::interpretation::{Interpretation, Stream};
 use super::settings::{Terminal, ask_checked_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 
@@ -139,7 +139,7 @@ impl Adapter for Grok {
         Ok(Some(ModelAndEffort { model, effort }))
     }
     fn interpretation(&self, _worktree: &Path, _prompt: &str) -> Interpretation {
-        Interpretation::new(self.name(), Box::new(Stream::grok()), Retained::None)
+        Interpretation::new(self.name(), Box::new(Stream::grok()))
     }
 }
 
