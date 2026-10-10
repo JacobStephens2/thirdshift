@@ -1,0 +1,86 @@
+name: Issue label to project status
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to synchronize
+        required: true
+        type: number
+
+permissions: {}
+
+concurrency:
+  group: issue-project-status-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  set-in-progress:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'in-progress'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # A user project requires a separate token; GITHUB_TOKEN cannot access it.
+      # PROJECT_STATUS_TOKEN must be able to read issues and write Projects.
+      - name: Move labeled Todo issue to In Progress
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_STATUS_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          PROJECT_ID: PVT_kwHOAzaH4M4BmapY
+          STATUS_FIELD_ID: PVTSSF_lAHOAzaH4M4BmapYzhlDz3Y
+          TODO_OPTION_ID: f75ad846
+          IN_PROGRESS_OPTION_ID: 47fc9ee4
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::error::Configure the PROJECT_STATUS_TOKEN repository secret with Projects write access.'
+            exit 1
+          fi
+
+          # Read the current issue rather than trusting a possibly stale event.
+          issue=$(gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER")
+          if ! jq -e '.state == "open" and (.labels | any(.name == "in-progress"))' <<< "$issue" >/dev/null; then
+            echo 'Issue is closed or no longer labeled in-progress; no change.'
+            exit 0
+          fi
+
+          issue_id=$(jq -r '.node_id' <<< "$issue")
+          items=$(gh api graphql --paginate --slurp -f issue="$issue_id" -f query='
+            query($issue: ID!, $endCursor: String) {
+              node(id: $issue) {
+                ... on Issue {
+                  projectItems(first: 100, after: $endCursor) {
+                    nodes {
+                      id
+                      project { id }
+                      fieldValueByName(name: "Status") {
+                        ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+                      }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }')
+          item_id=$(jq -r --arg project "$PROJECT_ID" --arg todo "$TODO_OPTION_ID" '
+            [.[].data.node.projectItems.nodes[]
+              | select(.project.id == $project and .fieldValueByName.optionId == $todo)
+              | .id] | first // empty' <<< "$items")
+          if [[ -z "$item_id" ]]; then
+            echo 'Issue is not in Todo in the thirdshift project; no change.'
+            exit 0
+          fi
+
+          gh api graphql --silent -f project="$PROJECT_ID" -f item="$item_id" \
+            -f field="$STATUS_FIELD_ID" -f option="$IN_PROGRESS_OPTION_ID" -f query='
+            mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $project, itemId: $item, fieldId: $field,
+                value: { singleSelectOptionId: $option }
+              }) { projectV2Item { id } }
+            }'
+          echo "Moved issue #$ISSUE_NUMBER from Todo to In Progress."

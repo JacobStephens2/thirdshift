@@ -3,8 +3,7 @@
 
 use std::fmt;
 
-use anyhow::{Context, Result};
-use serde_json::Value;
+use anyhow::Result;
 
 use crate::asks::Flags;
 use crate::base_fix::Advice;
@@ -83,30 +82,7 @@ fn command_with_fixing() -> String {
     format!("thirdshift {} security-fix", words.join(" "))
 }
 
-/// Only the metadata allowed in a Run notification; no private write-up.
-#[derive(Debug, PartialEq, Eq)]
-pub struct RecordedFinding {
-    pub severity: Option<String>,
-    pub title: String,
-    pub url: String,
-}
-
-impl RecordedFinding {
-    pub(crate) fn of_record(record: &Value) -> Result<Self> {
-        Ok(Self {
-            severity: record["severity"].as_str().map(String::from),
-            title: record["summary"]
-                .as_str()
-                .or_else(|| record["title"].as_str())
-                .context("the Security finding's private record has no title")?
-                .to_string(),
-            url: record["html_url"]
-                .as_str()
-                .context("the Security finding's private record has no link")?
-                .to_string(),
-        })
-    }
-}
+pub use crate::github::RecordedFinding;
 
 pub enum Skipped {
     AlreadyRunning(AlreadyRunning),
@@ -351,18 +327,17 @@ fn audit_and_record(
         let mut records = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for finding in audited.findings {
-            let (record, metadata) = if let Some(value) = known.finding(&finding) {
-                recorded.existing += 1;
-                (known.record(value)?, RecordedFinding::of_record(value)?)
-            } else {
-                let value = outside.create_security_record(&known, &finding)?;
-                let record = known.record(&value)?;
-                let metadata = RecordedFinding::of_record(&value)?;
-                known.remember(value);
+            let resolved = known.record_or_reuse(&finding, |records, draft| {
+                outside.create_security_record(records, draft)
+            })?;
+            if resolved.created {
                 recorded.created += 1;
                 outside.step("recorded a Security finding privately".to_string());
-                (record, metadata)
-            };
+            } else {
+                recorded.existing += 1;
+            }
+            let record = resolved.record;
+            let metadata = record.metadata().clone();
             let url = metadata.url.clone();
             findings.push(metadata);
             if record.untriaged() && seen.insert(finding.fingerprint) {
@@ -756,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn only_new_fingerprints_get_a_private_record() {
+    fn repeated_fingerprints_preserve_counts_metadata_order_and_reproduce_once() {
         use crate::github::{DraftAdvisory, Package};
         use serde_json::json;
         let draft = |fingerprint: &str| DraftAdvisory {
@@ -769,18 +744,30 @@ mod tests {
             },
         };
         let mut outside = InMemory::default()
-            .audited(vec![draft("old"), draft("new")])
+            .audited(vec![draft("old"), draft("new"), draft("new")])
             .advisories(vec![
                 json!({"ghsa_id":"old", "state":"closed", "description":"Fingerprint: `old`", "summary":"Candidate", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-old"}),
             ]);
         let Outcome::Audited(Ended {
             outcome: Ok(recorded),
+            findings,
             ..
         }) = run_through(&mut outside, &widgets(), "main", false, None)
         else {
             panic!("audit should succeed");
         };
-        assert_eq!((recorded.created, recorded.existing), (1, 1));
+        assert_eq!((recorded.created, recorded.existing), (1, 2));
+        assert_eq!(
+            findings
+                .iter()
+                .map(|finding| finding.url.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://github.com/acme/widgets/security/advisories/GHSA-old",
+                "https://github.com/acme/widgets/security/advisories/new",
+                "https://github.com/acme/widgets/security/advisories/new",
+            ]
+        );
         assert_eq!(
             outside
                 .calls
@@ -796,16 +783,12 @@ mod tests {
             outside
                 .calls
                 .iter()
-                .filter(|call| matches!(
-                    call,
-                    Call::CreateAdvisory(_) | Call::Reproduce(_) | Call::UpdateSecurityRecord(_)
-                ))
+                .filter_map(|call| match call {
+                    Call::Reproduce(record) => Some(record.as_str()),
+                    _ => None,
+                })
                 .collect::<Vec<_>>(),
-            vec![
-                &Call::CreateAdvisory("new".into()),
-                &Call::Reproduce("new".into()),
-                &Call::UpdateSecurityRecord("new".into()),
-            ]
+            vec!["new"]
         );
     }
 }
