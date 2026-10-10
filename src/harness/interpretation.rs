@@ -78,8 +78,27 @@ pub(super) struct Facts {
 }
 
 pub(super) trait Decoder: Send {
-    fn condense(&mut self, raw: &str) -> Vec<String>;
+    fn condense(&mut self, raw: &str) -> StreamUpdate;
     fn complete(self: Box<Self>) -> Facts;
+}
+
+/// Live protocol knowledge stays in the decoder, including evidence from
+/// events its progress or completion guards otherwise ignore.
+#[derive(Default)]
+pub(super) struct StreamUpdate {
+    pub progress: Vec<String>,
+    pub evidence: Vec<Evidence>,
+}
+
+pub(super) enum Evidence {
+    ObservedModel { name: String, scope: ModelScope },
+    RequestedModelFallback,
+    SafeguardRefusal(SafeguardRefusal),
+}
+
+pub(super) enum ModelScope {
+    MainLoop,
+    AttributionOnly,
 }
 
 pub(super) enum Retained {
@@ -172,13 +191,13 @@ impl Interpretation {
             decoder,
             retained,
             security: None,
-            models: models::Models::new(cli),
+            models: models::Models::default(),
         }
     }
 
     /// Apply refusal and Model reporting rules independently of the session's log label.
     pub fn for_security(mut self, requested_model: Option<&str>) -> Self {
-        self.security = Some(Security::new(self.cli, requested_model));
+        self.security = Some(Security::new(requested_model));
         self
     }
 
@@ -190,14 +209,23 @@ impl Interpretation {
 
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
-        let mut lines = self.decoder.condense(raw);
-        self.models.observe(raw);
-        if let Some(security) = &mut self.security
-            && let Some(line) = security.observe(raw)
-        {
-            lines.push(line);
+        let StreamUpdate {
+            mut progress,
+            evidence,
+        } = self.decoder.condense(raw);
+        for fact in evidence {
+            if let Evidence::ObservedModel { name, .. } = &fact
+                && !self.models.include(name)
+            {
+                continue;
+            }
+            if let Some(security) = &mut self.security
+                && let Some(line) = security.apply(&fact)
+            {
+                progress.push(line);
+            }
         }
-        lines
+        progress
     }
 
     pub fn finish(self, execution: Result<ExitStatus>) -> Completion {
