@@ -360,7 +360,7 @@ pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path
 pub const SECURITY_FIX_LINE: &str = "Security fix Ticket: ";
 pub const SECURITY_FIX_SPEC_LINE: &str = "Security fix Spec: ";
 pub const STAGED_PROPOSAL_MARKER: &str = "Proposed public issue:";
-pub const STAGED_TITLE_MARKER: &str = "Title: ";
+pub const STAGED_TITLE_MARKER: &str = "Title:";
 pub const STAGED_BODY_MARKER: &str = "Body:";
 
 pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
@@ -372,7 +372,7 @@ pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
          Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.\n\
          A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. Read the links back before finishing.\n\
          This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.\n\
-         End your final message for a single public fix with exactly:\n{STAGED_PROPOSAL_MARKER}\n{STAGED_TITLE_MARKER}<title>\n{STAGED_BODY_MARKER}\n<body>\nFor a spec, end with exactly `{SECURITY_FIX_SPEC_LINE}<Issue URL>`, naming the top issue.\n\n\
+         End your final message for a single public fix with exactly:\n{STAGED_PROPOSAL_MARKER}\n{STAGED_TITLE_MARKER} <title>\n{STAGED_BODY_MARKER}\n<body>\nFor a spec, end with exactly `{SECURITY_FIX_SPEC_LINE}<Issue URL>`, naming the top issue.\n\n\
          Private record:\n{finding}\n\n{HEADLESS}"
     )
 }

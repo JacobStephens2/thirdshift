@@ -304,9 +304,7 @@ impl GitHub {
     }
 
     /// Open an issue titled `title`, with `body` and `labels`, in the repository
-    /// of `issue`, and return it. Each label is first added to the repository,
-    /// with its description, if the repository lacks it: `gh` refuses a label it
-    /// doesn't know.
+    /// of `issue`, and return it. See [`GitHub::create_issue_in`].
     pub fn create_issue(
         &self,
         issue: &IssueUrl,
