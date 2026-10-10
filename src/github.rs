@@ -193,34 +193,36 @@ impl GitHub {
     /// Link `child` as a native sub-issue of `parent`.
     pub fn add_sub_issue(&self, parent: &IssueUrl, child: &IssueUrl) -> Result<()> {
         let child_id = self.issue_db_id(child)?;
-        self.gh(&[
-            "api",
-            "--method",
-            "POST",
-            &format!(
-                "repos/{}/issues/{}/sub_issues",
-                parent.repo_slug(),
-                parent.number
-            ),
-            "-F",
-            &format!("sub_issue_id={child_id}"),
-        ])
+        self.post_by_id(
+            parent,
+            &format!("issues/{}/sub_issues", parent.number),
+            "sub_issue_id",
+            child_id,
+        )
     }
 
     /// Add a native "blocked by" edge: `ticket` is blocked by `blocker`.
     pub fn add_blocked_by(&self, ticket: &IssueUrl, blocker: &IssueUrl) -> Result<()> {
         let blocker_id = self.issue_db_id(blocker)?;
+        self.post_by_id(
+            ticket,
+            &format!("issues/{}/dependencies/blocked_by", ticket.number),
+            "issue_id",
+            blocker_id,
+        )
+    }
+
+    /// `POST` one database-id field to the `endpoint` below
+    /// `repos/<owner>/<repo>`: the shared shape behind issue links that take
+    /// an id instead of an issue number.
+    fn post_by_id(&self, issue: &IssueUrl, endpoint: &str, field: &str, id: u64) -> Result<()> {
         self.gh(&[
             "api",
             "--method",
             "POST",
-            &format!(
-                "repos/{}/issues/{}/dependencies/blocked_by",
-                ticket.repo_slug(),
-                ticket.number
-            ),
+            &format!("repos/{}/{}", issue.repo_slug(), endpoint),
             "-F",
-            &format!("issue_id={blocker_id}"),
+            &format!("{field}={id}"),
         ])
     }
 
