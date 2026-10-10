@@ -63,25 +63,6 @@ impl From<anyhow::Error> for Ended {
     }
 }
 
-/// Preserve the typed command, quoting its words so the offered command can be run.
-fn command_with_fixing() -> String {
-    let words = std::env::args()
-        .skip(1)
-        .map(|word| {
-            if word
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_/.:@=".contains(c))
-                && !word.is_empty()
-            {
-                word
-            } else {
-                format!("'{}'", word.replace('\'', "'\\''"))
-            }
-        })
-        .collect::<Vec<_>>();
-    format!("thirdshift {} security-fix", words.join(" "))
-}
-
 pub use crate::github::RecordedFinding;
 
 pub enum Skipped {
@@ -136,6 +117,8 @@ pub fn run(
     config: &UserConfig,
     harness: &mut Choice,
 ) -> Outcome {
+    let offer_command = (flags.security_fix.is_none() && config.security_fix.is_none())
+        .then(|| crate::args::retry_with_security_fix(base, flags));
     let Launch {
         directory,
         repo,
@@ -148,8 +131,6 @@ pub fn run(
         }
         Err(error) => return Outcome::Audited(error.into()),
     };
-    let offer_command =
-        (flags.security_fix.is_none() && config.security_fix.is_none()).then(command_with_fixing);
     run_through(
         &mut LaunchAndGitHub {
             launch: &directory,

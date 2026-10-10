@@ -1052,61 +1052,87 @@ fn a_successful_fix_awaiting_review_does_not_pause_allowed_security_work() {
 
 #[test]
 fn an_undecided_run_offers_both_ways_to_allow_a_reproduced_fix() {
-    for (config, permission, reproduced, offers) in [
-        ("", None, true, true),
-        ("", Some("no-security-fix"), true, false),
-        ("[security]\nfix = false\n", None, true, false),
-        (
-            "[security]\nfix = true\n",
-            Some("no-security-fix"),
-            true,
-            false,
-        ),
-        ("", None, false, false),
-    ] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(config);
-        scenario.agent_does_in_session(1, &audit_script(&json!([finding("offer")]).to_string()));
-        scenario.agent_does_in_session(
-            2,
-            &reproduction_script(if reproduced {
-                "reproduced high single"
-            } else {
-                "not reproduced"
-            }),
-        );
-        let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
-        let mut args = vec![
-            "secure",
-            "base",
-            "main",
-            "harness",
-            "claude",
-            "email",
-            "day@example.com",
-        ];
-        if let Some(permission) = permission {
-            args.push(permission);
-        }
-        let result = scenario.run_with_env(&args, &resend_env(&resend));
-        assert_eq!(result.code, Some(0), "{}", result.stderr);
-        let (_, body) = the_one_notification(&resend);
-        for text in [&result.stderr, &body] {
-            assert_eq!(
-                text.contains(
-                    "thirdshift secure base main harness claude email day@example.com security-fix"
-                ),
-                offers,
-                "{text}"
+    for base in [None, Some("main")] {
+        for (config, permission, reproduced, offers) in [
+            ("", None, true, true),
+            ("", Some("no-security-fix"), true, false),
+            ("[security]\nfix = false\n", None, true, false),
+            (
+                "[security]\nfix = true\n",
+                Some("no-security-fix"),
+                true,
+                false,
+            ),
+            ("", None, false, false),
+        ] {
+            let scenario = Scenario::new();
+            scenario.user_config_is(config);
+            scenario.agent_does_in_session(1, "true\n"); // Requested Model check.
+            scenario
+                .agent_does_in_session(2, &audit_script(&json!([finding("offer")]).to_string()));
+            scenario.agent_does_in_session(
+                3,
+                &reproduction_script(if reproduced {
+                    "reproduced high single"
+                } else {
+                    "not reproduced"
+                }),
             );
-            assert_eq!(
-                text.contains("fix = true under [security]"),
-                offers,
-                "{text}"
-            );
-            assert!(!text.contains("Private candidate write-up"), "{text}");
+            let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+            let mut args = vec![
+                "secure",
+                "harness",
+                "claude",
+                "email",
+                "day@example.com",
+                "model",
+                "Model Label With Spaces",
+            ];
+            if let Some(base) = base {
+                args.extend(["base", base]);
+            }
+            if let Some(permission) = permission {
+                args.push(permission);
+            }
+            let result = scenario.run_with_env(&args, &resend_env(&resend));
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            let (_, body) = the_one_notification(&resend);
+            let mut offered_command = None;
+            for text in [&result.stderr, &body] {
+                let command = text.lines().find_map(|line| {
+                    line.split_once("Allow fixing:")
+                        .map(|(_, command)| command.trim())
+                });
+                assert_eq!(command.is_some(), offers, "{text}");
+                if let Some(command) = command {
+                    if let Some(previous) = offered_command {
+                        assert_eq!(command, previous);
+                    }
+                    offered_command = Some(command);
+                    let mut expected = vec!["secure"];
+                    if let Some(base) = base {
+                        expected.extend(["base", base]);
+                    }
+                    expected.extend([
+                        "--email",
+                        "day@example.com",
+                        "security-fix",
+                        "harness",
+                        "claude",
+                        "model",
+                        "Model Label With Spaces",
+                    ]);
+                    assert_eq!(support::guidance_words(command), expected);
+                }
+                assert_eq!(
+                    text.contains("fix = true under [security]"),
+                    offers,
+                    "{text}"
+                );
+                assert!(!text.contains("Private candidate write-up"), "{text}");
+            }
+            assert_eq!(scenario.claude_calls().len(), 3);
         }
-        assert_eq!(scenario.claude_calls().len(), 2);
     }
 }
 

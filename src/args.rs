@@ -1,5 +1,6 @@
 //! The command line: which command, and for a Run, its Issue URL and flags,
 //! or for a Pass, its flags and any arguments its own kind takes.
+//! Also owns public retry guidance: explicit asks rendered as literal POSIX words.
 
 use std::iter::Peekable;
 use std::mem::discriminant;
@@ -66,7 +67,7 @@ pub struct PassArgs {
 
 /// The word that lets a Run start a Base fix, which the command a Base fix
 /// is offered with ends in.
-pub const BASE_FIX: &str = "base-fix";
+const BASE_FIX: &str = "base-fix";
 
 /// A Run's arguments.
 pub struct RunArgs {
@@ -77,6 +78,99 @@ pub struct RunArgs {
     /// What the Run was given, if another thirdshift started it as a child
     /// Run, as the child Run module read it back from its hidden arguments.
     pub given: Option<Given>,
+}
+
+/// Retry the original Issue URL with Base fixing allowed, preserving only
+/// explicit public choices so omitted choices still consult the User config.
+pub fn retry_with_base_fix(issue: &IssueUrl, flags: &Flags) -> String {
+    let flags = Flags {
+        base_fix: Some(BaseFixAsk::Allow),
+        ..flags.clone()
+    };
+    let mut words = vec!["thirdshift".to_string(), issue.url.clone()];
+    public_flag_words(&flags, &mut words);
+    shell_command(words)
+}
+
+/// Retry a Security run with fixing allowed, retaining the original optional
+/// Base branch rather than the one launch preparation resolved.
+pub fn retry_with_security_fix(base: Option<&str>, flags: &Flags) -> String {
+    let flags = Flags {
+        security_fix: Some(crate::security::FixAsk::Allow),
+        ..flags.clone()
+    };
+    let mut words = vec!["thirdshift".to_string(), "secure".to_string()];
+    if let Some(base) = base {
+        words.extend(["base".into(), base.into()]);
+    }
+    public_flag_words(&flags, &mut words);
+    shell_command(words)
+}
+
+/// Serialize public asks, never computed retry text or hidden child Run facts.
+fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
+    match flags.goal {
+        Some(Goal::Merged) => words.push("merge".into()),
+        Some(Goal::ReadyForReview) => words.push("--no-merge".into()),
+        None => {}
+    }
+    match &flags.email {
+        Some(NotificationAsk::Send(to)) => {
+            words.push("--email".into());
+            if let Some(to) = to {
+                words.push(to.clone());
+            }
+        }
+        Some(NotificationAsk::Skip) => words.push("--no-email".into()),
+        None => {}
+    }
+    if let Some(parallel) = flags.parallel {
+        words.extend(["parallel".into(), parallel.to_string()]);
+    }
+    match flags.security_fix {
+        Some(crate::security::FixAsk::Allow) => words.push("security-fix".into()),
+        Some(crate::security::FixAsk::Forbid) => words.push("no-security-fix".into()),
+        None => {}
+    }
+    match flags.security_review {
+        Some(crate::security::review::Ask::Allow) => words.push("security-review".into()),
+        Some(crate::security::review::Ask::Forbid) => words.push("no-security-review".into()),
+        None => {}
+    }
+    let asked = &flags.harness;
+    if let Some(harness) = asked.harness {
+        words.extend(["harness".into(), harness.name().into()]);
+    }
+    if let Some(model) = &asked.model_and_effort.model {
+        words.extend(["model".into(), model.clone()]);
+    }
+    if let Some(effort) = &asked.model_and_effort.effort {
+        words.extend(["effort".into(), effort.clone()]);
+    }
+    match &flags.base_fix {
+        Some(BaseFixAsk::Allow) => words.push(BASE_FIX.into()),
+        Some(BaseFixAsk::Forbid) => words.push("no-base-fix".into()),
+        Some(BaseFixAsk::Undecided { .. }) | None => {}
+    }
+}
+
+/// Render literal POSIX shell words; readable safe words need no quoting.
+fn shell_command(words: Vec<String>) -> String {
+    words
+        .into_iter()
+        .map(|word| {
+            if !word.is_empty()
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_/.:@=".contains(c))
+            {
+                word
+            } else {
+                format!("'{}'", word.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
@@ -375,6 +469,227 @@ mod tests {
     use crate::harness::ModelAndEffort;
 
     const URL: &str = "https://github.com/acme/widgets/issues/7";
+
+    /// Recover exactly the argv a copied guidance command supplies.
+    fn shell_words(command: &str) -> Vec<String> {
+        let output = std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!("thirdshift() {{ printf '%s\\0' \"$@\"; }}; {command}"),
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let mut words = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
+        assert_eq!(words.pop(), Some(&b""[..]));
+        words
+            .into_iter()
+            .map(|word| String::from_utf8(word.to_vec()).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn base_fix_guidance_preserves_a_model_label_with_spaces() {
+        let flags = Flags {
+            harness: harness::Asked {
+                model_and_effort: ModelAndEffort {
+                    model: Some("Model Label With Spaces".into()),
+                    effort: None,
+                },
+                ..harness::Asked::default()
+            },
+            ..Flags::default()
+        };
+        let command = retry_with_base_fix(&IssueUrl::parse(URL).unwrap(), &flags);
+        let Command::Run(run) = parse(&shell_words(&command)).unwrap() else {
+            panic!("not a Run: {command}");
+        };
+        assert_eq!(
+            run.flags,
+            Flags {
+                base_fix: Some(BaseFixAsk::Allow),
+                ..flags
+            }
+        );
+        assert_eq!(run.issue.url, URL);
+        assert!(run.given.is_none());
+    }
+
+    /// Supplied public asks cover positive, negative, undecided and omitted choices.
+    fn guidance_flags() -> Vec<Flags> {
+        vec![
+            Flags::default(),
+            Flags {
+                goal: Some(Goal::Merged),
+                email: Some(NotificationAsk::Send(Some("day@example.com".into()))),
+                parallel: NonZeroUsize::new(2),
+                base_fix: Some(BaseFixAsk::Forbid),
+                security_fix: Some(crate::security::FixAsk::Forbid),
+                security_review: Some(crate::security::review::Ask::Allow),
+                harness: harness::Asked {
+                    harness: Some(Harness::Codex),
+                    model_and_effort: ModelAndEffort {
+                        model: Some("gpt-6.1-sol".into()),
+                        effort: Some("max".into()),
+                    },
+                },
+            },
+            Flags {
+                goal: Some(Goal::ReadyForReview),
+                email: Some(NotificationAsk::Skip),
+                parallel: NonZeroUsize::new(1),
+                base_fix: Some(BaseFixAsk::Allow),
+                security_fix: Some(crate::security::FixAsk::Allow),
+                security_review: Some(crate::security::review::Ask::Forbid),
+                ..Flags::default()
+            },
+            Flags {
+                email: Some(NotificationAsk::Send(None)),
+                base_fix: Some(BaseFixAsk::Undecided {
+                    retry: "computed child retry must stay private".into(),
+                }),
+                ..Flags::default()
+            },
+        ]
+    }
+
+    #[test]
+    fn both_guidance_operations_round_trip_public_choices_and_enable_permission_once() {
+        let issue = IssueUrl::parse(URL).unwrap();
+        for flags in guidance_flags() {
+            let command = retry_with_base_fix(&issue, &flags);
+            let words = shell_words(&command);
+            assert_eq!(words.iter().filter(|word| *word == "base-fix").count(), 1);
+            let Command::Run(run) = parse(&words).unwrap() else {
+                panic!("{command}")
+            };
+            assert_eq!(run.issue, issue);
+            assert!(run.given.is_none());
+            assert_eq!(
+                run.flags,
+                Flags {
+                    base_fix: Some(BaseFixAsk::Allow),
+                    ..flags.clone()
+                }
+            );
+
+            for base in [None, Some("main")] {
+                let command = retry_with_security_fix(base, &flags);
+                let words = shell_words(&command);
+                assert_eq!(
+                    words.iter().filter(|word| *word == "security-fix").count(),
+                    1
+                );
+                let Command::Secure(pass) = parse(&words).unwrap() else {
+                    panic!("{command}")
+                };
+                assert_eq!(pass.base.as_deref(), base);
+                let public_base_fix = match &flags.base_fix {
+                    Some(BaseFixAsk::Undecided { .. }) => None,
+                    other => other.clone(),
+                };
+                assert_eq!(
+                    pass.flags,
+                    Flags {
+                        security_fix: Some(crate::security::FixAsk::Allow),
+                        base_fix: public_base_fix,
+                        ..flags.clone()
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn guidance_preserves_literal_shell_punctuation_in_every_public_value() {
+        let issue = IssueUrl::parse(URL).unwrap();
+        for value in [
+            "Model Label With Spaces",
+            "O'Brien",
+            "\"double quotes\"",
+            "Unicode 模型 π",
+            "literal $fixture ${fixture} $(printf fixture) `printf fixture` ; & | < > ( ) * ? ! [ ] \\ \t\nnext",
+        ] {
+            let flags = Flags {
+                email: Some(NotificationAsk::Send(Some(format!("literal@{value}")))),
+                harness: harness::Asked {
+                    model_and_effort: ModelAndEffort {
+                        model: Some(value.into()),
+                        effort: Some(value.into()),
+                    },
+                    ..harness::Asked::default()
+                },
+                ..Flags::default()
+            };
+            let command = retry_with_base_fix(&issue, &flags);
+            let Command::Run(run) = parse(&shell_words(&command)).unwrap() else {
+                panic!("{command}")
+            };
+            assert_eq!(
+                run.flags,
+                Flags {
+                    base_fix: Some(BaseFixAsk::Allow),
+                    ..flags.clone()
+                }
+            );
+            assert!(run.given.is_none());
+            let command = retry_with_security_fix(Some(value), &flags);
+            let Command::Secure(pass) = parse(&shell_words(&command)).unwrap() else {
+                panic!("{command}")
+            };
+            assert_eq!(pass.base.as_deref(), Some(value));
+            assert_eq!(
+                pass.flags,
+                Flags {
+                    security_fix: Some(crate::security::FixAsk::Allow),
+                    ..flags
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn both_guidance_operations_preserve_every_explicit_harness() {
+        for harness in [
+            Harness::Claude,
+            Harness::Codex,
+            Harness::Agy,
+            Harness::Grok,
+            Harness::Muse,
+            Harness::OpenCode,
+        ] {
+            let flags = Flags {
+                harness: harness::Asked {
+                    harness: Some(harness),
+                    ..harness::Asked::default()
+                },
+                ..Flags::default()
+            };
+            let command = retry_with_base_fix(&IssueUrl::parse(URL).unwrap(), &flags);
+            let Command::Run(run) = parse(&shell_words(&command)).unwrap() else {
+                panic!("{command}")
+            };
+            assert_eq!(
+                run.flags,
+                Flags {
+                    base_fix: Some(BaseFixAsk::Allow),
+                    ..flags.clone()
+                }
+            );
+            let command = retry_with_security_fix(None, &flags);
+            let Command::Secure(pass) = parse(&shell_words(&command)).unwrap() else {
+                panic!("{command}")
+            };
+            assert_eq!(
+                pass.flags,
+                Flags {
+                    security_fix: Some(crate::security::FixAsk::Allow),
+                    ..flags
+                }
+            );
+        }
+    }
 
     #[test]
     fn security_review_words_are_accepted_on_commands_that_start_runs() {

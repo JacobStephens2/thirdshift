@@ -399,13 +399,21 @@ const OR_SET: &str = "base.fix = true in ~/.thirdshift/config.toml, \
 #[test]
 fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_offers_one() {
     let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, "true\n"); // Requested Model check.
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
     let cause = inherited_failure(&scenario.origin_git(&["rev-parse", "main"]));
     let resend = ResendStandIn::replying(200, ACCEPTED);
     let url = scenario.issue_url(7);
 
     let result = scenario.run_with_env(
-        &["merge", &url, "--email", "me@example.com"],
+        &[
+            "merge",
+            &url,
+            "--email",
+            "me@example.com",
+            "model",
+            "Model Label With Spaces",
+        ],
         &[
             ("THIRDSHIFT_RESEND_URL", resend.url()),
             ("RESEND_API_KEY", "re_test_123"),
@@ -413,7 +421,9 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
     );
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    let retry = format!("thirdshift {url} merge --email me@example.com base-fix");
+    let retry = format!(
+        "thirdshift {url} merge --email me@example.com model 'Model Label With Spaces' base-fix"
+    );
     assert!(
         result.stderr.contains(&format!(
             "thirdshift: {cause}\n\
@@ -437,6 +447,18 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
              Session log:  "
         )),
         "text: {text}"
+    );
+    assert_eq!(
+        support::guidance_words(&retry),
+        [
+            url.as_str(),
+            "merge",
+            "--email",
+            "me@example.com",
+            "model",
+            "Model Label With Spaces",
+            "base-fix",
+        ]
     );
     // The cause alone is the Failed-run commit's message.
     assert_eq!(
