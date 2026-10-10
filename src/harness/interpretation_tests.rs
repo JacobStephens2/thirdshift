@@ -340,3 +340,21 @@ fi
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// Local recording fixtures combine the real Claude stream protocol with the
+/// real retained policies, so conflicting/empty evidence crosses the runner.
+pub(crate) fn recording_interpretation(
+    root: &Path,
+    retained_harness: Harness,
+) -> interpretation::Interpretation {
+    let retained = match retained_harness {
+        Harness::Muse => interpretation::Retained::Muse(Some(root.to_path_buf())),
+        Harness::OpenCode => interpretation::Retained::OpenCode(root.to_path_buf()),
+        _ => panic!("recording fixtures support only retained Harnesses"),
+    };
+    interpretation::Interpretation::new(
+        "claude",
+        Box::new(interpretation::Stream::claude()),
+        retained,
+    )
+}

@@ -891,3 +891,64 @@ fn help_version_and_update_never_read_the_credentials() {
     let result = scenario.run(&["update"]);
     assert!(!result.stderr.contains("Credentials"), "{}", result.stderr);
 }
+
+#[test]
+fn a_notification_names_muses_retained_models() {
+    let scenario = Scenario::new();
+    let directory = scenario.path("home/.local/share/muse/sessions/2026/10/06/fake-muse-1");
+    scenario.agent_does(&format!(r#"
+mkdir -p '{}'
+cat > '{}/session.jsonl' <<'RETAINED'
+{{"stream":{{"id":"fake-muse-1"}},"payload":{{"kind":"run","event":{{"kind":"model_completed","model":"muse-retained-model"}}}}}}
+RETAINED
+{AGENT_OPENS_PR}
+"#, directory.display(), directory.display()));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let mut environment = env(&resend, Some(KEY));
+    environment.push(("FAKE_MUSE_NO_LOG", "1"));
+    let result = scenario.run_with_env(
+        &[
+            &scenario.issue_url(7),
+            "harness",
+            "muse",
+            "email",
+            "me@example.com",
+        ],
+        &environment,
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_contains(
+        text(&the_one_request(&resend)),
+        "- implement: muse · muse-retained-model · session effort: default effort",
+    );
+}
+
+#[test]
+fn a_notification_names_opencodes_retained_models() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_OPENS_PR);
+    let script = scenario.path("replace-export.sh");
+    std::fs::write(&script, format!(r#"
+cat > '{}' <<'RETAINED'
+{{"info":{{"outcome":"succeeded"}},"messages":[{{"type":"assistant","model":{{"providerID":"provider","id":"retained-model"}},"content":[]}}]}}
+RETAINED
+"#, scenario.path("opencode-calls.fake-opencode-1.export.json").display())).unwrap();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let mut environment = env(&resend, Some(KEY));
+    environment.push(("FAKE_OPENCODE_EXPORT_SCRIPT", script.to_str().unwrap()));
+    let result = scenario.run_with_env(
+        &[
+            &scenario.issue_url(7),
+            "harness",
+            "opencode",
+            "email",
+            "me@example.com",
+        ],
+        &environment,
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_contains(
+        text(&the_one_request(&resend)),
+        "- implement: opencode · provider/retained-model · session effort: default effort",
+    );
+}

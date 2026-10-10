@@ -25,7 +25,7 @@ pub(crate) mod settings;
 mod skill_load;
 mod summary;
 
-pub use adapter::{Adapter, Invocation};
+pub use adapter::Adapter;
 pub use summary::write as write_summary;
 
 /// The headless agent CLI a Command's sessions run on.
