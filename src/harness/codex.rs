@@ -17,6 +17,8 @@ use crate::progress;
 pub struct Codex;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Codex, &Codex);
 
+const FRESH_SUB_AGENTS: &str = "Start fresh sub-agents with `fork_turns: \"none\"`, giving each only its own task and necessary evidence, so the skill's verifiers stay independent.";
+
 impl Adapter for Codex {
     fn name(&self) -> &'static str {
         "codex"
@@ -45,6 +47,14 @@ impl Adapter for Codex {
             stdin: None,
         }
     }
+    fn code_review_session(
+        &self,
+        choice: &Choice,
+        resume: Option<&str>,
+        prompt: &str,
+    ) -> Invocation {
+        self.session(choice, resume, &format!("{prompt}\n{FRESH_SUB_AGENTS}\n"))
+    }
     fn security_session(
         &self,
         choice: &Choice,
@@ -53,9 +63,7 @@ impl Adapter for Codex {
         fresh_sub_agents: bool,
     ) -> Invocation {
         let prompt = if fresh_sub_agents {
-            format!(
-                "{prompt}\nStart fresh sub-agents with `fork_turns: \"none\"`, giving each only its own task and necessary evidence, so the skill's verifiers stay independent.\n"
-            )
+            format!("{prompt}\n{FRESH_SUB_AGENTS}\n")
         } else {
             prompt.to_string()
         };

@@ -126,6 +126,117 @@ fn first_lines(scenario: &Scenario) -> Vec<String> {
         .collect()
 }
 
+/// Code review sessions keep their reviewers independent without taking
+/// Security's thread-cap setting.
+fn assert_fresh_reviewers(call: &Value) {
+    let prompt = call["prompt"].as_str().unwrap();
+    assert!(prompt.contains("fresh sub-agents"), "{prompt}");
+    assert!(prompt.contains("fork_turns: \"none\""), "{prompt}");
+    assert!(
+        prompt.contains("only its own task and necessary evidence"),
+        "{prompt}"
+    );
+    assert!(
+        !argv(call)
+            .iter()
+            .any(|arg| arg.contains("max_concurrent_threads")),
+        "{call}"
+    );
+}
+
+#[test]
+fn implement_sessions_and_their_resumes_request_fresh_reviewers() {
+    // Fresh, Continuation without a PR, and Continuation with an open PR.
+    for continuation in [None, Some(false), Some(true)] {
+        let scenario = Scenario::new();
+        let mut script = AGENT_OPENS_PR.to_string();
+        if let Some(has_pr) = continuation {
+            scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+            if has_pr {
+                scenario.github_has_pr("issue-7", "main", "OPEN");
+                script = "echo more > more.txt\ngit add more.txt\ngit commit -q -m Continue\n"
+                    .to_string();
+            }
+        }
+        scenario.agent_does_in_session(1, &format!("{script}{}", leaves_running("cargo test")));
+        let result = scenario.run(&["harness", "codex", &scenario.issue_url(7)]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let calls = scenario.codex_calls();
+        assert_eq!(calls.len(), 2);
+        for call in &calls {
+            assert_fresh_reviewers(call);
+        }
+        assert_eq!(argv(&calls[1])[5..7], ["resume", "fake-thread-1"]);
+    }
+}
+
+#[test]
+fn spec_reviews_and_their_resumes_request_fresh_reviewers() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(20, &[(21, &[])]);
+    scenario.issue_is(21, "CLOSED");
+    scenario.origin_has_branch("issue-20", "main", &["Ticket 21"]);
+    scenario.github_has_pr("issue-20", "main", "OPEN");
+    scenario.agent_does_in_session(1, &leaves_running("cargo test"));
+
+    let result = scenario.run(&["harness", "codex", &scenario.issue_url(20)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.codex_calls();
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("$thirdshift-code-review main, with the Spec ")
+    );
+    for call in &calls {
+        assert_fresh_reviewers(call);
+    }
+    assert_eq!(argv(&calls[1])[5..7], ["resume", "fake-thread-1"]);
+}
+
+#[test]
+fn foreign_commit_reviews_and_their_resumes_request_fresh_reviewers() {
+    let scenario = Scenario::new();
+    // Publish a Foreign commit when CI is first read, after the Run has
+    // captured its own head. The new commit needs a review Repair.
+    let foreign_commit = r#"
+other="$(mktemp -d)"
+git clone -q -b issue-7 https://github.com/acme/widgets.git "$other"
+echo late > "$other/late.txt"
+git -C "$other" add late.txt
+git -C "$other" commit -q -m "Foreign commit"
+git -C "$other" push -q origin issue-7
+rm -rf "$other"
+"#;
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}gh fake on-ci-read 1 '{}'\n",
+            foreign_commit.replace('\'', r"'\''")
+        ),
+    );
+    scenario.agent_does_in_session(2, &leaves_running("cargo test"));
+
+    let result = scenario.run(&["merge", "harness", "codex", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.codex_calls();
+    assert_eq!(calls.len(), 3);
+    assert!(
+        calls[1]["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("$thirdshift-code-review ")
+    );
+    for call in &calls[1..] {
+        assert_fresh_reviewers(call);
+    }
+    assert_eq!(argv(&calls[2])[5..7], ["resume", "fake-thread-2"]);
+    assert_eq!(scenario.origin_file("main", "late.txt").unwrap(), "late\n");
+}
+
 #[test]
 fn a_runs_implement_session_and_its_repair_run_on_codex_with_the_model_and_effort_as_codex_names_them()
  {
@@ -162,6 +273,9 @@ fn a_runs_implement_session_and_its_repair_run_on_codex_with_the_model_and_effor
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_sessions_on_codex(&scenario, "gpt-6.1-sol", "max");
     assert_eq!(scenario.codex_calls().len(), 2);
+    let calls = scenario.codex_calls();
+    assert_fresh_reviewers(&calls[0]);
+    assert!(!calls[1]["prompt"].as_str().unwrap().contains("fork_turns"));
     assert_eq!(
         first_lines(&scenario)[0],
         format!("$thirdshift-implement {url}")
@@ -498,7 +612,6 @@ fn ordinary_runs_ignore_the_security_harness_and_keep_codexs_ordinary_session_pr
                 .iter()
                 .any(|arg| arg.contains("max_concurrent_threads"))
         );
-        assert!(!call["prompt"].as_str().unwrap().contains("fork_turns"));
     }
 }
 
@@ -603,6 +716,10 @@ printf 'Architecture review plan: %s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(spec_pr["isDraft"], false);
     let calls = scenario.codex_calls();
     assert_eq!(calls.len(), 4, "{calls:?}");
+    assert!(!calls[0]["prompt"].as_str().unwrap().contains("fork_turns"));
+    for call in &calls[1..] {
+        assert_fresh_reviewers(call);
+    }
     for call in &calls {
         let args = argv(call);
         assert_eq!(
