@@ -10,16 +10,24 @@ use crate::issue::IssueUrl;
 use crate::labels::{Label, NEEDS_TRIAGE};
 use crate::security::reproduction::{FixSize, Reproduction, Severity};
 
+mod description;
+use description::Description;
+
 const SECURITY_FINDING: Label = Label::new(
     "security-finding",
     "A Security finding recorded privately for the Day shift",
 );
 
-pub(crate) const FIX_TICKET_MARKER: &str = "\n<!-- thirdshift:security-fix -->\nFix Ticket: ";
+#[derive(Clone, Copy)]
+pub enum FixEnding {
+    Failed,
+    Succeeded,
+}
 
-const FIX_PENDING: &str = "Fix Run: pending";
-const FIX_FAILED: &str = "Fix Run: failed";
-const FIX_SUCCEEDED: &str = "Fix Run: succeeded";
+enum FixUpdate {
+    LinkPending,
+    End(FixEnding),
+}
 
 enum RecordStorage {
     Advisories(Vec<Value>),
@@ -59,11 +67,10 @@ impl SecurityRecords {
         create: impl FnOnce(&Self, &DraftAdvisory) -> Result<SecurityRecord>,
     ) -> Result<ResolvedFinding> {
         let (records, field, _) = self.entries();
-        let marker = format!("Fingerprint: `{}`", draft.fingerprint);
         if let Some(value) = records.iter().find(|record| {
             record[field]
                 .as_str()
-                .is_some_and(|text| text.lines().any(|line| line == marker))
+                .is_some_and(|text| Description(text).matches_fingerprint(&draft.fingerprint))
         }) {
             return Ok(ResolvedFinding {
                 record: self.decode_created(value.clone())?,
@@ -109,20 +116,28 @@ impl SecurityRecords {
         match &self.storage {
             RecordStorage::Advisories(records) => records.iter().any(|record| {
                 record["state"] == "draft"
-                    && (reproduced_severity(&record["description"]).is_some()
+                    && (Description(record["description"].as_str().unwrap_or_default())
+                        .reproduced_outcome()
+                        .is_some()
                         && !fixing
                         && record["security_fix_closed"] != true
-                        || reproduced_severity(&record["description"]).is_none()
+                        || Description(record["description"].as_str().unwrap_or_default())
+                            .reproduced_outcome()
+                            .is_none()
                             && record["severity"].is_null())
             }),
             RecordStorage::Issues(records) => records.iter().any(|record| {
                 record["state"]
                     .as_str()
                     .is_some_and(|state| state.eq_ignore_ascii_case("open"))
-                    && (reproduced_severity(&record["body"]).is_some()
+                    && (Description(record["body"].as_str().unwrap_or_default())
+                        .reproduced_outcome()
+                        .is_some()
                         && !fixing
                         && record["security_fix_closed"] != true
-                        || reproduced_severity(&record["body"]).is_none()
+                        || Description(record["body"].as_str().unwrap_or_default())
+                            .reproduced_outcome()
+                            .is_none()
                             && record["labels"].as_array().is_some_and(|labels| {
                                 labels.iter().any(|label| {
                                     label["name"]
@@ -141,17 +156,10 @@ impl SecurityRecords {
             if record["security_fix_closed"] == true {
                 continue;
             }
-            if let Some((_, fix)) = record[field]
-                .as_str()
-                .and_then(|text| text.rsplit_once(FIX_TICKET_MARKER))
-                // The Pass lock rules out an active dispatch here. A pending
-                // ending is also a failed/incomplete fix until success is recorded.
-                && fix.lines().rev().find(|line| line.starts_with("Fix Run: "))
-                    .is_some_and(|line| line == FIX_PENDING || line == FIX_FAILED)
+            if let Some(issue) =
+                Description(record[field].as_str().unwrap_or_default()).failed_fix()?
             {
-                return Ok(Some(IssueUrl::parse(
-                    fix.lines().next().unwrap_or_default(),
-                )?));
+                return Ok(Some(issue));
             }
         }
         Ok(None)
@@ -166,12 +174,14 @@ impl SecurityRecords {
             if !value["state"]
                 .as_str()
                 .is_some_and(|s| s.eq_ignore_ascii_case(state))
-                || has_fix_ticket(&value[description])
+                || Description(value[description].as_str().unwrap_or_default())
+                    .fix_link()
+                    .is_some()
             {
                 continue;
             }
             if let Some((severity, _)) =
-                reproduced_outcome(value[description].as_str().unwrap_or_default())
+                Description(value[description].as_str().unwrap_or_default()).reproduced_outcome()
             {
                 // The Day shift's current advisory grade takes precedence
                 // over the historical proof-of-concept's score.
@@ -231,29 +241,6 @@ impl SecurityRecords {
     }
 }
 
-fn reproduced_severity(description: &Value) -> Option<Severity> {
-    reproduced_outcome(description.as_str()?).map(|(severity, _)| severity)
-}
-
-fn reproduced_outcome(description: &str) -> Option<(Severity, FixSize)> {
-    let (_, reproduction) =
-        description.split_once("\n<!-- thirdshift:security-reproduction -->\n")?;
-    let outcome = reproduction
-        .lines()
-        .find_map(|line| line.strip_prefix("Outcome: "))?;
-    match outcome.split_whitespace().collect::<Vec<_>>().as_slice() {
-        ["reproduced", severity, "single"] => Some((Severity::parse(severity)?, FixSize::Single)),
-        ["reproduced", severity, "spec"] => Some((Severity::parse(severity)?, FixSize::Spec)),
-        _ => None,
-    }
-}
-
-fn has_fix_ticket(description: &Value) -> bool {
-    description
-        .as_str()
-        .is_some_and(|text| text.contains(FIX_TICKET_MARKER))
-}
-
 /// A finding read from the private storage selected for this repository.
 enum RecordData {
     Advisory {
@@ -301,6 +288,33 @@ impl RecordedFinding {
 }
 
 impl SecurityRecord {
+    /// The existing literal-copy check; diagnostics never include private text.
+    pub fn check_public_fix_text(&self, body: &str, private_url: &str) -> Result<()> {
+        Description(self.description()).check_public_fix_text(body, private_url)
+    }
+
+    pub fn with_pending_fix(&self, current: &str, issue: &IssueUrl) -> Result<String> {
+        Description(current).with_pending_fix(self.description(), issue)
+    }
+
+    pub fn with_fix_ending(
+        &self,
+        current: &str,
+        issue: &IssueUrl,
+        ending: FixEnding,
+    ) -> Result<String> {
+        Description(current).with_fix_ending(issue, ending)
+    }
+
+    pub fn with_reproduction(&self, reproduction: &Reproduction) -> String {
+        Description(self.description()).with_reproduction(reproduction)
+    }
+
+    /// The pinned audit commit is validated only when reproduction needs it.
+    pub fn audited_commit(&self) -> Result<&str> {
+        Description(self.description()).audited_commit()
+    }
+
     pub fn metadata(&self) -> &RecordedFinding {
         &self.metadata
     }
@@ -314,7 +328,8 @@ impl SecurityRecord {
 
     /// The size judged by the completed reproduction, never the candidate write-up.
     pub fn fix_size(&self) -> Result<FixSize> {
-        reproduced_outcome(self.description())
+        Description(self.description())
+            .reproduced_outcome()
             .map(|(_, size)| size)
             .context("the Security finding has no reproduced fix size")
     }
@@ -359,6 +374,34 @@ pub struct DraftAdvisory {
     pub package: Package,
 }
 
+/// Validated finding facts and opaque evidence supplied by audit or review.
+pub struct FindingDraft<'a> {
+    pub fingerprint: &'a str,
+    pub summary: &'a str,
+    pub audited_commit: &'a str,
+    pub provenance: FindingProvenance<'a>,
+    pub original_description: &'a str,
+    pub evidence: &'a str,
+    pub package: Package,
+}
+
+#[derive(Clone, Copy)]
+pub enum FindingProvenance<'a> {
+    Audit,
+    Review { issue_url: &'a str },
+}
+
+impl DraftAdvisory {
+    pub fn new(input: FindingDraft<'_>) -> Self {
+        Self {
+            description: Description::draft(&input),
+            fingerprint: input.fingerprint.into(),
+            summary: input.summary.into(),
+            package: input.package,
+        }
+    }
+}
+
 impl GitHub {
     /// Link the dispatched fix issue without changing the private record's grade.
     pub fn link_security_fix(
@@ -367,7 +410,7 @@ impl GitHub {
         record: &SecurityRecord,
         issue: &IssueUrl,
     ) -> Result<()> {
-        self.write_security_fix(repo, record, issue, FIX_PENDING)
+        self.write_security_fix(repo, record, issue, FixUpdate::LinkPending)
     }
 
     /// Record the dispatch's ending, preserving any private edits made during it.
@@ -382,7 +425,11 @@ impl GitHub {
             repo,
             record,
             issue,
-            if succeeded { FIX_SUCCEEDED } else { FIX_FAILED },
+            FixUpdate::End(if succeeded {
+                FixEnding::Succeeded
+            } else {
+                FixEnding::Failed
+            }),
         )
     }
 
@@ -391,7 +438,7 @@ impl GitHub {
         repo: &str,
         record: &SecurityRecord,
         issue: &IssueUrl,
-        ending: &str,
+        update: FixUpdate,
     ) -> Result<()> {
         let (path, field) = match &record.data {
             RecordData::Advisory { id, .. } => (
@@ -412,26 +459,9 @@ impl GitHub {
         let current = current[field]
             .as_str()
             .context("the private record has no description")?;
-        let description = if ending == FIX_PENDING {
-            if current != record.description() {
-                bail!("the private record changed while publishing its fix; leaving it unchanged");
-            }
-            // Persist before dispatch: a later write failure cannot reopen Fencing.
-            format!(
-                "{}{FIX_TICKET_MARKER}{}\n{ending}\n",
-                current.trim_end(),
-                issue.url
-            )
-        } else {
-            let link = current
-                .rsplit_once(FIX_TICKET_MARKER)
-                .and_then(|(_, fix)| fix.lines().next());
-            if link != Some(issue.url.as_str()) {
-                bail!(
-                    "the private record's fix Ticket changed during its Run; leaving it unchanged"
-                );
-            }
-            format!("{}\n{ending}\n", current.trim_end())
+        let description = match update {
+            FixUpdate::LinkPending => record.with_pending_fix(current, issue)?,
+            FixUpdate::End(ending) => record.with_fix_ending(current, issue, ending)?,
         };
         let body = serde_json::to_vec(&json!({field: description}))?;
         let output = self.output_with_input(
@@ -488,11 +518,8 @@ impl GitHub {
         let mut records = records?;
         let (_, field, _) = records.entries();
         for record in records.values_mut() {
-            if let Some((_, link)) = record[field]
-                .as_str()
-                .and_then(|text| text.rsplit_once(FIX_TICKET_MARKER))
-            {
-                let ticket = IssueUrl::parse(link.lines().next().unwrap_or_default())
+            if let Some(link) = Description(record[field].as_str().unwrap_or_default()).fix_link() {
+                let ticket = IssueUrl::parse(link)
                     .context("the private record has an invalid fix Ticket link")?;
                 if !ticket.repo_slug().eq_ignore_ascii_case(repo) {
                     bail!("the private record's fix Ticket belongs to another repository");
@@ -611,7 +638,7 @@ impl GitHub {
                 "informational severity has no GitHub advisory field; the Day shift must decide its representation; leaving the record unchanged"
             );
         }
-        let description = reproduction.description(record.description());
+        let description = record.with_reproduction(reproduction);
         let body = match &record.data {
             RecordData::Advisory { .. } => {
                 json!({"description": description, "severity": reproduction.severity()})

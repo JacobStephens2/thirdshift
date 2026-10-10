@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::git::Git;
-use crate::github::{DraftAdvisory, Package};
+use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, Package};
 use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::logs;
@@ -158,15 +158,23 @@ pub fn run(
         let findings: Vec<Value> =
             serde_json::from_slice(&fs::read(output.join("findings.json"))?)?;
         let package = package_in(worktree.path());
-        let findings = findings.into_iter().filter(|finding| finding["verdict"] != "rejected").map(|finding| {
-            let fingerprint = finding["fingerprint"].as_str().context("finding has no fingerprint")?.to_string();
-            Ok(DraftAdvisory {
-                summary: finding["title"].as_str().context("finding has no title")?.to_string(),
-                description: format!("Found by thirdshift's Security run.\n\nFingerprint: `{fingerprint}`\nAudited commit: `{commit}`\n\n{}\n\n```json\n{}\n```\n", finding["description"].as_str().unwrap_or_default(), serde_json::to_string_pretty(&finding)?),
-                fingerprint,
-                package: package.clone(),
+        let findings = findings
+            .into_iter()
+            .filter(|finding| finding["verdict"] != "rejected")
+            .map(|finding| {
+                Ok(DraftAdvisory::new(FindingDraft {
+                    fingerprint: finding["fingerprint"]
+                        .as_str()
+                        .context("finding has no fingerprint")?,
+                    summary: finding["title"].as_str().context("finding has no title")?,
+                    audited_commit: &commit,
+                    provenance: FindingProvenance::Audit,
+                    original_description: finding["description"].as_str().unwrap_or_default(),
+                    evidence: &serde_json::to_string_pretty(&finding)?,
+                    package: package.clone(),
+                }))
             })
-        }).collect::<Result<_>>()?;
+            .collect::<Result<_>>()?;
         Ok(Audited { findings })
     });
     // The session may claim completion before a validator or its final line

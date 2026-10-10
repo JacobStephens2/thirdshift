@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, fs};
 
 use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction, Severity};
-use crate::github::{DraftAdvisory, GitHub};
+use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, GitHub};
 use crate::harness::interpretation::SafeguardRefusal;
 use crate::issue::IssueUrl;
 use crate::session::{Purpose, Sessions};
@@ -65,18 +65,17 @@ pub(crate) fn run(
         let mut known = github.security_records(&repo)?;
         let package = super::audit::package_in(worktree.path());
         for (finding, reproduction) in findings {
-            let draft = DraftAdvisory {
-                fingerprint: finding.fingerprint.clone(),
-                summary: finding.title.clone(),
-                description: format!(
-                    "Found by thirdshift's Security review.\n\nFingerprint: `{}`\nAudited commit: `{merge_base}`\nReview issue: {}\n\n{}\n\n```json\n{}\n```\n",
-                    finding.fingerprint,
-                    issue.url,
-                    finding.description,
-                    serde_json::to_string_pretty(&finding)?
-                ),
+            let draft = DraftAdvisory::new(FindingDraft {
+                fingerprint: &finding.fingerprint,
+                summary: &finding.title,
+                audited_commit: &merge_base,
+                provenance: FindingProvenance::Review {
+                    issue_url: &issue.url,
+                },
+                original_description: &finding.description,
+                evidence: &serde_json::to_string_pretty(&finding)?,
                 package: package.clone(),
-            };
+            });
             // Reuse every record state and preserve the Day shift's grade.
             let resolved = known.record_or_reuse(&draft, |records, draft| {
                 github.create_security_record(&repo, records, draft)
