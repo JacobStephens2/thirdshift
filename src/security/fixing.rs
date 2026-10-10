@@ -82,7 +82,13 @@ pub fn publish(
             .then(|| message.as_deref().and_then(parse_staged_proposal))
             .flatten();
         let issue = match staged {
-            Some((title, body)) => github.create_issue_in(repo, &title, &body, &[NEEDS_TRIAGE])?,
+            Some((title, body)) => {
+                // Validate the staged text before any public issue exists;
+                // a rejection blocks creation, so no public issue leaks
+                // private write-up text.
+                record.check_public_fix_text(&format!("{title}\n\n{body}"), url)?;
+                github.create_issue_in(repo, &title, &body, &[NEEDS_TRIAGE])?
+            }
             None => {
                 let line = message
                     .as_deref()
