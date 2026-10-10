@@ -4,7 +4,9 @@ use std::fs;
 use std::io::Write;
 use std::process::Command;
 
-use crate::claude::{beside_skills_snapshot, exit_code, git_here, script_for, skills_snapshot};
+use crate::claude::{
+    beside_skills_snapshot, exit_code, git_here, script_for, skills_snapshot, transported_prompt,
+};
 use crate::json::{Array, Bool, Null, object, string};
 use crate::{outlast_interrupts, stdin_is_null};
 
@@ -13,10 +15,11 @@ const CACHE: &str = include_str!("../fixtures/grok-models.json");
 
 pub fn main(argv: Vec<String>) {
     let catalog = argv.first().is_some_and(|arg| arg == "models");
-    if !catalog && !argv.iter().any(|arg| arg == "-p") {
-        crate::die("fake grok: expected models or -p", 2);
+    let from_file = argv.iter().any(|arg| arg == "--prompt-file");
+    if !catalog && !from_file && !argv.iter().any(|arg| arg == "-p") {
+        crate::die("fake grok: expected models, -p or --prompt-file", 2);
     }
-    if !catalog {
+    if !catalog && !from_file {
         let prompt = argv
             .iter()
             .position(|arg| arg == "-p")
@@ -27,6 +30,7 @@ pub fn main(argv: Vec<String>) {
     }
     let record_path = crate::env_path("FAKE_GROK_RECORD");
     let lock = crate::lock_beside(&record_path);
+    let input = transported_prompt(&argv);
     let (branch, _) = git_here(&["branch", "--show-current"]);
     let (status, _) = git_here(&["status", "--porcelain"]);
     let cwd = std::env::current_dir().unwrap();
@@ -39,7 +43,11 @@ pub fn main(argv: Vec<String>) {
                 if catalog {
                     Null
                 } else {
-                    argv.last().map(string).unwrap_or(Null)
+                    input
+                        .as_ref()
+                        .or_else(|| argv.last())
+                        .map(string)
+                        .unwrap_or(Null)
                 },
             ),
             ("cwd", string(cwd.to_str().unwrap())),
