@@ -37,6 +37,9 @@
 
 #![allow(dead_code)]
 
+#[path = "../../src/test_support/guidance.rs"]
+pub mod guidance;
+
 pub mod fakes;
 pub mod resend;
 

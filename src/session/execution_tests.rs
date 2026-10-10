@@ -251,6 +251,34 @@ exec sleep 5"#,
 }
 
 #[test]
+fn startup_failure_never_reaches_an_installed_harness() {
+    let install = tempfile::tempdir().unwrap();
+    let invocation = install.path().join("invoked");
+    crate::test_support::write_executable(
+        &install.path().join("opencode"),
+        "#!/bin/bash\nprintf 'invoked\\n' > \"$THIRDSHIFT_INSTALLED_HARNESS_INVOCATION\"\nexit 1\n",
+    );
+    let path = std::env::join_paths(
+        std::iter::once(install.path().to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "session::execution_tests::startup_failure_preserves_its_cause_without_completion_reporting",
+            "--nocapture",
+        ])
+        .env_remove(FIXTURE)
+        .env("PATH", path)
+        .env("THIRDSHIFT_INSTALLED_HARNESS_INVOCATION", &invocation)
+        .output()
+        .unwrap();
+    assert!(!invocation.exists(), "installed Harness ran: {output:?}");
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
 fn startup_failure_preserves_its_cause_without_completion_reporting() {
     if let Some(root) = std::env::var_os(FIXTURE) {
         let error = execute_session(Path::new(&root));
@@ -262,15 +290,27 @@ fn startup_failure_preserves_its_cause_without_completion_reporting() {
         return;
     }
     let fixture = Fixture::new("exit 0");
-    // Leave the selected CLI on PATH, but make spawning it fail. This never
-    // falls through to a real installed Harness.
+    // A non-executable CLI doesn't stop PATH lookup. Give this child only
+    // the fixture's bin, with Git for worktree setup, so no installed Harness
+    // can be reached after the failed spawn.
+    let git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    assert!(git.status.success(), "{git:?}");
+    let git = fs::canonicalize(String::from_utf8(git.stdout).unwrap().trim()).unwrap();
+    std::os::unix::fs::symlink(git, fixture.path("bin/git")).unwrap();
     fs::set_permissions(
         fixture.path("bin/opencode"),
         fs::Permissions::from_mode(0o644),
     )
     .unwrap();
     assert_no_completion_reporting(
-        fixture.command("session::execution_tests::startup_failure_preserves_its_cause_without_completion_reporting").output().unwrap(),
+        fixture
+            .command("session::execution_tests::startup_failure_preserves_its_cause_without_completion_reporting")
+            .env("PATH", fixture.path("bin"))
+            .output()
+            .unwrap(),
     );
     assert!(!fixture.path("calls").exists());
 }

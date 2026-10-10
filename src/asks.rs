@@ -75,7 +75,7 @@ impl Asks {
             if config.base_fix {
                 BaseFixAsk::Allow
             } else {
-                let retry = retry_with_base_fix(issue, flags);
+                let retry = args::retry_with_base_fix(issue, flags);
                 BaseFixAsk::Undecided { retry }
             }
         });
@@ -210,47 +210,6 @@ impl Flags {
         }
         choice
     }
-}
-
-/// The command that starts the Run on `issue` again as `flags` asked for it,
-/// with `base-fix` added.
-fn retry_with_base_fix(issue: &IssueUrl, flags: &Flags) -> String {
-    let mut command = format!("thirdshift {}", issue.url);
-    match flags.goal {
-        Some(Goal::Merged) => command += " merge",
-        Some(Goal::ReadyForReview) => command += " --no-merge",
-        None => {}
-    }
-    match &flags.email {
-        Some(NotificationAsk::Send(Some(to))) => command += &format!(" --email {to}"),
-        Some(NotificationAsk::Send(None)) => command += " --email",
-        Some(NotificationAsk::Skip) => command += " --no-email",
-        None => {}
-    }
-    if let Some(parallel) = flags.parallel {
-        command += &format!(" parallel {parallel}");
-    }
-    match flags.security_fix {
-        Some(crate::security::FixAsk::Allow) => command += " security-fix",
-        Some(crate::security::FixAsk::Forbid) => command += " no-security-fix",
-        None => {}
-    }
-    match flags.security_review {
-        Some(crate::security::review::Ask::Allow) => command += " security-review",
-        Some(crate::security::review::Ask::Forbid) => command += " no-security-review",
-        None => {}
-    }
-    let asked = &flags.harness;
-    if let Some(harness) = asked.harness {
-        command += &format!(" harness {}", harness.name());
-    }
-    if let Some(model) = &asked.model_and_effort.model {
-        command += &format!(" model {model}");
-    }
-    if let Some(effort) = &asked.model_and_effort.effort {
-        command += &format!(" effort {effort}");
-    }
-    command + " " + args::BASE_FIX
 }
 
 #[cfg(test)]
@@ -665,102 +624,29 @@ mod tests {
         );
     }
 
-    /// The Run the command `retry` starts, read by the argument parser.
-    fn parsed(retry: &str) -> args::RunArgs {
-        let words: Vec<String> = retry.split(' ').skip(1).map(str::to_string).collect();
-        match args::parse(&words) {
-            Ok(args::Command::Run(run)) => run,
-            Ok(_) => panic!("{retry}: not a Run"),
-            Err(error) => panic!("{retry}: {error:#}"),
-        }
-    }
-
-    /// The command `asks` offer a Base fix with.
-    fn retry_of(asks: Asks) -> String {
-        match asks.base_fix {
-            BaseFixAsk::Undecided { retry } => retry,
-            decided => panic!("no command to offer: {decided:?}"),
-        }
-    }
-
     #[test]
-    fn the_retry_command_is_the_issue_url_and_the_flags_as_given_with_base_fix_added() {
-        let flags = |goal, email, parallel| Flags {
-            security_fix: None,
-            security_review: None,
-            goal,
-            email,
-            parallel,
-            base_fix: None,
-            harness: harness::Asked::default(),
+    fn all_dispatches_offer_the_original_issue_with_only_non_spec_parallel_removed() {
+        let flags = dispatch_flags();
+        let expected = BaseFixAsk::Undecided {
+            retry: args::retry_with_base_fix(&issue(), &flags),
         };
-        let on_codex = Flags {
-            harness: harness::Asked {
-                harness: Some(Harness::Codex),
-                model_and_effort: model_and_effort("gpt-6.1-sol", "max"),
-            },
-            ..flags(Some(Goal::Merged), None, None)
-        };
-        for (flags, retry) in [
-            (
-                on_codex,
-                format!(
-                    "thirdshift {URL} merge harness codex model gpt-6.1-sol effort max base-fix"
-                ),
-            ),
-            (Flags::default(), format!("thirdshift {URL} base-fix")),
-            (
-                flags(Some(Goal::Merged), Some(NotificationAsk::Send(None)), None),
-                format!("thirdshift {URL} merge --email base-fix"),
-            ),
-            (
-                flags(
-                    Some(Goal::ReadyForReview),
-                    Some(NotificationAsk::Skip),
-                    Some(n(2)),
-                ),
-                format!("thirdshift {URL} --no-merge --no-email parallel 2 base-fix"),
-            ),
-            (
-                flags(None, Some(to("me@example.com")), None),
-                format!("thirdshift {URL} --email me@example.com base-fix"),
-            ),
+        for asks in [
+            Asks::of_run(&issue(), &flags, &no_settings()),
+            Asks::of_architect_plan(&issue(), &flags, &no_settings()),
+            Asks::of_ready_issue(&issue(), true, &flags, &no_settings()),
         ] {
-            let config = no_settings();
-            let allowed = Flags {
-                base_fix: Some(BaseFixAsk::Allow),
-                ..flags.clone()
-            };
-            // Each kind of run offers the same command: a Run on the Issue
-            // URL, whatever dispatched it.
-            for (kind, asks) in [
-                ("a Run", Asks::of_run(&issue(), &flags, &config)),
-                (
-                    "an Architect plan",
-                    Asks::of_architect_plan(&issue(), &flags, &config),
-                ),
-                (
-                    "a Ready issue that is a Spec",
-                    Asks::of_ready_issue(&issue(), true, &flags, &config),
-                ),
-            ] {
-                let offered = retry_of(asks);
-                assert_eq!(offered, retry, "{kind}");
-                // The command it gives asks for what the run was asked for.
-                let again = parsed(&offered);
-                assert_eq!(again.issue.url, URL, "{kind}: {offered}");
-                assert_eq!(again.flags, allowed, "{kind}: {offered}");
-                assert_eq!(again.given, None, "{kind}: {offered}");
-            }
-            // Without the `parallel` that would fail its Run by hand.
-            let offered = retry_of(Asks::of_ready_issue(&issue(), false, &flags, &config));
-            let again = parsed(&offered);
-            let without_parallel = Flags {
-                parallel: None,
-                ..allowed
-            };
-            assert_eq!(again.flags, without_parallel, "{offered}");
+            assert_eq!(asks.base_fix, expected);
         }
+        let without_parallel = Flags {
+            parallel: None,
+            ..flags.clone()
+        };
+        assert_eq!(
+            Asks::of_ready_issue(&issue(), false, &flags, &no_settings()).base_fix,
+            BaseFixAsk::Undecided {
+                retry: args::retry_with_base_fix(&issue(), &without_parallel),
+            }
+        );
     }
 
     #[test]
