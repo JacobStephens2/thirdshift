@@ -3521,3 +3521,39 @@ fn audit_notifications_keep_record_order_and_reproduce_only_untriaged_records() 
         assert!(!text.contains("Private candidate write-up."), "{text}");
     }
 }
+
+#[test]
+fn historical_fix_links_are_validated_in_both_storage_adapters_before_work() {
+    for private in [false, true] {
+        for (link, diagnostic) in [
+            (
+                "malformed",
+                "the private record has an invalid fix Ticket link",
+            ),
+            (
+                "https://github.com/other/widgets/issues/8",
+                "the private record's fix Ticket belongs to another repository",
+            ),
+        ] {
+            let scenario = with_reproduced_findings(&["high"]);
+            let mut state = scenario.gh_state();
+            let text = format!(
+                "{}\n<!-- thirdshift:security-fix -->\nFix Ticket: {link}\nFix Run: pending\n",
+                state["advisories"][0]["description"].as_str().unwrap()
+            );
+            if private {
+                state["private"] = json!(true);
+                state["bodies"]["7"] = json!(text);
+                state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+            } else {
+                state["advisories"][0]["description"] = json!(text);
+            }
+            scenario.write_gh_state(&state);
+            let result = scenario.run(&["secure", "security-fix"]);
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
+            assert!(!result.stderr.contains("Private candidate write-up."));
+            assert!(scenario.claude_calls().is_empty());
+        }
+    }
+}

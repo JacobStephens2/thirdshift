@@ -160,11 +160,5 @@ fn check_issue_text(
     url: &str,
 ) -> Result<()> {
     let body = github.security_fix_text(issue)?;
-    if !body.contains(url) {
-        bail!("the Security fix Ticket does not link the private record");
-    }
-    if record.contains_private_text(&body) {
-        bail!("the Security fix Ticket includes private write-up text");
-    }
-    Ok(())
+    record.check_public_fix_text(&body, url)
 }

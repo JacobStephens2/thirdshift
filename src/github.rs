@@ -14,7 +14,8 @@ use crate::process::{self, Control, Interruption};
 
 mod advisories;
 pub use advisories::{
-    DraftAdvisory, FindingSource, Package, RecordedFinding, SecurityRecord, SecurityRecords,
+    DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
+    SecurityRecords,
 };
 
 #[cfg(test)]

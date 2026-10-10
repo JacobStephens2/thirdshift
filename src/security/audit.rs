@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::git::Git;
-use crate::github::{DraftAdvisory, FindingSource, Package};
+use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, Package};
 use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::logs;
@@ -162,21 +162,17 @@ pub fn run(
             .into_iter()
             .filter(|finding| finding["verdict"] != "rejected")
             .map(|finding| {
-                let fingerprint = finding["fingerprint"]
-                    .as_str()
-                    .context("finding has no fingerprint")?
-                    .to_string();
-                Ok(DraftAdvisory::new(
-                    FindingSource::Audit { commit: &commit },
-                    fingerprint,
-                    finding["title"]
+                Ok(DraftAdvisory::new(FindingDraft {
+                    fingerprint: finding["fingerprint"]
                         .as_str()
-                        .context("finding has no title")?
-                        .to_string(),
-                    finding["description"].as_str().unwrap_or_default(),
-                    &serde_json::to_string_pretty(&finding)?,
-                    package.clone(),
-                ))
+                        .context("finding has no fingerprint")?,
+                    summary: finding["title"].as_str().context("finding has no title")?,
+                    audited_commit: &commit,
+                    provenance: FindingProvenance::Audit,
+                    original_description: finding["description"].as_str().unwrap_or_default(),
+                    evidence: &serde_json::to_string_pretty(&finding)?,
+                    package: package.clone(),
+                }))
             })
             .collect::<Result<_>>()?;
         Ok(Audited { findings })
