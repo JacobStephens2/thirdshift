@@ -44,6 +44,19 @@ printf '%s\n' 'Security review: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
     )
 }
 
+fn assert_old_finding_stays_private(body: &str, result: &support::RunResult) {
+    for private in [
+        "Old unchecked bound",
+        "old-input-bound",
+        "Private old vulnerability evidence.",
+        "assert_bounded_input();",
+    ] {
+        assert!(!body.contains(private));
+        assert!(!result.stderr.contains(private));
+        assert!(!result.stdout.contains(private));
+    }
+}
+
 #[test]
 fn explicit_incomplete_review_surfaces_its_reason_and_records_old_findings_privately() {
     for old in [json!([]), json!([old_finding()])] {
@@ -67,16 +80,7 @@ fn explicit_incomplete_review_surfaces_its_reason_and_records_old_findings_priva
             assert_eq!(state["advisories"].as_array().unwrap().len(), 1);
             assert_eq!(state["advisories"][0]["severity"], "low");
         }
-        for private in [
-            "Old unchecked bound",
-            "old-input-bound",
-            "Private old vulnerability evidence.",
-            "assert_bounded_input();",
-        ] {
-            assert!(!pr["body"].as_str().unwrap().contains(private));
-            assert!(!result.stderr.contains(private));
-            assert!(!result.stdout.contains(private));
-        }
+        assert_old_finding_stays_private(pr["body"].as_str().unwrap(), &result);
     }
 }
 
@@ -125,16 +129,7 @@ fn explicit_incomplete_reviews_still_validate_the_entire_private_report() {
         let generic = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log";
         assert!(body.contains(generic), "{body}");
         assert!(result.stderr.contains(generic), "{}", result.stderr);
-        for private in [
-            "Old unchecked bound",
-            "old-input-bound",
-            "Private old vulnerability evidence.",
-            "assert_bounded_input();",
-        ] {
-            assert!(!body.contains(private));
-            assert!(!result.stderr.contains(private));
-            assert!(!result.stdout.contains(private));
-        }
+        assert_old_finding_stays_private(body, &result);
     }
 }
 
