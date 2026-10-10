@@ -609,6 +609,29 @@ fn a_staged_proposal_is_created_by_thirdshift_not_the_session() {
 }
 
 #[test]
+fn a_staged_proposal_is_validated_before_any_public_issue_is_created() {
+    for staged in [
+        // Copies private write-up text.
+        "printf 'Proposed public issue:\\nTitle: Bound accepted input\\nBody:\\nPrivate candidate write-up. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        // Omits the private record link.
+        "printf 'Proposed public issue:\\nTitle: Bound accepted input\\nBody:\\nReject oversized input.\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    ] {
+        let scenario = with_reproduced_findings(&["high"]);
+        scenario.agent_does_in_session(1, staged);
+        let result = scenario.run(&["secure", "security-fix"]);
+        assert_eq!(result.code, Some(1), "{staged}: {}", result.stderr);
+        let state = scenario.gh_state();
+        assert!(
+            state["bodies"].get("8").is_none(),
+            "{staged}: a rejected staged proposal must not create a public issue: {}",
+            state["bodies"]
+        );
+        assert!(state["prs"].as_array().unwrap().is_empty());
+        assert_eq!(scenario.claude_calls().len(), 1);
+    }
+}
+
+#[test]
 fn a_dispatched_fix_still_waits_without_permission_until_its_ticket_is_closed() {
     let scenario = with_reproduced_findings(&["high"]);
     scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
