@@ -1381,7 +1381,7 @@ fn plan_only_sends_one_notification_naming_the_plan() {
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       plan published\nReview:       plan published: {PLAN_URL}\n"
+            "Result:       plan published\nReview:       plan published: {PLAN_URL}\nDescription:  Deepen the session module\n"
         )),
         "{text}"
     );
@@ -1414,7 +1414,7 @@ printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       idea filed\nReview:       idea filed: {PLAN_URL}\n"
+            "Result:       idea filed\nReview:       idea filed: {PLAN_URL}\nDescription:  Deepen the session module\n"
         )),
         "{text}"
     );
@@ -1444,7 +1444,7 @@ fn a_review_whose_idea_is_already_filed_sends_one_notification_naming_that_issue
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       idea already filed\nReview:       idea already filed: {url}\n"
+            "Result:       idea already filed\nReview:       idea already filed: {url}\nDescription:  Issue 7\n"
         )),
         "{text}"
     );
@@ -1507,6 +1507,7 @@ fn email_always_sends_one_notification_for_the_review_and_the_run_it_dispatched(
         text.starts_with(&format!(
             "Result:       ready for review\n\
              Review:       plan published: {PLAN_URL}\n\
+             Description:  Deepen the session module\n\
              Dispatched:   ready for review\n\
              Pull request: {PR_URL}\n"
         )),
@@ -1532,6 +1533,7 @@ fn the_one_notification_says_what_became_of_the_dispatched_runs_base_fix() {
         text.starts_with(&format!(
             "Result:       ready for review\n\
              Review:       plan published: {PLAN_URL}\n\
+             Description:  Deepen the session module\n\
              Dispatched:   ready for review\n\
              Pull request: {PR_URL}\n\
              Base fix:     https://github.com/acme/widgets/issues/9 merged\n"
@@ -1556,6 +1558,7 @@ fn a_dispatched_spec_run_sends_no_notification_of_its_own_and_its_tickets_are_in
         text.starts_with(&format!(
             "Result:       merged\n\
              Review:       plan published: {PLAN_URL}\n\
+             Description:  Deepen the session module\n\
              Dispatched:   merged\n\
              Pull request: {}\n",
             spec_pr["url"].as_str().unwrap()
@@ -1589,6 +1592,7 @@ fn a_dispatched_run_that_fails_sends_one_notification_with_its_outcome_and_cause
         text.starts_with(&format!(
             "Result:       failed\n\
              Review:       plan published: {PLAN_URL}\n\
+             Description:  Deepen the session module\n\
              Dispatched:   failed\n\
              Pull request: {PR_URL}\n\
              Cause:        claude exited 3\n"
@@ -1706,6 +1710,7 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
         text.starts_with(&format!(
             "Result:       failed\n\
              Review:       plan published: {PLAN_URL}\n\
+             Description:  Deepen the session module\n\
              Dispatched:   failed\n"
         )),
         "{text}"

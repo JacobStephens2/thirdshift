@@ -123,6 +123,8 @@ pub struct Account<'a> {
 /// How an Architect run's Architecture review ended.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Review<'a> {
+    /// The title of the issue the review ended on, if known.
+    pub title: Option<&'a str>,
     /// How it ended, with the issue it ended on, as in `plan published:
     /// <url>`; else `failed` or `interrupted`.
     pub line: String,
@@ -244,7 +246,11 @@ impl<'a> Account<'a> {
         };
         let dispatched = dispatched.and(review.as_ref().ok()).map(Reviewed::url);
         Account {
-            review: Some(Review { line, dispatched }),
+            review: Some(Review {
+                title: review.as_ref().ok().and_then(Reviewed::title),
+                line,
+                dispatched,
+            }),
             ..account
         }
     }
@@ -434,7 +440,7 @@ mod tests {
     const PLAN: &str = "https://github.com/acme/widgets/issues/40";
 
     fn plan() -> Reviewed {
-        Reviewed::PlanReady(IssueUrl::parse(PLAN).unwrap())
+        Reviewed::PlanReady(IssueUrl::parse(PLAN).unwrap(), None)
     }
 
     fn failed_run(cause: &str) -> FailedRun {
@@ -621,6 +627,7 @@ mod tests {
             read_account(&ending),
             Account {
                 review: Some(Review {
+                    title: None,
                     line: format!("plan published: {PLAN}"),
                     dispatched: Some(PLAN),
                 }),
@@ -635,6 +642,7 @@ mod tests {
             read_account(&ending),
             Account {
                 review: Some(Review {
+                    title: None,
                     line: format!("plan published: {PLAN}"),
                     dispatched: Some(PLAN),
                 }),
@@ -653,12 +661,12 @@ mod tests {
                 format!("plan {PLAN} is ready for an agent"),
             ),
             (
-                Reviewed::IdeaFiled(issue()),
+                Reviewed::IdeaFiled(issue(), None),
                 "idea filed",
                 format!("no Strong candidate: the Architecture review filed the idea {PLAN}"),
             ),
             (
-                Reviewed::AlreadyFiled(issue()),
+                Reviewed::AlreadyFiled(issue(), None),
                 "idea already filed",
                 format!(
                     "no Strong candidate: {PLAN} already covers the Architecture review's \
@@ -682,6 +690,7 @@ mod tests {
                     log: None,
                     ticket_lines: &[],
                     review: Some(Review {
+                        title: None,
                         line: format!("{outcome}: {PLAN}"),
                         dispatched: None,
                     }),
@@ -704,6 +713,7 @@ mod tests {
             Account {
                 outcome: "review failed",
                 review: Some(Review {
+                    title: None,
                     line: "failed".to_string(),
                     dispatched: None,
                 }),
@@ -720,6 +730,7 @@ mod tests {
                 outcome: "interrupted",
                 interrupted: true,
                 review: Some(Review {
+                    title: None,
                     line: "interrupted".to_string(),
                     dispatched: None,
                 }),
@@ -816,6 +827,7 @@ mod tests {
     fn an_architect_run_sums_up_the_plan_it_dispatched_before_how_that_run_ended() {
         let review = |dispatched| {
             Some(Review {
+                title: None,
                 line: format!("plan published: {PLAN}"),
                 dispatched,
             })
