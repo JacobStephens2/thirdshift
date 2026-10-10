@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::git::Git;
-use crate::github::{FIX_TICKET_MARKER, SecurityRecord};
+use crate::github::SecurityRecord;
 use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::logs;
@@ -58,7 +58,7 @@ pub enum FixSize {
 }
 
 impl FixSize {
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Single => "single",
             Self::Spec => "spec",
@@ -95,48 +95,6 @@ impl Reproduction {
             Outcome::NotReproduced => None,
         }
     }
-
-    pub fn description(&self, original: &str) -> String {
-        // Replacing reproduction evidence must keep the dispatched fix's link.
-        let (original, fix) = original
-            .rsplit_once(FIX_TICKET_MARKER)
-            .map_or((original, String::new()), |(original, ticket)| {
-                (original, format!("{FIX_TICKET_MARKER}{ticket}"))
-            });
-        let original = original
-            .split_once("\n<!-- thirdshift:security-reproduction -->\n")
-            .map_or(original, |(original, _)| original);
-        let severity = self
-            .severity()
-            .map(|severity| format!("Severity: {}\n", severity.name()))
-            .unwrap_or_default();
-        let size = match &self.outcome {
-            Outcome::Reproduced { size, .. } => format!("Fix size: {}\n", size.name()),
-            Outcome::NotReproduced => String::new(),
-        };
-        // A test may itself contain Markdown fences. Preserve its text without
-        // allowing one of those fences to close the record's code block.
-        let fence = "`".repeat(
-            self.test
-                .lines()
-                .map(|line| line.chars().take_while(|c| *c == '`').count())
-                .max()
-                .unwrap_or(0)
-                .max(2)
-                + 1,
-        );
-        format!(
-            "{}\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: {}\n{severity}{size}\n{}\n\n### Proof-of-concept test\n\n{fence}\n{}{fence}\n{fix}",
-            original.trim_end(),
-            self.outcome,
-            self.notes,
-            if self.test.ends_with('\n') {
-                self.test.clone()
-            } else {
-                format!("{}\n", self.test)
-            }
-        )
-    }
 }
 
 pub fn run(
@@ -147,18 +105,7 @@ pub fn run(
     harness: &Choice,
 ) -> (Result<Reproduction>, Option<PathBuf>) {
     let prepared = (|| -> Result<_> {
-        let commit = record
-            .description()
-            .lines()
-            .find_map(|line| {
-                line.strip_prefix("Audited commit: `")
-                    .and_then(|commit| commit.strip_suffix('`'))
-            })
-            .context("Security finding record has no audited commit")?;
-        if ![40, 64].contains(&commit.len()) || !commit.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            bail!("Security finding record has an invalid audited commit");
-        }
+        let commit = record.audited_commit()?;
         let worktree = ReviewWorktree::at_commit(launch, &repo.name, commit)?;
         let root = logs::root(repo).join("reproductions");
         fs::create_dir_all(&root)?;
