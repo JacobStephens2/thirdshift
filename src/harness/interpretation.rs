@@ -1,11 +1,10 @@
 //! Interpret a Harness session once, including optional retained records.
 
-use std::path::PathBuf;
 use std::process::{ExitStatus, Output};
 
 use anyhow::{Result, anyhow};
 
-use super::{muse, opencode, said};
+use super::said;
 use crate::interrupt;
 
 mod stream;
@@ -20,7 +19,7 @@ use security::Security;
 pub struct Interpretation {
     cli: &'static str,
     decoder: Box<dyn Decoder>,
-    retained: Retained,
+    retained: Option<Box<dyn Retained>>,
     security: Option<Security>,
     models: models::Models,
 }
@@ -33,6 +32,8 @@ pub struct Completion {
 
 #[derive(Default)]
 pub struct Report {
+    /// Ordered progress supplied after retained completion.
+    pub completion_progress: Vec<String>,
     pub warnings: Vec<String>,
     pub summary: Option<String>,
     /// Models reported by session output or retained records.
@@ -101,46 +102,10 @@ pub(super) enum ModelScope {
     AttributionOnly,
 }
 
-pub(super) enum Retained {
-    None,
-    Muse(Option<PathBuf>),
-    OpenCode(PathBuf),
-}
-
-impl Retained {
-    fn reconcile(self, facts: &mut Facts) -> Result<()> {
-        match self {
-            Self::None => {}
-            Self::Muse(root) => {
-                if let Some(log) = root
-                    .as_deref()
-                    .zip(facts.ended.session_id.as_deref())
-                    .and_then(|(root, id)| muse::log::read(root, id))
-                {
-                    facts.report.summary = log.summary();
-                    if log.message.is_some() {
-                        facts.ended.final_message = log.message;
-                    }
-                    facts.report.models = log.models;
-                }
-            }
-            Self::OpenCode(worktree) => {
-                if let Some(id) = facts.ended.session_id.as_deref()
-                    && let Some(export) = opencode::export::read(&worktree, id)?
-                {
-                    // A readable export is authoritative, even without text.
-                    facts.ended.final_message = export.message;
-                    facts.report.summary = export.summary;
-                    facts.report.models = export.models;
-                    if export.failure.is_some() {
-                        facts.outcome = TurnOutcome::Failed;
-                        facts.diagnostic = facts.diagnostic.take().or(export.failure);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
+/// Optional retained reconciliation belongs to the supplying Harness adapter.
+/// Owned implementations follow Interpretation into the transcript reader.
+pub(super) trait Retained: Send {
+    fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()>;
 }
 
 enum Failure {
@@ -185,14 +150,19 @@ impl Failure {
 }
 
 impl Interpretation {
-    pub(super) fn new(cli: &'static str, decoder: Box<dyn Decoder>, retained: Retained) -> Self {
+    pub(super) fn new(cli: &'static str, decoder: Box<dyn Decoder>) -> Self {
         Self {
             cli,
             decoder,
-            retained,
+            retained: None,
             security: None,
             models: models::Models::default(),
         }
+    }
+
+    pub(super) fn with_retained(mut self, retained: Box<dyn Retained>) -> Self {
+        self.retained = Some(retained);
+        self
     }
 
     /// Apply refusal and Model reporting rules independently of the session's log label.
@@ -262,7 +232,9 @@ impl Interpretation {
         if refusal.is_some() {
             facts.outcome = TurnOutcome::Failed;
         }
-        let recovered = self.retained.reconcile(&mut facts);
+        let recovered = self
+            .retained
+            .map_or(Ok(()), |retained| retained.reconcile(&mut facts));
         if let Err(error) = interrupt::check() {
             return (None, Err(Failure::Execution(error)));
         }

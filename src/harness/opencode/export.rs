@@ -2,9 +2,10 @@
 //! survive dropped stream events. Session totals also count the title call.
 use super::OpenCode;
 use crate::harness::Adapter;
+use crate::harness::interpretation::{Facts, Retained, TurnOutcome};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(in crate::harness) struct SessionExport {
@@ -123,4 +124,47 @@ pub(in crate::harness) fn read(worktree: &Path, id: &str) -> Result<Option<Sessi
         Err(error) if crate::interrupt::requested() => Err(error),
         _ => Ok(None),
     }
+}
+
+/// A readable standalone export owns completion, including empty fields.
+pub(super) struct Completion {
+    worktree: PathBuf,
+}
+
+impl Completion {
+    pub(super) fn new(worktree: PathBuf) -> Self {
+        Self { worktree }
+    }
+}
+
+impl Retained for Completion {
+    fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()> {
+        if let Some(id) = facts.ended.session_id.as_deref()
+            && let Some(export) = read(&self.worktree, id)?
+        {
+            facts.ended.final_message = export.message;
+            facts.report.summary = export.summary;
+            facts.report.models = export.models;
+            if export.failure.is_some() {
+                facts.outcome = TurnOutcome::Failed;
+                facts.diagnostic = facts.diagnostic.take().or(export.failure);
+            }
+        }
+        facts.report.completion_progress = facts
+            .report
+            .models
+            .iter()
+            .map(|model| format!("Model: {model}"))
+            .collect();
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(in crate::harness) fn recording_interpretation(
+    root: &Path,
+    decoder: Box<dyn crate::harness::interpretation::Decoder>,
+) -> crate::harness::interpretation::Interpretation {
+    crate::harness::interpretation::Interpretation::new("claude", decoder)
+        .with_retained(Box::new(Completion::new(root.to_path_buf())))
 }

@@ -10,7 +10,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use super::adapter::{Adapter, Invocation, SkillLoading, without};
-use super::interpretation::{Interpretation, Retained};
+use super::interpretation::Interpretation;
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
 
@@ -124,8 +124,8 @@ impl Adapter for Muse {
         Interpretation::new(
             self.name(),
             Box::new(stream::MuseProgress::for_prompt(prompt)),
-            Retained::Muse(data_dir()),
         )
+        .with_retained(Box::new(log::Completion::new(data_dir())))
     }
 }
 
@@ -168,7 +168,6 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
             Interpretation::new(
                 Muse.name(),
                 Box::new(stream::MuseProgress::for_prompt("Reply with OK.")),
-                Retained::None,
             )
             .check_output(
                 &output,

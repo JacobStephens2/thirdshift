@@ -1,5 +1,6 @@
 //! Read Muse's retained session records for the last reply and token usage.
 
+use crate::harness::interpretation::{Facts, Retained};
 use anyhow::Result;
 use serde_json::Value;
 use std::fs;
@@ -103,4 +104,48 @@ pub(in crate::harness) fn read(root: &Path, id: &str) -> Option<SessionLog> {
     }
     let path = find_log(&root.join("sessions"), id, 3)?;
     SessionLog::parse(&fs::read_to_string(path).ok()?, id).ok()
+}
+
+/// Muse's readable records own usage and Models, but text only when present.
+pub(super) struct Completion {
+    root: Option<PathBuf>,
+}
+
+impl Completion {
+    pub(super) fn new(root: Option<PathBuf>) -> Self {
+        Self { root }
+    }
+}
+
+impl Retained for Completion {
+    fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()> {
+        if let Some(log) = self
+            .root
+            .as_deref()
+            .zip(facts.ended.session_id.as_deref())
+            .and_then(|(root, id)| read(root, id))
+        {
+            facts.report.summary = log.summary();
+            if log.message.is_some() {
+                facts.ended.final_message = log.message;
+            }
+            facts.report.models = log.models;
+        }
+        facts.report.completion_progress = facts
+            .report
+            .models
+            .iter()
+            .map(|model| format!("Model: {model}"))
+            .collect();
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(in crate::harness) fn recording_interpretation(
+    root: &Path,
+    decoder: Box<dyn crate::harness::interpretation::Decoder>,
+) -> crate::harness::interpretation::Interpretation {
+    crate::harness::interpretation::Interpretation::new("claude", decoder)
+        .with_retained(Box::new(Completion::new(Some(root.to_path_buf()))))
 }
