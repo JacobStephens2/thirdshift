@@ -1,5 +1,246 @@
 use super::*;
 
+#[test]
+fn semantic_sources_create_compatible_records_with_lazy_commit_validation() {
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+    for private in [false, true] {
+        for provenance in [
+            FindingProvenance::Audit,
+            FindingProvenance::Review {
+                issue_url: &issue.url,
+            },
+        ] {
+            let draft = DraftAdvisory::new(FindingDraft {
+                fingerprint: "bounded-input",
+                summary: "Bound input",
+                audited_commit: commit,
+                provenance,
+                original_description: "Original evidence.",
+                evidence: "{\n  \"evidence\": true\n}",
+                package: Package {
+                    ecosystem: "rust".into(),
+                    name: Some("widgets".into()),
+                },
+            });
+            let expected = match provenance {
+                FindingProvenance::Audit => {
+                    "Found by thirdshift's Security run.\n\nFingerprint: `bounded-input`\nAudited commit: `0123456789abcdef0123456789abcdef01234567`\n\nOriginal evidence.\n\n```json\n{\n  \"evidence\": true\n}\n```\n"
+                }
+                FindingProvenance::Review { .. } => {
+                    "Found by thirdshift's Security review.\n\nFingerprint: `bounded-input`\nAudited commit: `0123456789abcdef0123456789abcdef01234567`\nReview issue: https://github.com/acme/widgets/issues/7\n\nOriginal evidence.\n\n```json\n{\n  \"evidence\": true\n}\n```\n"
+                }
+            };
+            assert_eq!(draft.description, expected);
+            assert_eq!(draft.package.name.as_deref(), Some("widgets"));
+            let mut records = collection(private, vec![json!({"unused": "malformed"})]);
+            let created = records
+                .record_or_reuse(&draft, |storage, draft| {
+                    storage.decode_created(native(private, draft))
+                })
+                .unwrap();
+            assert!(created.created);
+            assert_eq!(created.record.audited_commit().unwrap(), commit);
+            let reused = records
+                .record_or_reuse(&draft, |_, _| bail!("duplicate creation"))
+                .unwrap();
+            assert!(!reused.created);
+            assert_eq!(reused.record.description(), expected);
+        }
+    }
+}
+
+#[test]
+fn repeated_reproduction_and_fix_completion_preserve_evidence_fences_and_private_edits() {
+    use crate::security::reproduction::Outcome;
+    let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    for private in [false, true] {
+        let mut candidate = draft("legacy");
+        candidate.description = "Fingerprint: `legacy`\nAudited commit: `ABCDEF0123456789ABCDEF0123456789ABCDEF0123`\nOriginal evidence.\n## Reproduction\nOrdinary Markdown heading.  \n".into();
+        let storage = collection(private, Vec::new());
+        let record = storage.decode_created(native(private, &candidate)).unwrap();
+        let pending = record
+            .with_pending_fix(record.description(), &issue)
+            .unwrap();
+        assert!(
+            record
+                .with_pending_fix(&format!("{pending}edit"), &issue)
+                .is_err()
+        );
+        candidate.description = pending;
+        let record = storage.decode_created(native(private, &candidate)).unwrap();
+        let reproduction = Reproduction {
+            outcome: Outcome::Reproduced {
+                severity: Severity::High,
+                size: FixSize::Spec,
+            },
+            notes: "Private reproduction notes.".into(),
+            test: "`````rust\nbounded_fixture();\n`````".into(),
+        };
+        candidate.description = record.with_reproduction(&reproduction);
+        let expected = "Fingerprint: `legacy`\nAudited commit: `ABCDEF0123456789ABCDEF0123456789ABCDEF0123`\nOriginal evidence.\n## Reproduction\nOrdinary Markdown heading.\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: reproduced high spec\nSeverity: high\nFix size: spec\n\nPrivate reproduction notes.\n\n### Proof-of-concept test\n\n``````\n`````rust\nbounded_fixture();\n`````\n``````\n\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/8\nFix Run: pending\n";
+        assert_eq!(candidate.description, expected);
+        let record = storage.decode_created(native(private, &candidate)).unwrap();
+        assert!(record.fix_size().unwrap() == FixSize::Spec);
+        assert_eq!(record.with_reproduction(&reproduction), expected);
+        let current = format!("{expected}Day shift note: keep the input contract.\n");
+        let failed = record
+            .with_fix_ending(&current, &issue, FixEnding::Failed)
+            .unwrap();
+        assert_eq!(failed, format!("{current}Fix Run: failed\n"));
+        candidate.description = failed;
+        let records = collection(private, vec![native(private, &candidate)]);
+        assert_eq!(records.failed_fix().unwrap().unwrap().url, issue.url);
+        let succeeded = record
+            .with_fix_ending(&candidate.description, &issue, FixEnding::Succeeded)
+            .unwrap();
+        assert_eq!(
+            succeeded,
+            format!("{}Fix Run: succeeded\n", candidate.description)
+        );
+        candidate.description = succeeded;
+        let records = collection(private, vec![native(private, &candidate)]);
+        assert!(records.failed_fix().unwrap().is_none());
+        assert!(records.next_fix().unwrap().is_none());
+        let changed = current.replace("issues/8", "issues/9");
+        assert!(
+            record
+                .with_fix_ending(&changed, &issue, FixEnding::Succeeded)
+                .is_err()
+        );
+        assert!(
+            record
+                .with_fix_ending(
+                    &current.replace("issues/8", "issues/8 "),
+                    &issue,
+                    FixEnding::Failed
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn public_fix_checks_preserve_copied_line_exclusions_and_short_statement_detection() {
+    for private in [false, true] {
+        let mut candidate = draft("private-lines");
+        candidate.description = "Private write-up.\n   bypass_login();   \nneedle\n___\n!!!\n```rust\nFingerprint: `private-lines`\nAudited commit: `bad`\nOutcome: reproduced high single\nSeverity: high\nFix size: single\n## Heading\n<!-- comment -->\n".into();
+        let storage = collection(private, Vec::new());
+        let record = storage.decode_created(native(private, &candidate)).unwrap();
+        let url = &record.metadata().url;
+        assert!(
+            record
+                .check_public_fix_text(&format!("{url}\nBound input; Private write-up."), url)
+                .is_err()
+        );
+        assert!(
+            record
+                .check_public_fix_text(
+                    &format!("{url}\nRemove bypass_login(); from the input path."),
+                    url
+                )
+                .is_err()
+        );
+        record.check_public_fix_text(&format!("{url}\nneedle ___ !!! ```rust Fingerprint: `private-lines` Audited commit: `bad` Outcome: reproduced high single Severity: high Fix size: single ## Heading <!-- comment -->"), url).unwrap();
+        assert!(record.audited_commit().is_err());
+    }
+}
+
+#[test]
+fn legacy_records_keep_first_outcomes_and_last_fix_endings_without_eager_decoding() {
+    use crate::security::reproduction::Outcome;
+    for private in [false, true] {
+        let field = if private { "body" } else { "description" };
+        let mut candidate = draft("legacy-selection");
+        candidate.description = "Fingerprint: `legacy-selection`\nAudited commit: no backticks\nAudited commit: `0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF`\nAudited commit: `bad`\nUnrelated text.\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced low spec\nOutcome: reproduced critical single\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced high single".into();
+        let mut records = collection(
+            private,
+            vec![
+                json!({field: "Unselected malformed history"}),
+                native(private, &candidate),
+            ],
+        );
+        let record = records
+            .record_or_reuse(&candidate, |_, _| bail!("duplicate creation"))
+            .unwrap()
+            .record;
+        assert_eq!(
+            record.audited_commit().unwrap(),
+            "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+        );
+        assert!(record.fix_size().unwrap() == FixSize::Spec);
+        assert_eq!(
+            records.next_fix().unwrap().unwrap().1.severity.as_deref(),
+            Some("low")
+        );
+        let suffix = "\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/8\nFix Run: succeeded\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/9\nFix Run: pending\nDay shift edits without final newline";
+        candidate.description.push_str(suffix);
+        let records = collection(private, vec![native(private, &candidate)]);
+        assert_eq!(records.failed_fix().unwrap().unwrap().number, 9);
+        assert!(records.next_fix().unwrap().is_none());
+        let record = records.decode_created(native(private, &candidate)).unwrap();
+        let replacement = record.with_reproduction(&Reproduction {
+            outcome: Outcome::NotReproduced,
+            notes: "Not reproduced.".into(),
+            test: "harmless_fixture();\n".into(),
+        });
+        assert_eq!(
+            replacement,
+            "Fingerprint: `legacy-selection`\nAudited commit: no backticks\nAudited commit: `0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF`\nAudited commit: `bad`\nUnrelated text.\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: not reproduced\n\nNot reproduced.\n\n### Proof-of-concept test\n\n```\nharmless_fixture();\n```\n\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/9\nFix Run: pending\nDay shift edits without final newline"
+        );
+        for ending in ["Fix Run: succeeded", "Fix Run: unknown", "Fix Run: failed "] {
+            let mut value = native(private, &candidate);
+            value[field] = json!(format!("{}\n{ending}", candidate.description));
+            assert!(
+                collection(private, vec![value])
+                    .failed_fix()
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        for (description, error) in [
+            ("Fingerprint: `legacy-selection`", "no audited commit"),
+            (
+                "Audited commit: `bad`\nAudited commit: `ABCDEF0123456789ABCDEF0123456789ABCDEF0123`",
+                "invalid audited commit",
+            ),
+            (
+                "Audited commit: `éééééééééééééééééééé`",
+                "invalid audited commit",
+            ),
+        ] {
+            candidate.description = description.into();
+            let record = records.decode_created(native(private, &candidate)).unwrap();
+            assert!(
+                record
+                    .audited_commit()
+                    .unwrap_err()
+                    .to_string()
+                    .contains(error)
+            );
+        }
+        for outcome in [
+            "not reproduced",
+            "reproduced invalid spec",
+            "reproduced high invalid",
+        ] {
+            candidate.description = format!(
+                "Private evidence.\n<!-- thirdshift:security-reproduction -->\nOutcome: {outcome}\nOutcome: reproduced high single"
+            );
+            let records = collection(private, vec![native(private, &candidate)]);
+            assert!(records.next_fix().unwrap().is_none());
+            assert!(records.waiting_for_day_shift(true));
+            assert!(
+                records
+                    .decode_created(native(private, &candidate))
+                    .unwrap()
+                    .fix_size()
+                    .is_err()
+            );
+        }
+    }
+}
+
 fn draft(fingerprint: &str) -> DraftAdvisory {
     DraftAdvisory {
         fingerprint: fingerprint.into(),

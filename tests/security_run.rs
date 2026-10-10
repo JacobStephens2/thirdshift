@@ -3294,6 +3294,132 @@ fn a_failed_fix_preserves_private_edits_made_during_its_run_and_still_pauses() {
     }
 }
 
+#[test]
+fn a_changed_fix_link_refuses_completion_without_a_patch() {
+    for private in [false, true] {
+        let scenario = with_reproduced_findings(&["high"]);
+        let dispatched = if private { 7 } else { 8 };
+        let mut state = scenario.gh_state();
+        let original = state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        if private {
+            state["private"] = json!(true);
+            state["bodies"]["7"] = json!(original);
+            state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+            scenario.write_gh_state(&state);
+        } else {
+            scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
+        }
+        let changed = format!(
+            "{original}\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/9\nFix Run: pending\nDay shift changed the dispatched Ticket.\n"
+        );
+        let (path, field) = if private {
+            ("issues/7", "body")
+        } else {
+            ("security-advisories/GHSA-finding-0", "description")
+        };
+        scenario.agent_does_for(dispatched, &format!(
+            "gh api --method PATCH repos/acme/widgets/{path} --input - <<'RECORD'\n{}\nRECORD\nexit 1\n", json!({field: changed})
+        ));
+        let failed = scenario.run(&["secure", "security-fix"]);
+        assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+        assert!(
+            failed
+                .stderr
+                .contains("could not record the failed Security fix's ending"),
+            "{}",
+            failed.stderr
+        );
+        let state = scenario.gh_state();
+        let description = if private {
+            &state["bodies"]["7"]
+        } else {
+            &state["advisories"][0]["description"]
+        };
+        assert_eq!(description.as_str().unwrap(), changed);
+        let patch_prefix = vec![
+            "api".to_string(),
+            "--method".to_string(),
+            "PATCH".to_string(),
+            format!("repos/acme/widgets/{path}"),
+        ];
+        // Only the pending link and the session's explicit link edit may PATCH.
+        assert_eq!(
+            scenario
+                .gh_calls()
+                .iter()
+                .filter(|call| call.starts_with(&patch_prefix))
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn missing_or_malformed_audited_commits_refuse_reproduction_before_worktree_acquisition() {
+    for private in [false, true] {
+        for (header, expected) in [
+            ("", "no audited commit"),
+            ("Audited commit: no backticks", "no audited commit"),
+            ("Audited commit: `bad`", "invalid audited commit"),
+            (
+                "Audited commit: `gggggggggggggggggggggggggggggggggggggggg`",
+                "invalid audited commit",
+            ),
+        ] {
+            let scenario = Scenario::new();
+            let mut state = scenario.gh_state();
+            let description = format!("Fingerprint: `invalid-commit`\n{header}\nPrivate evidence.");
+            if private {
+                state["private"] = json!(true);
+                state["bodies"]["7"] = json!(description);
+                state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+            } else {
+                state["advisories"] = json!([{
+                    "ghsa_id": "GHSA-invalid", "state": "draft", "severity": null,
+                    "summary": "Unchecked input size", "html_url": "https://github.com/acme/widgets/security/advisories/GHSA-invalid", "description": description
+                }]);
+            }
+            scenario.agent_does_in_session(
+                1,
+                &audit_script_with_records(
+                    &scenario,
+                    &json!([finding("invalid-commit")]).to_string(),
+                    &state,
+                ),
+            );
+            let failed = scenario.run(&["secure"]);
+            assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+            assert!(failed.stderr.contains(expected), "{}", failed.stderr);
+            assert_eq!(
+                scenario.claude_calls().len(),
+                1,
+                "reproduction session started"
+            );
+            assert!(
+                !failed.stderr.contains("widgets-security-reproduce"),
+                "reproduction Worktree acquisition started: {}",
+                failed.stderr
+            );
+            assert_eq!(scenario.entries("work"), vec![REPO]);
+            assert_eq!(
+                scenario
+                    .launch_git(&["worktree", "list", "--porcelain"])
+                    .matches("worktree ")
+                    .count(),
+                1
+            );
+            assert!(scenario.gh_calls().iter().all(|call| !call.starts_with(&[
+                "api".into(),
+                "--method".into(),
+                "PATCH".into()
+            ])));
+        }
+    }
+}
+
 fn assert_a_failed_fix_record_outage_pauses_security(severity: &str) {
     let scenario = with_reproduced_findings(&[severity]);
     scenario.agent_does_in_session(1, &publish_fix("GHSA-finding-0"));
