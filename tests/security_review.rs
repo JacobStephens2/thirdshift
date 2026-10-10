@@ -45,6 +45,100 @@ printf '%s\n' 'Security review: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 }
 
 #[test]
+fn explicit_incomplete_review_surfaces_its_reason_and_records_old_findings_privately() {
+    for old in [json!([]), json!([old_finding()])] {
+        let scenario = Scenario::new();
+        scenario.agent_does_in_session(1, OPENS_PR);
+        let script = format!(
+            "{}\nprintf '%s\\n' 'Security review: incomplete: required sandbox isolation is unavailable' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+            review_script(&old, &[])
+        );
+        scenario.agent_does_in_session(2, &script);
+        let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let reason = "Security review incomplete: required sandbox isolation is unavailable";
+        assert!(result.stderr.contains(reason), "{}", result.stderr);
+        let state = scenario.gh_state();
+        let pr = &state["prs"][0];
+        assert_eq!(pr["state"], "OPEN");
+        assert_eq!(pr["isDraft"], false);
+        assert!(pr["body"].as_str().unwrap().contains(reason));
+        if !old.as_array().unwrap().is_empty() {
+            assert_eq!(state["advisories"].as_array().unwrap().len(), 1);
+            assert_eq!(state["advisories"][0]["severity"], "low");
+        }
+        for private in [
+            "Old unchecked bound",
+            "old-input-bound",
+            "Private old vulnerability evidence.",
+            "assert_bounded_input();",
+        ] {
+            assert!(!pr["body"].as_str().unwrap().contains(private));
+            assert!(!result.stderr.contains(private));
+            assert!(!result.stdout.contains(private));
+        }
+    }
+}
+
+#[test]
+fn explicit_incomplete_reason_is_capped_without_breaking_unicode() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, OPENS_PR);
+    let reason = format!("{}discarded suffix", "λ".repeat(510));
+    scenario.agent_does_in_session(2, &format!(
+        "{}\nprintf '%s\\n' 'Security review: incomplete: {reason}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        review_script(&json!([]), &[])
+    ));
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let expected = format!("Security review incomplete: {}", "λ".repeat(500));
+    assert!(result.stderr.contains(&expected), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let body = state["prs"][0]["body"].as_str().unwrap();
+    assert!(body.contains(&format!("- {expected}\n")), "{body}");
+    assert!(!body.contains(&"λ".repeat(501)));
+    assert!(!result.stderr.contains(&"λ".repeat(501)));
+    assert!(!body.contains("discarded suffix"));
+    assert!(!result.stderr.contains("discarded suffix"));
+}
+
+#[test]
+fn explicit_incomplete_reviews_still_validate_the_entire_private_report() {
+    let mut invalid = old_finding();
+    invalid["proof_of_concept"]["merge_base_exit_code"] = json!(0);
+    let valid = review_script(&json!([old_finding()]), &[]);
+    for script in [
+        format!("{valid}\nrm \"$report\"\n"),
+        format!("{valid}\nprintf '%s' 'Private old vulnerability evidence.' > \"$report\"\n"),
+        review_script(&json!([old_finding(), invalid]), &[]),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does_in_session(1, OPENS_PR);
+        scenario.agent_does_in_session(2, &format!(
+            "{script}\nprintf '%s\\n' 'Security review: incomplete: blocked validation' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+        ));
+        let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let state = scenario.gh_state();
+        assert!(state["advisories"].is_null());
+        let body = state["prs"][0]["body"].as_str().unwrap();
+        let generic = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log";
+        assert!(body.contains(generic), "{body}");
+        assert!(result.stderr.contains(generic), "{}", result.stderr);
+        for private in [
+            "Old unchecked bound",
+            "old-input-bound",
+            "Private old vulnerability evidence.",
+            "assert_bounded_input();",
+        ] {
+            assert!(!body.contains(private));
+            assert!(!result.stderr.contains(private));
+            assert!(!result.stdout.contains(private));
+        }
+    }
+}
+
+#[test]
 fn an_old_finding_is_recorded_privately_without_holding_self_merge() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, OPENS_PR);
@@ -310,7 +404,13 @@ fn command_words_override_the_config_and_review_is_off_by_default() {
 #[test]
 fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue() {
     for final_message in [
+        "",
         "Review incomplete",
+        "Security review: not JSON",
+        "Security review: incomplete: ",
+        "Security review: incomplete:   ",
+        "Security review: incomplete: first line\nsecond line",
+        "Security review: incomplete: first\rsecond",
         "Security review: {}",
         r#"Security review: {"unaddressed_count":0,"findings":["Cross-tenant read"],"pre_existing_count":0}"#,
         r#"Security review: {"unaddressed_count":1,"findings":[""],"pre_existing_count":0}"#,
@@ -321,7 +421,11 @@ fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue(
             scenario.agent_does_in_session(1, OPENS_PR);
             // Write literal data as a file through the existing fixture.
             std::fs::write(scenario.path("review-final.txt"), final_message).unwrap();
-            scenario.agent_does_in_session(2, r#"cat "$(dirname "$FAKE_CLAUDE_SCRIPT")/review-final.txt" > "$FAKE_CLAUDE_FINAL_MESSAGE""#);
+            scenario.agent_does_in_session(2, &format!(
+                "{}\n{}",
+                review_script(&json!([]), &[]),
+                r#"cat "$(dirname "$FAKE_CLAUDE_SCRIPT")/review-final.txt" > "$FAKE_CLAUDE_FINAL_MESSAGE""#
+            ));
             let result = scenario.run(&[
                 &scenario.issue_url(7),
                 "security-review",
@@ -334,7 +438,7 @@ fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue(
                 result.stderr
             );
             assert!(
-                result.stderr.contains("Security review incomplete"),
+                result.stderr.contains("Security review incomplete: session failed, ended early or omitted a valid final line; see Session log"),
                 "{}",
                 result.stderr
             );
@@ -345,7 +449,7 @@ fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue(
                 pr["body"]
                     .as_str()
                     .unwrap()
-                    .contains("Security review incomplete")
+                    .contains("Security review incomplete: session failed, ended early or omitted a valid final line; see Session log")
             );
         }
     }
