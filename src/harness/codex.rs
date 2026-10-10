@@ -81,6 +81,39 @@ impl Adapter for Codex {
     fn check(&self, choice: &mut Choice) -> Result<()> {
         check_model_and_effort(choice)
     }
+    /// Unlike a session (ADR-0012), the summary reads contributor-editable PR
+    /// titles and bodies, so it runs sandboxed and read-only, with nothing to
+    /// approve and Codex's shell, MCP, browser and hook tools switched off,
+    /// as Claude's summary runs with no tools. A Codex that doesn't know one
+    /// of these features fails, and the release falls back to generated notes.
+    fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
+        let mut args: Vec<String> = [
+            "exec",
+            // Summary generation runs in a temporary directory, outside Git.
+            "--skip-git-repo-check",
+            "--json",
+            "--ephemeral",
+            "--sandbox",
+            "read-only",
+            "-c",
+            "approval_policy=\"never\"",
+            "-c",
+            "web_search=\"disabled\"",
+            "-c",
+            "mcp_servers={}",
+        ]
+        .map(String::from)
+        .to_vec();
+        for feature in SUMMARY_DISABLED_FEATURES {
+            args.extend(["--disable".to_string(), feature.to_string()]);
+        }
+        args.extend(model_args(choice));
+        args.push("-".to_string());
+        Invocation {
+            args,
+            stdin: Some(prompt.to_string()),
+        }
+    }
     fn ask_settings(
         &self,
         outside: &mut dyn Terminal,
@@ -146,6 +179,18 @@ pub fn codex_args(harness: &Choice, resume: Option<&str>, prompt: &str) -> Vec<S
 /// The config setting that has Codex read `CLAUDE.md` where a directory has
 /// no `AGENTS.md`.
 const CLAUDE_MD_FALLBACK: &str = r#"project_doc_fallback_filenames=["CLAUDE.md"]"#;
+
+/// The Codex features a release summary runs without: every tool that could
+/// run commands, reach a service, or act on the machine.
+const SUMMARY_DISABLED_FEATURES: [&str; 7] = [
+    "shell_tool",
+    "unified_exec",
+    "apps",
+    "plugins",
+    "browser_use",
+    "computer_use",
+    "hooks",
+];
 
 /// Settle the Model and Effort, if either is named, on Codex's names for
 /// them, from its catalog.

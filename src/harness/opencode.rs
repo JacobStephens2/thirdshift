@@ -2,7 +2,7 @@
 pub(super) mod export;
 mod stream;
 
-use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::adapter::{Adapter, Invocation, SkillLoading, without};
 use super::interpretation::{Interpretation, Retained};
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings};
@@ -57,6 +57,16 @@ impl Adapter for OpenCode {
             args,
             stdin: Some(self.skill_loading().prompt(prompt)),
         }
+    }
+    /// No `--auto`, and a deny-all permission config that holds even where
+    /// the user's config allows a tool: every tool call is refused.
+    fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
+        let mut invocation = self.session(choice, None, prompt);
+        invocation.args = without(invocation.args, &["--auto"]);
+        invocation
+    }
+    fn summary_environment(&self) -> &'static [(&'static str, &'static str)] {
+        &[("OPENCODE_CONFIG_CONTENT", r#"{"permission":{"*":"deny"}}"#)]
     }
     fn check(&self, choice: &mut Choice) -> Result<()> {
         check_model_and_effort(&ModelAndEffort {

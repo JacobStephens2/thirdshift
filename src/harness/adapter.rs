@@ -35,6 +35,17 @@ pub trait Adapter: Sync {
         self.session(choice, resume, prompt)
     }
 
+    /// A one-shot release summary, using stdin or `prompt_file` so release
+    /// input never exceeds the operating system's argument-size limit.
+    /// The file contains `prompt` and remains available until the CLI exits.
+    /// The input holds contributor-editable PR titles and bodies, so the
+    /// summary runs without the session's permission bypass and with as few
+    /// tools as the CLI allows: none that run commands, write, reach the
+    /// network or MCP, and none whose reads can reach the summary.
+    fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
+        self.session(choice, None, prompt)
+    }
+
     /// A Security session or its Resume. Guidance reviews do not permit
     /// delegation; other security sessions request fresh sub-agents.
     fn security_session(
@@ -65,11 +76,25 @@ pub trait Adapter: Sync {
         &[]
     }
 
+    /// Overrides a release summary adds to [`Self::environment`].
+    fn summary_environment(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// Make and exclude an instruction-file fallback link where the CLI
     /// needs one. Native and config-based fallbacks stay in the adapter.
     fn link_instruction_fallback(&self, _worktree: &Path) -> Result<()> {
         Ok(())
     }
+}
+
+/// `args` without the first run of `flags`, in order: a session's
+/// permission bypass, taken off for a release summary.
+pub(crate) fn without(mut args: Vec<String>, flags: &[&str]) -> Vec<String> {
+    if let Some(at) = args.windows(flags.len()).position(|run| run == flags) {
+        args.drain(at..at + flags.len());
+    }
+    args
 }
 
 /// A session's arguments and optional prompt on stdin. `None` keeps stdin
