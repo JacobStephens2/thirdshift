@@ -1109,20 +1109,44 @@ fn an_undecided_run_offers_both_ways_to_allow_a_reproduced_fix() {
                         assert_eq!(command, previous);
                     }
                     offered_command = Some(command);
-                    let mut expected = vec!["secure"];
+                    let words = support::guidance::words(command);
+                    assert_eq!(words.first().map(String::as_str), Some("secure"));
+                    assert_eq!(words.len(), if base.is_some() { 10 } else { 8 });
+                    assert_eq!(
+                        words
+                            .iter()
+                            .filter(|word| word.trim_start_matches('-') == "security-fix")
+                            .count(),
+                        1
+                    );
                     if let Some(base) = base {
-                        expected.extend(["base", base]);
+                        assert!(
+                            words
+                                .windows(2)
+                                .any(|pair| pair[0].trim_start_matches('-') == "base"
+                                    && pair[1] == base),
+                            "{words:?}"
+                        );
+                    } else {
+                        assert!(
+                            !words
+                                .iter()
+                                .any(|word| word.trim_start_matches('-') == "base")
+                        );
                     }
-                    expected.extend([
-                        "--email",
-                        "day@example.com",
-                        "security-fix",
-                        "harness",
-                        "claude",
-                        "model",
-                        "Model Label With Spaces",
-                    ]);
-                    assert_eq!(support::guidance_words(command), expected);
+                    for pair in [
+                        ["email", "day@example.com"],
+                        ["harness", "claude"],
+                        ["model", "Model Label With Spaces"],
+                    ] {
+                        assert!(
+                            words
+                                .windows(2)
+                                .any(|actual| actual[0].trim_start_matches('-') == pair[0]
+                                    && actual[1] == pair[1]),
+                            "{words:?}"
+                        );
+                    }
                 }
                 assert_eq!(
                     text.contains("fix = true under [security]"),

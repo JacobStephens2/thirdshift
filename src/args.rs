@@ -470,24 +470,7 @@ mod tests {
 
     const URL: &str = "https://github.com/acme/widgets/issues/7";
 
-    /// Recover exactly the argv a copied guidance command supplies.
-    fn shell_words(command: &str) -> Vec<String> {
-        let output = std::process::Command::new("sh")
-            .args([
-                "-c",
-                &format!("thirdshift() {{ printf '%s\\0' \"$@\"; }}; {command}"),
-            ])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        assert!(output.stderr.is_empty(), "{output:?}");
-        let mut words = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
-        assert_eq!(words.pop(), Some(&b""[..]));
-        words
-            .into_iter()
-            .map(|word| String::from_utf8(word.to_vec()).unwrap())
-            .collect()
-    }
+    use crate::test_support::guidance::words as shell_words;
 
     #[test]
     fn base_fix_guidance_preserves_a_model_label_with_spaces() {
