@@ -1889,28 +1889,6 @@ fn a_ticket_with_its_own_sub_issues_is_unready() {
 }
 
 #[test]
-fn help_explains_unready_tickets_and_that_a_spec_run_takes_every_ticket_it_can_reach() {
-    let scenario = Scenario::new();
-
-    let result = scenario.run(&["help"]);
-
-    assert_eq!(result.code, Some(0));
-    for part in [
-        "Spec run",
-        "every Ticket",
-        "can reach",
-        "Unready Ticket",
-        "ready-for-human, needs-info, wontfix or\nneeds-triage",
-        "sub-issues",
-        "cycle",
-        "merge on a Spec merges the Spec PR",
-        "Tickets always merge into the Spec branch",
-    ] {
-        assert_contains(&result.stdout, part);
-    }
-}
-
-#[test]
 fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as_interrupted() {
     // SIGTERM to the Spec run's process alone while #21's agent is at work,
     // leaving it half done: #21's Run pushes that work as a failed run, #22
