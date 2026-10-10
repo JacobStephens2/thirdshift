@@ -163,26 +163,8 @@ fn check_issue_text(
     if !body.contains(url) {
         bail!("the Security fix Ticket does not link the private record");
     }
-    // Reject copied write-up lines and test text. The session is also
-    // instructed to publish only what the fix changes, never a paraphrase.
-    for line in record.description().lines().filter(|line| {
-        let line = line.trim();
-        // A bare identifier can also be an ordinary word in fix prose.
-        // Complete short statements such as bypass_login(); stay checked.
-        line.chars().any(char::is_alphanumeric)
-            && !line.chars().all(|ch| ch.is_alphanumeric() || ch == '_')
-            && !line.starts_with("```")
-            && !line.starts_with("Fingerprint:")
-            && !line.starts_with("Audited commit:")
-            && !line.starts_with("Outcome:")
-            && !line.starts_with("Severity:")
-            && !line.starts_with("Fix size:")
-            && !line.starts_with('#')
-            && !line.starts_with("<!--")
-    }) {
-        if body.contains(line.trim()) {
-            bail!("the Security fix Ticket includes private write-up text");
-        }
+    if record.contains_private_text(&body) {
+        bail!("the Security fix Ticket includes private write-up text");
     }
     Ok(())
 }
