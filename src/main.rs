@@ -122,6 +122,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::ReleaseSummary) => return release_summary(),
         Ok(Command::EmailTest(to)) => {
             return outcome(
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),
@@ -259,6 +260,26 @@ fn secure(args: PassArgs) -> ExitCode {
         security::Outcome::Audited(audited) => Ending::Security(audited),
         security::Outcome::Fixed { ended, findings } => Ending::SecurityFix { ended, findings },
     })
+}
+
+/// The release script's internal interface: the prompt on stdin, only the
+/// summary on stdout, and failures on stderr for its generated-notes fallback.
+fn release_summary() -> ExitCode {
+    use std::io::Read;
+    let summary = (|| -> anyhow::Result<String> {
+        interrupt::install()?;
+        let config = UserConfig::load()?;
+        let mut prompt = String::new();
+        std::io::stdin().read_to_string(&mut prompt)?;
+        harness::write_summary(&config.harness, &prompt)
+    })();
+    match summary {
+        Ok(summary) => {
+            println!("{summary}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => failure(&error),
+    }
 }
 
 /// The end of a command other than a Run: the line that says how it went,

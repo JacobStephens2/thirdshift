@@ -21,30 +21,93 @@ const FIX_PENDING: &str = "Fix Run: pending";
 const FIX_FAILED: &str = "Fix Run: failed";
 const FIX_SUCCEEDED: &str = "Fix Run: succeeded";
 
-pub enum SecurityRecords {
+enum RecordStorage {
     Advisories(Vec<Value>),
     Issues(Vec<Value>),
 }
 
+/// Loaded records retain lazy decoding: only a selected finding is validated.
+pub struct SecurityRecords {
+    storage: RecordStorage,
+}
+
+/// A resolved finding and whether this collection created its private record.
+pub struct ResolvedFinding {
+    pub record: SecurityRecord,
+    pub created: bool,
+}
+
 impl SecurityRecords {
+    pub(crate) fn advisories(records: Vec<Value>) -> Self {
+        Self {
+            storage: RecordStorage::Advisories(records),
+        }
+    }
+
+    pub(crate) fn issues(records: Vec<Value>) -> Self {
+        Self {
+            storage: RecordStorage::Issues(records),
+        }
+    }
+
+    /// Reuse every state without changing its grade or write-up. Remember a
+    /// creation only after record and notification metadata validation succeeds.
+    /// Remote effects of a failed creation are deliberately not rolled back.
+    pub fn record_or_reuse(
+        &mut self,
+        draft: &DraftAdvisory,
+        create: impl FnOnce(&Self, &DraftAdvisory) -> Result<SecurityRecord>,
+    ) -> Result<ResolvedFinding> {
+        let (records, field, _) = self.entries();
+        let marker = format!("Fingerprint: `{}`", draft.fingerprint);
+        if let Some(value) = records.iter().find(|record| {
+            record[field]
+                .as_str()
+                .is_some_and(|text| text.lines().any(|line| line == marker))
+        }) {
+            return Ok(ResolvedFinding {
+                record: self.decode_created(value.clone())?,
+                created: false,
+            });
+        }
+        let record = create(self, draft)?;
+        let record = self.decode_created(record.value)?;
+        self.values_mut().push(record.value.clone());
+        Ok(ResolvedFinding {
+            record,
+            created: true,
+        })
+    }
+
+    /// Native-response decoding belongs to the record module and its adapters.
+    pub(crate) fn decode_created(&self, value: Value) -> Result<SecurityRecord> {
+        let data = self.decode_state(&value)?;
+        let metadata = RecordedFinding::of_record(&value)?;
+        Ok(SecurityRecord {
+            data,
+            metadata,
+            value,
+        })
+    }
+
     /// The record layout belongs to its storage, not each rule that reads it.
     fn entries(&self) -> (&[Value], &'static str, &'static str) {
-        match self {
-            Self::Advisories(records) => (records, "description", "draft"),
-            Self::Issues(records) => (records, "body", "open"),
+        match &self.storage {
+            RecordStorage::Advisories(records) => (records, "description", "draft"),
+            RecordStorage::Issues(records) => (records, "body", "open"),
         }
     }
 
     fn values_mut(&mut self) -> &mut Vec<Value> {
-        match self {
-            Self::Advisories(records) | Self::Issues(records) => records,
+        match &mut self.storage {
+            RecordStorage::Advisories(records) | RecordStorage::Issues(records) => records,
         }
     }
 
     /// An unreproduced, untriaged finding still needs the Day shift's call.
     pub fn waiting_for_day_shift(&self, fixing: bool) -> bool {
-        match self {
-            Self::Advisories(records) => records.iter().any(|record| {
+        match &self.storage {
+            RecordStorage::Advisories(records) => records.iter().any(|record| {
                 record["state"] == "draft"
                     && (reproduced_severity(&record["description"]).is_some()
                         && !fixing
@@ -52,7 +115,7 @@ impl SecurityRecords {
                         || reproduced_severity(&record["description"]).is_none()
                             && record["severity"].is_null())
             }),
-            Self::Issues(records) => records.iter().any(|record| {
+            RecordStorage::Issues(records) => records.iter().any(|record| {
                 record["state"]
                     .as_str()
                     .is_some_and(|state| state.eq_ignore_ascii_case("open"))
@@ -96,7 +159,7 @@ impl SecurityRecords {
 
     /// Most severe reproduced finding still awaiting a fix, ties in record order.
     /// A recorded Ticket has already been dispatched; its Run owns that fix.
-    pub fn next_fix(&self) -> Result<Option<(SecurityRecord, crate::security::RecordedFinding)>> {
+    pub fn next_fix(&self) -> Result<Option<(SecurityRecord, RecordedFinding)>> {
         let (records, description, state) = self.entries();
         let mut next = None;
         for value in records {
@@ -125,30 +188,16 @@ impl SecurityRecords {
             }
         }
         next.map(|(severity, value)| {
-            let mut metadata = crate::security::RecordedFinding::of_record(value)?;
+            let mut metadata = RecordedFinding::of_record(value)?;
             metadata.severity = Some(severity.name().into());
-            Ok((self.record(value)?, metadata))
+            Ok((self.decode_created(value.clone())?, metadata))
         })
         .transpose()
     }
 
-    pub fn remember(&mut self, record: Value) {
-        self.values_mut().push(record);
-    }
-
-    pub fn finding(&self, draft: &DraftAdvisory) -> Option<&Value> {
-        let (records, field, _) = self.entries();
-        let marker = format!("Fingerprint: `{}`", draft.fingerprint);
-        records.iter().find(|record| {
-            record[field]
-                .as_str()
-                .is_some_and(|text| text.lines().any(|line| line == marker))
-        })
-    }
-
-    pub fn record(&self, value: &Value) -> Result<SecurityRecord> {
-        Ok(match self {
-            Self::Advisories(_) => SecurityRecord::Advisory {
+    fn decode_state(&self, value: &Value) -> Result<RecordData> {
+        Ok(match &self.storage {
+            RecordStorage::Advisories(_) => RecordData::Advisory {
                 id: value["ghsa_id"]
                     .as_str()
                     .context("Security finding record has no advisory ID")?
@@ -159,7 +208,7 @@ impl SecurityRecords {
                     .to_string(),
                 untriaged: value["state"] == "draft" && value["severity"].is_null(),
             },
-            Self::Issues(_) => SecurityRecord::Issue {
+            RecordStorage::Issues(_) => RecordData::Issue {
                 number: value["number"]
                     .as_u64()
                     .context("Security finding record has no issue number")?,
@@ -206,7 +255,7 @@ fn has_fix_ticket(description: &Value) -> bool {
 }
 
 /// A finding read from the private storage selected for this repository.
-pub enum SecurityRecord {
+enum RecordData {
     Advisory {
         id: String,
         description: String,
@@ -219,7 +268,50 @@ pub enum SecurityRecord {
     },
 }
 
+/// Storage identity and native response fields remain private to this module.
+pub struct SecurityRecord {
+    data: RecordData,
+    metadata: RecordedFinding,
+    value: Value,
+}
+
+/// Only the metadata allowed in a Run notification; no private write-up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedFinding {
+    pub severity: Option<String>,
+    pub title: String,
+    pub url: String,
+}
+
+impl RecordedFinding {
+    fn of_record(record: &Value) -> Result<Self> {
+        Ok(Self {
+            severity: record["severity"].as_str().map(String::from),
+            title: record["summary"]
+                .as_str()
+                .or_else(|| record["title"].as_str())
+                .context("the Security finding's private record has no title")?
+                .to_string(),
+            url: record["html_url"]
+                .as_str()
+                .context("the Security finding's private record has no link")?
+                .to_string(),
+        })
+    }
+}
+
 impl SecurityRecord {
+    pub fn metadata(&self) -> &RecordedFinding {
+        &self.metadata
+    }
+
+    pub fn private_issue_number(&self) -> Option<u64> {
+        match &self.data {
+            RecordData::Issue { number, .. } => Some(*number),
+            RecordData::Advisory { .. } => None,
+        }
+    }
+
     /// The size judged by the completed reproduction, never the candidate write-up.
     pub fn fix_size(&self) -> Result<FixSize> {
         reproduced_outcome(self.description())
@@ -230,21 +322,25 @@ impl SecurityRecord {
     /// A Day-shift decision is the finding's grade; a repeated fingerprint
     /// must not publish new proof-of-concept evidence or replace that grade.
     pub fn untriaged(&self) -> bool {
-        match self {
-            Self::Advisory { untriaged, .. } | Self::Issue { untriaged, .. } => *untriaged,
+        match &self.data {
+            RecordData::Advisory { untriaged, .. } | RecordData::Issue { untriaged, .. } => {
+                *untriaged
+            }
         }
     }
 
     pub fn description(&self) -> &str {
-        match self {
-            Self::Advisory { description, .. } | Self::Issue { description, .. } => description,
+        match &self.data {
+            RecordData::Advisory { description, .. } | RecordData::Issue { description, .. } => {
+                description
+            }
         }
     }
 
     pub fn name(&self) -> String {
-        match self {
-            Self::Advisory { id, .. } => id.clone(),
-            Self::Issue { number, .. } => format!("issue #{number}"),
+        match &self.data {
+            RecordData::Advisory { id, .. } => id.clone(),
+            RecordData::Issue { number, .. } => format!("issue #{number}"),
         }
     }
 }
@@ -297,14 +393,12 @@ impl GitHub {
         issue: &IssueUrl,
         ending: &str,
     ) -> Result<()> {
-        let (path, field) = match record {
-            SecurityRecord::Advisory { id, .. } => (
+        let (path, field) = match &record.data {
+            RecordData::Advisory { id, .. } => (
                 format!("repos/{repo}/security-advisories/{id}"),
                 "description",
             ),
-            SecurityRecord::Issue { number, .. } => {
-                (format!("repos/{repo}/issues/{number}"), "body")
-            }
+            RecordData::Issue { number, .. } => (format!("repos/{repo}/issues/{number}"), "body"),
         };
         let output = self.output_with_input(&["api", &path], None)?;
         if !output.status.success() {
@@ -370,7 +464,7 @@ impl GitHub {
             &format!("repos/{repo}/security-advisories?per_page=100"),
             "",
         ) {
-            Ok(records) => Ok(SecurityRecords::Advisories(records)),
+            Ok(records) => Ok(SecurityRecords::advisories(records)),
             Err(error) if format!("{error:#}").contains("(HTTP 404)") => {
                 let repository = self.gh_json(&["api", &format!("repos/{repo}")])?;
                 if repository["private"].as_bool() != Some(true) {
@@ -382,7 +476,7 @@ impl GitHub {
                     &format!("repos/{repo}/issues?state=all&labels=security-finding&per_page=100"),
                     "",
                 )?;
-                Ok(SecurityRecords::Issues(
+                Ok(SecurityRecords::issues(
                     records
                         .into_iter()
                         .filter(|record| record.get("pull_request").is_none())
@@ -415,10 +509,10 @@ impl GitHub {
         repo: &str,
         records: &SecurityRecords,
         draft: &DraftAdvisory,
-    ) -> Result<Value> {
-        match records {
-            SecurityRecords::Advisories(_) => self.create_security_advisory(repo, draft),
-            SecurityRecords::Issues(_) => {
+    ) -> Result<SecurityRecord> {
+        let value = match &records.storage {
+            RecordStorage::Advisories(_) => self.create_security_advisory(repo, draft),
+            RecordStorage::Issues(_) => {
                 self.ensure_labels(repo, &[SECURITY_FINDING, NEEDS_TRIAGE])?;
                 let output = self.output_with_input(
                     &[
@@ -453,7 +547,8 @@ impl GitHub {
                 record["html_url"] = json!(url.trim());
                 Ok(record)
             }
-        }
+        }?;
+        records.decode_created(value)
     }
 
     /// Only the reproduction fields change; state, labels and disclosure stay
@@ -467,14 +562,14 @@ impl GitHub {
         if !record.untriaged() {
             bail!("refusing to replace a triaged Security finding record");
         }
-        let (path, storage) = match record {
-            SecurityRecord::Advisory { id, .. } => (
+        let (path, storage) = match &record.data {
+            RecordData::Advisory { id, .. } => (
                 format!("repos/{repo}/security-advisories/{id}"),
-                SecurityRecords::Advisories(Vec::new()),
+                SecurityRecords::advisories(Vec::new()),
             ),
-            SecurityRecord::Issue { number, .. } => (
+            RecordData::Issue { number, .. } => (
                 format!("repos/{repo}/issues/{number}"),
-                SecurityRecords::Issues(Vec::new()),
+                SecurityRecords::issues(Vec::new()),
             ),
         };
         let observed = self.output_with_input(&["api", &path], None)?;
@@ -486,18 +581,30 @@ impl GitHub {
         }
         let observed: Value = serde_json::from_slice(&observed.stdout)
             .context("reading a private Security finding record returned invalid JSON")?;
-        let current = storage.record(&observed)?;
-        if !current.untriaged() {
+        let current = storage.decode_state(&observed)?;
+        let (description, untriaged) = match &current {
+            RecordData::Advisory {
+                description,
+                untriaged,
+                ..
+            }
+            | RecordData::Issue {
+                description,
+                untriaged,
+                ..
+            } => (description, *untriaged),
+        };
+        if !untriaged {
             bail!(
                 "the Security finding was triaged during its reproduction; leaving the record unchanged"
             );
         }
-        if current.description() != record.description() {
+        if description != record.description() {
             bail!(
                 "the Security finding changed during its reproduction; leaving the record unchanged"
             );
         }
-        if matches!(record, SecurityRecord::Advisory { .. })
+        if matches!(&record.data, RecordData::Advisory { .. })
             && matches!(reproduction.severity(), Some(Severity::Informational))
         {
             bail!(
@@ -505,11 +612,11 @@ impl GitHub {
             );
         }
         let description = reproduction.description(record.description());
-        let body = match record {
-            SecurityRecord::Advisory { .. } => {
+        let body = match &record.data {
+            RecordData::Advisory { .. } => {
                 json!({"description": description, "severity": reproduction.severity()})
             }
-            SecurityRecord::Issue { .. } => json!({"body": description}),
+            RecordData::Issue { .. } => json!({"body": description}),
         };
         let body = serde_json::to_vec(&body)?;
         let output = self.output_with_input(
@@ -556,3 +663,7 @@ impl GitHub {
             .context("creating a draft advisory returned invalid JSON")
     }
 }
+
+#[cfg(test)]
+#[path = "advisories_tests.rs"]
+mod tests;

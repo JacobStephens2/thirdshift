@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use crate::github::{DraftAdvisory, SecurityRecord, SecurityRecords};
 use crate::security::reproduction::Reproduction;
 use anyhow::Result;
-use serde_json::Value;
 
 use crate::asks::{Asks, Flags};
 use crate::config::UserConfig;
@@ -115,7 +114,7 @@ pub trait Outside {
         &mut self,
         records: &SecurityRecords,
         finding: &DraftAdvisory,
-    ) -> Result<Value>;
+    ) -> Result<SecurityRecord>;
     /// Reproduce the finding read from this record, in a fresh checkout.
     fn reproduce(
         &mut self,
@@ -254,7 +253,7 @@ impl Outside for LaunchAndGitHub<'_> {
         &mut self,
         records: &SecurityRecords,
         finding: &DraftAdvisory,
-    ) -> Result<Value> {
+    ) -> Result<SecurityRecord> {
         GitHub::new().create_security_record(&self.repo.slug(), records, finding)
     }
 
@@ -767,8 +766,8 @@ mod in_memory {
         fn security_records(&mut self) -> Result<SecurityRecords> {
             self.calls.push(Call::AdvisoryList);
             Ok(match &self.finding_issues {
-                Some(issues) => SecurityRecords::Issues(issues.clone()),
-                None => SecurityRecords::Advisories(self.advisories.clone()),
+                Some(issues) => SecurityRecords::issues(issues.clone()),
+                None => SecurityRecords::advisories(self.advisories.clone()),
             })
         }
 
@@ -779,20 +778,37 @@ mod in_memory {
 
         fn create_security_record(
             &mut self,
-            _records: &SecurityRecords,
+            records: &SecurityRecords,
             finding: &DraftAdvisory,
-        ) -> Result<Value> {
+        ) -> Result<SecurityRecord> {
             self.calls
                 .push(Call::CreateAdvisory(finding.fingerprint.clone()));
-            let advisory = json!({
-                "ghsa_id": finding.fingerprint,
-                "description": finding.description, "state": "draft",
-                "summary": finding.summary,
-                "html_url": format!("https://github.com/acme/widgets/security/advisories/{}", finding.fingerprint),
-                "severity": null
-            });
-            self.advisories.push(advisory.clone());
-            Ok(advisory)
+            let value = if let Some(issues) = &mut self.finding_issues {
+                let number = issues
+                    .iter()
+                    .filter_map(|issue| issue["number"].as_u64())
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let issue = json!({
+                    "number": number, "body": finding.description, "state": "OPEN",
+                    "title": finding.summary, "labels": [{"name": "security-finding"}, {"name": "needs-triage"}],
+                    "html_url": format!("https://github.com/acme/widgets/issues/{number}")
+                });
+                issues.push(issue.clone());
+                issue
+            } else {
+                let advisory = json!({
+                    "ghsa_id": finding.fingerprint,
+                    "description": finding.description, "state": "draft",
+                    "summary": finding.summary,
+                    "html_url": format!("https://github.com/acme/widgets/security/advisories/{}", finding.fingerprint),
+                    "severity": null
+                });
+                self.advisories.push(advisory.clone());
+                advisory
+            };
+            records.decode_created(value)
         }
 
         fn reproduce(
