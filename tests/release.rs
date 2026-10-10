@@ -599,6 +599,31 @@ fn the_release_summary_uses_the_user_configs_default_harness_model_and_effort() 
     assert_eq!(calls.as_array().unwrap().len(), 1, "{calls:#?}");
     let argv = calls[0]["argv"].as_array().unwrap();
     assert!(argv.contains(&json!("--skip-git-repo-check")), "{argv:?}");
+    // Contributor-editable release input must not reach tools: no bypass, a
+    // read-only sandbox, nothing to approve, and no shell, MCP or browser.
+    assert!(
+        !argv.contains(&json!("--dangerously-bypass-approvals-and-sandbox")),
+        "{argv:?}"
+    );
+    for pair in [
+        ["--sandbox", "read-only"],
+        ["-c", "approval_policy=\"never\""],
+        ["-c", "web_search=\"disabled\""],
+        ["-c", "mcp_servers={}"],
+        ["--disable", "shell_tool"],
+        ["--disable", "unified_exec"],
+        ["--disable", "apps"],
+        ["--disable", "plugins"],
+        ["--disable", "browser_use"],
+        ["--disable", "computer_use"],
+        ["--disable", "hooks"],
+    ] {
+        assert!(
+            argv.windows(2)
+                .any(|window| window == [json!(pair[0]), json!(pair[1])]),
+            "{pair:?} missing from {argv:?}"
+        );
+    }
     assert_ne!(calls[0]["cwd"], release.maintainer().display().to_string());
     assert!(
         argv.windows(2)
