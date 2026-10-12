@@ -258,13 +258,13 @@ gh pr create --base issue-20 --head issue-{ticket} --title 'Ticket {ticket}' --b
     assert_contains(text, "- implement: claude · claude-opus-4-8");
     assert_contains(
         text,
-        "- spec-review: claude · Harness default (not reported)",
+        "- spec-review: claude · Harness default (actual model not reported)",
     );
     assert!(!text.contains("earlier-model"), "{text}");
 }
 
 #[test]
-fn a_codex_notification_labels_requested_models_for_the_review_and_its_resume() {
+fn a_codex_notification_distinguishes_launched_sessions_from_unconfirmed_models() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, AGENT_OPENS_PR);
     scenario.agent_does_in_session(2, r#"
@@ -294,10 +294,17 @@ printf '%s\n' '{"type":"item.started","item":{"id":"test","type":"command_execut
     assert_eq!(scenario.codex_calls().len(), 3);
     let request = the_one_request(&resend);
     let text = text(&request);
+    assert_contains(text, "Built with codex · gpt-6.1-sol · high (configured)");
+    assert_contains(
+        text,
+        "Listed sessions launched the harness. Requested models are not confirmed by harness evidence.",
+    );
     for kind in ["implement", "security-review", "security-review-resume"] {
         assert_contains(
             text,
-            &format!("- {kind}: codex · gpt-6.1-sol (requested) · session effort: high"),
+            &format!(
+                "- {kind}: codex · gpt-6.1-sol (requested; actual model not reported) · session effort: high"
+            ),
         );
     }
 }
@@ -333,14 +340,16 @@ printf '%s\n' '{{"type":"result","subtype":"success","modelUsage":{{"claude-haik
 #[test]
 fn a_failed_security_review_notification_names_each_sessions_models() {
     let scenario = Scenario::new();
+    // The explicit Model is checked before the Run's sessions start.
+    scenario.agent_does_in_session(1, "true\n");
     scenario.agent_does_in_session(
-        1,
+        2,
         &format!(
             "printf '%s\\n' '{{\"type\":\"assistant\",\"message\":{{\"model\":\"claude-opus-5-5\",\"content\":[]}}}}'\n{AGENT_OPENS_PR}"
         ),
     );
     scenario.agent_does_in_session(
-        2,
+        3,
         r#"
 printf '%s\n' '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[]}}'
 printf '%s\n' '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[]}}'
@@ -353,6 +362,8 @@ exit 3
         &resend,
         &[
             &scenario.issue_url(7),
+            "model",
+            "claude-opus-5-5",
             "security-review",
             "merge",
             "email",
@@ -364,15 +375,19 @@ exit 3
     let request = the_one_request(&resend);
     let text = text(&request);
     assert_contains(text, "Security review incomplete");
-    assert_contains(text, "Built with claude · default model · default effort");
     assert_contains(
         text,
-        "- implement: claude · claude-opus-5-5 · session effort: default effort",
+        "Built with claude · claude-opus-5-5 · default effort (configured)",
     );
     assert_contains(
         text,
-        "- security-review: claude · claude-opus-4-8 · session effort: default effort",
+        "- implement: claude · claude-opus-5-5 (reported) · session effort: default effort",
     );
+    assert_contains(
+        text,
+        "- security-review: claude · claude-opus-4-8 (reported) · session effort: default effort",
+    );
+    assert!(!text.contains("actual model not reported"), "{text}");
     assert_eq!(text.matches("claude-opus-4-8").count(), 1, "{text}");
 }
 
@@ -919,7 +934,7 @@ RETAINED
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_contains(
         text(&the_one_request(&resend)),
-        "- implement: muse · muse-retained-model · session effort: default effort",
+        "- implement: muse · muse-retained-model (reported) · session effort: default effort",
     );
 }
 
@@ -949,6 +964,6 @@ RETAINED
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_contains(
         text(&the_one_request(&resend)),
-        "- implement: opencode · provider/retained-model · session effort: default effort",
+        "- implement: opencode · provider/retained-model (reported) · session effort: default effort",
     );
 }

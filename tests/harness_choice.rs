@@ -339,7 +339,7 @@ fn the_run_notification_names_the_harness_model_and_effort() {
     assert_eq!(requests.len(), 1, "{requests:?}");
     let text = requests[0].body["text"].as_str().unwrap();
     assert!(
-        text.contains("\nBuilt with claude · default model · max\nHost:"),
+        text.contains("\nBuilt with claude · default model · max (configured)\nHost:"),
         "{text}"
     );
 }

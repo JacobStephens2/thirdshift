@@ -47,7 +47,7 @@ fn execution_failure_keeps_observed_models_for_the_owning_command() {
     assert_eq!(error.to_string(), "claude exited 3");
     assert_eq!(
         fixture.recording.notification_lines(),
-        ["- implement: claude · reported-model · session effort: default effort"]
+        ["- implement: claude · reported-model (reported) · session effort: default effort"]
     );
 }
 
@@ -58,11 +58,11 @@ fn retained_models_replace_stream_evidence_including_an_empty_authoritative_set(
     for (retained, expected) in [
         (
             r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"retained-model"}}}"#,
-            "retained-model",
+            "retained-model (reported)",
         ),
         (
             r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"assistant_message_committed","text":"retained reply"}}}"#,
-            "requested-model (requested)",
+            "requested-model (requested; actual model not reported)",
         ),
     ] {
         let fixture = Fixture::new();
@@ -159,7 +159,9 @@ sleep 1
             );
             assert_eq!(
                 recording.notification_lines(),
-                ["- implement: claude · reported-model · session effort: default effort"]
+                [
+                    "- implement: claude · reported-model (reported) · session effort: default effort"
+                ]
             );
         },
     );
@@ -205,7 +207,9 @@ echo '{"info":{"outcome":"completed"},"messages":[{"type":"assistant","model":{"
             }
             assert_eq!(
                 recording.notification_lines(),
-                ["- implement: claude · provider/retained-model · session effort: default effort"]
+                [
+                    "- implement: claude · provider/retained-model (reported) · session effort: default effort"
+                ]
             );
         },
     );
@@ -253,7 +257,7 @@ fn reader_failure_keeps_models_consumed_before_the_log_failed() {
     assert!(error.to_string().contains("could not write"), "{error:#}");
     assert_eq!(
         fixture.recording.notification_lines(),
-        ["- implement: claude · reported-model · session effort: default effort"]
+        ["- implement: claude · reported-model (reported) · session effort: default effort"]
     );
 }
 
@@ -311,9 +315,9 @@ fn collection_preserves_legacy_selection_order_deduplication_and_fallbacks() {
     assert_eq!(
         fixture.recording.notification_lines(),
         [
-            "- implement: claude · Harness default (not reported) · session effort: default effort",
-            "- review: claude · requested (requested) · session effort: high",
-            "- implement: claude · a, b · session effort: default effort",
+            "- implement: claude · Harness default (actual model not reported) · session effort: default effort",
+            "- review: claude · requested (requested; actual model not reported) · session effort: high",
+            "- implement: claude · a, b (reported) · session effort: default effort",
         ]
     );
 }
@@ -418,8 +422,8 @@ fn nested_children_keep_the_exact_owning_command() {
     assert_eq!(
         recording.notification_lines(),
         [
-            "- implement: claude · reported-model · session effort: default effort",
-            "- implement: claude · reported-model · session effort: default effort",
+            "- implement: claude · reported-model (reported) · session effort: default effort",
+            "- implement: claude · reported-model (reported) · session effort: default effort",
         ]
     );
 }
@@ -448,7 +452,9 @@ fn interrupted_stream_survives_process_owners_suppression_of_recovered_state() {
             assert_eq!(error.to_string(), "interrupted");
             assert_eq!(
                 recording.notification_lines(),
-                ["- implement: claude · reported-model · session effort: default effort"]
+                [
+                    "- implement: claude · reported-model (reported) · session effort: default effort"
+                ]
             );
         },
     );
