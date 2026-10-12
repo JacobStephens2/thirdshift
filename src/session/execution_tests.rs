@@ -321,6 +321,9 @@ const LEAVE_REPORTS: &str = r#"#!/bin/bash
 set -eu
 if test "$(basename "$0")" = opencode; then
     prompt=$(cat)
+elif test "$(basename "$0")" = agy; then
+    test "$1" = -p
+    prompt=$2
 else
     prompt=${!#}
 fi
