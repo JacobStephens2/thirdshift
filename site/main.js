@@ -14,6 +14,33 @@ for (const button of document.querySelectorAll(".install button.copy")) {
   });
 }
 
+// Fragment links reveal the destination inside the Prompts page's closed
+// disclosures, including links to a skill's supporting file.
+if (document.querySelector(".section-disclosure")) {
+  function revealFragment(hash) {
+    let id;
+    try { id = decodeURIComponent(hash.slice(1)); }
+    catch { return; }
+    const target = document.getElementById(id);
+    if (!target) return;
+    let disclosure = target.closest("details");
+    if (!disclosure) return;
+    while (disclosure) {
+      disclosure.open = true;
+      disclosure = disclosure.parentElement.closest("details");
+    }
+    target.scrollIntoView({ block: "start" });
+  }
+
+  revealFragment(location.hash);
+  addEventListener("hashchange", () => revealFragment(location.hash));
+  // Following the current fragment again emits no hashchange.
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest('a[href^="#"]');
+    if (link && link.hash === location.hash) revealFragment(link.hash);
+  });
+}
+
 // The Prompts and skills page's commit label: the commit of main the deploy
 // published, from the commit.txt it writes. Without one (e.g. served locally),
 // the label keeps its generic text.

@@ -311,7 +311,14 @@ body::after { /* scanlines */
 .page-head .home { display: block; color: inherit; }
 .paper-sheet .as-of { margin: 0; font-size: 14px; color: #444; max-width: 90ch; }
 .job-sheets { display: grid; gap: 28px; }
-.job-sheet { display: grid; gap: 10px; align-content: start; border-top: 4px solid var(--c); padding-top: 12px; min-width: 0; }
+.job-sheet { border-top: 4px solid var(--c); padding-top: 12px; min-width: 0; }
+.job-sheet-body { display: grid; gap: 10px; padding-top: 10px; }
+.section-disclosure > summary, .job-sheet > summary { position: relative; padding-right: 36px; cursor: pointer; list-style: none; }
+.section-disclosure > summary::-webkit-details-marker, .job-sheet > summary::-webkit-details-marker { display: none; }
+.section-disclosure > summary::after, .job-sheet > summary::after { content: "+"; position: absolute; right: 0; top: 0; color: var(--c); font: 700 28px/1 var(--f-mono); }
+.section-disclosure[open] > summary::after, .job-sheet[open] > summary::after { content: "−"; }
+.section-disclosure > .sec-head { margin-bottom: 0; }
+.section-disclosure[open] > .sec-head { margin-bottom: 28px; }
 .job-sheet h3 { font-size: 30px; }
 .job-sheet h4 { margin: 10px 0 0; font: 700 13px/1.3 var(--f-mono); color: var(--dim); }
 .job-sheet p { margin: 0; max-width: 90ch; }

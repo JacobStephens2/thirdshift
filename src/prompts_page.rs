@@ -439,12 +439,14 @@ fn command_line(html: &mut String) {
         html,
         r##"<section class="sec" aria-labelledby="command-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">The command line</p><h2 id="command-title">How each session starts</h2></div>
+    <details class="section-disclosure">
+    <summary class="sec-head"><span class="eyebrow">The command line</span><h2 id="command-title">How each session starts</h2></summary>
     <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
     <pre class="job-text" aria-label="A new session"><code>{new}</code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
     <pre class="job-text" aria-label="A Resume"><code>{resume}</code></pre>
     <p class="lede">{codex}</p>
+    </details>
   </div>
 </section>
 "##,
@@ -458,7 +460,8 @@ fn prompt_section(html: &mut String) {
     html.push_str(
         r##"<section class="sec" aria-labelledby="prompts-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Prompts</p><h2 id="prompts-title">What a Run tells the agent</h2></div>
+    <details class="section-disclosure">
+    <summary class="sec-head"><span class="eyebrow">Prompts</span><h2 id="prompts-title">What a Run tells the agent</h2></summary>
     <p class="lede">Every prompt a Run can send, with its placeholders highlighted: they change for each Run.</p>
     <div class="job-sheets">
 "##,
@@ -466,12 +469,14 @@ fn prompt_section(html: &mut String) {
     for prompt in prompts() {
         let _ = write!(
             html,
-            r##"      <article class="job-sheet" id="{id}" aria-labelledby="{id}-title">
-        <h3 id="{id}-title">{title}</h3>
+            r##"      <details class="job-sheet" id="{id}" aria-labelledby="{id}-title">
+        <summary><h3 id="{id}-title">{title}</h3></summary>
+        <div class="job-sheet-body">
         <p>{when}</p>
         <p class="sent-by">Sent by {sender}</p>
         <pre class="job-text"><code>{text}</code></pre>
-      </article>
+        </div>
+      </details>
 "##,
             id = prompt.id,
             title = prompt.title,
@@ -480,14 +485,15 @@ fn prompt_section(html: &mut String) {
             text = highlighted(&prompt.text),
         );
     }
-    html.push_str("    </div>\n  </div>\n</section>\n");
+    html.push_str("    </div>\n    </details>\n  </div>\n</section>\n");
 }
 
 fn skills_section(html: &mut String) {
     html.push_str(
         r##"<section class="sec" aria-labelledby="skills-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Factory skills</p><h2 id="skills-title">The skills, as the agent reads them</h2></div>
+    <details class="section-disclosure">
+    <summary class="sec-head"><span class="eyebrow">Factory skills</span><h2 id="skills-title">The skills, as the agent reads them</h2></summary>
     <p class="lede">Every Factory skill and supporting file, raw, exactly as thirdshift writes it out.</p>
     <div class="job-sheets">
 "##,
@@ -498,8 +504,9 @@ fn skills_section(html: &mut String) {
         let name = skill.path().to_string_lossy();
         let _ = write!(
             html,
-            r##"      <article class="job-sheet" id="skill-{name}" aria-labelledby="skill-{name}-title">
-        <h3 id="skill-{name}-title">{name}</h3>
+            r##"      <details class="job-sheet" id="skill-{name}" aria-labelledby="skill-{name}-title">
+        <summary><h3 id="skill-{name}-title">{name}</h3></summary>
+        <div class="job-sheet-body">
         <p class="sent-by">Used by {used_by}</p>
 "##,
             used_by = skill_used_by(&name),
@@ -516,16 +523,17 @@ fn skills_section(html: &mut String) {
         for file in files {
             file_block(html, file, "        ");
         }
-        html.push_str("      </article>\n");
+        html.push_str("        </div>\n      </details>\n");
     }
-    html.push_str("    </div>\n  </div>\n</section>\n");
+    html.push_str("    </div>\n    </details>\n  </div>\n</section>\n");
 }
 
 fn licence_section(html: &mut String) {
     html.push_str(
         r##"<section class="sec" aria-labelledby="licence-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
+    <details class="section-disclosure">
+    <summary class="sec-head"><span class="eyebrow">Licence and credits</span><h2 id="licence-title">Whose skills these are</h2></summary>
     <p class="lede">Most Factory skills are adapted from Matt Pocock's skills, under the licence below. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>. The <a href="#skill-thirdshift-security-audit">thirdshift-security-audit</a> skill is copied from <a href="https://github.com/cloudflare/security-audit-skill">Cloudflare's security-audit-skill</a>, under its own <a href="#file-thirdshift-security-audit-license">MIT licence</a>, with its upstream repository and commit recorded in <a href="#file-thirdshift-security-audit-credits-md">CREDITS.md</a>.</p>
 "##,
     );
@@ -539,7 +547,7 @@ fn licence_section(html: &mut String) {
         );
         file_block(html, file, "    ");
     }
-    html.push_str("  </div>\n</section>\n");
+    html.push_str("    </details>\n  </div>\n</section>\n");
 }
 
 /// Every file under `dir`, at any depth.
@@ -630,6 +638,43 @@ mod tests {
         std::env::var_os("UPDATE_PROMPTS").is_some()
     }
 
+    #[test]
+    fn prompts_page_sections_and_job_sheets_start_closed() {
+        let html = render();
+        assert_eq!(
+            html.matches("<details class=\"section-disclosure\">")
+                .count(),
+            4
+        );
+        for title in [
+            "command-title",
+            "prompts-title",
+            "skills-title",
+            "licence-title",
+        ] {
+            assert!(
+                html.contains(&format!("<h2 id=\"{title}\">")),
+                "the section keeps its heading: {title}"
+            );
+        }
+        for id in [
+            "prompt-fresh",
+            "prompt-resume",
+            "skill-thirdshift-implement",
+            "skill-thirdshift-tdd",
+        ] {
+            assert!(
+                html.contains(&format!("<details class=\"job-sheet\" id=\"{id}\"")),
+                "the job sheet has a native disclosure: {id}"
+            );
+            assert!(html.contains(&format!("<summary><h3 id=\"{id}-title\">")));
+        }
+        for disclosure in html.split("<details").skip(1) {
+            let (attributes, _) = disclosure.split_once('>').unwrap();
+            assert!(!attributes.contains("open"), "starts closed: {attributes}");
+        }
+    }
+
     /// The golden-file test: the page carries the fragment as rendered now.
     /// The crates.io package leaves `site/` out, so it skips there.
     #[test]
@@ -673,7 +718,7 @@ mod tests {
             let (_, card) = html
                 .split_once(&format!("id=\"skill-{name}\""))
                 .expect("the page lists the publishing skill");
-            let (card, _) = card.split_once("</article>").unwrap();
+            let (card, _) = card.split_once("</details>").unwrap();
             let (_, usage) = card
                 .split_once("Used by ")
                 .expect("the card names its users");
@@ -689,7 +734,7 @@ mod tests {
         let (_, skill) = html
             .split_once("id=\"skill-thirdshift-security-audit\"")
             .expect("the page lists thirdshift-security-audit");
-        let (skill, _) = skill.split_once("</article>").unwrap();
+        let (skill, _) = skill.split_once("</details>").unwrap();
         assert!(skill.contains("Security run") && skill.contains("Security review"));
         assert!(skill.contains("MIT License"));
         assert!(skill.contains("Copyright (c) 2025-2026 Cloudflare, Inc."));
