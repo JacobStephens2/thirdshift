@@ -135,7 +135,9 @@ def units():
         for item in plan_items(forward["plans"]):
             out.append(dict(item, replay="plansF", arm=arm, settings=settings,
                             kind="plan", skill=None, extra=None))
-    for arm, settings in [("other", "claude-high"), ("fresh", "codex-xhigh")]:
+    # othermax: Claude at max on Codex's plans, added by #429 Q34 (c) after
+    # Claude at high stopped too few to pass.
+    for arm, settings in [("other", "claude-high"), ("fresh", "codex-xhigh"), ("othermax", "claude-max")]:
         for item in plan_items(reverse.get("codex_plans", [])):
             out.append(dict(item, replay="plansR", arm=arm, settings=settings,
                             kind="plan", skill=None, extra=None))
@@ -156,6 +158,30 @@ def units():
                 "replay": "specs", "arm": arm, "settings": settings,
                 "kind": "review", "skill": "old", "extra": None,
             })
+
+    # specsR: fresh Codex on the Spec branches Codex's own Spec reviews saw, a
+    # pairing no other replay tried (#429 Q35). Each keeps the skill its
+    # recorded review ran. #486 was reviewed twice; only the first review is
+    # independent, so only it is replayed.
+    codex_specs = load(ROOT / "inputs/codex-specs/manifest.json") or {}
+    seen = set()
+    for s in sorted(codex_specs.get("codex_spec_reviews", []), key=lambda s: s["spec_review_started_at"]):
+        if (s["repo"], s["spec_issue"]) in seen:
+            continue
+        seen.add((s["repo"], s["spec_issue"]))
+        out.append({
+            "item": f"{s['repo']}-{s['spec_issue']}",
+            "repo": s["repo"],
+            "head": s["pre_review_head"],
+            "base": s["merge_base"],
+            "branch": s["spec_branch"],
+            "issues": [s["spec_issue"]],
+            "bugs": [],
+            "replay": "specsR", "arm": "fresh", "settings": "codex-xhigh",
+            "kind": "review",
+            "skill": "today" if s["review_skill"].startswith("evidence") else "old",
+            "extra": None,
+        })
 
     for u in out:
         u["id"] = f"{u['replay']}/{u['arm']}/{u['item']}"
