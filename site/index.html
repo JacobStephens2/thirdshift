@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>thirdshift: your issues go to press overnight</title>
-<meta name="description" content="thirdshift turns a GitHub issue into a pull request that is ready for review. You plan by day; unattended agents implement, review and open the pull request overnight.">
+<meta name="description" content="thirdshift turns a GitHub issue into a pull request ready for review, or merges it when asked. You plan by day; unattended agents implement, review and open the pull request overnight.">
 <!-- The share card. docs/share-card/render.mjs renders the image from this page. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="thirdshift">
 <meta property="og:url" content="https://thirdshift.app/">
 <meta property="og:title" content="thirdshift: your issues go to press overnight">
-<meta property="og:description" content="thirdshift turns a GitHub issue into a pull request that is ready for review. You plan by day; unattended agents implement, review and open the pull request overnight.">
+<meta property="og:description" content="thirdshift turns a GitHub issue into a pull request ready for review, or merges it when asked. You plan by day; unattended agents implement, review and open the pull request overnight.">
 <meta property="og:image" content="https://thirdshift.app/share-card.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
@@ -18,7 +18,7 @@
 <meta property="og:image:alt" content="Your issues go to press overnight. The press line: issue #24 goes in at the feeder, passes through units 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish, and comes out as pull request #25, ready for review.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="thirdshift: your issues go to press overnight">
-<meta name="twitter:description" content="thirdshift turns a GitHub issue into a pull request that is ready for review. You plan by day; unattended agents implement, review and open the pull request overnight.">
+<meta name="twitter:description" content="thirdshift turns a GitHub issue into a pull request ready for review, or merges it when asked. You plan by day; unattended agents implement, review and open the pull request overnight.">
 <meta name="twitter:image" content="https://thirdshift.app/share-card.png">
 <meta name="twitter:image:alt" content="Your issues go to press overnight. The press line: issue #24 goes in at the feeder, passes through units 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish, and comes out as pull request #25, ready for review.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -51,13 +51,14 @@
         <h1 class="misreg">Your issues go to press overnight.</h1>
         <div class="proof-row">
           <div>
-            <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into tickets. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and opens a pull request that is ready for review by morning.</p>
+            <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into tickets. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and delivers a pull request ready for review, or merges it when asked. Start a Run whenever you like, or let your operating system start passes on a schedule.</p>
             <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a>. Read <a href="/prompts/">every prompt and skill thirdshift sends</a>.</p>
           </div>
           <div>
             <p class="eyebrow">Install</p>
             <div class="install"><code>curl -fsSL https://thirdshift.app/install.sh | sh</code><button type="button" class="copy">Copy</button></div>
             <details class="install-more"><summary>Show the full command</summary><code>curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh</code></details>
+            <p class="credit">Then run <code>thirdshift setup</code> to choose your defaults. Keep the binary current with <code>thirdshift update</code>.</p>
           </div>
         </div>
         <div class="colorbar ht" aria-hidden="true"><i class="cb-c"></i><i class="cb-c50"></i><i class="cb-m"></i><i class="cb-m50"></i><i class="cb-y"></i><i class="cb-y50"></i><i class="cb-k"></i><i class="cb-c"></i><i class="cb-m"></i><i class="cb-y"></i><i class="cb-k"></i><i class="cb-c50"></i><i class="cb-m50"></i><i class="cb-y50"></i></div>
@@ -74,10 +75,10 @@
       <div class="shifts">
         <div class="shift"><h3>Day shift</h3><p class="who">Humans, with <a href="https://github.com/mattpocock/skills">Matt Pocock's skills</a>, used interactively</p>
           <ol class="chain"><li>/grill-with-docs</li><li>/to-spec</li><li>/to-tickets</li></ol>
-          <p>The human half of the workflow: shaping work into issues the factory can take on, by grilling the idea with <code>/grill-with-docs</code>, writing the spec with <code>/to-spec</code> and cutting it into tickets with <code>/to-tickets</code>, and reviewing the pull requests it delivers.</p></div>
+          <p>The human half of the workflow: shaping work into issues the factory can take on, by grilling the idea with <code>/grill-with-docs</code>, writing the spec with <code>/to-spec</code> and cutting it into tickets with <code>/to-tickets</code>, and reviewing the pull requests it delivers, except those you ask a Merge run to merge.</p></div>
         <div class="shift third"><h3>Third shift</h3><p class="who">Agents, with headless copies of the same skills</p>
           <ol class="chain"><li><a href="/prompts/#skill-thirdshift-implement">/thirdshift-implement</a></li><li><a href="/prompts/#skill-thirdshift-code-review">/thirdshift-code-review</a></li><li><a href="/prompts/#skill-thirdshift-pr">/thirdshift-pr</a></li></ol>
-          <p>thirdshift takes one Issue URL per Run. Its Factory skills, adapted to run with no human in the loop, implement the issue with <code>/implement</code>, review the work with <code>/code-review</code> and open a pull request that is ready for review with <code>/pr</code>.</p>
+          <p>thirdshift takes an Issue URL: one issue starts a Run; an issue with sub-issues starts a Spec run. Its Factory skills, adapted to run with no human in the loop, implement the issue with <code>/thirdshift-implement</code>, review the work with <code>/thirdshift-code-review</code> and write the pull request with <code>/thirdshift-pr</code>.</p>
           <p class="more"><a href="/prompts/">Read every prompt and skill the agents get →</a></p></div>
       </div>
     </div>
@@ -89,7 +90,7 @@
       <div class="sec-head">
         <p class="eyebrow">How a Run works</p>
         <h2 id="press-title" class="misreg">One issue in, one pull request out.</h2>
-        <p class="lede">A Run feeds one issue through four units and delivers a pull request that is ready for review. Units 2 and 3 are one agent session. Under each unit are the lines thirdshift printed on stderr during a real Run: issue <a href="https://github.com/JacobStephens2/thirdshift/issues/24">#24</a>, which produced <a href="https://github.com/JacobStephens2/thirdshift/pull/25">pull request #25</a>. Click a unit to see what it does. Every prompt and skill it sends is on the <a href="/prompts/">Prompts and skills</a> page.</p>
+        <p class="lede">A Run feeds one issue through four units and delivers a pull request that is ready for review. Units 2 and 3 are one agent session in the Harness you choose. This replay is a historical example, recorded before the newer workflows below. Under each unit are the lines thirdshift printed on stderr during a real Run: issue <a href="https://github.com/JacobStephens2/thirdshift/issues/24">#24</a>, which produced <a href="https://github.com/JacobStephens2/thirdshift/pull/25">pull request #25</a>. Click a unit to see what it does. Every prompt and skill it sends is on the <a href="/prompts/">Prompts and skills</a> page.</p>
       </div>
 
       <div class="press-track">
@@ -188,14 +189,14 @@
           <div class="press-cols">
             <article class="unit-col ink-c" aria-labelledby="unit-1">
               <h3 id="unit-1"><span class="tag" aria-hidden="true"></span>1 · C · Prepare</h3>
-              <p>Pre-flight checks the Origin match, that the issue is open and that git has a name and email to commit with. thirdshift then picks the Issue branch, fresh or a Continuation, and creates a worktree next to your clone. Pre-flight prints nothing when it passes, so the first line is the worktree.</p>
+              <p>Pre-flight checks the Origin match, the open issue, the Base branch and the selected Harness, plus Git’s commit identity. thirdshift picks the Issue branch, fresh or a Continuation, claims the issue with <code>in-progress</code>, and creates a worktree next to your clone. This older replay predates Claims.</p>
               <ol class="stderr-lines" aria-label="stderr lines from unit 1">
                 <li><span class="prefix">thirdshift:</span> creating worktree /home/jacob/repos/thirdshift-issue-24 on issue-24 from origin/main</li>
               </ol>
             </article>
             <article class="unit-col ink-m" aria-labelledby="unit-2">
               <h3 id="unit-2"><span class="tag" aria-hidden="true"></span>2 · M · Implement</h3>
-              <p>A headless Claude Code session, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits.</p>
+              <p>A headless session in the selected Harness, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits. The recorded Run used Claude Code.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-implement">/thirdshift-implement</a></li><li><a href="/prompts/#skill-thirdshift-tdd">/thirdshift-tdd</a></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 2">
                 <li><span class="prefix">thirdshift:</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-24-20260925T134143Z-implement.jsonl</li>
@@ -215,7 +216,7 @@
             </article>
             <article class="unit-col ink-y" aria-labelledby="unit-3">
               <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>3 · Y · Review</h3>
-              <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Then it opens the pull request, ready for review.</p>
+              <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Behavior findings need a test or command that exercises them before the agent decides. It fixes reproduced failures and keeps the test. Then it opens the pull request, ready for review.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-code-review">/thirdshift-code-review</a></li><li><a href="/prompts/#skill-thirdshift-pr">/thirdshift-pr</a></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 3">
                 <li><span class="prefix">thirdshift:</span> implement: skill thirdshift-code-review</li>
@@ -240,7 +241,7 @@
             </article>
             <article class="unit-col ink-k" aria-labelledby="unit-4">
               <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>4 · K · Finish</h3>
-              <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 5. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. This Run needed no Repair.</p>
+              <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 5. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. An optional Security review checks the change before Delivery. With <code>thirdshift merge &lt;Issue URL&gt;</code>, thirdshift also merges the reviewed head once its checks pass. This recorded Run needed no Repair and left its pull request for review.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-resolving-merge-conflicts">/thirdshift-resolving-merge-conflicts</a> <span>in a Repair</span></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 4">
                 <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
@@ -291,32 +292,44 @@
       <div class="sec-head"><p class="eyebrow">Delivery pile</p><h2 id="offpress-title">What comes off the press</h2></div>
       <div class="offpress">
         <div style="--ink:var(--c)"><h3>Ready for review</h3><p>An open pull request from the Issue branch to the Base branch. It is mergeable, its CI passes, and it has been reviewed against your repository's documented coding standards and against the issue. Otherwise thirdshift doesn't call it ready.</p></div>
-        <div style="--ink:var(--y)"><h3>Unaddressed findings</h3><p>Every Standards finding and Spec finding the agent chose not to fix is listed as an Unaddressed finding in the pull request body, so you decide on it.</p></div>
+        <div style="--ink:var(--y)"><h3>Unaddressed findings</h3><p>Every Standards finding and Spec finding the agent chose not to fix is listed as an Unaddressed finding in the pull request body, with the code, plan decision, ADR or focused run that refutes it. A decision left to the Day shift links a <code>needs-triage</code> issue.</p></div>
         <div style="--ink:var(--m)"><h3>Failed runs keep their work</h3><p>A Failed run still pushes its work, so nothing is lost (if the push fails, it keeps the worktree instead), and its pull request goes back to draft. Run the same command again to continue it.</p></div>
       </div>
     </div>
   </section>
 
-  <!-- The factory grows: "How the factory will grow" in the home page order in #61. -->
+  <!-- The factory grows: current workflows, documented in the README. -->
   <section class="sec" id="grows" aria-labelledby="grows-title">
     <div class="wrap grows">
       <div class="grows-text">
         <p class="eyebrow">Plan view · the press hall</p>
         <h2 id="grows-title">The factory grows</h2>
-        <p>One Run is the first primitive the factory is built from: one Issue URL in, one pull request ready for review out. It is the only line on the floor today.</p>
-        <p>The rest of the floor is marked out, not built. Each outlined line is a machine that is not yet installed, linked to the issue that tracks it.</p>
+        <p>One Run is the first primitive: one Issue URL in, one pull request out. The factory now builds with six workflows. Every line on this floor is installed; follow it to the documentation.</p>
+        <p>A <a href="https://github.com/JacobStephens2/thirdshift#usage">Merge run</a> merges its own reviewed, green pull request when you ask. A <a href="https://github.com/JacobStephens2/thirdshift#spec-runs">Spec run</a> works through Tickets in dependency order, up to three at once by default. They merge into a Spec branch, then one Spec PR gets reviewed against the whole Spec.</p>
+        <p>An <a href="https://github.com/JacobStephens2/thirdshift#architect-runs">Architect run</a> looks for architecture improvements and builds its top Strong plan. Without a Strong recommendation, it leaves an Architect idea for the Day shift. Use <code>--plan-only</code> to publish a plan and stop.</p>
+        <p>A <a href="https://github.com/JacobStephens2/thirdshift#pickup-runs">Pickup run</a> takes the lowest-numbered Ready issue, after it has settled and while the repository is below its Claim limit. Failed work stays with the Day shift; a later Pickup run does not retry a started issue.</p>
+        <p>A <a href="https://github.com/JacobStephens2/thirdshift#security-runs">Security run</a> audits the Base branch and records findings privately. It is report-only by default. With <code>security-fix</code>, it can fix a reproduced finding through a Run or Spec run. An optional <a href="https://github.com/JacobStephens2/thirdshift#security-review">Security review</a> checks an individual change and holds Self-merge if introduced findings remain unaddressed or the review is incomplete.</p>
+        <p>Start passes with <code>thirdshift architect base main</code>, <code>thirdshift pickup base main</code> or <code>thirdshift secure base main</code>. Your operating system schedules them. Frequent Architect runs are <a href="https://github.com/JacobStephens2/thirdshift#weeding">Weeding</a>; scheduled Security runs with fixing allowed are <a href="https://github.com/JacobStephens2/thirdshift#fencing">Fencing</a>. Both yield to work the Day shift shaped, and pause when a decision needs you.</p>
       </div>
       <figure class="floor grid-bg">
-        <!-- Drawn once, by hand: no animation. Every label is visible text; the hints also show on hover and focus.
-             Lines sit on a 150-unit pitch (146 frame + 4 gap) from y=60; a new line means a new translate and a taller viewBox and hall. -->
-        <svg viewBox="0 0 480 680" role="group" aria-labelledby="floor-title" aria-describedby="floor-desc">
+        <!-- Static plan: visible names, statuses and hints also work without JavaScript.
+             Lines sit on a 150-unit pitch from y=60. The shared machinery is decorative. -->
+        <svg viewBox="0 0 480 980" role="group" aria-labelledby="floor-title" aria-describedby="floor-desc">
           <title id="floor-title">Floor plan of the press hall</title>
-          <desc id="floor-desc">One press line is installed: a Run, from the issue through units C, M, Y and K to a pull request. Three more lines are outlined and not yet installed: self-merge, the architecture pass and implementing a whole spec.</desc>
+          <desc id="floor-desc">Six installed workflows: a Run, a Merge run, an Architect run, a Spec run, a Pickup run and a Security run. Each line links to its documentation. Architecture may leave an idea for triage; Security records findings privately and fixes only when allowed.</desc>
           <defs>
             <pattern id="floor-belt" width="8" height="12" patternUnits="userSpaceOnUse"><rect class="belt-base" width="8" height="12"/><rect class="belt-slat" x="5" width="2" height="12"/></pattern>
+            <g id="floor-press" class="floor-press">
+              <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
+              <rect class="unit" x="113" y="80" width="56" height="56"/><rect class="hopper c" x="125" y="92" width="32" height="32"/><text class="ink-letter" x="141" y="117">C</text>
+              <rect class="unit" x="179" y="80" width="56" height="56"/><rect class="hopper m" x="191" y="92" width="32" height="32"/><text class="ink-letter" x="207" y="117">M</text>
+              <rect class="unit" x="245" y="80" width="56" height="56"/><rect class="hopper y" x="257" y="92" width="32" height="32"/><text class="ink-letter" x="273" y="117">Y</text>
+              <rect class="unit" x="311" y="80" width="56" height="56"/><rect class="hopper k" x="323" y="92" width="32" height="32"/><text class="ink-letter k" x="339" y="117">K</text>
+              <rect class="chest" x="31" y="80" width="68" height="56"/><rect class="chest" x="381" y="80" width="68" height="56"/>
+            </g>
           </defs>
           <g class="hall" aria-hidden="true">
-            <rect x="10" y="10" width="460" height="660"/>
+            <rect x="10" y="10" width="460" height="960"/>
             <text x="24" y="38">PRESS HALL · PLAN</text>
             <text class="north" x="456" y="38">N ↑</text>
           </g>
@@ -327,64 +340,74 @@
               <text class="status" x="31" y="47">INSTALLED</text>
               <text class="hint" x="31" y="70">An Issue URL in, a pull request out.</text>
               <g aria-hidden="true">
-                <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
-                <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-label" x="65" y="113">issue</text>
-                <rect class="unit" x="113" y="80" width="56" height="56"/><rect class="hopper c" x="125" y="92" width="32" height="32"/><text class="ink-letter" x="141" y="117">C</text>
-                <rect class="unit" x="179" y="80" width="56" height="56"/><rect class="hopper m" x="191" y="92" width="32" height="32"/><text class="ink-letter" x="207" y="117">M</text>
-                <rect class="unit" x="245" y="80" width="56" height="56"/><rect class="hopper y" x="257" y="92" width="32" height="32"/><text class="ink-letter" x="273" y="117">Y</text>
-                <rect class="unit" x="311" y="80" width="56" height="56"/><rect class="hopper k" x="323" y="92" width="32" height="32"/><text class="ink-letter k" x="339" y="117">K</text>
-                <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-label" x="415" y="113">PR</text>
+                <use href="#floor-press"/>
+                <text class="chest-label" x="65" y="113">issue</text>
+                <text class="chest-label" x="415" y="113">PR</text>
               </g>
             </a>
           </g>
           <g transform="translate(0 210)">
-            <a href="https://github.com/JacobStephens2/thirdshift/issues/26" class="line ghost">
+            <a href="https://github.com/JacobStephens2/thirdshift#usage" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
-              <text class="line-label" x="31" y="24">LINE 2 · SELF-MERGE</text>
-              <text class="status" x="31" y="47">NOT YET INSTALLED · #26</text>
-              <text class="hint" x="31" y="70">Would merge its own pull request.</text>
+              <text class="line-label" x="31" y="24">LINE 2 · MERGE RUN</text>
+              <text class="status" x="31" y="47">INSTALLED</text>
+              <text class="hint" x="31" y="70">Merges the reviewed head after CI passes.</text>
               <g aria-hidden="true">
-                <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
-                <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-label" x="65" y="113">issue</text>
-                <rect class="footprint" x="113" y="80" width="56" height="56"/><path class="footprint" d="M113 80l56 56M169 80l-56 56"/>
-                <rect class="footprint" x="179" y="80" width="56" height="56"/><path class="footprint" d="M179 80l56 56M235 80l-56 56"/>
-                <rect class="footprint" x="245" y="80" width="56" height="56"/><path class="footprint" d="M245 80l56 56M301 80l-56 56"/>
-                <rect class="footprint" x="311" y="80" width="56" height="56"/><path class="footprint" d="M311 80l56 56M367 80l-56 56"/>
-                <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-label" x="415" y="113">merged</text>
+                <use href="#floor-press"/>
+                <text class="chest-label" x="65" y="113">issue</text>
+                <text class="chest-label" x="415" y="113">merged</text>
               </g>
             </a>
           </g>
           <g transform="translate(0 360)">
-            <a href="https://github.com/JacobStephens2/thirdshift/issues/27" class="line ghost">
+            <a href="https://github.com/JacobStephens2/thirdshift#architect-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
-              <text class="line-label" x="31" y="24">LINE 3 · ARCHITECTURE</text>
-              <text class="status" x="31" y="47">NOT YET INSTALLED · #27</text>
-              <text class="hint" x="31" y="70">Would run /improve-codebase-architecture.</text>
+              <text class="line-label" x="31" y="24">LINE 3 · ARCHITECT RUN</text>
+              <text class="status" x="31" y="47">INSTALLED</text>
+              <text class="hint" x="31" y="70">Reviews architecture; builds a Strong plan.</text>
               <g aria-hidden="true">
-                <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
-                <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-label" x="65" y="113">codebase</text>
-                <rect class="footprint" x="113" y="80" width="56" height="56"/><path class="footprint" d="M113 80l56 56M169 80l-56 56"/>
-                <rect class="footprint" x="179" y="80" width="56" height="56"/><path class="footprint" d="M179 80l56 56M235 80l-56 56"/>
-                <rect class="footprint" x="245" y="80" width="56" height="56"/><path class="footprint" d="M245 80l56 56M301 80l-56 56"/>
-                <rect class="footprint" x="311" y="80" width="56" height="56"/><path class="footprint" d="M311 80l56 56M367 80l-56 56"/>
-                <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-label" x="415" y="113">PRs</text>
+                <use href="#floor-press"/>
+                <text class="chest-label" x="65" y="113">codebase</text>
+                <text class="chest-label" x="415" y="113">plan</text>
               </g>
             </a>
           </g>
           <g transform="translate(0 510)">
-            <a href="https://github.com/JacobStephens2/thirdshift/issues/28" class="line ghost">
+            <a href="https://github.com/JacobStephens2/thirdshift#spec-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
-              <text class="line-label" x="31" y="24">LINE 4 · WHOLE SPEC</text>
-              <text class="status" x="31" y="47">NOT YET INSTALLED · #28</text>
-              <text class="hint" x="31" y="70">Would implement every issue in a spec.</text>
+              <text class="line-label" x="31" y="24">LINE 4 · SPEC RUN</text>
+              <text class="status" x="31" y="47">INSTALLED</text>
+              <text class="hint" x="31" y="70">Tickets land together in one Spec PR.</text>
               <g aria-hidden="true">
-                <rect class="belt" x="99" y="102" width="14" height="12"/><rect class="belt" x="169" y="102" width="10" height="12"/><rect class="belt" x="235" y="102" width="10" height="12"/><rect class="belt" x="301" y="102" width="10" height="12"/><rect class="belt" x="367" y="102" width="14" height="12"/>
-                <rect class="chest" x="31" y="80" width="68" height="56"/><text class="chest-label" x="65" y="113">spec</text>
-                <rect class="footprint" x="113" y="80" width="56" height="56"/><path class="footprint" d="M113 80l56 56M169 80l-56 56"/>
-                <rect class="footprint" x="179" y="80" width="56" height="56"/><path class="footprint" d="M179 80l56 56M235 80l-56 56"/>
-                <rect class="footprint" x="245" y="80" width="56" height="56"/><path class="footprint" d="M245 80l56 56M301 80l-56 56"/>
-                <rect class="footprint" x="311" y="80" width="56" height="56"/><path class="footprint" d="M311 80l56 56M367 80l-56 56"/>
-                <rect class="chest" x="381" y="80" width="68" height="56"/><text class="chest-label" x="415" y="113">PRs</text>
+                <use href="#floor-press"/>
+                <text class="chest-label" x="65" y="113">Spec</text>
+                <text class="chest-label" x="415" y="113">Spec PR</text>
+              </g>
+            </a>
+          </g>
+          <g transform="translate(0 660)">
+            <a href="https://github.com/JacobStephens2/thirdshift#pickup-runs" class="line">
+              <rect class="frame" x="20" y="0" width="440" height="146"/>
+              <text class="line-label" x="31" y="24">LINE 5 · PICKUP RUN</text>
+              <text class="status" x="31" y="47">INSTALLED</text>
+              <text class="hint" x="31" y="70">Takes the lowest-numbered Ready issue.</text>
+              <g aria-hidden="true">
+                <use href="#floor-press"/>
+                <text class="chest-label" x="65" y="113">ready</text>
+                <text class="chest-label" x="415" y="113">PR</text>
+              </g>
+            </a>
+          </g>
+          <g transform="translate(0 810)">
+            <a href="https://github.com/JacobStephens2/thirdshift#security-runs" class="line">
+              <rect class="frame" x="20" y="0" width="440" height="146"/>
+              <text class="line-label" x="31" y="24">LINE 6 · SECURITY RUN</text>
+              <text class="status" x="31" y="47">INSTALLED</text>
+              <text class="hint" x="31" y="70">Audits privately; fixes when allowed.</text>
+              <g aria-hidden="true">
+                <use href="#floor-press"/>
+                <text class="chest-label" x="65" y="113">codebase</text>
+                <text class="chest-label" x="415" y="113">record</text>
               </g>
             </a>
           </g>
@@ -423,8 +446,9 @@
       <div class="reqs">
         <div><h3>Requirements</h3>
           <ul>
-            <li><b><code>claude</code></b> (Claude Code), logged in.</li>
+            <li>Your chosen <b>Harness</b>, installed and authenticated: <code>claude</code> (Claude Code, the default), <code>codex</code> (Codex CLI), <code>agy</code> (Antigravity CLI), <code>grok</code> (Grok Build), <code>muse</code> (Muse Code) or <code>opencode</code> (OpenCode, with a configured Model provider).</li>
             <li><b><code>gh</code></b> (GitHub CLI), logged in.</li>
+            <li><b>Node.js</b> on <code>PATH</code> for Security runs, whose report validators use it.</li>
             <li><b><code>git</code></b> with a global <code>user.name</code> and <code>user.email</code>, and credentials that can push to the repository.</li>
           </ul></div>
         <div><h3>Platforms</h3>
@@ -435,7 +459,7 @@
             <li><b>macOS</b> Tahoe 26.5.2 and later, Apple Silicon.</li>
           </ul></div>
       </div>
-      <p class="reqs-note">Details in the <a href="https://github.com/JacobStephens2/thirdshift#supported-platforms">README</a>.</p>
+      <p class="reqs-note">Choose the Harness, Model and Effort with <code>thirdshift setup</code> or per command. See <a href="https://github.com/JacobStephens2/thirdshift#harness-model-and-effort">Harness configuration</a> and <a href="https://github.com/JacobStephens2/thirdshift#supported-platforms">supported platforms</a>.</p>
     </div>
   </section>
 
