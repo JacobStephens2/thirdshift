@@ -260,29 +260,23 @@ body::after { /* scanlines */
 .floor .frame { fill: transparent; stroke: none; }
 .floor .line-label { font-size: 17px; letter-spacing: .06em; }
 .floor .status { font-size: 14px; letter-spacing: .06em; fill: var(--y); }
-.floor .ghost .status { fill: var(--m-text); }
 .floor .hint { font-size: 15px; font-weight: 400; fill: var(--dim); }
 .floor .chest { fill: #111; stroke: var(--dim); stroke-width: 2; }
 .floor .chest-label { font-size: 13px; text-anchor: middle; fill: var(--paper); }
-.floor .belt { fill: url(#floor-belt); stroke: #333; stroke-width: 1; }
+.floor-press .belt { fill: url(#floor-belt); stroke: #333; stroke-width: 1; }
 .floor .belt-base { fill: #15130a; }
 .floor .belt-slat { fill: color-mix(in srgb, var(--y) 35%, transparent); }
-.floor .unit { fill: #0e0e0e; stroke: #3a3a3a; stroke-width: 2; }
-.floor .hopper.c { fill: var(--c); } .floor .hopper.m { fill: var(--m); } .floor .hopper.y { fill: var(--y); }
-.floor .hopper.k { fill: none; stroke: var(--paper); stroke-width: 2; }
-.floor .ink-letter { font: var(--f-head-w) 24px/1 var(--f-head); text-anchor: middle; fill: #000; }
-.floor .ink-letter.k { fill: var(--paper); }
-/* Not yet installed: floor tape where a machine will stand, and no ink. */
-.floor .ghost .chest, .floor .ghost .belt, .floor .footprint { fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-dasharray: 5 4; }
-.floor .ghost g { opacity: .55; }
-.floor .ghost .chest-label { fill: var(--dim); }
+.floor-press .unit { fill: #0e0e0e; stroke: #3a3a3a; stroke-width: 2; }
+.floor-press .hopper.c { fill: var(--c); } .floor-press .hopper.m { fill: var(--m); } .floor-press .hopper.y { fill: var(--y); }
+.floor-press .hopper.k { fill: none; stroke: var(--paper); stroke-width: 2; }
+.floor-press .ink-letter { font: var(--f-head-w) 24px/1 var(--f-head); text-anchor: middle; fill: #000; }
+.floor-press .ink-letter.k { fill: var(--paper); }
 /* The hint is the hover and focus label. Only a mouse hides it until hover, so touch screens always show it. */
 .floor a { outline: none; }
 @media (hover: hover) and (pointer: fine) {
   .floor .hint { opacity: 0; }
   .floor a:hover .hint, .floor a:focus-visible .hint { opacity: 1; }
 }
-.floor a.ghost:hover g, .floor a.ghost:focus-visible g { opacity: .85; }
 .floor a:focus-visible .frame { stroke: var(--y); stroke-width: 2; }
 
 /* ---------- Proof sheets ---------- */
