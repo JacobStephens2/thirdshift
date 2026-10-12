@@ -75,7 +75,9 @@ impl Adapter for Agy {
     /// file reads need none, and no flag removes them, so a summary can
     /// still quote a file the model chose to read.
     fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
-        let mut invocation = self.session(choice, None, prompt);
+        let mut invocation = self.session(choice, None, "");
+        // Replace the positional prompt pair with an empty print value;
+        // the complete release input travels on stdin.
         invocation.args.remove(1);
         invocation.args = without(invocation.args, &["--dangerously-skip-permissions"]);
         invocation.args[0] = "-p=".into();
