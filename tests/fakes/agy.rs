@@ -37,7 +37,11 @@ pub fn main(argv: Vec<String>) {
                 } else {
                     input
                         .as_ref()
-                        .or_else(|| argv.last())
+                        .or_else(|| {
+                            argv.windows(2)
+                                .find(|args| args[0] == "-p")
+                                .map(|args| &args[1])
+                        })
                         .map(string)
                         .unwrap_or(Null)
                 },
@@ -86,7 +90,19 @@ pub fn main(argv: Vec<String>) {
         print!("{CATALOG}");
         crate::exit(0);
     }
-    assert!(argv.iter().any(|arg| arg == "-p" || arg == "-p="));
+    if let Some(args) = argv.windows(2).find(|args| args[0] == "-p") {
+        assert!(
+            !args[1].starts_with("--"),
+            "-p took {:?} as its prompt",
+            args[1]
+        );
+    } else {
+        assert!(argv.iter().any(|arg| arg == "-p="));
+        assert!(
+            input.is_some(),
+            "-p= requires the stream-json prompt on stdin"
+        );
+    }
     let records = records.items();
     let session = records.len();
     let conversation = argv
