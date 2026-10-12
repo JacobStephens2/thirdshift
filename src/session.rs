@@ -368,6 +368,34 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn unsafe_project_skills_fail_session_start_before_the_harness_can_run() {
+        for harness in crate::harness::Harness::ALL {
+            let worktree = crate::test_support::scratch_worktree();
+            let outside = tempfile::tempdir().unwrap();
+            let dir = worktree.path().join(harness.adapter().project_skills());
+            fs::create_dir_all(dir.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
+            let logs = Logs {
+                name: "670".into(),
+                dir: worktree.path().join("session-logs"),
+            };
+            let choice = Choice {
+                harness,
+                ..Choice::default()
+            };
+            let (result, log) =
+                Sessions::within(&logs, worktree.path(), &choice, |_| -> Result<()> {
+                    panic!("unsafe project skills must prevent session steps");
+                });
+            let error = result.unwrap_err();
+            assert!(format!("{error:#}").contains(&dir.display().to_string()));
+            assert!(log.is_none());
+            assert!(!logs.dir.exists());
+            assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+        }
+    }
+
     /// What the rules asked of the scripted [`Outside`], in order.
     #[derive(Debug, PartialEq)]
     enum Call {

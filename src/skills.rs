@@ -4,7 +4,6 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -14,6 +13,12 @@ use tempfile::TempDir;
 
 use crate::git::Git;
 use crate::harness::Adapter;
+
+mod directory;
+use directory::CheckedDirectory;
+
+#[cfg(test)]
+mod tests;
 
 /// The Factory skills, as they are written out and the Prompts and skills
 /// page shows them, each in its `thirdshift-<skill>` directory.
@@ -29,21 +34,15 @@ static WRITTEN: Mutex<Option<TempDir>> = Mutex::new(None);
 /// keeps them out of git. The links are left in place: they go with the
 /// worktree.
 pub fn link_into(worktree: &Path, adapter: &dyn Adapter) -> Result<()> {
-    let written = written_out()?;
     let dir = adapter.project_skills();
+    // Refuse an unsafe path before writing skills or updating excludes.
+    let project_skills = CheckedDirectory::check(worktree, Path::new(dir))?;
+    let written = written_out()?;
     exclude(&Git::new(worktree), &format!("/{dir}/thirdshift-*"))?;
-    let project_skills = worktree.join(dir);
-    fs::create_dir_all(&project_skills)
-        .with_context(|| format!("could not create {}", project_skills.display()))?;
+    let project_skills = project_skills.create_missing()?;
     for skill in SKILLS.dirs() {
         let name = skill.path();
-        let link = project_skills.join(name);
-        if fs::symlink_metadata(&link).is_ok() {
-            fs::remove_file(&link)
-                .with_context(|| format!("could not replace {}", link.display()))?;
-        }
-        symlink(written.join(name), &link)
-            .with_context(|| format!("could not link {}", link.display()))?;
+        project_skills.link(&written.join(name), name)?;
     }
     Ok(())
 }
