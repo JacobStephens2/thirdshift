@@ -448,6 +448,91 @@ The options:
 
 *Answer:* agree
 
+## Round 11 (open)
+
+Picked up on 11 October, after the write-up merged as #657. Of the pieces the replays tried, two passed: the Second opinion after the Spec review (both families), and the plan check (only Claude checking Claude's plans). The rest aren't built. Q33 left two questions for this round: who acts on a Second opinion's findings, and what happens when the plan check disagrees. One fact shapes both: the factory now runs everything on Codex at high (`harness.default = "codex"`), so today's plans, Spec branches and Spec reviews are all Codex's. Neither passing arm was tried on Codex's work. See "Research results (2026-10-11)". (Both have been since: see Q34's result and Q35.)
+
+**Q34 - Is the plan check built?** The one arm that passed is fresh Claude checking Claude's plans: 10 stopped, 8 right. On Codex's plans, which are the ones Weeding writes now, neither arm passed. Claude at high stopped 2 (1 right) and fresh Codex stopped 4 (2 right). Claude at max was never tried on Codex's plans. The options:
+- (a) **Not built.** Record that it passes only for Claude checking Claude, and revisit if Weeding goes back to Claude. "What happens when the plan check disagrees" goes away.
+- (b) **Build it only for Claude:** the check runs when the Architecture review ran on Claude Code, in a fresh Claude session.
+- (c) **One more replay first:** Claude at max checks Codex's 20 plans, against the same bar of 3, mostly right. That's 20 Claude max sessions.
+
+*Recommended:* (a). With (b), the check would never run while Weeding runs on Codex. (c) spends a lot of your Claude week to test a setup Weeding only needs if Claude writes the plans. Claude at high stopped only 2 of Codex's plans, so max would have to do much better.
+
+*Answer:* c
+
+*Checked:* ran from 10:16 pm on 11 October to 3:44 am on 12 October: 20 sessions of Claude Opus 5.5 at max over the same 20 Codex plans and prompt as the Claude-at-high arm. A fresh agent graded each stop blind, with the earlier grading prompt. The bar is the same: at least 3 stops, most of them right.
+
+*Result:* it passes, exactly at the bar: 3 stops, 2 right. The 2 right stops are #463 and #465, the same plans fresh Codex stopped, for the same reasons. See "Research results (2026-10-12)". Whether to build it is Q41.
+
+**Q35 - Which Harness does the Second opinion run on by default?** Q7 made the family a setting, and the write-up left the default to this round. Both arms passed. Fresh Claude reached 19 Specs, but 9 of its 40 findings were wrong. Codex reached 16, with 2 of 25 wrong. They mostly found different bugs. The options:
+- (a) **The Spec run's own Harness, in a fresh session.** It needs no second CLI login, it uses no other family's limits, and nothing breaks one Harness per Command unless you set another Harness. Today that means fresh Codex on Codex's Spec. Each family's fresh look found plenty in Claude's Specs, and a pilot since has tried this pairing on Codex's 4 Specs: real missed bugs in 2 of them, none wrong. One was part of #603, which reached main.
+- (b) **The other family:** Claude on a Codex Spec run, Codex on a Claude one. It's the setup #429 set out to test, and Claude reviewing Codex is still untried for Specs.
+- (c) **No default:** turning it on requires naming a Harness.
+
+*Recommended:* (a). The fresh arm did as well as the other family, and the default should be the setup that needs least. Either way, each Spec run gets one more session, with its sub-agents, on that Harness's limits, which Codex shares with Weeding. Setting another Harness still needs the ADR from Q7.
+
+The blog post already gives (a) as your lean. Its TL;DR says the second review made the difference, not the other family. If you pick (b) or (c), the post needs a line changed.
+
+*Answer:* 
+
+**Q36 - Who acts on the Second opinion's findings?** The Spec review runs the review skill: its reviewer sub-agents find, and the session fixes as the author, under the evidence-backed rules (Q13). The options:
+- (a) **The Second opinion session itself,** working the way the Spec review does: its reviewers find, it fixes what their tests show, declines the rest with evidence, and adds its declines to the Spec PR's Unaddressed findings. Those declines follow the same rules, so a decision someone else must make becomes a `needs-triage` issue (Q15).
+- (b) **It only reports.** A further session on the Spec run's own Harness then acts as the author. That keeps the fixes on the Command's Harness, at the cost of another session.
+- (c) **The Day shift:** its findings hold the Self-merge until you read them.
+
+*Recommended:* (a). It's one session, and it's the shape the Spec review and the Security review already have. Under the evidence-backed rules, a wrong finding's test passes and the author declines it, which matters for Claude's 9 of 40 wrong. (c) would stop every Spec PR for you, and Spec PRs merge themselves today.
+
+*Answer:* 
+
+**Q37 - What do its reviewers see?** It runs after the Spec review, so the Spec PR already lists that review's Unaddressed findings. The options:
+- (a) **Not the PR's description.** The reviewers see the Spec, the Spec branch and the Base branch, as the replay's arms did. If they raise something the Spec review declined, the author weighs it under the usual rules, with no shortcut for "already declined".
+- (b) **The Spec PR's description too,** so they don't raise again what was declined.
+
+*Recommended:* (a). The replay measured an independent look, and two of the six timing bugs were raised once and then declined. A finding raised a second time is a reason to look again.
+
+*Answer:* 
+
+**Q38 - Where does it run, and what if it doesn't finish?** The Spec run order today is: Spec review, then the Security review (if asked), then the Repair loop. The options for its place:
+- (a) **Right after the Spec review,** so the Security review and the Repair loop see its fixes.
+- (b) **Last, after the Repair loop.** Its fixes would then need another Repair loop.
+
+And if it's refused, ends early, or fails:
+- (c) **The Spec PR goes on.** The PR body and the Run notification say the Second opinion didn't finish.
+- (d) **It holds the Self-merge,** as a Security review that didn't finish does.
+
+*Recommended:* (a) and (c). The Spec review has already done a full review by then, so a missing second look leaves the PR where it is today. The Security review holds the merge because it's the only look for vulnerabilities.
+
+*Answer:* 
+
+**Q39 - How will you know it pays off?** The replays measured Claude's Specs with the old skill. Once it's on, every Spec run keeps its reviewers' reports (#490), and its PR lists what it fixed and declined. The options:
+- (a) **Nothing extra built.** After about 10 Spec runs with it on, an agent reads the kept reports and PRs and counts real fixes per Spec. You decide then whether it stays on.
+- (b) **thirdshift counts what it fixed and declined** in the Activity log or the Run notification.
+- (c) **No look-back:** it's opt-in, and you can switch it off.
+
+*Recommended:* (a). The reports are already kept, so a later count costs nothing to build. The pilot found real bugs in 2 of Codex's 4 Specs, too few to meet Q6's bar. About 10 Spec runs answer whether fresh Codex on Codex's Specs keeps finding them.
+
+*Answer:* 
+
+**Q40 - What happens to #429 now?** #429 asked for multi-family review. The replays answered it: a second family isn't worth adding in a Run, as a plan check on today's plans, or in place of the Spec review. A second look after the Spec review is worth adding, from either family. Settled answers kept #429 open until the replays reported, and gave a built Second opinion a Spec of its own (Q22). The options:
+- (a) **Close #429 when that Spec is filed,** with a comment that links the Spec, the research note (#657) and the blog post.
+- (b) **Close it now,** with the same comment. The Spec is filed later from this log.
+- (c) **Keep it open** until the Spec's work merges.
+
+*Recommended:* (a). Closing it before the Spec exists would leave the Second opinion with no open issue. Keeping it open until the build merges would duplicate the Spec, which tracks that work itself.
+
+*Answer:* 
+
+
+**Q41 - Claude at max passed on Codex's plans. Is the plan check built?** Q34's replay met the bar with nothing to spare: one fewer right stop and it fails. Its right stops, #463 and #465, are the two plans fresh Codex also stopped rightly, and Claude at high stopped #465 too. So on Codex's plans, every arm's right stops fall on the same two plans. What Claude at max adds is one fewer wrong stop: 1 against fresh Codex's 2. Both arms that passed have Claude at max as the checker, so the checker's strength may matter more than its family. Weeding has since built #463 and #465; whether the faults the stops named reached main hasn't been checked. The options:
+- (a) **Not built.** The pass is at the floor, it stopped no plan a fresh Codex check missed, and one session per cell can't tell 1 wrong stop from 2.
+- (b) **Built, opt-in and off by default, with Claude at max as the checker** whoever wrote the plan; the Harness, Model and Effort are settings. Each plan Weeding publishes gets one Claude max session, about 16 minutes, on your Claude limits. What a stop does comes back as Q33's open question, in the next round.
+- (c) **Built, opt-in, on the plan's own Harness in a fresh session,** like Q35's lean. Fresh Codex stopped the same 2 bad plans, but its 2 wrong stops failed the bar.
+
+*Recommended:* (b). The bar was fixed before the run, and calling the pass too thin now would move the goalposts. Stopping 2 bad plans in 20, for 1 wrong stop, is a fair trade for a check you have to switch on. (a) is the cautious reading, since it caught nothing new. (c) failed its bar.
+
+*Answer:* 
+
 ## Settled by earlier answers (shout if any is wrong)
 
 - **Standalone Runs:** "every Ticket's Run" means any Run, standalone or a Ticket's. Whether they get separate switches is a config question for after the replays. (Q3)
@@ -489,6 +574,10 @@ The options:
 - **The reverse Spec replay still waits.** Codex has run four Specs: #432, #465, #486 and #427. That's too few to measure against a bar of 6 in 30. When it does run, Codex's own recorded Spec reviews can be its baseline, since #490 keeps their reports. (Q16, Q18)
 - **The replays that use the old skill pin it at 479a1fb** (#391, 5 October), the last commit before #486 changed it. (Q21, Q26)
 - **The Security review is no Second opinion.** It runs on the Command's Harness and looks for vulnerabilities only, so none of the replays include it. It is the precedent for the shape a Second opinion in a Run would take: a session a Run starts after its opening session, when the User config asks for one. (Q7)
+- **The replays have reported** (#657, 11 October): the Second opinion in a Run fails in both directions, the timing checklist ties fresh Claude, the new Harnesses fail, and Spec review on its own Harness fails. None of those is built. The Second opinion after the Spec review passes for both families, and the plan check passes only for Claude checking Claude's plans. (Q4, Q6)
+- **A Second opinion runs only in Spec runs,** after the Spec review, since the Second opinion in a Run failed. A Ticket's Run and a standalone Run get none. (Q4, Q6)
+- **It's opt-in User config, off by default,** with the Harness, Model and Effort as settings. (Q3, Q9)
+- **The reverse Spec replay still waits** for more Codex Specs. Q39's look-back may answer the same question sooner.
 
 ## Research results (2026-10-06)
 
@@ -553,6 +642,29 @@ The options:
   - reports written where the Session prompt says.
   - The reviewers still only read; the implementer runs their tests. The last commit before #486 changed it is 479a1fb. Confirmed by `git log -- skills/thirdshift-code-review/` and `src/prompt.rs`.
 
+## Research results (2026-10-11)
+
+- **Pilot: fresh Codex (xhigh) on Codex's 4 Specs found real bugs the recorded Spec review missed in 2 of them.** It raised 3 behaviour bugs the recorded review hadn't, all graded real and none wrong. Two are minor.
+  - #432: a process started in a new session by a stopping parent escapes both snapshots and the SIGKILL. Minor.
+  - #427: the Security fix notification loses how the audit, reproduction and fix stages ended, and a failed reproduction reads "audit failed". The second half is #603, which reached main and was fixed on 9 October. So a second Codex look after the Spec review would have caught part of a bug that escaped. In the reverse bug replay, neither arm caught #603 when reviewing the Ticket PRs (#562, #577).
+  - #427: a `security-fix` run on an existing finding skips the Node.js check the Spec requires. Minor, and still on main.
+  - #465 and #486: nothing new. Fresh Codex also missed the one bug #486's recorded review had found and fixed.
+  - Confirmed by the same sorting and blind grading as the Spec replay, using the same prompts. Each session used the review skill its recorded review ran: the older one for #432, #465 and #486, the evidence-backed one for #427. Weeding was paused for the 4 Codex sessions and restored afterwards. Four Specs can't meet Q6's bar of 6 in 30, so this is a pilot, not a test.
+- **Codex has run 5 Spec reviews over 4 Specs, all on thirdshift:** #432 (PR #442), #465 (#470), #486 (#496, reviewed twice) and #427 (#556). They ran between 6 and 9 October, all at xhigh. Only #427's used the evidence-backed review skill. No other repository has had a Codex Spec run, and both reviewers' reports survive for all five. #486's second review saw the first one's fix, so only the first is independent. Confirmed by an agent from the Session, Command and Activity logs, the Codex sub-agent rollouts and the clones; every sha was checked with `git cat-file`. The manifest is in `~/.thirdshift/replays/2026-10-09/inputs/codex-specs/`.
+
+- **The factory runs everything on Codex (GPT-6.1 Sol) at high:** `harness.default = "codex"`, with Security runs on Muse. So today's plans, Spec branches and Spec reviews are Codex's. Confirmed by `~/.thirdshift/config.toml`.
+- **A Spec run's order:** the Spec review, then the Security review on the Spec PR if the User config asks for one, then Repairs in the Repair loop. A Security review that didn't finish holds the Self-merge. Confirmed by `CONTEXT.md` (Spec review, Security review, Repair).
+- **#616 merged on 10 October:** Codex sessions that run the review now ask for fresh sub-agents. Confirmed by `gh issue view 616`.
+- **agy 1.3.3's `-p` change breaks thirdshift's agy adapter.** Filed as #658, fixed by #661 on 12 October. Confirmed by the replay's agy stderr logs and `src/harness/agy.rs` on main.
+
+## Research results (2026-10-12)
+
+- **Claude at max checking Codex's 20 plans stopped 3, and 2 held, so it meets the plan check's bar exactly** (Q34, Q41).
+  - #463, right: Decision 10 makes a forwarded interruption override a child that reached its goal, so a merged Ticket would be announced as interrupted and a merged Base fix reported as not merged. Fresh Codex stopped it for the same reason.
+  - #465, right: Decision 4 lets an interruption win over every Git and GitHub step's exit status. A step that changes state and finished anyway (a worktree add, a Claim label) is left behind with nothing to clean it up. Fresh Codex and Claude at high stopped it for the same reason.
+  - #499, wrong: its fact holds (a tag can shadow the Base branch's short name), but the plan already asks for full ref names, and the fix is one line a builder makes in passing.
+  - Confirmed by a fresh agent grading the 3 stops blind with the earlier plan-grading prompt, against each plan's base commit. The packets and grades are in `~/.thirdshift/replays/2026-10-09/grading/plans-max/`. All 20 sessions exited 0 in about 16 minutes on average, and none changed its repo.
+
 ## Filed
 
 - **#486, Evidence-backed review findings:** the Spec from Q8, Q13–Q15, Q18 and Q21. It's `ready-for-agent` now that its Tickets are published, so a Pickup run takes it once it settles.
@@ -563,7 +675,11 @@ The options:
 - **#429's body rewritten** with the decisions, the record and the replay plan, linking #486. It stays open until the replays report. (Q22)
 - **#616, Codex sessions that run the code review ask for fresh sub-agents:** Q28's Ticket, filed with `/to-tickets` on 9 October as a sub-issue of #429, labelled `ready-for-agent`. (Q28, Q33)
 - **#429's body rewritten again on 9 October** around the revised replay plan, with a reply to the 8 October comment on Codex sub-agents. This log went in as #618. (Q32)
+- **The replays' write-up:** `docs/research/second-opinion-replays.md`, with the script, merged as #657 on 11 October, and summarised on #429. (Q19)
+- **#658, agy sessions fail on agy 1.3.3:** found along the way. Fixed by #661, merged on 12 October.
+- **Blog post, "Fresh Eyes Beat a Second Family":** https://stephens.page/blog/fresh-eyes-beat-a-second-family/, published 11 October, with an `agents.md` companion. Its TL;DR answers whether multi-family review is worth adding (mostly no; only after the Spec review), and says the second look mattered more than the family. Like the note, it leaves out per-finding details from private or unfixed repositories. Updated on 12 October with Q34's replay and the Codex Spec pilot: the plan check now reads as undecided, not unbuilt, and the factory-moved paragraph reports the pilot.
+- **#659, a link to the post from thirdshift.app,** under "Pulled from the press". Merged on 11 October.
 
 ## Waiting on research
 
-- **The replays themselves,** once the script runs. Two questions wait on their numbers and aren't asked yet: who acts on a second opinion's findings, and what happens when the plan check disagrees.
+- Nothing. The plan check's replay reported on 12 October; see "Research results (2026-10-12)".
