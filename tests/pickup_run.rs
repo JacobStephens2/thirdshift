@@ -1501,3 +1501,19 @@ fn a_model_claude_refuses_fails_the_pass_once_it_has_taken_an_issue_before_any_w
         "a Command log was kept"
     );
 }
+
+#[test]
+fn an_issue_written_by_an_untrusted_account_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(&scenario, &result, &no_ready_issue_after(&[
+        "#7 issue author is not a Trusted account",
+    ]));
+    assert!(scenario.claude_calls().is_empty());
+}

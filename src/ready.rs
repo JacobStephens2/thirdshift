@@ -10,7 +10,7 @@ use crate::base_fix;
 use crate::branch::{self, Started};
 use crate::claim;
 use crate::git::Git;
-use crate::github::{Candidate, GitHub, ListedIssue, Shaping};
+use crate::github::{Candidate, GitHub, ListedIssue, Shaping, UntrustedIssue};
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, READY_FOR_AGENT};
 use crate::progress;
@@ -49,6 +49,7 @@ trait Reads {
     fn candidate(&self, issue: &IssueUrl) -> Result<Candidate>;
     /// What shows `issue` was ever started, if it was.
     fn started(&self, issue: &IssueUrl) -> Result<Option<Started>>;
+    fn issue_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>>;
 }
 
 /// The reads of GitHub and of the Launch directory `launch`'s origin.
@@ -58,6 +59,10 @@ struct GitHubAndOrigin<'a> {
 }
 
 impl Reads for GitHubAndOrigin<'_> {
+    fn issue_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
+        self.github.issue_trust(issue)
+    }
+
     fn candidate(&self, issue: &IssueUrl) -> Result<Candidate> {
         self.github.candidate(issue, READY_FOR_AGENT)
     }
@@ -82,6 +87,7 @@ enum Standing {
 /// Why an open issue labelled `ready-for-agent` is not a Ready issue.
 #[derive(Clone)]
 enum Reason {
+    Untrusted(UntrustedIssue),
     /// It has this label, which makes an Unready Ticket.
     Unready(Label),
     /// It carries a Claim.
@@ -177,6 +183,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
     fn line(&mut self, at: usize, reason: &Reason) -> Result<Option<String>> {
         let number = self.candidates[at].issue.number;
         let why = match reason {
+            Reason::Untrusted(check) => check.to_string(),
             Reason::Unready(label) => format!("labelled {label}"),
             Reason::Claimed => format!("labelled {}", claim::IN_PROGRESS),
             Reason::SecurityFix => "a Security fix: its Security run owns it".to_string(),
@@ -259,6 +266,9 @@ fn standing_of(
     if !read.open_blockers.is_empty() {
         return passed_over(Reason::Blocked(read.open_blockers));
     }
+    if let Some(check) = reads.issue_trust(&candidate.issue)? {
+        return passed_over(Reason::Untrusted(check));
+    }
     if let Some(started) = reads.started(&candidate.issue)? {
         return passed_over(Reason::Started(started));
     }
@@ -327,6 +337,10 @@ mod tests {
     }
 
     impl Reads for InMemory<'_> {
+        fn issue_trust(&self, _issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
+            Ok(None)
+        }
+
         fn candidate(&self, issue: &IssueUrl) -> Result<Candidate> {
             self.seen
                 .borrow_mut()

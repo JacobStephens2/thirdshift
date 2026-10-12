@@ -654,6 +654,8 @@ fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
         None => string("2020-01-01T00:00:00Z"),
     };
     object([
+        ("author_association", state.get("author_associations")
+            .and_then(|authors| authors.get(n)).cloned().unwrap_or_else(|| string("OWNER"))),
         ("number", number(n.parse::<i64>().unwrap())),
         // The fake's database ids are the issue numbers.
         ("id", number(n.parse::<i64>().unwrap())),

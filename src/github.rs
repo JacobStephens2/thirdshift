@@ -13,6 +13,8 @@ use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
 mod advisories;
+mod trust;
+pub use trust::UntrustedIssue;
 pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,
