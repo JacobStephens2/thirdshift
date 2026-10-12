@@ -11,6 +11,12 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+// Linking needs directory search permission, not permission to list it.
+#[cfg(target_os = "linux")]
+const DIRECTORY_ACCESS: libc::c_int = libc::O_PATH;
+#[cfg(not(target_os = "linux"))]
+const DIRECTORY_ACCESS: libc::c_int = libc::O_SEARCH;
+
 pub(super) struct CheckedDirectory {
     handle: File,
     path: PathBuf,
@@ -33,7 +39,7 @@ impl CheckedDirectory {
         }
         let handle = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .custom_flags(DIRECTORY_ACCESS | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(worktree)
             .with_context(|| format!("refusing project skills directory {}", worktree.display()))?;
         let mut checked = Self {
@@ -120,7 +126,7 @@ fn open_child(parent: &File, name: &Path) -> io::Result<File> {
         libc::openat(
             parent.as_raw_fd(),
             name.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            DIRECTORY_ACCESS | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
     };
     if fd < 0 {

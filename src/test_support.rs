@@ -8,6 +8,20 @@ use std::process::Command;
 
 use crate::interrupt;
 
+/// A scratch worktree in a fresh local Git repository.
+pub(crate) fn scratch_worktree() -> tempfile::TempDir {
+    let worktree = tempfile::tempdir().unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(worktree.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    worktree
+}
+
 /// Exercise the fully qualified test once per recorded signal, installing
 /// the handler only in the subprocess selected for that test.
 pub(crate) fn with_recorded_signal(test_name: &str, exercise: impl FnOnce(libc::c_int)) {

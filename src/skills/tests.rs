@@ -2,20 +2,14 @@
 
 use super::*;
 use crate::harness::Harness;
-use std::os::unix::fs::symlink;
-use std::process::Command;
+use crate::test_support::scratch_worktree;
+use std::os::unix::fs::{PermissionsExt, symlink};
 
-fn worktree() -> TempDir {
-    let worktree = tempfile::tempdir().unwrap();
-    assert!(
-        Command::new("git")
-            .args(["init", "-q"])
-            .arg(worktree.path())
-            .status()
-            .unwrap()
-            .success()
-    );
-    worktree
+fn skills_prefix(adapter: &dyn Adapter, depth: usize) -> PathBuf {
+    Path::new(adapter.project_skills())
+        .components()
+        .take(depth)
+        .collect()
 }
 
 #[test]
@@ -24,7 +18,7 @@ fn refuses_non_directory_skill_paths_without_changing_any_entries() {
         let adapter = harness.adapter();
         for depth in [1, 2] {
             for obstruction in ["outside link", "inside link", "dangling link", "file"] {
-                let worktree = worktree();
+                let worktree = scratch_worktree();
                 let outside = tempfile::tempdir().unwrap();
                 let inside = worktree.path().join("ordinary");
                 fs::create_dir(&inside).unwrap();
@@ -37,12 +31,7 @@ fn refuses_non_directory_skill_paths_without_changing_any_entries() {
                     )
                     .unwrap();
                 }
-                let blocked = worktree.path().join(
-                    Path::new(adapter.project_skills())
-                        .components()
-                        .take(depth)
-                        .collect::<PathBuf>(),
-                );
+                let blocked = worktree.path().join(skills_prefix(adapter, depth));
                 fs::create_dir_all(blocked.parent().unwrap()).unwrap();
                 match obstruction {
                     "outside link" => symlink(outside.path(), &blocked).unwrap(),
@@ -94,13 +83,8 @@ fn links_factory_skills_in_existing_and_missing_directories_for_every_adapter() 
     for harness in Harness::ALL {
         let adapter = harness.adapter();
         for existing_depth in [0, 1, 2] {
-            let worktree = worktree();
-            let existing = worktree.path().join(
-                Path::new(adapter.project_skills())
-                    .components()
-                    .take(existing_depth)
-                    .collect::<PathBuf>(),
-            );
+            let worktree = scratch_worktree();
+            let existing = worktree.path().join(skills_prefix(adapter, existing_depth));
             fs::create_dir_all(existing).unwrap();
             let dir = worktree.path().join(adapter.project_skills());
             let outside = tempfile::tempdir().unwrap();
@@ -143,9 +127,36 @@ fn links_factory_skills_in_existing_and_missing_directories_for_every_adapter() 
 }
 
 #[test]
+fn links_in_ordinary_directories_without_directory_read_permission() {
+    for harness in Harness::ALL {
+        let adapter = harness.adapter();
+        for restricted_depth in [0, 1, 2] {
+            let worktree = scratch_worktree();
+            let dir = worktree.path().join(adapter.project_skills());
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("thirdshift-implement"), "replace entry").unwrap();
+            let restricted = worktree
+                .path()
+                .join(skills_prefix(adapter, restricted_depth));
+            fs::set_permissions(&restricted, fs::Permissions::from_mode(0o300)).unwrap();
+            let result = link_into(worktree.path(), adapter)
+                .and_then(|()| link_into(worktree.path(), adapter));
+            // Restore listing permission even on failure so the fixture cleans up.
+            fs::set_permissions(&restricted, fs::Permissions::from_mode(0o700)).unwrap();
+            result.unwrap();
+            assert!(
+                fs::read_to_string(dir.join("thirdshift-implement/SKILL.md"))
+                    .unwrap()
+                    .contains("thirdshift-implement")
+            );
+        }
+    }
+}
+
+#[test]
 fn replacement_and_new_links_use_the_checked_directory_after_its_path_changes() {
     for harness in Harness::ALL {
-        let worktree = worktree();
+        let worktree = scratch_worktree();
         let relative = Path::new(harness.adapter().project_skills());
         let dir = worktree.path().join(relative);
         fs::create_dir_all(&dir).unwrap();

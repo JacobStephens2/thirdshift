@@ -371,15 +371,7 @@ mod tests {
     #[test]
     fn unsafe_project_skills_fail_session_start_before_the_harness_can_run() {
         for harness in crate::harness::Harness::ALL {
-            let worktree = tempfile::tempdir().unwrap();
-            assert!(
-                Command::new("git")
-                    .args(["init", "-q"])
-                    .arg(worktree.path())
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            let worktree = crate::test_support::scratch_worktree();
             let outside = tempfile::tempdir().unwrap();
             let dir = worktree.path().join(harness.adapter().project_skills());
             fs::create_dir_all(dir.parent().unwrap()).unwrap();
