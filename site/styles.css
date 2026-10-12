@@ -261,7 +261,7 @@ body::after { /* scanlines */
 .floor .line-label { font-size: 17px; letter-spacing: .06em; }
 .floor .status { font-size: 14px; letter-spacing: .06em; fill: var(--y); }
 .floor .hint { font-size: 15px; font-weight: 400; fill: var(--dim); }
-.floor .chest { fill: #111; stroke: var(--dim); stroke-width: 2; }
+.floor-press .chest { fill: #111; stroke: var(--dim); stroke-width: 2; }
 .floor .chest-label { font-size: 13px; text-anchor: middle; fill: var(--paper); }
 .floor-press .belt { fill: url(#floor-belt); stroke: #333; stroke-width: 1; }
 .floor .belt-base { fill: #15130a; }
