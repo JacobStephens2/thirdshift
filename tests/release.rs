@@ -1574,12 +1574,15 @@ fn a_rerun_after_the_branch_was_pushed_opens_its_pr_then_merges_and_tags() {
 #[test]
 #[cfg(target_os = "linux")]
 fn a_resumed_bump_pr_from_another_repository_is_refused() {
-    for merged in [false, true] {
+    for (merged, tagged) in [(false, false), (true, false), (true, true)] {
         let release = Release::new();
         let head = release.push_bump("0.2.0");
         release.open_bump_pr("0.2.0");
         if merged {
-            release.merge_bump_pr("0.2.0", &head);
+            let merge = release.merge_bump_pr("0.2.0", &head);
+            if tagged {
+                release.origin(&["tag", "v0.2.0", &merge]);
+            }
         }
         release.gh(&["fake", "pr", "release-0.2.0", "isCrossRepository", "true"]);
         release.ci_reports(GREEN);
@@ -1596,18 +1599,40 @@ fn a_resumed_bump_pr_from_another_repository_is_refused() {
 #[cfg(target_os = "linux")]
 fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
     for merged in [false, true] {
-        for file in ["README.md", "Cargo.toml", "Cargo.lock"] {
+        for change in [
+            "README.md",
+            "Cargo.toml",
+            "Cargo.lock",
+            "added file",
+            "file mode",
+            "wrong version",
+        ] {
             let release = Release::new();
             release.push_bump("0.2.0");
             let contributor = release.contributor();
             git(&contributor, &["checkout", "-q", "release-0.2.0"]);
-            let path = contributor.join(file);
-            let text = fs::read_to_string(&path).unwrap();
-            fs::write(&path, format!("{text}\n# Unrelated change\n")).unwrap();
-            git(
-                &contributor,
-                &["commit", "-q", "-a", "-m", "Unrelated change"],
-            );
+            match change {
+                "added file" => fs::write(contributor.join("extra.txt"), "extra\n").unwrap(),
+                "file mode" => {
+                    fs::set_permissions(
+                        contributor.join("Cargo.toml"),
+                        fs::Permissions::from_mode(0o755),
+                    )
+                    .unwrap();
+                }
+                "wrong version" => {
+                    for file in ["Cargo.toml", "Cargo.lock"] {
+                        fs::write(contributor.join(file), with_version(file, "0.3.0")).unwrap();
+                    }
+                }
+                file => {
+                    let path = contributor.join(file);
+                    let text = fs::read_to_string(&path).unwrap();
+                    fs::write(&path, format!("{text}\n# Unrelated change\n")).unwrap();
+                }
+            }
+            git(&contributor, &["add", "-A"]);
+            git(&contributor, &["commit", "-q", "-m", "Unrelated change"]);
             git(&contributor, &["push", "-q", "origin", "release-0.2.0"]);
             let head = git(&contributor, &["rev-parse", "HEAD"]);
             release.open_bump_pr("0.2.0");
@@ -1843,28 +1868,6 @@ fn a_tag_with_no_bump_pr_is_refused() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn an_open_bump_pr_from_another_repository_is_refused() {
-    let release = Release::new();
-    release.push_bump("0.2.0");
-    release.open_bump_pr("0.2.0");
-    release.gh(&["fake", "pr", "release-0.2.0", "isCrossRepository", "true"]);
-    release.ci_reports(GREEN);
-    let refs_before = release.origin_refs();
-    let url = release.pr("release-0.2.0")["url"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    let output = release.run_script("0.2.0");
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(stderr(&output).contains(&url), "{}", stderr(&output));
-    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
-    assert_eq!(release.origin_refs(), refs_before);
-}
-
-#[test]
-#[cfg(target_os = "linux")]
 fn an_open_bump_pr_with_a_different_head_from_origin_is_refused() {
     let release = Release::new();
     release.push_bump("0.2.0");
@@ -1887,147 +1890,6 @@ fn an_open_bump_pr_with_a_different_head_from_origin_is_refused() {
 
     assert_refused(&release, "0.2.0", &[&url, "head does not match", "origin"]);
     assert!(release.merge_calls().is_empty());
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn a_resumed_bump_pr_with_extra_changes_is_refused() {
-    let release = Release::new();
-    release.push_bump("0.2.0");
-    let contributor = release.contributor();
-    git(&contributor, &["checkout", "-q", "release-0.2.0"]);
-    fs::write(contributor.join("README.md"), "extra release change\n").unwrap();
-    git(&contributor, &["commit", "-q", "-a", "-m", "Extra change"]);
-    git(&contributor, &["push", "-q", "origin", "release-0.2.0"]);
-    release.open_bump_pr("0.2.0");
-    release.ci_reports(GREEN);
-    let refs_before = release.origin_refs();
-    let url = release.pr("release-0.2.0")["url"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    let output = release.run_script("0.2.0");
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(stderr(&output).contains(&url), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("version bump"),
-        "{}",
-        stderr(&output)
-    );
-    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
-    assert_eq!(release.origin_refs(), refs_before);
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn a_merged_bump_pr_from_another_repository_is_refused_even_if_tagged() {
-    for tagged in [false, true] {
-        let release = Release::new();
-        let head = release.push_bump("0.2.0");
-        release.open_bump_pr("0.2.0");
-        let merge = release.merge_bump_pr("0.2.0", &head);
-        release.gh(&["fake", "pr", "release-0.2.0", "isCrossRepository", "true"]);
-        if tagged {
-            release.origin(&["tag", "v0.2.0", &merge]);
-        }
-        let refs_before = release.origin_refs();
-        let url = release.pr("release-0.2.0")["url"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-
-        let output = release.run_script("0.2.0");
-
-        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-        assert!(stderr(&output).contains(&url), "{}", stderr(&output));
-        assert!(
-            stderr(&output).contains("another repository"),
-            "{}",
-            stderr(&output)
-        );
-        assert_eq!(release.origin_refs(), refs_before);
-    }
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn a_resumed_pr_must_contain_exactly_the_requested_version_bump() {
-    for change in [
-        "manifest",
-        "lockfile",
-        "added file",
-        "file mode",
-        "wrong version",
-        "merged",
-    ] {
-        let release = Release::new();
-        release.push_bump("0.2.0");
-        let contributor = release.contributor();
-        git(&contributor, &["checkout", "-q", "release-0.2.0"]);
-        match change {
-            "manifest" => {
-                let file = contributor.join("Cargo.toml");
-                let text = fs::read_to_string(&file).unwrap();
-                fs::write(file, format!("{text}\n# An unrelated manifest edit\n")).unwrap();
-            }
-            "lockfile" => {
-                let file = contributor.join("Cargo.lock");
-                let text = fs::read_to_string(&file).unwrap();
-                fs::write(file, format!("{text}\n# An unrelated lockfile edit\n")).unwrap();
-            }
-            "file mode" => {
-                fs::set_permissions(
-                    contributor.join("Cargo.toml"),
-                    fs::Permissions::from_mode(0o755),
-                )
-                .unwrap();
-            }
-            "wrong version" => {
-                for file in ["Cargo.toml", "Cargo.lock"] {
-                    fs::write(contributor.join(file), with_version(file, "0.3.0")).unwrap();
-                }
-            }
-            _ => fs::write(contributor.join("extra.txt"), "extra\n").unwrap(),
-        }
-        git(&contributor, &["add", "-A"]);
-        git(&contributor, &["commit", "-q", "-m", "Not just the bump"]);
-        git(&contributor, &["push", "-q", "origin", "release-0.2.0"]);
-        release.open_bump_pr("0.2.0");
-        if change == "merged" {
-            let head = release.origin(&["rev-parse", "release-0.2.0"]);
-            release.merge_bump_pr("0.2.0", &head);
-        }
-        release.ci_reports(GREEN);
-        let refs_before = release.origin_refs();
-        let pr_before = release.pr("release-0.2.0");
-
-        let output = release.run_script("0.2.0");
-
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "{change}: {}",
-            stderr(&output)
-        );
-        assert!(
-            stderr(&output).contains(pr_before["url"].as_str().unwrap()),
-            "{change}: {}",
-            stderr(&output)
-        );
-        assert!(
-            stderr(&output).contains("version bump"),
-            "{change}: {}",
-            stderr(&output)
-        );
-        assert_eq!(
-            release.pr("release-0.2.0")["state"],
-            pr_before["state"],
-            "{change}"
-        );
-        assert_eq!(release.origin_refs(), refs_before, "{change}");
-    }
 }
 
 #[test]
