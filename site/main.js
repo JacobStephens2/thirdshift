@@ -1,3 +1,22 @@
+// Reveal a linked prompt, skill or supporting file inside closed disclosures.
+function revealFragment() {
+  let id;
+  try { id = decodeURIComponent(location.hash.slice(1)); }
+  catch { return; }
+  const target = document.getElementById(id);
+  if (!target) return;
+  let disclosure = target.closest("details");
+  if (!disclosure) return;
+  while (disclosure) {
+    disclosure.open = true;
+    disclosure = disclosure.parentElement.closest("details");
+  }
+  target.scrollIntoView({ block: "start" });
+}
+
+revealFragment();
+window.addEventListener("hashchange", revealFragment);
+
 // Copy buttons: put the command next to the button on the clipboard.
 for (const button of document.querySelectorAll(".install button.copy")) {
   const code = button.closest(".install").querySelector("code");

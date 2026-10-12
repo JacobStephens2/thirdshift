@@ -33,21 +33,24 @@
 <!-- Generated from the source by src/prompts_page.rs; don't edit. Regenerate with UPDATE_PROMPTS=1 cargo test prompts_page -->
 <section class="sec" aria-labelledby="command-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">The command line</p><h2 id="command-title">How each session starts</h2></div>
+    <details class="section-disclosure">
+      <summary class="sec-head"><h2 id="command-title"><span class="eyebrow">The command line</span>How each session starts</h2></summary>
     <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
     <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
     <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">With <code>harness codex</code>, each session runs <code>codex exec --json --dangerously-bypass-approvals-and-sandbox -m <mark class="ph">&lt;model&gt;</mark> -c model_reasoning_effort="<mark class="ph">&lt;effort&gt;</mark>" -c project_doc_fallback_filenames=["CLAUDE.md"] <mark class="ph">&lt;prompt&gt;</mark></code> instead, without <code>-m <mark class="ph">&lt;model&gt;</mark></code> or the Effort's <code>-c</code> where they are not set, and with <code>resume <mark class="ph">&lt;session id&gt;</mark></code> before the prompt for a Resume. The Factory skills are linked into <code>.agents/skills/</code>, and a prompt's first line loads its skill as <code>$thirdshift-&lt;skill&gt;</code>.</p>
+    </details>
   </div>
 </section>
 <section class="sec" aria-labelledby="prompts-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Prompts</p><h2 id="prompts-title">What a Run tells the agent</h2></div>
+    <details class="section-disclosure">
+      <summary class="sec-head"><h2 id="prompts-title"><span class="eyebrow">Prompts</span>What a Run tells the agent</h2></summary>
     <p class="lede">Every prompt a Run can send, with its placeholders highlighted: they change for each Run.</p>
     <div class="job-sheets">
-      <article class="job-sheet" id="prompt-fresh" aria-labelledby="prompt-fresh-title">
-        <h3 id="prompt-fresh-title">Fresh</h3>
+      <details class="job-sheet" id="prompt-fresh" aria-labelledby="prompt-fresh-title">
+        <summary><h3 id="prompt-fresh-title">Fresh</h3></summary>
         <p>Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -59,9 +62,9 @@ In the PR body, add an "Unaddressed findings" section listing each skipped findi
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-continuation" aria-labelledby="prompt-continuation-title">
-        <h3 id="prompt-continuation-title">Continuation, with no pull request</h3>
+      </details>
+      <details class="job-sheet" id="prompt-continuation" aria-labelledby="prompt-continuation-title">
+        <summary><h3 id="prompt-continuation-title">Continuation, with no pull request</h3></summary>
         <p>Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -83,9 +86,9 @@ Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-continuation-pr" aria-labelledby="prompt-continuation-pr-title">
-        <h3 id="prompt-continuation-pr-title">Continuation, with an open pull request</h3>
+      </details>
+      <details class="job-sheet" id="prompt-continuation-pr" aria-labelledby="prompt-continuation-pr-title">
+        <summary><h3 id="prompt-continuation-pr-title">Continuation, with an open pull request</h3></summary>
         <p>Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -107,9 +110,9 @@ Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-spec-review" aria-labelledby="prompt-spec-review-title">
-        <h3 id="prompt-spec-review-title">Spec review</h3>
+      </details>
+      <details class="job-sheet" id="prompt-spec-review" aria-labelledby="prompt-spec-review-title">
+        <summary><h3 id="prompt-spec-review-title">Spec review</h3></summary>
         <p>In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.</p>
         <p class="sent-by">Sent by <a href="/#unit-3">3 · Y · Review</a></p>
         <pre class="job-text"><code>/thirdshift-code-review <mark class="ph">&lt;base&gt;</mark>, with the Spec <mark class="ph">&lt;Spec URL&gt;</mark> as the spec
@@ -131,9 +134,9 @@ Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-architecture-review" aria-labelledby="prompt-architecture-review-title">
-        <h3 id="prompt-architecture-review-title">Architecture review</h3>
+      </details>
+      <details class="job-sheet" id="prompt-architecture-review" aria-labelledby="prompt-architecture-review-title">
+        <summary><h3 id="prompt-architecture-review-title">Architecture review</h3></summary>
         <p>Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.</p>
         <p class="sent-by">Sent by an Architect run, before any unit</p>
         <pre class="job-text"><code>/thirdshift-improve-codebase-architecture
@@ -157,9 +160,9 @@ Architecture review already filed: &lt;URL of the open issue that already covers
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-security-review" aria-labelledby="prompt-security-review-title">
-        <h3 id="prompt-security-review-title">Security review</h3>
+      </details>
+      <details class="job-sheet" id="prompt-security-review" aria-labelledby="prompt-security-review-title">
+        <summary><h3 id="prompt-security-review-title">Security review</h3></summary>
         <p>When enabled, runs one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Ticket Runs get none; Base fixes get one too. Introduced findings, refusals or incomplete reviews hold Self-merge.</p>
         <p class="sent-by">Sent by <a href="/#unit-3">3 · Y · Review</a></p>
         <pre class="job-text"><code>Use the `thirdshift-security-audit` skill in guidance mode.
@@ -181,9 +184,9 @@ unaddressed_count counts only unaddressed findings introduced by this change; fi
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-security-audit" aria-labelledby="prompt-security-audit-title">
-        <h3 id="prompt-security-audit-title">Security audit</h3>
+      </details>
+      <details class="job-sheet" id="prompt-security-audit" aria-labelledby="prompt-security-audit-title">
+        <summary><h3 id="prompt-security-audit-title">Security audit</h3></summary>
         <p>Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root.</p>
         <p class="sent-by">Sent by a Security run, before any unit</p>
         <pre class="job-text"><code>/thirdshift-security-audit
@@ -200,9 +203,9 @@ End your final message with exactly `Security audit: complete` after writing val
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-security-reproduction" aria-labelledby="prompt-security-reproduction-title">
-        <h3 id="prompt-security-reproduction-title">Security reproduction</h3>
+      </details>
+      <details class="job-sheet" id="prompt-security-reproduction" aria-labelledby="prompt-security-reproduction-title">
+        <summary><h3 id="prompt-security-reproduction-title">Security reproduction</h3></summary>
         <p>After a Security audit, tries to reproduce one recorded finding in a fresh throwaway worktree at its audited commit. The test is copied into the private record only after a complete outcome.</p>
         <p class="sent-by">Sent by a Security run, before any unit</p>
         <pre class="job-text"><code>Reproduce this recorded Security finding at audited commit `&lt;audited commit&gt;`.
@@ -219,9 +222,9 @@ Recorded finding:
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-conflict-repair" aria-labelledby="prompt-conflict-repair-title">
-        <h3 id="prompt-conflict-repair-title">Conflict Repair</h3>
+      </details>
+      <details class="job-sheet" id="prompt-conflict-repair" aria-labelledby="prompt-conflict-repair-title">
+        <summary><h3 id="prompt-conflict-repair-title">Conflict Repair</h3></summary>
         <p>Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>/thirdshift-resolving-merge-conflicts
@@ -233,9 +236,9 @@ Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-security-fix" aria-labelledby="prompt-security-fix-title">
-        <h3 id="prompt-security-fix-title">Security fix publishing</h3>
+      </details>
+      <details class="job-sheet" id="prompt-security-fix" aria-labelledby="prompt-security-fix-title">
+        <summary><h3 id="prompt-security-fix-title">Security fix publishing</h3></summary>
         <p>With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run.</p>
         <p class="sent-by">Sent by a Security run, before any unit</p>
         <pre class="job-text"><code>Publish the fix for this reproduced Security finding on Base branch `<mark class="ph">&lt;base&gt;</mark>`.
@@ -270,9 +273,9 @@ Private record:
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-foreign-conflict-repair" aria-labelledby="prompt-foreign-conflict-repair-title">
-        <h3 id="prompt-foreign-conflict-repair-title">Conflict Repair, on Foreign commits</h3>
+      </details>
+      <details class="job-sheet" id="prompt-foreign-conflict-repair" aria-labelledby="prompt-foreign-conflict-repair-title">
+        <summary><h3 id="prompt-foreign-conflict-repair-title">Conflict Repair, on Foreign commits</h3></summary>
         <p>In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>/thirdshift-resolving-merge-conflicts
@@ -284,9 +287,9 @@ Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-review-repair" aria-labelledby="prompt-review-repair-title">
-        <h3 id="prompt-review-repair-title">Review Repair</h3>
+      </details>
+      <details class="job-sheet" id="prompt-review-repair" aria-labelledby="prompt-review-repair-title">
+        <summary><h3 id="prompt-review-repair-title">Review Repair</h3></summary>
         <p>In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>/thirdshift-code-review <mark class="ph">&lt;own head&gt;</mark>
@@ -304,9 +307,9 @@ Commit and push <mark class="ph">&lt;branch&gt;</mark>. Do not rebase or force-p
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-ci-fix-repair" aria-labelledby="prompt-ci-fix-repair-title">
-        <h3 id="prompt-ci-fix-repair-title">CI-fix Repair</h3>
+      </details>
+      <details class="job-sheet" id="prompt-ci-fix-repair" aria-labelledby="prompt-ci-fix-repair-title">
+        <summary><h3 id="prompt-ci-fix-repair-title">CI-fix Repair</h3></summary>
         <p>Starts a Repair session when CI fails on the pull request's head commit, listing each failed check.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>CI failed on pull request <mark class="ph">&lt;pull request URL&gt;</mark> (branch <mark class="ph">&lt;branch&gt;</mark>, implementing <mark class="ph">&lt;Issue URL&gt;</mark>).
@@ -321,9 +324,9 @@ If a failure is not caused by this branch (it is flaky, or also fails on <mark c
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-ci-fix-repair-inherited" aria-labelledby="prompt-ci-fix-repair-inherited-title">
-        <h3 id="prompt-ci-fix-repair-inherited-title">CI-fix Repair, with Inherited failures</h3>
+      </details>
+      <details class="job-sheet" id="prompt-ci-fix-repair-inherited" aria-labelledby="prompt-ci-fix-repair-inherited-title">
+        <summary><h3 id="prompt-ci-fix-repair-inherited-title">CI-fix Repair, with Inherited failures</h3></summary>
         <p>Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>CI failed on pull request <mark class="ph">&lt;pull request URL&gt;</mark> (branch <mark class="ph">&lt;branch&gt;</mark>, implementing <mark class="ph">&lt;Issue URL&gt;</mark>).
@@ -341,9 +344,9 @@ If a failure is not caused by this branch (it is flaky, or also fails on <mark c
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
-      <article class="job-sheet" id="prompt-resume" aria-labelledby="prompt-resume-title">
-        <h3 id="prompt-resume-title">Resume</h3>
+      </details>
+      <details class="job-sheet" id="prompt-resume" aria-labelledby="prompt-resume-title">
+        <summary><h3 id="prompt-resume-title">Resume</h3></summary>
         <p>Continues any session, once, that ended its turn with background work still running, which was killed with it.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a>, <a href="/#unit-3">3 · Y · Review</a> or <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>Your background work (<mark class="ph">&lt;background work&gt;</mark>) was killed when your turn ended, because ending the turn ends the session.
@@ -352,17 +355,19 @@ Re-run whatever you were waiting on in the foreground, then finish your job. If 
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
-      </article>
+      </details>
     </div>
+    </details>
   </div>
 </section>
 <section class="sec" aria-labelledby="skills-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Factory skills</p><h2 id="skills-title">The skills, as the agent reads them</h2></div>
+    <details class="section-disclosure">
+      <summary class="sec-head"><h2 id="skills-title"><span class="eyebrow">Factory skills</span>The skills, as the agent reads them</h2></summary>
     <p class="lede">Every Factory skill and supporting file, raw, exactly as thirdshift writes it out.</p>
     <div class="job-sheets">
-      <article class="job-sheet" id="skill-thirdshift-code-review" aria-labelledby="skill-thirdshift-code-review-title">
-        <h3 id="skill-thirdshift-code-review-title">thirdshift-code-review</h3>
+      <details class="job-sheet" id="skill-thirdshift-code-review" aria-labelledby="skill-thirdshift-code-review-title">
+        <summary><h3 id="skill-thirdshift-code-review-title">thirdshift-code-review</h3></summary>
         <p class="sent-by">Used by <a href="/#unit-3">3 · Y · Review</a></p>
         <h4 id="file-thirdshift-code-review-skill-md"><code>thirdshift-code-review/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -474,9 +479,9 @@ Reporting them separately stops one axis from masking the other.
   display_name: "Code Review"
   short_description: "Review a diff on standards and spec"
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-codebase-design" aria-labelledby="skill-thirdshift-codebase-design-title">
-        <h3 id="skill-thirdshift-codebase-design-title">thirdshift-codebase-design</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-codebase-design" aria-labelledby="skill-thirdshift-codebase-design-title">
+        <summary><h3 id="skill-thirdshift-codebase-design-title">thirdshift-codebase-design</h3></summary>
         <p class="sent-by">Used by the Architecture review, in an Architect run</p>
         <h4 id="file-thirdshift-codebase-design-skill-md"><code>thirdshift-codebase-design/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -684,9 +689,9 @@ After comparing, decide: which design is strongest and why. If elements from dif
   display_name: "Codebase Design"
   short_description: "Vocabulary for deep-module design"
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-implement" aria-labelledby="skill-thirdshift-implement-title">
-        <h3 id="skill-thirdshift-implement-title">thirdshift-implement</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-implement" aria-labelledby="skill-thirdshift-implement-title">
+        <summary><h3 id="skill-thirdshift-implement-title">thirdshift-implement</h3></summary>
         <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
         <h4 id="file-thirdshift-implement-skill-md"><code>thirdshift-implement/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -712,9 +717,9 @@ Commit your work to the current branch.
 policy:
   allow_implicit_invocation: true
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-improve-codebase-architecture" aria-labelledby="skill-thirdshift-improve-codebase-architecture-title">
-        <h3 id="skill-thirdshift-improve-codebase-architecture-title">thirdshift-improve-codebase-architecture</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-improve-codebase-architecture" aria-labelledby="skill-thirdshift-improve-codebase-architecture-title">
+        <summary><h3 id="skill-thirdshift-improve-codebase-architecture-title">thirdshift-improve-codebase-architecture</h3></summary>
         <p class="sent-by">Used by the Architecture review, in an Architect run</p>
         <h4 id="file-thirdshift-improve-codebase-architecture-skill-md"><code>thirdshift-improve-codebase-architecture/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -969,9 +974,9 @@ No hedging, no throat-clearing, no "it's worth noting that…". If a sentence co
 policy:
   allow_implicit_invocation: true
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-pr" aria-labelledby="skill-thirdshift-pr-title">
-        <h3 id="skill-thirdshift-pr-title">thirdshift-pr</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-pr" aria-labelledby="skill-thirdshift-pr-title">
+        <summary><h3 id="skill-thirdshift-pr-title">thirdshift-pr</h3></summary>
         <p class="sent-by">Used by <a href="/#unit-3">3 · Y · Review</a></p>
         <h4 id="file-thirdshift-pr-skill-md"><code>thirdshift-pr/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -1153,9 +1158,9 @@ The blast radius is the potential impact or scope of the changes introduced by t
   display_name: "PR"
   short_description: "Write a PR body that's fast to review"
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-resolving-merge-conflicts" aria-labelledby="skill-thirdshift-resolving-merge-conflicts-title">
-        <h3 id="skill-thirdshift-resolving-merge-conflicts-title">thirdshift-resolving-merge-conflicts</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-resolving-merge-conflicts" aria-labelledby="skill-thirdshift-resolving-merge-conflicts-title">
+        <summary><h3 id="skill-thirdshift-resolving-merge-conflicts-title">thirdshift-resolving-merge-conflicts</h3></summary>
         <p class="sent-by">Used by <a href="/#unit-4">4 · K · Finish</a>, in a Repair</p>
         <h4 id="file-thirdshift-resolving-merge-conflicts-skill-md"><code>thirdshift-resolving-merge-conflicts/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -1177,9 +1182,9 @@ description: "Use when you need to resolve an in-progress git merge/rebase confl
   display_name: "Resolving Merge Conflicts"
   short_description: "Resolve merge and rebase conflicts"
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-security-audit" aria-labelledby="skill-thirdshift-security-audit-title">
-        <h3 id="skill-thirdshift-security-audit-title">thirdshift-security-audit</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-security-audit" aria-labelledby="skill-thirdshift-security-audit-title">
+        <summary><h3 id="skill-thirdshift-security-audit-title">thirdshift-security-audit</h3></summary>
         <p class="sent-by">Used by the Security audit, in a Security run, or a Security review</p>
         <h4 id="file-thirdshift-security-audit-skill-md"><code>thirdshift-security-audit/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -6529,9 +6534,9 @@ test("keeps shared helpers aligned with the coverage-ledger validator", () =&gt;
   }
 });
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-tdd" aria-labelledby="skill-thirdshift-tdd-title">
-        <h3 id="skill-thirdshift-tdd-title">thirdshift-tdd</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-tdd" aria-labelledby="skill-thirdshift-tdd-title">
+        <summary><h3 id="skill-thirdshift-tdd-title">thirdshift-tdd</h3></summary>
         <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
         <h4 id="file-thirdshift-tdd-skill-md"><code>thirdshift-tdd/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -6718,9 +6723,9 @@ test("calculateTotal sums line items", () =&gt; {
 });
 ```
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-to-spec" aria-labelledby="skill-thirdshift-to-spec-title">
-        <h3 id="skill-thirdshift-to-spec-title">thirdshift-to-spec</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-to-spec" aria-labelledby="skill-thirdshift-to-spec-title">
+        <summary><h3 id="skill-thirdshift-to-spec-title">thirdshift-to-spec</h3></summary>
         <p class="sent-by">Used by the Architecture review, in an Architect run, or Security fix publishing, in a Security run</p>
         <h4 id="file-thirdshift-to-spec-skill-md"><code>thirdshift-to-spec/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -6810,9 +6815,9 @@ Any further notes about the feature.
 policy:
   allow_implicit_invocation: true
 </code></pre>
-      </article>
-      <article class="job-sheet" id="skill-thirdshift-to-tickets" aria-labelledby="skill-thirdshift-to-tickets-title">
-        <h3 id="skill-thirdshift-to-tickets-title">thirdshift-to-tickets</h3>
+      </details>
+      <details class="job-sheet" id="skill-thirdshift-to-tickets" aria-labelledby="skill-thirdshift-to-tickets-title">
+        <summary><h3 id="skill-thirdshift-to-tickets-title">thirdshift-to-tickets</h3></summary>
         <p class="sent-by">Used by the Architecture review, in an Architect run, or Security fix publishing, in a Security run</p>
         <h4 id="file-thirdshift-to-tickets-skill-md"><code>thirdshift-to-tickets/SKILL.md</code></h4>
         <pre class="job-text"><code>---
@@ -6925,13 +6930,15 @@ Avoid specific file paths or code snippets: they go stale fast. Exception: if a 
 policy:
   allow_implicit_invocation: true
 </code></pre>
-      </article>
+      </details>
     </div>
+    </details>
   </div>
 </section>
 <section class="sec" aria-labelledby="licence-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
+    <details class="section-disclosure">
+      <summary class="sec-head"><h2 id="licence-title"><span class="eyebrow">Licence and credits</span>Whose skills these are</h2></summary>
     <p class="lede">Most Factory skills are adapted from Matt Pocock's skills, under the licence below. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>. The <a href="#skill-thirdshift-security-audit">thirdshift-security-audit</a> skill is copied from <a href="https://github.com/cloudflare/security-audit-skill">Cloudflare's security-audit-skill</a>, under its own <a href="#file-thirdshift-security-audit-license">MIT licence</a>, with its upstream repository and commit recorded in <a href="#file-thirdshift-security-audit-credits-md">CREDITS.md</a>.</p>
     <h4 id="file-license"><code>LICENSE</code></h4>
     <pre class="job-text"><code>MIT License
@@ -6956,6 +6963,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 </code></pre>
+    </details>
   </div>
 </section>
 <!-- End of the generated fragment -->

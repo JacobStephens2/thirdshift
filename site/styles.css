@@ -310,11 +310,17 @@ body::after { /* scanlines */
 /* ---------- Prompts and skills: job sheets ---------- */
 .page-head .home { display: block; color: inherit; }
 .paper-sheet .as-of { margin: 0; font-size: 14px; color: #444; max-width: 90ch; }
+.section-disclosure > summary, .job-sheet > summary { cursor: pointer; }
+.section-disclosure > summary { display: list-item; }
+.section-disclosure > summary h2, .job-sheet > summary h3 { display: inline; }
+.section-disclosure .eyebrow { display: block; margin-bottom: 12px; }
+.section-disclosure:not([open]) > summary { margin-bottom: 0; }
 .job-sheets { display: grid; gap: 28px; }
-.job-sheet { display: grid; gap: 10px; align-content: start; border-top: 4px solid var(--c); padding-top: 12px; min-width: 0; }
+.job-sheet { border-top: 4px solid var(--c); padding-top: 12px; min-width: 0; }
+.job-sheet > :not(summary) { margin-top: 10px; }
 .job-sheet h3 { font-size: 30px; }
 .job-sheet h4 { margin: 10px 0 0; font: 700 13px/1.3 var(--f-mono); color: var(--dim); }
-.job-sheet p { margin: 0; max-width: 90ch; }
+.job-sheet p { margin-bottom: 0; max-width: 90ch; }
 .sent-by { font-size: 13px; color: var(--dim); }
 .job-text { margin: 0; padding: 14px 16px; background: #000; border: 1px solid var(--rule); font-size: 13px; line-height: 1.55;
   white-space: pre-wrap; overflow-wrap: anywhere; }
