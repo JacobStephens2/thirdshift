@@ -1391,7 +1391,7 @@ fn assert_refused(release: &Release, version: &str, reasons: &[&str]) {
 
     let output = release.run_script(version);
 
-    assert!(!output.status.success(), "{version} was not refused");
+    assert_eq!(output.status.code(), Some(1), "{version} was not refused");
     let err = stderr(&output);
     assert!(err.contains("refusing to release"), "{version}: {err}");
     for reason in reasons {
@@ -1562,11 +1562,91 @@ fn a_rerun_after_the_branch_was_pushed_opens_its_pr_then_merges_and_tags() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn a_resumed_bump_pr_from_another_repository_is_refused() {
+    for merged in [false, true] {
+        let release = Release::new();
+        let head = release.push_bump("0.2.0");
+        release.open_bump_pr("0.2.0");
+        if merged {
+            release.merge_bump_pr("0.2.0", &head);
+        }
+        release.gh(&["fake", "pr", "release-0.2.0", "isCrossRepository", "true"]);
+        release.ci_reports(GREEN);
+        let url = release.pr("release-0.2.0")["url"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        assert_refused(&release, "0.2.0", &[&url, "another repository"]);
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_resumed_open_bump_pr_with_a_different_head_from_origin_is_refused() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    // A stale PR observation must not authorize merging the current branch.
+    let stale = release.origin(&["rev-parse", "main"]);
+    release.gh(&[
+        "fake",
+        "pr",
+        "release-0.2.0",
+        "headRefOid",
+        &json!(stale).to_string(),
+    ]);
+    release.ci_reports(GREEN);
+    let url = release.pr("release-0.2.0")["url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    assert_refused(&release, "0.2.0", &[&url, "does not match", "origin"]);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
+    for merged in [false, true] {
+        for file in ["README.md", "Cargo.toml", "Cargo.lock"] {
+            let release = Release::new();
+            release.push_bump("0.2.0");
+            let contributor = release.contributor();
+            git(&contributor, &["checkout", "-q", "release-0.2.0"]);
+            let path = contributor.join(file);
+            let text = fs::read_to_string(&path).unwrap();
+            fs::write(&path, format!("{text}\n# Unrelated change\n")).unwrap();
+            git(
+                &contributor,
+                &["commit", "-q", "-a", "-m", "Unrelated change"],
+            );
+            git(&contributor, &["push", "-q", "origin", "release-0.2.0"]);
+            let head = git(&contributor, &["rev-parse", "HEAD"]);
+            release.open_bump_pr("0.2.0");
+            if merged {
+                release.merge_bump_pr("0.2.0", &head);
+            }
+            release.ci_reports(GREEN);
+            let url = release.pr("release-0.2.0")["url"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+
+            assert_refused(&release, "0.2.0", &[&url, "not just the version bump"]);
+        }
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
     release.ci_reports(GREEN);
+    // Branch lookup is ambiguous; only the selected PR's URL may be merged.
+    release.gh(&["fake", "fails", "pr merge release-0.2.0"]);
 
     let output = release.run_script("0.2.0");
 

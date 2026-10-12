@@ -29,7 +29,9 @@
 # of the bump PR, it says so and waits on or reports the release workflow run
 # instead; a v<version> tag anywhere else on origin is refused. A bump PR
 # closed without merging is refused while release-<version> is on origin;
-# once that branch is deleted, the next run starts over.
+# once that branch is deleted, the next run starts over. Resumed PRs must
+# belong to origin, open heads must match its release branch, and their only
+# changes must be the version bump this script makes.
 #
 # Prints a progress line on stderr for each step, with the release workflow
 # run's URL once it waits for that run, and the GitHub Release's URL last.
@@ -105,15 +107,30 @@ main() {
 # $branch, or with no PR, head from $branch on origin if it was pushed. A PR
 # closed without merging whose branch is gone from origin counts as no PR.
 find_earlier_run() {
-	local pr
-	pr=$(gh pr list --head "$branch" --base main --state all --limit 1 \
-		--json state,url,headRefOid,mergeCommit \
-		--jq '.[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")"')
-	read -r pr_state url head merge <<<"$pr"
+	local pr cross_repository origin_head
+	pr=$(gh pr list --repo "$(git remote get-url origin)" --head "$branch" --base main --state all --limit 1 \
+		--json state,url,headRefOid,mergeCommit,isCrossRepository \
+		--jq '.[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.isCrossRepository) \(.mergeCommit.oid // "")"')
+	read -r pr_state url head cross_repository merge <<<"$pr"
+	if [ -n "$pr_state" ] && [ "$cross_repository" != false ]; then
+		refuse "$url has its head in another repository, not origin"
+	fi
+	if [ "$pr_state" = OPEN ]; then
+		origin_head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
+		if [ "$head" != "$origin_head" ] || [ -z "$head" ]; then
+			refuse "$url head does not match refs/heads/$branch on origin"
+		fi
+	fi
 	# A PR closed without merging whose branch was then deleted leaves
 	# nothing to resume: start over.
 	if [ "$pr_state" = CLOSED ] && [ -z "$(git ls-remote origin "refs/heads/$branch")" ]; then
 		pr_state='' url='' head='' merge=''
+	fi
+	if [ "$pr_state" = OPEN ] || [ "$pr_state" = MERGED ]; then
+		if ! git fetch --quiet origin "$head"; then
+			refuse "$url head cannot be fetched from origin"
+		fi
+		check_resumed_bump
 	fi
 	if [ -z "$pr_state" ]; then
 		head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
@@ -122,6 +139,30 @@ find_earlier_run() {
 		fi
 	fi
 }
+
+# check_resumed_bump
+# Replays commit_bump's edit at the PR's merge base and compares the whole
+# resulting tree with its head. For a merged PR, use main before that merge:
+# current main already contains the bump and would make head its own base.
+check_resumed_bump() (
+	local base work repo expected
+	if [ "$pr_state" = MERGED ]; then
+		base=$(git merge-base "$head" "$merge^1")
+	else
+		base=$(git merge-base "$head" origin/main)
+	fi
+	work=$(mktemp -d)
+	repo=$PWD
+	trap 'git -C "$repo" worktree remove --force "$work" >/dev/null' EXIT
+	git worktree add --quiet --detach "$work" "$base"
+	cd "$work"
+	bump_version "$version"
+	git add -- Cargo.toml Cargo.lock
+	expected=$(git write-tree)
+	if [ "$expected" != "$(git rev-parse "$head^{tree}")" ]; then
+		refuse "$url is not just the version bump to $version in Cargo.toml and Cargo.lock"
+	fi
+)
 
 # finish_if_tagged
 # After an earlier run, if $tag is on origin at the merge of the bump PR,
@@ -202,7 +243,7 @@ wait_and_merge() {
 		exit 1
 	fi
 
-	gh pr merge "$branch" --merge --match-head-commit "$head" >/dev/null
+	gh pr merge "$url" --merge --match-head-commit "$head" >/dev/null
 	fetch_main
 	merge=$(merge_commit_of "$head")
 	progress "merged $url as ${merge:0:7}"
