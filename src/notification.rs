@@ -81,7 +81,7 @@ enum Subject {
 pub struct RunNotification {
     checked: Checked,
     subject: Subject,
-    /// The line that says what the command's sessions ran on, once known.
+    /// The command's configured Harness, Model and Effort, once known.
     built_with: Option<String>,
 }
 
@@ -126,10 +126,10 @@ impl RunNotification {
         };
     }
 
-    /// Take note that the command's sessions run on `harness`, as the
-    /// notification then says, as its pull request's body does.
+    /// Name the configured Harness, Model and Effort without claiming
+    /// that the Harness confirmed which Model executed.
     pub fn built_with(&mut self, harness: &Choice) {
-        self.built_with = Some(harness.built_with());
+        self.built_with = Some(format!("{} (configured)", harness.built_with()));
     }
 
     /// Send the one notification for the command that ended as `account`
@@ -153,6 +153,7 @@ impl RunNotification {
         let lines = crate::session::recording::Recording::capture().notification_lines();
         if !lines.is_empty() {
             text += "\nSession models:\n";
+            text += "Listed sessions launched the harness. Requested models are not confirmed by harness evidence.\n";
             for line in lines {
                 text += &format!("{line}\n");
             }
@@ -203,8 +204,8 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 }
 
 /// The plain-text body of the notification for a command that ended as
-/// `account` tells, with the line that says what its sessions were
-/// `built_with`, if known, naming `command_log`, if the command keeps one,
+/// `account` tells, with its configured `built_with` line, if known,
+/// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
 /// outcome, as the subject gives it. An Architect run's then tells how its
 /// review ended, and the outcome of the run it dispatched, if any. The cause

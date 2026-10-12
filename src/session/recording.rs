@@ -189,8 +189,8 @@ impl Recording {
             }
             let models = if record.observed.is_empty() {
                 record.requested.map_or_else(
-                    || "Harness default (not reported)".to_string(),
-                    |model| format!("{model} (requested)"),
+                    || "Harness default (actual model not reported)".to_string(),
+                    |model| format!("{model} (requested; actual model not reported)"),
                 )
             } else {
                 let mut names = Vec::new();
@@ -199,7 +199,7 @@ impl Recording {
                         names.push(model);
                     }
                 }
-                names.join(", ")
+                format!("{} (reported)", names.join(", "))
             };
             lines.push(format!(
                 "- {}: {} · {models} · session effort: {}",
