@@ -1594,30 +1594,6 @@ fn a_resumed_bump_pr_from_another_repository_is_refused() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn a_resumed_open_bump_pr_with_a_different_head_from_origin_is_refused() {
-    let release = Release::new();
-    release.push_bump("0.2.0");
-    release.open_bump_pr("0.2.0");
-    // A stale PR observation must not authorize merging the current branch.
-    let stale = release.origin(&["rev-parse", "main"]);
-    release.gh(&[
-        "fake",
-        "pr",
-        "release-0.2.0",
-        "headRefOid",
-        &json!(stale).to_string(),
-    ]);
-    release.ci_reports(GREEN);
-    let url = release.pr("release-0.2.0")["url"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    assert_refused(&release, "0.2.0", &[&url, "does not match", "origin"]);
-}
-
-#[test]
-#[cfg(target_os = "linux")]
 fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
     for merged in [false, true] {
         for file in ["README.md", "Cargo.toml", "Cargo.lock"] {
@@ -1904,23 +1880,12 @@ fn an_open_bump_pr_with_a_different_head_from_origin_is_refused() {
     ]);
     release.ci_reports(GREEN);
     fs::remove_file(release.root().join("gh-calls.json")).unwrap();
-    let refs_before = release.origin_refs();
     let url = release.pr("release-0.2.0")["url"]
         .as_str()
         .unwrap()
         .to_owned();
 
-    let output = release.run_script("0.2.0");
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(stderr(&output).contains(&url), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("head does not match"),
-        "{}",
-        stderr(&output)
-    );
-    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
-    assert_eq!(release.origin_refs(), refs_before);
+    assert_refused(&release, "0.2.0", &[&url, "head does not match", "origin"]);
     assert!(release.merge_calls().is_empty());
 }
 
