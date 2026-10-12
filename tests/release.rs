@@ -277,6 +277,17 @@ impl Release {
             .clone()
     }
 
+    /// Calls that attempted to merge a PR, oldest first.
+    fn merge_calls(&self) -> Vec<Vec<String>> {
+        let calls: Vec<Vec<String>> =
+            serde_json::from_str(&fs::read_to_string(self.root().join("gh-calls.json")).unwrap())
+                .unwrap();
+        calls
+            .into_iter()
+            .filter(|call| call.starts_with(&["pr".into(), "merge".into()]))
+            .collect()
+    }
+
     fn command(&self, program: &Path, dir: &Path) -> Command {
         let path = format!(
             "{}:{}",
@@ -1584,13 +1595,7 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
         err.contains("release: waiting for CI on https://github.com/"),
         "{err}"
     );
-    let calls: Vec<Vec<String>> =
-        serde_json::from_str(&fs::read_to_string(release.root().join("gh-calls.json")).unwrap())
-            .unwrap();
-    let merges: Vec<_> = calls
-        .iter()
-        .filter(|call| call.starts_with(&["pr".into(), "merge".into()]))
-        .collect();
+    let merges = release.merge_calls();
     assert_eq!(merges.last().unwrap()[2], pr["url"].as_str().unwrap());
 }
 
@@ -1836,14 +1841,7 @@ fn an_open_bump_pr_with_a_different_head_from_origin_is_refused() {
     );
     assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
     assert_eq!(release.origin_refs(), refs_before);
-    let calls: Vec<Vec<String>> =
-        serde_json::from_str(&fs::read_to_string(release.root().join("gh-calls.json")).unwrap())
-            .unwrap();
-    assert!(
-        !calls
-            .iter()
-            .any(|call| call.starts_with(&["pr".into(), "merge".into()]))
-    );
+    assert!(release.merge_calls().is_empty());
 }
 
 #[test]
