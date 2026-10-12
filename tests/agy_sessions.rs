@@ -38,9 +38,10 @@ echo '{{"event":"step_update","step_update":{{"step_index":2,"state":"DONE","ste
         .map(|arg| arg.as_str().unwrap())
         .collect();
     assert_eq!(
-        &argv[..8],
+        &argv[..9],
         [
             "-p",
+            call["prompt"].as_str().unwrap(),
             "--dangerously-skip-permissions",
             "--output-format",
             "stream-json",
@@ -297,8 +298,8 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success","
     assert_eq!(calls.len(), 2);
     assert!(calls[1]["prompt"].as_str().unwrap().contains("CI"));
     for call in calls {
-        assert_eq!(call["argv"][5], "gemini-3.8-flash");
-        assert_eq!(call["argv"][7], "high");
+        assert_eq!(call["argv"][6], "gemini-3.8-flash");
+        assert_eq!(call["argv"][8], "high");
         assert_eq!(call["auto_update"], "true");
         assert_eq!(call["stdin_null"], true);
     }

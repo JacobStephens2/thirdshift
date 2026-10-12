@@ -37,7 +37,11 @@ pub fn main(argv: Vec<String>) {
                 } else {
                     input
                         .as_ref()
-                        .or_else(|| argv.last())
+                        .or_else(|| {
+                            argv.windows(2)
+                                .find(|args| args[0] == "-p")
+                                .map(|args| &args[1])
+                        })
                         .map(string)
                         .unwrap_or(Null)
                 },

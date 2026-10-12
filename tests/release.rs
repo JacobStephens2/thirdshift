@@ -296,6 +296,7 @@ impl Release {
             .env("FAKE_CLAUDE_RECORD", self.root().join("claude-calls.json"))
             .env("FAKE_CODEX_RECORD", self.root().join("codex-calls.json"))
             .env("FAKE_AGY_RECORD", self.root().join("agy-calls.json"))
+            .env("FAKE_AGY_CHECK_RECORD", self.root().join("agy-checks.json"))
             .env("FAKE_GROK_RECORD", self.root().join("grok-calls.json"))
             .env("FAKE_MUSE_RECORD", self.root().join("muse-calls.json"))
             .env(
@@ -693,6 +694,9 @@ fn every_other_harness_summarizes_without_its_session_permission_bypass() {
             "agy",
             &["--dangerously-skip-permissions"],
             &[
+                &["-p="],
+                &["--model", "gemini-3.8-flash"],
+                &["--effort", "low"],
                 &["--sandbox"],
                 &["--disable-slash-commands"],
                 &["--print-timeout", "10m"],
@@ -722,11 +726,11 @@ fn every_other_harness_summarizes_without_its_session_permission_bypass() {
     for (harness, forbidden, required) in cases {
         let release = Release::new();
         fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
-        fs::write(
-            release.root().join("home/.thirdshift/config.toml"),
-            format!("[harness]\ndefault = '{harness}'\n"),
-        )
-        .unwrap();
+        let mut config = format!("[harness]\ndefault = '{harness}'\n");
+        if harness == "agy" {
+            config.push_str("[harness.agy]\nmodel = 'gemini-3.8-flash'\neffort = 'low'\n");
+        }
+        fs::write(release.root().join("home/.thirdshift/config.toml"), config).unwrap();
 
         let output = with_input(
             release

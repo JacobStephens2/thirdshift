@@ -40,14 +40,15 @@ impl Adapter for Agy {
         &[("AGY_CLI_DISABLE_AUTO_UPDATE", "true")]
     }
     fn session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
-        let mut args: Vec<String> = [
-            "-p",
-            "--dangerously-skip-permissions",
-            "--output-format",
-            "stream-json",
-        ]
-        .map(String::from)
-        .to_vec();
+        let mut args = vec!["-p".to_string(), self.skill_loading().prompt(prompt)];
+        args.extend(
+            [
+                "--dangerously-skip-permissions",
+                "--output-format",
+                "stream-json",
+            ]
+            .map(String::from),
+        );
         if let Some(model) = &choice.model {
             args.extend(["--model".to_string(), model.clone()]);
         }
@@ -57,7 +58,6 @@ impl Adapter for Agy {
         if let Some(id) = resume {
             args.extend(["--conversation".to_string(), id.to_string()]);
         }
-        args.push(self.skill_loading().prompt(prompt));
         Invocation { args, stdin: None }
     }
     fn check(&self, choice: &mut Choice) -> Result<()> {
@@ -75,8 +75,10 @@ impl Adapter for Agy {
     /// file reads need none, and no flag removes them, so a summary can
     /// still quote a file the model chose to read.
     fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
-        let mut invocation = self.session(choice, None, prompt);
-        invocation.args.pop();
+        let mut invocation = self.session(choice, None, "");
+        // Replace the positional prompt pair with an empty print value;
+        // the complete release input travels on stdin.
+        invocation.args.remove(1);
         invocation.args = without(invocation.args, &["--dangerously-skip-permissions"]);
         invocation.args[0] = "-p=".into();
         invocation.args.extend(
@@ -161,11 +163,16 @@ mod tests {
             chosen_by: ChosenBy::Command,
         };
         let adapter = chosen.harness.adapter();
-        let resume = adapter.session(&chosen, Some("recorded-conversation"), "Continue.");
+        let resume = adapter.session(
+            &chosen,
+            Some("recorded-conversation"),
+            "/thirdshift-implement Continue.",
+        );
         assert_eq!(
             resume.args,
             [
                 "-p",
+                "/thirdshift-implement Continue.",
                 "--dangerously-skip-permissions",
                 "--output-format",
                 "stream-json",
@@ -174,8 +181,7 @@ mod tests {
                 "--effort",
                 "medium",
                 "--conversation",
-                "recorded-conversation",
-                "Continue."
+                "recorded-conversation"
             ]
         );
         assert_eq!(resume.stdin, None);
