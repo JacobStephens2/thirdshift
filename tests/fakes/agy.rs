@@ -24,6 +24,10 @@ pub fn main(argv: Vec<String>) {
     });
     let lock = crate::lock_beside(&record_path);
     let input = transported_prompt(&argv);
+    let prompt = argv
+        .windows(2)
+        .find(|args| args[0] == "-p")
+        .map(|args| &args[1]);
     let (branch, _) = git_here(&["branch", "--show-current"]);
     let (status, _) = git_here(&["status", "--porcelain"]);
     let records = crate::append_record(
@@ -35,11 +39,7 @@ pub fn main(argv: Vec<String>) {
                 if catalog {
                     Null
                 } else {
-                    input
-                        .as_ref()
-                        .or_else(|| argv.last())
-                        .map(string)
-                        .unwrap_or(Null)
+                    input.as_ref().or(prompt).map(string).unwrap_or(Null)
                 },
             ),
             ("branch", string(branch)),
@@ -86,7 +86,18 @@ pub fn main(argv: Vec<String>) {
         print!("{CATALOG}");
         crate::exit(0);
     }
-    assert!(argv.iter().any(|arg| arg == "-p" || arg == "-p="));
+    if let Some(prompt) = prompt {
+        assert!(
+            !prompt.starts_with("--"),
+            "-p took {prompt:?} as its prompt"
+        );
+    } else {
+        assert!(argv.iter().any(|arg| arg == "-p="));
+        assert!(
+            input.is_some(),
+            "-p= requires the stream-json prompt on stdin"
+        );
+    }
     let records = records.items();
     let session = records.len();
     let conversation = argv
