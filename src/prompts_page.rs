@@ -517,7 +517,8 @@ fn skills_section(html: &mut String) {
         let mut files = Vec::new();
         collect_files(skill, &mut files);
         // SKILL.md first, as the agent reads it first; then the rest by path.
-        let is_skill_md = |file: &File| file.path().file_name() == Some(OsStr::new("SKILL.md"));
+        let skill_md = skill.path().join("SKILL.md");
+        let is_skill_md = |file: &File| file.path() == skill_md;
         files.sort_by_key(|file| (!is_skill_md(file), file.path()));
         for file in files {
             // Opening a skill shows its SKILL.md; the supporting files stay folded.

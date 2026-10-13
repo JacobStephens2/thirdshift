@@ -35,8 +35,13 @@ async function pageForTest(t, options) {
   return page;
 }
 
-// A skill's SKILL.md starts open, so it shows as soon as its skill does.
-const isSkillMd = id => /^file-.*-skill-md$/.test(id);
+// A skill's own SKILL.md starts open, so it shows as soon as its skill does.
+const skillMdIds = async page => new Set(await page.locator("main h4").evaluateAll(nodes =>
+  nodes.filter(node => /^[^/]+\/SKILL\.md$/.test(node.textContent)).map(node => node.id)));
+const openIds = page => page.locator("main details[open]").evaluateAll(nodes =>
+  nodes.map(node => node.querySelector("summary :is(h2,h3,h4)").id));
+// The folds whose opening shows anything at all.
+const openSections = "main > section > .wrap > details[open]";
 
 test("every headed section but a skill's SKILL.md starts closed, and each toggles independently by its heading", async (t) => {
   const page = await pageForTest(t);
@@ -44,6 +49,9 @@ test("every headed section but a skill's SKILL.md starts closed, and each toggle
   const headings = page.locator("main :is(h2, h3, h4)");
   assert.ok(await headings.count() > 30);
   const ids = await headings.evaluateAll(nodes => nodes.map(node => node.id));
+  const skillMds = await skillMdIds(page);
+  assert.ok(skillMds.size > 5);
+  const isSkillMd = id => skillMds.has(id);
   for (const id of ids) {
     assert.equal(await page.locator(`#${id}`).evaluate(heading => {
       const summary = heading.closest("summary");
@@ -51,8 +59,8 @@ test("every headed section but a skill's SKILL.md starts closed, and each toggle
     }), true, `${id} must control a section`);
     assert.equal(await page.locator(`#${id}`).evaluate(heading => heading.closest("details").open), isSkillMd(id), `${id} starts ${isSkillMd(id) ? "open" : "closed"}`);
   }
-  assert.equal(await page.locator("main details[open]").count(), ids.filter(isSkillMd).length);
-  assert.equal(await page.locator("main > section > .wrap > details[open]").count(), 0, "nothing shows before its section opens");
+  assert.deepEqual(new Set(await openIds(page)), skillMds);
+  assert.equal(await page.locator(openSections).count(), 0, "nothing shows before its section opens");
   for (const id of ids) {
     const heading = page.locator(`#${id}`);
     // Open only the containing sections, as a reader does before reaching a nested heading.
@@ -120,7 +128,8 @@ test("fragment links reveal the prompt or supporting file and its containing sec
 test("mobile readers can toggle headings with the keyboard without JavaScript", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
   await page.goto(`${origin}/prompts/`);
-  assert.equal(await page.locator("main > section > .wrap > details[open]").count(), 0);
+  assert.equal(await page.locator(openSections).count(), 0);
+  assert.deepEqual(new Set(await openIds(page)), await skillMdIds(page));
   const prompts = page.locator("#prompts-title").locator("xpath=parent::summary");
   await prompts.focus();
   await page.keyboard.press("Enter");
