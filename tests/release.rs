@@ -279,9 +279,12 @@ impl Release {
 
     /// Calls that attempted to merge a PR, oldest first.
     fn merge_calls(&self) -> Vec<Vec<String>> {
+        let path = self.root().join("gh-calls.json");
+        if !path.exists() {
+            return Vec::new();
+        }
         let calls: Vec<Vec<String>> =
-            serde_json::from_str(&fs::read_to_string(self.root().join("gh-calls.json")).unwrap())
-                .unwrap();
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         calls
             .into_iter()
             .filter(|call| call.starts_with(&["pr".into(), "merge".into()]))
@@ -334,6 +337,19 @@ impl Release {
             .envs(env.iter().copied()),
             stdin,
         )
+    }
+
+    /// Sources the script in the maintainer's clone, with what `run_script`
+    /// runs it with, then runs the bash `code`, which sets what the earlier
+    /// steps would have and calls its functions.
+    fn with_functions(&self, code: &str) -> Output {
+        self.command(Path::new("bash"), &self.maintainer())
+            .arg("-c")
+            .arg(format!("source \"$1\"\n{code}"))
+            .arg("bash")
+            .arg(manifest_dir().join("scripts/release.sh"))
+            .output()
+            .expect("could not run bash")
     }
 
     /// Runs the Release notes script for `tag` in the maintainer's clone,
@@ -413,6 +429,42 @@ impl Release {
             &contributor,
             &["commit", "-q", "-a", "-m", &format!("Release {version}")],
         );
+        git(&contributor, &["push", "-q", "origin", &branch]);
+        let head = git(&contributor, &["rev-parse", "HEAD"]);
+        git(&contributor, &["checkout", "-q", "--detach", "origin/main"]);
+        head
+    }
+
+    /// Pushes one more commit to `version`'s pushed bump branch, making
+    /// `change`: a line added to README.md, Cargo.toml or Cargo.lock, an
+    /// "added file", Cargo.toml's "file mode", or the "wrong version"; and
+    /// returns that commit.
+    fn push_change_to_bump(&self, version: &str, change: &str) -> String {
+        let contributor = self.contributor();
+        let branch = format!("release-{version}");
+        git(&contributor, &["checkout", "-q", &branch]);
+        match change {
+            "added file" => fs::write(contributor.join("extra.txt"), "extra\n").unwrap(),
+            "file mode" => {
+                fs::set_permissions(
+                    contributor.join("Cargo.toml"),
+                    fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
+            "wrong version" => {
+                for file in ["Cargo.toml", "Cargo.lock"] {
+                    fs::write(contributor.join(file), with_version(file, "0.3.0")).unwrap();
+                }
+            }
+            file => {
+                let path = contributor.join(file);
+                let text = fs::read_to_string(&path).unwrap();
+                fs::write(&path, format!("{text}\n# Unrelated change\n")).unwrap();
+            }
+        }
+        git(&contributor, &["add", "-A"]);
+        git(&contributor, &["commit", "-q", "-m", "Unrelated change"]);
         git(&contributor, &["push", "-q", "origin", &branch]);
         let head = git(&contributor, &["rev-parse", "HEAD"]);
         git(&contributor, &["checkout", "-q", "--detach", "origin/main"]);
@@ -537,6 +589,11 @@ fn assert_release_failed(release: &Release, output: &Output, merge: &str) {
 fn release_url() -> String {
     format!("https://github.com/{REPO}/releases/tag/v0.2.0")
 }
+
+/// Sets what `main` would for 0.2.0 and finds the earlier run, as `main`
+/// does before anything else.
+const FIND_EARLIER_RUN: &str =
+    "version=0.2.0 tag=v0.2.0 branch=release-0.2.0\nfetch_main\nfind_earlier_run";
 
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
@@ -1397,19 +1454,31 @@ fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_
 /// Runs the script with `version` and asserts it refused before pushing
 /// anything, with a message on stderr containing each of `reasons`.
 fn assert_refused(release: &Release, version: &str, reasons: &[&str]) {
+    assert_refused_by(release, version, reasons, || release.run_script(version));
+}
+
+/// Runs `run`, the script or some of its functions, and asserts it refused
+/// the `case` before pushing anything, with a message on stderr containing
+/// each of `reasons`.
+fn assert_refused_by(
+    release: &Release,
+    case: &str,
+    reasons: &[&str],
+    run: impl FnOnce() -> Output,
+) {
     let refs_before = release.origin_refs();
     let prs_before = release.gh_state()["prs"].clone();
 
-    let output = release.run_script(version);
+    let output = run();
 
-    assert_eq!(output.status.code(), Some(1), "{version} was not refused");
+    assert_eq!(output.status.code(), Some(1), "{case} was not refused");
     let err = stderr(&output);
-    assert!(err.contains("refusing to release"), "{version}: {err}");
+    assert!(err.contains("refusing to release"), "{case}: {err}");
     for reason in reasons {
-        assert!(err.contains(reason), "{version}: no {reason:?} in {err}");
+        assert!(err.contains(reason), "{case}: no {reason:?} in {err}");
     }
-    assert_eq!(release.origin_refs(), refs_before, "{version}");
-    assert_eq!(release.gh_state()["prs"], prs_before, "{version}");
+    assert_eq!(release.origin_refs(), refs_before, "{case}");
+    assert_eq!(release.gh_state()["prs"], prs_before, "{case}");
 }
 
 #[test]
@@ -1574,6 +1643,7 @@ fn a_rerun_after_the_branch_was_pushed_opens_its_pr_then_merges_and_tags() {
 #[test]
 #[cfg(target_os = "linux")]
 fn a_resumed_bump_pr_from_another_repository_is_refused() {
+    // The open PR end to end; finding the earlier run takes the rest.
     for (merged, tagged) in [(false, false), (true, false), (true, true)] {
         let release = Release::new();
         let head = release.push_bump("0.2.0");
@@ -1590,14 +1660,25 @@ fn a_resumed_bump_pr_from_another_repository_is_refused() {
             .as_str()
             .unwrap()
             .to_owned();
+        let reasons = [url.as_str(), "another repository"];
 
-        assert_refused(&release, "0.2.0", &[&url, "another repository"]);
+        if merged {
+            assert_refused_by(
+                &release,
+                &format!("merged {merged}, tagged {tagged}"),
+                &reasons,
+                || release.with_functions(FIND_EARLIER_RUN),
+            );
+        } else {
+            assert_refused(&release, "0.2.0", &reasons);
+        }
     }
 }
 
 #[test]
 #[cfg(target_os = "linux")]
 fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
+    // One open PR end to end; checking the bump PR takes the rest.
     for merged in [false, true] {
         for change in [
             "README.md",
@@ -1609,32 +1690,7 @@ fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
         ] {
             let release = Release::new();
             release.push_bump("0.2.0");
-            let contributor = release.contributor();
-            git(&contributor, &["checkout", "-q", "release-0.2.0"]);
-            match change {
-                "added file" => fs::write(contributor.join("extra.txt"), "extra\n").unwrap(),
-                "file mode" => {
-                    fs::set_permissions(
-                        contributor.join("Cargo.toml"),
-                        fs::Permissions::from_mode(0o755),
-                    )
-                    .unwrap();
-                }
-                "wrong version" => {
-                    for file in ["Cargo.toml", "Cargo.lock"] {
-                        fs::write(contributor.join(file), with_version(file, "0.3.0")).unwrap();
-                    }
-                }
-                file => {
-                    let path = contributor.join(file);
-                    let text = fs::read_to_string(&path).unwrap();
-                    fs::write(&path, format!("{text}\n# Unrelated change\n")).unwrap();
-                }
-            }
-            git(&contributor, &["add", "-A"]);
-            git(&contributor, &["commit", "-q", "-m", "Unrelated change"]);
-            git(&contributor, &["push", "-q", "origin", "release-0.2.0"]);
-            let head = git(&contributor, &["rev-parse", "HEAD"]);
+            let head = release.push_change_to_bump("0.2.0", change);
             release.open_bump_pr("0.2.0");
             if merged {
                 release.merge_bump_pr("0.2.0", &head);
@@ -1644,10 +1700,60 @@ fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
                 .as_str()
                 .unwrap()
                 .to_owned();
+            let reasons = [url.as_str(), "version bump"];
 
-            assert_refused(&release, "0.2.0", &[&url, "version bump"]);
+            if !merged && change == "README.md" {
+                assert_refused(&release, "0.2.0", &reasons);
+            } else {
+                assert_refused_by(
+                    &release,
+                    &format!("merged {merged}, {change}"),
+                    &reasons,
+                    || release.with_functions(&format!("{FIND_EARLIER_RUN}\nvalidate_bump_pr")),
+                );
+            }
         }
     }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_merged_bump_pr_whose_head_is_not_on_origin_is_refused() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.merge_bump_pr("0.2.0", &head);
+    let missing = json!("0".repeat(40)).to_string();
+    release.gh(&["fake", "pr", "release-0.2.0", "headRefOid", &missing]);
+    let url = release.pr("release-0.2.0")["url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    assert_refused_by(
+        &release,
+        "missing head",
+        &[&url, "could not be fetched"],
+        || release.with_functions(&format!("{FIND_EARLIER_RUN}\nvalidate_bump_pr")),
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn an_already_tagged_release_is_still_reported_when_its_pr_changed_more() {
+    // The tag is already out, so refusing would only hide its release run.
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    let head = release.push_change_to_bump("0.2.0", "added file");
+    release.open_bump_pr("0.2.0");
+    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &merge]);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(err.contains("v0.2.0 is already tagged"), "{err}");
 }
 
 #[test]
@@ -1882,14 +1988,14 @@ fn an_open_bump_pr_with_a_different_head_from_origin_is_refused() {
         &json!(stale).to_string(),
     ]);
     release.ci_reports(GREEN);
-    fs::remove_file(release.root().join("gh-calls.json")).unwrap();
     let url = release.pr("release-0.2.0")["url"]
         .as_str()
         .unwrap()
         .to_owned();
+    let merges_before = release.merge_calls();
 
     assert_refused(&release, "0.2.0", &[&url, "head does not match", "origin"]);
-    assert!(release.merge_calls().is_empty());
+    assert_eq!(release.merge_calls(), merges_before);
 }
 
 #[test]
@@ -1913,25 +2019,35 @@ fn a_bump_pr_closed_without_merging_is_refused() {
 #[test]
 #[cfg(target_os = "linux")]
 fn a_bump_pr_closed_without_merging_and_its_branch_deleted_starts_over() {
-    let release = Release::new();
-    let stale = release.push_bump("0.2.0");
-    release.open_bump_pr("0.2.0");
-    release.gh(&["fake", "pr", "release-0.2.0", "state", "\"CLOSED\""]);
-    // GitHub keeps a closed PR's head once its branch is deleted.
-    let head = format!("\"{stale}\"");
-    release.gh(&["fake", "pr", "release-0.2.0", "headRefOid", &head]);
-    release.origin(&["branch", "-D", "release-0.2.0"]);
-    release.ci_reports(GREEN);
+    // Even a closed PR from another repository leaves nothing to resume.
+    for cross_repository in ["false", "true"] {
+        let release = Release::new();
+        let stale = release.push_bump("0.2.0");
+        release.open_bump_pr("0.2.0");
+        release.gh(&["fake", "pr", "release-0.2.0", "state", "\"CLOSED\""]);
+        release.gh(&[
+            "fake",
+            "pr",
+            "release-0.2.0",
+            "isCrossRepository",
+            cross_repository,
+        ]);
+        // GitHub keeps a closed PR's head once its branch is deleted.
+        let head = format!("\"{stale}\"");
+        release.gh(&["fake", "pr", "release-0.2.0", "headRefOid", &head]);
+        release.origin(&["branch", "-D", "release-0.2.0"]);
+        release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+        let output = release.run_script("0.2.0");
 
-    assert!(output.status.success(), "{}", stderr(&output));
-    let prs = release.prs_from("release-0.2.0");
-    assert_eq!(prs.len(), 2);
-    assert_eq!(prs[0]["state"], "CLOSED");
-    assert_eq!(prs[1]["state"], "MERGED");
-    let merge = release.origin(&["rev-parse", "main"]);
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+        assert!(output.status.success(), "{}", stderr(&output));
+        let prs = release.prs_from("release-0.2.0");
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs[0]["state"], "CLOSED");
+        assert_eq!(prs[1]["state"], "MERGED");
+        let merge = release.origin(&["rev-parse", "main"]);
+        assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    }
 }
 
 #[test]
