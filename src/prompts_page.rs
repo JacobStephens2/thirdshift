@@ -439,12 +439,14 @@ fn command_line(html: &mut String) {
         html,
         r##"<section class="sec" aria-labelledby="command-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">The command line</p><h2 id="command-title">How each session starts</h2></div>
+    <details class="fold">
+    <summary class="sec-head"><span class="eyebrow">The command line</span><h2 id="command-title">How each session starts</h2></summary>
     <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
     <pre class="job-text" aria-label="A new session"><code>{new}</code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
     <pre class="job-text" aria-label="A Resume"><code>{resume}</code></pre>
     <p class="lede">{codex}</p>
+    </details>
   </div>
 </section>
 "##,
@@ -458,7 +460,8 @@ fn prompt_section(html: &mut String) {
     html.push_str(
         r##"<section class="sec" aria-labelledby="prompts-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Prompts</p><h2 id="prompts-title">What a Run tells the agent</h2></div>
+    <details class="fold">
+    <summary class="sec-head"><span class="eyebrow">Prompts</span><h2 id="prompts-title">What a Run tells the agent</h2></summary>
     <p class="lede">Every prompt a Run can send, with its placeholders highlighted: they change for each Run.</p>
     <div class="job-sheets">
 "##,
@@ -467,10 +470,14 @@ fn prompt_section(html: &mut String) {
         let _ = write!(
             html,
             r##"      <article class="job-sheet" id="{id}" aria-labelledby="{id}-title">
-        <h3 id="{id}-title">{title}</h3>
+        <details class="fold">
+        <summary><h3 id="{id}-title">{title}</h3></summary>
+        <div class="job-body">
         <p>{when}</p>
         <p class="sent-by">Sent by {sender}</p>
         <pre class="job-text"><code>{text}</code></pre>
+        </div>
+        </details>
       </article>
 "##,
             id = prompt.id,
@@ -480,14 +487,15 @@ fn prompt_section(html: &mut String) {
             text = highlighted(&prompt.text),
         );
     }
-    html.push_str("    </div>\n  </div>\n</section>\n");
+    html.push_str("    </div>\n    </details>\n  </div>\n</section>\n");
 }
 
 fn skills_section(html: &mut String) {
     html.push_str(
         r##"<section class="sec" aria-labelledby="skills-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Factory skills</p><h2 id="skills-title">The skills, as the agent reads them</h2></div>
+    <details class="fold">
+    <summary class="sec-head"><span class="eyebrow">Factory skills</span><h2 id="skills-title">The skills, as the agent reads them</h2></summary>
     <p class="lede">Every Factory skill and supporting file, raw, exactly as thirdshift writes it out.</p>
     <div class="job-sheets">
 "##,
@@ -499,7 +507,9 @@ fn skills_section(html: &mut String) {
         let _ = write!(
             html,
             r##"      <article class="job-sheet" id="skill-{name}" aria-labelledby="skill-{name}-title">
-        <h3 id="skill-{name}-title">{name}</h3>
+        <details class="fold">
+        <summary><h3 id="skill-{name}-title">{name}</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by {used_by}</p>
 "##,
             used_by = skill_used_by(&name),
@@ -516,16 +526,17 @@ fn skills_section(html: &mut String) {
         for file in files {
             file_block(html, file, "        ");
         }
-        html.push_str("      </article>\n");
+        html.push_str("        </div>\n        </details>\n      </article>\n");
     }
-    html.push_str("    </div>\n  </div>\n</section>\n");
+    html.push_str("    </div>\n    </details>\n  </div>\n</section>\n");
 }
 
 fn licence_section(html: &mut String) {
     html.push_str(
         r##"<section class="sec" aria-labelledby="licence-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
+    <details class="fold">
+    <summary class="sec-head"><span class="eyebrow">Licence and credits</span><h2 id="licence-title">Whose skills these are</h2></summary>
     <p class="lede">Most Factory skills are adapted from Matt Pocock's skills, under the licence below. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>. The <a href="#skill-thirdshift-security-audit">thirdshift-security-audit</a> skill is copied from <a href="https://github.com/cloudflare/security-audit-skill">Cloudflare's security-audit-skill</a>, under its own <a href="#file-thirdshift-security-audit-license">MIT licence</a>, with its upstream repository and commit recorded in <a href="#file-thirdshift-security-audit-credits-md">CREDITS.md</a>.</p>
 "##,
     );
@@ -539,7 +550,7 @@ fn licence_section(html: &mut String) {
         );
         file_block(html, file, "    ");
     }
-    html.push_str("  </div>\n</section>\n");
+    html.push_str("    </details>\n  </div>\n</section>\n");
 }
 
 /// Every file under `dir`, at any depth.
@@ -550,7 +561,7 @@ fn collect_files<'a>(dir: &'a Dir<'a>, files: &mut Vec<&'a File<'a>>) {
     }
 }
 
-/// A file's path as a heading, then its raw text.
+/// A file's path as a disclosure heading, then its raw text.
 fn file_block(html: &mut String, file: &File, indent: &str) {
     let path = file.path().to_string_lossy();
     let text = file
@@ -563,7 +574,7 @@ fn file_block(html: &mut String, file: &File, indent: &str) {
         .collect();
     let _ = write!(
         html,
-        "{indent}<h4 id=\"file-{id}\"><code>{path}</code></h4>\n{indent}<pre class=\"job-text\"><code>{text}</code></pre>\n",
+        "{indent}<details class=\"fold\">\n{indent}<summary><h4 id=\"file-{id}\"><code>{path}</code></h4></summary>\n{indent}<pre class=\"job-text\"><code>{text}</code></pre>\n{indent}</details>\n",
         path = escape(&path),
         text = escape(text),
     );
