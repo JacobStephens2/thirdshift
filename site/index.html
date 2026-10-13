@@ -15,12 +15,12 @@
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Your issues go to press overnight. The press line: issue #24 goes in at the feeder, passes through units 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish, and comes out as pull request #25, ready for review.">
+<meta property="og:image:alt" content="Your issues go to press overnight. The press line: issue #663 goes in at the feeder, passes through units 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish, and comes out as pull request #665, merged.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="thirdshift: your issues go to press overnight">
 <meta name="twitter:description" content="thirdshift turns a GitHub issue into a pull request ready for review, or merges it when asked. You plan by day; unattended agents implement, review and open the pull request overnight.">
 <meta name="twitter:image" content="https://thirdshift.app/share-card.png">
-<meta name="twitter:image:alt" content="Your issues go to press overnight. The press line: issue #24 goes in at the feeder, passes through units 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish, and comes out as pull request #25, ready for review.">
+<meta name="twitter:image:alt" content="Your issues go to press overnight. The press line: issue #663 goes in at the feeder, passes through units 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish, and comes out as pull request #665, merged.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -90,7 +90,7 @@
       <div class="sec-head">
         <p class="eyebrow">How a Run works</p>
         <h2 id="press-title" class="misreg">One issue in, one pull request out.</h2>
-        <p class="lede">A Run feeds one issue through four units and delivers a pull request that is ready for review. Units 2 and 3 are one agent session in the Harness you choose. This replay is a historical example, recorded before the newer workflows below. Under each unit are the lines thirdshift printed on stderr during a real Run: issue <a href="https://github.com/JacobStephens2/thirdshift/issues/24">#24</a>, which produced <a href="https://github.com/JacobStephens2/thirdshift/pull/25">pull request #25</a>. Click a unit to see what it does. Every prompt and skill it sends is on the <a href="/prompts/">Prompts and skills</a> page.</p>
+        <p class="lede">A Run feeds one issue through four units and delivers a pull request that is ready for review, or merged in a Merge run. Units 2 and 3 are one agent session in the Harness you choose. Under each unit are lines thirdshift printed on stderr during a real Run, overnight on 12 October 2026. A scheduled Pickup run took issue <a href="https://github.com/JacobStephens2/thirdshift/issues/663">#663</a> at 00:21, and its Merge run merged <a href="https://github.com/JacobStephens2/thirdshift/pull/665">pull request #665</a> at 01:22. That pull request refreshed the floor plan further down this page. Click a unit to see what it does. Every prompt and skill it sends is on the <a href="/prompts/">Prompts and skills</a> page.</p>
       </div>
 
       <div class="press-track">
@@ -100,7 +100,7 @@
           <div class="press-frame grid-bg">
             <svg class="press-svg" viewBox="0 0 1200 420" role="img" aria-labelledby="press-svg-title press-svg-desc">
               <title id="press-svg-title">The press line: a feeder, units C, M, Y and K, and a delivery pile</title>
-              <desc id="press-svg-desc">Issue #24 goes in at the feeder and passes through four press units: 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish. A bracket over units M and Y marks them as one agent session. Pull request #25, ready for review, comes out on the delivery pile.</desc>
+              <desc id="press-svg-desc">Issue #663 goes in at the feeder and passes through four press units: 1 · C · Prepare, 2 · M · Implement, 3 · Y · Review and 4 · K · Finish. A bracket over units M and Y marks them as one agent session. Pull request #665, merged into main, comes out on the delivery pile.</desc>
               <defs>
                 <pattern id="dots" width="6" height="6" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="1.5" fill="#000"/></pattern>
                 <!-- Centred on the origin, so a spin (styles.css) turns each one about its own centre. -->
@@ -116,7 +116,7 @@
               <g transform="translate(24,230)">
                 <rect x="10" y="0" width="140" height="70" fill="var(--k3)" stroke="var(--dim)"/><rect x="5" y="8" width="140" height="70" fill="var(--k3)" stroke="var(--dim)"/>
                 <rect x="0" y="16" width="140" height="70" fill="var(--k2)" stroke="var(--paper)"/>
-                <text x="70" y="50" text-anchor="middle" font-size="16" font-weight="700" fill="var(--paper)">ISSUE #24</text>
+                <text x="70" y="50" text-anchor="middle" font-size="16" font-weight="700" fill="var(--paper)">ISSUE #663</text>
                 <text x="70" y="-12" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">FEEDER</text>
                 <text x="70" y="112" text-anchor="middle" font-size="11" fill="var(--dim)">the issue</text>
               </g>
@@ -172,9 +172,9 @@
               <g class="delivery" transform="translate(1040,230)">
                 <rect x="0" y="36" width="140" height="10" fill="var(--k3)" stroke="var(--dim)"/><rect x="0" y="48" width="140" height="10" fill="var(--k3)" stroke="var(--dim)"/>
                 <rect x="0" y="60" width="140" height="42" fill="var(--k2)" stroke="var(--paper)"/>
-                <text x="70" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">PR #25 · READY</text>
+                <text x="70" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">PR #665 · MERGED</text>
                 <text x="70" y="-12" text-anchor="middle" font-size="12" font-weight="700" fill="var(--paper)">DELIVERY PILE</text>
-                <text x="70" y="124" text-anchor="middle" font-size="11" fill="var(--dim)">ready for review</text>
+                <text x="70" y="124" text-anchor="middle" font-size="11" fill="var(--dim)">merged into main</text>
               </g>
             </svg>
           </div>
@@ -189,29 +189,41 @@
           <div class="press-cols">
             <article class="unit-col ink-c" aria-labelledby="unit-1">
               <h3 id="unit-1"><span class="tag" aria-hidden="true"></span>1 · C · Prepare</h3>
-              <p>Pre-flight checks the Origin match, the open issue, the Base branch and the selected Harness, plus Git’s commit identity. thirdshift picks the Issue branch, fresh or a Continuation, claims the issue with <code>in-progress</code>, and creates a worktree next to your clone. This older replay predates Claims.</p>
+              <p>Pre-flight checks the Origin match, the open issue, the Base branch and the selected Harness, plus Git’s commit identity. thirdshift picks the Issue branch, fresh or a Continuation, claims the issue with <code>in-progress</code>, and creates a worktree next to your clone. Here a scheduled Pickup run took the issue.</p>
               <ol class="stderr-lines" aria-label="stderr lines from unit 1">
-                <li><span class="prefix">thirdshift:</span> creating worktree /home/jacob/repos/thirdshift-issue-24 on issue-24 from origin/main</li>
+                <li><span class="prefix">thirdshift: 00:21:01</span> Pickup run starting, 2026-10-12 -0400</li>
+                <li><span class="prefix">thirdshift: 00:21:05</span> taking Ready issue #663 "update https://thirdshift.app/ based on the latest which is part of thirdshift", as thirdshift https://github.com/JacobStephens2/thirdshift/issues/663 would</li>
+                <li><span class="prefix">thirdshift: 00:21:05</span> checking the Model and Effort against codex debug models</li>
+                <li><span class="prefix">thirdshift: 00:21:06</span> logging this command to /home/jacob/.thirdshift/logs/JacobStephens2/thirdshift/commands/pickup/663-20261012T002101-0400.log</li>
+                <li><span class="prefix">thirdshift: 00:21:06</span> sessions run on codex · gpt-6.1-sol · high</li>
+                <li><span class="prefix">thirdshift: 00:21:08</span> updating main in the Launch directory from origin/main</li>
+                <li><span class="prefix">thirdshift: 00:21:08</span> labelling #663 in-progress, in place of ready-for-agent</li>
+                <li><span class="prefix">thirdshift: 00:21:10</span> creating worktree /home/jacob/repos/thirdshift-issue-663 on issue-663 from origin/main</li>
               </ol>
             </article>
             <article class="unit-col ink-m" aria-labelledby="unit-2">
               <h3 id="unit-2"><span class="tag" aria-hidden="true"></span>2 · M · Implement</h3>
-              <p>A headless session in the selected Harness, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits. The recorded Run used Claude Code.</p>
+              <p>A headless session in the selected Harness, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits. The recorded Run used Codex.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-implement">/thirdshift-implement</a></li><li><a href="/prompts/#skill-thirdshift-tdd">/thirdshift-tdd</a></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 2">
-                <li><span class="prefix">thirdshift:</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-thirdshift-issue-24-20260925T134143Z-implement.jsonl</li>
-                <li><span class="prefix">thirdshift:</span> implement: session started</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ gh issue view 24 --comments &amp;&amp; ls &amp;&amp; cat CONTEXT.md | head -80 &amp;&amp; ls docs docs/adr</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ gh issue view 24 --json title,body,comments,labels &amp;&amp; ls &amp;&amp; ls docs docs/adr 2&gt;/dev/null; git log --…</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ cat src/interrupt.rs &amp;&amp; grep -rn "assert_interrupt_fails_the_run\|SIGTERM\|SIGINT\|Signal::" tests/ …</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ sed -n 1,40p tests/failed_run.rs &amp;&amp; sed -n 150,240p tests/failed_run.rs; grep -rn "fn tmp\|\"tmp\"\|…</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ sed -n 40,70p tests/failed_run.rs; sed -n 290,340p tests/support/mod.rs; grep -n "fn run_and_signal"…</li>
-                <li><span class="prefix">thirdshift:</span> implement: Edit tests/failed_run.rs</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ cargo test --test failed_run sighup 2&gt;&amp;1 | tail -15</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ python3 - &lt;&lt;'EOF'</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ grep -rni "interrupt\|ctrl-c\|signal" README.md CONTEXT.md docs/adr; cargo fmt &amp;&amp; cargo clippy --all…</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ sed -i 's/ends, including by Ctrl-C, without/ends, including by Ctrl-C or a closed terminal, without…</li>
-                <li><span class="prefix">thirdshift:</span> implement: commit</li>
+                <li><span class="prefix">thirdshift: 00:21:10</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2/thirdshift/commands/pickup/663-20261012T002101-0400-implement.jsonl</li>
+                <li><span class="prefix">thirdshift: 00:21:11</span> implement: session started</li>
+                <li><span class="prefix">thirdshift: 00:21:19</span> implement: $ pwd &amp;&amp; git status --short &amp;&amp; git branch --show-current &amp;&amp; cat /tmp/thirdshift-skills-OIZYKN/thirdshi…</li>
+                <li><span class="prefix">thirdshift: 00:21:25</span> implement: $ cat AGENTS.md CONTEXT.md docs/agents/issue-tracker.md docs/agents/domain.md docs/agents/triage-label…</li>
+                <li><span class="prefix">thirdshift: 00:21:25</span> implement: $ gh issue view 663 --repo JacobStephens2/thirdshift --json title,body,comments,labels &amp;&amp; git log -5 -…</li>
+                <li><span class="prefix">thirdshift: 00:21:30</span> implement: web search</li>
+                <li><span class="prefix">thirdshift: 00:21:30</span> implement: $ cat CODING_STANDARDS.md &amp;&amp; rg --files | rg '("'^site/|web|index.html|landing|pages|astro|package.jso…</li>
+                <li><span class="prefix">thirdshift: 00:21:35</span> implement: $ cat site/index.html site/main.js</li>
+                <li class="cut"><span aria-hidden="true">···</span> 7 lines cut: more reading</li>
+                <li><span class="prefix">thirdshift: 00:23:41</span> implement: $ cat &gt; /tmp/issue-663-pr.md &lt;&lt;'EOF'</li>
+                <li><span class="prefix">thirdshift: 00:24:13</span> implement: $ "cat &gt; /tmp/verify-site-663.cjs &lt;&lt;'JS'</li>
+                <li><span class="prefix">thirdshift: 00:24:15</span> implement: $ cargo check --all-targets &amp;&amp; cargo test --test share_card --test site_deploy</li>
+                <li><span class="prefix">thirdshift: 00:24:25</span> implement: $ node /tmp/verify-site-663.cjs</li>
+                <li><span class="prefix">thirdshift: 00:24:26</span> implement: $ git diff --check &amp;&amp; git diff -- site/index.html site/styles.css</li>
+                <li><span class="prefix">thirdshift: 00:24:39</span> implement: $ python3 - &lt;&lt;'PY'</li>
+                <li><span class="prefix">thirdshift: 00:24:48</span> implement: $ rg -n '\\.unit|\\.floor|hopper' site/styles.css &amp;&amp; sed -n '115,160p' site/styles.css</li>
+                <li><span class="prefix">thirdshift: 00:25:13</span> implement: $ python3 - &lt;&lt;'PY'</li>
+                <li><span class="prefix">thirdshift: 00:25:26</span> implement: commit</li>
               </ol>
             </article>
             <article class="unit-col ink-y" aria-labelledby="unit-3">
@@ -219,41 +231,62 @@
               <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Behavior findings need a test or command that exercises them before the agent decides. It fixes reproduced failures and keeps the test. Then it opens the pull request, ready for review.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-code-review">/thirdshift-code-review</a></li><li><a href="/prompts/#skill-thirdshift-pr">/thirdshift-pr</a></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 3">
-                <li><span class="prefix">thirdshift:</span> implement: skill thirdshift-code-review</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ git rev-parse main &amp;&amp; git log main..HEAD --oneline &amp;&amp; git diff main...HEAD --stat; ls .agents/skills…</li>
-                <li><span class="prefix">thirdshift:</span> implement: Agent Standards review</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ git diff main...HEAD &amp;&amp; cat CODING_STANDARDS.md &amp;&amp; ls .agents/skills/codebase-design/ &amp;&amp; cat .agents…</li>
-                <li><span class="prefix">thirdshift:</span> implement: Agent Spec review</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ cat CONTEXT.md; grep -rn -i "sigint\|sigterm\|ctrl-c\|interrupt\|signal" README.md CONTEXT.md docs s…</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ gh issue view 24 --json body,comments; git diff main...HEAD</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ sed -n 140,240p tests/failed_run.rs; grep -n "fn assert_cleaned_up" -A25 tests/support/mod.rs; grep …</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ grep -n "TMPDIR\|fn entries\|fn run_and_signal" -A8 tests/support/mod.rs | head -60; git show --stat…</li>
-                <li><span class="prefix">thirdshift:</span> implement: SubagentHandback</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ sed -n 145,162p tests/support/mod.rs; cargo test --test failed_run 2&gt;&amp;1 | tail -8</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ cargo test 2&gt;&amp;1 | grep -E "test result|FAILED|panicked" | head</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ python3 - &lt;&lt;'EOF'</li>
-                <li><span class="prefix">thirdshift:</span> implement: SubagentHandback</li>
-                <li><span class="prefix">thirdshift:</span> implement: commit and push</li>
-                <li><span class="prefix">thirdshift:</span> implement: skill thirdshift-pr</li>
-                <li><span class="prefix">thirdshift:</span> implement: $ cat &gt; /tmp/pr24.md &lt;&lt;'EOF'</li>
-                <li><span class="prefix">thirdshift:</span> implement: session ended after 3m 40s: 5 turns, $1.06 at API prices</li>
+                <li><span class="prefix">thirdshift: 00:26:05</span> implement: $ git status --short &amp;&amp; gh pr list --repo JacobStephens2/thirdshift --head issue-663 --state open --js…</li>
+                <li><span class="prefix">thirdshift: 00:26:26</span> implement: $ cargo fmt --check &amp;&amp; cargo clippy --all-targets -- -D warnings</li>
+                <li><span class="prefix">thirdshift: 00:26:27</span> implement: $ git check-ignore .thirdshift-review-ZgRuM9/standards.md; rg -n 'thirdshift-review' /home/jacob/repos…</li>
+                <li><span class="prefix">thirdshift: 00:27:10</span> implement: $ ls -l /tmp/issue-663-standards-initial.md /tmp/issue-663-spec-initial.md 2&gt;/dev/null &amp;&amp; cat /tmp/iss…</li>
+                <li><span class="prefix">thirdshift: 00:27:13</span> implement: $ cat /tmp/issue-663-standards-initial.md</li>
+                <li><span class="prefix">thirdshift: 00:27:29</span> implement: $ python3 - &lt;&lt;'PY'</li>
+                <li><span class="prefix">thirdshift: 00:27:30</span> implement: commit</li>
+                <li><span class="prefix">thirdshift: 00:27:41</span> implement: $ cat /tmp/issue-663-spec-initial.md</li>
+                <li><span class="prefix">thirdshift: 00:27:53</span> implement: $ cargo test &gt; /tmp/issue-663-cargo-test.log 2&gt;&amp;1</li>
+                <li><span class="prefix">thirdshift: 00:27:54</span> implement: $ "mkdir -p .thirdshift-review-ZgRuM9 &amp;&amp; cp /tmp/issue-663-standards-initial.md .thirdshift-review-ZgR…</li>
+                <li><span class="prefix">thirdshift: 00:28:10</span> implement: $ tail -n 12 /tmp/issue-663-cargo-test.log &amp;&amp; git status --short &amp;&amp; git log main..HEAD --oneline</li>
+                <li><span class="prefix">thirdshift: 00:28:30</span> implement: $ "cat &gt; /tmp/issue-663-pr.md &lt;&lt;'EOF'</li>
+                <li><span class="prefix">thirdshift: 00:28:51</span> implement: push</li>
+                <li><span class="prefix">thirdshift: 00:28:52</span> implement: $ tail -n 14 /tmp/issue-663-cargo-test.log</li>
+                <li class="cut"><span aria-hidden="true">···</span> 20 lines cut: mostly waiting on the full test suite</li>
+                <li><span class="prefix">thirdshift: 00:46:48</span> implement: $ python3 - &lt;&lt;'PY'</li>
+                <li><span class="prefix">thirdshift: 00:46:59</span> implement: $ gh pr view issue-663 --repo JacobStephens2/thirdshift --json number,url,state,isDraft,baseRefName,he…</li>
+                <li><span class="prefix">thirdshift: 00:47:13</span> implement: session ended after 26m 2s: 7416316 input tokens (7285760 cached), 20664 output tokens</li>
               </ol>
             </article>
             <article class="unit-col ink-k" aria-labelledby="unit-4">
               <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>4 · K · Finish</h3>
-              <p>thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 5. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. An optional Security review checks the change before Delivery. With <code>thirdshift merge &lt;Issue URL&gt;</code>, thirdshift also merges the reviewed head once its checks pass. This recorded Run needed no Repair and left its pull request for review.</p>
+              <p>An optional Security review checks the change first. Then thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 5. A Resume can happen in any session and isn't a Repair. The Run ends once the pull request is open, ready, mergeable and passing CI. A Merge run, from <code>thirdshift merge &lt;Issue URL&gt;</code> or the User config, then merges it. Here the Security review found nothing, main moved during CI and was merged in again, and no Repair was needed.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-resolving-merge-conflicts">/thirdshift-resolving-merge-conflicts</a> <span>in a Repair</span></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from unit 4">
-                <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
-                <li><span class="prefix">thirdshift:</span> checking the PR</li>
-                <li><span class="prefix">thirdshift:</span> merging origin/main into issue-24</li>
-                <li><span class="prefix">thirdshift:</span> pushing issue-24</li>
-                <li><span class="prefix">thirdshift:</span> waiting up to 60s for CI on f32bc95</li>
-                <li><span class="prefix">thirdshift:</span> CI on f32bc95: 1 of 1 checks still running</li>
-                <li><span class="prefix">thirdshift:</span> CI passed on f32bc95</li>
-                <li><span class="prefix">thirdshift:</span> checking the PR is open, ready and mergeable</li>
-                <li><span class="prefix">thirdshift:</span> cleaning up the worktree and local branch issue-24</li>
-                <li class="ready"><span class="prefix">thirdshift:</span> PR https://github.com/JacobStephens2/thirdshift/pull/25 is ready for review</li>
+                <li><span class="prefix">thirdshift: 00:47:13</span> Security review private report: /home/jacob/.thirdshift/logs/JacobStephens2/thirdshift/security-reviews/663-20261012T002101-0400-0eoBGA/pre-existing.json</li>
+                <li><span class="prefix">thirdshift: 00:47:13</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2/thirdshift/commands/pickup/663-20261012T002101-0400-security-review.jsonl</li>
+                <li><span class="prefix">thirdshift: 00:47:14</span> security-review: session started</li>
+                <li><span class="prefix">thirdshift: 00:47:14</span> security-review: Model: gpt-6.1-sol (requested)</li>
+                <li><span class="prefix">thirdshift: 00:47:23</span> security-review: $ git status --short --branch</li>
+                <li><span class="prefix">thirdshift: 00:47:23</span> security-review: $ cat .agents/skills/thirdshift-security-audit/SKILL.md</li>
+                <li class="cut"><span aria-hidden="true">···</span> 28 lines cut: the review reading and checking the change</li>
+                <li><span class="prefix">thirdshift: 00:49:54</span> security-review: session ended after 2m 41s: 981609 input tokens (882304 cached), 5030 output tokens</li>
+                <li><span class="prefix">thirdshift: 00:49:54</span> pushing issue-663</li>
+                <li><span class="prefix">thirdshift: 00:49:56</span> writing "Built with codex · gpt-6.1-sol · high" in the pull request's body</li>
+                <li><span class="prefix">thirdshift: 00:49:57</span> checking the PR</li>
+                <li><span class="prefix">thirdshift: 00:50:01</span> merging origin/main into issue-663</li>
+                <li><span class="prefix">thirdshift: 00:50:03</span> pushing issue-663</li>
+                <li><span class="prefix">thirdshift: 00:50:05</span> waiting up to 60s for CI on c16e780</li>
+                <li><span class="prefix">thirdshift: 00:50:07</span> CI on c16e780: 6 of 8 checks still running</li>
+                <li class="cut"><span aria-hidden="true">···</span> 5 lines cut: CI still running</li>
+                <li><span class="prefix">thirdshift: 01:00:40</span> CI passed on c16e780</li>
+                <li><span class="prefix">thirdshift: 01:00:41</span> origin/main moved while CI ran; merging it again</li>
+                <li><span class="prefix">thirdshift: 01:00:42</span> merging origin/main into issue-663</li>
+                <li><span class="prefix">thirdshift: 01:00:43</span> pushing issue-663</li>
+                <li><span class="prefix">thirdshift: 01:00:45</span> waiting up to 60s for CI on 545e42f</li>
+                <li><span class="prefix">thirdshift: 01:00:57</span> CI on 545e42f: 6 of 6 checks still running</li>
+                <li class="cut"><span aria-hidden="true">···</span> 9 lines cut: CI still running</li>
+                <li><span class="prefix">thirdshift: 01:22:47</span> CI passed on 545e42f</li>
+                <li><span class="prefix">thirdshift: 01:22:48</span> checking the PR is open, ready and mergeable</li>
+                <li><span class="prefix">thirdshift: 01:22:49</span> merging the PR into main</li>
+                <li><span class="prefix">thirdshift: 01:22:49</span> checking the PR is open, ready and mergeable</li>
+                <li><span class="prefix">thirdshift: 01:22:53</span> deleting issue-663 on origin</li>
+                <li><span class="prefix">thirdshift: 01:22:54</span> cleaning up the worktree and local branch issue-663</li>
+                <li><span class="prefix">thirdshift: 01:22:55</span> removing in-progress from issue #663</li>
+                <li class="ready"><span class="prefix">thirdshift: 01:22:56</span> PR https://github.com/JacobStephens2/thirdshift/pull/665 is merged</li>
               </ol>
             </article>
           </div>
@@ -261,26 +294,26 @@
           <!-- The terminal replays the lit unit's lines, copied from the columns above. -->
           <div class="press-term" hidden>
             <div class="term-bar">
-              <span>stderr · issue #24 → <a href="https://github.com/JacobStephens2/thirdshift/pull/25">pull request #25</a></span>
+              <span>stderr · issue #663 → <a href="https://github.com/JacobStephens2/thirdshift/pull/665">pull request #665</a></span>
               <button type="button" class="pause">Pause</button>
             </div>
             <ol class="stderr-lines" role="log" aria-live="off" aria-label="Terminal replay of the lit unit's stderr lines"></ol>
           </div>
         </div>
       </div>
-      <p class="press-source">The <code>implement:</code> lines are the Run's session log passed through thirdshift's own progress condensing. The other lines are thirdshift's progress messages, filled in with pull request #25's branch, commit and CI result. The session's duration is rebuilt from its log file's timestamps, so thirdshift may have printed 3m 41s.</p>
+      <p class="press-source">The lines are copied, timestamps and all, from the Pickup run's Command log, which keeps everything thirdshift printed. Each cut for length says how many lines it left out; there are 139 lines on stderr in all.</p>
 
       <aside class="misprint" aria-labelledby="misprint-title">
         <h3 id="misprint-title">Misprint: a Failed run</h3>
         <p>A Run that ends, including by interruption, without an open pull request from its Issue branch that targets the Base branch, is mergeable, and has passing CI is a Failed run. Nothing is lost: its work, uncommitted changes included, is committed and pushed to the Issue branch (or, if the push fails, its worktree and local Issue branch are kept), and its open pull request, if any, goes back to draft. Run the same command again to continue it.</p>
-        <p class="illustrative"><b>Illustrative.</b> These are the last lines of a Run whose CI is still failing after 5 Repairs. Their order is inferred from the code, not seen in a real Run.</p>
+        <p class="illustrative"><b>Illustrative.</b> These are the last stderr lines of a Run whose CI is still failing after 5 Repairs. Their order is inferred from the code, not seen in a real Run.</p>
         <ol class="stderr-lines" aria-label="stderr lines from an illustrative Failed run">
-          <li><span class="prefix">thirdshift:</span> CI failed on &lt;commit&gt;: &lt;check&gt;</li>
-          <li><span class="prefix">thirdshift:</span> pushing issue-&lt;n&gt;</li>
-          <li><span class="prefix">thirdshift:</span> cleaning up the worktree and local branch issue-&lt;n&gt;</li>
-          <li class="failed"><span class="prefix">thirdshift:</span> repairs exhausted: CI red</li>
-          <li class="failed"><span class="prefix">thirdshift:</span> session log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/sessions/&lt;n&gt;-&lt;stamp&gt;-repair-5.jsonl</li>
-          <li class="failed"><span class="prefix">thirdshift:</span> command log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/issue/&lt;n&gt;-&lt;stamp&gt;.log</li>
+          <li><span class="prefix">thirdshift: &lt;time&gt;</span> CI failed on &lt;commit&gt;: &lt;check&gt;</li>
+          <li><span class="prefix">thirdshift: &lt;time&gt;</span> pushing issue-&lt;n&gt;</li>
+          <li><span class="prefix">thirdshift: &lt;time&gt;</span> cleaning up the worktree and local branch issue-&lt;n&gt;</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> repairs exhausted: CI red</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> session log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/issue/&lt;n&gt;-&lt;stamp&gt;-repair-5.jsonl</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> command log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/issue/&lt;n&gt;-&lt;stamp&gt;.log</li>
         </ol>
       </aside>
     </div>
@@ -422,18 +455,18 @@
     <div class="wrap">
       <div class="sec-head"><p class="eyebrow">Proof sheets</p><h2 id="proofs-title">Pulled from the press</h2><p class="lede">Real pull requests thirdshift made on its own repository. Judge the work yourself.</p></div>
       <ul class="proofs">
-        <li class="proof-card" style="--ink:var(--c)"><p class="slug">Pull request #25 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/24">issue #24</a></p>
-          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/25">Treat SIGHUP like SIGINT and SIGTERM</a></h3>
-          <p>A small fix with a real test: closing the terminal now stops the session and fails the Run cleanly, and it is the Run the press line replays.</p></li>
-        <li class="proof-card" style="--ink:var(--m)"><p class="slug">Pull request #21 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/7">issue #7</a></p>
+        <li class="proof-card" style="--ink:var(--c)"><p class="slug">Pickup run · pull request #665 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/663">issue #663</a></p>
+          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/665">Refresh homepage for current factory workflows</a></h3>
+          <p>A two-line issue, taken by a scheduled Pickup run at 00:21 and merged at 01:22. It is the Run the press line replays.</p></li>
+        <li class="proof-card" style="--ink:var(--m)"><p class="slug">Spec run · pull request #401 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/136">Spec #136</a></p>
+          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/401">Choose the Harness, Model and Effort a Command runs on (Claude Code or Codex)</a></h3>
+          <p>Six Tickets, run two at a time on Claude Code from 23:48 and merged as one Spec PR at 02:29: the night thirdshift learned to run on Codex.</p></li>
+        <li class="proof-card" style="--ink:var(--y)"><p class="slug">Architect run · pull request #484 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/482">issue #482</a></p>
+          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/484">Move Failed run preservation and retention into Worktree</a></h3>
+          <p>Weeding: an Architect run published the plan at 23:44 and merged its pull request at 00:12. Ten more did the same that night, between 21:32 and 08:13.</p></li>
+        <li class="proof-card" style="--ink:var(--k)"><p class="slug">Run · pull request #21 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/7">issue #7</a></p>
           <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/21">Numbered Issue branches after a merged or closed PR</a></h3>
-          <p>A careful change to branch selection, where the agent flags a new error the issue didn't ask for, so a human can decide on it.</p></li>
-        <li class="proof-card" style="--ink:var(--y)"><p class="slug">Pull request #22 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/9">issue #9</a></p>
-          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/22">CI watching, CI-fix Repair and the Repair cap</a></h3>
-          <p>The factory building its own quality gate: the loop that watches CI and starts a Repair when checks fail.</p></li>
-        <li class="proof-card" style="--ink:var(--k)"><p class="slug">Pull request #16 · closes <a href="https://github.com/JacobStephens2/thirdshift/issues/4">issue #4</a></p>
-          <h3><a href="https://github.com/JacobStephens2/thirdshift/pull/16">Pre-flight checks</a></h3>
-          <p>Every check that runs before a Run creates anything, each with a clear message, including the Origin match.</p></li>
+          <p>From the factory's first day: a careful change to branch selection, where the agent flags a new error the issue didn't ask for, so a human can decide on it.</p></li>
       </ul>
       <p class="reqs-note">Does a second reviewer catch what thirdshift's own review lets through? 183 replayed reviews, Codex against a fresh Claude session: <a href="https://stephens.page/blog/fresh-eyes-beat-a-second-family/">Fresh Eyes Beat a Second Family</a>.</p>
     </div>

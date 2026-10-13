@@ -159,6 +159,8 @@ body::after { /* scanlines */
 .stderr-lines .prefix { color: var(--dim); }
 .stderr-lines .ready { color: var(--nc); }
 .stderr-lines .failed { color: var(--m-text); }
+/* A line standing in for lines cut from a quoted log: dim, as the prefixes are. */
+.stderr-lines .cut { color: var(--dim); }
 .press-source { margin: 16px 0 0; font-size: 13px; color: var(--dim); max-width: 90ch; }
 .misprint { margin-top: 36px; border: 1px solid var(--m); padding: 16px 18px; display: grid; gap: 10px; max-width: 90ch; }
 .misprint h3 { font-size: 26px; color: var(--m-text); }
