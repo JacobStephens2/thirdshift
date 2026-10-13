@@ -328,6 +328,16 @@ body::after { /* scanlines */
 .job-sheet h3 { font-size: 30px; }
 .job-sheet h4 { margin: 10px 0 0; font: 700 13px/1.3 var(--f-mono); color: var(--dim); }
 .job-sheet p { margin: 0; max-width: 90ch; }
+.job-body { display: grid; gap: 10px; margin-top: 10px; }
+.fold > summary { display: block; position: relative; padding-right: 32px; cursor: pointer; }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::after { content: "+"; position: absolute; right: 0; top: 0; color: var(--c); font: 700 24px/1 var(--f-mono); }
+.fold[open] > summary::after { content: "−"; }
+.fold > .sec-head { display: grid; margin-bottom: 0; }
+.fold[open] > .sec-head { margin-bottom: 28px; }
+.fold > summary h4 { margin: 0; overflow-wrap: anywhere; }
+.fold > summary + .job-text { margin-top: 10px; }
+.fold > .lede + .job-sheets { margin-top: 28px; }
 .sent-by { font-size: 13px; color: var(--dim); }
 .job-text { margin: 0; padding: 14px 16px; background: #000; border: 1px solid var(--rule); font-size: 13px; line-height: 1.55;
   white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -1,3 +1,31 @@
+// Fragment links on the Prompts and skills page reveal their folded target.
+function revealFoldedTarget() {
+  let id;
+  try {
+    id = decodeURIComponent(location.hash.slice(1));
+  } catch {
+    return;
+  }
+  const target = document.getElementById(id);
+  if (!target) return;
+  let fold = target.matches(".job-sheet")
+    ? target.querySelector("details.fold")
+    : target.closest("details.fold");
+  if (!fold) return;
+  while (fold) {
+    fold.open = true;
+    fold = fold.parentElement.closest("details.fold");
+  }
+  target.scrollIntoView({ block: "start" });
+}
+revealFoldedTarget();
+addEventListener("hashchange", revealFoldedTarget);
+document.addEventListener("click", event => {
+  const link = event.target.closest("a[href^='#']");
+  // Repeating the current link doesn't fire hashchange.
+  if (link && link.hash === location.hash) revealFoldedTarget();
+});
+
 // Copy buttons: put the command next to the button on the clipboard.
 for (const button of document.querySelectorAll(".install button.copy")) {
   const code = button.closest(".install").querySelector("code");
