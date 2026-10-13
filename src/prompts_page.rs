@@ -517,14 +517,11 @@ fn skills_section(html: &mut String) {
         let mut files = Vec::new();
         collect_files(skill, &mut files);
         // SKILL.md first, as the agent reads it first; then the rest by path.
-        files.sort_by_key(|file| {
-            (
-                file.path().file_name() != Some(OsStr::new("SKILL.md")),
-                file.path(),
-            )
-        });
+        let is_skill_md = |file: &File| file.path().file_name() == Some(OsStr::new("SKILL.md"));
+        files.sort_by_key(|file| (!is_skill_md(file), file.path()));
         for file in files {
-            file_block(html, file, "        ");
+            // Opening a skill shows its SKILL.md; the supporting files stay folded.
+            file_block(html, file, "        ", is_skill_md(file));
         }
         html.push_str("        </div>\n        </details>\n      </article>\n");
     }
@@ -548,7 +545,7 @@ fn licence_section(html: &mut String) {
             OsStr::new("LICENSE"),
             "a file outside any skill needs a place on the page"
         );
-        file_block(html, file, "    ");
+        file_block(html, file, "    ", false);
     }
     html.push_str("    </details>\n  </div>\n</section>\n");
 }
@@ -561,8 +558,8 @@ fn collect_files<'a>(dir: &'a Dir<'a>, files: &mut Vec<&'a File<'a>>) {
     }
 }
 
-/// A file's path as a disclosure heading, then its raw text.
-fn file_block(html: &mut String, file: &File, indent: &str) {
+/// A file's path as a disclosure heading, then its raw text, folded unless `open`.
+fn file_block(html: &mut String, file: &File, indent: &str, open: bool) {
     let path = file.path().to_string_lossy();
     let text = file
         .contents_utf8()
@@ -574,7 +571,8 @@ fn file_block(html: &mut String, file: &File, indent: &str) {
         .collect();
     let _ = write!(
         html,
-        "{indent}<details class=\"fold\">\n{indent}<summary><h4 id=\"file-{id}\"><code>{path}</code></h4></summary>\n{indent}<pre class=\"job-text\"><code>{text}</code></pre>\n{indent}</details>\n",
+        "{indent}<details class=\"fold\"{open}>\n{indent}<summary><h4 id=\"file-{id}\"><code>{path}</code></h4></summary>\n{indent}<pre class=\"job-text\"><code>{text}</code></pre>\n{indent}</details>\n",
+        open = if open { " open" } else { "" },
         path = escape(&path),
         text = escape(text),
     );

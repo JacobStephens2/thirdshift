@@ -35,7 +35,10 @@ async function pageForTest(t, options) {
   return page;
 }
 
-test("every headed section starts closed and toggles independently by its heading", async (t) => {
+// A skill's SKILL.md starts open, so it shows as soon as its skill does.
+const isSkillMd = id => /^file-.*-skill-md$/.test(id);
+
+test("every headed section but a skill's SKILL.md starts closed, and each toggles independently by its heading", async (t) => {
   const page = await pageForTest(t);
   await page.goto(`${origin}/prompts/`);
   const headings = page.locator("main :is(h2, h3, h4)");
@@ -44,10 +47,12 @@ test("every headed section starts closed and toggles independently by its headin
   for (const id of ids) {
     assert.equal(await page.locator(`#${id}`).evaluate(heading => {
       const summary = heading.closest("summary");
-      return Boolean(summary && summary.parentElement.tagName === "DETAILS" && !summary.parentElement.open);
-    }), true, `${id} must control a closed section`);
+      return Boolean(summary && summary.parentElement.tagName === "DETAILS");
+    }), true, `${id} must control a section`);
+    assert.equal(await page.locator(`#${id}`).evaluate(heading => heading.closest("details").open), isSkillMd(id), `${id} starts ${isSkillMd(id) ? "open" : "closed"}`);
   }
-  assert.equal(await page.locator("main details[open]").count(), 0);
+  assert.equal(await page.locator("main details[open]").count(), ids.filter(isSkillMd).length);
+  assert.equal(await page.locator("main > section > .wrap > details[open]").count(), 0, "nothing shows before its section opens");
   for (const id of ids) {
     const heading = page.locator(`#${id}`);
     // Open only the containing sections, as a reader does before reaching a nested heading.
@@ -63,6 +68,8 @@ test("every headed section starts closed and toggles independently by its headin
         await page.locator(`#${parent}`).click();
       }
     }
+    // Fold a SKILL.md first, so every heading is tested opening then folding.
+    if (isSkillMd(id)) await heading.click();
     await heading.click();
     assert.equal(await heading.evaluate(node => node.closest("details").open), true, id);
     const content = heading.locator("xpath=ancestor::summary/parent::details/*[not(self::summary)][1]");
@@ -74,6 +81,24 @@ test("every headed section starts closed and toggles independently by its headin
   await page.locator("#command-title").click();
   await page.locator("#prompts-title").click();
   assert.equal(await page.locator("#command-title").evaluate(node => node.closest("details").open), true);
+});
+
+test("opening a skill shows its SKILL.md, which still folds by its heading", async (t) => {
+  const page = await pageForTest(t);
+  await page.goto(`${origin}/prompts/`);
+  await page.locator("#skills-title").click();
+  const skillMd = page.locator("#file-thirdshift-code-review-skill-md").locator("xpath=ancestor::details[1]/pre");
+  assert.equal(await skillMd.isVisible(), false);
+  await page.locator("#skill-thirdshift-code-review-title").click();
+  assert.equal(await skillMd.isVisible(), true);
+  // The supporting files stay folded.
+  const others = page.locator("#skill-thirdshift-code-review h4:not(#file-thirdshift-code-review-skill-md)");
+  assert.ok(await others.count() > 0);
+  for (const heading of await others.all()) {
+    assert.equal(await heading.evaluate(node => node.closest("details").open), false);
+  }
+  await page.locator("#file-thirdshift-code-review-skill-md").click();
+  assert.equal(await skillMd.isVisible(), false);
 });
 
 test("fragment links reveal the prompt or supporting file and its containing sections", async (t) => {
@@ -95,7 +120,7 @@ test("fragment links reveal the prompt or supporting file and its containing sec
 test("mobile readers can toggle headings with the keyboard without JavaScript", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
   await page.goto(`${origin}/prompts/`);
-  assert.equal(await page.locator("main details[open]").count(), 0);
+  assert.equal(await page.locator("main > section > .wrap > details[open]").count(), 0);
   const prompts = page.locator("#prompts-title").locator("xpath=parent::summary");
   await prompts.focus();
   await page.keyboard.press("Enter");
