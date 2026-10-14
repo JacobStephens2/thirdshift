@@ -84,7 +84,8 @@ test("fragment links reveal the prompt or supporting file and its containing sec
   await page.locator("#licence-title").click();
   await page.locator('a[href="#file-thirdshift-pr-credits-md"]').click();
   const credits = page.locator("#file-thirdshift-pr-credits-md").locator("xpath=ancestor::details[1]/pre");
-  assert.equal(await credits.isVisible(), true);
+  // The page reveals a new fragment on hashchange, which can fire after the click returns.
+  await credits.waitFor({ state: "visible", timeout: 5000 });
   // A link to the current fragment must reveal a section the reader closed.
   await page.locator("#file-thirdshift-pr-credits-md").click();
   assert.equal(await credits.isVisible(), false);
