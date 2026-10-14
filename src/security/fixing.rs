@@ -72,8 +72,12 @@ pub fn publish(
     let started = Utc::now();
     let prompt = prompt::security_fix(base, url, record.description());
     Sessions::within(&logs, worktree.path(), harness, |sessions| {
-        let message =
-            sessions.run_to_final_message(Purpose::Security, "security-fix-publishing", &prompt)?;
+        let purpose = if record.private_issue_number().is_none() {
+            Purpose::SecurityPublishing
+        } else {
+            Purpose::Security
+        };
+        let message = sessions.run_to_final_message(purpose, "security-fix-publishing", &prompt)?;
         let github = GitHub::new();
         // A public fix stages its proposed text for validation;
         // thirdshift creates the issues from it, and the session has no

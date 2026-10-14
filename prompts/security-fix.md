@@ -6,7 +6,7 @@ With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most 
 
 ```
 Publish the fix for this reproduced Security finding on Base branch `<base>`.
-Read the private record at <private record URL> and the record below.
+Work from the private record below, supplied by thirdshift from <private record URL>, and the repository in this worktree. On a public repository this session has no GitHub credentials; no authenticated fetch of the private record is needed.
 Follow the completed reproduction's fix size: single stages one Ticket; spec stages a Spec with Tickets, drafted with `thirdshift-to-spec` and `thirdshift-to-tickets`.
 On a public repository, stage the proposed public issue text instead of creating any public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue and its Tickets from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. Only a private bigger fix publishes its issues itself.
 Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.
