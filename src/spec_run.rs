@@ -86,7 +86,7 @@ fn run_through(
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
-    let (ticket_lines, landed) = land_tickets(outside, tickets, parallel);
+    let (ticket_lines, landed) = land_tickets(outside, spec, tickets, parallel);
     // Every Ticket landed only once the Spec PR is told so.
     let landed = landed.and_then(|checklist| {
         let spec_pr_url = outside.landed(&checklist)?;
@@ -156,11 +156,11 @@ fn review_and_deliver(
 trait Outside {
     /// Push the Spec branch to origin.
     fn push(&mut self) -> Result<()>;
-    /// Start Ticket `number`'s Run, a Merge run into the Spec branch.
-    fn start_ticket(&mut self, number: u64) -> Result<()>;
-    /// Wait for the next running Ticket's Run to end: its number and how it
+    /// Start `ticket`'s Run, a Merge run into the Spec branch.
+    fn start_ticket(&mut self, ticket: &IssueUrl) -> Result<()>;
+    /// Wait for the next running Ticket's Run to end: its Issue URL and how it
     /// ended.
-    fn next_ending(&mut self) -> (u64, Result<Ended>);
+    fn next_ending(&mut self) -> (IssueUrl, Result<Ended>);
     /// The Spec's Tickets, read again.
     fn tickets(&mut self) -> Result<Vec<Ticket>>;
     /// Show `checklist` as the Spec PR's Tickets checklist, if it is open.
@@ -190,6 +190,8 @@ struct ChildRunsAndGitHub<'a> {
     /// Fields drop in declaration order: stop and drain child salvage before
     /// Worktree cleanup, including when the Spec run owner unwinds.
     children: Runs,
+    /// Full identities of local Tickets keyed by the child supervisor's number.
+    active: std::collections::BTreeMap<u64, IssueUrl>,
     /// Held until the Delivery starts, which takes it.
     worktree: Option<Worktree>,
     /// Held until it starts.
@@ -209,6 +211,7 @@ impl<'a> ChildRunsAndGitHub<'a> {
         Self {
             spec: delivery.issue,
             children: Runs::default(),
+            active: std::collections::BTreeMap::new(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
             security_fix: delivery.security_fix,
@@ -232,13 +235,15 @@ impl Outside for ChildRunsAndGitHub<'_> {
         self.worktree().push()
     }
 
-    fn start_ticket(&mut self, number: u64) -> Result<()> {
+    fn start_ticket(&mut self, ticket: &IssueUrl) -> Result<()> {
+        if !self.spec.in_same_repo(ticket) {
+            bail!("a Ticket outside the Spec's repository cannot start");
+        }
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
         };
-        let ticket = self.spec.sibling(number);
         self.children.start(
-            &ticket,
+            ticket,
             kind,
             self.base_fix.clone(),
             crate::security::Options {
@@ -246,10 +251,12 @@ impl Outside for ChildRunsAndGitHub<'_> {
                 review: self.security_review,
             },
             self.harness,
-        )
+        )?;
+        self.active.insert(ticket.number, ticket.clone());
+        Ok(())
     }
 
-    fn next_ending(&mut self) -> (u64, Result<Ended>) {
+    fn next_ending(&mut self) -> (IssueUrl, Result<Ended>) {
         let (number, ending) = self
             .children
             .next_ending()
@@ -261,7 +268,11 @@ impl Outside for ChildRunsAndGitHub<'_> {
                 Ended::Failed { .. } => format!("#{number} failed"),
             });
         }
-        (number, ending)
+        let ticket = self
+            .active
+            .remove(&number)
+            .expect("an outstanding Ticket keeps its Issue URL");
+        (ticket, ending)
     }
 
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
@@ -306,21 +317,18 @@ impl Outside for ChildRunsAndGitHub<'_> {
 /// another error ended it first.
 fn land_tickets(
     outside: &mut impl Outside,
+    spec: &IssueUrl,
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
 ) -> (Vec<String>, Result<String>) {
     if let Err(error) = outside.push() {
         return (Vec::new(), Err(error));
     }
-    let mut board = TicketBoard::new(tickets, parallel);
+    let mut board = TicketBoard::new(spec, tickets, parallel);
     let landing = run_ready_tickets(outside, &mut board);
     let lines = board.lines();
     let landed = landing.and_then(|()| {
-        let not_done: Vec<String> = board
-            .not_done()
-            .iter()
-            .map(|number| format!("#{number}"))
-            .collect();
+        let not_done = board.not_done();
         if not_done.is_empty() {
             return Ok(board.checklist());
         }
@@ -349,10 +357,10 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             let Some(ticket) = board.next_to_start() else {
                 break;
             };
-            outside.step(format!("starting #{ticket}"));
-            match outside.start_ticket(ticket) {
+            outside.step(format!("starting #{}", ticket.number));
+            match outside.start_ticket(&ticket) {
                 Ok(()) => {
-                    board.started(ticket);
+                    board.started(&ticket);
                     started = true;
                 }
                 Err(start_error) => error = Some(start_error),
@@ -373,7 +381,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             Ended::Failed { cause, log: None }
         });
         let landed = matches!(ending, Ended::Reached { .. });
-        board.ended(ticket, ending);
+        board.ended(&ticket, ending);
         match outside.tickets() {
             Ok(reread) => board.reread(reread),
             Err(reread_error) => {
@@ -446,10 +454,10 @@ mod tests {
 
     /// A Ticket as GitHub has it: its open blockers follow from the graph.
     struct Node {
-        number: u64,
+        issue: IssueUrl,
         is_open: bool,
         labels: Vec<&'static str>,
-        blockers: Vec<u64>,
+        blockers: Vec<IssueUrl>,
     }
 
     /// How a read of the Spec's Tickets goes.
@@ -470,7 +478,7 @@ mod tests {
         /// The Spec's Tickets.
         tickets: Vec<Node>,
         /// The issues outside the Spec that are open.
-        open_outside: Vec<u64>,
+        open_outside: Vec<IssueUrl>,
         /// Whether the push of the Spec branch fails.
         push_fails: bool,
         /// The Tickets whose Runs cannot be started.
@@ -501,6 +509,7 @@ mod tests {
     struct Scripted {
         script: Script,
         did: Vec<Did>,
+        started_urls: Vec<IssueUrl>,
         /// The Tickets whose Runs are running, in the order they started.
         running: Vec<u64>,
         /// How many times the Spec run was found not interrupted.
@@ -515,6 +524,7 @@ mod tests {
                 spec_pr_open: script.spec_pr_open,
                 script,
                 did: Vec::new(),
+                started_urls: Vec::new(),
                 running: Vec::new(),
                 not_interrupted: 0,
             }
@@ -522,20 +532,24 @@ mod tests {
 
         /// The Spec's Tickets as GitHub has them now.
         fn graph(&self) -> Vec<Ticket> {
-            let is_open = |number: u64| match self
+            let is_open = |issue: &IssueUrl| match self
                 .script
                 .tickets
                 .iter()
-                .find(|node| node.number == number)
+                .find(|node| node.issue.identity() == issue.identity())
             {
                 Some(node) => node.is_open,
-                None => self.script.open_outside.contains(&number),
+                None => self
+                    .script
+                    .open_outside
+                    .iter()
+                    .any(|open| open.identity() == issue.identity()),
             };
             self.script
                 .tickets
                 .iter()
                 .map(|node| Ticket {
-                    number: node.number,
+                    issue: node.issue.clone(),
                     is_open: node.is_open,
                     labels: node.labels.iter().copied().collect(),
                     has_sub_issues: false,
@@ -543,8 +557,8 @@ mod tests {
                     open_blockers: node
                         .blockers
                         .iter()
-                        .copied()
-                        .filter(|blocker| is_open(*blocker))
+                        .filter(|blocker| is_open(blocker))
+                        .cloned()
                         .collect(),
                 })
                 .collect()
@@ -565,7 +579,9 @@ mod tests {
             Ok(())
         }
 
-        fn start_ticket(&mut self, number: u64) -> Result<()> {
+        fn start_ticket(&mut self, ticket: &IssueUrl) -> Result<()> {
+            let number = ticket.number;
+            self.started_urls.push(ticket.clone());
             self.did.push(Did::Start(number));
             if self.script.start_fails.contains(&number) {
                 bail!("could not start #{number}'s Run");
@@ -574,7 +590,7 @@ mod tests {
             Ok(())
         }
 
-        fn next_ending(&mut self) -> (u64, Result<Ended>) {
+        fn next_ending(&mut self) -> (IssueUrl, Result<Ended>) {
             let (number, ended) = self.script.endings.pop_front().unwrap_or_else(|| {
                 let first = *self.running.first().expect("no Ticket's Run is running");
                 (first, Ok(reached()))
@@ -591,10 +607,16 @@ mod tests {
                     .script
                     .tickets
                     .iter_mut()
-                    .find(|node| node.number == number);
+                    .find(|node| node.issue.number == number);
                 node.expect("a Ticket of the Spec").is_open = false;
             }
-            (number, ended)
+            let issue = self
+                .started_urls
+                .iter()
+                .find(|issue| issue.number == number)
+                .unwrap()
+                .clone();
+            (issue, ended)
         }
 
         fn tickets(&mut self) -> Result<Vec<Ticket>> {
@@ -681,13 +703,17 @@ mod tests {
         }
     }
 
+    fn issue(number: u64) -> IssueUrl {
+        IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}")).unwrap()
+    }
+
     /// Open Ticket `number`, blocked by `blockers`.
     fn open(number: u64, blockers: &[u64]) -> Node {
         Node {
-            number,
+            issue: issue(number),
             is_open: true,
             labels: Vec::new(),
-            blockers: blockers.to_vec(),
+            blockers: blockers.iter().copied().map(issue).collect(),
         }
     }
 
@@ -725,7 +751,12 @@ mod tests {
     /// once.
     fn land(outside: &mut Scripted, parallel: usize) -> (Vec<String>, Result<String>) {
         let tickets = outside.graph();
-        land_tickets(outside, tickets, NonZeroUsize::new(parallel).unwrap())
+        land_tickets(
+            outside,
+            &IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap(),
+            tickets,
+            NonZeroUsize::new(parallel).unwrap(),
+        )
     }
 
     /// Take Spec #20, its Tickets as `outside` has them, up to `parallel`
@@ -802,6 +833,65 @@ mod tests {
     /// Progress lines only.
     fn progress_lines(did: &Did) -> bool {
         matches!(did, Did::Line(_))
+    }
+
+    #[test]
+    fn start_ticket_receives_the_graphs_full_issue_url() {
+        let mut ticket = open(21, &[]);
+        ticket.issue = IssueUrl::parse("https://github.com/Acme/Widgets/issues/21/").unwrap();
+        let mut outside = Scripted::new(Script {
+            tickets: vec![ticket],
+            ..Script::default()
+        });
+        reached_of(spec_run(&mut outside, 1));
+        assert_eq!(
+            outside.started_urls,
+            [IssueUrl::parse("https://github.com/Acme/Widgets/issues/21/").unwrap()]
+        );
+    }
+
+    #[test]
+    fn a_foreign_blocker_with_a_tickets_number_holds_its_dependent_without_a_false_cycle() {
+        let mut blocked = open(21, &[]);
+        let foreign = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
+        blocked.blockers = vec![foreign.clone()];
+        let mut outside = Scripted::new(Script {
+            tickets: vec![blocked, open(22, &[])],
+            open_outside: vec![foreign],
+            ..Script::default()
+        });
+        let failed = failed_of(spec_run(&mut outside, 2));
+        assert_eq!(outside.did_only(runs), [Did::Start(22), Did::Ended(22)]);
+        assert_eq!(
+            failed.ticket_lines,
+            [
+                "#21 blocked by https://github.com/other/widgets/issues/21 (outside the Spec)",
+                "#22 landed"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_foreign_sub_issue_is_unready_and_never_starts_a_run() {
+        let mut foreign = open(21, &[]);
+        foreign.issue = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
+        let mut outside = Scripted::new(Script {
+            tickets: vec![foreign, open(22, &[])],
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 2));
+
+        assert_eq!(outside.did_only(runs), [Did::Start(22), Did::Ended(22)]);
+        assert_eq!(
+            failed.ticket_lines,
+            [
+                "https://github.com/other/widgets/issues/21 unready: outside the Spec's repository",
+                "#22 landed"
+            ]
+        );
+        assert!(outside.did.iter().any(|did| matches!(did, Did::Landed(list)
+            if list.contains("- [ ] https://github.com/other/widgets/issues/21 unready: outside the Spec's repository"))));
     }
 
     #[test]
@@ -950,7 +1040,7 @@ mod tests {
     fn an_open_outside_blocker_holds_a_ticket_back_and_a_closed_one_does_not() {
         let mut outside = Scripted::new(Script {
             tickets: vec![open(21, &[90]), open(22, &[91])],
-            open_outside: vec![90],
+            open_outside: vec![issue(90)],
             ..Script::default()
         });
 

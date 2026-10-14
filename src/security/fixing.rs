@@ -153,8 +153,11 @@ pub fn publish(
             check_issue_text(&github, &issue, record, url)?;
         }
         for child in &tickets {
-            let issue = issue.sibling(child.number);
-            let viewed = github.issue(&issue)?;
+            if !issue.in_same_repo(&child.issue) {
+                bail!("a Security fix Spec's Ticket must be in the fix issue's repository");
+            }
+            let issue = &child.issue;
+            let viewed = github.issue(issue)?;
             if !viewed.is_open || viewed.created.timestamp() < started.timestamp() {
                 bail!("a Security fix Spec's Ticket must be new and open");
             }
@@ -164,11 +167,11 @@ pub fn publish(
             {
                 bail!("a Security fix Spec's Ticket must be ready-for-agent with no sub-issues");
             }
-            check_issue_text(&github, &issue, record, url)?;
+            check_issue_text(&github, issue, record, url)?;
         }
         for child in tickets {
-            let issue = issue.sibling(child.number);
-            Edit::of(&issue, github.issue_labels(&issue)?, &[], &[SECURITY_FIX]).apply(&github)?;
+            let issue = &child.issue;
+            Edit::of(issue, github.issue_labels(issue)?, &[], &[SECURITY_FIX]).apply(&github)?;
         }
         if crate::interrupt::requested() {
             bail!("interrupted");
