@@ -325,17 +325,7 @@ fn land_tickets(
     let landing = run_ready_tickets(outside, &mut board);
     let lines = board.lines();
     let landed = landing.and_then(|()| {
-        let not_done: Vec<String> = board
-            .not_done()
-            .iter()
-            .map(|issue| {
-                if spec.in_same_repo(issue) {
-                    format!("#{}", issue.number)
-                } else {
-                    issue.url.clone()
-                }
-            })
-            .collect();
+        let not_done = board.not_done();
         if not_done.is_empty() {
             return Ok(board.checklist());
         }

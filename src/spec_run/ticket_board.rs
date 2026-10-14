@@ -94,12 +94,12 @@ impl TicketBoard {
         self.running() > 0
     }
 
-    /// The Tickets not done, the open ones, in the order they were read.
-    pub(super) fn not_done(&self) -> Vec<IssueUrl> {
+    /// The names of Tickets not done, the open ones, in read order.
+    pub(super) fn not_done(&self) -> Vec<String> {
         self.tickets
             .iter()
             .filter(|ticket| ticket.is_open)
-            .map(|ticket| ticket.issue.clone())
+            .map(|ticket| self.name(&ticket.issue))
             .collect()
     }
 
@@ -484,7 +484,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(board.not_done(), [issue(23), issue(22)]);
+        assert_eq!(board.not_done(), ["#23", "#22"]);
     }
 
     #[test]
