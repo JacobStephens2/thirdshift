@@ -182,7 +182,11 @@ fn rerun_through(
     workflow_runs.sort_unstable();
     workflow_runs.dedup();
     let before = outside.checks_on(sha)?;
-    let previous_attempt: Vec<u64> = jobs_of(&before).map(|job| job.check_run).collect();
+    let previous_attempt: Vec<u64> = jobs_of(&before)
+        .chain(jobs_of(&failed.own))
+        .chain(jobs_of(&failed.inherited))
+        .map(|job| job.check_run)
+        .collect();
     let mut requested = Vec::new();
     for workflow_run in &workflow_runs {
         if let Err(error) = outside.rerun_failed_jobs(*workflow_run) {
@@ -193,29 +197,20 @@ fn rerun_through(
         }
         requested.push(*workflow_run);
     }
-    if requested.is_empty() {
-        return watch_to_end(outside, sha, base_commit, None).map(Some);
-    }
-
     // GitHub re-runs every failed job of a workflow run, so an Inherited
     // failure that shares one with the branch's own gets a new attempt too.
     let rerun_checks = RerunChecks {
-        checks: failed
-            .own
-            .iter()
-            .chain(&failed.inherited)
-            .filter(|check| {
-                check
-                    .job
-                    .is_some_and(|job| requested.contains(&job.workflow_run))
-            })
-            .collect(),
+        checks: failed.own.iter().chain(&failed.inherited).collect(),
         previous_attempt,
+        requested,
     };
+    if rerun_checks.requested.is_empty() {
+        return watch_to_end(outside, sha, base_commit, Some(&rerun_checks)).map(Some);
+    }
     let (grace, deadline) = outside.start_grace();
     let new_attempt = within(outside, deadline, |outside| {
         let checks = outside.checks_on(sha)?;
-        Ok(rerun_checks.listed_in(&checks).then_some(()))
+        Ok(rerun_checks.new_attempts_listed(&checks).then_some(()))
     })?;
     if new_attempt.is_none() {
         outside.step(format!(
@@ -227,22 +222,42 @@ fn rerun_through(
     watch_to_end(outside, sha, base_commit, Some(&rerun_checks)).map(Some)
 }
 
-/// The checks a successful Check re-run must list with new attempts.
+/// Known failed checks that must stay listed during a Check re-run. Those
+/// in successfully requested workflow runs must also have new attempts.
 struct RerunChecks<'a> {
     checks: Vec<&'a Check>,
     previous_attempt: Vec<u64>,
+    requested: Vec<u64>,
 }
 
 impl RerunChecks<'_> {
+    fn is_requested(&self, check: &Check) -> bool {
+        check
+            .job
+            .is_some_and(|job| self.requested.contains(&job.workflow_run))
+    }
+
+    fn new_attempts_listed(&self, checks: &[Check]) -> bool {
+        self.checks
+            .iter()
+            .filter(|check| self.is_requested(check))
+            .all(|check| self.check_is_listed(check, checks))
+    }
+
     fn listed_in(&self, checks: &[Check]) -> bool {
-        self.checks.iter().all(|expected| {
-            checks.iter().any(|check| {
-                check.name == expected.name
-                    && check.job.is_some_and(|job| {
+        self.checks
+            .iter()
+            .all(|check| self.check_is_listed(check, checks))
+    }
+
+    fn check_is_listed(&self, expected: &Check, checks: &[Check]) -> bool {
+        checks.iter().any(|check| {
+            check.name == expected.name
+                && (!self.is_requested(expected)
+                    || check.job.is_some_and(|job| {
                         Some(job.workflow_run) == expected.job.map(|job| job.workflow_run)
                             && !self.previous_attempt.contains(&job.check_run)
-                    })
-            })
+                    }))
         })
     }
 }
@@ -728,6 +743,31 @@ mod tests {
     }
 
     #[test]
+    fn a_check_rerun_excludes_known_failed_ids_missing_before_the_request() {
+        let mut github = InMemory::new().listing(
+            HEAD,
+            vec![
+                vec![green("lint")],
+                vec![job(red("test"), 11, 1), green("lint")],
+                vec![job(red("test"), 11, 1), green("lint")],
+                vec![job(green("test"), 12, 1), green("lint")],
+            ],
+        );
+        let failed = FailedChecks {
+            own: vec![job(red("test"), 11, 1)],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
+
+        assert!(
+            matches!(ci, Some(Ci::Passed)),
+            "the old failed attempt must not end the watch before the new attempt passes"
+        );
+    }
+
+    #[test]
     fn a_check_rerun_waits_through_a_missing_failed_check_until_its_new_attempt_fails() {
         let mut github = InMemory::new().listing(
             HEAD,
@@ -821,6 +861,31 @@ mod tests {
         assert_eq!(
             github.steps.last().map(String::as_str),
             Some("no re-run appeared on abcdef0 within 60s")
+        );
+    }
+
+    #[test]
+    fn a_partial_rerun_cannot_pass_when_a_refused_failed_check_disappears() {
+        let mut github = InMemory::new().refusing(2).listing(
+            HEAD,
+            vec![
+                vec![job(red("test"), 11, 1), job(red("lint"), 21, 2)],
+                vec![job(pending("test"), 12, 1), job(red("lint"), 21, 2)],
+                vec![job(pending("test"), 12, 1), job(red("lint"), 21, 2)],
+                vec![job(green("test"), 12, 1)],
+            ],
+        );
+        let failed = FailedChecks {
+            own: vec![job(red("test"), 11, 1), job(red("lint"), 21, 2)],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let result = rerun_through(&mut github, HEAD, None, &failed);
+
+        assert!(
+            !matches!(result, Ok(Some(Ci::Passed))),
+            "the refused workflow's known failed lint check disappeared; CI cannot pass"
         );
     }
 
