@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use crate::git::Git;
-use crate::github::{GitHub, SecurityRecord};
+use crate::github::{GitHub, Issue, SecurityRecord, Ticket};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
@@ -74,7 +74,7 @@ pub fn publish(
     Sessions::within(&logs, worktree.path(), harness, |sessions| {
         let message =
             sessions.run_to_final_message(Purpose::Security, "security-fix-publishing", &prompt)?;
-        let github = GitHub::new();
+        let mut github = GitHub::new();
         // A public fix stages its proposed text for validation;
         // thirdshift creates the issues from it, and the session has no
         // independent public-issue path. A private bigger fix keeps the
@@ -152,23 +152,13 @@ pub fn publish(
         if !private {
             check_issue_text(&github, &issue, record, url)?;
         }
+        check_spec_tickets(&mut github, &issue, &tickets, started)?;
         for child in &tickets {
-            let issue = issue.sibling(child.number);
-            let viewed = github.issue(&issue)?;
-            if !viewed.is_open || viewed.created.timestamp() < started.timestamp() {
-                bail!("a Security fix Spec's Ticket must be new and open");
-            }
-            if child.has_sub_issues
-                || !viewed.labels.has(READY_FOR_AGENT)
-                || viewed.labels.unready().is_some()
-            {
-                bail!("a Security fix Spec's Ticket must be ready-for-agent with no sub-issues");
-            }
-            check_issue_text(&github, &issue, record, url)?;
+            check_issue_text(&github, &child.issue, record, url)?;
         }
         for child in tickets {
-            let issue = issue.sibling(child.number);
-            Edit::of(&issue, github.issue_labels(&issue)?, &[], &[SECURITY_FIX]).apply(&github)?;
+            let issue = &child.issue;
+            Edit::of(issue, github.issue_labels(issue)?, &[], &[SECURITY_FIX]).apply(&github)?;
         }
         if crate::interrupt::requested() {
             bail!("interrupted");
@@ -182,6 +172,46 @@ pub fn publish(
         .apply(&github)?;
         Ok(issue)
     })
+}
+
+/// The GitHub issue views used to check a Security fix Spec's Tickets.
+trait Outside {
+    fn issue(&mut self, issue: &IssueUrl) -> Result<Issue>;
+}
+
+impl Outside for GitHub {
+    fn issue(&mut self, issue: &IssueUrl) -> Result<Issue> {
+        GitHub::issue(self, issue)
+    }
+}
+
+fn check_spec_tickets(
+    outside: &mut impl Outside,
+    spec: &IssueUrl,
+    tickets: &[Ticket],
+    started: DateTime<Utc>,
+) -> Result<()> {
+    for child in tickets {
+        if !spec.in_same_repo(&child.issue) {
+            bail!(
+                "a Security fix Spec's Ticket is outside the fix issue's repository: {}",
+                child.issue.url
+            );
+        }
+    }
+    for child in tickets {
+        let viewed = outside.issue(&child.issue)?;
+        if !viewed.is_open || viewed.created.timestamp() < started.timestamp() {
+            bail!("a Security fix Spec's Ticket must be new and open");
+        }
+        if child.has_sub_issues
+            || !viewed.labels.has(READY_FOR_AGENT)
+            || viewed.labels.unready().is_some()
+        {
+            bail!("a Security fix Spec's Ticket must be ready-for-agent with no sub-issues");
+        }
+    }
+    Ok(())
 }
 
 /// One staged Spec Ticket the publishing session proposed: its title, its
@@ -405,6 +435,57 @@ fn check_issue_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_security_fix_spec_rejects_foreign_tickets_before_reading_them() {
+        struct Scripted {
+            read: Vec<IssueUrl>,
+        }
+        impl Outside for Scripted {
+            fn issue(&mut self, issue: &IssueUrl) -> Result<Issue> {
+                self.read.push(issue.clone());
+                Ok(Issue {
+                    title: None,
+                    is_open: true,
+                    labels: [READY_FOR_AGENT].map(Label::name).into_iter().collect(),
+                    created: Utc::now(),
+                })
+            }
+        }
+        fn ticket(url: &str) -> Ticket {
+            Ticket {
+                issue: IssueUrl::parse(url).unwrap(),
+                is_open: true,
+                labels: [READY_FOR_AGENT].map(Label::name).into_iter().collect(),
+                has_sub_issues: false,
+                blockers: Vec::new(),
+                open_blockers: Vec::new(),
+            }
+        }
+        let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
+        for url in [
+            "https://github.com/other/widgets/issues/21",
+            "https://github.com/acme/other/issues/21",
+        ] {
+            let mut outside = Scripted { read: Vec::new() };
+            let tickets = [
+                ticket("https://github.com/acme/widgets/issues/21"),
+                ticket(url),
+            ];
+            let error = check_spec_tickets(&mut outside, &spec, &tickets, Utc::now()).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "a Security fix Spec's Ticket is outside the fix issue's repository: {url}"
+                )
+            );
+            assert!(outside.read.is_empty());
+        }
+        let mut outside = Scripted { read: Vec::new() };
+        let tickets = [ticket("https://github.com/Acme/Widgets/issues/21/")];
+        check_spec_tickets(&mut outside, &spec, &tickets, Utc::now()).unwrap();
+        assert_eq!(outside.read, [tickets[0].issue.clone()]);
+    }
 
     #[test]
     fn staged_proposal_parses_title_and_body() {

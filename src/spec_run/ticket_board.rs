@@ -4,12 +4,12 @@
 //! the Tickets checklist; the Spec run's loop starts and waits for the
 //! Tickets' Runs, reads the graph, and tells it what happened.
 
-use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 
 use crate::child_run::Ended;
 use crate::github::Ticket;
+use crate::issue::IssueUrl;
 
 /// Where a Ticket this Spec run started stands.
 enum Standing {
@@ -22,17 +22,19 @@ enum Standing {
 /// A Spec run's Tickets, as last read, and where each one it started stands.
 pub(super) struct TicketBoard {
     tickets: Vec<Ticket>,
-    standings: BTreeMap<u64, Standing>,
+    spec: IssueUrl,
+    standings: Vec<(IssueUrl, Standing)>,
     parallel: NonZeroUsize,
     stopped: bool,
 }
 
 impl TicketBoard {
     /// A board of `tickets`, none started, running up to `parallel` at once.
-    pub(super) fn new(tickets: Vec<Ticket>, parallel: NonZeroUsize) -> Self {
+    pub(super) fn new(spec: &IssueUrl, tickets: Vec<Ticket>, parallel: NonZeroUsize) -> Self {
         Self {
             tickets,
-            standings: BTreeMap::new(),
+            spec: spec.clone(),
+            standings: Vec::new(),
             parallel,
             stopped: false,
         }
@@ -40,11 +42,11 @@ impl TicketBoard {
 
     /// The Ticket to start next, if any: none once starting has stopped or
     /// `parallel` are running, else the lowest-numbered Ticket that is open,
-    /// not an Unready Ticket, has no sub-issues, has every blocker closed and
-    /// none running, and was not started in this Spec run. A blocker's Run
+    /// in the Spec's repository, not an Unready Ticket, has no sub-issues,
+    /// has every blocker closed and none running, and was not started in this Spec run. A blocker's Run
     /// closes its issue before it ends, so a closed blocker may still be
     /// running.
-    pub(super) fn next_to_start(&self) -> Option<u64> {
+    pub(super) fn next_to_start(&self) -> Option<IssueUrl> {
         if self.stopped || self.running() >= self.parallel.get() {
             return None;
         }
@@ -52,27 +54,28 @@ impl TicketBoard {
             .iter()
             .filter(|ticket| {
                 ticket.is_open
+                    && self.spec.in_same_repo(&ticket.issue)
                     && !ticket.has_sub_issues
                     && ticket.open_blockers.is_empty()
                     && !ticket
                         .blockers
                         .iter()
-                        .any(|blocker| self.is_running(*blocker))
-                    && !self.standings.contains_key(&ticket.number)
+                        .any(|blocker| self.is_running(blocker))
+                    && self.standing_of(&ticket.issue).is_none()
                     && ticket.labels.unready().is_none()
             })
-            .map(|ticket| ticket.number)
-            .min()
+            .min_by_key(|ticket| ticket.issue.number)
+            .map(|ticket| ticket.issue.clone())
     }
 
-    /// Ticket `number`'s Run has started.
-    pub(super) fn started(&mut self, number: u64) {
-        self.standings.insert(number, Standing::Running);
+    /// `issue`'s Run has started.
+    pub(super) fn started(&mut self, issue: &IssueUrl) {
+        self.set_standing(issue, Standing::Running);
     }
 
-    /// Ticket `number`'s Run has ended, as `ended` tells.
-    pub(super) fn ended(&mut self, number: u64, ended: Ended) {
-        self.standings.insert(number, Standing::Ended(ended));
+    /// `issue`'s Run has ended, as `ended` tells.
+    pub(super) fn ended(&mut self, issue: &IssueUrl, ended: Ended) {
+        self.set_standing(issue, Standing::Ended(ended));
     }
 
     /// Start no more Tickets: those running are still waited for.
@@ -92,11 +95,11 @@ impl TicketBoard {
     }
 
     /// The Tickets not done, the open ones, in the order they were read.
-    pub(super) fn not_done(&self) -> Vec<u64> {
+    pub(super) fn not_done(&self) -> Vec<IssueUrl> {
         self.tickets
             .iter()
             .filter(|ticket| ticket.is_open)
-            .map(|ticket| ticket.number)
+            .map(|ticket| ticket.issue.clone())
             .collect()
     }
 
@@ -105,16 +108,16 @@ impl TicketBoard {
     pub(super) fn lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for ticket in self.by_number() {
-            let number = ticket.number;
-            if !ticket.is_open && !self.standings.contains_key(&number) {
+            let number = self.name(&ticket.issue);
+            if !ticket.is_open && self.standing_of(&ticket.issue).is_none() {
                 continue;
             }
             let standing = self.standing(ticket);
-            lines.push(match self.standings.get(&number) {
+            lines.push(match self.standing_of(&ticket.issue) {
                 Some(Standing::Ended(Ended::Failed { log: Some(log), .. })) if ticket.is_open => {
-                    format!("#{number} {standing} (session log: {log})")
+                    format!("{number} {standing} (session log: {log})")
                 }
-                _ => format!("#{number} {standing}"),
+                _ => format!("{number} {standing}"),
             });
         }
         lines
@@ -126,7 +129,11 @@ impl TicketBoard {
         let mut list = "## Tickets\n\n".to_string();
         for ticket in self.by_number() {
             let tick = if ticket.is_open { ' ' } else { 'x' };
-            list += &format!("- [{tick}] #{} {}\n", ticket.number, self.standing(ticket));
+            list += &format!(
+                "- [{tick}] {} {}\n",
+                self.name(&ticket.issue),
+                self.standing(ticket)
+            );
         }
         list
     }
@@ -134,28 +141,54 @@ impl TicketBoard {
     /// How many Tickets' Runs are running.
     fn running(&self) -> usize {
         self.standings
-            .values()
-            .filter(|standing| matches!(standing, Standing::Running))
+            .iter()
+            .filter(|(_, standing)| matches!(standing, Standing::Running))
             .count()
     }
 
     /// Whether Ticket `number`'s Run is running.
-    fn is_running(&self, number: u64) -> bool {
-        matches!(self.standings.get(&number), Some(Standing::Running))
+    fn is_running(&self, issue: &IssueUrl) -> bool {
+        matches!(self.standing_of(issue), Some(Standing::Running))
+    }
+
+    fn standing_of(&self, issue: &IssueUrl) -> Option<&Standing> {
+        self.standings
+            .iter()
+            .find(|(known, _)| known.is_same_issue(issue))
+            .map(|(_, standing)| standing)
+    }
+
+    fn set_standing(&mut self, issue: &IssueUrl, standing: Standing) {
+        if let Some((_, current)) = self
+            .standings
+            .iter_mut()
+            .find(|(known, _)| known.is_same_issue(issue))
+        {
+            *current = standing;
+        } else {
+            self.standings.push((issue.clone(), standing));
+        }
+    }
+
+    fn name(&self, issue: &IssueUrl) -> String {
+        if self.spec.in_same_repo(issue) {
+            format!("#{}", issue.number)
+        } else {
+            issue.url.clone()
+        }
     }
 
     /// The Tickets, lowest number first.
     fn by_number(&self) -> Vec<&Ticket> {
         let mut sorted: Vec<&Ticket> = self.tickets.iter().collect();
-        sorted.sort_by_key(|ticket| ticket.number);
+        sorted.sort_by_key(|ticket| ticket.issue.number);
         sorted
     }
 
     /// Where `ticket` stands in this Spec run, as in "#21 <standing>": done,
     /// with its PR if it landed in this Spec run, or why it is not done.
     fn standing(&self, ticket: &Ticket) -> String {
-        let number = ticket.number;
-        let landed = match self.standings.get(&number) {
+        let landed = match self.standing_of(&ticket.issue) {
             Some(Standing::Ended(Ended::Reached { pr_url, base_fix })) => {
                 let mut landed = "landed".to_string();
                 if let Some(pr_url) = pr_url {
@@ -171,7 +204,7 @@ impl TicketBoard {
         if !ticket.is_open {
             return landed.unwrap_or_else(|| "done".to_string());
         }
-        match self.standings.get(&number) {
+        match self.standing_of(&ticket.issue) {
             Some(Standing::Running) => return "running".to_string(),
             Some(Standing::Ended(Ended::Interrupted)) => return "interrupted".to_string(),
             Some(Standing::Ended(Ended::Failed { cause, .. })) => {
@@ -181,12 +214,14 @@ impl TicketBoard {
         }
         if let Some(landed) = landed {
             format!("{landed}, but is still open")
+        } else if !self.spec.in_same_repo(&ticket.issue) {
+            "unready: outside the Spec's repository".to_string()
         } else if let Some(label) = ticket.labels.unready() {
             format!("unready: labelled {label}")
         } else if ticket.has_sub_issues {
             "unready: has sub-issues".to_string()
-        } else if let Some(cycle) = cycle_through(number, &self.tickets) {
-            let cycle: Vec<String> = cycle.iter().map(|number| format!("#{number}")).collect();
+        } else if let Some(cycle) = cycle_through(&ticket.issue, &self.tickets) {
+            let cycle: Vec<String> = cycle.iter().map(|issue| self.name(issue)).collect();
             format!("in a cycle: {}", cycle.join(" blocked by "))
         } else if ticket.open_blockers.is_empty() {
             // Ready, but not started yet, or the Spec run ended before it could.
@@ -196,10 +231,14 @@ impl TicketBoard {
                 .open_blockers
                 .iter()
                 .map(|blocker| {
-                    if self.tickets.iter().any(|ticket| ticket.number == *blocker) {
-                        format!("#{blocker}")
+                    if self
+                        .tickets
+                        .iter()
+                        .any(|ticket| ticket.issue.is_same_issue(blocker))
+                    {
+                        self.name(blocker)
                     } else {
-                        format!("#{blocker} (outside the Spec)")
+                        format!("{} (outside the Spec)", self.name(blocker))
                     }
                 })
                 .collect();
@@ -210,31 +249,26 @@ impl TicketBoard {
 
 /// The shortest cycle of "blocked by" links among `tickets` from Ticket
 /// `start` back to itself, `start` first and last, if there is one.
-fn cycle_through(start: u64, tickets: &[Ticket]) -> Option<Vec<u64>> {
-    let blockers = |number: u64| {
-        tickets
+fn cycle_through<'a>(start: &'a IssueUrl, tickets: &'a [Ticket]) -> Option<Vec<&'a IssueUrl>> {
+    let mut visited = vec![start];
+    let mut queue = VecDeque::from([vec![start]]);
+    while let Some(path) = queue.pop_front() {
+        let issue = path.last().unwrap();
+        let Some(ticket) = tickets
             .iter()
-            .find(|ticket| ticket.number == number)
-            .map_or(&[][..], |ticket| &ticket.open_blockers[..])
-    };
-    let mut reached_from = HashMap::new();
-    let mut queue = VecDeque::from([start]);
-    while let Some(number) = queue.pop_front() {
-        for &blocker in blockers(number) {
-            if blocker == start {
-                let mut cycle = vec![start];
-                let mut at = number;
-                while at != start {
-                    cycle.push(at);
-                    at = reached_from[&at];
-                }
-                cycle.push(start);
-                cycle.reverse();
-                return Some(cycle);
+            .find(|ticket| ticket.issue.is_same_issue(issue))
+        else {
+            continue;
+        };
+        for blocker in &ticket.open_blockers {
+            let mut next = path.clone();
+            next.push(blocker);
+            if blocker.is_same_issue(start) {
+                return Some(next);
             }
-            if let Entry::Vacant(entry) = reached_from.entry(blocker) {
-                entry.insert(number);
-                queue.push_back(blocker);
+            if !visited.iter().any(|known| known.is_same_issue(blocker)) {
+                visited.push(blocker);
+                queue.push_back(next);
             }
         }
     }
@@ -246,19 +280,23 @@ mod tests {
     use super::*;
     use crate::labels::{Label, Labels, READY_FOR_AGENT, UNREADY};
 
+    fn issue(number: u64) -> IssueUrl {
+        IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}")).unwrap()
+    }
+
     fn ticket(number: u64, is_open: bool, blockers: &[u64], open_blockers: &[u64]) -> Ticket {
         Ticket {
-            number,
+            issue: issue(number),
             is_open,
             labels: Labels::default(),
             has_sub_issues: false,
-            blockers: blockers.to_vec(),
-            open_blockers: open_blockers.to_vec(),
+            blockers: blockers.iter().copied().map(issue).collect(),
+            open_blockers: open_blockers.iter().copied().map(issue).collect(),
         }
     }
 
     fn board(tickets: Vec<Ticket>, parallel: usize) -> TicketBoard {
-        TicketBoard::new(tickets, NonZeroUsize::new(parallel).unwrap())
+        TicketBoard::new(&issue(20), tickets, NonZeroUsize::new(parallel).unwrap())
     }
 
     fn reached(pr_url: Option<&str>) -> Ended {
@@ -276,6 +314,73 @@ mod tests {
     }
 
     #[test]
+    fn a_foreign_ticket_is_unready_and_its_url_is_named_in_the_checklist() {
+        let mut foreign = ticket(21, true, &[], &[]);
+        foreign.issue = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
+        let board = board(vec![foreign, ticket(22, true, &[], &[])], 1);
+
+        assert_eq!(board.next_to_start(), Some(issue(22)));
+        assert_eq!(
+            board.checklist(),
+            "## Tickets\n\n- [ ] https://github.com/other/widgets/issues/21 unready: outside the Spec's repository\n- [ ] #22 not started\n"
+        );
+    }
+
+    #[test]
+    fn a_foreign_blocker_with_a_tickets_number_is_outside_the_spec_not_a_cycle() {
+        let foreign = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
+        let mut blocked = ticket(21, true, &[], &[]);
+        blocked.blockers = vec![foreign.clone()];
+        blocked.open_blockers = vec![foreign];
+        let board = board(vec![blocked], 1);
+
+        assert_eq!(board.next_to_start(), None);
+        assert_eq!(
+            board.lines(),
+            ["#21 blocked by https://github.com/other/widgets/issues/21 (outside the Spec)"]
+        );
+    }
+
+    #[test]
+    fn a_closed_foreign_blocker_does_not_wait_for_the_same_numbered_local_run() {
+        let mut blocked = ticket(22, true, &[], &[]);
+        blocked.blockers =
+            vec![IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap()];
+        let mut board = board(vec![ticket(21, true, &[], &[]), blocked], 2);
+        board.started(&issue(21));
+
+        assert_eq!(board.next_to_start(), Some(issue(22)));
+    }
+
+    #[test]
+    fn a_reread_does_not_give_a_foreign_ticket_a_local_tickets_standing() {
+        let mut board = board(vec![ticket(21, true, &[], &[])], 1);
+        board.started(&issue(21));
+        board.ended(&issue(21), reached(None));
+        let mut foreign = ticket(21, true, &[], &[]);
+        foreign.issue = IssueUrl::parse("https://github.com/acme/other/issues/21").unwrap();
+        board.reread(vec![foreign]);
+
+        assert_eq!(board.next_to_start(), None);
+        assert_eq!(
+            board.lines(),
+            ["https://github.com/acme/other/issues/21 unready: outside the Spec's repository"]
+        );
+    }
+
+    #[test]
+    fn differently_spelled_urls_keep_the_same_tickets_standing_and_dependencies() {
+        let canonical = IssueUrl::parse("https://github.com/Acme/Widgets/issues/21/").unwrap();
+        let mut blocker = ticket(21, false, &[], &[]);
+        blocker.issue = canonical.clone();
+        let mut board = board(vec![blocker, ticket(22, true, &[21], &[])], 2);
+        board.started(&canonical);
+        assert_eq!(board.next_to_start(), None);
+        board.ended(&issue(21), reached(None));
+        assert_eq!(board.next_to_start(), Some(issue(22)));
+    }
+
+    #[test]
     fn it_never_offers_more_than_parallel_tickets_at_once() {
         let mut board = board(
             vec![
@@ -286,14 +391,14 @@ mod tests {
             2,
         );
 
-        assert_eq!(board.next_to_start(), Some(21));
-        board.started(21);
-        assert_eq!(board.next_to_start(), Some(22));
-        board.started(22);
+        assert_eq!(board.next_to_start(), Some(issue(21)));
+        board.started(&issue(21));
+        assert_eq!(board.next_to_start(), Some(issue(22)));
+        board.started(&issue(22));
         assert_eq!(board.next_to_start(), None);
 
-        board.ended(21, failed("claude exited 1", None));
-        assert_eq!(board.next_to_start(), Some(23));
+        board.ended(&issue(21), failed("claude exited 1", None));
+        assert_eq!(board.next_to_start(), Some(issue(23)));
     }
 
     #[test]
@@ -302,13 +407,13 @@ mod tests {
             vec![ticket(21, true, &[], &[]), ticket(22, true, &[], &[])],
             2,
         );
-        board.started(21);
+        board.started(&issue(21));
 
         board.stop();
 
         assert_eq!(board.next_to_start(), None);
         assert!(board.any_running());
-        board.ended(21, Ended::Interrupted);
+        board.ended(&issue(21), Ended::Interrupted);
         assert!(!board.any_running());
         assert_eq!(board.next_to_start(), None);
     }
@@ -319,10 +424,10 @@ mod tests {
             vec![ticket(21, true, &[], &[]), ticket(22, true, &[], &[])],
             2,
         );
-        board.started(21);
-        board.started(22);
-        board.ended(21, failed("claude exited 1", None));
-        board.ended(22, reached(None));
+        board.started(&issue(21));
+        board.started(&issue(22));
+        board.ended(&issue(21), failed("claude exited 1", None));
+        board.ended(&issue(22), reached(None));
 
         assert_eq!(board.next_to_start(), None);
     }
@@ -338,13 +443,13 @@ mod tests {
             ],
             2,
         );
-        board.started(21);
-        board.ended(21, reached(None));
-        board.started(22);
+        board.started(&issue(21));
+        board.ended(&issue(21), reached(None));
+        board.started(&issue(22));
 
         assert_eq!(board.next_to_start(), None);
-        board.ended(22, reached(None));
-        assert_eq!(board.next_to_start(), Some(23));
+        board.ended(&issue(22), reached(None));
+        assert_eq!(board.next_to_start(), Some(issue(23)));
     }
 
     #[test]
@@ -353,8 +458,8 @@ mod tests {
             vec![ticket(21, true, &[], &[]), ticket(22, true, &[21], &[21])],
             1,
         );
-        board.started(21);
-        board.ended(21, reached(Some("https://x/pull/1")));
+        board.started(&issue(21));
+        board.ended(&issue(21), reached(Some("https://x/pull/1")));
 
         board.reread(vec![
             ticket(21, false, &[], &[]),
@@ -365,7 +470,7 @@ mod tests {
             board.lines(),
             ["#21 landed with https://x/pull/1", "#22 not started"]
         );
-        assert_eq!(board.next_to_start(), Some(22));
+        assert_eq!(board.next_to_start(), Some(issue(22)));
     }
 
     #[test]
@@ -379,7 +484,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(board.not_done(), [23, 22]);
+        assert_eq!(board.not_done(), [issue(23), issue(22)]);
     }
 
     #[test]
@@ -392,7 +497,7 @@ mod tests {
                 .collect();
             let board = board(vec![unready, ticket(22, true, &[], &[])], 1);
 
-            assert_eq!(board.next_to_start(), Some(22), "{label}");
+            assert_eq!(board.next_to_start(), Some(issue(22)), "{label}");
             assert_eq!(board.lines()[0], format!("#21 unready: labelled {label}"));
         }
     }
@@ -400,9 +505,9 @@ mod tests {
     #[test]
     fn a_failed_tickets_line_says_its_cause() {
         let mut board = board(vec![ticket(23, true, &[], &[])], 1);
-        board.started(23);
+        board.started(&issue(23));
         board.ended(
-            23,
+            &issue(23),
             failed(
                 "git fetch origin issue-21 failed: \
                  error: fetching ref refs/remotes/origin/issue-21 failed",
@@ -433,11 +538,14 @@ mod tests {
             ],
             3,
         );
-        board.started(21);
-        board.ended(21, reached(Some("https://x/pull/1")));
-        board.started(23);
-        board.ended(23, failed("claude exited 1", Some("/logs/23.jsonl")));
-        board.started(25);
+        board.started(&issue(21));
+        board.ended(&issue(21), reached(Some("https://x/pull/1")));
+        board.started(&issue(23));
+        board.ended(
+            &issue(23),
+            failed("claude exited 1", Some("/logs/23.jsonl")),
+        );
+        board.started(&issue(25));
 
         assert_eq!(
             board.checklist(),

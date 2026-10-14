@@ -405,3 +405,51 @@ esac
         },
     );
 }
+
+#[test]
+fn tickets_keep_each_sub_issue_and_blockers_returned_url() {
+    with_recorded_signal(
+        "github::execution_tests::tickets_keep_each_sub_issue_and_blockers_returned_url",
+        |_| {
+            let fixture = Fixture::new(
+                r#"
+case "$1 $2" in
+  'api graphql')
+    case "$*" in
+      *'nodes { url state }'*) ;;
+      *) echo 'blocker URLs were not requested' >&2; exit 1 ;;
+    esac
+    printf '%s' '{"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/Other/Widgets/issues/8/","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":"https://github.com/acme/widgets/issues/8","state":"CLOSED"},{"url":"https://github.com/acme/other/issues/8","state":"OPEN"}]}}]}}}}}' ;;
+  *) exit 1 ;;
+esac
+"#,
+            );
+            let tickets = GitHub::new().tickets(&issue()).unwrap();
+            assert_eq!(tickets.len(), 1);
+            assert_eq!(
+                tickets[0].issue,
+                IssueUrl::parse("https://github.com/Other/Widgets/issues/8/").unwrap()
+            );
+            assert_eq!(
+                tickets[0].blockers,
+                [
+                    IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap(),
+                    IssueUrl::parse("https://github.com/acme/other/issues/8").unwrap()
+                ]
+            );
+            assert_eq!(
+                tickets[0].open_blockers,
+                [IssueUrl::parse("https://github.com/acme/other/issues/8").unwrap()]
+            );
+
+            for node in [
+                serde_json::json!({}),
+                serde_json::json!({"url": "https://example.com/issues/8"}),
+            ] {
+                let response = serde_json::json!({"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/acme/widgets/issues/8","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[node]}}]}}}}});
+                fixture.script(&format!("printf '%s' '{response}'"));
+                assert!(GitHub::new().tickets(&issue()).is_err());
+            }
+        },
+    );
+}

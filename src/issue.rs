@@ -33,20 +33,15 @@ impl IssueUrl {
         }
     }
 
-    /// Issue `number` in the same repository.
-    pub fn sibling(&self, number: u64) -> IssueUrl {
-        IssueUrl {
-            url: format!("https://github.com/{}/issues/{number}", self.repo_slug()),
-            owner: self.owner.clone(),
-            repo: self.repo.clone(),
-            number,
-        }
-    }
-
     /// Whether `other` is in the same repository, whatever the case their
     /// URLs spell it in.
     pub fn in_same_repo(&self, other: &IssueUrl) -> bool {
         self.owner.eq_ignore_ascii_case(&other.owner) && self.repo.eq_ignore_ascii_case(&other.repo)
+    }
+
+    /// Whether both URLs identify the same GitHub issue.
+    pub fn is_same_issue(&self, other: &IssueUrl) -> bool {
+        self.number == other.number && self.in_same_repo(other)
     }
 
     /// Its repository, spelled as its URL spells it.

@@ -130,13 +130,13 @@ impl GitHub {
             let mut blockers = Vec::new();
             let mut open_blockers = Vec::new();
             for blocker in nodes(&node["blockedBy"], "blockedBy")? {
-                blockers.push(node_number(blocker)?);
+                blockers.push(node_issue_url(blocker)?);
                 if node_is_open(blocker)? {
-                    open_blockers.push(node_number(blocker)?);
+                    open_blockers.push(node_issue_url(blocker)?);
                 }
             }
             Ok(Ticket {
-                number: node_number(node)?,
+                issue: node_issue_url(node)?,
                 is_open: node_is_open(node)?,
                 labels: named(nodes(&node["labels"], "labels")?),
                 has_sub_issues: sub_issue_count(node)? > 0,
@@ -799,15 +799,15 @@ pub fn add_label_command(issue: &IssueUrl, label: Label) -> String {
 
 /// A Spec's sub-issue, as a Spec run reads it.
 pub struct Ticket {
-    pub number: u64,
+    pub issue: IssueUrl,
     pub is_open: bool,
     pub labels: Labels,
     /// It has sub-issues of its own.
     pub has_sub_issues: bool,
-    /// The numbers of the issues it is blocked by, in the Spec or not.
-    pub blockers: Vec<u64>,
-    /// The numbers of those blockers that are open.
-    pub open_blockers: Vec<u64>,
+    /// The issues it is blocked by, in the Spec or not.
+    pub blockers: Vec<IssueUrl>,
+    /// Those blockers that are open.
+    pub open_blockers: Vec<IssueUrl>,
 }
 
 /// Every sub-issue of `issue`, open or closed, with its labels, whether it
@@ -819,11 +819,11 @@ query($owner: String!, $repo: String!, $number: Int!) {
     issue(number: $number) {
       subIssues(first: 100) {
         nodes {
-          number
+          url
           state
           labels(first: 100) { nodes { name } }
           subIssues { totalCount }
-          blockedBy(first: 100) { nodes { number state } }
+          blockedBy(first: 100) { nodes { url state } }
         }
       }
     }
@@ -843,6 +843,15 @@ fn node_is_open(node: &Value) -> Result<bool> {
         .as_str()
         .context("gh api graphql output has an issue with no state")?
         == "OPEN")
+}
+
+/// The full Issue URL GitHub returned for a graph node.
+fn node_issue_url(node: &Value) -> Result<IssueUrl> {
+    IssueUrl::parse(
+        node["url"]
+            .as_str()
+            .context("gh api graphql output has an issue with no url")?,
+    )
 }
 
 /// The number of the issue a GraphQL answer's `node` describes.

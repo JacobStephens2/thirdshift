@@ -668,7 +668,8 @@ mod tests {
 
     fn ticket(number: u64, is_open: bool) -> Ticket {
         Ticket {
-            number,
+            issue: IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}"))
+                .unwrap(),
             is_open,
             labels: Labels::default(),
             has_sub_issues: false,

@@ -1750,6 +1750,14 @@ fn numbered_issue(state: &Json, n: &Json) -> Json {
     let issue_state = state.at("issues").get(&n.python()).cloned();
     object([
         ("number", n.clone()),
+        (
+            "url",
+            string(format!(
+                "https://github.com/{}/issues/{}",
+                state.at("repo").str(),
+                n.python()
+            )),
+        ),
         ("state", issue_state.unwrap_or(string("OPEN"))),
     ])
 }
