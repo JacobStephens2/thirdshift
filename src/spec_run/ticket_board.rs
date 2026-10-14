@@ -111,16 +111,16 @@ impl TicketBoard {
         let mut lines = Vec::new();
         for ticket in self.by_number() {
             let identity = ticket.issue.identity();
-            let number = self.name(&ticket.issue);
+            let reference = self.name(&ticket.issue);
             if !ticket.is_open && !self.standings.contains_key(&identity) {
                 continue;
             }
             let standing = self.standing(ticket);
             lines.push(match self.standings.get(&identity) {
                 Some(Standing::Ended(Ended::Failed { log: Some(log), .. })) if ticket.is_open => {
-                    format!("{number} {standing} (session log: {log})")
+                    format!("{reference} {standing} (session log: {log})")
                 }
-                _ => format!("{number} {standing}"),
+                _ => format!("{reference} {standing}"),
             });
         }
         lines

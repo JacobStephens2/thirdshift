@@ -602,20 +602,20 @@ mod tests {
                 .unwrap_or_else(|| panic!("#{number} ends, but its Run is not running"));
             self.running.remove(at);
             self.did.push(Did::Ended(number));
-            if let Ok(Ended::Reached { .. }) = ended {
-                let node = self
-                    .script
-                    .tickets
-                    .iter_mut()
-                    .find(|node| node.issue.number == number);
-                node.expect("a Ticket of the Spec").is_open = false;
-            }
             let issue = self
                 .started_urls
                 .iter()
                 .find(|issue| issue.number == number)
                 .unwrap()
                 .clone();
+            if let Ok(Ended::Reached { .. }) = ended {
+                let node = self
+                    .script
+                    .tickets
+                    .iter_mut()
+                    .find(|node| node.issue.identity() == issue.identity());
+                node.expect("a Ticket of the Spec").is_open = false;
+            }
             (issue, ended)
         }
 
@@ -833,6 +833,29 @@ mod tests {
     /// Progress lines only.
     fn progress_lines(did: &Did) -> bool {
         matches!(did, Did::Line(_))
+    }
+
+    #[test]
+    fn scripted_endings_close_the_started_issue_without_a_foreign_number_collision() {
+        let mut foreign = open(21, &[]);
+        foreign.issue = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
+
+        let mut outside = Scripted::new(Script {
+            tickets: vec![foreign, open(21, &[])],
+            ..Script::default()
+        });
+
+        outside.start_ticket(&issue(21)).unwrap();
+        let (ended_issue, ending) = outside.next_ending();
+        assert_eq!(ended_issue.identity(), issue(21).identity());
+        assert!(matches!(ending, Ok(Ended::Reached { .. })));
+
+        let tickets = outside.graph();
+        assert!(
+            tickets[0].is_open,
+            "ending the local Run closed the foreign Ticket"
+        );
+        assert!(!tickets[1].is_open, "the local Ticket stayed open");
     }
 
     #[test]
