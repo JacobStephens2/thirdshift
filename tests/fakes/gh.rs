@@ -1968,6 +1968,26 @@ fn fake_command(state: &mut Json, args: &[&str]) {
 }
 
 pub fn main(args: Vec<String>) {
+    // Opt-in authentication at the external GitHub seam. Most fixtures do
+    // not model credentials; publishing-authority tests explicitly do.
+    if std::env::var_os("FAKE_GH_REQUIRE_AUTH").is_some() {
+        let token = [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+        ]
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()));
+        let config = std::env::var_os("GH_CONFIG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| crate::env_path("HOME").join(".config/gh"));
+        let stored = fs::read_to_string(config.join("hosts.yml"))
+            .is_ok_and(|text| text.contains("oauth_token:"));
+        if !token && !stored {
+            die("gh: authentication required", 1);
+        }
+    }
     lock();
     record(&args);
     let mut state = load();
