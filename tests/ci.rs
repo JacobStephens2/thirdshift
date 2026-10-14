@@ -390,7 +390,7 @@ fn a_refused_request_still_waits_for_an_earlier_accepted_workflows_new_attempt()
 }
 
 #[test]
-fn a_refused_request_cannot_deliver_or_merge_without_readable_nonempty_checks() {
+fn a_check_re_run_cannot_deliver_or_merge_without_readable_nonempty_checks() {
     for merge in [false, true] {
         for empty in [true, false] {
             let scenario = Scenario::new();
@@ -418,14 +418,19 @@ fn a_refused_request_cannot_deliver_or_merge_without_readable_nonempty_checks() 
 
             assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
             assert_one_repair(&scenario, &result);
-            assert_eq!(rerun_requests(&scenario), ["900"]);
+            // An unreadable request-time listing stops before asking GitHub
+            // to re-run; an empty listing can be read, but cannot prove green.
+            let requests = if empty { vec!["900"] } else { Vec::new() };
+            assert_eq!(rerun_requests(&scenario), requests);
             assert!(scenario.gh_calls_of("pr", "merge").is_empty());
             assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
-            assert!(
-                result.stderr.contains("were not re-run"),
-                "{}",
-                result.stderr
-            );
+            if empty {
+                assert!(
+                    result.stderr.contains("were not re-run"),
+                    "{}",
+                    result.stderr
+                );
+            }
             let cause = if empty {
                 "CI checks disappeared"
             } else {
