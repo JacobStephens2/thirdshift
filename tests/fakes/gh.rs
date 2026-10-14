@@ -31,6 +31,7 @@
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
 //!  "labels"?: {"<number>": ["<label>", ...]},
 //!  "repo_labels"?: ["<label>", ...],
+//!  "issue_urls"?: {"<number>": "<full Issue URL>"},
 //!  "blocked_by"?: {"<number>": [<number>, ...]},
 //!  "timeline"?: {"<number>": [{"event", "label"?, "at"}, ...]}}
 //! ```
@@ -1750,6 +1751,20 @@ fn numbered_issue(state: &Json, n: &Json) -> Json {
     let issue_state = state.at("issues").get(&n.python()).cloned();
     object([
         ("number", n.clone()),
+        (
+            "url",
+            state
+                .get("issue_urls")
+                .and_then(|urls| urls.get(&n.python()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    string(format!(
+                        "https://github.com/{}/issues/{}",
+                        state.at("repo").str(),
+                        n.python()
+                    ))
+                }),
+        ),
         ("state", issue_state.unwrap_or(string("OPEN"))),
     ])
 }

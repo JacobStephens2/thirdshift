@@ -3862,3 +3862,42 @@ fn historical_fix_links_are_validated_in_both_storage_adapters_before_work() {
         }
     }
 }
+
+#[test]
+fn a_security_fix_spec_rejects_a_ticket_outside_its_repository_before_labelling_or_dispatch() {
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["private"] = json!(true);
+    state["bodies"]["7"] = json!(
+        state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .replace("high single", "high spec")
+            .replace("Fix size: single", "Fix size: spec")
+    );
+    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    state["issue_urls"] = json!({"8": "https://github.com/other/widgets/issues/8"});
+    scenario.write_gh_state(&state);
+    scenario.agent_does_for_in_session(7, 1, r#"
+gh issue create --title 'Bound storage input' --body 'Bound storage input. Private record: https://github.com/acme/widgets/issues/7' --label ready-for-agent
+gh fake sub-issues 7 '[8]'
+printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("a Security fix Spec's Ticket must be in the fix issue's repository"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert_eq!(
+        state["labels"]["7"],
+        json!(["security-finding", "needs-triage"])
+    );
+    assert_eq!(state["labels"]["8"], json!(["ready-for-agent"]));
+    assert!(state["prs"].as_array().unwrap().is_empty());
+    assert_eq!(scenario.claude_calls().len(), 1);
+}

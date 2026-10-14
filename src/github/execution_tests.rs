@@ -405,3 +405,80 @@ esac
         },
     );
 }
+
+#[test]
+fn tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers() {
+    with_recorded_signal(
+        "github::execution_tests::tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"
+case "$*" in
+  *'nodes { url state }'*)
+    cat <<'JSON'
+{"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/other/widgets/issues/21","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":"https://github.com/acme/widgets/issues/21","state":"OPEN"},{"url":"https://github.com/another/widgets/issues/21","state":"CLOSED"}]}}]}}}}}
+JSON
+    ;;
+  *) echo '{}' ;;
+esac
+"#,
+            );
+            let tickets = GitHub::new().tickets(&issue()).unwrap();
+            assert_eq!(tickets.len(), 1);
+            assert_eq!(
+                tickets[0].issue.url,
+                "https://github.com/other/widgets/issues/21"
+            );
+            assert_eq!(
+                tickets[0]
+                    .blockers
+                    .iter()
+                    .map(|issue| issue.url.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "https://github.com/acme/widgets/issues/21",
+                    "https://github.com/another/widgets/issues/21"
+                ]
+            );
+            assert_eq!(
+                tickets[0]
+                    .open_blockers
+                    .iter()
+                    .map(|issue| issue.url.as_str())
+                    .collect::<Vec<_>>(),
+                ["https://github.com/acme/widgets/issues/21"]
+            );
+        },
+    );
+}
+
+#[test]
+fn a_ticket_or_blocker_without_a_valid_url_fails_the_graph_read() {
+    with_recorded_signal(
+        "github::execution_tests::a_ticket_or_blocker_without_a_valid_url_fails_the_graph_read",
+        |_| {
+            let fixture = Fixture::new("");
+            for (ticket_url, blocker_url) in [
+                (
+                    serde_json::Value::Null,
+                    serde_json::json!("https://github.com/acme/widgets/issues/21"),
+                ),
+                (
+                    serde_json::json!("https://github.com/acme/widgets/issues/22"),
+                    serde_json::Value::Null,
+                ),
+                (
+                    serde_json::json!("https://github.com/acme/widgets/issues/22"),
+                    serde_json::json!("https://example.invalid/issues/21"),
+                ),
+            ] {
+                let response = serde_json::json!({"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":ticket_url,"state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":blocker_url,"state":"CLOSED"}]}}]}}}}});
+                fixture.script(&format!("cat <<'JSON'\n{response}\nJSON"));
+                assert!(
+                    GitHub::new().tickets(&issue()).is_err(),
+                    "accepted {response}"
+                );
+            }
+        },
+    );
+}

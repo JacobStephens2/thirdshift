@@ -33,13 +33,12 @@ impl IssueUrl {
         }
     }
 
-    /// Issue `number` in the same repository.
-    pub fn sibling(&self, number: u64) -> IssueUrl {
-        IssueUrl {
-            url: format!("https://github.com/{}/issues/{number}", self.repo_slug()),
-            owner: self.owner.clone(),
-            repo: self.repo.clone(),
-            number,
+    /// Repository and number identity, independent of URL spelling.
+    pub(crate) fn identity(&self) -> IssueIdentity {
+        IssueIdentity {
+            owner: self.owner.to_ascii_lowercase(),
+            repo: self.repo.to_ascii_lowercase(),
+            number: self.number,
         }
     }
 
@@ -70,6 +69,15 @@ impl IssueUrl {
                 && origin.name.eq_ignore_ascii_case(&self.repo)
         })
     }
+}
+
+/// An issue's identity for graph comparisons and keyed state. GitHub
+/// repository names are case-insensitive; URL spelling is kept separately.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct IssueIdentity {
+    owner: String,
+    repo: String,
+    number: u64,
 }
 
 /// The GitHub repository an `origin` remote names, spelled as its URL spells
