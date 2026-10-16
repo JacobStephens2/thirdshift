@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use crate::architect::Reviewed;
 use crate::base_fix::Advice;
 use crate::command::{Ending, Skip};
-use crate::failed_run::FailedRun;
+use crate::failed_run::{FailedRun, PolicyRefusal};
 use crate::logs;
 use crate::progress::{self, ChildLine};
 use crate::run::Ended;
@@ -285,10 +285,15 @@ impl<'a> Account<'a> {
     }
 }
 
-/// `interrupted`, or `failure` for a failure that was not an interrupt.
+/// A named interruption or review requirement, otherwise `failure`.
 fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
     if failed.interrupted {
         "interrupted"
+    } else if matches!(
+        failed.error.downcast_ref::<PolicyRefusal>(),
+        Some(PolicyRefusal::ReviewRequired { .. })
+    ) {
+        "review required"
     } else {
         failure
     }
