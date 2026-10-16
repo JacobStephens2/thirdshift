@@ -12,7 +12,7 @@
 //!  "bodies"?: {"<number>": "<body>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
-//!           "mergeable"?, "unknown_polls"?}],
+//!           "mergeable"?, "unknown_polls"?, "reviewDecision"?}],
 //!  "checks": {"<sha>": [{"id", "name", "conclusion", "url", "pending_polls"?,
 //!                        "rerun"?: {"conclusion", "stale_polls"?, "pending_polls"?},
 //!                        "stale"?: {"id", "conclusion", "polls"}}]},
@@ -421,6 +421,10 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
         (
             "mergeable",
             pr.get("mergeable").cloned().unwrap_or(string("MERGEABLE")),
+        ),
+        (
+            "reviewDecision",
+            pr.get("reviewDecision").cloned().unwrap_or(string("")),
         ),
         ("body", pr.get("body").cloned().unwrap_or(string(""))),
         (

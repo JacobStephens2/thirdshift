@@ -597,6 +597,19 @@ impl GitHub {
         ])
     }
 
+    /// Whether a structured review decision blocks this numbered PR's merge.
+    /// Failed or unrecognized reads are unknown and leave the merge to GitHub.
+    pub fn review_blocks_merge(&self, issue: &IssueUrl, number: u64) -> bool {
+        self.pr_view(issue, &number.to_string(), "reviewDecision")
+            .ok()
+            .is_some_and(|json| {
+                matches!(
+                    json["reviewDecision"].as_str(),
+                    Some("REVIEW_REQUIRED" | "CHANGES_REQUESTED")
+                )
+            })
+    }
+
     /// One guarded merge request, with a merge commit and without auto-merge
     /// or local branch deletion (ADR 0004). Delivery owns reconciliation.
     pub fn merge(&self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
