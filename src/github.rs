@@ -597,14 +597,17 @@ impl GitHub {
         ])
     }
 
-    /// Whether the PR's structured review decision currently blocks a merge.
-    /// Callers may treat a failed read as unknown and let GitHub decide.
-    pub fn review_blocks_merge(&self, issue: &IssueUrl, number: u64) -> Result<bool> {
-        let json = self.pr_view(issue, &number.to_string(), "reviewDecision")?;
-        Ok(matches!(
-            json["reviewDecision"].as_str(),
-            Some("REVIEW_REQUIRED" | "CHANGES_REQUESTED")
-        ))
+    /// Whether a structured review decision blocks this numbered PR's merge.
+    /// Failed or unrecognized reads are unknown and leave the merge to GitHub.
+    pub fn review_blocks_merge(&self, issue: &IssueUrl, number: u64) -> bool {
+        self.pr_view(issue, &number.to_string(), "reviewDecision")
+            .ok()
+            .is_some_and(|json| {
+                matches!(
+                    json["reviewDecision"].as_str(),
+                    Some("REVIEW_REQUIRED" | "CHANGES_REQUESTED")
+                )
+            })
     }
 
     /// One guarded merge request, with a merge commit and without auto-merge

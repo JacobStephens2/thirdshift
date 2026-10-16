@@ -22,14 +22,14 @@ pub struct FailedRun {
     pub ticket_lines: Vec<String>,
 }
 
-/// A Self-merge blocked by policy. The Run fails but leaves the PR ready
-/// for review, with no failure commit pushed onto the watched head.
+/// A repository policy that prevents Self-merge of a ready PR. The Run
+/// fails without pushing a failure commit or converting the PR to a draft.
 #[derive(Debug)]
 pub enum PolicyRefusal {
-    /// A refused merge whose Repair round found nothing to fix.
-    MergeRefused,
-    /// A structured review decision blocks the merge before any attempt.
-    ReviewRequired { url: String },
+    /// A refused merge whose next Repair round found nothing to fix.
+    NothingToFix,
+    /// A structured review decision that blocks the merge before a request.
+    ReviewRequired { pr_url: String },
 }
 
 impl std::error::Error for PolicyRefusal {}
@@ -37,12 +37,12 @@ impl std::error::Error for PolicyRefusal {}
 impl fmt::Display for PolicyRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MergeRefused => f.write_str(
+            Self::NothingToFix => f.write_str(
                 "the merge was refused with nothing left to fix, so the PR stays ready for review",
             ),
-            Self::ReviewRequired { url } => write!(
+            Self::ReviewRequired { pr_url } => write!(
                 f,
-                "PR {url} needs an approving review before it can merge; it is ready for review"
+                "PR {pr_url} needs an approving review before it can merge; it is ready for review"
             ),
         }
     }

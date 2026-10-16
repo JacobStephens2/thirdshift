@@ -131,7 +131,7 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
             Round::NothingToFix => {
                 // Only a PR still ready and mergeable is left ready.
                 repair_loop.outside.ensure_pr_ready_and_mergeable()?;
-                return Err(error.context(PolicyRefusal::MergeRefused));
+                return Err(error.context(PolicyRefusal::NothingToFix));
             }
         }
     }

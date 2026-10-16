@@ -260,7 +260,8 @@ impl<A: Adapter> PullRequest<A> {
         }
     }
 
-    /// A fresh gate immediately precedes the numbered request. GitHub guards
+    /// A fresh gate and best-effort review decision read precede each numbered
+    /// request. A blocking review is a terminal policy refusal. GitHub guards
     /// its head; a retarget between the gate and server merge remains a remote
     /// race because the request has no expected-base precondition.
     pub fn merge(&mut self, watched: &str) -> Result<MergeAttempt> {
@@ -270,13 +271,9 @@ impl<A: Adapter> PullRequest<A> {
             .as_ref()
             .expect("gate captured identity")
             .number;
-        if self
-            .adapter
-            .review_blocks_merge(&self.issue, number)
-            .unwrap_or(false)
-        {
+        if self.adapter.review_blocks_merge(&self.issue, number) {
             return Err(PolicyRefusal::ReviewRequired {
-                url: self
+                pr_url: self
                     .identified
                     .as_ref()
                     .expect("gate captured identity")
@@ -429,7 +426,7 @@ pub(crate) trait Adapter {
         title: &str,
         body: &str,
     ) -> Result<String>;
-    fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> Result<bool>;
+    fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool;
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()>;
     fn pause(&mut self) -> Result<()> {
         poll::pause()
@@ -497,7 +494,7 @@ impl Adapter for GitHub {
         self.completion()
             .create_draft_pr(issue, branch, base, title, body)
     }
-    fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> Result<bool> {
+    fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool {
         GitHub::review_blocks_merge(self, issue, number)
     }
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
@@ -734,8 +731,8 @@ mod tests {
             ));
             world.creation.clone().map_err(anyhow::Error::msg)
         }
-        fn review_blocks_merge(&mut self, _: &IssueUrl, _: u64) -> Result<bool> {
-            Ok(false)
+        fn review_blocks_merge(&mut self, _: &IssueUrl, _: u64) -> bool {
+            false
         }
         fn merge(&mut self, _: &IssueUrl, number: u64, head: &str) -> Result<()> {
             let mut world = self.0.borrow_mut();

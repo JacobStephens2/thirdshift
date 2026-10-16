@@ -1150,87 +1150,6 @@ fn a_shared_base_fix_that_fails_fails_the_ticket_that_started_it_and_the_one_wai
 }
 
 #[test]
-fn a_blocking_review_on_the_spec_pr_stops_without_a_merge_or_repair() {
-    for decision in ["REVIEW_REQUIRED", "CHANGES_REQUESTED"] {
-        let scenario = linear_spec();
-        scenario.agent_does_for(
-            SPEC,
-            &format!(
-                "gh fake pr issue-20 reviewDecision '\"{decision}\"'\n{}",
-                checks_on_head(GREEN)
-            ),
-        );
-        let resend = ResendStandIn::replying(200, r#"{"id":"test"}"#);
-
-        let result = scenario.run_with_env(
-            &["merge", &spec_url(&scenario), "email", "me@example.com"],
-            &[
-                ("THIRDSHIFT_RESEND_URL", resend.url()),
-                ("RESEND_API_KEY", "re_test_123"),
-            ],
-        );
-
-        assert_eq!(result.code, Some(1), "{}", result.stderr);
-        let spec = spec_pr(&scenario);
-        let url = spec["url"].as_str().unwrap();
-        assert_eq!(result.stdout, format!("{url}\n"));
-        assert_eq!(spec["state"], "OPEN");
-        assert_eq!(spec["isDraft"], false);
-        assert_eq!(scenario.gh_state()["issues"]["20"], "OPEN");
-        assert!(
-            scenario
-                .issue_labels(SPEC)
-                .contains(&"in-progress".to_string())
-        );
-        assert_contains(
-            &result.stderr,
-            &format!(
-                "PR {url} needs an approving review before it can merge; it is ready for review"
-            ),
-        );
-        assert_eq!(spec_prompts(&scenario).len(), 1);
-        assert_eq!(
-            result
-                .stderr
-                .matches("merging origin/main into issue-20")
-                .count(),
-            1,
-            "{}",
-            result.stderr
-        );
-        let number = spec["number"].as_u64().unwrap().to_string();
-        assert!(
-            scenario
-                .gh_calls_of("pr", "merge")
-                .iter()
-                .all(|call| call[2] != number)
-        );
-        for ticket in ["issue-21", "issue-22"] {
-            assert_eq!(pr_from(&scenario, ticket).unwrap()["state"], "MERGED");
-        }
-        assert_eq!(scenario.origin_log("main").unwrap(), ["Initial commit"]);
-        assert!(
-            !scenario
-                .origin_log("issue-20")
-                .unwrap()
-                .iter()
-                .any(|subject| subject.contains("failed run"))
-        );
-        scenario.assert_cleaned_up("issue-20");
-        let requests = resend.requests();
-        assert_eq!(requests.len(), 1);
-        assert_contains(
-            requests[0].body["subject"].as_str().unwrap(),
-            ": review required",
-        );
-        assert_contains(
-            requests[0].body["text"].as_str().unwrap(),
-            "Result:       review required\n",
-        );
-    }
-}
-
-#[test]
 fn a_policy_refusal_on_the_spec_pr_leaves_it_ready_and_exits_1() {
     let scenario = linear_spec();
     scenario.agent_does_for(
@@ -2644,5 +2563,53 @@ fn a_spec_run_checks_its_model_once_and_every_ticket_and_the_spec_review_runs_on
                 .any(|window| window == ["--model", "opus", "--effort", "high"]),
             "{args:?}"
         );
+    }
+}
+
+#[test]
+fn a_review_required_spec_pr_stays_ready_without_an_attempt_or_another_round() {
+    for decision in ["REVIEW_REQUIRED", "CHANGES_REQUESTED"] {
+        let scenario = linear_spec();
+        scenario.agent_does_for(
+            SPEC,
+            &format!(
+                "gh fake pr issue-20 reviewDecision '\"{decision}\"'\n{}",
+                checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+            ),
+        );
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+        let result = run_emailing(
+            &scenario,
+            &resend,
+            &["merge", &spec_url(&scenario), "email", "owner@example.com"],
+        );
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/2\n");
+        let reason = "PR https://github.com/acme/widgets/pull/2 needs an approving review before it can merge; it is ready for review";
+        assert_contains(&result.stderr, reason);
+        let spec = spec_pr(&scenario);
+        assert_eq!(spec["state"], "OPEN");
+        assert_eq!(spec["isDraft"], false);
+        assert_eq!(scenario.issue_labels(SPEC), ["in-progress"]);
+        assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
+        assert!(
+            scenario
+                .gh_calls_of("pr", "merge")
+                .iter()
+                .all(|call| call[2] != "2")
+        );
+        assert_eq!(
+            result.stderr.matches("waiting up to 0s for CI on").count(),
+            3,
+            "{}",
+            result.stderr
+        );
+        scenario.assert_cleaned_up("issue-20");
+        let (subject, text) = the_one_notification(&resend);
+        assert_contains(&subject, "review required");
+        assert_contains(&text, reason);
+        assert_contains(&text, "Result:       review required");
     }
 }

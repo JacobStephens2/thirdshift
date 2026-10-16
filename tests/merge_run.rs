@@ -5,6 +5,7 @@
 
 mod support;
 
+use support::resend::ResendStandIn;
 use support::{Scenario, leaves_running};
 
 /// The agent commits its work and opens a PR that closes issue #7, into
@@ -48,151 +49,6 @@ fn assert_issue_7_merged_into(scenario: &Scenario, base: &str) -> String {
         "{base}'s tip does not merge issue-7's head"
     );
     head
-}
-
-#[test]
-fn a_review_required_merge_run_stops_without_a_merge_or_repair() {
-    assert_review_blocks_merge("REVIEW_REQUIRED");
-}
-
-#[test]
-fn changes_requested_stops_without_a_merge_or_repair() {
-    assert_review_blocks_merge("CHANGES_REQUESTED");
-}
-
-fn assert_review_blocks_merge(decision: &str) {
-    let scenario = Scenario::new();
-    scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}gh fake pr issue-7 reviewDecision '\"{decision}\"'\n{}",
-        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#)
-    ));
-
-    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert_eq!(result.stdout, format!("{PR_URL}\n"));
-    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
-    assert_eq!(scenario.claude_calls().len(), 1);
-    assert_eq!(
-        result
-            .stderr
-            .matches("merging origin/main into issue-7")
-            .count(),
-        1,
-        "{}",
-        result.stderr
-    );
-    assert!(
-        result.stderr.contains(&format!(
-            "PR {PR_URL} needs an approving review before it can merge; it is ready for review"
-        )),
-        "{}",
-        result.stderr
-    );
-    let state = scenario.gh_state();
-    assert_eq!(state["prs"][0]["state"], "OPEN");
-    assert_eq!(state["prs"][0]["isDraft"], false);
-    assert_eq!(state["issues"]["7"], "OPEN");
-    assert!(
-        scenario
-            .issue_labels(7)
-            .contains(&"in-progress".to_string())
-    );
-    assert_eq!(
-        scenario.origin_log("issue-7").unwrap(),
-        ["Add feature", "Initial commit"]
-    );
-    scenario.assert_cleaned_up("issue-7");
-}
-
-#[test]
-fn empty_approved_and_unknown_review_decisions_allow_the_merge() {
-    for decision in ["", "APPROVED", "FUTURE_DECISION"] {
-        let scenario = Scenario::new();
-        scenario.agent_does(&format!(
-            "{AGENT_OPENS_PR}gh fake pr issue-7 reviewDecision '\"{decision}\"'\n"
-        ));
-
-        let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-
-        assert_eq!(result.code, Some(0), "{decision}: {}", result.stderr);
-        assert_issue_7_merged_into(&scenario, "main");
-        let calls = scenario.gh_calls();
-        let merge = calls
-            .iter()
-            .position(|call| call.starts_with(&["pr".to_string(), "merge".to_string()]))
-            .unwrap();
-        assert_eq!(
-            calls[merge - 1],
-            [
-                "pr",
-                "view",
-                "1",
-                "--repo",
-                "acme/widgets",
-                "--json",
-                "reviewDecision"
-            ]
-        );
-    }
-}
-
-#[test]
-fn a_failed_review_decision_read_still_attempts_the_merge() {
-    let scenario = Scenario::new();
-    scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}gh fake pr issue-7 reviewDecision '\"REVIEW_REQUIRED\"'\n\
-         gh fake fails 'pr view 1 --repo acme/widgets --json reviewDecision'\n"
-    ));
-
-    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_issue_7_merged_into(&scenario, "main");
-}
-
-#[test]
-fn a_review_required_after_repair_stops_the_next_merge_attempt() {
-    let scenario = Scenario::new();
-    let foreign = someone_pushes_to_issue_7("late.txt", "late", "Late commit");
-    scenario.agent_does_in_session(
-        1,
-        &format!(
-            "{AGENT_OPENS_PR}gh fake on-merge 1 '{}'\n",
-            foreign.replace('\'', r"'\''")
-        ),
-    );
-    scenario.agent_does_in_session(
-        2,
-        "gh fake pr issue-7 reviewDecision '\"REVIEW_REQUIRED\"'\n",
-    );
-
-    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert_eq!(result.stdout, format!("{PR_URL}\n"));
-    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
-    assert_eq!(scenario.claude_calls().len(), 2);
-    assert_review_repair_from(
-        &scenario.claude_calls()[1]["prompt"],
-        &sha_of(&scenario, "issue-7", "Add feature"),
-    );
-    assert_eq!(
-        result
-            .stderr
-            .matches("merging origin/main into issue-7")
-            .count(),
-        2,
-        "{}",
-        result.stderr
-    );
-    assert!(
-        result.stderr.contains("needs an approving review"),
-        "{}",
-        result.stderr
-    );
-    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
-    scenario.assert_cleaned_up("issue-7");
 }
 
 #[test]
@@ -880,4 +736,188 @@ fn an_issue_github_closed_after_the_merge_has_its_claim_removed_too() {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert!(scenario.gh_calls_of("issue", "close").is_empty());
     assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+}
+
+#[test]
+fn a_required_review_refuses_the_merge_without_another_round_and_names_the_outcome() {
+    for decision in ["REVIEW_REQUIRED", "CHANGES_REQUESTED"] {
+        let scenario = Scenario::new();
+        scenario.issue_labelled(7, &["ready-for-agent"]);
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}gh fake pr issue-7 reviewDecision '\"{decision}\"'\n{}",
+            checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+        ));
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+        let result = scenario.run_with_env(
+            &[
+                "merge",
+                &scenario.issue_url(7),
+                "email",
+                "owner@example.com",
+            ],
+            &[
+                ("THIRDSHIFT_RESEND_URL", resend.url()),
+                ("RESEND_API_KEY", "test-key"),
+            ],
+        );
+
+        assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+        assert_eq!(result.stdout, format!("{PR_URL}\n"));
+        let reason = format!(
+            "PR {PR_URL} needs an approving review before it can merge; it is ready for review"
+        );
+        assert!(result.stderr.contains(&reason), "{}", result.stderr);
+        assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+        assert_eq!(
+            result.stderr.matches("waiting up to 0s for CI on").count(),
+            1,
+            "{}",
+            result.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), 1);
+        let gh = scenario.gh_state();
+        assert_eq!(gh["prs"][0]["state"], "OPEN");
+        assert_eq!(gh["prs"][0]["isDraft"], false);
+        assert_eq!(gh["issues"]["7"], "OPEN");
+        assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+        assert_eq!(
+            scenario.origin_log("issue-7").unwrap(),
+            ["Add feature", "Initial commit"]
+        );
+        scenario.assert_cleaned_up("issue-7");
+        let requests = resend.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0].body["subject"]
+                .as_str()
+                .unwrap()
+                .contains("review required"),
+            "{:?}",
+            requests[0].body
+        );
+        assert!(
+            requests[0].body["text"].as_str().unwrap().contains(&reason),
+            "{:?}",
+            requests[0].body
+        );
+        assert!(
+            requests[0].body["text"]
+                .as_str()
+                .unwrap()
+                .contains("Result:       review required")
+        );
+    }
+}
+
+#[test]
+fn unblocked_or_unknown_review_decisions_allow_the_guarded_merge() {
+    for decision in [r#""""#, r#""APPROVED""#, r#""FUTURE_VALUE""#, "null"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}gh fake pr issue-7 reviewDecision '{decision}'\n"
+        ));
+
+        let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(0), "{decision}: {}", result.stderr);
+        assert_issue_7_merged_into(&scenario, "main");
+        assert!(scenario.gh_calls().iter().any(|call| call
+            == &[
+                "pr",
+                "view",
+                "1",
+                "--repo",
+                "acme/widgets",
+                "--json",
+                "reviewDecision"
+            ]));
+    }
+}
+
+#[test]
+fn an_unreadable_review_decision_keeps_existing_merge_and_policy_refusal_behavior() {
+    for refused in [false, true] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}gh fake pr issue-7 reviewDecision '\"REVIEW_REQUIRED\"'\n\
+             gh fake fails 'pr view 1 --repo acme/widgets --json reviewDecision'\n{}",
+            if refused {
+                refuse_merges(1, "Merge commits are not allowed.")
+            } else {
+                String::new()
+            },
+        ));
+
+        let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+        assert_eq!(
+            result.code,
+            Some(if refused { 1 } else { 0 }),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+        assert!(!result.stderr.contains("needs an approving review"));
+        if refused {
+            assert!(
+                result.stderr.contains("Merge commits are not allowed."),
+                "{}",
+                result.stderr
+            );
+            assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+        } else {
+            assert_issue_7_merged_into(&scenario, "main");
+        }
+    }
+}
+
+#[test]
+fn the_review_decision_is_read_again_after_a_repair_before_retrying_the_merge() {
+    let scenario = Scenario::new();
+    let hook = format!(
+        "{}\ngh fake pr issue-7 reviewDecision '\"REVIEW_REQUIRED\"'\n",
+        someone_pushes_to_issue_7("late.txt", "late", "Late commit"),
+    );
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}gh fake on-merge 1 '{}'\n{}",
+            hook.replace('\'', r"'\''"),
+            refuse_merges(1, "Head branch was modified."),
+        ),
+    );
+    scenario.agent_does_in_session(2, "");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert!(
+        result.stderr.contains("needs an approving review"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_eq!(
+        result.stderr.matches("waiting up to 0s for CI on").count(),
+        2,
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario
+            .gh_calls()
+            .iter()
+            .filter(|call| call.last().is_some_and(|arg| arg == "reviewDecision"))
+            .count(),
+        2
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    assert_eq!(scenario.origin_log("main").unwrap(), ["Initial commit"]);
+    assert_eq!(
+        scenario.origin_file("issue-7", "late.txt").as_deref(),
+        Some("late\n")
+    );
 }
