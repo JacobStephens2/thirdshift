@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result, bail};
 
+use crate::failed_run::PolicyRefusal;
 use crate::github::{GitHub, Mergeable, PrSnapshot, PrState};
 use crate::harness::Choice;
 use crate::issue::IssueUrl;
@@ -269,6 +270,21 @@ impl<A: Adapter> PullRequest<A> {
             .as_ref()
             .expect("gate captured identity")
             .number;
+        if self
+            .adapter
+            .review_blocks_merge(&self.issue, number)
+            .unwrap_or(false)
+        {
+            return Err(PolicyRefusal::ReviewRequired {
+                url: self
+                    .identified
+                    .as_ref()
+                    .expect("gate captured identity")
+                    .url
+                    .clone(),
+            }
+            .into());
+        }
         let Err(error) = self.adapter.merge(&self.issue, number, watched) else {
             return Ok(MergeAttempt::Merged);
         };
@@ -413,6 +429,7 @@ pub(crate) trait Adapter {
         title: &str,
         body: &str,
     ) -> Result<String>;
+    fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> Result<bool>;
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()>;
     fn pause(&mut self) -> Result<()> {
         poll::pause()
@@ -479,6 +496,9 @@ impl Adapter for GitHub {
     ) -> Result<String> {
         self.completion()
             .create_draft_pr(issue, branch, base, title, body)
+    }
+    fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> Result<bool> {
+        GitHub::review_blocks_merge(self, issue, number)
     }
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
         GitHub::merge(self, issue, number, head)
@@ -713,6 +733,9 @@ mod tests {
                 body.to_string(),
             ));
             world.creation.clone().map_err(anyhow::Error::msg)
+        }
+        fn review_blocks_merge(&mut self, _: &IssueUrl, _: u64) -> Result<bool> {
+            Ok(false)
         }
         fn merge(&mut self, _: &IssueUrl, number: u64, head: &str) -> Result<()> {
             let mut world = self.0.borrow_mut();

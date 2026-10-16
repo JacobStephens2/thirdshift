@@ -12,7 +12,7 @@
 //!  "bodies"?: {"<number>": "<body>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
-//!           "mergeable"?, "unknown_polls"?}],
+//!           "mergeable"?, "unknown_polls"?, "reviewDecision"?}],
 //!  "checks": {"<sha>": [{"id", "name", "conclusion", "url", "pending_polls"?,
 //!                        "rerun"?: {"conclusion", "stale_polls"?, "pending_polls"?},
 //!                        "stale"?: {"id", "conclusion", "polls"}}]},
@@ -119,6 +119,7 @@
 //! labels, and `gh label create <name>` adds one, failing if the repository
 //! has it already.
 //!
+//! A PR's reviewDecision defaults to an empty string when no review rule is set.
 //! A PR's mergeable state reports as UNKNOWN for its first `unknown_polls`
 //! reads. A check run reports as in progress for its first `pending_polls`
 //! reads, then as completed with its `conclusion`.
@@ -423,6 +424,10 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
             pr.get("mergeable").cloned().unwrap_or(string("MERGEABLE")),
         ),
         ("body", pr.get("body").cloned().unwrap_or(string(""))),
+        (
+            "reviewDecision",
+            pr.get("reviewDecision").cloned().unwrap_or(string("")),
+        ),
         (
             "mergeCommit",
             match pr.get("mergeCommit") {

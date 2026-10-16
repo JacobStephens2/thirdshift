@@ -597,6 +597,16 @@ impl GitHub {
         ])
     }
 
+    /// Whether the PR's structured review decision currently blocks a merge.
+    /// Callers may treat a failed read as unknown and let GitHub decide.
+    pub fn review_blocks_merge(&self, issue: &IssueUrl, number: u64) -> Result<bool> {
+        let json = self.pr_view(issue, &number.to_string(), "reviewDecision")?;
+        Ok(matches!(
+            json["reviewDecision"].as_str(),
+            Some("REVIEW_REQUIRED" | "CHANGES_REQUESTED")
+        ))
+    }
+
     /// One guarded merge request, with a merge commit and without auto-merge
     /// or local branch deletion (ADR 0004). Delivery owns reconciliation.
     pub fn merge(&self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {

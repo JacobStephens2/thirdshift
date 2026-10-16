@@ -13,5 +13,6 @@ A **Merge run** ends with thirdshift itself running `gh pr merge --merge --match
 
 ## Consequences
 
+- Before each Self-merge attempt, thirdshift detects a blocking review up front from the structured `reviewDecision` field (`REVIEW_REQUIRED` or `CHANGES_REQUESTED`) and ends as **Review required**, a policy refusal, without a merge attempt or Repair round. An empty or `APPROVED` decision, or a failed read, leaves the existing merge behavior in place.
 - A merge that fails with nothing left to fix (no new commits, Base branch unchanged, mergeable, green) is a policy refusal, such as a disallowed merge method or a required review. The Run fails, but it leaves the pull request ready for review, not a draft. thirdshift never parses GitHub's error text to tell policy refusals apart from other failures.
 - A repository that requires reviews can't be used with a Merge run; that is the repository owner's choice to have a human look first.

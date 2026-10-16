@@ -75,6 +75,49 @@ fn assert_contains(text: &str, part: &str) {
 }
 
 #[test]
+fn a_review_required_notification_and_summary_name_the_refusal() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake pr issue-7 reviewDecision '\"REVIEW_REQUIRED\"'\n"
+    ));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &["merge", &scenario.issue_url(7), "email", "me@example.com"],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    let request = the_one_request(&resend);
+    assert!(
+        subject(&request).ends_with(": review required"),
+        "{}",
+        subject(&request)
+    );
+    assert!(
+        text(&request).starts_with("Result:       review required\n"),
+        "{}",
+        text(&request)
+    );
+    assert_contains(
+        text(&request),
+        &format!(
+            "Cause:        PR {PR_URL} needs an approving review before it can merge; it is ready for review"
+        ),
+    );
+    let activity =
+        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert_contains(
+        &activity,
+        &format!("review required: PR {PR_URL} needs an approving review"),
+    );
+}
+
+#[test]
 fn a_notification_keeps_current_models_when_an_unrelated_record_is_corrupt() {
     let scenario = Scenario::new();
     let started = scenario.path("agent-started");
