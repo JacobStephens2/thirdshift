@@ -1,0 +1,323 @@
+{
+  "source_revision": "bf918a774d7028998c1b61b7991c55c8a9027bff",
+  "tokenizer": "tiktoken 0.12.0 o200k_base; proxy, not model billing",
+  "samples": [
+    {
+      "context": "fresh",
+      "sample": "Issue #735 opening session; sampled before review",
+      "rollout": "2026/10/17/rollout-2026-10-17T13-31-13-01a14aea-f217-70f0-a0e3-8c16171bbfc8.jsonl",
+      "timestamp_utc": "2026-10-17T17:31:13.840Z",
+      "cli_version": "0.163.0",
+      "catalog_sha256": "008ccc018c7c06cb5c4dda0cb546747c472c6f82691f50c81fb82a15267581c9",
+      "catalog_utf8_bytes": 13277,
+      "o200k_base_tokens": 3159,
+      "entries": 47,
+      "distinct_names": 32,
+      "duplicate_names": {
+        "code-review": 2,
+        "codebase-design": 2,
+        "diagnosing-bugs": 2,
+        "domain-modeling": 2,
+        "git-guardrails-claude-code": 2,
+        "grilling": 2,
+        "migrate-to-shoehorn": 2,
+        "pr": 2,
+        "prototype": 2,
+        "research": 2,
+        "scaffold-exercises": 2,
+        "setup-pre-commit": 2,
+        "tdd": 2,
+        "wizard": 2,
+        "writing-for-agents": 2
+      },
+      "roots": {
+        "r0": "/home/jacob/.agents/skills",
+        "r1": "/home/jacob/.codex/skills/.system",
+        "r2": "/home/jacob/repos/thirdshift-issue-735/.agents/skills"
+      },
+      "names_by_root": {
+        "r1": [
+          "imagegen",
+          "openai-docs",
+          "skill-creator",
+          "skill-installer"
+        ],
+        "r2": [
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "domain-modeling",
+          "git-guardrails-claude-code",
+          "grilling",
+          "migrate-to-shoehorn",
+          "pr",
+          "prototype",
+          "research",
+          "scaffold-exercises",
+          "security-audit",
+          "setup-pre-commit",
+          "tdd",
+          "thirdshift-code-review",
+          "thirdshift-codebase-design",
+          "thirdshift-implement",
+          "thirdshift-improve-codebase-architecture",
+          "thirdshift-pr",
+          "thirdshift-resolving-merge-conflicts",
+          "thirdshift-security-audit",
+          "thirdshift-tdd",
+          "thirdshift-to-spec",
+          "thirdshift-to-tickets",
+          "wizard",
+          "writing-for-agents"
+        ],
+        "r0": [
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "domain-modeling",
+          "find-skills",
+          "git-guardrails-claude-code",
+          "granola-transcripts",
+          "grilling",
+          "migrate-to-shoehorn",
+          "pr",
+          "prototype",
+          "research",
+          "scaffold-exercises",
+          "setup-pre-commit",
+          "tdd",
+          "wizard",
+          "writing-for-agents"
+        ]
+      }
+    },
+    {
+      "context": "continued",
+      "sample": "Issue #671 Continuation opening session, not a Harness Resume",
+      "rollout": "2026/10/16/rollout-2026-10-16T22-01-00-01a14797-4c62-7be0-afa8-9d10553e9b46.jsonl",
+      "timestamp_utc": "2026-10-17T02:01:00.305Z",
+      "cli_version": "0.163.0",
+      "catalog_sha256": "ee8e6efdff28908764b6d59ff1a2a4c7d85ada33095d40ae16a910132b3a1048",
+      "catalog_utf8_bytes": 17728,
+      "o200k_base_tokens": 4205,
+      "entries": 59,
+      "distinct_names": 44,
+      "duplicate_names": {
+        "code-review": 2,
+        "codebase-design": 2,
+        "diagnosing-bugs": 2,
+        "domain-modeling": 2,
+        "git-guardrails-claude-code": 2,
+        "grilling": 2,
+        "migrate-to-shoehorn": 2,
+        "pr": 2,
+        "prototype": 2,
+        "research": 2,
+        "scaffold-exercises": 2,
+        "setup-pre-commit": 2,
+        "tdd": 2,
+        "wizard": 2,
+        "writing-for-agents": 2
+      },
+      "roots": {
+        "r0": "/home/jacob/.agents/skills",
+        "r1": "/home/jacob/.codex/skills/.system",
+        "r2": "/home/jacob/.codex/plugins/cache/openai-curated-remote/google-drive/0.1.20/skills",
+        "r3": "/home/jacob/.codex/plugins/cache/openai-curated-remote/pages/0.1.23/skills",
+        "r4": "/home/jacob/.codex/plugins/cache/openai-curated-remote",
+        "r5": "/home/jacob/.codex/plugins/cache/openai-curated-remote/work-pets/0.1.6/skills",
+        "r6": "/home/jacob/repos/thirdshift-issue-671/.agents/skills"
+      },
+      "names_by_root": {
+        "r1": [
+          "imagegen",
+          "openai-docs",
+          "skill-creator",
+          "skill-installer"
+        ],
+        "r6": [
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "domain-modeling",
+          "git-guardrails-claude-code",
+          "grilling",
+          "migrate-to-shoehorn",
+          "pr",
+          "prototype",
+          "research",
+          "scaffold-exercises",
+          "setup-pre-commit",
+          "tdd",
+          "thirdshift-code-review",
+          "thirdshift-codebase-design",
+          "thirdshift-implement",
+          "thirdshift-improve-codebase-architecture",
+          "thirdshift-pr",
+          "thirdshift-resolving-merge-conflicts",
+          "thirdshift-security-audit",
+          "thirdshift-tdd",
+          "thirdshift-to-spec",
+          "thirdshift-to-tickets",
+          "wizard",
+          "writing-for-agents"
+        ],
+        "r0": [
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "domain-modeling",
+          "find-skills",
+          "git-guardrails-claude-code",
+          "grilling",
+          "migrate-to-shoehorn",
+          "pr",
+          "prototype",
+          "research",
+          "scaffold-exercises",
+          "setup-pre-commit",
+          "tdd",
+          "wizard",
+          "writing-for-agents"
+        ],
+        "r2": [
+          "google-drive:google-docs",
+          "google-drive:google-drive",
+          "google-drive:google-drive-comments",
+          "google-drive:google-sheets",
+          "google-drive:google-slides"
+        ],
+        "r3": [
+          "pages:maintain-space",
+          "pages:manage-schedules",
+          "pages:organize-space",
+          "pages:write-page"
+        ],
+        "r4": [
+          "plugin-management:plugin-management",
+          "sites:sites"
+        ],
+        "r5": [
+          "work-pets:create-pet",
+          "work-pets:pets",
+          "work-pets:update-pet"
+        ]
+      }
+    },
+    {
+      "context": "reviewer",
+      "sample": "Issue #734 independent Standards sub-agent /root/standards",
+      "rollout": "2026/10/17/rollout-2026-10-17T12-47-58-01a14ac3-59de-7613-84db-4d2076f555fa.jsonl",
+      "timestamp_utc": "2026-10-17T16:47:58.955Z",
+      "cli_version": "0.163.0",
+      "catalog_sha256": "6d7814daae09fc576cda96b1c5812fc2c706d4a3cc15d56ec2c12522e1680fd4",
+      "catalog_utf8_bytes": 18345,
+      "o200k_base_tokens": 4339,
+      "entries": 61,
+      "distinct_names": 46,
+      "duplicate_names": {
+        "code-review": 2,
+        "codebase-design": 2,
+        "diagnosing-bugs": 2,
+        "domain-modeling": 2,
+        "git-guardrails-claude-code": 2,
+        "grilling": 2,
+        "migrate-to-shoehorn": 2,
+        "pr": 2,
+        "prototype": 2,
+        "research": 2,
+        "scaffold-exercises": 2,
+        "setup-pre-commit": 2,
+        "tdd": 2,
+        "wizard": 2,
+        "writing-for-agents": 2
+      },
+      "roots": {
+        "r0": "/home/jacob/.agents/skills",
+        "r1": "/home/jacob/.codex/skills/.system",
+        "r2": "/home/jacob/.codex/plugins/cache/openai-curated-remote/google-drive/0.1.22/skills",
+        "r3": "/home/jacob/.codex/plugins/cache/openai-curated-remote/pages/0.1.23/skills",
+        "r4": "/home/jacob/.codex/plugins/cache/openai-curated-remote",
+        "r5": "/home/jacob/.codex/plugins/cache/openai-curated-remote/work-pets/0.1.6/skills",
+        "r6": "/home/jacob/repos/thirdshift-issue-734/.agents/skills"
+      },
+      "names_by_root": {
+        "r1": [
+          "imagegen",
+          "openai-docs",
+          "skill-creator",
+          "skill-installer"
+        ],
+        "r6": [
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "domain-modeling",
+          "git-guardrails-claude-code",
+          "grilling",
+          "migrate-to-shoehorn",
+          "pr",
+          "prototype",
+          "research",
+          "scaffold-exercises",
+          "security-audit",
+          "setup-pre-commit",
+          "tdd",
+          "thirdshift-code-review",
+          "thirdshift-codebase-design",
+          "thirdshift-implement",
+          "thirdshift-improve-codebase-architecture",
+          "thirdshift-pr",
+          "thirdshift-resolving-merge-conflicts",
+          "thirdshift-security-audit",
+          "thirdshift-tdd",
+          "thirdshift-to-spec",
+          "thirdshift-to-tickets",
+          "wizard",
+          "writing-for-agents"
+        ],
+        "r0": [
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "domain-modeling",
+          "find-skills",
+          "git-guardrails-claude-code",
+          "granola-transcripts",
+          "grilling",
+          "migrate-to-shoehorn",
+          "pr",
+          "prototype",
+          "research",
+          "scaffold-exercises",
+          "setup-pre-commit",
+          "tdd",
+          "wizard",
+          "writing-for-agents"
+        ],
+        "r2": [
+          "google-drive:google-docs",
+          "google-drive:google-drive",
+          "google-drive:google-drive-comments",
+          "google-drive:google-sheets",
+          "google-drive:google-slides"
+        ],
+        "r3": [
+          "pages:maintain-space",
+          "pages:manage-schedules",
+          "pages:organize-space",
+          "pages:write-page"
+        ],
+        "r4": [
+          "plugin-management:plugin-management",
+          "sites:sites"
+        ],
+        "r5": [
+          "work-pets:create-pet",
+          "work-pets:pets",
+          "work-pets:update-pet"
+        ]
+      }
+    }
+  ]
+}
