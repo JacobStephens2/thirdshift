@@ -22,6 +22,10 @@ Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so th
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside two parallel sub-agents.
 
+Keep the complete changed-file list for coverage accounting. Start review with changed hunks (`git diff --unified=5 <fixed-point>...HEAD -- <path>`) and use `rg -n` plus bounded ranges to follow supporting symbols; widen when behavior or a standard needs more context. Look up the issue's terms in relevant domain entries and follow any repository domain-to-code index. Read applicable standards and ADRs.
+
+Generated output may be excluded from routine reading only when the repository identifies its source of truth and a regeneration check passes for this change. Review that source, generator and validation instead. Inspect meaningful generated behavior (for example, rendered interactions or escaping) and hand-written portions of partially generated files when affected; regeneration alone does not establish their correctness. For each proposed exclusion, record the generated path, source paths, exact validation command/result and behavior checks, and give this evidence to both reviewers. Each reviewer must confirm the exclusion or inspect the output. Keep these paths in coverage accounting, separately from files actually read.
+
 ### 2. Identify the spec source
 
 Look for the originating spec, in this order:
@@ -61,6 +65,8 @@ Include this shared reporting instruction in **both sub-agent prompts**:
 
 > List the files you read, using repository-relative paths, including supporting files. For a deleted file, read its removed contents in the pinned diff and list the deleted path. For every finding that says behaviour is wrong, include a test or command, written out in full, that fails if the finding is right. Keep the prose under 800 words; written-out tests, commands and files-read lists are outside that limit.
 
+Also include in both prompts: "Prioritize changed hunks and supporting symbols, using searches and bounded reads before widening. Check applicable standards and ADRs. For any generated-output exclusion you accept, list the path, reviewed sources, regeneration command/result and meaningful behavior validation separately; never count excluded output as read. Report gaps in the exclusion evidence as unread unless you inspect the output."
+
 **Standards sub-agent prompt** should include:
 
 - The full diff command and commit list.
@@ -77,19 +83,19 @@ If the spec is missing, skip the Spec sub-agent and note this in the final repor
 
 ### 5. Close unread changed files once
 
-Compare each reviewer's files-read list with the changed-file list captured in step 1. For each reviewer with changed files absent from its list, send all those missing files back to that reviewer in **one follow-up**, scoped to those files and retaining its axis's brief and reporting instruction. Ask for any additional findings and the list of files it read on this pass.
+Compare each reviewer's files-read list and confirmed generated-output exclusions with the complete changed-file list captured in step 1. For each reviewer with changed files neither read nor covered by a confirmed exclusion, send all those missing files back to that reviewer in **one follow-up**, scoped to those files and retaining its axis's brief and reporting instruction. Ask for any additional findings, the list of files it read on this pass and any confirmed exclusions with their evidence.
 
 On a Harness where a finished sub-agent cannot be asked again, spawn a fresh one with the same axis's brief and context, scoped to read just those missing changed files.
 
-Combine each axis's initial and follow-up files-read lists, then compare again with the original changed-file list. Any changed file still absent is **unread**: report it in step 6. Each axis gets at most one follow-up or replacement; remaining gaps are reported, not retried.
+Combine each axis's initial and follow-up files-read lists and confirmed exclusions, then compare again with the original changed-file list. Any changed file still neither read nor covered by a confirmed exclusion is **unread**: report it in step 6. Each axis gets at most one follow-up or replacement; remaining gaps are reported, not retried.
 
 ### 6. Aggregate
 
 Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
 
-Include the final files-read list for each reviewer and name every changed file still unread under its axis, or explicitly say none is unread. Include findings from the follow-up in the same axis as its initial report.
+Include the final files-read list for each reviewer, separately list every confirmed generated-output exclusion with its evidence, and name every remaining unread changed file under its axis, or explicitly say none remains. Excluded paths must stay visible as intentionally not read, including in the PR's review coverage disclosure. Include findings from the follow-up in the same axis as its initial report.
 
-If the Session prompt names a place for the reviewers' reports, write the final Standards report to its `standards.md` and the final Spec report to its `spec.md`. Each file includes that axis's initial and follow-up findings, its combined files-read list, and any changed files still unread (or explicitly none). Write both reports even when there are no findings. When the prompt names no place, report in the conversation only.
+If the Session prompt names a place for the reviewers' reports, write the final Standards report to its `standards.md` and the final Spec report to its `spec.md`. Each file includes that axis's initial and follow-up findings, its combined files-read list, confirmed generated-output exclusions with evidence, and any remaining unread changed files (or explicitly none). Write both reports even when there are no findings. When the prompt names no place, report in the conversation only.
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
