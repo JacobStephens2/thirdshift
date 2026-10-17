@@ -2870,3 +2870,31 @@ fn interrupted_ticket_local_retention_reaches_the_spec_notification() {
         "Before retrying: inspect and publish the retained work",
     );
 }
+
+#[test]
+fn a_tickets_local_base_fix_work_reaches_the_spec_notification() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    scenario.agent_does_for(22, "echo partial > partial-base-fix.txt\nexit 3\n");
+    scenario.repo_has_hook(
+        &scenario.origin_dir(), "pre-receive",
+        "#!/bin/sh\nwhile read old new ref; do\ncase \"$ref\" in refs/heads/issue-22) exit 1;; esac\ndone\nexit 0\n",
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[&spec_url(&scenario), "base-fix", "email", "me@example.com"],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let requests = resend.requests();
+    let notification = requests[0].body["text"].as_str().unwrap();
+    assert_contains(notification, "only locally on issue-22");
+    assert_contains(
+        notification,
+        scenario.path("work/widgets-issue-22").to_str().unwrap(),
+    );
+    assert_contains(
+        notification,
+        "Before retrying: inspect and publish the retained work",
+    );
+}

@@ -11,7 +11,7 @@ const RECOVERY: &str = "Recovery: ";
 const LAUNCH: &str = "Run from the Launch directory ";
 const CONTINUING: &str = "Continuing reuses ";
 const RETRY: &str = "Retry starts work ";
-const TICKET_WORK: &str = "Ticket work: ";
+const RETAINED_WORK: &str = "Retained work: ";
 const LOCAL_WORK: &str = "work may exist only locally on ";
 
 /// The lifecycle operation underway when a Run stopped.
@@ -77,8 +77,8 @@ pub struct Recovery {
     /// Spec review completed, independently of any later delivery failure.
     pub tickets: Option<TicketProgress>,
     pub continuation: Option<Continuation>,
-    /// Factory-reported retention facts from child Tickets, including their paths.
-    pub local_ticket_work: Vec<String>,
+    /// Factory-reported retention facts from child Runs, including their paths.
+    pub local_child_work: Vec<String>,
 }
 
 impl Recovery {
@@ -89,7 +89,7 @@ impl Recovery {
             worktree: None,
             tickets: None,
             continuation: None,
-            local_ticket_work: Vec::new(),
+            local_child_work: Vec::new(),
         }
     }
 
@@ -123,11 +123,11 @@ impl Recovery {
             Preservation::None => format!("{PRESERVED}no work preserved"),
         });
         lines.extend(
-            self.local_ticket_work
+            self.local_child_work
                 .iter()
-                .map(|line| format!("{TICKET_WORK}{line}")),
+                .map(|line| format!("{RETAINED_WORK}{line}")),
         );
-        if self.preservation == Preservation::Local || !self.local_ticket_work.is_empty() {
+        if self.preservation == Preservation::Local || !self.local_child_work.is_empty() {
             lines.push(format!("{BEFORE_RETRYING}inspect and publish the retained work, reconcile with origin without forcing, then free the Issue branch and Worktree acquisition path. Do not discard local work."));
         }
         lines.push(format!("{RECOVERY}{}", context.command));
@@ -145,10 +145,13 @@ impl Recovery {
         lines
     }
 
-    /// Read only the factory's own preservation line, never agent output.
-    pub fn is_local_work(line: &str) -> bool {
+    /// Read only factory-owned retention facts, including those passed through
+    /// a Ticket from its Base fix. Agent output never enters this protocol.
+    pub fn local_work(line: &str) -> Option<&str> {
+        let line = line.strip_prefix(RETAINED_WORK).unwrap_or(line);
         line.strip_prefix(PRESERVED)
             .is_some_and(|value| value.starts_with(LOCAL_WORK))
+            .then_some(line)
     }
 
     pub fn is_line(line: &str) -> bool {
@@ -161,7 +164,7 @@ impl Recovery {
             LAUNCH,
             CONTINUING,
             RETRY,
-            TICKET_WORK,
+            RETAINED_WORK,
         ]
         .iter()
         .any(|prefix| line.starts_with(prefix))

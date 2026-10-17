@@ -123,7 +123,14 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
             review: asks.security_review,
         },
     );
-    let outcome = run(issue, asks, started_by, &mut base_fix);
+    let mut outcome = run(issue, asks, started_by, &mut base_fix);
+    if let Err(failed) = &mut outcome
+        && let Some(recovery) = &mut failed.recovery
+    {
+        recovery
+            .local_child_work
+            .extend_from_slice(base_fix.local_work());
+    }
     Ended {
         outcome,
         base_fix: base_fix.report(),

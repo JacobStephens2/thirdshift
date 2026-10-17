@@ -125,6 +125,7 @@ struct Taken {
     issue: IssueUrl,
     /// Started by this Run, rather than waited on.
     started: bool,
+    local_work: Vec<String>,
     /// Whether it came to the end the Run awaited: see [`Taken::awaited_end`].
     reached: bool,
 }
@@ -292,6 +293,7 @@ impl BaseFix {
         let taken = self.taken.insert(Taken {
             issue: fix,
             started: true,
+            local_work: Vec::new(),
             reached: false,
         });
         outside.step(format!("waiting on Base fix #{number}"));
@@ -304,8 +306,16 @@ impl BaseFix {
                 ));
                 Ok(())
             }
-            Ended::Interrupted { .. } => bail!("interrupted"),
-            Ended::Failed { cause, log, .. } => {
+            Ended::Interrupted { local_work } => {
+                taken.local_work = local_work;
+                bail!("interrupted")
+            }
+            Ended::Failed {
+                cause,
+                log,
+                local_work,
+            } => {
+                taken.local_work = local_work;
                 if let Some(log) = log {
                     outside.step(format!("Base fix #{number} session log: {log}"));
                 }
@@ -336,6 +346,7 @@ impl BaseFix {
         let taken = self.taken.insert(Taken {
             issue: open,
             started: false,
+            local_work: Vec::new(),
             reached: false,
         });
         let closed = loop {
@@ -392,6 +403,14 @@ impl BaseFix {
     /// with no Base fix taken; nothing otherwise.
     pub fn into_advice(self) -> Vec<Advice> {
         self.advice
+    }
+
+    /// Local retention facts from the Base fix this Run started, if any.
+    pub fn local_work(&self) -> &[String] {
+        self.taken
+            .as_ref()
+            .map(|taken| taken.local_work.as_slice())
+            .unwrap_or_default()
     }
 
     /// What became of the Base fix the Run took, if it took one, for its Run
@@ -1306,6 +1325,7 @@ mod tests {
                 issue: url(8),
                 started,
                 reached,
+                local_work: Vec::new(),
             });
             base_fix.report().unwrap()
         };

@@ -425,8 +425,8 @@ impl Reader {
         let ChildLine::Own(message) = line else {
             return;
         };
-        if crate::recovery::Recovery::is_local_work(message) {
-            self.local_work.push(message.to_string());
+        if let Some(work) = crate::recovery::Recovery::local_work(message) {
+            self.local_work.push(work.to_string());
         } else if let Some(report) = message.strip_prefix(BASE_FIX) {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {

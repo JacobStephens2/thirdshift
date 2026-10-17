@@ -135,7 +135,7 @@ fn run_through(
             progress.reviewed = !matches!(recovery.stage, Stage::Tickets | Stage::SpecReview)
                 && all_tickets_accounted;
             recovery.tickets = Some(progress);
-            recovery.local_ticket_work = local_work;
+            recovery.local_child_work = local_work;
             failed.ticket_lines = ticket_lines;
             Err(failed)
         }
