@@ -12,6 +12,9 @@ use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
+mod failure;
+pub(crate) use failure::safe_cause;
+
 mod check_read;
 pub(crate) use check_read::is_transient as check_read_is_transient;
 
@@ -760,15 +763,21 @@ impl GitHub {
     /// it exits non-zero.
     fn gh_json(&self, args: &[&str]) -> Result<Value> {
         let command = format!("gh {}", args[..2].join(" "));
-        let output = self.output(args)?;
+        let output = self.output(args).with_context(|| failure::QueryFailure {
+            message: format!("{command} could not run"),
+            stderr: None,
+        })?;
         if !output.status.success() {
-            bail!(
-                "{command} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            bail!(failure::QueryFailure {
+                message: format!("{command} failed: {stderr}"),
+                stderr: Some(stderr),
+            });
         }
-        serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("{command} returned invalid JSON"))
+        serde_json::from_slice(&output.stdout).with_context(|| failure::QueryFailure {
+            message: format!("{command} returned invalid JSON"),
+            stderr: None,
+        })
     }
     fn output(&self, args: &[&str]) -> Result<Output> {
         self.output_with_input(args, None)

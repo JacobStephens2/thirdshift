@@ -3151,7 +3151,6 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
             Some("api --method POST"),
             "creating a draft repository security advisory failed",
         ),
-        (audit_script("[]"), Some("issue list"), "gh issue list"),
     ] {
         let scenario = Scenario::new();
         scenario.agent_does(&script);
@@ -3186,6 +3185,108 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
         assert!(!text.contains("Cause:"), "{text}");
         assert!(!text.contains("Private candidate write-up."), "{text}");
     }
+}
+
+#[test]
+fn pre_audit_github_quota_failures_notify_without_claiming_an_audit_ran() {
+    for call in ["issue list", "api --paginate"] {
+        assert_pre_audit_github_failure(
+            call,
+            "GraphQL: API rate limit already exceeded for user ID PRIVATE_USER_ID. token=PRIVATE_TOKEN Private candidate write-up. Private verifier diagnostics.",
+            "GitHub rate-limit exhaustion",
+        );
+    }
+}
+
+#[test]
+fn pre_audit_unknown_github_failures_notify_only_a_safe_dependency_category() {
+    for call in ["issue list", "api --paginate"] {
+        assert_pre_audit_github_failure(
+            call,
+            "HTTP 502: PRIVATE_USER_ID token=PRIVATE_TOKEN Private candidate write-up. Private verifier diagnostics. GraphQL: rate limit configuration unknown",
+            "GitHub dependency failure",
+        );
+    }
+}
+
+fn assert_pre_audit_github_failure(call: &str, diagnostic: &str, cause: &str) {
+    let scenario = Scenario::new();
+    scenario.agent_does(&audit_script("[]"));
+    scenario.gh_fails(call);
+    let mut github = scenario.gh_state();
+    github["failure_stderr"] = json!(diagnostic);
+    scenario.write_gh_state(&github);
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Security run: pre-audit failed"
+    );
+    assert!(text.contains("Result:       pre-audit failed"), "{text}");
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(text.contains(&format!("Cause:        {cause}")), "{text}");
+    assert!(text.contains("Configured:"), "{text}");
+    assert!(!text.contains("Built with"), "{text}");
+    assert!(text.contains("Diagnostics:"), "{text}");
+    assert!(text.contains("stderr"), "{text}");
+    assert!(text.contains("scheduler"), "{text}");
+    let host = text
+        .lines()
+        .find_map(|line| line.strip_prefix("Host:         "))
+        .unwrap();
+    let route = text
+        .lines()
+        .find(|line| line.starts_with("Diagnostics:"))
+        .unwrap();
+    assert!(route.contains(host), "{route}");
+    let (_, timestamp) = route.split_once(" around ").unwrap();
+    let (timestamp, _) = timestamp.split_once(" UTC;").unwrap();
+    chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S").unwrap();
+    for private in [
+        "PRIVATE_USER_ID",
+        "PRIVATE_TOKEN",
+        "Private candidate write-up.",
+        "Private verifier diagnostics.",
+        "GraphQL:",
+    ] {
+        assert!(!format!("{subject}\n{text}").contains(private), "{text}");
+    }
+    for absent in [
+        "Command log:",
+        "Session log:",
+        "Session models:",
+        "Reproduction:",
+        "cron.log",
+    ] {
+        assert!(!text.contains(absent), "{text}");
+    }
+    assert!(
+        result.stderr.contains("PRIVATE_USER_ID"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    assert!(scenario.gh_state()["advisories"].is_null());
+    let calls = scenario.gh_calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with(&["issue".into(), "create".into()])),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with(&[
+            "api".into(),
+            "--method".into(),
+            "POST".into()
+        ])),
+        "{calls:?}"
+    );
+    assert_eq!(scenario.entries("work"), vec![REPO]);
 }
 
 #[test]

@@ -54,13 +54,16 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     ticket_lines: &[],
                     review: None,
                     security_findings: None,
+                    pre_audit: None,
                     failed_reproduction: None,
                     recovery: None,
                     urls: Vec::new(),
                 },
                 Err(failed) => Account::of_failure(
                     failed,
-                    if audited.failed_reproduction.is_some() {
+                    if !audited.audit_started {
+                        "pre-audit failed"
+                    } else if audited.failed_reproduction.is_some() {
                         "reproduction failed"
                     } else {
                         "audit failed"
@@ -68,6 +71,18 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 ),
             };
             Ok(Account {
+                pre_audit: if audited.audit_started {
+                    None
+                } else {
+                    Some(
+                        audited
+                            .outcome
+                            .as_ref()
+                            .err()
+                            .and_then(|failed| crate::github::safe_cause(&failed.error))
+                            .unwrap_or("Security run pre-audit checks failed"),
+                    )
+                },
                 failed_reproduction: audited.failed_reproduction,
                 security_findings: Some(&audited.findings),
                 advice: &audited.advice,
@@ -117,6 +132,8 @@ pub struct Account<'a> {
     pub review: Option<Review<'a>>,
     /// The failed reproduction, after a completed Security audit and private recording.
     pub failed_reproduction: Option<usize>,
+    /// Fixed safe cause when the Security audit was never entered.
+    pub pre_audit: Option<&'static str>,
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
@@ -189,6 +206,7 @@ impl<'a> Account<'a> {
                 ticket_lines: &reached.ticket_lines,
                 review: None,
                 security_findings: None,
+                pre_audit: None,
                 failed_reproduction: None,
                 recovery: None,
                 urls: vec![&reached.pr_url],
@@ -215,6 +233,7 @@ impl<'a> Account<'a> {
             ticket_lines: &failed.ticket_lines,
             review: None,
             security_findings: None,
+            pre_audit: None,
             failed_reproduction: None,
             recovery: failed.recovery.as_deref(),
             urls: failed.pr_url.as_deref().into_iter().collect(),
@@ -245,6 +264,7 @@ impl<'a> Account<'a> {
                 ticket_lines: &[],
                 review: None,
                 security_findings: None,
+                pre_audit: None,
                 failed_reproduction: None,
                 recovery: None,
                 urls: vec![reviewed.url()],
@@ -536,6 +556,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            pre_audit: None,
             failed_reproduction: None,
             recovery: None,
             urls: vec![PR],
@@ -556,6 +577,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            pre_audit: None,
             failed_reproduction: None,
             recovery: None,
             urls: Vec::new(),
@@ -738,6 +760,7 @@ mod tests {
                         dispatched: None,
                     }),
                     security_findings: None,
+                    pre_audit: None,
                     failed_reproduction: None,
                     recovery: None,
                     urls: vec![PLAN],

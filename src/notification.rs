@@ -34,6 +34,7 @@ pub enum NotificationAsk {
 struct Checked {
     resend: Resend,
     started: Instant,
+    started_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl Checked {
@@ -42,8 +43,13 @@ impl Checked {
     /// address is known and a Resend API key is found.
     fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
         let started = Instant::now();
+        let started_at = chrono::Utc::now();
         let resend = Resend::new(to, settings)?;
-        Ok(Checked { resend, started })
+        Ok(Checked {
+            resend,
+            started,
+            started_at,
+        })
     }
 }
 
@@ -151,6 +157,13 @@ impl RunNotification {
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
         );
+        if account.pre_audit.is_some() {
+            text += &format!(
+                "Diagnostics:  Check this command's stderr on {} around {} UTC; for a scheduled command, check the scheduler's captured stderr.\n",
+                host.as_deref().unwrap_or("unknown host"),
+                self.checked.started_at.format("%Y-%m-%d %H:%M:%S"),
+            );
+        }
         let lines = crate::session::recording::Recording::capture().notification_lines();
         if !lines.is_empty() {
             text += "\nSession models:\n";
@@ -226,6 +239,7 @@ fn body(
     }
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
+            _ if account.pre_audit.is_some() => "not started",
             Err(_) if account.failed_reproduction.is_some() => "audit complete",
             Ok(line) => line.as_str(),
             Err(_) => account.outcome,
@@ -273,12 +287,12 @@ fn body(
         text += &format!("Pull request: {pr_url}\n");
     }
     // Security failure causes can quote private verifier work or Harness
-    // diagnostics. Only the fixed safeguard category is safe to send.
+    // diagnostics. Only fixed operational and safeguard categories are safe to send.
     if let Err(cause) = &account.ended
         && !account.interrupted
     {
         let cause = if account.security_findings.is_some() {
-            cause.safeguard_refusal()
+            account.pre_audit.or_else(|| cause.safeguard_refusal())
         } else {
             Some(cause.full())
         };
@@ -299,7 +313,14 @@ fn body(
         text += &format!("Command log:  {}\n", log.display());
     }
     if let Some(built_with) = built_with {
-        text += &format!("{built_with}\n");
+        if account.pre_audit.is_some() {
+            text += &format!(
+                "Configured:   {}\n",
+                built_with.strip_prefix("Built with ").unwrap_or(built_with)
+            );
+        } else {
+            text += &format!("{built_with}\n");
+        }
     }
     text += &format!("Host:         {host}\n");
     text += &format!("Took:         {}\n", progress::duration(took));
@@ -357,6 +378,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            pre_audit: None,
             failed_reproduction: None,
             recovery: None,
             urls: vec![PR],
@@ -377,6 +399,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            pre_audit: None,
             failed_reproduction: None,
             recovery: None,
             urls: Vec::new(),
