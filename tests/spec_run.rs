@@ -216,22 +216,7 @@ git commit -q -m 'Fix reproduced Security finding'
     let result = scenario.run(&[&spec_url(&scenario), "security-review", "merge"]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
-    let sessions: Vec<_> = scenario
-        .claude_calls()
-        .into_iter()
-        .filter(|call| call["prompt"].as_str().unwrap().contains("/issues/"))
-        .collect();
-    assert_eq!(
-        sessions.len(),
-        4,
-        "completed Tickets must not be rebuilt: {sessions:?}"
-    );
-    assert!(
-        sessions.last().unwrap()["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("Spec https://github.com/acme/widgets/issues/20")
-    );
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20", "20"]);
     let calls = scenario.claude_calls();
     assert_contains(
         calls[2]["prompt"].as_str().unwrap(),
@@ -354,22 +339,7 @@ fn security_findings_refusals_and_incomplete_reviews_hold_only_the_spec_self_mer
                 result.stderr
             );
             assert_contains(&result.stderr, cause);
-            let sessions: Vec<_> = scenario
-                .claude_calls()
-                .into_iter()
-                .filter(|call| call["prompt"].as_str().unwrap().contains("/issues/"))
-                .collect();
-            assert_eq!(
-                sessions.len(),
-                4,
-                "completed Tickets must not be rebuilt: {sessions:?}"
-            );
-            assert!(
-                sessions.last().unwrap()["prompt"]
-                    .as_str()
-                    .unwrap()
-                    .contains("Spec https://github.com/acme/widgets/issues/20")
-            );
+            assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20", "20"]);
             let pr = spec_pr(&scenario);
             assert_eq!(pr["state"], "OPEN");
             assert_eq!(pr["isDraft"], false);
@@ -2730,4 +2700,46 @@ fn a_review_required_spec_pr_stays_ready_without_an_attempt_or_another_round() {
         assert_contains(&text, reason);
         assert_contains(&text, "Result:       review required");
     }
+}
+
+#[test]
+fn spec_notification_reports_a_tickets_locally_retained_work() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(20, &[(21, &[])]);
+    scenario.agent_does_for(21, "echo 'half done' > wip.txt\nexit 1\n");
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        "#!/bin/sh\nwhile read old new name; do\n  case \"$name\" in refs/heads/issue-21) echo 'Ticket push rejected'; exit 1;; esac\ndone\n",
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["email", "me@example.com", &scenario.issue_url(20)],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let retained = scenario.path("work/widgets-issue-21");
+    assert_eq!(
+        std::fs::read_to_string(retained.join("wip.txt")).unwrap(),
+        "half done\n"
+    );
+    assert_eq!(scenario.origin_file("issue-21", "wip.txt"), None);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(
+        text.contains(retained.to_str().unwrap()),
+        "Spec notification omits the locally retained Ticket worktree:\n{text}"
+    );
+    for line in text
+        .lines()
+        .filter(|line| line.starts_with("Local Ticket:") || line.starts_with("Recovery:"))
+    {
+        assert_contains(&result.stderr, line);
+    }
+    assert_contains(text, "Recover locally retained Ticket work first");
+    assert_contains(text, "Recover and push its retained branch");
 }

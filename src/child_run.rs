@@ -312,9 +312,13 @@ pub enum Ended {
         base_fix: Option<String>,
     },
     /// Why, and its session log, as it reported them.
-    Failed { cause: String, log: Option<String> },
+    Failed {
+        cause: String,
+        log: Option<String>,
+        local_worktree: Option<String>,
+    },
     /// Ended by an interrupt passed on to it.
-    Interrupted,
+    Interrupted { local_worktree: Option<String> },
 }
 
 /// Own a child Run and both readers from spawn through reaping and joining.
@@ -639,7 +643,13 @@ impl Handle {
 
     fn ending(&mut self) -> Result<Ended> {
         if self.interrupted || (self.error.is_some() && interrupt::requested()) {
-            return Ok(Ended::Interrupted);
+            let local_worktree = self
+                .stderr
+                .as_ref()
+                .and_then(|worker| worker.value.as_ref())
+                .and_then(run_ending::Reader::local_worktree)
+                .map(str::to_string);
+            return Ok(Ended::Interrupted { local_worktree });
         }
         if let Some(error) = self.error.take() {
             return Err(error);
@@ -655,8 +665,11 @@ impl Handle {
                 pr_url,
                 base_fix: ending.base_fix,
             },
-            Err(_) if interrupt::requested() => Ended::Interrupted,
+            Err(failure) if interrupt::requested() => Ended::Interrupted {
+                local_worktree: failure.local_worktree,
+            },
             Err(failure) => Ended::Failed {
+                local_worktree: failure.local_worktree,
                 cause: failure.cause.unwrap_or_else(|| format!("the Run {status}")),
                 log: failure.log,
             },

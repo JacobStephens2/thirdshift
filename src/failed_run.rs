@@ -9,7 +9,7 @@ use anyhow::anyhow;
 use crate::interrupt;
 
 mod recovery;
-pub use recovery::{Preservation, Recovery, Stage, TicketProgress};
+pub use recovery::{Preservation, Recovery, RetainedTicket, Stage, TicketProgress};
 
 /// Why a Run did not end with a ready PR, and what the user should see.
 pub struct FailedRun {

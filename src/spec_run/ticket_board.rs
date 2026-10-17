@@ -112,6 +112,25 @@ impl TicketBoard {
         }
     }
 
+    pub(super) fn retained_tickets(&self) -> Vec<crate::failed_run::RetainedTicket> {
+        self.by_number()
+            .into_iter()
+            .filter_map(|ticket| {
+                let local_worktree = match self.standings.get(&ticket.issue.identity()) {
+                    Some(Standing::Ended(
+                        Ended::Failed { local_worktree, .. }
+                        | Ended::Interrupted { local_worktree },
+                    )) => local_worktree.as_ref(),
+                    _ => None,
+                }?;
+                Some(crate::failed_run::RetainedTicket {
+                    issue: ticket.issue.clone(),
+                    worktree: local_worktree.clone(),
+                })
+            })
+            .collect()
+    }
+
     /// A line on each Ticket that landed in this Spec run, with its PR, and
     /// on each Ticket not done, with why, lowest number first.
     pub(super) fn lines(&self) -> Vec<String> {
@@ -202,7 +221,7 @@ impl TicketBoard {
         }
         match self.standings.get(&identity) {
             Some(Standing::Running) => return "running".to_string(),
-            Some(Standing::Ended(Ended::Interrupted)) => return "interrupted".to_string(),
+            Some(Standing::Ended(Ended::Interrupted { .. })) => return "interrupted".to_string(),
             Some(Standing::Ended(Ended::Failed { cause, .. })) => {
                 return format!("failed: {cause}");
             }
@@ -310,6 +329,7 @@ mod tests {
 
     fn failed(cause: &str, log: Option<&str>) -> Ended {
         Ended::Failed {
+            local_worktree: None,
             cause: cause.to_string(),
             log: log.map(str::to_string),
         }
@@ -398,7 +418,12 @@ mod tests {
 
         assert_eq!(board.next_to_start(), None);
         assert!(board.any_running());
-        board.ended(&issue(21), Ended::Interrupted);
+        board.ended(
+            &issue(21),
+            Ended::Interrupted {
+                local_worktree: None,
+            },
+        );
         assert!(!board.any_running());
         assert_eq!(board.next_to_start(), None);
     }

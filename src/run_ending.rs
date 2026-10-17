@@ -304,16 +304,11 @@ impl<'a> Account<'a> {
             }
             Err(cause) => format!("failed: {}", cause.first_line()),
         };
-        let ended = if let Some(recovery) = self.recovery {
-            let rows = recovery
-                .rows()
-                .into_iter()
-                .map(|(label, value)| format!("{label}: {value}"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            format!("{ended}; {rows}")
-        } else {
+        let recovery = self.recovery_lines();
+        let ended = if recovery.is_empty() {
             ended
+        } else {
+            format!("{ended}; {}", recovery.join("; "))
         };
         match self.review.as_ref().and_then(|review| review.dispatched) {
             Some(plan) => format!("plan {plan} dispatched: {ended}"),
@@ -412,6 +407,7 @@ pub struct ChildEnding {
 /// How a child Run failed, as read back from what it showed.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ChildFailure {
+    pub local_worktree: Option<String>,
     /// The first line of its cause, or none if it showed nothing.
     pub cause: Option<String>,
     pub log: Option<String>,
@@ -432,6 +428,7 @@ pub struct Reader {
     /// The session log named since that line.
     log: Option<String>,
     base_fix: Option<String>,
+    local_worktree: Option<String>,
 }
 
 impl Reader {
@@ -440,7 +437,9 @@ impl Reader {
         let ChildLine::Own(message) = line else {
             return;
         };
-        if let Some(report) = message.strip_prefix(BASE_FIX) {
+        if let Some(path) = message.strip_prefix("Local worktree: ") {
+            self.local_worktree = Some(path.to_string());
+        } else if let Some(report) = message.strip_prefix(BASE_FIX) {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {
             self.log = Some(log.to_string());
@@ -450,12 +449,18 @@ impl Reader {
         }
     }
 
+    /// Retention is still relevant when the supervisor interrupted the child.
+    pub fn local_worktree(&self) -> Option<&str> {
+        self.local_worktree.as_deref()
+    }
+
     /// How the child ended, given its `stdout` and whether it `exited_zero`.
     pub fn finish(self, stdout: &str, exited_zero: bool) -> ChildEnding {
         let outcome = if exited_zero {
             Ok(stdout.lines().last().map(String::from))
         } else {
             Err(ChildFailure {
+                local_worktree: self.local_worktree,
                 cause: self.cause,
                 log: self.log,
             })
@@ -983,6 +988,7 @@ mod tests {
         assert_eq!(
             read_back(&ended).outcome,
             Err(ChildFailure {
+                local_worktree: None,
                 cause: Some("claude exited 3".into()),
                 log: Some(LOG.into())
             })
@@ -997,6 +1003,7 @@ mod tests {
         assert_eq!(
             reader.finish("", false).outcome,
             Err(ChildFailure {
+                local_worktree: None,
                 cause: Some("claude exited 3".into()),
                 log: Some(LOG.into())
             })
@@ -1046,6 +1053,7 @@ mod tests {
 
     fn failure(cause: &str, log: Option<&str>) -> Result<Option<String>, ChildFailure> {
         Err(ChildFailure {
+            local_worktree: None,
             cause: Some(cause.to_string()),
             log: log.map(String::from),
         })
@@ -1213,6 +1221,7 @@ mod tests {
     fn a_child_that_showed_nothing_reads_back_with_no_cause() {
         let nothing = ChildEnding {
             outcome: Err(ChildFailure {
+                local_worktree: None,
                 cause: None,
                 log: None,
             }),

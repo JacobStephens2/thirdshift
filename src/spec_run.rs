@@ -86,7 +86,13 @@ fn run_through(
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
-    let (ticket_lines, progress, pushed, landed) = land_tickets(outside, spec, tickets, parallel);
+    let Landing {
+        lines: ticket_lines,
+        progress,
+        retained_tickets,
+        pushed,
+        outcome: landed,
+    } = land_tickets(outside, spec, tickets, parallel);
     // Every Ticket landed only once the Spec PR is told so.
     let landed = landed.and_then(|checklist| {
         let spec_pr_url = outside.landed(&checklist)?;
@@ -125,6 +131,7 @@ fn run_through(
                 ))
             });
             recovery.tickets = Some(progress);
+            recovery.retained_tickets = retained_tickets;
             failed.ticket_lines = ticket_lines;
             Err(failed)
         }
@@ -285,7 +292,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
         if let Ok(ended) = &ending {
             progress::step(match ended {
                 Ended::Reached { .. } => format!("#{number} landed"),
-                Ended::Interrupted => format!("#{number} interrupted"),
+                Ended::Interrupted { .. } => format!("#{number} interrupted"),
                 Ended::Failed { .. } => format!("#{number} failed"),
             });
         }
@@ -327,6 +334,15 @@ impl Outside for ChildRunsAndGitHub<'_> {
     }
 }
 
+/// Ticket accounting captured before ownership passes to Delivery.
+struct Landing {
+    lines: Vec<String>,
+    progress: TicketProgress,
+    retained_tickets: Vec<crate::failed_run::RetainedTicket>,
+    pushed: bool,
+    outcome: Result<String>,
+}
+
 /// Push the Spec branch, then keep up to `parallel` of the Tickets, last
 /// read as `tickets`, running, each time one ends starting ready ones,
 /// lowest number first, until none is ready and none is running, showing
@@ -341,10 +357,16 @@ fn land_tickets(
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
-) -> (Vec<String>, TicketProgress, bool, Result<String>) {
+) -> Landing {
     let mut board = TicketBoard::new(spec, tickets, parallel);
     if let Err(error) = outside.push() {
-        return (Vec::new(), board.progress(), false, Err(error));
+        return Landing {
+            lines: Vec::new(),
+            progress: board.progress(),
+            retained_tickets: Vec::new(),
+            pushed: false,
+            outcome: Err(error),
+        };
     }
     let landing = run_ready_tickets(outside, &mut board);
     let lines = board.lines();
@@ -358,7 +380,13 @@ fn land_tickets(
         }
         bail!("Tickets not done: {}", not_done.join(", "));
     });
-    (lines, board.progress(), true, landed)
+    Landing {
+        lines,
+        progress: board.progress(),
+        retained_tickets: board.retained_tickets(),
+        pushed: true,
+        outcome: landed,
+    }
 }
 
 /// Keep the Tickets on `board` running as it offers them, until it offers
@@ -399,7 +427,11 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
         let ending = result.unwrap_or_else(|finish_error| {
             let cause = format!("{finish_error:#}");
             error.get_or_insert(finish_error);
-            Ended::Failed { cause, log: None }
+            Ended::Failed {
+                cause,
+                log: None,
+                local_worktree: None,
+            }
         });
         let landed = matches!(ending, Ended::Reached { .. });
         board.ended(&ticket, ending);
@@ -764,6 +796,7 @@ mod tests {
 
     fn failed(cause: &str) -> Ended {
         Ended::Failed {
+            local_worktree: None,
             cause: cause.to_string(),
             log: Some("/logs/session.jsonl".to_string()),
         }
@@ -773,13 +806,13 @@ mod tests {
     /// once.
     fn land(outside: &mut Scripted, parallel: usize) -> (Vec<String>, Result<String>) {
         let tickets = outside.graph();
-        let (lines, _, _, landed) = land_tickets(
+        let landing = land_tickets(
             outside,
             &IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap(),
             tickets,
             NonZeroUsize::new(parallel).unwrap(),
         );
-        (lines, landed)
+        (landing.lines, landing.outcome)
     }
 
     /// Take Spec #20, its Tickets as `outside` has them, up to `parallel`
@@ -1287,7 +1320,12 @@ mod tests {
             tickets: vec![open(21, &[]), open(22, &[])],
             endings: VecDeque::from([
                 (21, Ok(failed("claude exited 1"))),
-                (22, Ok(Ended::Interrupted)),
+                (
+                    22,
+                    Ok(Ended::Interrupted {
+                        local_worktree: None,
+                    }),
+                ),
             ]),
             ..Script::default()
         });

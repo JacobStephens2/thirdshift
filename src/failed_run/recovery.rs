@@ -50,10 +50,17 @@ pub struct TicketProgress {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct RetainedTicket {
+    pub issue: crate::issue::IssueUrl,
+    pub worktree: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct Recovery {
     pub stage: Stage,
     pub preservation: Preservation,
     pub tickets: Option<TicketProgress>,
+    pub retained_tickets: Vec<RetainedTicket>,
     pub local_worktree: Option<PathBuf>,
     /// Executable public command and its Launch directory/Base branch requirement.
     pub continuation: Option<String>,
@@ -66,6 +73,7 @@ impl Recovery {
             stage,
             preservation,
             tickets: None,
+            retained_tickets: Vec::new(),
             local_worktree: None,
             continuation: None,
             base: None,
@@ -102,16 +110,23 @@ impl Recovery {
         if let Some(path) = &self.local_worktree {
             rows.push(("Local worktree", path.display().to_string()));
         }
+        for ticket in &self.retained_tickets {
+            rows.push(("Local Ticket", format!("{}: work may exist only locally in {}. Recover and push its retained branch, then release its retained checkout safely before continuing the Spec.", ticket.issue.url, ticket.worktree)));
+        }
         if let Some(command) = &self.continuation {
-            let advice = match self.preservation {
-                Preservation::Remote => {
-                    "Re-run when the cause is resolved or usage is available. Continuation reuses the preserved branch and open PR, and skips completed Tickets. It starts a new agent session; further merge or CI Repairs may still be needed."
-                }
-                Preservation::Local => {
-                    "After recovering and pushing local work, re-run when the cause is resolved. Continuation reuses the branch and open PR and skips completed Tickets; it starts a new agent session and may need further merge or CI Repairs."
-                }
-                Preservation::None => {
-                    "Re-run when the cause is resolved; there is no preserved work from this Run to continue."
+            let advice = if !self.retained_tickets.is_empty() {
+                "Recover locally retained Ticket work first. Then re-run the Spec: Continuation reuses the Spec branch and open PR and skips completed Tickets. It starts a new agent session; further merge or CI Repairs may still be needed."
+            } else {
+                match self.preservation {
+                    Preservation::Remote => {
+                        "Re-run when the cause is resolved or usage is available. Continuation reuses the preserved branch and open PR, and skips completed Tickets. It starts a new agent session; further merge or CI Repairs may still be needed."
+                    }
+                    Preservation::Local => {
+                        "After recovering and pushing local work, re-run when the cause is resolved. Continuation reuses the branch and open PR and skips completed Tickets; it starts a new agent session and may need further merge or CI Repairs."
+                    }
+                    Preservation::None => {
+                        "Re-run when the cause is resolved; there is no preserved work from this Run to continue."
+                    }
                 }
             };
             rows.push(("Recovery", advice.into()));
@@ -130,6 +145,7 @@ impl Recovery {
             "Progress:",
             "Preservation:",
             "Local worktree:",
+            "Local Ticket:",
             "Recovery:",
             "Launch:",
             "Continue:",
