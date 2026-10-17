@@ -2,14 +2,7 @@
 
 mod support;
 
-use support::Scenario;
-
-const AGENT_COMMITS_AND_OPENS_PR: &str = r#"
-echo "feature" > feature.txt
-git add feature.txt
-git commit -q -m "Add feature"
-gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
-"#;
+use support::{AGENT_COMMITS_AND_OPENS_PR, Scenario};
 
 #[test]
 fn a_number_and_a_full_url_deliver_the_same_issue() {

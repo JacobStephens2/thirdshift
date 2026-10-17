@@ -233,6 +233,14 @@ pub enum TimelineEvent<'a> {
     BlockedByRemoved,
 }
 
+/// A successful session for issue #7: commit a feature and open a PR into main.
+pub const AGENT_COMMITS_AND_OPENS_PR: &str = r#"
+echo "feature" > feature.txt
+git add feature.txt
+git commit -q -m "Add feature"
+gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
+"#;
+
 pub struct RunResult {
     pub stdout: String,
     /// stderr with the time each progress line was printed removed, so it
