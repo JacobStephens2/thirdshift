@@ -1501,3 +1501,130 @@ fn a_model_claude_refuses_fails_the_pass_once_it_has_taken_an_issue_before_any_w
         "a Command log was kept"
     );
 }
+
+#[test]
+fn an_issue_written_by_an_untrusted_account_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&["#7 issue author is not a Trusted account"]),
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+#[test]
+fn an_issue_labelled_by_an_untrusted_account_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": [
+        {"event": "labeled", "label": {"name": "ready-for-agent"},
+         "actor": {"login": "acme"}},
+        {"event": "unlabeled", "label": {"name": "ready-for-agent"},
+         "actor": {"login": "acme"}},
+        {"event": "labeled", "label": {"name": "ready-for-agent"},
+         "actor": {"login": "outsider"}}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[
+            "#7 most recent ready-for-agent label actor is not a Trusted account",
+        ]),
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+#[test]
+fn missing_ready_label_history_or_actor_cannot_authorize_pickup() {
+    for events in [
+        serde_json::json!([]),
+        serde_json::json!([
+            {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": null}
+        ]),
+    ] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        let mut state = scenario.gh_state();
+        state["trust_events"] = serde_json::json!({"7": events});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_skipped(
+            &scenario,
+            &result,
+            &no_ready_issue_after(&[
+                "#7 most recent ready-for-agent label actor is not a Trusted account",
+            ]),
+        );
+        assert!(scenario.claude_calls().is_empty());
+    }
+}
+
+#[test]
+fn trusted_authors_and_the_latest_trusted_ready_label_authorize_pickup() {
+    for (association, actor, owner_type, collaborators, members) in [
+        ("OWNER", "ACME", "User", vec![], vec![]),
+        ("COLLABORATOR", "reader", "User", vec!["reader"], vec![]),
+        ("MEMBER", "member", "Organization", vec![], vec!["member"]),
+    ] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+        let mut state = scenario.gh_state();
+        state["author_associations"] = serde_json::json!({"7": association});
+        state["owner_type"] = serde_json::json!(owner_type);
+        state["collaborators"] = serde_json::json!(collaborators);
+        state["org_members"] = serde_json::json!(members);
+        state["trust_events"] = serde_json::json!({"7": [
+            {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}},
+            {"event": "unlabeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+            {"event": "labeled", "label": {"name": "READY-for-AGENT"}, "actor": {"login": actor}},
+            {"event": "labeled", "label": {"name": "bug"}, "actor": {"login": "outsider"}}
+        ]});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+        assert!(!result.stderr.contains("warning:"), "{}", result.stderr);
+    }
+}
+
+#[test]
+fn a_failed_label_actor_membership_lookup_starts_no_work() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": [
+        {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "reader"}}
+    ]});
+    state["failing"] = serde_json::json!(["api --include repos/acme/widgets/collaborators/reader"]);
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("could not check Trusted account membership"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+}
