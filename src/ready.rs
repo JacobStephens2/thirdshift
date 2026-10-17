@@ -234,7 +234,8 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
 
 /// Where `candidate`, an open issue labelled `ready-for-agent`, stands at
 /// `now`, reading what its listing doesn't give through `reads`. It is a
-/// Ready issue when it has no label that makes an Unready Ticket and no
+/// Ready issue when its author and latest ready-for-agent label actor are
+/// Trusted accounts, it has no label that makes an Unready Ticket and no
 /// Claim, is not a sub-issue, has no `base-fix` or `security-fix` label and no
 /// open blocker, was never started, is not a Spec whose Tickets are all
 /// closed, and is settled: `wait` has passed since it was last labelled

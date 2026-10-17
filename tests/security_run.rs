@@ -2333,6 +2333,30 @@ fn a_ready_issue_skips_before_any_session_and_keeps_only_the_activity_log() {
 }
 
 #[test]
+fn an_untrusted_ready_label_does_not_skip_the_security_audit() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = json!({"7": [
+        {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
+    ]});
+    scenario.write_gh_state(&state);
+    scenario.agent_does(&audit_script("[]"));
+
+    let result = scenario.run(&["secure"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("#7 most recent ready-for-agent label actor is not a Trusted account"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     let scenario = Scenario::new();
     let waiting = format!(
