@@ -62,6 +62,8 @@ Write the reviewers' reports, with each axis's final files-read list, to `<mark 
 Push branch <mark class="ph">&lt;branch&gt;</mark> and create a pull request against <mark class="ph">&lt;base&gt;</mark> using the `thirdshift-pr` skill, marked ready for review.
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
+
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
@@ -91,6 +93,8 @@ Create a pull request against <mark class="ph">&lt;base&gt;</mark> using the `th
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
+
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
 
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
@@ -122,6 +126,8 @@ In the PR body, add an "Unaddressed findings" section listing each skipped findi
 
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
+
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
@@ -151,6 +157,8 @@ Update PR <mark class="ph">&lt;pull request URL&gt;</mark> using the `thirdshift
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
+
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
 
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
@@ -184,6 +192,8 @@ Architecture review plan: &lt;URL of the Spec or the single Ticket you published
 Architecture review idea: &lt;URL of the issue you filed&gt;
 Architecture review already filed: &lt;URL of the open issue that already covers it&gt;
 
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
+
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
         </div>
@@ -211,6 +221,8 @@ The reason must be nonempty, on a single line, and at most 500 characters. It is
 After a complete review, end your final message with exactly one line of the form:
 Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}
 unaddressed_count counts only unaddressed findings introduced by this change; findings is an array of their short titles, with one title per finding. pre_existing_count is the number of entries in the private report. No old-finding details belong in this line.
+
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
 
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
@@ -278,6 +290,8 @@ A merge of origin/<mark class="ph">&lt;base&gt;</mark> into <mark class="ph">&lt
 
 Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt;</mark>. Do not rebase or force-push.
 
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
+
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
@@ -339,6 +353,8 @@ A merge of origin/<mark class="ph">&lt;branch&gt;</mark> into <mark class="ph">&
 
 Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt;</mark>. Do not rebase or force-push.
 
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
+
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
@@ -365,6 +381,8 @@ Add each skipped finding to the "Unaddressed findings" section of the pull reque
 
 Commit only if the review changes files. If no files change, make no commit, including no `--allow-empty` commit. If there is no new review information, leave the PR body unchanged; still record actual declined findings as required above. Push <mark class="ph">&lt;branch&gt;</mark> when needed to publish changes or reconcile upstream commits. Do not rebase or force-push.
 
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
+
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
@@ -390,6 +408,8 @@ Compare the failing test or check with the branch's diff against <mark class="ph
 Only failures in tests or checks this branch does not touch may go in a "CI notes" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on <mark class="ph">&lt;base&gt;</mark>). Do not change code for those unrelated failures.
 
 Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.
+
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
 
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
@@ -419,6 +439,8 @@ Compare the failing test or check with the branch's diff against <mark class="ph
 Only failures in tests or checks this branch does not touch may go in a "CI notes" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on <mark class="ph">&lt;base&gt;</mark>). Do not change code for those unrelated failures.
 
 Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.
+
+For source edits, prefer an available structured patch/edit tool (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. Language-specific code generation and narrowly justified scripts remain appropriate.
 
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 

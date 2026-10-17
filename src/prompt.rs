@@ -4,6 +4,12 @@ use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 use crate::labels::{NEEDS_TRIAGE, READY_FOR_AGENT};
 
+/// Shared by sessions permitted to edit source. Resumes retain the original
+/// session's guidance; sessions that prohibit source edits do not receive it.
+const SOURCE_EDITS: &str = "For source edits, prefer an available structured patch/edit tool \
+    (for example, `apply_patch` on Codex) that makes the intended context and changed regions explicit. \
+    Language-specific code generation and narrowly justified scripts remain appropriate.\n";
+
 /// Every prompt ends with this, worded for either Harness. A session exits
 /// once the agent ends its turn, killing any background task still running.
 /// Other sessions on the same machine run the same commands, so a wait on a
@@ -94,6 +100,7 @@ pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
          Push branch {branch} and create a pull request against {base} using the `thirdshift-pr` skill, marked ready for review.\n\
          {unaddressed_findings}\n\
          Include \"Closes #{number}\" in the PR body.\n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -132,6 +139,7 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -162,6 +170,7 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = spec.url,
@@ -207,6 +216,7 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
          {IDEA_LINE}<URL of the issue you filed>\n\
          {ALREADY_FILED_LINE}<URL of the open issue that already covers it>\n\
          \n\
+         {SOURCE_EDITS}\n\
          {HEADLESS}",
     )
 }
@@ -223,6 +233,7 @@ pub fn conflict_repair(issue: &IssueUrl, merging: &str, branch: &str, pr_url: &s
          \n\
          Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -263,6 +274,7 @@ pub fn ci_fix_repair(
          \n\
          Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -286,6 +298,7 @@ pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &st
          \n\
          Commit only if the review changes files. If no files change, make no commit, including no `--allow-empty` commit. If there is no new review information, leave the PR body unchanged; still record actual declined findings as required above. Push {branch} when needed to publish changes or reconcile upstream commits. Do not rebase or force-push.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -354,6 +367,7 @@ pub fn security_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
          After a complete review, end your final message with exactly one line of the form:\n\
          Security review: {{\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}}\n\
          unaddressed_count counts only unaddressed findings introduced by this change; findings is an array of their short titles, with one title per finding. pre_existing_count is the number of entries in the private report. No old-finding details belong in this line.\n\n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
