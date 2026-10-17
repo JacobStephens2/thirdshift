@@ -109,7 +109,7 @@ A **Pickup run**'s removal of `in-progress` from every closed issue in the repos
 _Avoid_: cleanup, garbage collection
 
 **Ready issue**:
-An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no label that makes an **Unready Ticket** and no **Claim**, not a sub-issue, not a **Base fix**'s or a **Security run**'s fix issue, with no open blocker, never started (no **Issue branch** and no pull request), not a **Spec** whose **Tickets** are all closed, and left untouched long enough that whoever is shaping it has finished. On a Spec, the label says its Tickets are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
+An open issue a **Pickup run** may take: labelled `ready-for-agent`, with no label that makes an **Unready Ticket** and no **Claim**, not a sub-issue, not a **Base fix**'s or a **Security run**'s fix issue, with no open blocker, either never started (no **Issue branch** and no pull request) or handed back by the **Day shift** applying `ready-for-agent` after the last **Claim** ended, as recorded in its label history, not a **Spec** whose **Tickets** are all closed, and left untouched long enough that whoever is shaping it has finished. On a Spec, the label says its Tickets are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
 _Avoid_: queued issue, backlog item
 
 **Architecture review**:
@@ -117,7 +117,7 @@ The agent session that opens an **Architect run**: it scans the **Base branch** 
 _Avoid_: planning session
 
 **Architect plan**:
-The **Spec**, or the standalone **Ticket** when one session is enough, that an **Architecture review** published: one or the other, never a third kind of issue. thirdshift labels it `architect-plan` once the review has ended cleanly, and it stays open until its work is merged or someone closes it. A failed **Run** or **Spec run** on it leaves it open for the **Day shift** to take over; no later **Architect run** or **Pickup run** retries it.
+The **Spec**, or the standalone **Ticket** when one session is enough, that an **Architecture review** published: one or the other, never a third kind of issue. thirdshift labels it `architect-plan` once the review has ended cleanly, and it stays open until its work is merged or someone closes it. A failed **Run** or **Spec run** on it leaves it open for the **Day shift** to take over; no later **Architect run** retries it, and a **Pickup run** takes it again only if the Day shift hands it back as a **Ready issue**.
 _Avoid_: plan, plan doc
 
 **Architect idea**:

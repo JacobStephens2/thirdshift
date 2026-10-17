@@ -1,7 +1,8 @@
 //! Pickup runs: `thirdshift pickup` takes the lowest-numbered Ready issue in
 //! the repository, an open issue labelled `ready-for-agent` with no label
 //! that makes an Unready Ticket, no Claim and no `base-fix` label, that is
-//! not a sub-issue, has no open blocker and nothing started on it, is not a
+//! not a sub-issue, has no open blocker and was never started or was handed
+//! back after its last Claim ended, is not a
 //! Spec whose Tickets are all closed, and has settled, and
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
@@ -178,7 +179,9 @@ fn an_issue_with_an_issue_branch_on_origin_is_not_taken() {
 
         let result = scenario.run(&["pickup"]);
 
-        let line = format!("#7 already started: {branch} is on origin");
+        let line = format!(
+            "#7 started: {branch} is on origin; no ready-for-agent hand-back after the last Claim ended"
+        );
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT], "{branch}");
     }
@@ -193,7 +196,8 @@ fn an_issue_with_a_pull_request_from_an_issue_branch_in_any_state_is_not_taken()
 
         let result = scenario.run(&["pickup"]);
 
-        let line = format!("#7 already started: PR {pr}");
+        let line =
+            format!("#7 started: PR {pr}; no ready-for-agent hand-back after the last Claim ended");
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT], "{state}");
     }
@@ -217,7 +221,7 @@ fn when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_take
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-70"), "ready for review");
     let url = scenario.issue_url(70);
     let lines = format!(
-        "thirdshift: #7 already started: PR {pr}\n\
+        "thirdshift: #7 started: PR {pr}; no ready-for-agent hand-back after the last Claim ended\n\
          thirdshift: #8 labelled wontfix\n\
          thirdshift: #9 labelled in-progress\n\
          thirdshift: taking Ready issue #70 \"Issue 70\", as thirdshift {url} would\n"
@@ -1500,5 +1504,171 @@ fn a_model_claude_refuses_fails_the_pass_once_it_has_taken_an_issue_before_any_w
             .path("home/.thirdshift/logs/acme/widgets/commands")
             .exists(),
         "a Command log was kept"
+    );
+}
+
+#[test]
+fn a_handed_back_branch_is_continued_without_losing_interrupted_work() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::Labelled(IN_PROGRESS), 90),
+            (TimelineEvent::Unlabelled(IN_PROGRESS), 61),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
+        ],
+    );
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7");
+    assert!(scenario.first_prompt().contains("You are continuing work"));
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            "Work on 7".to_string(),
+            "Interrupted work".to_string(),
+            "Initial commit".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn a_handed_back_open_pr_is_continued_using_its_base() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("develop", "main", &["Develop work"]);
+    scenario.launch_checks_out("develop");
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    let pr = scenario.github_has_pr("issue-7", "main", "OPEN");
+    // These operations can all occur in the same second. Timeline order
+    // still establishes the Claim ending before the hand-back.
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::Labelled("In-Progress"), 60),
+            (TimelineEvent::Unlabelled("IN-PROGRESS"), 60),
+            (TimelineEvent::Labelled("Ready-For-Agent"), 60),
+        ],
+    );
+    scenario.agent_does_for(
+        7,
+        "echo more > more.txt\ngit add more.txt\ngit commit -q -m Continued",
+    );
+
+    let result = scenario.run(&["pickup", "base", "develop"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(result.stdout, format!("{pr}\n"));
+    assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
+    assert!(scenario.first_prompt().contains("You are continuing work"));
+    assert!(scenario.first_prompt().contains("The base branch is main."));
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            "Continued".to_string(),
+            "Interrupted work".to_string(),
+            "Initial commit".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
+    use TimelineEvent::{Labelled as On, Unlabelled as Off};
+    let claim = On(IN_PROGRESS);
+    let end = Off(IN_PROGRESS);
+    let ready = On(READY_FOR_AGENT);
+    let histories = [
+        vec![],
+        vec![ready],
+        vec![end, ready],
+        vec![claim, ready],
+        vec![claim, ready, end],
+        vec![claim, end],
+        vec![claim, end, ready, claim, end],
+        vec![claim, end, ready, claim, ready, end],
+        vec![claim, end, ready, Off(READY_FOR_AGENT)],
+    ];
+    for history in histories {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.origin_has_branch("issue-7", "main", &["Human or interrupted work"]);
+        let events: Vec<_> = history.into_iter().map(|event| (event, 60)).collect();
+        scenario.issue_timeline(7, &events);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_skipped(
+            &scenario,
+            &result,
+            &no_ready_issue_after(&[
+                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended",
+            ]),
+        );
+    }
+}
+
+#[test]
+fn label_history_is_read_past_one_page_before_accepting_or_rejecting_a_hand_back() {
+    for handed_back in [true, false] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+        let mut events = vec![
+            (TimelineEvent::Labelled(IN_PROGRESS), 90),
+            (TimelineEvent::Unlabelled(IN_PROGRESS), 80),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 70),
+        ];
+        events.extend((0..205).map(|_| (TimelineEvent::Labelled("bug"), 65)));
+        events.extend([
+            (TimelineEvent::Labelled(IN_PROGRESS), 62),
+            (TimelineEvent::Unlabelled(IN_PROGRESS), 61),
+        ]);
+        if handed_back {
+            events.push((TimelineEvent::Labelled(READY_FOR_AGENT), 60));
+            scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+        }
+        scenario.issue_timeline(7, &events);
+
+        let result = scenario.run(&["pickup"]);
+
+        if handed_back {
+            assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+        } else {
+            assert_skipped(
+                &scenario,
+                &result,
+                &no_ready_issue_after(&[
+                    "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended",
+                ]),
+            );
+        }
+    }
+}
+
+#[test]
+fn a_recent_hand_back_on_a_later_history_page_waits_for_settling() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    let mut events = vec![(TimelineEvent::Labelled(IN_PROGRESS), 90)];
+    events.extend((0..101).map(|_| (TimelineEvent::Labelled("bug"), 65)));
+    events.extend([
+        (TimelineEvent::Unlabelled(IN_PROGRESS), 2),
+        (TimelineEvent::Labelled(READY_FOR_AGENT), 1),
+    ]);
+    scenario.issue_timeline(7, &events);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[LABELLED_TOO_RECENTLY]),
     );
 }
