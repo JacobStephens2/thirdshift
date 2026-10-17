@@ -492,6 +492,8 @@ fn check_reads_classify_transport_and_api_failures_without_hiding_diagnostics() 
             for (stderr, transient) in [
                 ("unexpected end of JSON input", true),
                 ("Get https://api.github.com: unexpected EOF", true),
+                ("Get \"https://api.github.com\": EOF", true),
+                ("EOF", true),
                 ("error connecting to api.github.com", true),
                 ("dial tcp: lookup api.github.com: no such host", true),
                 ("read tcp: connection reset by peer", true),
@@ -504,6 +506,7 @@ fn check_reads_classify_transport_and_api_failures_without_hiding_diagnostics() 
                 ("gh: Not Found (HTTP 404)", false),
                 ("gh: Validation Failed (HTTP 422)", false),
                 ("gh: Bad credentials (HTTP 401): unexpected EOF", false),
+                ("gh: Bad credentials (HTTP 401): EOF", false),
                 (
                     "To get started with GitHub CLI, please run: gh auth login",
                     false,

@@ -36,7 +36,10 @@ pub(crate) fn is_transient(error: &anyhow::Error) -> bool {
     {
         return status == 429 || (500..600).contains(&status);
     }
-    let stderr = failure.stderr.to_ascii_lowercase();
+    let stderr = failure.stderr.trim().to_ascii_lowercase();
+    if stderr == "eof" || stderr.ends_with(": eof") {
+        return true;
+    }
     [
         "unexpected end of json input",
         "unexpected eof",
