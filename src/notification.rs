@@ -205,7 +205,7 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 }
 
 /// The plain-text body of the notification for a command that ended as
-/// `account` tells, with its configured `built_with` line, if known,
+/// `account` tells, about `subject`, with its configured `built_with` line, if known,
 /// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
 /// outcome, as the subject gives it, then the original Issue URL when the

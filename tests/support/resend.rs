@@ -18,17 +18,6 @@ pub struct Request {
     pub body: Value,
 }
 
-/// An issue-based notification has exactly one `Issue:` line.
-pub fn assert_one_issue_line(text: &str) {
-    assert_eq!(
-        text.lines()
-            .filter(|line| line.starts_with("Issue:"))
-            .count(),
-        1,
-        "{text}"
-    );
-}
-
 pub struct ResendStandIn {
     url: String,
     requests: Arc<Mutex<Vec<Request>>>,
@@ -60,6 +49,17 @@ impl ResendStandIn {
     pub fn requests(&self) -> Vec<Request> {
         self.requests.lock().unwrap().clone()
     }
+}
+
+/// An issue-based notification identifies its original issue exactly once.
+pub fn assert_one_issue_line(text: &str) {
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("Issue:"))
+            .count(),
+        1,
+        "expected exactly one Issue line in: {text}"
+    );
 }
 
 /// Read one HTTP/1.1 request from `stream`, record it in `recorded`, reply,

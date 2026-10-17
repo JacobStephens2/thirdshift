@@ -2178,6 +2178,7 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
     let requests = resend.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
     let body = &requests[0].body;
+    assert_one_issue_line(body["text"].as_str().unwrap());
     (
         body["subject"].as_str().unwrap().to_string(),
         body["text"].as_str().unwrap().to_string(),
@@ -2213,7 +2214,6 @@ fn a_ready_spec_run_sends_one_notification_with_a_line_per_ticket() {
     ] {
         assert_contains(&text, part);
     }
-    assert_one_issue_line(&text);
     assert!(!text.contains("#23"), "{text}");
 }
 

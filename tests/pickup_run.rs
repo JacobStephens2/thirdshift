@@ -911,7 +911,9 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
     assert_eq!(requests.len(), 1, "{requests:?}");
     let body = &requests[0].body;
     let part = |name: &str| body[name].as_str().unwrap().to_string();
-    (part("subject"), part("text"))
+    let text = part("text");
+    assert_one_issue_line(&text);
+    (part("subject"), text)
 }
 
 /// A Ready issue, #7, titled, with no sub-issues, whose session opens its PR
@@ -1090,7 +1092,6 @@ fn the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket() {
     );
     assert!(text.starts_with(&pull_request), "{text}");
     let (_, tickets) = text.split_once("\nTickets:\n").expect(&text);
-    assert_one_issue_line(&text);
     for ticket in [8, 9] {
         let pr = pr_from(&scenario, &format!("issue-{ticket}"));
         let line = format!("#{ticket} landed with {}\n", pr["url"].as_str().unwrap());
