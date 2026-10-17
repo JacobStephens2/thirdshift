@@ -96,6 +96,27 @@ impl TicketBoard {
         self.running() > 0
     }
 
+    pub(super) fn progress(&self) -> crate::recovery::TicketProgress {
+        crate::recovery::TicketProgress {
+            landed: self.tickets.iter().filter(|ticket| !ticket.is_open).count(),
+            total: self.tickets.len(),
+            reviewed: false,
+        }
+    }
+
+    pub(super) fn local_work(&self) -> Vec<String> {
+        self.standings
+            .values()
+            .flat_map(|standing| match standing {
+                Standing::Ended(
+                    Ended::Failed { local_work, .. } | Ended::Interrupted { local_work },
+                ) => local_work.as_slice(),
+                _ => &[],
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The Tickets not done, the open ones, in the order they were read.
     pub(super) fn not_done(&self) -> Vec<String> {
         self.tickets
@@ -195,7 +216,7 @@ impl TicketBoard {
         }
         match self.standings.get(&identity) {
             Some(Standing::Running) => return "running".to_string(),
-            Some(Standing::Ended(Ended::Interrupted)) => return "interrupted".to_string(),
+            Some(Standing::Ended(Ended::Interrupted { .. })) => return "interrupted".to_string(),
             Some(Standing::Ended(Ended::Failed { cause, .. })) => {
                 return format!("failed: {cause}");
             }
@@ -305,6 +326,7 @@ mod tests {
         Ended::Failed {
             cause: cause.to_string(),
             log: log.map(str::to_string),
+            local_work: Vec::new(),
         }
     }
 
@@ -391,7 +413,12 @@ mod tests {
 
         assert_eq!(board.next_to_start(), None);
         assert!(board.any_running());
-        board.ended(&issue(21), Ended::Interrupted);
+        board.ended(
+            &issue(21),
+            Ended::Interrupted {
+                local_work: Vec::new(),
+            },
+        );
         assert!(!board.any_running());
         assert_eq!(board.next_to_start(), None);
     }

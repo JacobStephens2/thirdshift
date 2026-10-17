@@ -31,6 +31,7 @@ mod prompt;
 mod prompts_page;
 mod pull_request;
 mod ready;
+mod recovery;
 mod resend_key;
 mod run;
 mod run_ending;

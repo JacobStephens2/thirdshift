@@ -1010,3 +1010,93 @@ RETAINED
         "- implement: opencode · provider/retained-model (reported) · session effort: default effort",
     );
 }
+
+#[test]
+fn failure_reports_distinguish_remote_local_and_absent_work() {
+    for preservation in ["remote", "local", "none"] {
+        let scenario = Scenario::new();
+        if preservation == "local" {
+            scenario.repo_has_hook(&scenario.origin_dir(), "pre-receive", "#!/bin/sh\nexit 1\n");
+        }
+        scenario.agent_does(if preservation == "none" {
+            "exit 3\n"
+        } else {
+            "echo unfinished > wip.txt\nexit 3\n"
+        });
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+        let result = run(
+            &scenario,
+            &resend,
+            &[&scenario.issue_url(7), "email", "me@example.com"],
+            Some(KEY),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let request = the_one_request(&resend);
+        let notification = text(&request);
+        let expected = match preservation {
+            "remote" => "Preserved: remotely on issue-7",
+            "local" => "Preserved: work may exist only locally on issue-7",
+            _ => "Preserved: no work preserved",
+        };
+        for output in [&*result.stderr, notification] {
+            assert_contains(output, expected);
+            assert_contains(output, "Stopped at: Implementation");
+            assert_contains(output, "claude exited 3");
+            assert_contains(
+                output,
+                "Recovery: thirdshift https://github.com/acme/widgets/issues/7 --no-merge",
+            );
+            if preservation == "local" {
+                assert_contains(
+                    output,
+                    scenario.path("work/widgets-issue-7").to_str().unwrap(),
+                );
+                assert_contains(
+                    output,
+                    "Before retrying: inspect and publish the retained work",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn delivery_failures_name_the_stopped_stage_in_terminal_and_notification() {
+    for stage in ["Repair", "CI watching", "Self-merge", "Security review"] {
+        let scenario = Scenario::new();
+        let setup = match stage {
+            "Repair" => {
+                "gh fake checks \"$(git rev-parse HEAD)\" '[{\"name\":\"test\",\"conclusion\":\"failure\"}]'\n"
+            }
+            "CI watching" => "gh fake fails 'api --paginate --jq .check_runs[]'\n",
+            "Security review" => "",
+            _ => "gh fake refuse-merges 1 'Merge commits are not allowed'\n",
+        };
+        scenario.agent_does(&format!("{AGENT_OPENS_PR}{setup}"));
+        scenario.agent_does_in_session(2, "exit 3\n");
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+        let result = run(
+            &scenario,
+            &resend,
+            &[
+                &scenario.issue_url(7),
+                "merge",
+                "email",
+                "me@example.com",
+                if stage == "Security review" {
+                    "security-review"
+                } else {
+                    "no-security-review"
+                },
+            ],
+            Some(KEY),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let request = the_one_request(&resend);
+        let expected = format!("Stopped at: {stage}");
+        assert_contains(&result.stderr, &expected);
+        assert_contains(text(&request), &expected);
+        assert_contains(text(&request), "Pull request:");
+        assert_contains(text(&request), "Command log:");
+    }
+}

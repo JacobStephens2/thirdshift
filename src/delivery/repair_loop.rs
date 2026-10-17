@@ -13,6 +13,7 @@ use crate::pull_request::MergeAttempt;
 
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::PolicyRefusal;
+use crate::recovery::Stage;
 use crate::run::Goal;
 use crate::worktree::{ForeignCommits, Merge};
 
@@ -40,6 +41,9 @@ pub(super) enum Repair<'a> {
 pub(super) trait Outside {
     /// A merge left in progress for a conflict Repair.
     type Pending;
+
+    /// Record the lifecycle stage before entering an operation or its budget gate.
+    fn stage(&mut self, stage: Stage);
 
     /// Merge the Base branch, fetched from origin, into the Issue branch,
     /// returning the selected commit or the merge left pending if it conflicted.
@@ -113,6 +117,11 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
     let mut watched = repair_loop.rounds()?;
     loop {
         let outside = &mut *repair_loop.outside;
+        outside.stage(if goal == Goal::Merged {
+            Stage::SelfMerge
+        } else {
+            Stage::PullRequest
+        });
         outside.ensure_pr_ready_and_mergeable()?;
         if outside.interrupt_requested() {
             bail!("interrupted");
@@ -130,6 +139,7 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
             Round::NewHead(head) => watched = head,
             Round::NothingToFix => {
                 // Only a PR still ready and mergeable is left ready.
+                repair_loop.outside.stage(Stage::SelfMerge);
                 repair_loop.outside.ensure_pr_ready_and_mergeable()?;
                 return Err(error.context(PolicyRefusal::NothingToFix));
             }
@@ -262,6 +272,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// Start the next Repair, `repair`, for `cause`, counting it against the
     /// Repair cap.
     fn repair(&mut self, cause: &str, repair: Repair) -> Result<()> {
+        self.outside.stage(Stage::Repair);
         let (kind, line) = self.budgets.next_repair(cause)?;
         self.outside.progress(line);
         self.outside.repair(&kind, repair)
@@ -302,6 +313,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     fn rounds(&mut self) -> Result<String> {
         let base = self.base;
         loop {
+            self.outside.stage(Stage::Repair);
             if self.goal == Goal::Merged {
                 self.take_in_foreign_commits()?;
             }
@@ -394,6 +406,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// branch that moved since as an upstream move. GitHub's error text is never
     /// consulted.
     fn round_after_failed_merge(&mut self, watched: &str) -> Result<Round> {
+        self.outside.stage(Stage::Repair);
         let before = self.budgets;
         if self.outside.base_branch_moved()? {
             self.count_base_move("since the merge was tried")?;
@@ -541,6 +554,8 @@ mod tests {
     impl Outside for Scripted {
         /// The upstream whose merge is pending.
         type Pending = &'static str;
+
+        fn stage(&mut self, _: Stage) {}
 
         fn merge_base_branch(&mut self) -> Result<Merge<&'static str>> {
             self.did.push(Did::MergeBase);

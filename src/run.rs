@@ -2,7 +2,7 @@
 //! with sub-issues is a Spec instead, handed to a Spec run.
 
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 
@@ -123,7 +123,14 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
             review: asks.security_review,
         },
     );
-    let outcome = run(issue, asks, started_by, &mut base_fix);
+    let mut outcome = run(issue, asks, started_by, &mut base_fix);
+    if let Err(failed) = &mut outcome
+        && let Some(recovery) = &mut failed.recovery
+    {
+        recovery
+            .local_child_work
+            .extend_from_slice(base_fix.local_work());
+    }
     Ended {
         outcome,
         base_fix: base_fix.report(),
@@ -252,7 +259,8 @@ fn start<O: Outside>(
     if claims {
         outside.make_claim()?;
     }
-    let outcome = start_in_worktree(
+    let is_spec = !tickets.is_empty();
+    let mut outcome = start_in_worktree(
         outside,
         issue,
         tickets,
@@ -260,6 +268,21 @@ fn start<O: Outside>(
         &base,
         asks.tickets_at_once,
     );
+    if let Err(failed) = &mut outcome
+        && let Some(recovery) = &mut failed.recovery
+    {
+        if recovery.preservation == crate::recovery::Preservation::None
+            && matches!(selection, Selection::Continuation { .. })
+        {
+            recovery.preservation = crate::recovery::Preservation::Remote;
+        }
+        recovery.continuation = Some(crate::recovery::Continuation {
+            command: crate::args::continuation(issue, asks, is_spec),
+            launch: outside.launch_path().to_path_buf(),
+            base: base.clone(),
+            branch: selection.branch().to_string(),
+        });
+    }
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));
     }
@@ -312,6 +335,8 @@ enum Checkout {
 trait Outside {
     /// The worktree the Run's work is done in.
     type Worktree;
+
+    fn launch_path(&self) -> &Path;
 
     /// The issue's Tickets, its sub-issues, if it is a Spec.
     fn tickets(&mut self) -> Result<Vec<Ticket>>;
@@ -388,6 +413,10 @@ impl LaunchAndGitHub<'_> {
 
 impl<'a> Outside for LaunchAndGitHub<'a> {
     type Worktree = Worktree;
+
+    fn launch_path(&self) -> &Path {
+        self.directory.git().dir()
+    }
 
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
         GitHub::new().tickets(self.issue)
@@ -555,6 +584,10 @@ mod tests {
     impl Outside for Scripted {
         /// How it was created.
         type Worktree = Checkout;
+
+        fn launch_path(&self) -> &Path {
+            Path::new("/launch")
+        }
 
         fn tickets(&mut self) -> Result<Vec<Ticket>> {
             self.calls.push(Call::Tickets);

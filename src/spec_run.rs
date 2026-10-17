@@ -26,6 +26,7 @@ use crate::issue::IssueUrl;
 use crate::progress;
 use crate::prompt;
 use crate::pull_request::PullRequest;
+use crate::recovery::{Preservation, Recovery, Stage, TicketProgress};
 use crate::run::Reached;
 use crate::worktree::Worktree;
 
@@ -86,12 +87,19 @@ fn run_through(
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
-    let (ticket_lines, landed) = land_tickets(outside, spec, tickets, parallel);
+    let Landing {
+        lines: ticket_lines,
+        mut progress,
+        pushed,
+        landed,
+        local_work,
+    } = land_tickets(outside, spec, tickets, parallel);
     // Every Ticket landed only once the Spec PR is told so.
     let landed = landed.and_then(|checklist| {
         let spec_pr_url = outside.landed(&checklist)?;
         Ok((checklist, spec_pr_url))
     });
+    let all_tickets_accounted = landed.is_ok();
     let ended = match landed {
         Ok((checklist, spec_pr_url)) => {
             review_and_deliver(outside, spec, base, branch, &checklist, &spec_pr_url)
@@ -104,6 +112,14 @@ fn run_through(
                 log: None,
                 interrupted,
                 ticket_lines: Vec::new(),
+                recovery: Some(Box::new(Recovery::new(
+                    if pushed { Stage::Tickets } else { Stage::Push },
+                    if pushed {
+                        Preservation::Remote
+                    } else {
+                        Preservation::None
+                    },
+                ))),
             })
         }
     };
@@ -112,10 +128,17 @@ fn run_through(
             ticket_lines,
             ..reached
         }),
-        Err(failed) => Err(FailedRun {
-            ticket_lines,
-            ..failed
-        }),
+        Err(mut failed) => {
+            let recovery = failed.recovery.get_or_insert_with(|| {
+                Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
+            });
+            progress.reviewed = !matches!(recovery.stage, Stage::Tickets | Stage::SpecReview)
+                && all_tickets_accounted;
+            recovery.tickets = Some(progress);
+            recovery.local_child_work = local_work;
+            failed.ticket_lines = ticket_lines;
+            Err(failed)
+        }
     }
 }
 
@@ -264,7 +287,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
         if let Ok(ended) = &ending {
             progress::step(match ended {
                 Ended::Reached { .. } => format!("#{number} landed"),
-                Ended::Interrupted => format!("#{number} interrupted"),
+                Ended::Interrupted { .. } => format!("#{number} interrupted"),
                 Ended::Failed { .. } => format!("#{number} failed"),
             });
         }
@@ -315,16 +338,30 @@ impl Outside for ChildRunsAndGitHub<'_> {
 /// be pushed, and the last Tickets checklist if every Ticket is done: if
 /// not, it fails, after putting those lines on stderr unless an interrupt or
 /// another error ended it first.
+struct Landing {
+    lines: Vec<String>,
+    progress: TicketProgress,
+    pushed: bool,
+    landed: Result<String>,
+    local_work: Vec<String>,
+}
+
 fn land_tickets(
     outside: &mut impl Outside,
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
-) -> (Vec<String>, Result<String>) {
-    if let Err(error) = outside.push() {
-        return (Vec::new(), Err(error));
-    }
+) -> Landing {
     let mut board = TicketBoard::new(spec, tickets, parallel);
+    if let Err(error) = outside.push() {
+        return Landing {
+            lines: Vec::new(),
+            progress: board.progress(),
+            pushed: false,
+            landed: Err(error),
+            local_work: Vec::new(),
+        };
+    }
     let landing = run_ready_tickets(outside, &mut board);
     let lines = board.lines();
     let landed = landing.and_then(|()| {
@@ -337,7 +374,13 @@ fn land_tickets(
         }
         bail!("Tickets not done: {}", not_done.join(", "));
     });
-    (lines, landed)
+    Landing {
+        lines,
+        progress: board.progress(),
+        local_work: board.local_work(),
+        pushed: true,
+        landed,
+    }
 }
 
 /// Keep the Tickets on `board` running as it offers them, until it offers
@@ -378,7 +421,11 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
         let ending = result.unwrap_or_else(|finish_error| {
             let cause = format!("{finish_error:#}");
             error.get_or_insert(finish_error);
-            Ended::Failed { cause, log: None }
+            Ended::Failed {
+                cause,
+                log: None,
+                local_work: Vec::new(),
+            }
         });
         let landed = matches!(ending, Ended::Reached { .. });
         board.ended(&ticket, ending);
@@ -681,6 +728,7 @@ mod tests {
                     pr_url: Some(SPEC_PR.to_string()),
                     log: Some(PathBuf::from(DELIVERY_LOG)),
                     interrupted: false,
+                    recovery: None,
                     ticket_lines: Vec::new(),
                 }),
             }
@@ -744,6 +792,7 @@ mod tests {
         Ended::Failed {
             cause: cause.to_string(),
             log: Some("/logs/session.jsonl".to_string()),
+            local_work: Vec::new(),
         }
     }
 
@@ -751,12 +800,13 @@ mod tests {
     /// once.
     fn land(outside: &mut Scripted, parallel: usize) -> (Vec<String>, Result<String>) {
         let tickets = outside.graph();
-        land_tickets(
+        let landing = land_tickets(
             outside,
             &IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap(),
             tickets,
             NonZeroUsize::new(parallel).unwrap(),
-        )
+        );
+        (landing.lines, landing.landed)
     }
 
     /// Take Spec #20, its Tickets as `outside` has them, up to `parallel`
@@ -1264,7 +1314,12 @@ mod tests {
             tickets: vec![open(21, &[]), open(22, &[])],
             endings: VecDeque::from([
                 (21, Ok(failed("claude exited 1"))),
-                (22, Ok(Ended::Interrupted)),
+                (
+                    22,
+                    Ok(Ended::Interrupted {
+                        local_work: Vec::new(),
+                    }),
+                ),
             ]),
             ..Script::default()
         });
