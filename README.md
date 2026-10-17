@@ -186,6 +186,8 @@ It sends one [Run notification](#run-notifications), whatever the outcome. To ha
 
 During a CI wait, `CI on <short sha>: 3 still running out of 4 checks listed so far` counts the checks GitHub currently lists, including commit statuses. Dependent jobs and matrix jobs may become visible later, so both the pending count and the listed total can rise as CI progresses. A change to either count prints a new progress line; identical repeated counts stay quiet. The listed total is not a prediction of the final workflow total. This reporting does not change which checks count as passing or when Delivery may merge.
 
+CI check observations get at most three total attempts: the original read and two retries, with interruptible delays of one second then two seconds. Transport failures, HTTP 429 or 5xx responses, and truncated JSON can recover this way; known permanent errors and unclassified failures stop immediately with their diagnostics. This applies to the initial watch, pending-check polling, Base comparison and Check re-run reconciliation. Each retry reads the same repository and full commit again. Failed reads never count as passing or absent CI, never start a Repair, and never repeat a workflow re-run request. Progress lines retain each failure and delay; exhaustion reports all three attempts and their causes. Cancellation stops active reads and backoff without another request.
+
 The other commands:
 
 ```sh

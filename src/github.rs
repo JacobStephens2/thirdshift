@@ -12,6 +12,9 @@ use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
+mod check_read;
+pub(crate) use check_read::is_transient as check_read_is_transient;
+
 mod advisories;
 pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
@@ -742,10 +745,10 @@ impl GitHub {
     fn gh_api_items(&self, path: &str, field: &str) -> Result<Vec<Value>> {
         let output = self.output(&["api", "--paginate", "--jq", &format!(".{field}[]"), path])?;
         if !output.status.success() {
-            bail!(
-                "gh api {path} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            bail!(check_read::ApiFailure {
+                path: path.to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
         }
         serde_json::Deserializer::from_slice(&output.stdout)
             .into_iter()
