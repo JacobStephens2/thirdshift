@@ -1177,6 +1177,27 @@ fn finding_issue_patch(state: &mut Json, rest: &[&str]) {
     println!("{}", issue_fields(state, n, &issue_state));
 }
 
+/// Answer either membership endpoint from its list of account logins.
+fn membership_response(state: &Json, key: &str, login: &str) {
+    let member = state.get(key).is_some_and(|users| {
+        users
+            .items()
+            .iter()
+            .any(|user| user.str().eq_ignore_ascii_case(login))
+    });
+    println!(
+        "HTTP/2.0 {}\r\n",
+        if member {
+            "204 No Content"
+        } else {
+            "404 Not Found"
+        }
+    );
+    if !member {
+        std::process::exit(1);
+    }
+}
+
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
     if let Some((repo, rest)) = repo_prefix(path) {
@@ -1208,23 +1229,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         if let Some(login) = rest.strip_prefix("collaborators/") {
             check_repo_is(state, Some(repo));
             assert!(flags.contains_key("include"));
-            let trusted = state.get("collaborators").is_some_and(|users| {
-                users
-                    .items()
-                    .iter()
-                    .any(|user| user.str().eq_ignore_ascii_case(login))
-            });
-            println!(
-                "HTTP/2.0 {}\r\n",
-                if trusted {
-                    "204 No Content"
-                } else {
-                    "404 Not Found"
-                }
-            );
-            if !trusted {
-                std::process::exit(1);
-            }
+            membership_response(state, "collaborators", login);
             return;
         }
     }
@@ -1233,23 +1238,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         .and_then(|s| s.split_once("/members/").map(|(_, login)| login))
     {
         assert!(flags.contains_key("include"));
-        let member = state.get("org_members").is_some_and(|users| {
-            users
-                .items()
-                .iter()
-                .any(|user| user.str().eq_ignore_ascii_case(login))
-        });
-        println!(
-            "HTTP/2.0 {}\r\n",
-            if member {
-                "204 No Content"
-            } else {
-                "404 Not Found"
-            }
-        );
-        if !member {
-            std::process::exit(1);
-        }
+        membership_response(state, "org_members", login);
         return;
     }
     if let Some((repo, rest)) = repo_prefix(path)
