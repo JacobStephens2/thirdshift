@@ -664,7 +664,7 @@ mod tests {
         fn take_to_goal(&mut self, _: &str, goal: Goal) -> Result<()> {
             self.calls.push(Call::Goal(goal));
             if self.refused {
-                return Err(anyhow!("merge refused").context(PolicyRefusal));
+                return Err(anyhow!("merge refused").context(PolicyRefusal::NothingToFix));
             }
             self.check(Fails::Goal)
         }

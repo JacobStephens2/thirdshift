@@ -2565,3 +2565,51 @@ fn a_spec_run_checks_its_model_once_and_every_ticket_and_the_spec_review_runs_on
         );
     }
 }
+
+#[test]
+fn a_review_required_spec_pr_stays_ready_without_an_attempt_or_another_round() {
+    for decision in ["REVIEW_REQUIRED", "CHANGES_REQUESTED"] {
+        let scenario = linear_spec();
+        scenario.agent_does_for(
+            SPEC,
+            &format!(
+                "gh fake pr issue-20 reviewDecision '\"{decision}\"'\n{}",
+                checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+            ),
+        );
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+
+        let result = run_emailing(
+            &scenario,
+            &resend,
+            &["merge", &spec_url(&scenario), "email", "owner@example.com"],
+        );
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/2\n");
+        let reason = "PR https://github.com/acme/widgets/pull/2 needs an approving review before it can merge; it is ready for review";
+        assert_contains(&result.stderr, reason);
+        let spec = spec_pr(&scenario);
+        assert_eq!(spec["state"], "OPEN");
+        assert_eq!(spec["isDraft"], false);
+        assert_eq!(scenario.issue_labels(SPEC), ["in-progress"]);
+        assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
+        assert!(
+            scenario
+                .gh_calls_of("pr", "merge")
+                .iter()
+                .all(|call| call[2] != "2")
+        );
+        assert_eq!(
+            result.stderr.matches("waiting up to 0s for CI on").count(),
+            3,
+            "{}",
+            result.stderr
+        );
+        scenario.assert_cleaned_up("issue-20");
+        let (subject, text) = the_one_notification(&resend);
+        assert_contains(&subject, "review required");
+        assert_contains(&text, reason);
+        assert_contains(&text, "Result:       review required");
+    }
+}

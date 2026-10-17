@@ -247,7 +247,10 @@ pub fn ci_fix_repair(
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
          Run the affected checks locally, commit, and push {branch}.\n\
          \n\
-         If a failure is not caused by this branch (it is flaky, or also fails on {base}), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n\
+         Compare the failing test or check with the branch's diff against {base}. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
+         Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on {base}). Do not change code for those unrelated failures.\n\
+         \n\
+         Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.\n\
          \n\
          {HEADLESS}",
         url = issue.url,
@@ -369,7 +372,7 @@ pub const STAGED_BLOCKED_BY_MARKER: &str = "Blocked by:";
 pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
     format!(
         "Publish the fix for this reproduced Security finding on Base branch `{base}`.\n\
-         Read the private record at {url} and the record below.\n\
+         Work from the private record below, supplied by thirdshift from {url}, and the repository in this worktree. On a public repository this session has no GitHub credentials; no authenticated fetch of the private record is needed.\n\
          Follow the completed reproduction's fix size: single stages one Ticket; spec stages a Spec with Tickets, drafted with `thirdshift-to-spec` and `thirdshift-to-tickets`.\n\
          On a public repository, stage the proposed public issue text instead of creating any public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue and its Tickets from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. Only a private bigger fix publishes its issues itself.\n\
          Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.\n\

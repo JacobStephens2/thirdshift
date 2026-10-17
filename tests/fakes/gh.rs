@@ -12,7 +12,7 @@
 //!  "bodies"?: {"<number>": "<body>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
-//!           "mergeable"?, "unknown_polls"?}],
+//!           "mergeable"?, "unknown_polls"?, "reviewDecision"?}],
 //!  "checks": {"<sha>": [{"id", "name", "conclusion", "url", "pending_polls"?,
 //!                        "rerun"?: {"conclusion", "stale_polls"?, "pending_polls"?},
 //!                        "stale"?: {"id", "conclusion", "polls"}}]},
@@ -31,6 +31,7 @@
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
 //!  "labels"?: {"<number>": ["<label>", ...]},
 //!  "repo_labels"?: ["<label>", ...],
+//!  "issue_urls"?: {"<number>": "<full Issue URL>"},
 //!  "blocked_by"?: {"<number>": [<number>, ...]},
 //!  "timeline"?: {"<number>": [{"event", "label"?, "at"}, ...]}}
 //! ```
@@ -427,6 +428,10 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
         (
             "mergeable",
             pr.get("mergeable").cloned().unwrap_or(string("MERGEABLE")),
+        ),
+        (
+            "reviewDecision",
+            pr.get("reviewDecision").cloned().unwrap_or(string("")),
         ),
         ("body", pr.get("body").cloned().unwrap_or(string(""))),
         (
@@ -1763,6 +1768,20 @@ fn numbered_issue(state: &Json, n: &Json) -> Json {
     let issue_state = state.at("issues").get(&n.python()).cloned();
     object([
         ("number", n.clone()),
+        (
+            "url",
+            state
+                .get("issue_urls")
+                .and_then(|urls| urls.get(&n.python()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    string(format!(
+                        "https://github.com/{}/issues/{}",
+                        state.at("repo").str(),
+                        n.python()
+                    ))
+                }),
+        ),
         ("state", issue_state.unwrap_or(string("OPEN"))),
     ])
 }
@@ -1966,6 +1985,26 @@ fn fake_command(state: &mut Json, args: &[&str]) {
 }
 
 pub fn main(args: Vec<String>) {
+    // Opt-in authentication at the external GitHub seam. Most fixtures do
+    // not model credentials; publishing-authority tests explicitly do.
+    if std::env::var_os("FAKE_GH_REQUIRE_AUTH").is_some() {
+        let token = [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+        ]
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()));
+        let config = std::env::var_os("GH_CONFIG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| crate::env_path("HOME").join(".config/gh"));
+        let stored = fs::read_to_string(config.join("hosts.yml"))
+            .is_ok_and(|text| text.contains("oauth_token:"));
+        if !token && !stored {
+            die("gh: authentication required", 1);
+        }
+    }
     lock();
     record(&args);
     let mut state = load();
