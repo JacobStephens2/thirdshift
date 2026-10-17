@@ -3135,35 +3135,31 @@ fn a_skipped_security_run_sends_no_notification_requested_by_word_or_config() {
 
 #[test]
 fn failed_security_audits_send_one_notification_with_a_safe_status() {
-    for (script, failing_call, cause) in [
+    for (script, recording_fails, cause) in [
         (
             audit_script("[]").replace("Security audit: complete", "Security audit: incomplete"),
-            None,
+            false,
             "ended incomplete",
         ),
         (
             audit_script("[{}]"),
-            None,
+            false,
             "validator validate-findings.cjs",
         ),
         (
             audit_script(&json!([finding("new")]).to_string()),
-            Some("api --method POST"),
+            true,
             "creating a draft repository security advisory failed",
         ),
     ] {
         let scenario = Scenario::new();
         scenario.agent_does(&script);
-        if let Some(call) = failing_call {
-            if call == "api --method POST" {
-                // The API consumes the request before rejecting it, avoiding
-                // a race between writing stdin and an early fake gh exit.
-                let mut github = scenario.gh_state();
-                github["advisory_create_fails_after"] = json!(0);
-                scenario.write_gh_state(&github);
-            } else {
-                scenario.gh_fails(call);
-            }
+        if recording_fails {
+            // The API consumes the request before rejecting it, avoiding
+            // a race between writing stdin and an early fake gh exit.
+            let mut github = scenario.gh_state();
+            github["advisory_create_fails_after"] = json!(0);
+            scenario.write_gh_state(&github);
         }
         let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
         let result =
@@ -3293,6 +3289,86 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
             }
         }
     }
+}
+
+#[test]
+fn malformed_pre_audit_github_response_has_dependency_cause() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = Scenario::new();
+    let gh = scenario.path("bin/gh");
+    fs::remove_file(&gh).unwrap();
+    fs::write(&gh, "#!/bin/sh\nprintf '%s\\n' 'PRIVATE-INVALID-JSON'\n").unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_fake"),
+        ],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("gh issue list returned invalid JSON"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(
+        !requests[0]
+            .body
+            .to_string()
+            .contains("PRIVATE-INVALID-JSON")
+    );
+    assert!(
+        text.contains("Cause:        GitHub dependency failure"),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_unavailable_github_cli_has_a_safe_pre_audit_dependency_cause() {
+    let scenario = Scenario::new();
+    let git = std::process::Command::new("which")
+        .arg("git")
+        .output()
+        .unwrap();
+    let git = String::from_utf8(git.stdout).unwrap();
+    std::os::unix::fs::symlink(git.trim(), scenario.path("bin/git")).unwrap();
+    fs::remove_file(scenario.path("bin/gh")).unwrap();
+    let path = scenario.path("bin");
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let mut env = resend_env(&resend).to_vec();
+    env.push(("PATH", path.to_str().unwrap()));
+    let result = scenario.run_with_env(&["secure", "email", "me@example.com"], &env);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("could not run gh"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": pre-audit failed"), "{subject}");
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(
+        text.contains("Cause:        GitHub dependency failure"),
+        "{text}"
+    );
+    assert!(!text.contains("could not run gh"), "{text}");
+    assert!(!text.contains("No such file"), "{text}");
 }
 
 #[test]

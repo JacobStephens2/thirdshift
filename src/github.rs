@@ -27,14 +27,15 @@ mod execution_tests;
 /// A failed gh command keeps its diagnostic locally; notifications use only
 /// its fixed operational category.
 #[derive(Debug)]
-struct CommandFailure {
-    command: String,
-    stderr: String,
+enum CommandFailure {
+    Rejected { command: String, stderr: String },
+    InvalidJson { command: String },
+    Execution,
 }
 
 impl CommandFailure {
-    fn new(command: String, output: &Output) -> Self {
-        Self {
+    fn rejected(command: String, output: &Output) -> Self {
+        Self::Rejected {
             command,
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         }
@@ -43,7 +44,11 @@ impl CommandFailure {
 
 impl fmt::Display for CommandFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} failed: {}", self.command, self.stderr)
+        match self {
+            Self::Rejected { command, stderr } => write!(f, "{command} failed: {stderr}"),
+            Self::InvalidJson { command } => write!(f, "{command} returned invalid JSON"),
+            Self::Execution => f.write_str("could not run gh"),
+        }
     }
 }
 
@@ -52,10 +57,10 @@ impl std::error::Error for CommandFailure {}
 /// A fixed cause for failed GitHub queries, never their original diagnostics.
 /// Only explicit quota messages establish exhaustion; a bare 403 does not.
 pub(crate) fn operational_cause(error: &anyhow::Error) -> Option<&'static str> {
-    let stderr = if let Some(failure) = error.downcast_ref::<CommandFailure>() {
-        &failure.stderr
-    } else {
-        &error.downcast_ref::<check_read::ApiFailure>()?.stderr
+    let stderr = match error.downcast_ref::<CommandFailure>() {
+        Some(CommandFailure::Rejected { stderr, .. }) => stderr,
+        Some(_) => return Some("GitHub dependency failure"),
+        None => &error.downcast_ref::<check_read::ApiFailure>()?.stderr,
     };
     let stderr = stderr.to_ascii_lowercase();
     Some(
@@ -777,7 +782,7 @@ impl GitHub {
     fn gh_stdout(&self, args: &[&str]) -> Result<String> {
         let output = self.output(args)?;
         if !output.status.success() {
-            bail!(CommandFailure::new(
+            bail!(CommandFailure::rejected(
                 format!("gh {}", args.join(" ")),
                 &output
             ));
@@ -798,7 +803,9 @@ impl GitHub {
         serde_json::Deserializer::from_slice(&output.stdout)
             .into_iter()
             .collect::<Result<_, _>>()
-            .with_context(|| format!("gh api {path} returned invalid JSON"))
+            .with_context(|| CommandFailure::InvalidJson {
+                command: format!("gh api {path}"),
+            })
     }
 
     /// Run `gh <args>` and parse its stdout as JSON, failing with gh's stderr if
@@ -807,10 +814,10 @@ impl GitHub {
         let command = format!("gh {}", args[..2].join(" "));
         let output = self.output(args)?;
         if !output.status.success() {
-            bail!(CommandFailure::new(command, &output));
+            bail!(CommandFailure::rejected(command, &output));
         }
         serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("{command} returned invalid JSON"))
+            .with_context(|| CommandFailure::InvalidJson { command })
     }
     fn output(&self, args: &[&str]) -> Result<Output> {
         self.output_with_input(args, None)
@@ -826,6 +833,7 @@ impl GitHub {
                 stop: &|child| process::stop(child, &[libc::SIGTERM]),
             },
         )
+        .context(CommandFailure::Execution)
     }
 }
 
