@@ -194,3 +194,57 @@ fn an_issue_branch_checked_out_in_launch_can_continue_after_switching_to_base() 
     assert_eq!(scenario.origin_log("issue-7").unwrap()[0], "Continued");
     scenario.assert_cleaned_up("issue-7");
 }
+
+#[test]
+fn branch_switch_advice_is_only_offered_when_it_frees_acquisition() {
+    for relative in ["work/widgets-issue-7", "work/preserved-checkout"] {
+        let scenario = Scenario::new();
+        scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+        scenario.github_has_pr("issue-7", "main", "OPEN");
+        scenario.launch_git(&["fetch", "-q", "origin"]);
+        let occupied = scenario.path(relative);
+        scenario.launch_git(&[
+            "worktree",
+            "add",
+            "-b",
+            "issue-7",
+            occupied.to_str().unwrap(),
+            "origin/issue-7",
+        ]);
+        let refused = scenario.run(&[&scenario.issue_url(7)]);
+        assert_eq!(refused.code, Some(1), "{}", refused.stderr);
+        let can_keep_checkout = relative == "work/preserved-checkout";
+        assert_eq!(refused.stderr.contains("Alternatively, leave this checkout on another branch and retry, keeping the preserved checkout"), can_keep_checkout, "{}", refused.stderr);
+
+        scenario.launch_git(&[
+            "-C",
+            occupied.to_str().unwrap(),
+            "switch",
+            "-c",
+            "preserved-checkout",
+        ]);
+        scenario.agent_does(
+            "echo continued > continued.txt\ngit add continued.txt\ngit commit -q -m Continued",
+        );
+        let retried = scenario.run(&[&scenario.issue_url(7)]);
+        assert_eq!(
+            retried.code,
+            Some(if can_keep_checkout { 0 } else { 1 }),
+            "{}",
+            retried.stderr
+        );
+        if can_keep_checkout {
+            assert_eq!(scenario.origin_log("issue-7").unwrap()[0], "Continued");
+        } else {
+            assert!(
+                !retried
+                    .stderr
+                    .contains("Alternatively, leave this checkout on another branch and retry"),
+                "{}",
+                retried.stderr
+            );
+            assert!(scenario.claude_calls().is_empty());
+        }
+        assert!(occupied.join("README.md").exists());
+    }
+}

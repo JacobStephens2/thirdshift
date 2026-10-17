@@ -69,7 +69,7 @@ pub(crate) fn local_branch_advice(launch: &Git, mut error: anyhow::Error) -> any
         Ok(entries) => {
             let reference = format!("refs/heads/{branch}");
             for entry in entries.iter().filter(|entry| entry.branch.as_deref() == Some(&reference)) {
-                conflict.advice.push_str(&checkout_advice(launch, entry));
+                conflict.advice.push_str(&checkout_advice(launch, entry, None));
             }
         }
         Err(inspection) => conflict.advice.push_str(&format!(
@@ -99,7 +99,7 @@ pub(super) fn occupied_advice(
         .iter()
         .filter(|entry| entry.path == path || entry.branch.as_deref() == Some(&reference))
     {
-        advice.push_str(&checkout_advice(launch, entry));
+        advice.push_str(&checkout_advice(launch, entry, Some(&path)));
     }
     if advice.is_empty() {
         error
@@ -130,7 +130,7 @@ impl std::error::Error for OccupiedAdvice {
     }
 }
 
-fn checkout_advice(launch: &Git, entry: &Registration) -> String {
+fn checkout_advice(launch: &Git, entry: &Registration, target: Option<&Path>) -> String {
     let mut advice = format!(
         "\nOccupied checkout {} on {}. Before renaming or deleting its branch, leave or inspect this checkout.\n\
          Inspect and preserve its work first:\n  {}",
@@ -145,10 +145,13 @@ fn checkout_advice(launch: &Git, entry: &Registration) -> String {
         advice.push_str("\nThis is the Launch directory: switch it to the Base branch, then rerun the original thirdshift command to use the normal Continuation path once preserved work is published. Do not remove the Launch directory.");
     } else {
         advice.push_str(&format!(
-            "\nTo free the checkout for a retry, remove it only after preserving its work, then rerun the original thirdshift command from the Launch directory on the Base branch. If the selected Issue branch is on origin, the retry uses the normal Continuation path. Alternatively, leave this checkout on another branch and retry, keeping the preserved checkout. Commands use git -C and can run from any directory:\n  {}\n\
+            "\nTo free the checkout for a retry, remove it only after preserving its work, then rerun the original thirdshift command from the Launch directory on the Base branch. If the selected Issue branch is on origin, the retry uses the normal Continuation path. Commands use git -C and can run from any directory:\n  {}\n\
              Removal is optional and may refuse while work remains or the Worktree is locked; inspect and preserve it first. No force flags are used.",
             command(launch, &["worktree", "remove", "--", &entry.path.to_string_lossy()])
         ));
+        if target.is_some_and(|target| target != entry.path) {
+            advice.push_str("\nAlternatively, leave this checkout on another branch and retry, keeping the preserved checkout.");
+        }
     }
     advice
 }
