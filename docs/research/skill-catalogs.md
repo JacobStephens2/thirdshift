@@ -10,9 +10,9 @@ The [captured baseline](skill-catalog-baseline-2026-10-17.json) records every lo
 
 | Context | Observed session | Entries / distinct names | Catalog UTF-8 bytes | Proxy tokens |
 | --- | --- | ---: | ---: | ---: |
-| Fresh Run | #735 opening session, 2026-10-17 13:31:13 UTC | 47 / 32 | 13,277 | 3,159 |
+| Fresh Run | #735 opening session, 2026-10-17 17:31:13 UTC | 47 / 32 | 13,277 | 3,159 |
 | Continuation | #671 opening session, 2026-10-17 02:01:00 UTC | 59 / 44 | 17,728 | 4,205 |
-| Reviewer | #734 Standards sub-agent `/root/standards`, 2026-10-17 12:47:58 UTC | 61 / 46 | 18,345 | 4,339 |
+| Reviewer | #734 Standards sub-agent `/root/standards`, 2026-10-17 16:47:58 UTC | 61 / 46 | 18,345 | 4,339 |
 
 The Continuation is a new session working on an existing Issue branch, identified by its actual opening prompt, `You are continuing work on branch issue-671`. It is **not** `codex exec resume`. The reviewer is an actual independent code-review sub-agent, not a fabricated reviewer prompt. Samples were selected from recent local thirdshift rollouts; they are three observations, not a controlled comparison of session types. The rollout filenames use local dates; the table uses their metadata's UTC timestamps. Source identifiers and complete name inventories are in the baseline.
 
@@ -60,6 +60,8 @@ Official docs and schemas below were fetched on 2026-10-17; they are live, unver
 Sources: OpenAI [skills](https://developers.openai.com/codex/skills), [config basics](https://developers.openai.com/codex/config-basic), [configuration reference](https://developers.openai.com/codex/config-reference), [official schema](https://developers.openai.com/codex/config-schema.json), [CLI reference](https://developers.openai.com/codex/cli/reference), and [plugin enablement](https://developers.openai.com/plugins/build/plugins); Claude [skill visibility overrides](https://code.claude.com/docs/en/skills#override-skill-visibility-from-settings), [settings precedence](https://code.claude.com/docs/en/settings#settings-precedence), [enabledPlugins](https://code.claude.com/docs/en/settings-reference#enabledplugins) and [CLI reference](https://code.claude.com/docs/en/cli-reference).
 
 The Codex schema includes exact `name` selectors in addition to paths; no wildcard/all-except semantics were established. Paths are preferable for a same-name duplicate because a name selector cannot express which copy to retain. Prose docs and the config reference differ about file versus directory paths; the installed no-turn probe accepts a `SKILL.md` file path. Do not replace an operator's existing `skills.config` array without defining how to preserve existing entries/disables. The probe only supplies an invocation override and deliberately makes no claim to merge arbitrary arrays correctly.
+
+Codex also exposes `--disable plugins`: `codex features list` reports `plugins` as stable and enabled in this installation, and `codex debug prompt-input --disable plugins` accepts it. That probe still emits 47 entries / 13,277 bytes because this fresh render already has no plugin skill entries. Thus the installed feature toggle exists, but this probe cannot demonstrate removal of plugin skill entries or retention of plugin tools/hooks. The release-summary adapter already uses it for a different, deliberately tool-restricted purpose ([`src/harness/codex.rs`](../../src/harness/codex.rs)). It does not remove the Host/repository duplicate standalone skills and is not recommended for Run catalog trimming. The generic `--disable` interface is documented in the CLI reference above.
 
 Claude's `--plugin-dir` adds session-only plugins; it does not exclude installed plugins. `--disable-slash-commands` disables all skills, including Factory skills. `--setting-sources` can exclude hooks, permissions and settings along with skill discovery. Broad `--bare`, `--safe-mode` and `--restricted` modes remove required parts of the operating context according to installed help. They are not suitable catalog-only controls. No blanket plugin-off option is proposed.
 
@@ -135,3 +137,24 @@ PY
 ```
 
 `tiktoken==0.12.0` and its encoding data are required for proxy counts. Install them in an owned temporary virtual environment if reproducing elsewhere; no personal configuration changes are necessary. SHA-256 covers the catalog block's exact text, excluding its JSON transport escapes. Catalogs can vary with CLI, working directory, installed skills/plugins and inherited context; do not treat this snapshot as a permanent expected catalog.
+
+This additional check keeps the displayed UTC timestamps tied to the captured metadata. It reproduced the two local-time-as-UTC errors found in Spec review before their correction and passes afterward:
+
+```sh
+python3 - <<'PY'
+import datetime, json, pathlib, re
+base = json.loads(pathlib.Path(
+    'docs/research/skill-catalog-baseline-2026-10-17.json').read_text())
+note = pathlib.Path('docs/research/skill-catalogs.md').read_text()
+errors = []
+for sample, label in zip(base['samples'], ('Fresh Run', 'Continuation', 'Reviewer')):
+    row = next(line for line in note.splitlines()
+               if line.startswith('| ' + label + ' |'))
+    observed = re.search(r'2026-10-17 \d\d:\d\d:\d\d UTC', row).group()
+    expected = datetime.datetime.fromisoformat(sample['timestamp_utc']).strftime(
+        '%Y-%m-%d %H:%M:%S UTC')
+    if observed != expected:
+        errors.append(f'{label}: table={observed}; metadata={expected}')
+assert not errors, '\n'.join(errors)
+PY
+```
