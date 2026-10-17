@@ -66,7 +66,9 @@ fn checks_pending_then_green_is_success() {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
     assert!(
-        result.stderr.contains("1 of 2 checks still running"),
+        result
+            .stderr
+            .contains("1 still running out of 2 checks listed so far"),
         "stderr: {}",
         result.stderr
     );
@@ -303,7 +305,9 @@ fn a_repair_that_already_re_ran_ci_to_green_delivers_or_self_merges_the_unchange
             assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
             if pending {
                 assert!(
-                    result.stderr.contains("1 of 1 checks still running"),
+                    result
+                        .stderr
+                        .contains("1 still running out of 1 checks listed so far"),
                     "{}",
                     result.stderr
                 );
@@ -385,7 +389,9 @@ fn a_refused_request_still_waits_for_an_earlier_accepted_workflows_new_attempt()
         result.stderr
     );
     assert!(
-        result.stderr.contains("1 of 2 checks still running"),
+        result
+            .stderr
+            .contains("1 still running out of 2 checks listed so far"),
         "{}",
         result.stderr
     );
@@ -474,7 +480,9 @@ fn a_refused_request_pending_then_red_is_a_declined_ci_fix_without_another_repai
         result.stderr
     );
     assert!(
-        result.stderr.contains("1 of 1 checks still running"),
+        result
+            .stderr
+            .contains("1 still running out of 1 checks listed so far"),
         "{}",
         result.stderr
     );
@@ -651,7 +659,9 @@ fn the_attempt_before_a_check_re_run_is_never_taken_for_its_result() {
         result.stderr
     );
     assert!(
-        result.stderr.contains("1 of 1 checks still running"),
+        result
+            .stderr
+            .contains("1 still running out of 1 checks listed so far"),
         "stderr: {}",
         result.stderr
     );
