@@ -131,7 +131,7 @@ printf '%s\n' 'Security review: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
     let scenario = linear_spec();
 
-    let result = scenario.run(&[&spec_url(&scenario)]);
+    let result = scenario.run(&["no-email", &spec_url(&scenario)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let spec_pr_url = "https://github.com/acme/widgets/pull/2";
@@ -142,6 +142,16 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
         "stderr: {}",
         result.stderr
     );
+    // The Spec run owns the summary; relayed Ticket Runs add none.
+    let lines: Vec<_> = result.stderr.lines().collect();
+    let elapsed: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("Took: "))
+        .collect();
+    assert_eq!(elapsed.len(), 1, "{}", result.stderr);
+    assert!(elapsed[0].1.starts_with("thirdshift: Took: "));
+    assert_eq!(elapsed[0].0, lines.len() - 2, "{}", result.stderr);
     assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
 
     let gh = scenario.gh_state();

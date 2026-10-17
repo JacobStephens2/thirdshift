@@ -144,14 +144,62 @@ fn ends_a_successful_run_by_naming_the_pr() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
-    let result = scenario.run(&[&scenario.issue_url(7)]);
+    let result = scenario.run(&["no-email", &scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_elapsed_before(
+        &result.stderr,
+        "thirdshift: PR https://github.com/acme/widgets/pull/1 is ready for review",
+    );
     assert_eq!(
         stderr_lines(&result.stderr).last(),
         Some(&"thirdshift: PR https://github.com/acme/widgets/pull/1 is ready for review")
     );
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+}
+
+/// The elapsed summary appears once, directly before the final outcome.
+fn assert_elapsed_before(stderr: &str, outcome: &str) {
+    let lines = stderr_lines(stderr);
+    let elapsed: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("Took: "))
+        .collect();
+    assert_eq!(elapsed.len(), 1, "{stderr}");
+    assert!(elapsed[0].1.starts_with("thirdshift: Took: "), "{stderr}");
+    assert_eq!(lines.get(elapsed[0].0 + 1), Some(&outcome), "{stderr}");
+}
+
+#[test]
+fn a_failed_run_reports_elapsed_time_before_its_original_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does("exit 3");
+
+    let result = scenario.run(&["no-email", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_elapsed_before(&result.stderr, "thirdshift: claude exited 3");
+}
+
+#[test]
+fn a_gracefully_interrupted_run_reports_elapsed_time_before_its_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "touch '{}'\nsleep 30\n",
+        scenario.path("agent-started").display()
+    ));
+
+    let result = scenario.run_and_signal(
+        &["no-email", &scenario.issue_url(7)],
+        "agent-started",
+        "INT",
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_elapsed_before(&result.stderr, "thirdshift: interrupted");
 }
 
 #[test]
