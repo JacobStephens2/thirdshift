@@ -229,26 +229,23 @@ fn selection_asks_github_once_for_the_pr_history() {
     scenario.github_has_pr("issue-7", "main", "OPEN");
     scenario.agent_does(AGENT_COMMITS);
 
-    scenario.run(&[&scenario.issue_url(7)]);
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
 
-    // Pre-flight's `issue view` comes first, then the `api graphql` that finds
-    // no sub-issues; what comes after it is selection, up to the Claim, which
-    // starts at the next `issue view`.
-    let subcommands: Vec<String> = scenario
-        .gh_calls()
+    // Selection ends when the Claim begins, at the second `issue view`.
+    // Trust and sub-issue reads do not change the PR history guarantee.
+    let calls = scenario.gh_calls();
+    let history: Vec<_> = calls
         .iter()
-        .map(|argv| argv[..2].join(" "))
         .enumerate()
-        .take_while(|(at, subcommand)| *at == 0 || subcommand != "issue view")
-        .map(|(_, subcommand)| subcommand)
+        .take_while(|(at, argv)| *at == 0 || argv[..2] != ["issue", "view"])
+        .map(|(_, argv)| argv)
+        .filter(|argv| argv[..2] == ["pr", "list"])
         .collect();
-    assert_eq!(subcommands, vec!["issue view", "api graphql", "pr list"]);
+    assert_eq!(history.len(), 1, "gh calls: {calls:?}");
     assert!(
-        scenario.gh_calls()[2]
-            .windows(2)
-            .any(|w| w == ["--state", "all"]),
-        "gh calls: {:?}",
-        scenario.gh_calls()
+        history[0].windows(2).any(|w| w == ["--state", "all"]),
+        "gh calls: {calls:?}"
     );
 }
 
