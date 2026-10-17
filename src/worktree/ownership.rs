@@ -1,5 +1,6 @@
 //! Own checked synchronization, preservation and disposal of the acquired instance.
 
+use std::cell::RefCell;
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -104,6 +105,7 @@ impl Checkout {
         launch: &Git,
         base: &str,
         reason: &str,
+        actionable: &mut dyn FnMut() -> Result<()>,
     ) -> Result<super::Preserved> {
         let operation = Operation::new(self, launch, Purpose::Preservation);
         let branch = self
@@ -139,7 +141,7 @@ impl Checkout {
                 "-m",
                 &message,
             ])?;
-            operation.push(branch)?;
+            operation.push_if_needed(branch, actionable)?;
         }
         operation.inspect()?;
         Ok(if has_work {
@@ -566,18 +568,31 @@ impl<'a> Operation<'a> {
 
     /// Avoid a publication command when origin already has this exact head.
     /// Compare commits, not trees: reconciled history still needs publishing.
-    pub(super) fn push_if_needed(&self, branch: &str) -> Result<()> {
+    pub(super) fn push_if_needed(
+        &self,
+        branch: &str,
+        actionable: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
         let head = self.head()?;
         let reference = format!("refs/heads/{branch}");
         let remote = self.run(&["ls-remote", "--heads", "origin", &reference])?;
-        if remote.split_whitespace().next() == Some(head.as_str()) {
+        let remote_head = remote.split_whitespace().next();
+        actionable()?;
+        if remote_head == Some(head.as_str()) {
             return Ok(());
         }
-        self.push(branch)
-    }
-
-    pub(super) fn push(&self, branch: &str) -> Result<()> {
-        self.git.push_checked(branch, || self.inspect().map(|_| ()))
+        // The lease supplies an atomic expected-ref check, not authority to
+        // overwrite history. Require fast-forward ancestry independently.
+        if let Some(remote_head) = remote_head
+            && !self.succeeds(&["merge-base", "--is-ancestor", remote_head, &head])?
+        {
+            bail!("cannot push {branch}: non-fast-forward; reconcile origin/{branch} first");
+        }
+        let actionable = RefCell::new(actionable);
+        self.git.push_checked(branch, &head, remote_head, || {
+            self.inspect()?;
+            (actionable.borrow_mut())()
+        })
     }
 
     pub(super) fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {

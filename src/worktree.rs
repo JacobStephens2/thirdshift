@@ -179,8 +179,14 @@ impl Worktree {
     /// gates the PR, so a local hook doesn't decide whether work reaches
     /// origin.
     pub fn push(&self) -> Result<()> {
+        self.push_if_actionable(&mut || Ok(()))
+    }
+
+    /// Publish only while the caller's lifecycle gate permits it. Publication
+    /// also guards the sampled origin head against deletion or replacement.
+    pub fn push_if_actionable(&self, actionable: &mut dyn FnMut() -> Result<()>) -> Result<()> {
         self.checkout.ordinary(&self.launch, |operation| {
-            operation.push_if_needed(&self.branch)
+            operation.push_if_needed(&self.branch, actionable)
         })
     }
 
@@ -191,12 +197,18 @@ impl Worktree {
     /// Only the acquired checkout instance on its Issue branch may be changed.
     /// Retention is armed before salvage: any error or unwinding leaves the
     /// worktree and local Issue branch in place. Final verified ownership
-    /// allows normal cleanup.
-    pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<Preserved> {
+    /// allows normal cleanup. The lifecycle gate is rechecked around each
+    /// publication attempt, with the same expected-ref protection as ordinary pushes.
+    pub fn preserve_failed_run(
+        &mut self,
+        base: &str,
+        reason: &str,
+        actionable: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Preserved> {
         self.kept = true;
         let pushed = self
             .checkout
-            .preserve_failed_run(&self.launch, base, reason)?;
+            .preserve_failed_run(&self.launch, base, reason, actionable)?;
         self.kept = false;
         Ok(pushed)
     }

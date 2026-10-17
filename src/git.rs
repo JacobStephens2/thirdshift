@@ -211,9 +211,22 @@ impl Git {
 
     /// Push `branch` to origin without local hooks: sessions and CI check
     /// the work, and a rejecting hook must not strand Failed run salvage.
-    pub(crate) fn push_checked(&self, branch: &str, check: impl Fn() -> Result<()>) -> Result<()> {
+    /// The caller proves `expected_head` is an ancestor of the pinned `head`.
+    /// The lease guards deletion/replacement; it never authorizes discarding history.
+    pub(crate) fn push_checked(
+        &self,
+        branch: &str,
+        head: &str,
+        expected_head: Option<&str>,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<()> {
+        let lease = format!(
+            "--force-with-lease=refs/heads/{branch}:{}",
+            expected_head.unwrap_or("")
+        );
+        let refspec = format!("{head}:refs/heads/{branch}");
         progress::step(format_args!("pushing {branch}"));
-        self.run_checked(&["push", "--no-verify", "origin", branch], check)?;
+        self.run_checked(&["push", "--no-verify", &lease, "origin", &refspec], check)?;
         Ok(())
     }
 

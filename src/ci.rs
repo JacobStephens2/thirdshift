@@ -51,7 +51,7 @@ pub struct FailedChecks {
 /// name, with the checks on `base_commit` as they stand: the Base branch's CI
 /// is never waited for or triggered, and no log text is read. With no
 /// `base_commit`, as in a Base fix, every check that failed is the branch's
-/// own.
+/// own. `actionable` gates each GitHub observation before and after it.
 pub fn watch(
     issue: &IssueUrl,
     sha: &str,

@@ -431,7 +431,8 @@ impl Outside for InWorktree<'_> {
     fn push(&mut self) -> Result<()> {
         self.stage.set(Stage::Push);
         self.pull_request.ensure_actionable(false)?;
-        self.worktree.push()
+        self.worktree
+            .push_if_actionable(&mut || self.pull_request.ensure_actionable(false))
     }
 
     fn write_built_with(&mut self, choice: &Choice) -> Result<()> {
@@ -497,7 +498,10 @@ impl FailedOutside for OnFailure<'_> {
             self.worktree.retain_local();
             return Err(error);
         }
-        self.worktree.preserve_failed_run(self.base, reason)
+        self.worktree
+            .preserve_failed_run(self.base, reason, &mut || {
+                self.pull_request.ensure_preservable()
+            })
     }
 
     fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>> {
@@ -549,7 +553,8 @@ impl repair_loop::Outside for RunOutside<'_> {
     fn push(&mut self) -> Result<()> {
         self.stage.set(Stage::Push);
         self.pull_request.ensure_actionable(true)?;
-        self.worktree.push()
+        self.worktree
+            .push_if_actionable(&mut || self.pull_request.ensure_actionable(true))
     }
 
     fn head(&mut self) -> Result<String> {
