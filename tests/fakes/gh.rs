@@ -101,7 +101,7 @@
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
-//! its head branch, number or URL; an identity selects that PR's actual head.
+//! its head branch, number or URL; a number or URL selects that PR's actual head.
 //!
 //! `gh issue close` closes the issue, recording its `--comment`; on an issue
 //! already closed it only warns, as gh does.
@@ -450,7 +450,7 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
 const PR_LINE_OF_NEWEST: &str =
     r#".[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")""#;
 
-const RELEASE_PR_LINE_OF_NEWEST: &str = r#".[0] // empty | "\(.isCrossRepository) \(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")""#;
+const PR_LINE_OF_NEWEST_WITH_OWNERSHIP: &str = r#".[0] // empty | "\(.isCrossRepository) \(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")""#;
 
 const WORKFLOW_RUN_LINES: &str = r#".workflow_runs[] | "\(.status) \(.conclusion) \(.name)""#;
 
@@ -488,7 +488,7 @@ fn pr_list(state: &Json, flags: &Flags) {
         .collect();
     match flag(flags, "jq") {
         None => println!("{}", Array(listed)),
-        Some(jq @ (PR_LINE_OF_NEWEST | RELEASE_PR_LINE_OF_NEWEST)) => {
+        Some(jq @ (PR_LINE_OF_NEWEST | PR_LINE_OF_NEWEST_WITH_OWNERSHIP)) => {
             if let Some(pr) = listed.first() {
                 let merge = match pr.at("mergeCommit") {
                     commit if commit.truthy() => {
@@ -496,17 +496,17 @@ fn pr_list(state: &Json, flags: &Flags) {
                     }
                     _ => String::new(),
                 };
+                let ownership = match jq {
+                    PR_LINE_OF_NEWEST_WITH_OWNERSHIP => format!("{} ", pr.at("isCrossRepository")),
+                    _ => String::new(),
+                };
                 let line = format!(
-                    "{} {} {} {merge}",
+                    "{ownership}{} {} {} {merge}",
                     pr.at("state").python(),
                     pr.at("url").python(),
                     pr.at("headRefOid").python()
                 );
-                if jq == RELEASE_PR_LINE_OF_NEWEST {
-                    println!("{} {}", pr.at("isCrossRepository"), line.trim_end());
-                } else {
-                    println!("{}", line.trim_end());
-                }
+                println!("{}", line.trim_end());
             }
         }
         jq => unsupported_jq(jq),

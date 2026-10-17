@@ -30,9 +30,10 @@
 # instead; a v<version> tag anywhere else on origin is refused. A bump PR
 # closed without merging is refused while release-<version> is on origin;
 # once that branch is deleted, the next run starts over.
-# A resumed PR must belong to origin, match its branch tip while open, and
-# change only the version bump in Cargo.toml and Cargo.lock from its merge
-# base. Any other matching PR is refused before merging or tagging.
+# A resumed PR must belong to origin and match its branch tip while open, or
+# it is refused, even once tagged. Unless already tagged, it must also change
+# only the version bump in Cargo.toml and Cargo.lock from its merge base, or
+# it is refused before merging or tagging.
 #
 # Prints a progress line on stderr for each step, with the release workflow
 # run's URL once it waits for that run, and the GitHub Release's URL last.
@@ -86,10 +87,12 @@ main() {
 		wait_and_merge
 		;;
 	OPEN)
+		validate_bump_pr
 		progress "resuming: $url is open"
 		wait_and_merge
 		;;
 	MERGED)
+		validate_bump_pr
 		progress "resuming: $url was merged as ${merge:0:7}"
 		;;
 	*)
@@ -107,32 +110,31 @@ main() {
 # CLOSED, or empty with no PR), url, head and merge from the newest PR from
 # $branch, or with no PR, head from $branch on origin if it was pushed. A PR
 # closed without merging whose branch is gone from origin counts as no PR.
-# Validates a resumed PR's ownership, head and version-only tree first.
+# Refuses a PR from another repository, or an open PR whose head is not
+# $branch on origin.
 find_earlier_run() {
 	local pr cross_repository origin_head
 	pr=$(gh pr list --repo "$(git remote get-url origin)" --head "$branch" --base main --state all --limit 1 \
 		--json state,url,headRefOid,mergeCommit,isCrossRepository \
 		--jq '.[0] // empty | "\(.isCrossRepository) \(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")"')
 	read -r cross_repository pr_state url head merge <<<"$pr"
+	origin_head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
+	# A PR closed without merging whose branch was then deleted leaves
+	# nothing to resume, whichever repository it came from: start over.
+	if [ "$pr_state" = CLOSED ] && [ -z "$origin_head" ]; then
+		pr_state='' url='' head='' merge=''
+	fi
 	if [ -n "$pr_state" ] && [ "$cross_repository" != false ]; then
 		refuse "$url has its head in another repository, not origin"
 	fi
-	origin_head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
 	if [ "$pr_state" = OPEN ] && { [ -z "$origin_head" ] || [ "$head" != "$origin_head" ]; }; then
 		refuse "$url head does not match refs/heads/$branch on origin"
-	fi
-	# A PR closed without merging whose branch was then deleted leaves
-	# nothing to resume: start over.
-	if [ "$pr_state" = CLOSED ] && [ -z "$origin_head" ]; then
-		pr_state='' url='' head='' merge=''
 	fi
 	if [ -z "$pr_state" ]; then
 		head=$origin_head
 		if [ -n "$head" ]; then
 			git fetch --quiet origin "refs/heads/$branch"
 		fi
-	elif [ "$pr_state" = OPEN ] || [ "$pr_state" = MERGED ]; then
-		validate_bump_pr
 	fi
 }
 
