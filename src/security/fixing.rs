@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use crate::git::Git;
-use crate::github::{GitHub, SecurityRecord};
+use crate::github::{GitHub, SecurityRecord, Ticket};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
@@ -72,8 +72,12 @@ pub fn publish(
     let started = Utc::now();
     let prompt = prompt::security_fix(base, url, record.description());
     Sessions::within(&logs, worktree.path(), harness, |sessions| {
-        let message =
-            sessions.run_to_final_message(Purpose::Security, "security-fix-publishing", &prompt)?;
+        let purpose = if record.private_issue_number().is_none() {
+            Purpose::SecurityPublishing
+        } else {
+            Purpose::Security
+        };
+        let message = sessions.run_to_final_message(purpose, "security-fix-publishing", &prompt)?;
         let github = GitHub::new();
         // A public fix stages its proposed text for validation;
         // thirdshift creates the issues from it, and the session has no
@@ -152,9 +156,9 @@ pub fn publish(
         if !private {
             check_issue_text(&github, &issue, record, url)?;
         }
-        for child in &tickets {
-            let issue = issue.sibling(child.number);
-            let viewed = github.issue(&issue)?;
+        check_spec_tickets(&issue, &tickets, |child| {
+            let issue = &child.issue;
+            let viewed = github.issue(issue)?;
             if !viewed.is_open || viewed.created.timestamp() < started.timestamp() {
                 bail!("a Security fix Spec's Ticket must be new and open");
             }
@@ -164,11 +168,11 @@ pub fn publish(
             {
                 bail!("a Security fix Spec's Ticket must be ready-for-agent with no sub-issues");
             }
-            check_issue_text(&github, &issue, record, url)?;
-        }
+            check_issue_text(&github, issue, record, url)
+        })?;
         for child in tickets {
-            let issue = issue.sibling(child.number);
-            Edit::of(&issue, github.issue_labels(&issue)?, &[], &[SECURITY_FIX]).apply(&github)?;
+            let issue = &child.issue;
+            Edit::of(issue, github.issue_labels(issue)?, &[], &[SECURITY_FIX]).apply(&github)?;
         }
         if crate::interrupt::requested() {
             bail!("interrupted");
@@ -182,6 +186,22 @@ pub fn publish(
         .apply(&github)?;
         Ok(issue)
     })
+}
+
+/// Validate every Security fix Spec Ticket before any Ticket is labelled.
+/// The callback reads and checks the Ticket on GitHub.
+fn check_spec_tickets(
+    spec: &IssueUrl,
+    tickets: &[Ticket],
+    mut check_on_github: impl FnMut(&Ticket) -> Result<()>,
+) -> Result<()> {
+    for ticket in tickets {
+        if !spec.in_same_repo(&ticket.issue) {
+            bail!("a Security fix Spec's Ticket must be in the fix issue's repository");
+        }
+        check_on_github(ticket)?;
+    }
+    Ok(())
 }
 
 /// One staged Spec Ticket the publishing session proposed: its title, its
@@ -405,6 +425,32 @@ fn check_issue_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_foreign_security_fix_ticket_is_rejected_before_its_github_checks() {
+        let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
+        let tickets = [Ticket {
+            issue: IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap(),
+            is_open: true,
+            labels: ["ready-for-agent"].into_iter().collect(),
+            has_sub_issues: false,
+            blockers: Vec::new(),
+            open_blockers: Vec::new(),
+        }];
+        let mut checked = Vec::new();
+        let result = check_spec_tickets(&spec, &tickets, |ticket| {
+            checked.push(ticket.issue.clone());
+            Ok(())
+        });
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "a Security fix Spec's Ticket must be in the fix issue's repository"
+        );
+        assert!(
+            checked.is_empty(),
+            "foreign Ticket reached GitHub validation"
+        );
+    }
 
     #[test]
     fn staged_proposal_parses_title_and_body() {

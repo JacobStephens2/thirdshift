@@ -10,7 +10,7 @@ use std::process::Command;
 
 #[cfg(test)]
 use anyhow::bail;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 
 #[cfg(test)]
 pub(crate) use crate::harness::claude::claude_args;
@@ -38,6 +38,9 @@ pub enum Purpose {
     Ordinary,
     CodeReview,
     Security,
+    /// Public fix publishing uses Security's protocol without inherited
+    /// GitHub credentials. Its Resume retains the same launch policy.
+    SecurityPublishing,
     /// A guidance review retains security checks without delegating auditors.
     SecurityReview,
 }
@@ -225,7 +228,10 @@ impl<'a> Sessions<'a> {
         }
         if !ended.killed.is_empty() {
             let ending = ending_with(&ended.killed_work());
-            if matches!(purpose, Purpose::Security | Purpose::SecurityReview) {
+            if matches!(
+                purpose,
+                Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview
+            ) {
                 return Err(anyhow!(
                     "{kind}: the {ended_last} {ending}; Security session incomplete"
                 ));
@@ -311,12 +317,12 @@ impl Outside for OnMachine {
     ) -> Result<Ended> {
         let interpretation = self.adapter.interpretation(&self.worktree, prompt);
         let (invocation, interpretation) = match purpose {
-            Purpose::Security | Purpose::SecurityReview => (
+            Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 self.adapter.security_session(
                     &self.harness,
                     resume,
                     prompt,
-                    matches!(purpose, Purpose::Security),
+                    matches!(purpose, Purpose::Security | Purpose::SecurityPublishing),
                 ),
                 interpretation.for_security(self.harness.model.as_deref()),
             ),
@@ -330,16 +336,40 @@ impl Outside for OnMachine {
                 interpretation,
             ),
         };
-        recording::Recording::capture().run(
+        let mut command = Command::new(self.adapter.name());
+        command.args(&invocation.args).current_dir(&self.worktree);
+        // Keep the empty config alive until the process and descendants
+        // finish. A fresh one on each launch also fences the Resume.
+        let github_config = if matches!(purpose, Purpose::SecurityPublishing) {
+            let config = tempfile::Builder::new()
+                .prefix("thirdshift-gh-")
+                .tempdir()
+                .context("could not prepare an unauthenticated GitHub config")?;
+            for name in [
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "GH_ENTERPRISE_TOKEN",
+                "GITHUB_ENTERPRISE_TOKEN",
+            ] {
+                command.env_remove(name);
+            }
+            command
+                .env("GH_CONFIG_DIR", config.path())
+                .env("GH_PROMPT_DISABLED", "1");
+            Some(config)
+        } else {
+            None
+        };
+        let ended = recording::Recording::capture().run(
             kind,
             &self.harness,
-            Command::new(self.adapter.name())
-                .args(&invocation.args)
-                .current_dir(&self.worktree),
+            &mut command,
             invocation.stdin.as_deref(),
             log,
             interpretation,
-        )
+        );
+        drop(github_config);
+        ended
     }
 
     fn step(&mut self, line: String) {
@@ -367,6 +397,34 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
+
+    #[test]
+    fn unsafe_project_skills_fail_session_start_before_the_harness_can_run() {
+        for harness in crate::harness::Harness::ALL {
+            let worktree = crate::test_support::scratch_worktree();
+            let outside = tempfile::tempdir().unwrap();
+            let dir = worktree.path().join(harness.adapter().project_skills());
+            fs::create_dir_all(dir.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
+            let logs = Logs {
+                name: "670".into(),
+                dir: worktree.path().join("session-logs"),
+            };
+            let choice = Choice {
+                harness,
+                ..Choice::default()
+            };
+            let (result, log) =
+                Sessions::within(&logs, worktree.path(), &choice, |_| -> Result<()> {
+                    panic!("unsafe project skills must prevent session steps");
+                });
+            let error = result.unwrap_err();
+            assert!(format!("{error:#}").contains(&dir.display().to_string()));
+            assert!(log.is_none());
+            assert!(!logs.dir.exists());
+            assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+        }
+    }
 
     /// What the rules asked of the scripted [`Outside`], in order.
     #[derive(Debug, PartialEq)]

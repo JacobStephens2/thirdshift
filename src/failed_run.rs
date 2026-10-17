@@ -22,17 +22,29 @@ pub struct FailedRun {
     pub ticket_lines: Vec<String>,
 }
 
-/// A merge GitHub refused when a round of the Repair loop found nothing to
-/// fix. The Run fails, but, as it can do no more, leaves the PR ready for review
-/// rather than a draft. It is the context of the merge error.
+/// A repository policy that prevents Self-merge of a ready PR. The Run
+/// fails without pushing a failure commit or converting the PR to a draft.
 #[derive(Debug)]
-pub struct PolicyRefusal;
+pub enum PolicyRefusal {
+    /// A refused merge whose next Repair round found nothing to fix.
+    NothingToFix,
+    /// A structured review decision that blocks the merge before a request.
+    ReviewRequired { pr_url: String },
+}
+
+impl std::error::Error for PolicyRefusal {}
 
 impl fmt::Display for PolicyRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(
-            "the merge was refused with nothing left to fix, so the PR stays ready for review",
-        )
+        match self {
+            Self::NothingToFix => f.write_str(
+                "the merge was refused with nothing left to fix, so the PR stays ready for review",
+            ),
+            Self::ReviewRequired { pr_url } => write!(
+                f,
+                "PR {pr_url} needs an approving review before it can merge; it is ready for review"
+            ),
+        }
     }
 }
 

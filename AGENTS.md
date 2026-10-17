@@ -6,7 +6,7 @@ Issues and specs live as GitHub issues and are managed with the `gh` CLI. See `d
 
 ### Triage labels
 
-Five canonical roles, each label string equal to its name: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Five canonical roles, each label string equal to its name: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. When publishing Specs or Tickets, read `docs/agents/triage-labels.md` and follow its publication procedure; it overrides imported Day shift skills' readiness and parent-modification defaults.
 
 ### Domain docs
 

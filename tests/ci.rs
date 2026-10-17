@@ -108,7 +108,10 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
          Run the affected checks locally, commit, and push issue-7.\n\
          \n\
-         If a failure is not caused by this branch (it is flaky, or also fails on main), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n\
+         Compare the failing test or check with the branch's diff against main. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
+         Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on main). Do not change code for those unrelated failures.\n\
+         \n\
+         Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.\n\
          \n\
          You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
     );
@@ -390,7 +393,7 @@ fn a_refused_request_still_waits_for_an_earlier_accepted_workflows_new_attempt()
 }
 
 #[test]
-fn a_refused_request_cannot_deliver_or_merge_without_readable_nonempty_checks() {
+fn a_check_re_run_cannot_deliver_or_merge_without_readable_nonempty_checks() {
     for merge in [false, true] {
         for empty in [true, false] {
             let scenario = Scenario::new();
@@ -418,14 +421,19 @@ fn a_refused_request_cannot_deliver_or_merge_without_readable_nonempty_checks() 
 
             assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
             assert_one_repair(&scenario, &result);
-            assert_eq!(rerun_requests(&scenario), ["900"]);
+            // An unreadable request-time listing stops before asking GitHub
+            // to re-run; an empty listing can be read, but cannot prove green.
+            let requests = if empty { vec!["900"] } else { Vec::new() };
+            assert_eq!(rerun_requests(&scenario), requests);
             assert!(scenario.gh_calls_of("pr", "merge").is_empty());
             assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
-            assert!(
-                result.stderr.contains("were not re-run"),
-                "{}",
-                result.stderr
-            );
+            if empty {
+                assert!(
+                    result.stderr.contains("were not re-run"),
+                    "{}",
+                    result.stderr
+                );
+            }
             let cause = if empty {
                 "CI checks disappeared"
             } else {
@@ -906,7 +914,10 @@ fn with_mixed_failures_the_repair_fixes_only_the_branchs_own_and_the_run_then_fa
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
          Run the affected checks locally, commit, and push issue-7.\n\
          \n\
-         If a failure is not caused by this branch (it is flaky, or also fails on main), do not change code for it. Instead, add it to a \"CI notes\" section of the pull request body with a one-line explanation.\n\
+         Compare the failing test or check with the branch's diff against main. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
+         Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on main). Do not change code for those unrelated failures.\n\
+         \n\
+         Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.\n\
          \n\
          You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
     );

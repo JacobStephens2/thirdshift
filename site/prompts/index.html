@@ -33,21 +33,26 @@
 <!-- Generated from the source by src/prompts_page.rs; don't edit. Regenerate with UPDATE_PROMPTS=1 cargo test prompts_page -->
 <section class="sec" aria-labelledby="command-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">The command line</p><h2 id="command-title">How each session starts</h2></div>
+    <details class="fold">
+    <summary class="sec-head"><span class="eyebrow">The command line</span><h2 id="command-title">How each session starts</h2></summary>
     <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
     <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
     <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">With <code>harness codex</code>, each session runs <code>codex exec --json --dangerously-bypass-approvals-and-sandbox -m <mark class="ph">&lt;model&gt;</mark> -c model_reasoning_effort="<mark class="ph">&lt;effort&gt;</mark>" -c project_doc_fallback_filenames=["CLAUDE.md"] <mark class="ph">&lt;prompt&gt;</mark></code> instead, without <code>-m <mark class="ph">&lt;model&gt;</mark></code> or the Effort's <code>-c</code> where they are not set, and with <code>resume <mark class="ph">&lt;session id&gt;</mark></code> before the prompt for a Resume. The Factory skills are linked into <code>.agents/skills/</code>, and a prompt's first line loads its skill as <code>$thirdshift-&lt;skill&gt;</code>.</p>
+    </details>
   </div>
 </section>
 <section class="sec" aria-labelledby="prompts-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Prompts</p><h2 id="prompts-title">What a Run tells the agent</h2></div>
+    <details class="fold">
+    <summary class="sec-head"><span class="eyebrow">Prompts</span><h2 id="prompts-title">What a Run tells the agent</h2></summary>
     <p class="lede">Every prompt a Run can send, with its placeholders highlighted: they change for each Run.</p>
     <div class="job-sheets">
       <article class="job-sheet" id="prompt-fresh" aria-labelledby="prompt-fresh-title">
-        <h3 id="prompt-fresh-title">Fresh</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-fresh-title">Fresh</h3></summary>
+        <div class="job-body">
         <p>Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -59,9 +64,13 @@ In the PR body, add an "Unaddressed findings" section listing each skipped findi
 Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-continuation" aria-labelledby="prompt-continuation-title">
-        <h3 id="prompt-continuation-title">Continuation, with no pull request</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-continuation-title">Continuation, with no pull request</h3></summary>
+        <div class="job-body">
         <p>Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -83,9 +92,13 @@ Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-continuation-pr" aria-labelledby="prompt-continuation-pr-title">
-        <h3 id="prompt-continuation-pr-title">Continuation, with an open pull request</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-continuation-pr-title">Continuation, with an open pull request</h3></summary>
+        <div class="job-body">
         <p>Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -107,9 +120,13 @@ Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-spec-review" aria-labelledby="prompt-spec-review-title">
-        <h3 id="prompt-spec-review-title">Spec review</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-spec-review-title">Spec review</h3></summary>
+        <div class="job-body">
         <p>In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.</p>
         <p class="sent-by">Sent by <a href="/#unit-3">3 · Y · Review</a></p>
         <pre class="job-text"><code>/thirdshift-code-review <mark class="ph">&lt;base&gt;</mark>, with the Spec <mark class="ph">&lt;Spec URL&gt;</mark> as the spec
@@ -131,9 +148,13 @@ Include "Closes #<mark class="ph">&lt;n&gt;</mark>" in the PR body.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-architecture-review" aria-labelledby="prompt-architecture-review-title">
-        <h3 id="prompt-architecture-review-title">Architecture review</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-architecture-review-title">Architecture review</h3></summary>
+        <div class="job-body">
         <p>Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.</p>
         <p class="sent-by">Sent by an Architect run, before any unit</p>
         <pre class="job-text"><code>/thirdshift-improve-codebase-architecture
@@ -157,9 +178,13 @@ Architecture review already filed: &lt;URL of the open issue that already covers
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-security-review" aria-labelledby="prompt-security-review-title">
-        <h3 id="prompt-security-review-title">Security review</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-security-review-title">Security review</h3></summary>
+        <div class="job-body">
         <p>When enabled, runs one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Ticket Runs get none; Base fixes get one too. Introduced findings, refusals or incomplete reviews hold Self-merge.</p>
         <p class="sent-by">Sent by <a href="/#unit-3">3 · Y · Review</a></p>
         <pre class="job-text"><code>Use the `thirdshift-security-audit` skill in guidance mode.
@@ -181,9 +206,13 @@ unaddressed_count counts only unaddressed findings introduced by this change; fi
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-security-audit" aria-labelledby="prompt-security-audit-title">
-        <h3 id="prompt-security-audit-title">Security audit</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-security-audit-title">Security audit</h3></summary>
+        <div class="job-body">
         <p>Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root.</p>
         <p class="sent-by">Sent by a Security run, before any unit</p>
         <pre class="job-text"><code>/thirdshift-security-audit
@@ -200,9 +229,13 @@ End your final message with exactly `Security audit: complete` after writing val
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-security-reproduction" aria-labelledby="prompt-security-reproduction-title">
-        <h3 id="prompt-security-reproduction-title">Security reproduction</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-security-reproduction-title">Security reproduction</h3></summary>
+        <div class="job-body">
         <p>After a Security audit, tries to reproduce one recorded finding in a fresh throwaway worktree at its audited commit. The test is copied into the private record only after a complete outcome.</p>
         <p class="sent-by">Sent by a Security run, before any unit</p>
         <pre class="job-text"><code>Reproduce this recorded Security finding at audited commit `&lt;audited commit&gt;`.
@@ -219,9 +252,13 @@ Recorded finding:
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-conflict-repair" aria-labelledby="prompt-conflict-repair-title">
-        <h3 id="prompt-conflict-repair-title">Conflict Repair</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-conflict-repair-title">Conflict Repair</h3></summary>
+        <div class="job-body">
         <p>Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>/thirdshift-resolving-merge-conflicts
@@ -233,13 +270,17 @@ Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-security-fix" aria-labelledby="prompt-security-fix-title">
-        <h3 id="prompt-security-fix-title">Security fix publishing</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-security-fix-title">Security fix publishing</h3></summary>
+        <div class="job-body">
         <p>With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run.</p>
         <p class="sent-by">Sent by a Security run, before any unit</p>
         <pre class="job-text"><code>Publish the fix for this reproduced Security finding on Base branch `<mark class="ph">&lt;base&gt;</mark>`.
-Read the private record at &lt;private record URL&gt; and the record below.
+Work from the private record below, supplied by thirdshift from &lt;private record URL&gt;, and the repository in this worktree. On a public repository this session has no GitHub credentials; no authenticated fetch of the private record is needed.
 Follow the completed reproduction's fix size: single stages one Ticket; spec stages a Spec with Tickets, drafted with `thirdshift-to-spec` and `thirdshift-to-tickets`.
 On a public repository, stage the proposed public issue text instead of creating any public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue and its Tickets from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. Only a private bigger fix publishes its issues itself.
 Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.
@@ -270,9 +311,13 @@ Private record:
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-foreign-conflict-repair" aria-labelledby="prompt-foreign-conflict-repair-title">
-        <h3 id="prompt-foreign-conflict-repair-title">Conflict Repair, on Foreign commits</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-foreign-conflict-repair-title">Conflict Repair, on Foreign commits</h3></summary>
+        <div class="job-body">
         <p>In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>/thirdshift-resolving-merge-conflicts
@@ -284,9 +329,13 @@ Resolve the conflicts, finish the merge, and push <mark class="ph">&lt;branch&gt
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-review-repair" aria-labelledby="prompt-review-repair-title">
-        <h3 id="prompt-review-repair-title">Review Repair</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-review-repair-title">Review Repair</h3></summary>
+        <div class="job-body">
         <p>In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>/thirdshift-code-review <mark class="ph">&lt;own head&gt;</mark>
@@ -304,9 +353,13 @@ Commit and push <mark class="ph">&lt;branch&gt;</mark>. Do not rebase or force-p
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-ci-fix-repair" aria-labelledby="prompt-ci-fix-repair-title">
-        <h3 id="prompt-ci-fix-repair-title">CI-fix Repair</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-ci-fix-repair-title">CI-fix Repair</h3></summary>
+        <div class="job-body">
         <p>Starts a Repair session when CI fails on the pull request's head commit, listing each failed check.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>CI failed on pull request <mark class="ph">&lt;pull request URL&gt;</mark> (branch <mark class="ph">&lt;branch&gt;</mark>, implementing <mark class="ph">&lt;Issue URL&gt;</mark>).
@@ -317,13 +370,20 @@ Failed checks:
 Read the failure logs (e.g. `gh run view &lt;run-id&gt; --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.
 Run the affected checks locally, commit, and push <mark class="ph">&lt;branch&gt;</mark>.
 
-If a failure is not caused by this branch (it is flaky, or also fails on <mark class="ph">&lt;base&gt;</mark>), do not change code for it. Instead, add it to a "CI notes" section of the pull request body with a one-line explanation.
+Compare the failing test or check with the branch's diff against <mark class="ph">&lt;base&gt;</mark>. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.
+Only failures in tests or checks this branch does not touch may go in a "CI notes" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on <mark class="ph">&lt;base&gt;</mark>). Do not change code for those unrelated failures.
+
+Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-ci-fix-repair-inherited" aria-labelledby="prompt-ci-fix-repair-inherited-title">
-        <h3 id="prompt-ci-fix-repair-inherited-title">CI-fix Repair, with Inherited failures</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-ci-fix-repair-inherited-title">CI-fix Repair, with Inherited failures</h3></summary>
+        <div class="job-body">
         <p>Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix.</p>
         <p class="sent-by">Sent by <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>CI failed on pull request <mark class="ph">&lt;pull request URL&gt;</mark> (branch <mark class="ph">&lt;branch&gt;</mark>, implementing <mark class="ph">&lt;Issue URL&gt;</mark>).
@@ -337,13 +397,20 @@ Also failing on `<mark class="ph">&lt;base&gt;</mark>`; don't fix:
 Read the failure logs (e.g. `gh run view &lt;run-id&gt; --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.
 Run the affected checks locally, commit, and push <mark class="ph">&lt;branch&gt;</mark>.
 
-If a failure is not caused by this branch (it is flaky, or also fails on <mark class="ph">&lt;base&gt;</mark>), do not change code for it. Instead, add it to a "CI notes" section of the pull request body with a one-line explanation.
+Compare the failing test or check with the branch's diff against <mark class="ph">&lt;base&gt;</mark>. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.
+Only failures in tests or checks this branch does not touch may go in a "CI notes" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on <mark class="ph">&lt;base&gt;</mark>). Do not change code for those unrelated failures.
+
+Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="prompt-resume" aria-labelledby="prompt-resume-title">
-        <h3 id="prompt-resume-title">Resume</h3>
+        <details class="fold">
+        <summary><h3 id="prompt-resume-title">Resume</h3></summary>
+        <div class="job-body">
         <p>Continues any session, once, that ended its turn with background work still running, which was killed with it.</p>
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a>, <a href="/#unit-3">3 · Y · Review</a> or <a href="/#unit-4">4 · K · Finish</a></p>
         <pre class="job-text"><code>Your background work (<mark class="ph">&lt;background work&gt;</mark>) was killed when your turn ended, because ending the turn ends the session.
@@ -352,19 +419,26 @@ Re-run whatever you were waiting on in the foreground, then finish your job. If 
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 </code></pre>
+        </div>
+        </details>
       </article>
     </div>
+    </details>
   </div>
 </section>
 <section class="sec" aria-labelledby="skills-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Factory skills</p><h2 id="skills-title">The skills, as the agent reads them</h2></div>
+    <details class="fold">
+    <summary class="sec-head"><span class="eyebrow">Factory skills</span><h2 id="skills-title">The skills, as the agent reads them</h2></summary>
     <p class="lede">Every Factory skill and supporting file, raw, exactly as thirdshift writes it out.</p>
     <div class="job-sheets">
       <article class="job-sheet" id="skill-thirdshift-code-review" aria-labelledby="skill-thirdshift-code-review-title">
-        <h3 id="skill-thirdshift-code-review-title">thirdshift-code-review</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-code-review-title">thirdshift-code-review</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by <a href="/#unit-3">3 · Y · Review</a></p>
-        <h4 id="file-thirdshift-code-review-skill-md"><code>thirdshift-code-review/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-code-review-skill-md"><code>thirdshift-code-review/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-code-review
 description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
@@ -469,16 +543,24 @@ A change can pass one axis and fail the other:
 
 Reporting them separately stops one axis from masking the other.
 </code></pre>
-        <h4 id="file-thirdshift-code-review-agents-openai-yaml"><code>thirdshift-code-review/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-code-review-agents-openai-yaml"><code>thirdshift-code-review/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "Code Review"
   short_description: "Review a diff on standards and spec"
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-codebase-design" aria-labelledby="skill-thirdshift-codebase-design-title">
-        <h3 id="skill-thirdshift-codebase-design-title">thirdshift-codebase-design</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-codebase-design-title">thirdshift-codebase-design</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by the Architecture review, in an Architect run</p>
-        <h4 id="file-thirdshift-codebase-design-skill-md"><code>thirdshift-codebase-design/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-codebase-design-skill-md"><code>thirdshift-codebase-design/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-codebase-design
 description: Shared vocabulary for designing deep modules. Use when designing or improving a module's interface, finding deepening opportunities, deciding where a seam goes, making code more testable or AI-navigable, or when another skill needs the deep-module vocabulary.
@@ -594,7 +676,9 @@ Good interfaces make testing natural:
 - **Deepening a cluster given its dependencies**, see [DEEPENING.md](DEEPENING.md): dependency categories, seam discipline, and replace-don't-layer testing.
 - **Exploring alternative interfaces**, see [DESIGN-IT-TWICE.md](DESIGN-IT-TWICE.md): spin up parallel sub-agents to design the interface several radically different ways, then compare on depth, locality, and seam placement.
 </code></pre>
-        <h4 id="file-thirdshift-codebase-design-deepening-md"><code>thirdshift-codebase-design/DEEPENING.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-codebase-design-deepening-md"><code>thirdshift-codebase-design/DEEPENING.md</code></h4></summary>
         <pre class="job-text"><code># Deepening
 
 How to deepen a cluster of shallow modules safely, given its dependencies. Assumes the vocabulary in [SKILL.md](SKILL.md): **module**, **interface**, **seam**, **adapter**.
@@ -633,7 +717,9 @@ Third-party services (Stripe, Twilio, etc.) you don't control. The deepened modu
 - Tests assert on observable outcomes through the interface, not internal state.
 - Tests should survive internal refactors, since they describe behaviour, not implementation. If a test has to change when the implementation changes, it's testing past the interface.
 </code></pre>
-        <h4 id="file-thirdshift-codebase-design-design-it-twice-md"><code>thirdshift-codebase-design/DESIGN-IT-TWICE.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-codebase-design-design-it-twice-md"><code>thirdshift-codebase-design/DESIGN-IT-TWICE.md</code></h4></summary>
         <pre class="job-text"><code># Design It Twice
 
 To explore alternative interfaces for a chosen deepening candidate, use this parallel sub-agent pattern. Based on "Design It Twice" (Ousterhout): your first idea is unlikely to be the best.
@@ -679,16 +765,24 @@ Compare the designs in prose. Contrast by **depth** (leverage at the interface),
 
 After comparing, decide: which design is strongest and why. If elements from different designs would combine well, take a hybrid. Be opinionated: the choice is yours to make, and nobody picks from a menu. Record the decision and its reason, with the designs you turned down and why.
 </code></pre>
-        <h4 id="file-thirdshift-codebase-design-agents-openai-yaml"><code>thirdshift-codebase-design/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-codebase-design-agents-openai-yaml"><code>thirdshift-codebase-design/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "Codebase Design"
   short_description: "Vocabulary for deep-module design"
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-implement" aria-labelledby="skill-thirdshift-implement-title">
-        <h3 id="skill-thirdshift-implement-title">thirdshift-implement</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-implement-title">thirdshift-implement</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
-        <h4 id="file-thirdshift-implement-skill-md"><code>thirdshift-implement/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-implement-skill-md"><code>thirdshift-implement/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-implement
 description: "Implement a piece of work based on a spec or set of tickets."
@@ -705,18 +799,26 @@ Once done, use the `thirdshift-code-review` skill to review the work.
 
 Commit your work to the current branch.
 </code></pre>
-        <h4 id="file-thirdshift-implement-agents-openai-yaml"><code>thirdshift-implement/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-implement-agents-openai-yaml"><code>thirdshift-implement/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "Implement"
   short_description: "Build work from a spec or tickets"
 policy:
   allow_implicit_invocation: true
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-improve-codebase-architecture" aria-labelledby="skill-thirdshift-improve-codebase-architecture-title">
-        <h3 id="skill-thirdshift-improve-codebase-architecture-title">thirdshift-improve-codebase-architecture</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-improve-codebase-architecture-title">thirdshift-improve-codebase-architecture</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by the Architecture review, in an Architect run</p>
-        <h4 id="file-thirdshift-improve-codebase-architecture-skill-md"><code>thirdshift-improve-codebase-architecture/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-improve-codebase-architecture-skill-md"><code>thirdshift-improve-codebase-architecture/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-improve-codebase-architecture
 description: "Scan a codebase for deepening opportunities, take the top recommendation, and publish it to the issue tracker: as a plan when it is Strong, as an idea otherwise. Only for an Architecture review."
@@ -849,7 +951,9 @@ Unless the scan surfaced no candidate at all, end your final message with the on
 
 thirdshift reads only that line, so everything else you want read belongs in the issue.
 </code></pre>
-        <h4 id="file-thirdshift-improve-codebase-architecture-report-md"><code>thirdshift-improve-codebase-architecture/REPORT.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-improve-codebase-architecture-report-md"><code>thirdshift-improve-codebase-architecture/REPORT.md</code></h4></summary>
         <pre class="job-text"><code># Report Format
 
 The Architecture review's report is Markdown, written into the issue it publishes: the plan's top issue, or the idea issue. GitHub renders Mermaid in a fenced `mermaid` block, so the diagrams live where the issue is read. Write no file, and open nothing.
@@ -962,18 +1066,26 @@ Plain English, concise, but the architectural nouns and verbs come straight from
 
 No hedging, no throat-clearing, no "it's worth noting that…". If a sentence could be a bullet, make it a bullet. If a bullet could be cut, cut it. If a term isn't in the `thirdshift-codebase-design` skill's glossary, reach for one that is before inventing a new one.
 </code></pre>
-        <h4 id="file-thirdshift-improve-codebase-architecture-agents-openai-yaml"><code>thirdshift-improve-codebase-architecture/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-improve-codebase-architecture-agents-openai-yaml"><code>thirdshift-improve-codebase-architecture/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "Improve Codebase Architecture"
   short_description: "Find and publish the top architecture improvement"
 policy:
   allow_implicit_invocation: true
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-pr" aria-labelledby="skill-thirdshift-pr-title">
-        <h3 id="skill-thirdshift-pr-title">thirdshift-pr</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-pr-title">thirdshift-pr</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by <a href="/#unit-3">3 · Y · Review</a></p>
-        <h4 id="file-thirdshift-pr-skill-md"><code>thirdshift-pr/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-pr-skill-md"><code>thirdshift-pr/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-pr
 description: "Use when writing a PR body."
@@ -1143,21 +1255,31 @@ Describe whether it's a one-way or two-way door. You can walk back through two-w
 
 The blast radius is the potential impact or scope of the changes introduced by this PR. Consider all possibilities. Examples are layout shift, breakages for consumers, mobile responsiveness, etc.
 </code></pre>
-        <h4 id="file-thirdshift-pr-credits-md"><code>thirdshift-pr/CREDITS.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-pr-credits-md"><code>thirdshift-pr/CREDITS.md</code></h4></summary>
         <pre class="job-text"><code># Credits
 
 "The shape of the change" section is [Dex Horthy](https://github.com/dexhorthy)'s [`show-me`](https://github.com/humanlayer/humanlayer) skill, reproduced almost word for word, aimed at a diff instead of a live conversation. `pr` does not depend on `show-me` as a skill (it isn't part of this repo, and a hard dependency would break standalone installs), so the content is copied in rather than pointed at; this file is the attribution a dependency would otherwise have carried.
 </code></pre>
-        <h4 id="file-thirdshift-pr-agents-openai-yaml"><code>thirdshift-pr/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-pr-agents-openai-yaml"><code>thirdshift-pr/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "PR"
   short_description: "Write a PR body that's fast to review"
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-resolving-merge-conflicts" aria-labelledby="skill-thirdshift-resolving-merge-conflicts-title">
-        <h3 id="skill-thirdshift-resolving-merge-conflicts-title">thirdshift-resolving-merge-conflicts</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-resolving-merge-conflicts-title">thirdshift-resolving-merge-conflicts</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by <a href="/#unit-4">4 · K · Finish</a>, in a Repair</p>
-        <h4 id="file-thirdshift-resolving-merge-conflicts-skill-md"><code>thirdshift-resolving-merge-conflicts/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-resolving-merge-conflicts-skill-md"><code>thirdshift-resolving-merge-conflicts/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-resolving-merge-conflicts
 description: "Use when you need to resolve an in-progress git merge/rebase conflict."
@@ -1172,16 +1294,24 @@ description: "Use when you need to resolve an in-progress git merge/rebase confl
 4. Discover the project's **automated checks** and run them, typically typecheck, then tests, then format. Fix anything the merge broke.
 
 5. **Finish the merge/rebase.** Stage everything, commit, and push. If rebasing, continue the rebase process until all commits are rebased.</code></pre>
-        <h4 id="file-thirdshift-resolving-merge-conflicts-agents-openai-yaml"><code>thirdshift-resolving-merge-conflicts/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-resolving-merge-conflicts-agents-openai-yaml"><code>thirdshift-resolving-merge-conflicts/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "Resolving Merge Conflicts"
   short_description: "Resolve merge and rebase conflicts"
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-security-audit" aria-labelledby="skill-thirdshift-security-audit-title">
-        <h3 id="skill-thirdshift-security-audit-title">thirdshift-security-audit</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-security-audit-title">thirdshift-security-audit</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by the Security audit, in a Security run, or a Security review</p>
-        <h4 id="file-thirdshift-security-audit-skill-md"><code>thirdshift-security-audit/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-security-audit-skill-md"><code>thirdshift-security-audit/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-security-audit
 description: Security guidance and vulnerability review for codebases, APIs, services, CLI tools, libraries, and daemons. Use for security questions, focused reviews, vulnerability research, security audits, or pen tests. Run the complete workflow only for explicit codebase audit or pen-test requests, full/comprehensive/end-to-end reviews, or requested report artifacts.
@@ -1375,7 +1505,9 @@ Do not end the run before one of exactly two terminal states: (a) all Phase 6 ar
 9. Assigning severity to `needs_validation` records.
 10. Writing the report before independent verification or letting prose and JSON disagree.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-ai-and-llm-md"><code>thirdshift-security-audit/AI-AND-LLM.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-ai-and-llm-md"><code>thirdshift-security-audit/AI-AND-LLM.md</code></h4></summary>
         <pre class="job-text"><code># AI, LLM, and Agent Hunting
 
 #### When to use this file
@@ -1460,7 +1592,9 @@ The assembled context contains credentials, another user's data, private source,
 5. For MCP identity claims, verify the authenticated connection, request correlation, tool namespace, and effective credential. Mark `needs_validation` if external server identity or deployment routing is required.
 6. Return `confirmed` findings only with a complete source trace and meaningful result. Return `needs_validation` for a specific unresolved boundary fact and state the bounded local or owner-observed check needed to resolve it.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-attack-classes-md"><code>thirdshift-security-audit/ATTACK-CLASSES.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-attack-classes-md"><code>thirdshift-security-audit/ATTACK-CLASSES.md</code></h4></summary>
         <pre class="job-text"><code># Attack Classes
 
 #### Attack classes — choose and split based on Phase 1
@@ -1592,7 +1726,9 @@ This agent does not need to be creative. It needs to be thorough and literal. Ch
 
 **Important**: For any finding this agent reports, it must verify the full code path, not just surface appearance. If a cookie is missing `HttpOnly`, check whether the cookie contains security-sensitive data and whether JS needs to read it by design. If an error message contains a field name, check whether the field is ever actually populated with sensitive data. A flag is not a finding — trace the impact before reporting.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-client-side-md"><code>thirdshift-security-audit/CLIENT-SIDE.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-client-side-md"><code>thirdshift-security-audit/CLIENT-SIDE.md</code></h4></summary>
         <pre class="job-text"><code># Client-Side and Browser Hunting
 
 #### When to use this file
@@ -1677,7 +1813,9 @@ A client source controls redirect or navigation without scheme and destination p
 4. For messaging, CORS, WebSocket, and XS-Leaks, show exact origin/source validation and the protected state or action exposed. Confirm that CSP, COOP/CORP, cookies, and SameSite policy do not already block it.
 5. Return `confirmed` findings only with a complete client path and bounded local evidence. Return `needs_validation` with the precise deployed header, extension permission, browser version, or renderer behavior an owner must verify.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-cloud-and-deployment-md"><code>thirdshift-security-audit/CLOUD-AND-DEPLOYMENT.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-cloud-and-deployment-md"><code>thirdshift-security-audit/CLOUD-AND-DEPLOYMENT.md</code></h4></summary>
         <pre class="job-text"><code># Cloud and Deployment Hunting
 
 #### When to use this file
@@ -1765,7 +1903,9 @@ An edge or serverless runtime assumes a secret, API, filesystem, isolation, or t
 4. Local validation may render templates, evaluate policy, inspect container/user namespaces in an isolated fixture, or run an emulator with dummy identities. Do not probe live endpoints or alter shared cloud resources.
 5. Return `confirmed` only with a complete active source trace and concrete boundary result. Return `needs_validation` with the exact deployed policy, identity attachment, overlay, network, or drift observation needed.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-credits-md"><code>thirdshift-security-audit/CREDITS.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-credits-md"><code>thirdshift-security-audit/CREDITS.md</code></h4></summary>
         <pre class="job-text"><code># Upstream and licence
 
 Copied from Cloudflare's [security-audit-skill](https://github.com/cloudflare/security-audit-skill), at commit [`c1c8a8c1471069fb0e188eeaff69b8e8db6564a8`](https://github.com/cloudflare/security-audit-skill/tree/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8).
@@ -1774,7 +1914,9 @@ The skill and its supporting files are unchanged except for the `SKILL.md` front
 
 Used under the MIT License. Cloudflare's copyright notice and licence are kept in [LICENSE](LICENSE) in this directory.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-data-isolation-and-lifecycle-md"><code>thirdshift-security-audit/DATA-ISOLATION-AND-LIFECYCLE.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-data-isolation-and-lifecycle-md"><code>thirdshift-security-audit/DATA-ISOLATION-AND-LIFECYCLE.md</code></h4></summary>
         <pre class="job-text"><code># Data Isolation and Lifecycle Hunting
 
 #### When to use this file
@@ -1860,7 +2002,9 @@ Backup, undo, undelete, or replica recovery restores data, credentials, membersh
 4. If external cache, object storage, replicas, analytics, backup, or retention policy is required, classify `needs_validation` and state the owner-observed check.
 5. Return `confirmed` only with complete lineage and concrete boundary impact. Return `needs_validation` with the exact unresolved storage, ACL, invalidation, retention, or restore fact.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-desktop-mobile-and-local-ipc-md"><code>thirdshift-security-audit/DESKTOP-MOBILE-AND-LOCAL-IPC.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-desktop-mobile-and-local-ipc-md"><code>thirdshift-security-audit/DESKTOP-MOBILE-AND-LOCAL-IPC.md</code></h4></summary>
         <pre class="job-text"><code># Desktop, Mobile, and Local IPC Hunting
 
 #### When to use this file
@@ -1951,7 +2095,9 @@ Notification, widget, shortcut, share sheet, biometric prompt, or deferred opera
 4. Keep local tests bounded and use dummy content/accounts. Stop after proving the boundary result; do not extend proof into persistence or broader system modification.
 5. Return `confirmed` only with a complete source and local evidence chain. Return `needs_validation` with the exact OS, manifest, signing, ACL, or device-lifecycle fact required.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-hunting-md"><code>thirdshift-security-audit/HUNTING.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-hunting-md"><code>thirdshift-security-audit/HUNTING.md</code></h4></summary>
         <pre class="job-text"><code># Vulnerability Hunting
 
 ### Phase 2: Run coverage-led hunting waves
@@ -2204,7 +2350,9 @@ The run profile bounds this loop. A `quick` run has exactly one hunter wave foll
 
 A budget bounds it the same way. Before assigning each wave, compare remaining budget against its hunter count, the validation reserve, the immediate post-wave critic, and the retained final-clean critic (`quick` reserves only its single final post-wave critic). Shrink the hunter wave to fit, taking units in priority order. If those mandatory reserves do not fit, launch no hunter from that wave and mark its planned units `deferred` with reason `budget_cannot_reserve_critics_and_validation`. Critic-proposed units enter the same ranked queue rather than extending the budget. If surviving candidates exceed the validation reserve, follow the incomplete-run rule in `SKILL.md`: stop hunting, validate in fingerprint order, retain unvalidated units as unresolved candidates, and never present them as findings.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-license"><code>thirdshift-security-audit/LICENSE</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-license"><code>thirdshift-security-audit/LICENSE</code></h4></summary>
         <pre class="job-text"><code>MIT License
 
 Copyright (c) 2025-2026 Cloudflare, Inc.
@@ -2227,7 +2375,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-memory-safety-and-binary-md"><code>thirdshift-security-audit/MEMORY-SAFETY-AND-BINARY.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-memory-safety-and-binary-md"><code>thirdshift-security-audit/MEMORY-SAFETY-AND-BINARY.md</code></h4></summary>
         <pre class="job-text"><code># Memory Safety, Binary, and Kernel Hunting
 
 #### When to use this file
@@ -2330,7 +2480,9 @@ A device node, admin socket, helper, or management API validates shape but not t
 4. For concurrency, use a deterministic schedule or sanitizer trace. For binary loading, prove the checked identity differs from the mapped identity and name the lower-trust writer.
 5. Return `confirmed` findings only with exact input, source trace, and observed result. Return `needs_validation` for a specific unresolved reachability, ABI, build, deployment, or runtime fact and state the bounded check needed.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-protocols-rpc-and-messaging-md"><code>thirdshift-security-audit/PROTOCOLS-RPC-AND-MESSAGING.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-protocols-rpc-and-messaging-md"><code>thirdshift-security-audit/PROTOCOLS-RPC-AND-MESSAGING.md</code></h4></summary>
         <pre class="job-text"><code># Protocols, RPC, and Messaging Hunting
 
 #### When to use this file
@@ -2413,7 +2565,9 @@ Several consumers jointly implement one authorization or business transition, bu
 4. For authorization and isolation, verify all interceptor, broker ACL, gateway, and consumer layers visible in source. External attachments make the candidate `needs_validation`.
 5. Return `confirmed` only with the complete message lifecycle and observed meaningful result. Return `needs_validation` with the exact broker, service identity, route, or delivery fact required.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-reconnaissance-md"><code>thirdshift-security-audit/RECONNAISSANCE.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-reconnaissance-md"><code>thirdshift-security-audit/RECONNAISSANCE.md</code></h4></summary>
         <pre class="job-text"><code># Reconnaissance
 
 ### Phase 1: Map the source and plan coverage
@@ -2571,7 +2725,9 @@ The ledger is the coverage claim. An architecture summary, agent count, or gener
 
 Run `node &lt;skill-dir&gt;/validate-coverage-ledger.cjs &lt;output-dir&gt;/coverage-ledger.json` after seeding, after every parent update, and before Phase 6. The validator rejects input beyond 5 MiB, 64 nesting levels, 10,000 units, 1,000 entries in a nested collection, or 500,000 traversed values, and caps reported validation errors at 100. In practice the 5 MiB byte limit holds roughly 2,000-5,000 realistic units, so it binds before the 10,000-unit cap. Fix every error before assigning work or making a coverage claim.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-resource-exhaustion-and-availability-md"><code>thirdshift-security-audit/RESOURCE-EXHAUSTION-AND-AVAILABILITY.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-resource-exhaustion-and-availability-md"><code>thirdshift-security-audit/RESOURCE-EXHAUSTION-AND-AVAILABILITY.md</code></h4></summary>
         <pre class="job-text"><code># Resource Exhaustion and Availability Hunting
 
 #### When to use this file
@@ -2651,7 +2807,9 @@ A restart, restore, fallback, or cleanup path rebuilds unbounded state, ignores 
 4. Prioritize by low requester work, unauthenticated reachability, cross-tenant scope, persistence, and poor recovery; do not validate with availability impact.
 5. Return `confirmed` only with safe local proof and meaningful shared effect. Return `needs_validation` with the exact upstream limit, topology, quota, or recovery observation an owner must check.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-supply-chain-and-release-md"><code>thirdshift-security-audit/SUPPLY-CHAIN-AND-RELEASE.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-supply-chain-and-release-md"><code>thirdshift-security-audit/SUPPLY-CHAIN-AND-RELEASE.md</code></h4></summary>
         <pre class="job-text"><code># Supply Chain and Release Hunting
 
 #### When to use this file
@@ -2726,7 +2884,9 @@ An extension package gains host authority beyond its declared scope, a lower-tru
 4. Keep local validation bounded: use a harmless fixture repository, dummy credential marker, local registry/config, and non-production artifact namespace. Do not publish or alter a real release.
 5. Return `confirmed` only with a complete source-visible handoff and meaningful result. Return `needs_validation` with the precise branch, runner, registry, signing, or deployment fact an owner must observe.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-validation-and-reporting-md"><code>thirdshift-security-audit/VALIDATION-AND-REPORTING.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-validation-and-reporting-md"><code>thirdshift-security-audit/VALIDATION-AND-REPORTING.md</code></h4></summary>
         <pre class="job-text"><code># Validation, Structured Output, Verification, and Reporting
 
 ### Phase 3: Independently validate every candidate
@@ -2914,7 +3074,9 @@ HTTP is one possible native interface, not the default. A library finding may us
 
 Keep the report proportional to the evidence. A clean run may have zero confirmed records. State that result and the remaining coverage/validation limits without inventing LOW findings.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-web-protocol-and-auth-md"><code>thirdshift-security-audit/WEB-PROTOCOL-AND-AUTH.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-web-protocol-and-auth-md"><code>thirdshift-security-audit/WEB-PROTOCOL-AND-AUTH.md</code></h4></summary>
         <pre class="job-text"><code># HTTP-Protocol and Authentication Hunting
 
 #### When to use this file
@@ -3021,7 +3183,9 @@ Expired, revoked, missing, or renewal-failed certificates cause silent fallback 
 5. Verify framework and library defaults. If version or configuration is unknown, use `needs_validation`; do not turn an unverified critical claim into a lower-severity confirmed finding.
 6. Return `confirmed` only with a complete source trace and observable unauthorized identity, state, or disclosure. For `needs_validation`, name the missing fact and safe local or owner-observed check that resolves it.
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-report-schema-json"><code>thirdshift-security-audit/report-schema.json</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-report-schema-json"><code>thirdshift-security-audit/report-schema.json</code></h4></summary>
         <pre class="job-text"><code>{
   "$comment": "Top-level contract for findings.json. validate-findings.cjs interprets and checks this schema directly.",
   "type": "array",
@@ -3484,7 +3648,9 @@ Expired, revoked, missing, or renewal-failed certificates cause silent fallback 
   }
 }
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-validate-coverage-ledger-cjs"><code>thirdshift-security-audit/validate-coverage-ledger.cjs</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-validate-coverage-ledger-cjs"><code>thirdshift-security-audit/validate-coverage-ledger.cjs</code></h4></summary>
         <pre class="job-text"><code>#!/usr/bin/env node
 
 /**
@@ -4358,7 +4524,9 @@ module.exports = {
 
 if (require.main === module) process.exit(run(process.argv[2]));
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-validate-coverage-ledger-test-cjs"><code>thirdshift-security-audit/validate-coverage-ledger.test.cjs</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-validate-coverage-ledger-test-cjs"><code>thirdshift-security-audit/validate-coverage-ledger.test.cjs</code></h4></summary>
         <pre class="job-text"><code>const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -5100,7 +5268,9 @@ test("accepts a canonical ID derived from near-maximum multibyte references", ()
   }
 });
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-validate-findings-cjs"><code>thirdshift-security-audit/validate-findings.cjs</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-validate-findings-cjs"><code>thirdshift-security-audit/validate-findings.cjs</code></h4></summary>
         <pre class="job-text"><code>#!/usr/bin/env node
 
 /**
@@ -5875,7 +6045,9 @@ module.exports = {
 
 if (require.main === module) process.exit(run(process.argv[2]));
 </code></pre>
-        <h4 id="file-thirdshift-security-audit-validate-findings-test-cjs"><code>thirdshift-security-audit/validate-findings.test.cjs</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-security-audit-validate-findings-test-cjs"><code>thirdshift-security-audit/validate-findings.test.cjs</code></h4></summary>
         <pre class="job-text"><code>const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -6529,11 +6701,17 @@ test("keeps shared helpers aligned with the coverage-ledger validator", () =&gt;
   }
 });
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-tdd" aria-labelledby="skill-thirdshift-tdd-title">
-        <h3 id="skill-thirdshift-tdd-title">thirdshift-tdd</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-tdd-title">thirdshift-tdd</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by <a href="/#unit-2">2 · M · Implement</a></p>
-        <h4 id="file-thirdshift-tdd-skill-md"><code>thirdshift-tdd/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-tdd-skill-md"><code>thirdshift-tdd/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-tdd
 description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
@@ -6573,12 +6751,16 @@ When the shape of that interface is itself in question (how deep the module is, 
 - **One slice at a time.** One seam, one test, one minimal implementation per cycle.
 - **Refactoring is not part of the loop.** It belongs to the review stage (see the `thirdshift-code-review` skill), not the red → green implementation cycle.
 </code></pre>
-        <h4 id="file-thirdshift-tdd-agents-openai-yaml"><code>thirdshift-tdd/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-tdd-agents-openai-yaml"><code>thirdshift-tdd/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "TDD"
   short_description: "Test-driven red-green-refactor"
 </code></pre>
-        <h4 id="file-thirdshift-tdd-mocking-md"><code>thirdshift-tdd/mocking.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-tdd-mocking-md"><code>thirdshift-tdd/mocking.md</code></h4></summary>
         <pre class="job-text"><code># When to Mock
 
 Mock at **system boundaries** only:
@@ -6639,7 +6821,9 @@ The SDK approach means:
 - Easier to see which endpoints a test exercises
 - Type safety per endpoint
 </code></pre>
-        <h4 id="file-thirdshift-tdd-tests-md"><code>thirdshift-tdd/tests.md</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-tdd-tests-md"><code>thirdshift-tdd/tests.md</code></h4></summary>
         <pre class="job-text"><code># Good and Bad Tests
 
 ## Good Tests
@@ -6718,11 +6902,17 @@ test("calculateTotal sums line items", () =&gt; {
 });
 ```
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-to-spec" aria-labelledby="skill-thirdshift-to-spec-title">
-        <h3 id="skill-thirdshift-to-spec-title">thirdshift-to-spec</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-to-spec-title">thirdshift-to-spec</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by the Architecture review, in an Architect run, or Security fix publishing, in a Security run</p>
-        <h4 id="file-thirdshift-to-spec-skill-md"><code>thirdshift-to-spec/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-to-spec-skill-md"><code>thirdshift-to-spec/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-to-spec
 description: "Turn the current session into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already settled. For an Architecture review or Security fix publishing."
@@ -6803,18 +6993,26 @@ Any further notes about the feature.
 
 &lt;/spec-template&gt;
 </code></pre>
-        <h4 id="file-thirdshift-to-spec-agents-openai-yaml"><code>thirdshift-to-spec/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-to-spec-agents-openai-yaml"><code>thirdshift-to-spec/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "To Spec"
   short_description: "Turn a session into a spec"
 policy:
   allow_implicit_invocation: true
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
       <article class="job-sheet" id="skill-thirdshift-to-tickets" aria-labelledby="skill-thirdshift-to-tickets-title">
-        <h3 id="skill-thirdshift-to-tickets-title">thirdshift-to-tickets</h3>
+        <details class="fold">
+        <summary><h3 id="skill-thirdshift-to-tickets-title">thirdshift-to-tickets</h3></summary>
+        <div class="job-body">
         <p class="sent-by">Used by the Architecture review, in an Architect run, or Security fix publishing, in a Security run</p>
-        <h4 id="file-thirdshift-to-tickets-skill-md"><code>thirdshift-to-tickets/SKILL.md</code></h4>
+        <details class="fold" open>
+        <summary><h4 id="file-thirdshift-to-tickets-skill-md"><code>thirdshift-to-tickets/SKILL.md</code></h4></summary>
         <pre class="job-text"><code>---
 name: thirdshift-to-tickets
 description: Break a plan, spec, or the current session into a set of tracer-bullet tickets, each declaring its blocking edges, published to the issue tracker with native sub-issue and blocking links. For an Architecture review or Security fix publishing.
@@ -6918,22 +7116,30 @@ The end-to-end behaviour this ticket makes work, from the user's perspective, no
 
 Avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
 </code></pre>
-        <h4 id="file-thirdshift-to-tickets-agents-openai-yaml"><code>thirdshift-to-tickets/agents/openai.yaml</code></h4>
+        </details>
+        <details class="fold">
+        <summary><h4 id="file-thirdshift-to-tickets-agents-openai-yaml"><code>thirdshift-to-tickets/agents/openai.yaml</code></h4></summary>
         <pre class="job-text"><code>interface:
   display_name: "To Tickets"
   short_description: "Split a plan into tracer-bullet tickets"
 policy:
   allow_implicit_invocation: true
 </code></pre>
+        </details>
+        </div>
+        </details>
       </article>
     </div>
+    </details>
   </div>
 </section>
 <section class="sec" aria-labelledby="licence-title">
   <div class="wrap">
-    <div class="sec-head"><p class="eyebrow">Licence and credits</p><h2 id="licence-title">Whose skills these are</h2></div>
+    <details class="fold">
+    <summary class="sec-head"><span class="eyebrow">Licence and credits</span><h2 id="licence-title">Whose skills these are</h2></summary>
     <p class="lede">Most Factory skills are adapted from Matt Pocock's skills, under the licence below. The <a href="#skill-thirdshift-pr">thirdshift-pr</a> skill credits Dex Horthy's <code>show-me</code> skill in its <a href="#file-thirdshift-pr-credits-md">CREDITS.md</a>. The <a href="#skill-thirdshift-security-audit">thirdshift-security-audit</a> skill is copied from <a href="https://github.com/cloudflare/security-audit-skill">Cloudflare's security-audit-skill</a>, under its own <a href="#file-thirdshift-security-audit-license">MIT licence</a>, with its upstream repository and commit recorded in <a href="#file-thirdshift-security-audit-credits-md">CREDITS.md</a>.</p>
-    <h4 id="file-license"><code>LICENSE</code></h4>
+    <details class="fold">
+    <summary><h4 id="file-license"><code>LICENSE</code></h4></summary>
     <pre class="job-text"><code>MIT License
 
 Copyright (c) 2026 Matt Pocock
@@ -6956,6 +7162,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 </code></pre>
+    </details>
+    </details>
   </div>
 </section>
 <!-- End of the generated fragment -->

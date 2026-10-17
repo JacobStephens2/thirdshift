@@ -414,6 +414,56 @@ printf 'Proposed public issue:\nTitle: Bound accepted input\nBody:\nReject overs
     )
 }
 
+#[test]
+fn public_fix_publishing_cannot_write_github_content_with_any_harness() {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+        let scenario = with_reproduced_findings(&["high"]);
+        let before = scenario.gh_state();
+        scenario.agent_does_in_session(
+            1,
+            r#"
+for command in \
+  "issue create --title Unvalidated --body Unvalidated" \
+  "issue comment 7 --body Unvalidated" \
+  "issue edit 7 --body Unvalidated" \
+  "pr create --base main --head main --title Unvalidated --body Unvalidated" \
+  "pr comment 1 --body Unvalidated" \
+  "pr edit 1 --body Unvalidated" \
+  "api --method POST repos/acme/widgets/issues -f title=Unvalidated"
+do
+  if gh $command 2> denied.txt; then
+    echo "publishing session retained GitHub authority: $command" >&2
+    exit 90
+  fi
+  grep -q 'authentication required' denied.txt
+done
+echo 'all publishing writes denied' >&2
+exit 1
+"#,
+        );
+        let result = scenario.run_with_env(
+            &["secure", "security-fix", "harness", harness],
+            &[
+                ("FAKE_GH_REQUIRE_AUTH", "1"),
+                ("GH_TOKEN", "factory-token"),
+                ("GITHUB_TOKEN", "factory-token"),
+                ("GH_ENTERPRISE_TOKEN", "factory-token"),
+                ("GITHUB_ENTERPRISE_TOKEN", "factory-token"),
+            ],
+        );
+        assert_eq!(result.code, Some(1), "{harness}: {}", result.stderr);
+        assert!(
+            result.stderr.contains("all publishing writes denied"),
+            "{harness}: {}",
+            result.stderr
+        );
+        let after = scenario.gh_state();
+        for field in ["issues", "bodies", "titles", "comments", "prs"] {
+            assert_eq!(after[field], before[field], "{harness}: {field}");
+        }
+    }
+}
+
 /// The staged spec path: the session returns its proposed public spec text
 /// without running `gh issue create` itself. thirdshift validates every
 /// staged text before creating any public issue.
@@ -434,6 +484,143 @@ git commit -q -m 'Bound accepted input'
 gh pr create --base issue-{spec} --head issue-{ticket} --title 'Bound accepted input' --body 'Closes #{ticket}'
 "#
     )
+}
+
+#[test]
+fn unauthenticated_public_publishers_stage_single_fixes_and_specs_with_every_harness() {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+        for spec in [false, true] {
+            let scenario = with_reproduced_findings(&["high"]);
+            let mut state = scenario.gh_state();
+            if spec {
+                state["advisories"][0]["description"] = json!(
+                    state["advisories"][0]["description"]
+                        .as_str()
+                        .unwrap()
+                        .replace("high single", "high spec")
+                        .replace("Fix size: single", "Fix size: spec")
+                );
+                scenario.write_gh_state(&state);
+            }
+            let config = scenario.path("factory-gh");
+            fs::create_dir_all(&config).unwrap();
+            let credentials = "github.com:\n  oauth_token: factory-token\n";
+            fs::write(config.join("hosts.yml"), credentials).unwrap();
+            let proposal = if spec {
+                stage_spec("https://github.com/acme/widgets/security/advisories/GHSA-finding-0")
+            } else {
+                stage_fix("GHSA-finding-0")
+            };
+            scenario.agent_does_in_session(
+                1,
+                &format!(
+                    r#"
+test -f README.md
+git rev-parse --is-inside-work-tree
+test -d "$GH_CONFIG_DIR"
+test ! -f "$GH_CONFIG_DIR/hosts.yml"
+if gh issue create --title Unvalidated --body Unvalidated 2> denied.txt; then exit 90; fi
+grep -q 'authentication required' denied.txt
+{proposal}
+"#,
+                ),
+            );
+            if spec {
+                scenario.agent_does_for(9, &implement_spec_ticket(9, 8));
+                scenario.agent_does_for(10, &implement_spec_ticket(10, 8));
+            } else {
+                scenario.agent_does_for(8, implement_fix());
+            }
+            let result = scenario.run_with_env(
+                &[
+                    "secure",
+                    "security-fix",
+                    "harness",
+                    harness,
+                    "parallel",
+                    "1",
+                ],
+                &[
+                    ("FAKE_GH_REQUIRE_AUTH", "1"),
+                    ("GH_CONFIG_DIR", config.to_str().unwrap()),
+                ],
+            );
+            assert_eq!(
+                result.code,
+                Some(0),
+                "{harness}, spec={spec}: {}",
+                result.stderr
+            );
+            let after = scenario.gh_state();
+            assert_eq!(after["titles"]["8"], "Bound accepted input");
+            if spec {
+                assert_eq!(after["sub_issues"]["8"], json!([9, 10]));
+                assert_eq!(after["blocked_by"]["10"], json!([9]));
+            }
+            assert!(
+                after["prs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|pr| pr["head"] == "issue-8" && pr["isDraft"] == false)
+            );
+            let calls: Vec<Value> = serde_json::from_str(
+                &fs::read_to_string(scenario.path(&format!("{harness}-calls.json"))).unwrap(),
+            )
+            .unwrap();
+            let prompt = calls
+                .iter()
+                .filter_map(|call| call["prompt"].as_str())
+                .find(|prompt| prompt.contains("Private record:"))
+                .unwrap();
+            assert!(prompt.contains(state["advisories"][0]["description"].as_str().unwrap()));
+            assert_eq!(
+                fs::read_to_string(config.join("hosts.yml")).unwrap(),
+                credentials
+            );
+            assert!(scenario.entries("tmp").is_empty());
+        }
+    }
+}
+
+#[test]
+fn public_publishing_resumes_still_cannot_write_github_content() {
+    for (harness, killed) in [
+        (
+            "claude",
+            r#"printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"pending","status":"stopped","summary":"bounded-fixture"}' > "$FAKE_CLAUDE_AFTER_RESULT""#,
+        ),
+        (
+            "codex",
+            r#"printf '%s\n' '{"type":"item.started","item":{"id":"pending","type":"command_execution","command":"bounded-fixture","status":"in_progress"}}'"#,
+        ),
+        (
+            "muse",
+            r#"printf '%s\n' '{"payload_type":"task.lifecycle.proposed","payload":{"event":{"task_id":"pending","task_kind":"tool.bash"}}}' '{"payload_type":"task.lifecycle.cancelled","payload":{"event":{"task_id":"pending","reason":"session ended"}}}'"#,
+        ),
+    ] {
+        let scenario = with_reproduced_findings(&["high"]);
+        let denied = r#"
+if gh issue create --title Unvalidated --body Unvalidated 2> denied.txt; then exit 90; fi
+grep -q 'authentication required' denied.txt
+"#;
+        scenario.agent_does_in_session(1, &format!("{denied}\n{killed}\n"));
+        scenario.agent_does_in_session(2, &format!("{denied}\n{}", stage_fix("GHSA-finding-0")));
+        scenario.agent_does_for(8, implement_fix());
+        let result = scenario.run_with_env(
+            &["secure", "security-fix", "harness", harness],
+            &[("FAKE_GH_REQUIRE_AUTH", "1"), ("GH_TOKEN", "factory-token")],
+        );
+        assert_eq!(result.code, Some(0), "{harness}: {}", result.stderr);
+        assert!(
+            result.stderr.contains("resuming it once"),
+            "{harness}: {}",
+            result.stderr
+        );
+        assert_eq!(scenario.gh_state()["titles"]["8"], "Bound accepted input");
+        assert!(scenario.gh_state()["bodies"].get("9").is_none());
+        assert!(scenario.entries("tmp").is_empty());
+    }
 }
 
 #[test]
@@ -745,8 +932,9 @@ fn a_session_side_effect_public_issue_fails_the_fix_and_is_closed() {
     // on the side must fail loudly, and thirdshift closes the leak for
     // Day-shift triage instead of reporting success. Failing closed rather
     // than succeeding with one issue: stopping the session's `gh issue
-    // create` itself would need harness-level sandboxing, which is Day-shift
-    // scope beyond this review.
+    // create` itself is now denied by the unauthenticated launch policy.
+    // This fixture deliberately leaves fake authentication off to exercise
+    // the second check when an issue nevertheless appears in that window.
     let scenario = with_reproduced_findings(&["high"]);
     scenario.agent_does_in_session(
         1,
@@ -952,7 +1140,10 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
         9,
         &format!("test -f bounded-8.txt\n{}", implement_spec_ticket(9, 7)),
     );
-    let result = scenario.run(&["secure", "security-fix", "merge", "parallel", "1"]);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "merge", "parallel", "1"],
+        &[("FAKE_GH_REQUIRE_AUTH", "1"), ("GH_TOKEN", "factory-token")],
+    );
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let state = scenario.gh_state();
     assert_eq!(state["issues"].as_object().unwrap().len(), 3);
@@ -3885,4 +4076,43 @@ fn historical_fix_links_are_validated_in_both_storage_adapters_before_work() {
             assert!(scenario.claude_calls().is_empty());
         }
     }
+}
+
+#[test]
+fn a_security_fix_spec_rejects_a_ticket_outside_its_repository_before_labelling_or_dispatch() {
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["private"] = json!(true);
+    state["bodies"]["7"] = json!(
+        state["advisories"][0]["description"]
+            .as_str()
+            .unwrap()
+            .replace("high single", "high spec")
+            .replace("Fix size: single", "Fix size: spec")
+    );
+    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    state["issue_urls"] = json!({"8": "https://github.com/other/widgets/issues/8"});
+    scenario.write_gh_state(&state);
+    scenario.agent_does_for_in_session(7, 1, r#"
+gh issue create --title 'Bound storage input' --body 'Bound storage input. Private record: https://github.com/acme/widgets/issues/7' --label ready-for-agent
+gh fake sub-issues 7 '[8]'
+printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("a Security fix Spec's Ticket must be in the fix issue's repository"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert_eq!(
+        state["labels"]["7"],
+        json!(["security-finding", "needs-triage"])
+    );
+    assert_eq!(state["labels"]["8"], json!(["ready-for-agent"]));
+    assert!(state["prs"].as_array().unwrap().is_empty());
+    assert_eq!(scenario.claude_calls().len(), 1);
 }

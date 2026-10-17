@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use crate::architect::Reviewed;
 use crate::base_fix::Advice;
 use crate::command::{Ending, Skip};
-use crate::failed_run::FailedRun;
+use crate::failed_run::{FailedRun, PolicyRefusal};
 use crate::logs;
 use crate::progress::{self, ChildLine};
 use crate::run::Ended;
@@ -88,8 +88,8 @@ pub fn show_skip(skip: &Skip) -> ExitCode {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Account<'a> {
     /// In a word or a few, as a Run notification's subject gives it: its
-    /// pull request's outcome, `failed` or `interrupted`; or, for an
-    /// Architect run that dispatched nothing, how its review ended, or
+    /// pull request's outcome, `review required`, `failed` or `interrupted`;
+    /// or, for an Architect run that dispatched nothing, how its review ended, or
     /// `review failed`.
     pub outcome: &'static str,
     /// The line that says how it ended, once it succeeded: its pull
@@ -271,11 +271,14 @@ impl<'a> Account<'a> {
 
     /// How the command ended, in short, as its Activity log end line gives
     /// it: the line that says how it ended once it succeeded, or `failed: `
-    /// and the first line of its cause; after the plan it dispatched, in an
-    /// Architect run that dispatched one.
+    /// (or `review required: `) and the first line of its cause; after the
+    /// plan it dispatched, in an Architect run that dispatched one.
     pub fn summary(&self) -> String {
         let ended = match &self.ended {
             Ok(line) => line.clone(),
+            Err(cause) if self.outcome == "review required" => {
+                format!("review required: {}", cause.first_line())
+            }
             Err(cause) => format!("failed: {}", cause.first_line()),
         };
         match self.review.as_ref().and_then(|review| review.dispatched) {
@@ -285,10 +288,15 @@ impl<'a> Account<'a> {
     }
 }
 
-/// `interrupted`, or `failure` for a failure that was not an interrupt.
+/// `interrupted`, `review required` for a blocking review, or `failure`.
 fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
     if failed.interrupted {
         "interrupted"
+    } else if matches!(
+        failed.error.downcast_ref::<PolicyRefusal>(),
+        Some(PolicyRefusal::ReviewRequired { .. })
+    ) {
+        "review required"
     } else {
         failure
     }
