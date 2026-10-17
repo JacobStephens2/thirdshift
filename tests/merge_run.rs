@@ -647,7 +647,10 @@ rm -rf "$other"
         2
     );
     assert_issue_7_merged_into(&scenario, "main");
-    assert_eq!(scenario.gh_state()["prs"][0]["body"], "Closes #7");
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["body"],
+        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+    );
     scenario.assert_cleaned_up("issue-7");
 }
 
@@ -700,7 +703,10 @@ rm -rf "$other"
     assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &first));
     let restored = sha_of(&scenario, "main", "Restore reviewed tree");
     assert_review_repair_from(&calls[2]["prompt"], &restored);
-    assert_eq!(scenario.gh_state()["prs"][0]["body"], "Closes #7");
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["body"],
+        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+    );
     assert_eq!(
         scenario.origin_file("main", "first.txt").unwrap(),
         "first\n"
