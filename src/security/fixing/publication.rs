@@ -112,15 +112,7 @@ pub(super) fn publish(
             {
                 bail!("the private Security finding must be an open, ready single Ticket");
             }
-            if github.interrupted() {
-                bail!("interrupted");
-            }
-            github.apply(&Edit::of(
-                &issue,
-                viewed.labels,
-                &[NEEDS_TRIAGE],
-                &[READY_FOR_AGENT, SECURITY_FIX],
-            ))?;
+            mark_ready(github, &issue, viewed.labels)?;
             return Ok(issue);
         }
         Source::Session { message, started } => (message, started),
@@ -223,16 +215,21 @@ pub(super) fn publish(
         let labels = github.issue_labels(issue)?;
         github.apply(&Edit::of(issue, labels, &[], &[SECURITY_FIX]))?;
     }
+    mark_ready(github, &issue, viewed.labels)?;
+    Ok(issue)
+}
+
+/// Make the final readiness edit, after the flow's checks and child tagging.
+fn mark_ready(github: &mut impl Outside, issue: &IssueUrl, labels: Labels) -> Result<()> {
     if github.interrupted() {
         bail!("interrupted");
     }
     github.apply(&Edit::of(
-        &issue,
-        viewed.labels,
+        issue,
+        labels,
         &[NEEDS_TRIAGE],
         &[READY_FOR_AGENT, SECURITY_FIX],
-    ))?;
-    Ok(issue)
+    ))
 }
 
 /// One staged Spec Ticket the publishing session proposed: its title, its
