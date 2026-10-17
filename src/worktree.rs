@@ -200,6 +200,12 @@ impl Worktree {
         Ok(pushed)
     }
 
+    /// Retain unpublished work when Delivery cannot safely push it, such as
+    /// after a PR was merged and its remote branch deleted.
+    pub fn retain_locally(&mut self) {
+        self.kept = true;
+    }
+
     /// Delete the Issue branch on origin, or do nothing if it is already gone
     /// there, e.g. deleted by GitHub after a merge. Hooks are skipped, as for
     /// [`Worktree::push`]. This finishes a confirmed Self-merge, including

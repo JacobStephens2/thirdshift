@@ -406,7 +406,8 @@ impl Outside for InWorktree<'_> {
         } else {
             Stage::Implementation
         });
-        self.sessions.run(kind, prompt)
+        self.sessions.run(kind, prompt)?;
+        self.pull_request.ensure_open(false)
     }
 
     fn security_review(&mut self, prompt: &str) -> Result<Review> {
@@ -420,6 +421,7 @@ impl Outside for InWorktree<'_> {
 
     fn push(&mut self) -> Result<()> {
         self.stage.set(Stage::Push);
+        self.pull_request.ensure_open(false)?;
         self.worktree.push()
     }
 
@@ -482,6 +484,8 @@ struct OnFailure<'a> {
 
 impl FailedOutside for OnFailure<'_> {
     fn preserve_failed_run(&mut self, reason: &str) -> Result<Preserved> {
+        self.worktree.retain_locally();
+        self.pull_request.ensure_preservable()?;
         self.worktree.preserve_failed_run(self.base, reason)
     }
 
@@ -519,10 +523,12 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn merge_base_branch(&mut self) -> Result<Merge> {
+        self.pull_request.ensure_open(true)?;
         self.worktree.merge_base_branch(self.base)
     }
 
     fn merge_new_commits(&mut self, observed: ForeignCommits) -> Result<Merge> {
+        self.pull_request.ensure_open(true)?;
         self.worktree.merge_new_commits(observed)
     }
 
@@ -532,6 +538,7 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn push(&mut self) -> Result<()> {
         self.stage.set(Stage::Push);
+        self.pull_request.ensure_open(true)?;
         self.worktree.push()
     }
 
@@ -553,7 +560,7 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
         self.stage.set(Stage::Ci);
-        ci::watch(self.issue, head, base_commit)
+        ci::watch(self.issue, self.pull_request, head, base_commit)
     }
 
     fn rerun(
@@ -563,7 +570,7 @@ impl repair_loop::Outside for RunOutside<'_> {
         failed: &FailedChecks,
     ) -> Result<Option<Ci>> {
         self.stage.set(Stage::Ci);
-        ci::rerun(self.issue, head, base_commit, failed)
+        ci::rerun(self.issue, self.pull_request, head, base_commit, failed)
     }
 
     fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
@@ -580,7 +587,9 @@ impl repair_loop::Outside for RunOutside<'_> {
             Repair::CiFix(failed) => prompt::ci_fix_repair(issue, base, branch, pr_url, failed),
             Repair::Review { from } => prompt::review_repair(issue, branch, pr_url, from),
         };
-        self.sessions.run(kind, &prompt)
+        self.pull_request.ensure_open(true)?;
+        self.sessions.run(kind, &prompt)?;
+        self.pull_request.ensure_open(true)
     }
 
     fn sees_inherited_failures(&mut self) -> bool {

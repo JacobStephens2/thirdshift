@@ -330,6 +330,16 @@ fn pr_create(state: &mut Json, flags: &Flags) {
         ("isDraft", Bool(flags.contains_key("draft"))),
         ("title", string(flag(flags, "title").unwrap_or(""))),
         ("body", string(flag(flags, "body").unwrap_or(""))),
+        // Agents in these fixtures may leave their initial push to Delivery.
+        // GitHub retains a PR head even before that push or after deletion.
+        (
+            "initialHead",
+            string(
+                String::from_utf8(git(Path::new("."), &["rev-parse", "HEAD"]).stdout)
+                    .unwrap()
+                    .trim(),
+            ),
+        ),
     ]));
     save(state);
     println!("{url}");
@@ -439,7 +449,13 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
     if wanted.iter().any(|w| w == "headRefOid") {
         let head = match pr.get("headRefOid") {
             Some(head) if head.truthy() => head.clone(),
-            _ => string(branch_tip(pr.at("head").str())),
+            _ => origin_tip(pr.at("head").str())
+                .map(string)
+                .unwrap_or_else(|| {
+                    pr.get("initialHead")
+                        .cloned()
+                        .unwrap_or_else(|| panic!("origin has no branch {}", pr.at("head").str()))
+                }),
         };
         fields.set("headRefOid", head);
     }

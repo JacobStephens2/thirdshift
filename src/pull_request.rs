@@ -167,6 +167,7 @@ impl<A: Adapter> PullRequest<A> {
         let Some(snapshot) = self.observe(false)? else {
             return Ok(());
         };
+        self.validate(&snapshot, false)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
         let written = with_built_with(&body, choice);
         if written != body {
@@ -236,6 +237,26 @@ impl<A: Adapter> PullRequest<A> {
     /// identity captured only by Failed run completion discovery.
     pub fn info(&self) -> Option<Identified> {
         self.identified.clone()
+    }
+
+    /// Reobserve the selected PR before continuing Delivery work. Opening
+    /// sessions may leave a draft; Repairs and CI require a ready PR.
+    pub fn ensure_open(&mut self, ready: bool) -> Result<()> {
+        let snapshot = self.observe(false)?.context("no PR found")?;
+        self.validate(&snapshot, ready)
+    }
+
+    /// Failure preservation must not recreate a terminal PR's branch. With
+    /// no PR yet, salvage is still allowed; a missing captured PR is uncertain.
+    /// Completion observations preserve the original session/interrupt cause.
+    pub fn ensure_preservable(&mut self) -> Result<()> {
+        match self.observe(true)? {
+            Some(snapshot) if !snapshot.pr.is_open() => {
+                bail!("PR {} is {}, not open", snapshot.pr.url, snapshot.pr.state)
+            }
+            None if self.identified.is_some() => bail!("captured PR is not found"),
+            _ => Ok(()),
+        }
     }
 
     /// Every unknown-mergeability poll repeats all readiness checks on one

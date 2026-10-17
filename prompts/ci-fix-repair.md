@@ -11,12 +11,14 @@ Failed checks:
 - <failing check>: <check URL>
 
 Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.
-Run the affected checks locally, commit, and push <branch>.
+Run the affected checks locally. Commit only actual file changes, and push <branch> only when needed to publish changes or reconcile upstream commits.
 
 Compare the failing test or check with the branch's diff against <base>. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.
 Only failures in tests or checks this branch does not touch may go in a "CI notes" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on <base>). Do not change code for those unrelated failures.
 
 Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.
+
+Before additional validation, pushes, or PR edits, check whether this branch's PR is still open. If it is merged or closed, stop and report its actual state; do not push or edit the PR. During a Repair, if it becomes a draft, stop and report that readiness gate. If a Repair changes no files and has no merge to finish, create no commit (including no empty commit) and do not push merely to satisfy this prompt; still push real changes and commits needed to reconcile upstream.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 ```
