@@ -144,6 +144,7 @@ impl RunNotification {
         let host = host::name();
         let command_log = logs::command_log_path();
         let mut text = body(
+            &self.subject,
             account,
             self.built_with.as_deref(),
             command_log.as_deref(),
@@ -207,10 +208,12 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 /// `account` tells, with its configured `built_with` line, if known,
 /// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
-/// outcome, as the subject gives it. An Architect run's then tells how its
+/// outcome, as the subject gives it, then the original Issue URL when the
+/// subject names an issue. An Architect run's then tells how its
 /// review ended, and the outcome of the run it dispatched, if any. The cause
 /// is left out of an interrupted command's, whose outcome says so.
 fn body(
+    subject: &Subject,
     account: &Account,
     built_with: Option<&str>,
     command_log: Option<&Path>,
@@ -218,6 +221,9 @@ fn body(
     took: Duration,
 ) -> String {
     let mut text = format!("Result:       {}\n", account.outcome);
+    if let Subject::Issue { issue, .. } = subject {
+        text += &format!("Issue:        {}\n", issue.url);
+    }
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
             Err(_) if account.failed_reproduction.is_some() => "audit complete",
@@ -380,13 +386,32 @@ mod tests {
     /// The subject and body of the notification about `subject` for a
     /// command that ended as `account` tells, if it sends one.
     fn told(subject: &Subject, account: &Account) -> Option<(String, String)> {
-        subject_line(subject, account.outcome).map(|subject| (subject, body_of(account)))
+        subject_line(subject, account.outcome).map(|line| {
+            (
+                line,
+                body(
+                    subject,
+                    account,
+                    None,
+                    None,
+                    "droplet-1",
+                    Duration::from_secs(4),
+                ),
+            )
+        })
     }
 
     /// The body for a command that ended as `account` tells, run on
     /// `droplet-1` for 4s with no Command log.
     fn body_of(account: &Account) -> String {
-        body(account, None, None, "droplet-1", Duration::from_secs(4))
+        body(
+            &Subject::Pending,
+            account,
+            None,
+            None,
+            "droplet-1",
+            Duration::from_secs(4),
+        )
     }
 
     #[test]
@@ -397,6 +422,7 @@ mod tests {
                 "[thirdshift] acme/widgets#123 Add export button: merged".to_string(),
                 format!(
                     "Result:       merged\n\
+                     Issue:        https://github.com/acme/widgets/issues/123\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
                      Host:         droplet-1\n\
@@ -416,6 +442,7 @@ mod tests {
                 "[thirdshift] acme/widgets#123 Add export button: failed".to_string(),
                 format!(
                     "Result:       failed\n\
+                     Issue:        https://github.com/acme/widgets/issues/123\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session log:  {LOG}\n\
@@ -438,6 +465,7 @@ mod tests {
             Some((
                 "[thirdshift] acme/widgets#123 Add export button: interrupted".to_string(),
                 "Result:       interrupted\n\
+                 Issue:        https://github.com/acme/widgets/issues/123\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
                     .to_string()
@@ -564,6 +592,7 @@ mod tests {
         };
         assert_eq!(
             body(
+                &Subject::Pending,
                 &account,
                 Some("Built with claude · opus · high"),
                 Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),

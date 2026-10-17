@@ -2202,7 +2202,7 @@ fn a_ready_spec_run_sends_one_notification_with_a_line_per_ticket() {
         format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: ready for review")
     );
     assert!(
-        text.starts_with("Result:       ready for review\n"),
+        text.starts_with("Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/20\n"),
         "{text}"
     );
     for part in [
@@ -2213,6 +2213,13 @@ fn a_ready_spec_run_sends_one_notification_with_a_line_per_ticket() {
     ] {
         assert_contains(&text, part);
     }
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("Issue:"))
+            .count(),
+        1,
+        "{text}"
+    );
     assert!(!text.contains("#23"), "{text}");
 }
 
@@ -2240,7 +2247,12 @@ fn a_failed_spec_run_sends_one_notification_with_each_tickets_outcome() {
         subject,
         format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: failed")
     );
-    assert!(text.starts_with("Result:       failed\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       failed\nIssue:        https://github.com/acme/widgets/issues/20\n"
+        ),
+        "{text}"
+    );
     for part in [
         "Cause:        Tickets not done: #21, #22\n",
         "#21 failed: claude exited 1 (session log: ",
@@ -2279,7 +2291,12 @@ fn an_interrupted_spec_run_sends_one_notification_with_each_tickets_outcome() {
         subject,
         format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: interrupted")
     );
-    assert!(text.starts_with("Result:       interrupted\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       interrupted\nIssue:        https://github.com/acme/widgets/issues/20\n"
+        ),
+        "{text}"
+    );
     assert_contains(&text, "#21 interrupted\n");
     assert_contains(&text, "#22 blocked by #21\n");
 }

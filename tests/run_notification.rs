@@ -98,7 +98,7 @@ fn a_review_required_notification_and_summary_name_the_refusal() {
         subject(&request)
     );
     assert!(
-        text(&request).starts_with("Result:       review required\n"),
+        text(&request).starts_with("Result:       review required\nIssue:        https://github.com/acme/widgets/issues/7\n"),
         "{}",
         text(&request)
     );
@@ -461,7 +461,14 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
     );
     let text = text(&request);
     assert!(
-        text.starts_with("Result:       ready for review\n"),
+        text.starts_with("Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\n"),
+        "{text}"
+    );
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("Issue:"))
+            .count(),
+        1,
         "{text}"
     );
     assert_contains(text, PR_URL);
@@ -494,7 +501,9 @@ fn a_merge_run_sends_one_notification_that_it_merged() {
         "[thirdshift] acme/widgets#7 I cancelled my subscription but the account still shows as part of the monthly revenue total on the site: merged"
     );
     assert!(
-        text(&request).starts_with("Result:       merged\n"),
+        text(&request).starts_with(
+            "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
         "{}",
         text(&request)
     );
@@ -523,9 +532,15 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
         "[thirdshift] acme/widgets#7 Add export button: failed"
     );
     let text = text(&request);
-    assert!(text.starts_with("Result:       failed\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       failed\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
+        "{text}"
+    );
     assert_contains(text, "claude exited 3");
     assert_contains(text, &the_one_log(&scenario));
+    assert!(!text.contains("Pull request:"), "{text}");
 }
 
 #[test]
@@ -624,7 +639,9 @@ fn an_interrupted_run_sends_one_notification_that_it_was_interrupted() {
         subject(&request)
     );
     assert!(
-        text(&request).starts_with("Result:       interrupted\n"),
+        text(&request).starts_with(
+            "Result:       interrupted\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
         "{}",
         text(&request)
     );
@@ -634,7 +651,7 @@ fn an_interrupted_run_sends_one_notification_that_it_was_interrupted() {
 fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
     let scenario = Scenario::new();
     let resend = ResendStandIn::replying(200, ACCEPTED);
-    let url = "https://github.com/other/widgets/issues/7";
+    let url = "https://github.com/Other/Widgets/issues/007/";
 
     let result = run(
         &scenario,
@@ -645,7 +662,12 @@ fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     let request = the_one_request(&resend);
-    assert_eq!(subject(&request), "[thirdshift] other/widgets#7: failed");
+    assert_eq!(subject(&request), "[thirdshift] Other/Widgets#7: failed");
+    assert!(
+        text(&request).starts_with(&format!("Result:       failed\nIssue:        {url}\n")),
+        "{}",
+        text(&request)
+    );
     assert_contains(text(&request), "origin mismatch");
 }
 
