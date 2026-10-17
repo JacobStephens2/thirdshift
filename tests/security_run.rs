@@ -3291,14 +3291,13 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
     }
 }
 
-#[test]
-fn malformed_pre_audit_github_response_has_dependency_cause() {
+fn assert_pre_audit_response_dependency_cause(response: &str, diagnostic: &str) {
     use std::os::unix::fs::PermissionsExt;
 
     let scenario = Scenario::new();
     let gh = scenario.path("bin/gh");
     fs::remove_file(&gh).unwrap();
-    fs::write(&gh, "#!/bin/sh\nprintf '%s\\n' 'PRIVATE-INVALID-JSON'\n").unwrap();
+    fs::write(&gh, format!("#!/bin/sh\nprintf '%s\\n' '{response}'\n")).unwrap();
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
 
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
@@ -3311,13 +3310,7 @@ fn malformed_pre_audit_github_response_has_dependency_cause() {
     );
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert!(
-        result
-            .stderr
-            .contains("gh issue list returned invalid JSON"),
-        "{}",
-        result.stderr
-    );
+    assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
     assert!(scenario.claude_calls().is_empty());
     assert!(scenario.codex_calls().is_empty());
 
@@ -3335,6 +3328,19 @@ fn malformed_pre_audit_github_response_has_dependency_cause() {
         text.contains("Cause:        GitHub dependency failure"),
         "{text}"
     );
+}
+
+#[test]
+fn malformed_pre_audit_github_response_has_dependency_cause() {
+    assert_pre_audit_response_dependency_cause(
+        "PRIVATE-INVALID-JSON",
+        "gh issue list returned invalid JSON",
+    );
+}
+
+#[test]
+fn invalid_schema_pre_audit_github_response_has_dependency_cause() {
+    assert_pre_audit_response_dependency_cause("{}", "gh issue list did not return a list");
 }
 
 #[test]
