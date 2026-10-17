@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::resend::ResendStandIn;
+use support::resend::{ResendStandIn, assert_one_issue_line};
 use support::{Scenario, WAIT_BOUND, leaves_running};
 
 const SPEC: u32 = 20;
@@ -2178,6 +2178,7 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
     let requests = resend.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
     let body = &requests[0].body;
+    assert_one_issue_line(body["text"].as_str().unwrap());
     (
         body["subject"].as_str().unwrap().to_string(),
         body["text"].as_str().unwrap().to_string(),
@@ -2202,7 +2203,7 @@ fn a_ready_spec_run_sends_one_notification_with_a_line_per_ticket() {
         format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: ready for review")
     );
     assert!(
-        text.starts_with("Result:       ready for review\n"),
+        text.starts_with("Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/20\n"),
         "{text}"
     );
     for part in [
@@ -2240,7 +2241,12 @@ fn a_failed_spec_run_sends_one_notification_with_each_tickets_outcome() {
         subject,
         format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: failed")
     );
-    assert!(text.starts_with("Result:       failed\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       failed\nIssue:        https://github.com/acme/widgets/issues/20\n"
+        ),
+        "{text}"
+    );
     for part in [
         "Cause:        Tickets not done: #21, #22\n",
         "#21 failed: claude exited 1 (session log: ",
@@ -2279,7 +2285,12 @@ fn an_interrupted_spec_run_sends_one_notification_with_each_tickets_outcome() {
         subject,
         format!("[thirdshift] acme/widgets#20 {SPEC_TITLE}: interrupted")
     );
-    assert!(text.starts_with("Result:       interrupted\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       interrupted\nIssue:        https://github.com/acme/widgets/issues/20\n"
+        ),
+        "{text}"
+    );
     assert_contains(&text, "#21 interrupted\n");
     assert_contains(&text, "#22 blocked by #21\n");
 }
