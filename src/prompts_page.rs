@@ -677,6 +677,39 @@ mod tests {
     }
 
     #[test]
+    fn source_editing_sessions_prefer_available_structured_tools() {
+        for prompt in prompts() {
+            let edits_source = matches!(
+                prompt.id,
+                "prompt-fresh"
+                    | "prompt-continuation"
+                    | "prompt-continuation-pr"
+                    | "prompt-spec-review"
+                    | "prompt-architecture-review"
+                    | "prompt-security-review"
+                    | "prompt-conflict-repair"
+                    | "prompt-foreign-conflict-repair"
+                    | "prompt-review-repair"
+                    | "prompt-ci-fix-repair"
+                    | "prompt-ci-fix-repair-inherited"
+            );
+            for instruction in [
+                "For source edits, prefer an available structured patch/edit tool",
+                "(for example, `apply_patch` on Codex)",
+                "intended context and changed regions explicit",
+                "Normal language-specific code generation and narrowly justified scripts remain appropriate;",
+            ] {
+                assert_eq!(
+                    prompt.text.contains(instruction),
+                    edits_source,
+                    "{}: {instruction}",
+                    prompt.id,
+                );
+            }
+        }
+    }
+
+    #[test]
     fn publishing_skills_show_security_fix_publishing_as_a_user() {
         let html = render();
         for name in ["thirdshift-to-spec", "thirdshift-to-tickets"] {
