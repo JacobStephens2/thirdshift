@@ -4,6 +4,13 @@ use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 use crate::labels::{NEEDS_TRIAGE, READY_FOR_AGENT};
 
+/// Shared by sessions that may edit source. Read-only sessions omit this;
+/// a Resume retains the original session's guidance in its context.
+const SOURCE_EDITS: &str = "For source edits, prefer an available structured patch/edit tool that makes the intended context and changed regions explicit \
+    (for example, `apply_patch` on Codex). Use the Harness's equivalent when available. \
+    Normal language-specific code generation and narrowly justified scripts remain appropriate; \
+    scope scripted replacements to the intended region and check the diff for unrelated changes.\n";
+
 /// Every prompt ends with this, worded for either Harness. A session exits
 /// once the agent ends its turn, killing any background task still running.
 /// Other sessions on the same machine run the same commands, so a wait on a
@@ -94,6 +101,7 @@ pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
          Push branch {branch} and create a pull request against {base} using the `thirdshift-pr` skill, marked ready for review.\n\
          {unaddressed_findings}\n\
          Include \"Closes #{number}\" in the PR body.\n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -132,6 +140,7 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -162,6 +171,7 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = spec.url,
@@ -207,6 +217,7 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
          {IDEA_LINE}<URL of the issue you filed>\n\
          {ALREADY_FILED_LINE}<URL of the open issue that already covers it>\n\
          \n\
+         {SOURCE_EDITS}\n\
          {HEADLESS}",
     )
 }
@@ -223,6 +234,7 @@ pub fn conflict_repair(issue: &IssueUrl, merging: &str, branch: &str, pr_url: &s
          \n\
          Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -263,6 +275,7 @@ pub fn ci_fix_repair(
          \n\
          Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -286,6 +299,7 @@ pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &st
          \n\
          Commit only if the review changes files. If no files change, make no commit, including no `--allow-empty` commit. If there is no new review information, leave the PR body unchanged; still record actual declined findings as required above. Push {branch} when needed to publish changes or reconcile upstream commits. Do not rebase or force-push.\n\
          \n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -354,6 +368,7 @@ pub fn security_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
          After a complete review, end your final message with exactly one line of the form:\n\
          Security review: {{\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}}\n\
          unaddressed_count counts only unaddressed findings introduced by this change; findings is an array of their short titles, with one title per finding. pre_existing_count is the number of entries in the private report. No old-finding details belong in this line.\n\n\
+         {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
@@ -401,6 +416,56 @@ pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_only_sessions_and_resumes_do_not_add_source_editing_guidance() {
+        let root = std::path::Path::new("/tmp/audit");
+        for prompt in [
+            security_audit("main", "abc123", root, root, None),
+            security_reproduction("abc123", "<finding>", root),
+            security_fix("main", "<private record>", "<finding>"),
+            resume(&["cargo test"]),
+        ] {
+            assert!(!prompt.contains("structured patch/edit tool"), "{prompt}");
+            assert!(!prompt.contains("apply_patch"), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn source_editing_sessions_prefer_available_structured_tools_and_allow_scoped_scripts() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let failed = FailedChecks {
+            own: Vec::new(),
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+        for prompt in [
+            fresh(&issue, "main", "issue-7"),
+            continuation(&issue, "main", "issue-7", None),
+            continuation(&issue, "main", "issue-7", Some("<pr>")),
+            spec_review(&issue, "main", "spec-7", "<pr>"),
+            architecture_review("main", None),
+            conflict_repair(&issue, "main", "issue-7", "<pr>"),
+            ci_fix_repair(&issue, "main", "issue-7", "<pr>", &failed),
+            review_repair(&issue, "issue-7", "<pr>", "abc123"),
+            security_review(&issue, "main", "issue-7"),
+        ] {
+            for instruction in [
+                "prefer an available structured patch/edit tool",
+                "intended context and changed regions explicit",
+                "`apply_patch` on Codex",
+                "Harness's equivalent when available",
+                "Normal language-specific code generation and narrowly justified scripts remain appropriate",
+                "scope scripted replacements to the intended region",
+                "check the diff for unrelated changes",
+            ] {
+                assert!(
+                    prompt.contains(instruction),
+                    "missing {instruction}: {prompt}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn a_review_without_file_changes_commits_nothing_and_preserves_review_information() {
