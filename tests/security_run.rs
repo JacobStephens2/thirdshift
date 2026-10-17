@@ -3151,7 +3151,6 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
             Some("api --method POST"),
             "creating a draft repository security advisory failed",
         ),
-        (audit_script("[]"), Some("issue list"), "gh issue list"),
     ] {
         let scenario = Scenario::new();
         scenario.agent_does(&script);
@@ -3185,6 +3184,114 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
         );
         assert!(!text.contains("Cause:"), "{text}");
         assert!(!text.contains("Private candidate write-up."), "{text}");
+    }
+}
+
+#[test]
+fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran() {
+    for (diagnostic, expected_cause) in [
+        (
+            "GraphQL: API rate limit already exceeded for user ID PRIVATE-IDENTIFIER.",
+            "GitHub rate-limit exhaustion",
+        ),
+        (
+            "gh: API rate limit exceeded for PRIVATE-IDENTIFIER. (HTTP 403)",
+            "GitHub rate-limit exhaustion",
+        ),
+        (
+            "gh: You have exceeded a secondary rate limit. (HTTP 403)",
+            "GitHub rate-limit exhaustion",
+        ),
+        (
+            "gh: Resource not accessible by PRIVATE-IDENTIFIER (HTTP 403)",
+            "GitHub dependency failure",
+        ),
+        (
+            "HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+            "GitHub dependency failure",
+        ),
+    ] {
+        for call in ["issue list", "api --paginate"] {
+            let scenario = Scenario::new();
+            scenario.user_config_is(&format!(
+                "[harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"high\"\n[logs]\ndir = {:?}\n",
+                scenario.path("custom-logs")
+            ));
+            scenario.gh_fails(call);
+            let mut github = scenario.gh_state();
+            github["failing_stderr"] = json!(format!(
+                "{diagnostic} token=PRIVATE-CREDENTIAL Private candidate write-up. Private provider/verifier diagnostic."
+            ));
+            scenario.write_gh_state(&github);
+            let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+            let result = scenario.run_with_env(
+                &["secure", "harness", "codex", "email", "me@example.com"],
+                &resend_env(&resend),
+            );
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(scenario.claude_calls().is_empty());
+            assert!(scenario.codex_calls().is_empty());
+            assert!(scenario.gh_calls_of("issue", "create").is_empty());
+            assert!(scenario.gh_state()["advisories"].is_null());
+            assert!(
+                !scenario
+                    .path("custom-logs/acme/widgets/commands/secure")
+                    .exists()
+            );
+            let (subject, text) = the_one_notification(&resend);
+            assert_eq!(
+                subject,
+                "[thirdshift] acme/widgets Security run: pre-audit failed"
+            );
+            assert!(text.contains("Result:       pre-audit failed"), "{text}");
+            assert!(text.contains("Audit:        not started"), "{text}");
+            assert!(
+                text.contains(&format!("Cause:        {expected_cause}")),
+                "{text}"
+            );
+            assert!(
+                text.contains("Diagnostics:  Check this command's stderr on "),
+                "{text}"
+            );
+            let started = text
+                .lines()
+                .find_map(|line| line.strip_prefix("Started (UTC): "))
+                .expect(&text);
+            chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S UTC").expect(&text);
+            let host = text
+                .lines()
+                .find_map(|line| line.strip_prefix("Host:         "))
+                .expect(&text);
+            assert!(
+                text.contains(&format!(
+                    "Check this command's stderr on {host} at that time"
+                )),
+                "{text}"
+            );
+            assert!(text.contains("gpt-6.1-sol · high (configured)"), "{text}");
+            for private in [
+                "PRIVATE-IDENTIFIER",
+                "PRIVATE-CREDENTIAL",
+                "Private candidate write-up.",
+                "GraphQL:",
+                "Private provider/verifier diagnostic.",
+                diagnostic,
+            ] {
+                assert!(
+                    !resend.requests()[0].body.to_string().contains(private),
+                    "{text}"
+                );
+            }
+            for absent in [
+                "Session log:",
+                "Command log:",
+                "Reproduction:",
+                "Session models:",
+                "cron.log",
+            ] {
+                assert!(!text.contains(absent), "{text}");
+            }
+        }
     }
 }
 

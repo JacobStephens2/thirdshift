@@ -24,6 +24,52 @@ pub use advisories::{
 #[cfg(test)]
 mod execution_tests;
 
+/// A failed gh command keeps its diagnostic locally; notifications use only
+/// its fixed operational category.
+#[derive(Debug)]
+struct CommandFailure {
+    command: String,
+    stderr: String,
+}
+
+impl CommandFailure {
+    fn new(command: String, output: &Output) -> Self {
+        Self {
+            command,
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }
+    }
+}
+
+impl fmt::Display for CommandFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} failed: {}", self.command, self.stderr)
+    }
+}
+
+impl std::error::Error for CommandFailure {}
+
+/// A fixed cause for failed GitHub queries, never their original diagnostics.
+/// Only explicit quota messages establish exhaustion; a bare 403 does not.
+pub(crate) fn operational_cause(error: &anyhow::Error) -> Option<&'static str> {
+    let stderr = if let Some(failure) = error.downcast_ref::<CommandFailure>() {
+        &failure.stderr
+    } else {
+        &error.downcast_ref::<check_read::ApiFailure>()?.stderr
+    };
+    let stderr = stderr.to_ascii_lowercase();
+    Some(
+        if stderr.contains("api rate limit exceeded")
+            || stderr.contains("api rate limit already exceeded")
+            || stderr.contains("secondary rate limit")
+        {
+            "GitHub rate-limit exhaustion"
+        } else {
+            "GitHub dependency failure"
+        },
+    )
+}
+
 /// GitHub CLI operations bound to an immutable interruption policy.
 /// Ordinary views stop for Command interruption; completion views finish
 /// independently without changing the recorded request or other views.
@@ -731,11 +777,10 @@ impl GitHub {
     fn gh_stdout(&self, args: &[&str]) -> Result<String> {
         let output = self.output(args)?;
         if !output.status.success() {
-            bail!(
-                "gh {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            bail!(CommandFailure::new(
+                format!("gh {}", args.join(" ")),
+                &output
+            ));
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
@@ -762,10 +807,7 @@ impl GitHub {
         let command = format!("gh {}", args[..2].join(" "));
         let output = self.output(args)?;
         if !output.status.success() {
-            bail!(
-                "{command} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            bail!(CommandFailure::new(command, &output));
         }
         serde_json::from_slice(&output.stdout)
             .with_context(|| format!("{command} returned invalid JSON"))

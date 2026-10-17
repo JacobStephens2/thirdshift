@@ -34,6 +34,7 @@ pub enum NotificationAsk {
 struct Checked {
     resend: Resend,
     started: Instant,
+    started_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl Checked {
@@ -42,8 +43,13 @@ impl Checked {
     /// address is known and a Resend API key is found.
     fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
         let started = Instant::now();
+        let started_at = chrono::Utc::now();
         let resend = Resend::new(to, settings)?;
-        Ok(Checked { resend, started })
+        Ok(Checked {
+            resend,
+            started,
+            started_at,
+        })
     }
 }
 
@@ -151,6 +157,13 @@ impl RunNotification {
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
         );
+        if account.pre_audit_failure.is_some() {
+            text += &format!(
+                "Started (UTC): {}\nDiagnostics:  Check this command's stderr on {} at that time (or the scheduler's captured stderr, if scheduled).\n",
+                self.checked.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                host.as_deref().unwrap_or("unknown host"),
+            );
+        }
         let lines = crate::session::recording::Recording::capture().notification_lines();
         if !lines.is_empty() {
             text += "\nSession models:\n";
@@ -226,6 +239,7 @@ fn body(
     }
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
+            Err(_) if account.pre_audit_failure.is_some() => "not started",
             Err(_) if account.failed_reproduction.is_some() => "audit complete",
             Ok(line) => line.as_str(),
             Err(_) => account.outcome,
@@ -273,12 +287,14 @@ fn body(
         text += &format!("Pull request: {pr_url}\n");
     }
     // Security failure causes can quote private verifier work or Harness
-    // diagnostics. Only the fixed safeguard category is safe to send.
+    // diagnostics. Only fixed operational and safeguard categories are safe to send.
     if let Err(cause) = &account.ended
         && !account.interrupted
     {
         let cause = if account.security_findings.is_some() {
-            cause.safeguard_refusal()
+            account
+                .pre_audit_failure
+                .or_else(|| cause.safeguard_refusal())
         } else {
             Some(cause.full())
         };
@@ -358,6 +374,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            pre_audit_failure: None,
             recovery: None,
             urls: vec![PR],
         }
@@ -378,6 +395,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            pre_audit_failure: None,
             recovery: None,
             urls: Vec::new(),
         }
