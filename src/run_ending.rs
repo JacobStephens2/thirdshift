@@ -55,6 +55,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     review: None,
                     security_findings: None,
                     failed_reproduction: None,
+                    recovery: None,
                     urls: Vec::new(),
                 },
                 Err(failed) => Account::of_failure(
@@ -88,6 +89,8 @@ pub fn show_skip(skip: &Skip) -> ExitCode {
 /// if it dispatched it, else as its Architecture review did.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Account<'a> {
+    /// Shared lifecycle and continuation facts for a Failed run.
+    pub recovery: Option<&'a crate::recovery::Recovery>,
     /// In a word or a few, as a Run notification's subject gives it: its
     /// pull request's outcome, `review required`, `failed` or `interrupted`;
     /// or, for an Architect run that dispatched nothing, how its review ended, or
@@ -187,6 +190,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 failed_reproduction: None,
+                recovery: None,
                 urls: vec![&reached.pr_url],
             },
             Err(failed) => Account {
@@ -212,6 +216,7 @@ impl<'a> Account<'a> {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            recovery: failed.recovery.as_deref(),
             urls: failed.pr_url.as_deref().into_iter().collect(),
         }
     }
@@ -241,6 +246,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 failed_reproduction: None,
+                recovery: None,
                 urls: vec![reviewed.url()],
             },
             (Err(failed), None) => Account::of_failure(failed, "review failed"),
@@ -286,6 +292,11 @@ impl<'a> Account<'a> {
             }
             Err(cause) => format!("failed: {}", cause.first_line()),
         };
+        let ended = if let Some(recovery) = self.recovery {
+            format!("{ended}; {}", recovery.lines().join("; "))
+        } else {
+            ended
+        };
         match self.review.as_ref().and_then(|review| review.dispatched) {
             Some(plan) => format!("plan {plan} dispatched: {ended}"),
             None => ended,
@@ -323,6 +334,9 @@ impl Shown {
         let mut steps = Vec::new();
         if let Some(report) = account.base_fix {
             steps.push(format!("{BASE_FIX}{report}"));
+        }
+        if let Some(recovery) = account.recovery {
+            steps.extend(recovery.lines());
         }
         match &account.ended {
             // Also on stderr, so the outcome shows even when stdout is captured.
@@ -414,7 +428,7 @@ impl Reader {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {
             self.log = Some(log.to_string());
-        } else if !Advice::is_line(message) {
+        } else if !Advice::is_line(message) && !crate::recovery::Recovery::is_line(message) {
             self.cause = Some(message.to_string());
             self.log = None;
         }
@@ -463,6 +477,7 @@ mod tests {
             log: Some(PathBuf::from(LOG)),
             interrupted: false,
             ticket_lines: Vec::new(),
+            recovery: None,
         }
     }
 
@@ -510,6 +525,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            recovery: None,
             urls: vec![PR],
         }
     }
@@ -529,6 +545,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            recovery: None,
             urls: Vec::new(),
         }
     }
@@ -576,6 +593,7 @@ mod tests {
                 pr_url: Some(PR),
                 advice: &advice,
                 base_fix: Some(&base_fix),
+                recovery: None,
                 urls: vec![PR],
                 ..failed_account("claude exited 1\nno such model")
             }
@@ -709,6 +727,7 @@ mod tests {
                     }),
                     security_findings: None,
                     failed_reproduction: None,
+                    recovery: None,
                     urls: vec![PLAN],
                 }
             );
@@ -808,6 +827,7 @@ mod tests {
         let account = Account {
             pr_url: Some(PR),
             advice: &advice,
+            recovery: None,
             urls: vec![PR],
             ..failed_account("claude exited 1\nno such model")
         };
@@ -876,6 +896,7 @@ mod tests {
             pr_url: None,
             log: None,
             review: review(None),
+            recovery: None,
             urls: vec![PLAN],
             ..reached_account(Goal::ReadyForReview)
         };
@@ -917,6 +938,7 @@ mod tests {
                 pr_url: pr_url.map(String::from),
                 log: log.map(PathBuf::from),
                 interrupted: false,
+                recovery: None,
                 ticket_lines: Vec::new(),
             }),
             base_fix: None,

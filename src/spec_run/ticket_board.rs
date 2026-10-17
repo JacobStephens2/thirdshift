@@ -96,6 +96,14 @@ impl TicketBoard {
         self.running() > 0
     }
 
+    pub(super) fn progress(&self) -> crate::recovery::TicketProgress {
+        crate::recovery::TicketProgress {
+            landed: self.tickets.iter().filter(|ticket| !ticket.is_open).count(),
+            total: self.tickets.len(),
+            reviewed: false,
+        }
+    }
+
     /// The Tickets not done, the open ones, in the order they were read.
     pub(super) fn not_done(&self) -> Vec<String> {
         self.tickets

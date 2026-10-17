@@ -2618,3 +2618,147 @@ fn a_review_required_spec_pr_stays_ready_without_an_attempt_or_another_round() {
         assert_contains(&text, "Result:       review required");
     }
 }
+
+#[test]
+fn failed_spec_review_reports_preserved_progress_and_the_same_recovery_in_notification() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(SPEC, "exit 1\n");
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &[
+            &spec_url(&scenario),
+            "merge",
+            "parallel",
+            "2",
+            "no-base-fix",
+            "email",
+            "me@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "test"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/2\n");
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let notification = requests[0].body["text"].as_str().unwrap();
+    for expected in [
+        "Stopped at: Spec review",
+        "Progress: 3/3 Tickets landed; final review incomplete",
+        "Preserved: remotely on issue-20",
+        "Recovery: thirdshift https://github.com/acme/widgets/issues/20 merge parallel 2 no-security-review harness claude no-base-fix",
+        "reuses the preserved branch and PR and skips completed Tickets",
+        "new Continuation",
+        "claude exited 1",
+    ] {
+        assert_contains(&result.stderr, expected);
+        assert_contains(notification, expected);
+    }
+    assert_eq!(spec_pr(&scenario)["isDraft"], true);
+    assert_contains(notification, "#21 landed");
+    assert_contains(notification, "#22 landed");
+    assert_contains(notification, "Session log:");
+    assert_contains(notification, "Command log:");
+}
+
+#[test]
+fn recovery_command_preserves_effective_options_and_continues_without_rebuilding_tickets() {
+    let scenario = linear_spec();
+    let model = "team/model's choice; $(touch should-not-exist)";
+    scenario.user_config_is(&format!(
+        "[merge]\nalways = true\n[spec]\nparallel = 2\n[base]\nfix = true\n[harness]\ndefault = \"claude\"\n[harness.claude]\nmodel = {model:?}\neffort = \"high\"\n"
+    ));
+    scenario.agent_does_for(SPEC, "exit 1\n");
+    let failed = scenario.run(&[&spec_url(&scenario)]);
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    let command = failed
+        .stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("thirdshift: Recovery: "))
+        .expect(&failed.stderr);
+    // Execute the printed POSIX command through a harmless argv recorder, then
+    // give those exact arguments to the real CLI in this isolated scenario.
+    let parsed = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "thirdshift() { printf '%s\\0' \"$@\"; }; eval \"$RECOVERY_COMMAND\"",
+        ])
+        .env("RECOVERY_COMMAND", command)
+        .current_dir(scenario.path("work/widgets"))
+        .output()
+        .unwrap();
+    assert!(parsed.status.success());
+    let words: Vec<_> = parsed
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|word| !word.is_empty())
+        .map(|word| std::str::from_utf8(word).unwrap())
+        .collect();
+    assert!(
+        words.windows(2).any(|pair| pair == ["model", model]),
+        "{words:?}"
+    );
+    assert!(
+        words.windows(2).any(|pair| pair == ["effort", "high"]),
+        "{words:?}"
+    );
+    assert!(
+        words.windows(2).any(|pair| pair == ["parallel", "2"]),
+        "{words:?}"
+    );
+    assert!(words.contains(&"merge"), "{words:?}");
+    assert!(words.contains(&"base-fix"), "{words:?}");
+    assert!(!scenario.path("work/widgets/should-not-exist").exists());
+    scenario.agent_does_for(SPEC, "exit 0\n");
+    let continued = scenario.run(&words);
+    assert_eq!(continued.code, Some(0), "{}", continued.stderr);
+    assert_eq!(spec_pr(&scenario)["state"], "MERGED");
+    assert_eq!(prs_from(&scenario, "issue-20").len(), 1);
+    assert_eq!(
+        scenario
+            .claude_calls()
+            .iter()
+            .filter(|call| {
+                let prompt = call["prompt"].as_str().unwrap_or_default();
+                prompt.contains("https://github.com/acme/widgets/issues/21")
+                    || prompt.contains("https://github.com/acme/widgets/issues/22")
+            })
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn failed_ticket_reports_execution_progress_and_retains_the_child_cause() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(22, "echo partial > partial.txt\nexit 3\n");
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[&spec_url(&scenario), "email", "me@example.com"],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let requests = resend.requests();
+    let notification = requests[0].body["text"].as_str().unwrap();
+    for output in [&*result.stderr, notification] {
+        assert_contains(output, "Stopped at: Ticket execution");
+        assert_contains(
+            output,
+            "Progress: 2/3 Tickets landed; final review incomplete",
+        );
+        assert_contains(output, "Preserved: remotely on issue-20");
+        assert_contains(output, "claude exited 3");
+    }
+    assert_contains(notification, "#22 failed: claude exited 3");
+    let activity =
+        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert_contains(&activity, "Stopped at: Ticket execution");
+    assert_contains(
+        &activity,
+        "Progress: 2/3 Tickets landed; final review incomplete",
+    );
+}

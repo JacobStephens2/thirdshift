@@ -10,6 +10,7 @@ use crate::interrupt;
 
 /// Why a Run did not end with a ready PR, and what the user should see.
 pub struct FailedRun {
+    pub recovery: Option<Box<crate::recovery::Recovery>>,
     pub error: anyhow::Error,
     /// The Issue branch's open PR, if it has one.
     pub pr_url: Option<String>,
@@ -53,6 +54,7 @@ impl From<anyhow::Error> for FailedRun {
     fn from(error: anyhow::Error) -> Self {
         let interrupted = interrupt::requested();
         FailedRun {
+            recovery: None,
             error: interrupted_or(error, interrupted),
             pr_url: None,
             log: None,

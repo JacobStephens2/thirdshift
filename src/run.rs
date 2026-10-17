@@ -252,7 +252,8 @@ fn start<O: Outside>(
     if claims {
         outside.make_claim()?;
     }
-    let outcome = start_in_worktree(
+    let is_spec = !tickets.is_empty();
+    let mut outcome = start_in_worktree(
         outside,
         issue,
         tickets,
@@ -260,6 +261,16 @@ fn start<O: Outside>(
         &base,
         asks.tickets_at_once,
     );
+    if let Err(failed) = &mut outcome
+        && let Some(recovery) = &mut failed.recovery
+    {
+        recovery.continuation = Some(crate::recovery::Continuation {
+            command: crate::args::continuation(issue, asks, is_spec),
+            launch: std::env::current_dir().unwrap_or_default(),
+            base: base.clone(),
+            branch: selection.branch().to_string(),
+        });
+    }
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));
     }

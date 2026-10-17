@@ -280,6 +280,11 @@ fn body(
             text += &format!("Cause:        {cause}\n");
         }
     }
+    if let Some(recovery) = account.recovery {
+        for line in recovery.lines() {
+            text += &format!("{line}\n");
+        }
+    }
     for line in account.advice {
         text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
     }
@@ -347,6 +352,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            recovery: None,
             urls: vec![PR],
         }
     }
@@ -366,6 +372,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            recovery: None,
             urls: Vec::new(),
         }
     }
@@ -479,6 +486,7 @@ mod tests {
                 line: format!("idea filed: {PLAN}"),
                 dispatched: None,
             }),
+            recovery: None,
             urls: vec![PLAN],
             ..merged()
         };

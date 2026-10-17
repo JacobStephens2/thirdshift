@@ -92,6 +92,34 @@ pub fn retry_with_base_fix(issue: &IssueUrl, flags: &Flags) -> String {
     shell_command(words)
 }
 
+/// Continue an Issue URL using settled public choices, never hidden child flags.
+pub fn continuation(issue: &IssueUrl, asks: &crate::asks::Asks, spec: bool) -> String {
+    let flags = Flags {
+        goal: Some(asks.goal),
+        parallel: spec.then_some(asks.tickets_at_once),
+        base_fix: Some(match asks.base_fix {
+            BaseFixAsk::Allow => BaseFixAsk::Allow,
+            _ => BaseFixAsk::Forbid,
+        }),
+        security_review: Some(if asks.security_review {
+            crate::security::review::Ask::Allow
+        } else {
+            crate::security::review::Ask::Forbid
+        }),
+        harness: harness::Asked {
+            harness: Some(asks.harness.harness),
+            model_and_effort: harness::ModelAndEffort {
+                model: asks.harness.model.clone(),
+                effort: asks.harness.effort.clone(),
+            },
+        },
+        ..Flags::default()
+    };
+    let mut words = vec!["thirdshift".into(), issue.url.clone()];
+    public_flag_words(&flags, &mut words);
+    shell_command(words)
+}
+
 /// Retry a Security run with fixing allowed, retaining the original optional
 /// Base branch rather than the one launch preparation resolved.
 pub fn retry_with_security_fix(base: Option<&str>, flags: &Flags) -> String {

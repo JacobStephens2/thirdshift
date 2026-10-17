@@ -184,12 +184,13 @@ impl Worktree {
     /// Retention is armed before salvage: any error or unwinding leaves the
     /// worktree and local Issue branch in place. Final verified ownership
     /// allows normal cleanup.
-    pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<()> {
+    pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<bool> {
         self.kept = true;
-        self.checkout
+        let pushed = self
+            .checkout
             .preserve_failed_run(&self.launch, base, reason)?;
         self.kept = false;
-        Ok(())
+        Ok(pushed)
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone

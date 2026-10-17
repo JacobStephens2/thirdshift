@@ -11,6 +11,8 @@
 //! [`FailedOutside`]: [`InWorktree`] and [`OnFailure`] do each for real;
 //! `Scripted`, in tests, from a script, recording each call.
 
+use crate::recovery::{Preservation, Recovery, Stage};
+use std::cell::Cell;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -87,6 +89,11 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
+        let stage = Cell::new(if opening.catch_up_from_origin {
+            Stage::SpecReview
+        } else {
+            Stage::Implementation
+        });
         let route = Route {
             security_review: self.security_review,
             issue: self.issue,
@@ -99,6 +106,7 @@ impl Delivery<'_> {
         let (delivered, log) =
             Sessions::within(self.logs, worktree.path(), self.harness, |sessions| {
                 let mut outside = InWorktree {
+                    stage: &stage,
                     issue: self.issue,
                     worktree: &worktree,
                     base: self.base,
@@ -116,12 +124,18 @@ impl Delivery<'_> {
                 ticket_lines: Vec::new(),
             }),
             Err(error) => {
+                let path = worktree.path().to_path_buf();
                 let mut outside = OnFailure {
                     base: self.base,
                     worktree,
                     pull_request,
                 };
-                Err(fail(&mut outside, log, error))
+                let mut failed = fail(&mut outside, log, error);
+                if let Some(recovery) = &mut failed.recovery {
+                    recovery.stage = stage.get();
+                    recovery.worktree = Some(path);
+                }
+                Err(failed)
             }
         }
     }
@@ -288,11 +302,20 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
     let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
     let keep_ready = error.is::<PolicyRefusal>() || error.is::<SecurityHold>();
-    if !keep_ready && let Err(problem) = outside.preserve_failed_run(&reason) {
-        outside.step(format!(
-            "could not push the failed run's work, so it may exist only locally: {problem:#}"
-        ));
-    }
+    let preservation = if keep_ready {
+        Preservation::Remote
+    } else {
+        match outside.preserve_failed_run(&reason) {
+            Ok(true) => Preservation::Remote,
+            Ok(false) => Preservation::None,
+            Err(problem) => {
+                outside.step(format!(
+                    "could not push the failed run's work, so it may exist only locally: {problem:#}"
+                ));
+                Preservation::Local
+            }
+        }
+    };
     let pr_url = match outside.finish_pr(keep_ready) {
         Ok(pr_url) => pr_url,
         Err(problem) => {
@@ -301,6 +324,7 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
         }
     };
     FailedRun {
+        recovery: Some(Box::new(Recovery::new(Stage::Implementation, preservation))),
         error,
         pr_url,
         log,
@@ -347,7 +371,7 @@ trait Outside {
 trait FailedOutside {
     /// Preserve the Failed run's work for `reason`, retaining it locally if
     /// preservation fails.
-    fn preserve_failed_run(&mut self, reason: &str) -> Result<()>;
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<bool>;
     /// Finish the captured PR through completion operations after preservation.
     fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>>;
     /// Whether an interrupt was requested.
@@ -359,6 +383,7 @@ trait FailedOutside {
 /// A Delivery's worktree, its sessions, its Base fix, and its issue and pull
 /// request on GitHub.
 struct InWorktree<'a> {
+    stage: &'a Cell<Stage>,
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
     base: &'a str,
@@ -373,10 +398,16 @@ impl Outside for InWorktree<'_> {
     }
 
     fn session(&mut self, kind: &str, prompt: &str) -> Result<()> {
+        self.stage.set(if kind == "spec-review" {
+            Stage::SpecReview
+        } else {
+            Stage::Implementation
+        });
         self.sessions.run(kind, prompt)
     }
 
     fn security_review(&mut self, prompt: &str) -> Result<Review> {
+        self.stage.set(Stage::SecurityReview);
         crate::security::review::run(self.sessions, self.worktree, self.issue, self.base, prompt)
     }
 
@@ -385,6 +416,7 @@ impl Outside for InWorktree<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
+        self.stage.set(Stage::Push);
         self.worktree.push()
     }
 
@@ -393,11 +425,14 @@ impl Outside for InWorktree<'_> {
     }
 
     fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified> {
+        self.stage.set(Stage::PullRequest);
         self.pull_request.mark_ready(checklist)
     }
 
     fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()> {
+        self.stage.set(Stage::Repair);
         let mut outside = RunOutside {
+            stage: self.stage,
             issue: self.issue,
             worktree: self.worktree,
             base: self.base,
@@ -406,7 +441,14 @@ impl Outside for InWorktree<'_> {
             sessions: self.sessions,
             pull_request: self.pull_request,
         };
-        repair_loop::take_to_goal(&mut outside, self.base, goal)
+        let result = repair_loop::take_to_goal(&mut outside, self.base, goal);
+        if result
+            .as_ref()
+            .is_err_and(|error| error.is::<PolicyRefusal>())
+        {
+            self.stage.set(Stage::SelfMerge);
+        }
+        result
     }
 
     fn delete_branch(&mut self) -> Result<()> {
@@ -443,7 +485,7 @@ struct OnFailure<'a> {
 }
 
 impl FailedOutside for OnFailure<'_> {
-    fn preserve_failed_run(&mut self, reason: &str) -> Result<()> {
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<bool> {
         self.worktree.preserve_failed_run(self.base, reason)
     }
 
@@ -463,6 +505,7 @@ impl FailedOutside for OnFailure<'_> {
 /// What a Run's Repair loop reaches outside itself: the Run's worktree, its
 /// Repair sessions, its Base fix, its issue and its pull request.
 struct RunOutside<'a> {
+    stage: &'a Cell<Stage>,
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
     base: &'a str,
@@ -488,6 +531,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
+        self.stage.set(Stage::Push);
         self.worktree.push()
     }
 
@@ -504,6 +548,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
+        self.stage.set(Stage::Ci);
         ci::watch(self.issue, head, base_commit)
     }
 
@@ -513,10 +558,12 @@ impl repair_loop::Outside for RunOutside<'_> {
         base_commit: Option<&str>,
         failed: &FailedChecks,
     ) -> Result<Option<Ci>> {
+        self.stage.set(Stage::Ci);
         ci::rerun(self.issue, head, base_commit, failed)
     }
 
     fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
+        self.stage.set(Stage::Repair);
         let (issue, base, pr_url) = (self.issue, self.base, self.pr_url);
         let branch = self.worktree.branch();
         let prompt = match repair {
@@ -552,6 +599,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn merge(&mut self, head: &str) -> Result<MergeAttempt> {
+        self.stage.set(Stage::SelfMerge);
         self.pull_request.merge(head)
     }
 
@@ -692,9 +740,10 @@ mod tests {
     }
 
     impl FailedOutside for Scripted {
-        fn preserve_failed_run(&mut self, reason: &str) -> Result<()> {
+        fn preserve_failed_run(&mut self, reason: &str) -> Result<bool> {
             self.calls.push(Call::Preserve(reason.to_string()));
-            self.check(Fails::Preserve)
+            self.check(Fails::Preserve)?;
+            Ok(true)
         }
         fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>> {
             self.calls.push(Call::Finish(keep_ready));
