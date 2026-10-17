@@ -389,7 +389,11 @@ impl GitHub {
                     })?
                     .to_utc();
                 if at.timestamp() >= since.timestamp() {
-                    found.push(IssueUrl::parse(url)?);
+                    found.push(
+                        IssueUrl::parse(url).context(CommandFailure::InvalidResponse(
+                            "gh issue list output has an invalid issue URL".into(),
+                        ))?,
+                    );
                 }
             }
         }
@@ -431,7 +435,10 @@ impl GitHub {
         let parent = issue["parent"]["url"]
             .as_str()
             .map(IssueUrl::parse)
-            .transpose()?;
+            .transpose()
+            .context(CommandFailure::InvalidResponse(
+                "gh api graphql output has an invalid parent issue URL".into(),
+            ))?;
         let mut open_blockers = Vec::new();
         for blocker in nodes(&issue["blockedBy"], "blockedBy")? {
             if node_is_open(blocker)? {
@@ -1012,6 +1019,9 @@ fn node_issue(node: &Value) -> Result<IssueUrl> {
                 "gh api graphql output has an issue with no URL".into(),
             ))?,
     )
+    .context(CommandFailure::InvalidResponse(
+        "gh api graphql output has an invalid issue URL".into(),
+    ))
 }
 
 /// The number of the issue a GraphQL answer's `node` describes.

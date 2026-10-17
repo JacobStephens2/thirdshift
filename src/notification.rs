@@ -88,7 +88,7 @@ pub struct RunNotification {
     checked: Checked,
     subject: Subject,
     /// The command's configured Harness, Model and Effort, once known.
-    built_with: Option<String>,
+    configured: Option<String>,
 }
 
 impl RunNotification {
@@ -117,7 +117,7 @@ impl RunNotification {
         Ok(RunNotification {
             checked,
             subject,
-            built_with: None,
+            configured: None,
         })
     }
 
@@ -135,7 +135,7 @@ impl RunNotification {
     /// Name the configured Harness, Model and Effort without claiming
     /// that the Harness confirmed which Model executed.
     pub fn built_with(&mut self, harness: &Choice) {
-        self.built_with = Some(format!("{} (configured)", harness.built_with()));
+        self.configured = Some(format!("{harness} (configured)"));
     }
 
     /// Send the one notification for the command that ended as `account`
@@ -152,7 +152,7 @@ impl RunNotification {
         let mut text = body(
             &self.subject,
             account,
-            self.built_with.as_deref(),
+            self.configured.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
@@ -218,7 +218,7 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 }
 
 /// The plain-text body of the notification for a command that ended as
-/// `account` tells, about `subject`, with its configured `built_with` line, if known,
+/// `account` tells, about `subject`, with its `configured` Harness, Model and Effort, if known,
 /// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
 /// outcome, as the subject gives it, then the original Issue URL when the
@@ -228,7 +228,7 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 fn body(
     subject: &Subject,
     account: &Account,
-    built_with: Option<&str>,
+    configured: Option<&str>,
     command_log: Option<&Path>,
     host: &str,
     took: Duration,
@@ -314,14 +314,11 @@ fn body(
     if let Some(log) = command_log {
         text += &format!("Command log:  {}\n", log.display());
     }
-    if let Some(built_with) = built_with {
+    if let Some(configured) = configured {
         if account.pre_audit_failure.is_some() {
-            text += &format!(
-                "Configured:   {}\n",
-                built_with.strip_prefix("Built with ").unwrap_or(built_with)
-            );
+            text += &format!("Configured:   {configured}\n");
         } else {
-            text += &format!("{built_with}\n");
+            text += &format!("Built with {configured}\n");
         }
     }
     text += &format!("Host:         {host}\n");
@@ -607,7 +604,7 @@ mod tests {
             body(
                 &Subject::Pending,
                 &account,
-                Some("Built with claude · opus · high"),
+                Some("claude · opus · high"),
                 Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
                 "droplet-1",
                 Duration::from_secs(4)

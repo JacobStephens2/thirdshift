@@ -4346,3 +4346,49 @@ exec "$(dirname "$0")/original/gh" "$@"
         result.stderr
     );
 }
+
+#[test]
+fn invalid_parent_issue_url_retains_github_dependency_cause() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    fs::create_dir(scenario.path("bin/original")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("bin/original/gh")).unwrap();
+    fs::write(scenario.path("bin/gh"), r#"#!/bin/sh
+if [ "$1" = api ] && [ "$2" = graphql ]; then
+    printf '%s\n' '{"data":{"repository":{"issue":{"labelled":{"nodes":[],"pageInfo":{"hasNextPage":false}},"parent":{"url":"PRIVATE-INVALID-PARENT"}}}}}'
+    exit 0
+fi
+exec "$(dirname "$0")/original/gh" "$@"
+"#).unwrap();
+    fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_fake"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("not a GitHub issue URL: PRIVATE-INVALID-PARENT"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(!text.contains("PRIVATE-INVALID-PARENT"), "{text}");
+    assert!(
+        text.contains("Cause:        GitHub dependency failure"),
+        "{text}"
+    );
+}
