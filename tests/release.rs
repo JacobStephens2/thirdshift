@@ -29,13 +29,139 @@ fn manifest_dir() -> &'static Path {
 /// Keeps the machine's git configuration (signing, hooks, default branch) out
 /// of the test's git, the script's and the fake `gh`'s.
 fn isolated(command: &mut Command) -> &mut Command {
+    // Git's inherited -c parameters override GIT_CONFIG_COUNT too. Append to
+    // them so unrelated entries survive and inherited conflicts cannot turn
+    // maintenance back on when the shared harness's gitconfig is excluded.
+    let mut parameters = command
+        .get_envs()
+        .find(|(name, _)| *name == "GIT_CONFIG_PARAMETERS")
+        .map(|(_, value)| value.unwrap_or_default().to_os_string())
+        .unwrap_or_else(|| std::env::var_os("GIT_CONFIG_PARAMETERS").unwrap_or_default());
+    if !parameters.is_empty() {
+        parameters.push(" ");
+    }
+    parameters.push("'maintenance.auto=false' 'gc.auto=0'");
     command
+        .env("GIT_CONFIG_PARAMETERS", parameters)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
+}
+
+#[test]
+fn isolated_git_disables_automatic_maintenance() {
+    let dir = TempDir::new().unwrap();
+    for (kind, key, expected) in [
+        ("bool", "maintenance.auto", "false\n"),
+        ("int", "gc.auto", "0\n"),
+    ] {
+        let mut command = Command::new("git");
+        command
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_COUNT", "0")
+            .env_remove("GIT_CONFIG_PARAMETERS");
+        let output = isolated(&mut command)
+            .args(["config", &format!("--type={kind}"), "--get", key])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{key}: {output:?}");
+        assert_eq!(stdout(&output), expected, "{key}");
+    }
+}
+
+#[test]
+fn isolated_git_descendants_preserve_configuration_and_identity() {
+    const CHILD: &str = "THIRDSHIFT_RELEASE_ISOLATION_TEST";
+    if std::env::var_os(CHILD).is_some() {
+        for (parameters, expected) in [
+            (None, "inherited parameter"),
+            (
+                Some(
+                    "'thirdshift.parameters=command parameter' 'maintenance.auto=true' 'gc.auto=42'",
+                ),
+                "command parameter",
+            ),
+        ] {
+            let mut command = Command::new("bash");
+            command.args([
+                "-c",
+                r#"set -eu
+test "$GIT_CONFIG_GLOBAL" = /dev/null
+test "$GIT_CONFIG_NOSYSTEM" = 1
+git config --type=bool --get maintenance.auto
+git config --type=int --get gc.auto
+git config --get-all thirdshift.count
+git config --get thirdshift.parameters
+if git config --get thirdshift.host; then exit 1; fi
+git var GIT_AUTHOR_IDENT
+git var GIT_COMMITTER_IDENT
+"#,
+            ]);
+            if let Some(parameters) = parameters {
+                command.env("GIT_CONFIG_PARAMETERS", parameters);
+            }
+            let output = isolated(&mut command).output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let text = stdout(&output);
+            let lines: Vec<_> = text.lines().collect();
+            assert_eq!(
+                &lines[..5],
+                [
+                    "false",
+                    "0",
+                    "first count entry",
+                    "second count entry",
+                    expected
+                ]
+            );
+            assert_eq!(lines.len(), 7, "{text}");
+            for identity in &lines[5..] {
+                assert!(identity.starts_with("Test <test@example.com> "), "{text}");
+            }
+        }
+        return;
+    }
+
+    // Re-exec so isolated() reads real inherited entries, without mutating
+    // the environment of other tests in this process.
+    let dir = TempDir::new().unwrap();
+    let host_config = dir.path().join("host.gitconfig");
+    fs::write(&host_config, "[thirdshift]\n\thost = must stay excluded\n").unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "isolated_git_descendants_preserve_configuration_and_identity",
+            "--nocapture",
+        ])
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .env(CHILD, "1")
+        .env("GIT_CONFIG_GLOBAL", &host_config)
+        .env("GIT_CONFIG_SYSTEM", &host_config)
+        .env("GIT_CONFIG_COUNT", "4")
+        .env("GIT_CONFIG_KEY_0", "maintenance.auto")
+        .env("GIT_CONFIG_VALUE_0", "true")
+        .env("GIT_CONFIG_KEY_1", "gc.auto")
+        .env("GIT_CONFIG_VALUE_1", "42")
+        .env("GIT_CONFIG_KEY_2", "thirdshift.count")
+        .env("GIT_CONFIG_VALUE_2", "first count entry")
+        .env("GIT_CONFIG_KEY_3", "thirdshift.count")
+        .env("GIT_CONFIG_VALUE_3", "second count entry")
+        .env(
+            "GIT_CONFIG_PARAMETERS",
+            "'thirdshift.parameters=inherited parameter' 'maintenance.auto=true' 'gc.auto=42'",
+        )
+        .env("GIT_AUTHOR_NAME", "Host")
+        .env("GIT_AUTHOR_EMAIL", "host@example.com")
+        .env("GIT_COMMITTER_NAME", "Host")
+        .env("GIT_COMMITTER_EMAIL", "host@example.com")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
