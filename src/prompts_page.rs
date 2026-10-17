@@ -221,7 +221,7 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-review-repair",
             title: "Review Repair",
-            when: "In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.",
+            when: "In a Merge run, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Run last knew as its own before they can be merged.",
             sender: Units(&[FINISH]),
             text: prompt::review_repair(&issue, BRANCH, PR_URL, OWN_HEAD),
         },
