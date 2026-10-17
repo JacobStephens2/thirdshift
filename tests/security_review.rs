@@ -398,19 +398,7 @@ fn command_words_override_the_config_and_review_is_off_by_default() {
 
 #[test]
 fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue() {
-    for final_message in [
-        "",
-        "Review incomplete",
-        "Security review: not JSON",
-        "Security review: incomplete: ",
-        "Security review: incomplete:   ",
-        "Security review: incomplete: first line\nsecond line",
-        "Security review: incomplete: first\rsecond",
-        "Security review: {}",
-        r#"Security review: {"unaddressed_count":0,"findings":["Cross-tenant read"],"pre_existing_count":0}"#,
-        r#"Security review: {"unaddressed_count":1,"findings":[""],"pre_existing_count":0}"#,
-        r#"Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}\nMore text"#,
-    ] {
+    for final_message in ["", "Security review: not JSON"] {
         for merge in [true, false] {
             let scenario = Scenario::new();
             scenario.agent_does_in_session(1, OPENS_PR);

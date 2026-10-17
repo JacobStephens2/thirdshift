@@ -271,3 +271,6 @@ impl Review {
         Ok(review)
     }
 }
+
+#[cfg(test)]
+mod tests;
