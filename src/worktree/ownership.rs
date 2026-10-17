@@ -565,12 +565,14 @@ impl<'a> Operation<'a> {
     }
 
     pub(super) fn push(&self, branch: &str) -> Result<()> {
-        let remote = self.run(&[
-            "ls-remote",
-            "--heads",
-            "origin",
-            &format!("refs/heads/{branch}"),
-        ])?;
+        let remote = self
+            .run(&[
+                "ls-remote",
+                "--heads",
+                "origin",
+                &format!("refs/heads/{branch}"),
+            ])
+            .context("git push preflight failed")?;
         if remote.split_whitespace().next() == Some(self.head()?.as_str()) {
             return Ok(());
         }
