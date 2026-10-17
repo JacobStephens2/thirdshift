@@ -31,9 +31,9 @@
 # closed without merging is refused while release-<version> is on origin;
 # once that branch is deleted, the next run starts over.
 # A resumed PR must belong to origin and match its branch tip while open, or
-# it is refused, even once tagged. Unless already tagged, it must also change
-# only the version bump in Cargo.toml and Cargo.lock from its merge base, or
-# it is refused before merging or tagging.
+# it is refused, even once tagged. Its tree (or a pushed branch with no PR)
+# must also be exactly the version bump in Cargo.toml and Cargo.lock from
+# its merge base, or it is refused before merging or tagging.
 #
 # Prints a progress line on stderr for each step, with the release workflow
 # run's URL once it waits for that run, and the GitHub Release's URL last.
@@ -71,6 +71,9 @@ main() {
 
 	fetch_main
 	find_earlier_run
+	case $pr_state in
+	OPEN | MERGED) validate_bump_pr ;;
+	esac
 	finish_if_tagged
 
 	case $pr_state in
@@ -81,18 +84,17 @@ main() {
 			git push --quiet origin "$head:refs/heads/$branch"
 		else
 			progress "resuming: $branch is on origin at ${head:0:7} with no PR"
+			validate_bump_pr
 			write_summary "no PR was opened"
 		fi
 		open_pr
 		wait_and_merge
 		;;
 	OPEN)
-		validate_bump_pr
 		progress "resuming: $url is open"
 		wait_and_merge
 		;;
 	MERGED)
-		validate_bump_pr
 		progress "resuming: $url was merged as ${merge:0:7}"
 		;;
 	*)
@@ -139,13 +141,13 @@ find_earlier_run() {
 }
 
 # validate_bump_pr
-# Refuses unless the selected PR's entire tree is the bump_version result
-# from its merge base. A merged PR uses main just before its merge, since
-# its head is already an ancestor of main now.
+# Refuses unless the selected PR's (or pushed branch's) entire tree is the
+# bump_version result from its merge base. A merged PR uses main just before
+# its merge, since its head is already an ancestor of main now.
 validate_bump_pr() {
-	local base target expected
+	local base target expected candidate=${url:-$branch on origin}
 	if ! git fetch --quiet origin "$head"; then
-		refuse "$url head could not be fetched from origin"
+		refuse "$candidate head could not be fetched from origin"
 	fi
 	target=origin/main
 	if [ "$pr_state" = MERGED ]; then
@@ -154,7 +156,7 @@ validate_bump_pr() {
 	base=$(git merge-base "$head" "$target")
 	expected=$(bump_tree "$base")
 	if [ "$expected" != "$(git rev-parse "$head^{tree}")" ]; then
-		refuse "$url changes more than the version bump to $version in Cargo.toml and Cargo.lock"
+		refuse "$candidate changes more than the version bump to $version in Cargo.toml and Cargo.lock"
 	fi
 }
 

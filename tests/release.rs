@@ -62,6 +62,14 @@ fn with_version(file: &str, version: &str) -> String {
     format!("{}{version}{}", &text[..start], &text[end..])
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BumpChange {
+    AppendComment(&'static str),
+    AddedFile,
+    FileMode,
+    WrongVersion,
+}
+
 /// A bare origin whose main is at version 0.1.0, tagged `v0.1.0`, with one PR
 /// merged before the tag and two after, and a green CI run on main's tip; a
 /// contributor's clone that makes them; the maintainer's clone the script
@@ -436,28 +444,26 @@ impl Release {
     }
 
     /// Pushes one more commit to `version`'s pushed bump branch, making
-    /// `change`: a line added to README.md, Cargo.toml or Cargo.lock, an
-    /// "added file", Cargo.toml's "file mode", or the "wrong version"; and
-    /// returns that commit.
-    fn push_change_to_bump(&self, version: &str, change: &str) -> String {
+    /// `change`, and returns that commit.
+    fn push_change_to_bump(&self, version: &str, change: BumpChange) -> String {
         let contributor = self.contributor();
         let branch = format!("release-{version}");
         git(&contributor, &["checkout", "-q", &branch]);
         match change {
-            "added file" => fs::write(contributor.join("extra.txt"), "extra\n").unwrap(),
-            "file mode" => {
+            BumpChange::AddedFile => fs::write(contributor.join("extra.txt"), "extra\n").unwrap(),
+            BumpChange::FileMode => {
                 fs::set_permissions(
                     contributor.join("Cargo.toml"),
                     fs::Permissions::from_mode(0o755),
                 )
                 .unwrap();
             }
-            "wrong version" => {
+            BumpChange::WrongVersion => {
                 for file in ["Cargo.toml", "Cargo.lock"] {
                     fs::write(contributor.join(file), with_version(file, "0.3.0")).unwrap();
                 }
             }
-            file => {
+            BumpChange::AppendComment(file) => {
                 let path = contributor.join(file);
                 let text = fs::read_to_string(&path).unwrap();
                 fs::write(&path, format!("{text}\n# Unrelated change\n")).unwrap();
@@ -1681,12 +1687,12 @@ fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
     // One open PR end to end; checking the bump PR takes the rest.
     for merged in [false, true] {
         for change in [
-            "README.md",
-            "Cargo.toml",
-            "Cargo.lock",
-            "added file",
-            "file mode",
-            "wrong version",
+            BumpChange::AppendComment("README.md"),
+            BumpChange::AppendComment("Cargo.toml"),
+            BumpChange::AppendComment("Cargo.lock"),
+            BumpChange::AddedFile,
+            BumpChange::FileMode,
+            BumpChange::WrongVersion,
         ] {
             let release = Release::new();
             release.push_bump("0.2.0");
@@ -1702,12 +1708,12 @@ fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
                 .to_owned();
             let reasons = [url.as_str(), "version bump"];
 
-            if !merged && change == "README.md" {
+            if !merged && change == BumpChange::AppendComment("README.md") {
                 assert_refused(&release, "0.2.0", &reasons);
             } else {
                 assert_refused_by(
                     &release,
-                    &format!("merged {merged}, {change}"),
+                    &format!("merged {merged}, {change:?}"),
                     &reasons,
                     || release.with_functions(&format!("{FIND_EARLIER_RUN}\nvalidate_bump_pr")),
                 );
@@ -1736,24 +1742,6 @@ fn a_merged_bump_pr_whose_head_is_not_on_origin_is_refused() {
         &[&url, "could not be fetched"],
         || release.with_functions(&format!("{FIND_EARLIER_RUN}\nvalidate_bump_pr")),
     );
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn an_already_tagged_release_is_still_reported_when_its_pr_changed_more() {
-    // The tag is already out, so refusing would only hide its release run.
-    let release = Release::new();
-    release.push_bump("0.2.0");
-    let head = release.push_change_to_bump("0.2.0", "added file");
-    release.open_bump_pr("0.2.0");
-    let merge = release.merge_bump_pr("0.2.0", &head);
-    release.origin(&["tag", "v0.2.0", &merge]);
-
-    let output = release.run_script("0.2.0");
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
-    assert!(err.contains("v0.2.0 is already tagged"), "{err}");
 }
 
 #[test]
@@ -2068,4 +2056,39 @@ fn review_no_on_a_rerun_after_the_branch_was_pushed_stops_with_no_pr_opened() {
     );
     assert!(!release.pr_opened("release-0.2.0"));
     assert_eq!(release.origin_refs(), refs_before);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_resumed_branch_without_pr_with_extra_changes_is_refused() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    release.push_change_to_bump("0.2.0", BumpChange::AddedFile);
+    release.ci_reports(GREEN);
+    let refs_before = release.origin_refs();
+    let merges_before = release.merge_calls();
+
+    let output = release.run_script("0.2.0");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("refusing to release"));
+    assert_eq!(release.origin_refs(), refs_before);
+    assert_eq!(release.merge_calls(), merges_before);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn review_tagged_resumed_pr_with_extra_changes_is_refused() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    let head = release.push_change_to_bump("0.2.0", BumpChange::AddedFile);
+    release.open_bump_pr("0.2.0");
+    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &merge]);
+    let url = release.pr("release-0.2.0")["url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    assert_refused(&release, "0.2.0", &[&url, "version bump"]);
 }
