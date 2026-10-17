@@ -8,8 +8,13 @@ use anyhow::anyhow;
 
 use crate::interrupt;
 
+mod recovery;
+pub use recovery::{Preservation, Recovery, Stage, TicketProgress};
+
 /// Why a Run did not end with a ready PR, and what the user should see.
 pub struct FailedRun {
+    /// Known lifecycle and preservation facts; absent for unrelated preflight failures.
+    pub recovery: Option<Box<Recovery>>,
     pub error: anyhow::Error,
     /// The Issue branch's open PR, if it has one.
     pub pr_url: Option<String>,
@@ -53,6 +58,7 @@ impl From<anyhow::Error> for FailedRun {
     fn from(error: anyhow::Error) -> Self {
         let interrupted = interrupt::requested();
         FailedRun {
+            recovery: None,
             error: interrupted_or(error, interrupted),
             pr_url: None,
             log: None,

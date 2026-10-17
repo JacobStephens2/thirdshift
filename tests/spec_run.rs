@@ -216,7 +216,22 @@ git commit -q -m 'Fix reproduced Security finding'
     let result = scenario.run(&[&spec_url(&scenario), "security-review", "merge"]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20", "20"]);
+    let sessions: Vec<_> = scenario
+        .claude_calls()
+        .into_iter()
+        .filter(|call| call["prompt"].as_str().unwrap().contains("/issues/"))
+        .collect();
+    assert_eq!(
+        sessions.len(),
+        4,
+        "completed Tickets must not be rebuilt: {sessions:?}"
+    );
+    assert!(
+        sessions.last().unwrap()["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Spec https://github.com/acme/widgets/issues/20")
+    );
     let calls = scenario.claude_calls();
     assert_contains(
         calls[2]["prompt"].as_str().unwrap(),
@@ -339,7 +354,22 @@ fn security_findings_refusals_and_incomplete_reviews_hold_only_the_spec_self_mer
                 result.stderr
             );
             assert_contains(&result.stderr, cause);
-            assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20", "20"]);
+            let sessions: Vec<_> = scenario
+                .claude_calls()
+                .into_iter()
+                .filter(|call| call["prompt"].as_str().unwrap().contains("/issues/"))
+                .collect();
+            assert_eq!(
+                sessions.len(),
+                4,
+                "completed Tickets must not be rebuilt: {sessions:?}"
+            );
+            assert!(
+                sessions.last().unwrap()["prompt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Spec https://github.com/acme/widgets/issues/20")
+            );
             let pr = spec_pr(&scenario);
             assert_eq!(pr["state"], "OPEN");
             assert_eq!(pr["isDraft"], false);
@@ -1408,6 +1438,89 @@ fn the_spec_review_is_logged_under_the_specs_name() {
         .find(|line| line.ends_with("-spec-review.jsonl"))
         .unwrap_or_else(|| panic!("no Spec review log in: {}", result.stderr));
     assert_contains(logged, "/20-");
+}
+
+#[test]
+fn failed_spec_review_reports_the_same_recovery_in_terminal_and_notification_and_can_continue() {
+    let scenario = linear_spec();
+    scenario.user_config_is("[harness.claude]\nmodel = \"opus\"\neffort = \"low\"\n[spec]\nparallel = 2\n[base]\nfix = false\n");
+    scenario.agent_does_for(SPEC, "exit 1");
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[
+            "email",
+            "me@example.com",
+            &spec_url(&scenario),
+            "no-merge",
+            "no-base-fix",
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": failed"), "{subject}");
+    for line in [
+        "Stopped at: Spec review",
+        "Progress: 3/3 Tickets landed; final review incomplete",
+        "Preservation: Work preserved remotely",
+    ] {
+        assert_contains(&result.stderr, line);
+        assert_contains(&text, line);
+    }
+    let command = text
+        .lines()
+        .find_map(|line| line.strip_prefix("Continue: "))
+        .expect(&text);
+    for part in [
+        &spec_url(&scenario),
+        "harness claude",
+        "model opus",
+        "effort low",
+        "parallel 2",
+        "--no-merge",
+        "no-base-fix",
+    ] {
+        assert_contains(command, part);
+    }
+    assert_contains(&text, "skips completed Tickets");
+    assert_contains(&text, "new agent session");
+    assert_contains(&text, "Base branch main");
+    for evidence in [
+        "Cause:",
+        "claude exited 1",
+        "Pull request:",
+        "Session log:",
+        "Command log:",
+        "#21 landed with",
+        "#22 landed with",
+    ] {
+        assert_contains(&text, evidence);
+    }
+    assert_eq!(spec_pr(&scenario)["isDraft"], true);
+    let pr_url = result.stdout;
+    scenario.agent_does_for(SPEC, "true");
+    // All values in this fixture are shell-safe; parser roundtrip tests cover quoting.
+    let args: Vec<_> = command.split_whitespace().skip(1).collect();
+    let continued = scenario.run(&args);
+    assert_eq!(continued.code, Some(0), "{}", continued.stderr);
+    assert_eq!(continued.stdout, pr_url);
+    let sessions: Vec<_> = scenario
+        .claude_calls()
+        .into_iter()
+        .filter(|call| call["prompt"].as_str().unwrap().contains("/issues/"))
+        .collect();
+    assert_eq!(
+        sessions.len(),
+        4,
+        "completed Tickets must not be rebuilt: {sessions:?}"
+    );
+    assert!(
+        sessions.last().unwrap()["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Spec https://github.com/acme/widgets/issues/20")
+    );
 }
 
 #[test]

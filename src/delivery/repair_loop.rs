@@ -12,7 +12,7 @@ use anyhow::{Result, bail};
 use crate::pull_request::MergeAttempt;
 
 use crate::ci::{self, Ci, FailedChecks};
-use crate::failed_run::PolicyRefusal;
+use crate::failed_run::{PolicyRefusal, Stage};
 use crate::run::Goal;
 use crate::worktree::{ForeignCommits, Merge};
 
@@ -102,16 +102,27 @@ pub(super) trait Outside {
 /// fails with a [`PolicyRefusal`]. Returns once the pull request has
 /// reached `goal`; fails as interrupted if an interrupt was requested before
 /// the merge.
-pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -> Result<()> {
+pub(super) fn take_to_goal(
+    outside: &mut impl Outside,
+    base: &str,
+    goal: Goal,
+    stage: &mut Stage,
+) -> Result<()> {
     let mut repair_loop = RepairLoop {
         outside,
         base,
         goal,
         budgets: Budgets::default(),
         check_reruns: CheckReruns::default(),
+        stage,
     };
     let mut watched = repair_loop.rounds()?;
     loop {
+        *repair_loop.stage = if goal == Goal::Merged {
+            Stage::SelfMerge
+        } else {
+            Stage::Readiness
+        };
         let outside = &mut *repair_loop.outside;
         outside.ensure_pr_ready_and_mergeable()?;
         if outside.interrupt_requested() {
@@ -130,6 +141,7 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
             Round::NewHead(head) => watched = head,
             Round::NothingToFix => {
                 // Only a PR still ready and mergeable is left ready.
+                *repair_loop.stage = Stage::SelfMerge;
                 repair_loop.outside.ensure_pr_ready_and_mergeable()?;
                 return Err(error.context(PolicyRefusal::NothingToFix));
             }
@@ -256,12 +268,14 @@ struct RepairLoop<'a, O> {
     goal: Goal,
     budgets: Budgets,
     check_reruns: CheckReruns,
+    stage: &'a mut Stage,
 }
 
 impl<O: Outside> RepairLoop<'_, O> {
     /// Start the next Repair, `repair`, for `cause`, counting it against the
     /// Repair cap.
     fn repair(&mut self, cause: &str, repair: Repair) -> Result<()> {
+        *self.stage = Stage::Repair;
         let (kind, line) = self.budgets.next_repair(cause)?;
         self.outside.progress(line);
         self.outside.repair(&kind, repair)
@@ -302,6 +316,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     fn rounds(&mut self) -> Result<String> {
         let base = self.base;
         loop {
+            *self.stage = Stage::Synchronization;
             if self.goal == Goal::Merged {
                 self.take_in_foreign_commits()?;
             }
@@ -319,6 +334,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                 .outside
                 .sees_inherited_failures()
                 .then_some(base_commit.as_str());
+            *self.stage = Stage::Ci;
             let ci = self
                 .check_reruns
                 .assess(self.outside, &head, compared_with)?;
@@ -346,6 +362,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                             self.count_base_move("while CI ran")?;
                             continue;
                         }
+                        *self.stage = Stage::BaseFix;
                         self.outside.base_fix(&base_commit, &failed)?;
                         continue;
                     }
@@ -364,6 +381,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// Repair, and the push after them would be rejected.
     fn take_in_foreign_commits(&mut self) -> Result<()> {
         loop {
+            *self.stage = Stage::Synchronization;
             let foreign = self.outside.new_commits_on_origin()?;
             if foreign.commits().is_empty() {
                 return Ok(());
@@ -395,6 +413,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// consulted.
     fn round_after_failed_merge(&mut self, watched: &str) -> Result<Round> {
         let before = self.budgets;
+        *self.stage = Stage::Synchronization;
         if self.outside.base_branch_moved()? {
             self.count_base_move("since the merge was tried")?;
         }
@@ -510,6 +529,7 @@ mod tests {
         /// For each merge, the error it fails with, if it does.
         merges: VecDeque<Option<&'static str>>,
         merge_gate_error: Option<&'static str>,
+        fail_at: Option<Stage>,
         sees_no_inherited_failures: bool,
         interrupted: bool,
     }
@@ -600,6 +620,9 @@ mod tests {
         }
 
         fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
+            if self.script.fail_at == Some(Stage::Ci) {
+                bail!("CI observation failed");
+            }
             self.did
                 .push(Did::Watch(head.to_string(), base_commit.map(String::from)));
             let is = self.script.watches.pop_front().expect("no watch scripted");
@@ -622,6 +645,9 @@ mod tests {
         }
 
         fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
+            if self.script.fail_at == Some(Stage::Repair) {
+                bail!("Repair session failed");
+            }
             let started = match repair {
                 Repair::Conflict(upstream) => Started::Conflict(upstream),
                 Repair::CiFix(failed) => {
@@ -680,7 +706,7 @@ mod tests {
             script,
             did: Vec::new(),
         };
-        let delivered = take_to_goal(&mut outside, "main", goal);
+        let delivered = take_to_goal(&mut outside, "main", goal, &mut Stage::Synchronization);
         (delivered, outside.did)
     }
 
@@ -756,6 +782,45 @@ mod tests {
     /// The cause `delivered` failed with, every context included.
     fn cause(delivered: Result<()>) -> String {
         format!("{:#}", delivered.unwrap_err())
+    }
+
+    #[test]
+    fn failures_name_ci_repair_and_self_merge_without_changing_their_causes() {
+        for (expected, script) in [
+            (
+                Stage::Ci,
+                Script {
+                    heads: script(["h1"]),
+                    fail_at: Some(Stage::Ci),
+                    ..Script::default()
+                },
+            ),
+            (
+                Stage::Repair,
+                Script {
+                    base_conflicts: script([true]),
+                    fail_at: Some(Stage::Repair),
+                    ..Script::default()
+                },
+            ),
+            (
+                Stage::SelfMerge,
+                Script {
+                    heads: script(["h1"]),
+                    watches: script([Is::Passed]),
+                    merge_gate_error: Some("merge blocked"),
+                    ..Script::default()
+                },
+            ),
+        ] {
+            let mut outside = Scripted {
+                script,
+                did: Vec::new(),
+            };
+            let mut stage = Stage::Synchronization;
+            assert!(take_to_goal(&mut outside, "main", Goal::Merged, &mut stage).is_err());
+            assert_eq!(stage, expected);
+        }
     }
 
     #[test]

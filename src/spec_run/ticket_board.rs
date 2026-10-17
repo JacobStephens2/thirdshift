@@ -105,6 +105,13 @@ impl TicketBoard {
             .collect()
     }
 
+    pub(super) fn progress(&self) -> crate::failed_run::TicketProgress {
+        crate::failed_run::TicketProgress {
+            landed: self.tickets.iter().filter(|ticket| !ticket.is_open).count(),
+            total: self.tickets.len(),
+        }
+    }
+
     /// A line on each Ticket that landed in this Spec run, with its PR, and
     /// on each Ticket not done, with why, lowest number first.
     pub(super) fn lines(&self) -> Vec<String> {

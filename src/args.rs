@@ -92,6 +92,37 @@ pub fn retry_with_base_fix(issue: &IssueUrl, flags: &Flags) -> String {
     shell_command(words)
 }
 
+/// Re-run the original issue with the effective public choices. Spec parallelism
+/// is valid only on a Spec; Launch directory/Base branch are stated separately.
+pub fn continuation(issue: &IssueUrl, asks: &crate::asks::Asks, is_spec: bool) -> String {
+    let flags = Flags {
+        goal: Some(asks.goal),
+        parallel: is_spec.then_some(asks.tickets_at_once),
+        base_fix: Some(asks.base_fix.clone()),
+        harness: harness::Asked {
+            harness: Some(asks.harness.harness),
+            model_and_effort: crate::harness::ModelAndEffort {
+                model: asks.harness.model.clone(),
+                effort: asks.harness.effort.clone(),
+            },
+        },
+        security_fix: Some(if asks.security_fix {
+            crate::security::FixAsk::Allow
+        } else {
+            crate::security::FixAsk::Forbid
+        }),
+        security_review: Some(if asks.security_review {
+            crate::security::review::Ask::Allow
+        } else {
+            crate::security::review::Ask::Forbid
+        }),
+        ..Flags::default()
+    };
+    let mut words = vec!["thirdshift".into(), issue.url.clone()];
+    public_flag_words(&flags, &mut words);
+    shell_command(words)
+}
+
 /// Retry a Security run with fixing allowed, retaining the original optional
 /// Base branch rather than the one launch preparation resolved.
 pub fn retry_with_security_fix(base: Option<&str>, flags: &Flags) -> String {
@@ -471,6 +502,71 @@ mod tests {
     const URL: &str = "https://github.com/acme/widgets/issues/7";
 
     use crate::test_support::guidance::words as shell_words;
+
+    #[test]
+    fn continuation_roundtrips_effective_choices_and_literal_shell_values() {
+        use crate::asks::Asks;
+        use crate::harness::{Choice, ChosenBy};
+        for is_spec in [false, true] {
+            for goal in [Goal::Merged, Goal::ReadyForReview] {
+                for base_fix in [
+                    BaseFixAsk::Allow,
+                    BaseFixAsk::Forbid,
+                    BaseFixAsk::Undecided {
+                        retry: "do not serialize this".into(),
+                    },
+                ] {
+                    let asks = Asks {
+                        goal,
+                        base_fix: base_fix.clone(),
+                        tickets_at_once: NonZeroUsize::new(5).unwrap(),
+                        parallel_asked: false,
+                        security_fix: true,
+                        security_review: true,
+                        launch_pull: false,
+                        notification: NotificationAsk::Skip,
+                        harness: Choice {
+                            harness: Harness::Codex,
+                            model: Some("vendor/model's $(touch never); `literal`".into()),
+                            effort: Some("max".into()),
+                            chosen_by: ChosenBy::UserConfig,
+                        },
+                    };
+                    let command = continuation(&IssueUrl::parse(URL).unwrap(), &asks, is_spec);
+                    let Command::Run(run) = parse(&shell_words(&command)).unwrap() else {
+                        panic!("not a Run: {command}")
+                    };
+                    assert_eq!(run.issue, IssueInput::Url(IssueUrl::parse(URL).unwrap()));
+                    assert_eq!(run.flags.goal, Some(goal));
+                    assert_eq!(
+                        run.flags.parallel,
+                        is_spec.then_some(NonZeroUsize::new(5).unwrap())
+                    );
+                    assert_eq!(run.flags.harness.harness, Some(Harness::Codex));
+                    assert_eq!(run.flags.harness.model_and_effort.model, asks.harness.model);
+                    assert_eq!(
+                        run.flags.harness.model_and_effort.effort,
+                        asks.harness.effort
+                    );
+                    assert_eq!(
+                        run.flags.base_fix,
+                        if matches!(base_fix, BaseFixAsk::Undecided { .. }) {
+                            None
+                        } else {
+                            Some(base_fix)
+                        }
+                    );
+                    assert_eq!(run.flags.security_fix, Some(crate::security::FixAsk::Allow));
+                    assert_eq!(
+                        run.flags.security_review,
+                        Some(crate::security::review::Ask::Allow)
+                    );
+                    assert!(run.given.is_none());
+                    assert!(!command.contains("do not serialize"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn base_fix_guidance_preserves_a_model_label_with_spaces() {

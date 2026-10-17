@@ -152,6 +152,13 @@ fn no_changes_against_the_base_branch_means_no_failure_commit_and_no_push() {
 
     assert_failed(&scenario, &result, "");
     assert_eq!(scenario.origin_log("issue-7"), None);
+    assert!(
+        result
+            .stderr
+            .contains("Preservation: No work preserved by this Run."),
+        "{}",
+        result.stderr
+    );
 }
 
 #[test]
@@ -241,6 +248,15 @@ fn when_origin_rejects_the_failure_push_the_worktree_and_local_branch_are_kept()
         result.stderr
     );
     assert_kept(&scenario, &result, "claude exited 3");
+    for part in [
+        "Preservation: Preservation did not finish; work may exist only locally",
+        "Recover and push the retained Issue branch before continuing",
+        "Local worktree:",
+        "After recovering and pushing local work",
+        "Continue: thirdshift https://github.com/acme/widgets/issues/7",
+    ] {
+        assert!(result.stderr.contains(part), "{}", result.stderr);
+    }
 }
 
 #[test]

@@ -18,7 +18,7 @@ use anyhow::{Result, bail};
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{Ended, Kind, Runs};
 use crate::delivery::{Delivery, Opening};
-use crate::failed_run::{FailedRun, interrupted_or};
+use crate::failed_run::{FailedRun, Preservation, Recovery, Stage, TicketProgress, interrupted_or};
 use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
 use crate::interrupt;
@@ -86,7 +86,7 @@ fn run_through(
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
-    let (ticket_lines, landed) = land_tickets(outside, spec, tickets, parallel);
+    let (ticket_lines, progress, pushed, landed) = land_tickets(outside, spec, tickets, parallel);
     // Every Ticket landed only once the Spec PR is told so.
     let landed = landed.and_then(|checklist| {
         let spec_pr_url = outside.landed(&checklist)?;
@@ -99,6 +99,7 @@ fn run_through(
         Err(error) => {
             let interrupted = outside.interrupted();
             Err(FailedRun {
+                recovery: None,
                 error: interrupted_or(error, interrupted),
                 pr_url: outside.spec_pr_url(),
                 log: None,
@@ -112,10 +113,21 @@ fn run_through(
             ticket_lines,
             ..reached
         }),
-        Err(failed) => Err(FailedRun {
-            ticket_lines,
-            ..failed
-        }),
+        Err(mut failed) => {
+            let recovery = failed.recovery.get_or_insert_with(|| {
+                Box::new(Recovery::new(
+                    Stage::Tickets,
+                    if pushed {
+                        Preservation::Remote
+                    } else {
+                        Preservation::None
+                    },
+                ))
+            });
+            recovery.tickets = Some(progress);
+            failed.ticket_lines = ticket_lines;
+            Err(failed)
+        }
     }
 }
 
@@ -133,6 +145,10 @@ fn review_and_deliver(
     if outside.interrupted() {
         return Err(FailedRun {
             interrupted: true,
+            recovery: Some(Box::new(Recovery::new(
+                Stage::SpecReview,
+                Preservation::Remote,
+            ))),
             pr_url: Some(spec_pr_url.to_string()),
             ..FailedRun::from(anyhow::anyhow!("interrupted"))
         });
@@ -143,7 +159,12 @@ fn review_and_deliver(
         catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
-    let delivered = outside.deliver(opening, checklist);
+    let delivered = outside.deliver(opening, checklist).map_err(|mut failed| {
+        failed.recovery.get_or_insert_with(|| {
+            Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
+        });
+        failed
+    });
     if delivered.is_err() {
         outside.show(checklist);
     }
@@ -320,11 +341,11 @@ fn land_tickets(
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
-) -> (Vec<String>, Result<String>) {
-    if let Err(error) = outside.push() {
-        return (Vec::new(), Err(error));
-    }
+) -> (Vec<String>, TicketProgress, bool, Result<String>) {
     let mut board = TicketBoard::new(spec, tickets, parallel);
+    if let Err(error) = outside.push() {
+        return (Vec::new(), board.progress(), false, Err(error));
+    }
     let landing = run_ready_tickets(outside, &mut board);
     let lines = board.lines();
     let landed = landing.and_then(|()| {
@@ -337,7 +358,7 @@ fn land_tickets(
         }
         bail!("Tickets not done: {}", not_done.join(", "));
     });
-    (lines, landed)
+    (lines, board.progress(), true, landed)
 }
 
 /// Keep the Tickets on `board` running as it offers them, until it offers
@@ -677,6 +698,7 @@ mod tests {
                     ticket_lines: Vec::new(),
                 }),
                 Err(error) => Err(FailedRun {
+                    recovery: None,
                     error,
                     pr_url: Some(SPEC_PR.to_string()),
                     log: Some(PathBuf::from(DELIVERY_LOG)),
@@ -751,12 +773,13 @@ mod tests {
     /// once.
     fn land(outside: &mut Scripted, parallel: usize) -> (Vec<String>, Result<String>) {
         let tickets = outside.graph();
-        land_tickets(
+        let (lines, _, _, landed) = land_tickets(
             outside,
             &IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap(),
             tickets,
             NonZeroUsize::new(parallel).unwrap(),
-        )
+        );
+        (lines, landed)
     }
 
     /// Take Spec #20, its Tickets as `outside` has them, up to `parallel`
@@ -1521,6 +1544,31 @@ mod tests {
 
         let failed = failed_of(spec_run(&mut outside, 3));
 
+        let ending = crate::command::Ending::Run(crate::run::Ended {
+            outcome: Err(failed),
+            base_fix: None,
+            advice: Vec::new(),
+        });
+        let Ok(account) = crate::run_ending::read(&ending) else {
+            panic!("Run cannot be skipped")
+        };
+        assert!(
+            account.summary().contains("Spec review"),
+            "{}",
+            account.summary()
+        );
+        assert!(
+            account.summary().contains("1/1 Tickets landed"),
+            "{}",
+            account.summary()
+        );
+        let crate::command::Ending::Run(crate::run::Ended {
+            outcome: Err(failed),
+            ..
+        }) = ending
+        else {
+            unreachable!()
+        };
         let done = checklist(&["[x] #21 done"]);
         assert_eq!(
             format!("{:#}", failed.error),

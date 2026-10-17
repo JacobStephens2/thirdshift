@@ -14,7 +14,7 @@ use std::time::Duration;
 use crate::architect::Reviewed;
 use crate::base_fix::Advice;
 use crate::command::{Ending, Skip};
-use crate::failed_run::{FailedRun, PolicyRefusal};
+use crate::failed_run::{FailedRun, PolicyRefusal, Recovery};
 use crate::logs;
 use crate::progress::{self, ChildLine};
 use crate::run::Ended;
@@ -54,6 +54,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     ticket_lines: &[],
                     review: None,
                     security_findings: None,
+                    recovery: None,
                     failed_reproduction: None,
                     urls: Vec::new(),
                 },
@@ -88,6 +89,7 @@ pub fn show_skip(skip: &Skip) -> ExitCode {
 /// if it dispatched it, else as its Architecture review did.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Account<'a> {
+    pub recovery: Option<&'a Recovery>,
     /// In a word or a few, as a Run notification's subject gives it: its
     /// pull request's outcome, `review required`, `failed` or `interrupted`;
     /// or, for an Architect run that dispatched nothing, how its review ended, or
@@ -186,6 +188,7 @@ impl<'a> Account<'a> {
                 ticket_lines: &reached.ticket_lines,
                 review: None,
                 security_findings: None,
+                recovery: None,
                 failed_reproduction: None,
                 urls: vec![&reached.pr_url],
             },
@@ -211,6 +214,7 @@ impl<'a> Account<'a> {
             ticket_lines: &failed.ticket_lines,
             review: None,
             security_findings: None,
+            recovery: failed.recovery.as_deref(),
             failed_reproduction: None,
             urls: failed.pr_url.as_deref().into_iter().collect(),
         }
@@ -240,6 +244,7 @@ impl<'a> Account<'a> {
                 ticket_lines: &[],
                 review: None,
                 security_findings: None,
+                recovery: None,
                 failed_reproduction: None,
                 urls: vec![reviewed.url()],
             },
@@ -254,6 +259,19 @@ impl<'a> Account<'a> {
             }),
             ..account
         }
+    }
+
+    /// Shared failure facts in the layout consumed by both terminal and notification.
+    pub fn recovery_lines(&self) -> Vec<String> {
+        self.recovery
+            .map(|recovery| {
+                recovery
+                    .rows()
+                    .into_iter()
+                    .map(|(label, value)| format!("{label}: {value}"))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Whether the command succeeded, and so exits 0.
@@ -285,6 +303,17 @@ impl<'a> Account<'a> {
                 format!("review required: {}", cause.first_line())
             }
             Err(cause) => format!("failed: {}", cause.first_line()),
+        };
+        let ended = if let Some(recovery) = self.recovery {
+            let rows = recovery
+                .rows()
+                .into_iter()
+                .map(|(label, value)| format!("{label}: {value}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!("{ended}; {rows}")
+        } else {
+            ended
         };
         match self.review.as_ref().and_then(|review| review.dispatched) {
             Some(plan) => format!("plan {plan} dispatched: {ended}"),
@@ -324,6 +353,7 @@ impl Shown {
         if let Some(report) = account.base_fix {
             steps.push(format!("{BASE_FIX}{report}"));
         }
+        steps.extend(account.recovery_lines());
         match &account.ended {
             // Also on stderr, so the outcome shows even when stdout is captured.
             Ok(line) => steps.push(line.clone()),
@@ -414,7 +444,7 @@ impl Reader {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {
             self.log = Some(log.to_string());
-        } else if !Advice::is_line(message) {
+        } else if !Advice::is_line(message) && !Recovery::is_line(message) {
             self.cause = Some(message.to_string());
             self.log = None;
         }
@@ -458,6 +488,7 @@ mod tests {
 
     fn failed_run(cause: &str) -> FailedRun {
         FailedRun {
+            recovery: None,
             error: anyhow!("{cause}"),
             pr_url: None,
             log: Some(PathBuf::from(LOG)),
@@ -468,6 +499,7 @@ mod tests {
 
     fn interrupted(failed: FailedRun) -> FailedRun {
         FailedRun {
+            recovery: None,
             error: anyhow!("interrupted"),
             interrupted: true,
             ..failed
@@ -509,6 +541,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            recovery: None,
             failed_reproduction: None,
             urls: vec![PR],
         }
@@ -528,6 +561,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            recovery: None,
             failed_reproduction: None,
             urls: Vec::new(),
         }
@@ -708,6 +742,7 @@ mod tests {
                         dispatched: None,
                     }),
                     security_findings: None,
+                    recovery: None,
                     failed_reproduction: None,
                     urls: vec![PLAN],
                 }
@@ -913,6 +948,7 @@ mod tests {
     fn failed(cause: &str, log: Option<&str>, pr_url: Option<&str>) -> Ended {
         Ended {
             outcome: Err(FailedRun {
+                recovery: None,
                 error: anyhow!("{cause}"),
                 pr_url: pr_url.map(String::from),
                 log: log.map(PathBuf::from),
@@ -922,6 +958,49 @@ mod tests {
             base_fix: None,
             advice: Vec::new(),
         }
+    }
+
+    #[test]
+    fn recovery_rows_do_not_replace_a_childs_cause_or_log() {
+        use crate::failed_run::{Preservation, Stage, TicketProgress};
+        let mut ended = failed("claude exited 3", Some(LOG), Some(PR));
+        let failure = ended.outcome.as_mut().err().unwrap();
+        let mut recovery = Recovery::new(Stage::SpecReview, Preservation::Remote);
+        recovery.tickets = Some(TicketProgress {
+            landed: 17,
+            total: 17,
+        });
+        recovery.continuation = Some(
+            "thirdshift https://github.com/acme/widgets/issues/21 --no-merge harness claude".into(),
+        );
+        recovery.base = Some("main".into());
+        failure.recovery = Some(Box::new(recovery));
+        let account = Account::of_run(&ended);
+        let shown = Shown::of(&account);
+        for line in account.recovery_lines() {
+            assert!(shown.steps.contains(&line), "{line}");
+        }
+        assert_eq!(
+            read_back(&ended).outcome,
+            Err(ChildFailure {
+                cause: Some("claude exited 3".into()),
+                log: Some(LOG.into())
+            })
+        );
+        // Rows can also follow a cause when a child is relayed by another consumer.
+        let mut reader = Reader::default();
+        reader.read(ChildLine::Own("claude exited 3"));
+        for line in account.recovery_lines() {
+            reader.read(ChildLine::Own(&line));
+        }
+        reader.read(ChildLine::Own(&format!("session log: {LOG}")));
+        assert_eq!(
+            reader.finish("", false).outcome,
+            Err(ChildFailure {
+                cause: Some("claude exited 3".into()),
+                log: Some(LOG.into())
+            })
+        );
     }
 
     fn with_base_fix(ended: Ended, became: &str) -> Ended {

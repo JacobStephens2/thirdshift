@@ -21,7 +21,7 @@ use crate::pull_request::{Identified, MergeAttempt, PullRequest};
 
 use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
-use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
+use crate::failed_run::{FailedRun, PolicyRefusal, Preservation, Recovery, Stage, interrupted_or};
 use crate::github::GitHub;
 use crate::harness::Choice;
 use crate::interrupt;
@@ -87,6 +87,8 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
+        let mut stage = Stage::Synchronization;
+        let local_worktree = worktree.path().to_path_buf();
         let route = Route {
             security_review: self.security_review,
             issue: self.issue,
@@ -106,7 +108,7 @@ impl Delivery<'_> {
                     sessions,
                     pull_request,
                 };
-                route.steps(&mut outside, &opening, checklist)
+                route.steps(&mut outside, &opening, checklist, &mut stage)
             });
         match delivered {
             Ok(pr_url) => Ok(Reached {
@@ -121,7 +123,14 @@ impl Delivery<'_> {
                     worktree,
                     pull_request,
                 };
-                Err(fail(&mut outside, log, error))
+                let mut failed = fail(&mut outside, log, error);
+                if let Some(recovery) = &mut failed.recovery {
+                    recovery.stage = stage;
+                    if recovery.preservation == Preservation::Local {
+                        recovery.local_worktree = Some(local_worktree);
+                    }
+                }
+                Err(failed)
             }
         }
     }
@@ -149,20 +158,29 @@ impl Route<'_> {
         outside: &mut O,
         opening: &Opening,
         checklist: Option<&str>,
+        stage: &mut Stage,
     ) -> Result<String> {
         if opening.catch_up_from_origin {
             outside.catch_up()?;
         }
+        *stage = if opening.kind == "spec-review" {
+            Stage::SpecReview
+        } else {
+            Stage::Implementation
+        };
         outside.session(opening.kind, &opening.prompt)?;
         let review = self.security_review.then(|| {
+            *stage = Stage::SecurityReview;
             SecurityOutcome::of(outside.security_review(&prompt::security_review(
                 self.issue,
                 self.base,
                 self.branch,
             )))
         });
+        *stage = Stage::Synchronization;
         outside.push()?;
         self.write_built_with(outside);
+        *stage = Stage::Readiness;
         let pr = outside.mark_pr_ready(checklist)?;
         let hold = review.as_ref().and_then(SecurityOutcome::hold);
         if let Some(review) = &review
@@ -181,7 +199,7 @@ impl Route<'_> {
         } else {
             self.goal
         };
-        outside.take_to_goal(&pr.url, goal)?;
+        outside.take_to_goal(&pr.url, goal, stage)?;
         if let Some(hold) = hold {
             outside.step(hold.to_string());
             if self.goal == Goal::Merged {
@@ -288,11 +306,18 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
     let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
     let keep_ready = error.is::<PolicyRefusal>() || error.is::<SecurityHold>();
-    if !keep_ready && let Err(problem) = outside.preserve_failed_run(&reason) {
-        outside.step(format!(
-            "could not push the failed run's work, so it may exist only locally: {problem:#}"
-        ));
-    }
+    let preservation = if keep_ready {
+        Preservation::Remote
+    } else {
+        match outside.preserve_failed_run(&reason) {
+            Ok(true) => Preservation::Remote,
+            Ok(false) => Preservation::None,
+            Err(problem) => {
+                outside.step(format!("could not push the failed run's work, so it may exist only locally: {problem:#}"));
+                Preservation::Local
+            }
+        }
+    };
     let pr_url = match outside.finish_pr(keep_ready) {
         Ok(pr_url) => pr_url,
         Err(problem) => {
@@ -301,6 +326,14 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
         }
     };
     FailedRun {
+        recovery: Some(Box::new(Recovery::new(
+            Stage::Implementation,
+            if preservation == Preservation::None && pr_url.is_some() {
+                Preservation::Remote
+            } else {
+                preservation
+            },
+        ))),
         error,
         pr_url,
         log,
@@ -326,7 +359,7 @@ trait Outside {
     fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified>;
     /// Take the ready pull request at `pr_url` to `goal` through the Repair
     /// loop.
-    fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()>;
+    fn take_to_goal(&mut self, pr_url: &str, goal: Goal, stage: &mut Stage) -> Result<()>;
     /// Delete the Issue branch on origin.
     fn delete_branch(&mut self) -> Result<()>;
     /// Whether the issue is open.
@@ -347,7 +380,7 @@ trait Outside {
 trait FailedOutside {
     /// Preserve the Failed run's work for `reason`, retaining it locally if
     /// preservation fails.
-    fn preserve_failed_run(&mut self, reason: &str) -> Result<()>;
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<bool>;
     /// Finish the captured PR through completion operations after preservation.
     fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>>;
     /// Whether an interrupt was requested.
@@ -396,7 +429,7 @@ impl Outside for InWorktree<'_> {
         self.pull_request.mark_ready(checklist)
     }
 
-    fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()> {
+    fn take_to_goal(&mut self, pr_url: &str, goal: Goal, stage: &mut Stage) -> Result<()> {
         let mut outside = RunOutside {
             issue: self.issue,
             worktree: self.worktree,
@@ -406,7 +439,7 @@ impl Outside for InWorktree<'_> {
             sessions: self.sessions,
             pull_request: self.pull_request,
         };
-        repair_loop::take_to_goal(&mut outside, self.base, goal)
+        repair_loop::take_to_goal(&mut outside, self.base, goal, stage)
     }
 
     fn delete_branch(&mut self) -> Result<()> {
@@ -443,7 +476,7 @@ struct OnFailure<'a> {
 }
 
 impl FailedOutside for OnFailure<'_> {
-    fn preserve_failed_run(&mut self, reason: &str) -> Result<()> {
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<bool> {
         self.worktree.preserve_failed_run(self.base, reason)
     }
 
@@ -662,7 +695,7 @@ mod tests {
                 url: PR_URL.to_string(),
             })
         }
-        fn take_to_goal(&mut self, _: &str, goal: Goal) -> Result<()> {
+        fn take_to_goal(&mut self, _: &str, goal: Goal, _: &mut Stage) -> Result<()> {
             self.calls.push(Call::Goal(goal));
             if self.refused {
                 return Err(anyhow!("merge refused").context(PolicyRefusal::NothingToFix));
@@ -692,9 +725,9 @@ mod tests {
     }
 
     impl FailedOutside for Scripted {
-        fn preserve_failed_run(&mut self, reason: &str) -> Result<()> {
+        fn preserve_failed_run(&mut self, reason: &str) -> Result<bool> {
             self.calls.push(Call::Preserve(reason.to_string()));
-            self.check(Fails::Preserve)
+            self.check(Fails::Preserve).map(|()| true)
         }
         fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>> {
             self.calls.push(Call::Finish(keep_ready));
@@ -724,9 +757,34 @@ mod tests {
             prompt: String::new(),
             catch_up_from_origin: spec,
         };
+        let mut stage = Stage::Synchronization;
         route
-            .steps(outside, &opening, spec.then_some("Tickets"))
-            .map_err(|error| fail(outside, outside.log.clone(), error))
+            .steps(outside, &opening, spec.then_some("Tickets"), &mut stage)
+            .map_err(|error| {
+                let mut failed = fail(outside, outside.log.clone(), error);
+                failed.recovery.as_mut().unwrap().stage = stage;
+                failed
+            })
+    }
+
+    #[test]
+    fn a_failed_opening_names_the_unfinished_stage_and_remote_preservation() {
+        for (spec, stage) in [
+            (true, crate::failed_run::Stage::SpecReview),
+            (false, crate::failed_run::Stage::Implementation),
+        ] {
+            let mut outside = Scripted {
+                failing: Some(Fails::Session),
+                ..Scripted::default()
+            };
+            let failed = deliver(&mut outside, Goal::ReadyForReview, spec).unwrap_err();
+            let recovery = failed.recovery.expect("lifecycle facts");
+            assert_eq!(recovery.stage, stage);
+            assert_eq!(
+                recovery.preservation,
+                crate::failed_run::Preservation::Remote
+            );
+        }
     }
 
     #[test]

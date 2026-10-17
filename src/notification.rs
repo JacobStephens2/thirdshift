@@ -280,6 +280,9 @@ fn body(
             text += &format!("Cause:        {cause}\n");
         }
     }
+    for line in account.recovery_lines() {
+        text += &format!("{line}\n");
+    }
     for line in account.advice {
         text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
     }
@@ -346,6 +349,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            recovery: None,
             failed_reproduction: None,
             urls: vec![PR],
         }
@@ -365,6 +369,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            recovery: None,
             failed_reproduction: None,
             urls: Vec::new(),
         }

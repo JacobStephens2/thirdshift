@@ -99,7 +99,12 @@ impl Checkout {
         }
     }
 
-    pub(super) fn preserve_failed_run(&self, launch: &Git, base: &str, reason: &str) -> Result<()> {
+    pub(super) fn preserve_failed_run(
+        &self,
+        launch: &Git,
+        base: &str,
+        reason: &str,
+    ) -> Result<bool> {
         let operation = Operation::new(self, launch, Purpose::Preservation);
         let branch = self
             .branch
@@ -117,7 +122,8 @@ impl Checkout {
         }
         operation.run(&["add", "-A"])?;
         let base = format!("origin/{base}");
-        if !operation.succeeds(&["diff", "--cached", "--quiet", &base])? {
+        let has_work = !operation.succeeds(&["diff", "--cached", "--quiet", &base])?;
+        if has_work {
             let message = format!(
                 "thirdshift: failed run ({reason})\n\n\
                  {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
@@ -136,7 +142,7 @@ impl Checkout {
             operation.push(branch)?;
         }
         operation.inspect()?;
-        Ok(())
+        Ok(has_work)
     }
 
     /// Drop is best effort, including while another panic is unwinding.

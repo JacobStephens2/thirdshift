@@ -881,9 +881,11 @@ fn unchanged_work_makes_no_failure_commit_or_remote_branch_and_allows_cleanup() 
     let path = worktree.path().to_path_buf();
     let head = worktree.head().unwrap();
 
-    worktree
-        .preserve_failed_run("main", "session failed")
-        .unwrap();
+    assert!(
+        !worktree
+            .preserve_failed_run("main", "session failed")
+            .unwrap()
+    );
 
     assert_eq!(worktree.head().unwrap(), head);
     assert!(!launch.on_origin(BRANCH).unwrap());

@@ -252,6 +252,7 @@ fn start<O: Outside>(
     if claims {
         outside.make_claim()?;
     }
+    let is_spec = !tickets.is_empty();
     let outcome = start_in_worktree(
         outside,
         issue,
@@ -260,6 +261,18 @@ fn start<O: Outside>(
         &base,
         asks.tickets_at_once,
     );
+    let outcome = outcome.map_err(|mut failed| {
+        if let Some(recovery) = &mut failed.recovery {
+            if recovery.preservation == crate::failed_run::Preservation::None
+                && matches!(selection, Selection::Continuation { .. })
+            {
+                recovery.preservation = crate::failed_run::Preservation::Remote;
+            }
+            recovery.continuation = Some(crate::args::continuation(issue, asks, is_spec));
+            recovery.base = Some(base.clone());
+        }
+        failed
+    });
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));
     }
