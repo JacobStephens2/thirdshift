@@ -123,6 +123,7 @@ pub struct BaseFix {
 /// another Run running and waited on.
 struct Taken {
     issue: IssueUrl,
+    local_worktree: Option<String>,
     /// Started by this Run, rather than waited on.
     started: bool,
     /// Whether it came to the end the Run awaited: see [`Taken::awaited_end`].
@@ -130,6 +131,11 @@ struct Taken {
 }
 
 impl Taken {
+    /// Kept separately from the error so interruption cannot erase retention.
+    fn retention_advice(&self) -> String {
+        self.local_worktree.as_ref().map(|path| format!("; work may exist only locally in {path}. Recover and push its retained branch, then release its retained checkout safely before continuing the Run.")).unwrap_or_default()
+    }
+
     /// The end of the Base fix the Run goes on from: `merged`, or `closed`
     /// for one waited on, of which the Run sees only the issue.
     fn awaited_end(&self) -> &'static str {
@@ -290,6 +296,7 @@ impl BaseFix {
         let running = outside.mark_running(number)?;
         drop(looking);
         let taken = self.taken.insert(Taken {
+            local_worktree: None,
             issue: fix,
             started: true,
             reached: false,
@@ -304,12 +311,24 @@ impl BaseFix {
                 ));
                 Ok(())
             }
-            Ended::Interrupted { .. } => bail!("interrupted"),
-            Ended::Failed { cause, log, .. } => {
+            Ended::Interrupted { local_worktree } => {
+                taken.local_worktree = local_worktree;
+                bail!("interrupted")
+            }
+            Ended::Failed {
+                cause,
+                log,
+                local_worktree,
+            } => {
+                taken.local_worktree = local_worktree;
                 if let Some(log) = log {
                     outside.step(format!("Base fix #{number} session log: {log}"));
                 }
-                bail!("Base fix {} failed: {cause}", taken.issue.url)
+                bail!(
+                    "Base fix {} failed: {cause}{}",
+                    taken.issue.url,
+                    taken.retention_advice()
+                )
             }
         }
     }
@@ -334,6 +353,7 @@ impl BaseFix {
             open.url
         ));
         let taken = self.taken.insert(Taken {
+            local_worktree: None,
             issue: open,
             started: false,
             reached: false,
@@ -400,7 +420,12 @@ impl BaseFix {
     pub fn report(&self) -> Option<String> {
         let taken = self.taken.as_ref()?;
         let not = if taken.reached { "" } else { "not " };
-        Some(format!("{} {not}{}", taken.issue.url, taken.awaited_end()))
+        Some(format!(
+            "{} {not}{}{}",
+            taken.issue.url,
+            taken.awaited_end(),
+            taken.retention_advice()
+        ))
     }
 }
 
@@ -1303,6 +1328,7 @@ mod tests {
         let report = |started, reached| {
             let mut base_fix = asked(BaseFixAsk::Allow);
             base_fix.taken = Some(Taken {
+                local_worktree: None,
                 issue: url(8),
                 started,
                 reached,

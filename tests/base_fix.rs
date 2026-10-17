@@ -550,3 +550,49 @@ fn a_base_fix_runs_its_sessions_on_the_runs_model_and_effort() {
     }
     assert!(prompts(&scenario)[2].contains(BASE_FIX_URL));
 }
+
+#[test]
+fn run_notification_reports_a_base_fixes_locally_retained_work() {
+    let scenario = Scenario::new();
+    scenario.agent_does(r#"
+echo feature > feature.txt
+git add feature.txt
+git commit -q -m 'Add feature'
+gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/main/test"}]'
+"#);
+    scenario.agent_does_for(8, "echo 'half done' > wip.txt\nexit 1\n");
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        "#!/bin/sh\nwhile read old new name; do\n  case \"$name\" in refs/heads/issue-8) echo 'Base fix push rejected'; exit 1;; esac\ndone\n",
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &[
+            "email",
+            "me@example.com",
+            &scenario.issue_url(7),
+            "base-fix",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let retained = scenario.path("work/widgets-issue-8");
+    assert_eq!(
+        std::fs::read_to_string(retained.join("wip.txt")).unwrap(),
+        "half done\n"
+    );
+    assert_eq!(scenario.origin_file("issue-8", "wip.txt"), None);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(
+        text.contains(retained.to_str().unwrap()),
+        "Run notification omits the locally retained Base fix worktree:\n{text}"
+    );
+}
