@@ -55,11 +55,12 @@ pub(super) fn add(
         Err(cause) => {
             let retained = owner.recover();
             owner.armed = false;
-            if retained.is_empty() {
-                Err(cause)
+            let error = if retained.is_empty() {
+                cause
             } else {
-                Err(AcquisitionFailure { cause, retained }.into())
-            }
+                AcquisitionFailure { cause, retained }.into()
+            };
+            Err(super::advice::occupied_advice(launch, branch, path, error))
         }
     }
 }
@@ -104,7 +105,8 @@ impl<'a> Acquisition<'a> {
             .flatten();
         common.verify_repository(launch)?;
         if let Some(branch) = branch {
-            super::check_local_branch(branch, branch_before.as_deref(), Some(start))?;
+            super::check_local_branch(branch, branch_before.as_deref(), Some(start))
+                .map_err(|error| super::local_branch_advice(launch, error))?;
         }
         Ok(Self {
             launch,

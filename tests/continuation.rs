@@ -130,6 +130,7 @@ fn a_local_issue_branch_that_differs_from_origin_stops_the_run() {
         "stderr: {}",
         result.stderr
     );
+    assert_branch_recovery_advice(&result.stderr);
     assert_nothing_created(&scenario, "issue-7");
     assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
     assert_eq!(scenario.launch_git(&["rev-parse", "issue-7"]), local_head);
@@ -172,11 +173,23 @@ git checkout -q main
         assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
         assert_eq!(result.stdout, "");
         let message = if continuing {
-            "the local branch issue-7 differs from origin/issue-7; push, reset or delete it first"
+            "the local branch issue-7 differs from origin/issue-7"
         } else {
-            "the local branch issue-7 is not on origin; push, rename or delete it first"
+            "the local branch issue-7 is not on origin"
         };
         assert!(result.stderr.contains(message), "stderr: {}", result.stderr);
+        for operation in [
+            " push origin ",
+            " branch -m -- issue-7 ",
+            " branch -d -- issue-7",
+        ] {
+            assert!(
+                result.stderr.contains(operation),
+                "stderr: {}",
+                result.stderr
+            );
+        }
+        assert_branch_recovery_advice(&result.stderr);
         assert_nothing_created(&scenario, "issue-7");
         assert_eq!(
             scenario.launch_git(&["rev-parse", "issue-7"]),
@@ -269,4 +282,73 @@ fn an_open_pr_supplies_the_base_branch_even_on_a_detached_head() {
         "prompt: {}",
         scenario.first_prompt()
     );
+}
+
+fn assert_branch_recovery_advice(stderr: &str) {
+    for expected in [
+        "git -C ",
+        " push origin refs/heads/issue-7:refs/heads/issue-7",
+        " branch -m -- issue-7 issue-7-preserved",
+        " branch -d -- issue-7",
+        "Alternatives",
+        "Continuation",
+    ] {
+        assert!(stderr.contains(expected), "missing {expected}: {stderr}");
+    }
+    assert!(!stderr.contains("--force"), "{stderr}");
+    assert!(!stderr.contains(" reset "), "{stderr}");
+}
+
+#[test]
+fn occupied_checkouts_stop_the_cli_with_recovery_advice_and_preserve_work() {
+    for main_checkout in [false, true] {
+        let scenario = Scenario::new();
+        scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+        scenario.launch_git(&["fetch", "origin", "issue-7:issue-7"]);
+        let checkout = if main_checkout {
+            scenario.launch_checks_out("issue-7");
+            scenario.path("work/widgets")
+        } else {
+            let path = scenario.path("work/manual ' checkout");
+            scenario.launch_git(&["worktree", "add", path.to_str().unwrap(), "issue-7"]);
+            path
+        };
+        std::fs::write(checkout.join("untracked.txt"), "keep this work").unwrap();
+        let before = scenario.launch_git(&["worktree", "list", "--porcelain"]);
+        let head = scenario.launch_git(&["rev-parse", "issue-7"]);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(result.stdout, "");
+        assert!(
+            result.stderr.contains("Occupied checkout"),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            result.stderr.contains("leave or inspect this checkout"),
+            "{}",
+            result.stderr
+        );
+        assert!(result.stderr.contains("Continuation"), "{}", result.stderr);
+        assert_eq!(
+            result.stderr.contains(" worktree remove "),
+            !main_checkout,
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            scenario.launch_git(&["worktree", "list", "--porcelain"]),
+            before
+        );
+        assert_eq!(scenario.launch_git(&["rev-parse", "issue-7"]), head);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("untracked.txt")).unwrap(),
+            "keep this work"
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+        assert!(!scenario.path("work/widgets-issue-7").exists());
+    }
 }
