@@ -29,33 +29,22 @@ fn manifest_dir() -> &'static Path {
 /// Keeps the machine's git configuration (signing, hooks, default branch) out
 /// of the test's git, the script's and the fake `gh`'s.
 fn isolated(command: &mut Command) -> &mut Command {
-    let inherited_count = std::env::var_os("GIT_CONFIG_COUNT");
-    let count = command
+    let inherited_parameters = std::env::var_os("GIT_CONFIG_PARAMETERS");
+    let mut parameters = command
         .get_envs()
-        .find(|(key, _)| *key == "GIT_CONFIG_COUNT")
-        .map_or(inherited_count.as_deref(), |(_, value)| value)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            value
-                .to_str()
-                .unwrap()
-                .parse::<usize>()
-                .expect("invalid GIT_CONFIG_COUNT")
-        })
-        .unwrap_or(0);
-    // Append so unrelated inherited entries survive and our values win over
-    // earlier maintenance settings. Command scope reaches descendants even
-    // though GIT_CONFIG_GLOBAL=/dev/null excludes the Scenario's gitconfig.
-    for (index, (key, value)) in [("maintenance.auto", "false"), ("gc.auto", "0")]
-        .into_iter()
-        .enumerate()
-    {
-        command
-            .env(format!("GIT_CONFIG_KEY_{}", count + index), key)
-            .env(format!("GIT_CONFIG_VALUE_{}", count + index), value);
+        .find(|(key, _)| *key == "GIT_CONFIG_PARAMETERS")
+        .map_or(inherited_parameters.as_deref(), |(_, value)| value)
+        .unwrap_or_default()
+        .to_os_string();
+    // Git propagates -c options to descendants through this quoted list,
+    // read after GIT_CONFIG_COUNT. Append so both forms of inherited config
+    // survive and our values win, even with the Scenario's gitconfig excluded.
+    if !parameters.is_empty() {
+        parameters.push(" ");
     }
+    parameters.push("'maintenance.auto=false' 'gc.auto=0'");
     command
-        .env("GIT_CONFIG_COUNT", (count + 2).to_string())
+        .env("GIT_CONFIG_PARAMETERS", parameters)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "Test")
@@ -87,17 +76,24 @@ fn isolated_git_children_preserve_unrelated_config_and_override_maintenance() {
         .env("GIT_CONFIG_KEY_1", "maintenance.auto")
         .env("GIT_CONFIG_VALUE_1", "true")
         .env("GIT_CONFIG_KEY_2", "gc.auto")
-        .env("GIT_CONFIG_VALUE_2", "1");
+        .env("GIT_CONFIG_VALUE_2", "1")
+        .env(
+            "GIT_CONFIG_PARAMETERS",
+            "'release.parameter=keep this too' 'maintenance.auto=true' 'gc.auto=1'",
+        );
     let output = isolated(&mut command)
         .current_dir(dir.path())
         .args([
             "-c",
-            "set -e\ngit config --get release.fixture\ngit config --bool maintenance.auto\ngit config --int gc.auto",
+            "set -e\ngit config --get release.fixture\ngit config --get release.parameter\ngit config --bool maintenance.auto\ngit config --int gc.auto",
         ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "keep this value\nfalse\n0\n");
+    assert_eq!(
+        stdout(&output),
+        "keep this value\nkeep this too\nfalse\n0\n"
+    );
 }
 
 #[test]
