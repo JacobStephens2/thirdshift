@@ -152,9 +152,9 @@ fn checkout_advice(
         )
     );
     if launch.dir().canonicalize().ok().as_ref() == Some(&entry.path) {
-        advice.push_str("\nThis is the Launch directory: switch it to the Base branch, then rerun the original thirdshift command to use the normal Continuation path once preserved work is published. Do not remove the Launch directory.");
+        advice.push_str("\nThis is the Launch directory. After inspecting and preserving its work, leave the Issue branch here before retrying from the Base branch. The acquisition path must also be free for normal Continuation; if this checkout occupies that path, use a Launch directory under a different parent directory. Do not remove the Launch directory.");
     } else if main_checkout {
-        advice.push_str("\nThis is the main checkout; Git cannot remove it with worktree remove. After inspecting and preserving its work, switch it to another branch, then rerun the original thirdshift command from the Launch directory on the Base branch to use normal Continuation.");
+        advice.push_str("\nThis is the main checkout; Git cannot remove it with worktree remove. After inspecting and preserving its work, a branch switch can free the Issue branch. The acquisition path must also be free: if this checkout occupies that path, use a Launch directory under a different parent directory, keeping this checkout. Once the Issue branch is published and the acquisition path is free, rerun the original thirdshift command from the Launch directory on the Base branch for normal Continuation.");
     } else {
         advice.push_str(&format!(
             "\nTo free the checkout for a retry, remove it only after preserving its work, then rerun the original thirdshift command from the Launch directory on the Base branch. If the selected Issue branch is on origin, the retry uses the normal Continuation path. Commands use git -C and can run from any directory:\n  {}\n\

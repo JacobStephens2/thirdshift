@@ -294,3 +294,123 @@ fn continuation_from_a_linked_launch_does_not_offer_to_remove_the_main_checkout(
     );
     assert!(scenario.claude_calls().is_empty());
 }
+
+use std::path::Path;
+
+fn git_at(scenario: &Scenario, directory: &Path, arguments: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(arguments)
+        .current_dir(directory)
+        .env("HOME", scenario.path("home"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {arguments:?}: {output:?}");
+}
+
+#[test]
+fn main_checkout_at_target_does_not_offer_a_branch_switch_as_sufficient_recovery() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    scenario.github_has_pr("issue-7", "main", "OPEN");
+    let linked = scenario.path("work/linked-launch");
+    scenario.launch_git(&[
+        "worktree",
+        "add",
+        "--detach",
+        linked.to_str().unwrap(),
+        "main",
+    ]);
+    scenario.launch_checks_out("issue-7");
+    let main = scenario.path("work/widgets-issue-7");
+    std::fs::rename(scenario.launch_dir(), &main).unwrap();
+    git_at(&scenario, &main, &["worktree", "repair"]);
+
+    let refused = scenario.run_from(&linked, &[&scenario.issue_url(7)]);
+    assert_eq!(refused.code, Some(1), "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("This is the main checkout"),
+        "{}",
+        refused.stderr
+    );
+    git_at(&scenario, &main, &["switch", "main"]);
+    let retried = scenario.run_from(&linked, &[&scenario.issue_url(7)]);
+    assert_eq!(retried.code, Some(1), "{}", retried.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    assert!(main.join("README.md").exists());
+    assert!(
+        !refused
+            .stderr
+            .contains("switch it to another branch, then rerun"),
+        "Switching leaves the target occupied and the retry still fails:\nFIRST:\n{}\nRETRY:\n{}",
+        refused.stderr,
+        retried.stderr
+    );
+    assert!(
+        refused.stderr.contains("different parent directory"),
+        "{}",
+        refused.stderr
+    );
+    continue_from_another_parent(&scenario, &main);
+}
+
+#[test]
+fn launch_at_target_does_not_offer_a_branch_switch_as_sufficient_recovery() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    scenario.github_has_pr("issue-7", "main", "OPEN");
+    scenario.launch_checks_out("issue-7");
+    let launch = scenario.path("work/widgets-issue-7");
+    std::fs::rename(scenario.launch_dir(), &launch).unwrap();
+
+    let refused = scenario.run_from(&launch, &[&scenario.issue_url(7)]);
+    assert_eq!(refused.code, Some(1), "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("This is the Launch directory"),
+        "{}",
+        refused.stderr
+    );
+    git_at(&scenario, &launch, &["switch", "main"]);
+    let retried = scenario.run_from(&launch, &[&scenario.issue_url(7)]);
+    assert_eq!(retried.code, Some(1), "{}", retried.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    assert!(launch.join("README.md").exists());
+    assert!(
+        !refused
+            .stderr
+            .contains("switch it to the Base branch, then rerun"),
+        "Switching leaves the target occupied and the retry still fails:\nFIRST:\n{}\nRETRY:\n{}",
+        refused.stderr,
+        retried.stderr
+    );
+    assert!(
+        refused.stderr.contains("different parent directory"),
+        "{}",
+        refused.stderr
+    );
+    continue_from_another_parent(&scenario, &launch);
+}
+
+fn continue_from_another_parent(scenario: &Scenario, repository: &Path) {
+    let parent = scenario.path("other-parent");
+    std::fs::create_dir(&parent).unwrap();
+    let launch = parent.join("linked-launch");
+    git_at(
+        scenario,
+        repository,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            launch.to_str().unwrap(),
+            "main",
+        ],
+    );
+    scenario.agent_does(
+        "echo continued > continued.txt\ngit add continued.txt\ngit commit -q -m Continued",
+    );
+    let result = scenario.run_from(&launch, &[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.origin_log("issue-7").unwrap()[0], "Continued");
+    assert!(repository.join("README.md").exists());
+}
