@@ -911,7 +911,14 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
     assert_eq!(requests.len(), 1, "{requests:?}");
     let body = &requests[0].body;
     let part = |name: &str| body[name].as_str().unwrap().to_string();
-    (part("subject"), part("text"))
+    let text = part("text");
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("Issue:"))
+            .count(),
+        1
+    );
+    (part("subject"), text)
 }
 
 /// A Ready issue, #7, titled, with no sub-issues, whose session opens its PR
@@ -971,6 +978,7 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
     assert!(
         text.starts_with(&format!(
             "Result:       ready for review\n\
+             Issue:        https://github.com/acme/widgets/issues/7\n\
              Pull request: {}\n\
              Session log:  {}\n\
              Command log:  {}\n\
@@ -1001,7 +1009,7 @@ fn the_notification_of_a_merge_run_says_it_merged() {
         "[thirdshift] acme/widgets#7 Sharpen the widgets: merged"
     );
     let pull_request = format!(
-        "Result:       merged\nPull request: {}\n",
+        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nPull request: {}\n",
         pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");
@@ -1024,6 +1032,7 @@ fn the_notification_of_a_failed_run_has_its_pull_request_and_its_cause() {
     assert!(
         text.starts_with(&format!(
             "Result:       failed\n\
+             Issue:        https://github.com/acme/widgets/issues/7\n\
              Pull request: {}\n\
              Cause:        claude exited 3\n\
              Session log:  ",
@@ -1056,7 +1065,12 @@ sleep 60"#,
         subject,
         "[thirdshift] acme/widgets#7 Sharpen the widgets: interrupted"
     );
-    assert!(text.starts_with("Result:       interrupted\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       interrupted\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
+        "{text}"
+    );
     assert!(!text.contains("Cause:"), "{text}");
 }
 
@@ -1078,7 +1092,7 @@ fn the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket() {
         "[thirdshift] acme/widgets#7 Sharpen every widget: ready for review"
     );
     let pull_request = format!(
-        "Result:       ready for review\nPull request: {}\n",
+        "Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\nPull request: {}\n",
         spec_pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");
@@ -1100,7 +1114,12 @@ fn the_notification_of_a_failed_spec_run_has_each_tickets_outcome() {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     let (subject, text) = the_one_notification(&resend);
     assert!(subject.ends_with(": failed"), "{subject}");
-    assert!(text.starts_with("Result:       failed\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       failed\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
+        "{text}"
+    );
     let (_, tickets) = text.split_once("\nTickets:\n").expect(&text);
     let landed = pr_from(&scenario, "issue-8");
     let landed = format!("#8 landed with {}\n", landed["url"].as_str().unwrap());
