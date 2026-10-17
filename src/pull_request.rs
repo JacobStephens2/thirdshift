@@ -169,6 +169,31 @@ impl<A: Adapter> PullRequest<A> {
         Ok(())
     }
 
+    /// Gate further Delivery work on this identity. Before the opening
+    /// session has produced a PR, absence is allowed; a captured PR may not
+    /// disappear. Drafts are allowed only before initial readiness.
+    pub fn ensure_actionable(&mut self, ready: bool) -> Result<()> {
+        let captured = self.identified.is_some();
+        match self.observe(false)? {
+            Some(snapshot) => self.validate(&snapshot, ready),
+            None if !captured => Ok(()),
+            None => bail!("no PR found"),
+        }
+    }
+
+    /// Failure preservation must not recreate a terminal PR's branch. With
+    /// no PR yet, salvage is still allowed; a missing captured PR is uncertain.
+    /// Completion observations preserve the original session/interrupt cause.
+    pub fn ensure_preservable(&mut self) -> Result<()> {
+        match self.observe(true)? {
+            Some(snapshot) if !snapshot.pr.is_open() => {
+                bail!("PR {} is {}, not open", snapshot.pr.url, snapshot.pr.state)
+            }
+            None if self.identified.is_some() => bail!("captured PR is not found"),
+            _ => Ok(()),
+        }
+    }
+
     /// Missing PRs are a no-op; the caller warns on errors, then readiness
     /// supplies the decisive gate. Body reads and edits always use the number.
     pub fn write_built_with(&mut self, choice: &Choice) -> Result<()> {
@@ -245,26 +270,6 @@ impl<A: Adapter> PullRequest<A> {
     /// identity captured only by Failed run completion discovery.
     pub fn info(&self) -> Option<Identified> {
         self.identified.clone()
-    }
-
-    /// Reobserve the selected PR before continuing Delivery work. Opening
-    /// sessions may leave a draft; Repairs and CI require a ready PR.
-    pub fn ensure_open(&mut self, ready: bool) -> Result<()> {
-        let snapshot = self.observe(false)?.context("no PR found")?;
-        self.validate(&snapshot, ready)
-    }
-
-    /// Failure preservation must not recreate a terminal PR's branch. With
-    /// no PR yet, salvage is still allowed; a missing captured PR is uncertain.
-    /// Completion observations preserve the original session/interrupt cause.
-    pub fn ensure_preservable(&mut self) -> Result<()> {
-        match self.observe(true)? {
-            Some(snapshot) if !snapshot.pr.is_open() => {
-                bail!("PR {} is {}, not open", snapshot.pr.url, snapshot.pr.state)
-            }
-            None if self.identified.is_some() => bail!("captured PR is not found"),
-            _ => Ok(()),
-        }
     }
 
     /// Every unknown-mergeability poll repeats all readiness checks on one

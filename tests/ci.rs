@@ -222,6 +222,15 @@ fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_succe
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
     assert_one_repair(&scenario, &result);
     assert_eq!(rerun_requests(&scenario), ["900", "901"]);
+    assert_eq!(
+        result
+            .stderr
+            .matches("thirdshift: pushing issue-7\n")
+            .count(),
+        1,
+        "an unchanged Repair must not cause pointless pushes: {}",
+        result.stderr
+    );
     let head = scenario.origin_git(&["rev-parse", "issue-7"]);
     assert!(
         result.stderr.contains(&format!(
