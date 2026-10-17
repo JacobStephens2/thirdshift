@@ -29,13 +29,109 @@ fn manifest_dir() -> &'static Path {
 /// Keeps the machine's git configuration (signing, hooks, default branch) out
 /// of the test's git, the script's and the fake `gh`'s.
 fn isolated(command: &mut Command) -> &mut Command {
+    let inherited_count = std::env::var_os("GIT_CONFIG_COUNT");
+    let count = command
+        .get_envs()
+        .find(|(key, _)| *key == "GIT_CONFIG_COUNT")
+        .map_or(inherited_count.as_deref(), |(_, value)| value)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .to_str()
+                .unwrap()
+                .parse::<usize>()
+                .expect("invalid GIT_CONFIG_COUNT")
+        })
+        .unwrap_or(0);
+    // Append so unrelated inherited entries survive and our values win over
+    // earlier maintenance settings. Command scope reaches descendants even
+    // though GIT_CONFIG_GLOBAL=/dev/null excludes the Scenario's gitconfig.
+    for (index, (key, value)) in [("maintenance.auto", "false"), ("gc.auto", "0")]
+        .into_iter()
+        .enumerate()
+    {
+        command
+            .env(format!("GIT_CONFIG_KEY_{}", count + index), key)
+            .env(format!("GIT_CONFIG_VALUE_{}", count + index), value);
+    }
     command
+        .env("GIT_CONFIG_COUNT", (count + 2).to_string())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn isolated_git_disables_automatic_maintenance() {
+    let dir = TempDir::new().unwrap();
+    assert_eq!(
+        git(dir.path(), &["config", "--bool", "maintenance.auto"]),
+        "false"
+    );
+    assert_eq!(git(dir.path(), &["config", "--int", "gc.auto"]), "0");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn isolated_git_children_preserve_unrelated_config_and_override_maintenance() {
+    let dir = TempDir::new().unwrap();
+    let mut command = Command::new("bash");
+    command
+        .env("GIT_CONFIG_COUNT", "3")
+        .env("GIT_CONFIG_KEY_0", "release.fixture")
+        .env("GIT_CONFIG_VALUE_0", "keep this value")
+        .env("GIT_CONFIG_KEY_1", "maintenance.auto")
+        .env("GIT_CONFIG_VALUE_1", "true")
+        .env("GIT_CONFIG_KEY_2", "gc.auto")
+        .env("GIT_CONFIG_VALUE_2", "1");
+    let output = isolated(&mut command)
+        .current_dir(dir.path())
+        .args([
+            "-c",
+            "set -e\ngit config --get release.fixture\ngit config --bool maintenance.auto\ngit config --int gc.auto",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "keep this value\nfalse\n0\n");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn isolated_git_keeps_host_configuration_excluded_and_test_identity() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("host.gitconfig");
+    fs::write(&config, "[release]\n\thost = must not leak\n").unwrap();
+    let mut command = Command::new("bash");
+    command
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("GIT_CONFIG_SYSTEM", &config)
+        .env("GIT_CONFIG_NOSYSTEM", "0")
+        .env("GIT_AUTHOR_NAME", "Host")
+        .env("GIT_AUTHOR_EMAIL", "host@example.com")
+        .env("GIT_COMMITTER_NAME", "Host")
+        .env("GIT_COMMITTER_EMAIL", "host@example.com");
+    let output = isolated(&mut command)
+        .current_dir(dir.path())
+        .args([
+            "-c",
+            "set -e\nif git config --get release.host; then exit 1; fi\ngit var GIT_AUTHOR_IDENT\ngit var GIT_COMMITTER_IDENT",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let identities = stdout(&output);
+    assert_eq!(identities.lines().count(), 2, "{identities}");
+    for identity in identities.lines() {
+        assert!(
+            identity.starts_with("Test <test@example.com> "),
+            "{identity}"
+        );
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
