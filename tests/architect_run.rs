@@ -1229,15 +1229,33 @@ fn merge_merges_the_dispatched_runs_pull_request_into_the_named_branch() {
 fn a_named_branch_that_is_not_on_origin_is_rejected_before_any_work() {
     let scenario = scenario();
     scenario.launch_git(&["branch", "local-only"]);
+    let refs = scenario.launch_git(&["show-ref"]);
+    let remote_refs = scenario.origin_git(&["show-ref"]);
 
-    for branch in ["nowhere", "local-only"] {
+    for (branch, guidance) in [
+        (
+            "nowhere",
+            "base branch nowhere does not exist on origin or locally; \
+             create or obtain that branch first, or select a valid Base branch",
+        ),
+        (
+            "local-only",
+            "base branch local-only does not exist on origin; push it first with: \
+             git push --set-upstream origin 'refs/heads/local-only:refs/heads/local-only'",
+        ),
+    ] {
         let result = scenario.run(&["architect", "base", branch]);
 
-        scenario.assert_rejected_before_any_work(
-            &result,
-            &format!("base branch {branch} does not exist on origin; push it first"),
-        );
+        scenario.assert_rejected_before_any_work(&result, guidance);
         assert_eq!(result.code, Some(1), "{branch}");
+        assert_eq!(scenario.launch_git(&["show-ref"]), refs);
+        assert_eq!(scenario.origin_git(&["show-ref"]), remote_refs);
+        assert_eq!(
+            scenario
+                .launch_git(&["symbolic-ref", "--short", "HEAD"])
+                .trim(),
+            "main"
+        );
     }
 }
 

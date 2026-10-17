@@ -589,7 +589,10 @@ mod tests {
                 pull,
             });
             if self.script.base_fails {
-                bail!("base branch gone does not exist on origin; push it first");
+                bail!(
+                    "base branch gone does not exist on origin or locally; \
+                     create or obtain that branch first, or select a valid Base branch"
+                );
             }
             Ok(named.unwrap_or(CHECKED_OUT).to_string())
         }
@@ -1025,7 +1028,8 @@ mod tests {
 
         assert_eq!(
             cause(ended),
-            "base branch gone does not exist on origin; push it first"
+            "base branch gone does not exist on origin or locally; \
+             create or obtain that branch first, or select a valid Base branch"
         );
         assert_eq!(calls.last(), Some(&base_branch(None)));
     }

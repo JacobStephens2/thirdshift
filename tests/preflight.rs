@@ -98,7 +98,15 @@ fn a_base_branch_missing_on_origin_is_rejected() {
 
     scenario.assert_rejected_before_any_work(
         &result,
-        "base branch local-only does not exist on origin",
+        "base branch local-only does not exist on origin; push it first with: \
+         git push --set-upstream origin 'refs/heads/local-only:refs/heads/local-only'",
+    );
+    assert_eq!(scenario.origin_log("local-only"), None);
+    assert_eq!(
+        scenario
+            .launch_git(&["symbolic-ref", "--short", "HEAD"])
+            .trim(),
+        "local-only"
     );
 }
 

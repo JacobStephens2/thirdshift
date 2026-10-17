@@ -150,8 +150,22 @@ impl LaunchDirectory {
                 ),
             }
         };
+        let local_ref = format!("refs/heads/{base}");
         if !self.git.on_origin(base)? {
-            bail!("base branch {base} does not exist on origin; push it first");
+            if !self
+                .git
+                .succeeds(&["show-ref", "--verify", "--quiet", &local_ref])?
+            {
+                bail!(
+                    "base branch {base} does not exist on origin or locally; \
+                     create or obtain that branch first, or select a valid Base branch"
+                );
+            }
+            let refspec = format!("{local_ref}:{local_ref}").replace('\'', r"'\''");
+            bail!(
+                "base branch {base} does not exist on origin; push it first with: \
+                 git push --set-upstream origin '{refspec}'"
+            );
         }
         self.git.fetch(&[base])?;
         let origin_commit = self.git.run(&[
@@ -159,7 +173,6 @@ impl LaunchDirectory {
             "--verify",
             &format!("refs/remotes/origin/{base}^{{commit}}"),
         ])?;
-        let local_ref = format!("refs/heads/{base}");
         if let Some(local_commit) = self.git.run_optional(&[
             "rev-parse",
             "--verify",
@@ -556,9 +569,12 @@ mod tests {
     }
 
     #[test]
-    fn a_base_branch_missing_on_origin_fails() {
+    fn a_local_base_branch_missing_on_origin_gets_a_working_push_command() {
         let (_temp, work) = launch_with_origin();
         isolated(&work, &["checkout", "-q", "-b", "unpushed"]);
+        let refs = isolated(&work, &["show-ref"]);
+        let remote_refs = isolated(&work, &["ls-remote", "--heads", "origin"]);
+        let config = isolated(&work, &["config", "--local", "--list"]);
 
         let error = opened(&work, Opening::Run)
             .prepare_base_branch(None)
@@ -567,7 +583,142 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "base branch unpushed does not exist on origin; push it first"
+            "base branch unpushed does not exist on origin; push it first with: \
+             git push --set-upstream origin 'refs/heads/unpushed:refs/heads/unpushed'"
+        );
+        assert_eq!(isolated(&work, &["show-ref"]), refs);
+        assert_eq!(
+            isolated(&work, &["ls-remote", "--heads", "origin"]),
+            remote_refs
+        );
+        assert_eq!(isolated(&work, &["config", "--local", "--list"]), config);
+        assert_eq!(
+            isolated(&work, &["symbolic-ref", "--short", "HEAD"]),
+            "unpushed"
+        );
+        run_suggested_push(&work, &error);
+        assert_eq!(
+            isolated(&work, &["rev-parse", "unpushed@{upstream}"]),
+            head(&work)
+        );
+        assert_eq!(
+            isolated(
+                &work,
+                &["ls-remote", "--heads", "origin", "refs/heads/unpushed"]
+            ),
+            format!("{}\trefs/heads/unpushed", head(&work))
+        );
+    }
+
+    fn run_suggested_push(work: &Path, error: &anyhow::Error) {
+        let message = error.to_string();
+        let command = message.split_once("with: ").unwrap().1;
+        let output = Command::new("sh")
+            .args(["-c", command])
+            .current_dir(work)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    #[test]
+    fn a_named_local_base_gets_a_safely_quoted_push_for_that_branch() {
+        for base in ["release", "release/o'brien;$USER`id`", "HEAD"] {
+            let (_temp, work) = launch_with_origin();
+            let expected = head(&work);
+            isolated(
+                &work,
+                &["update-ref", &format!("refs/heads/{base}"), &expected],
+            );
+            isolated(
+                &work,
+                &["commit", "-q", "--allow-empty", "-m", "Other work"],
+            );
+            // A same-named tag must not make the push ambiguous or publish it instead.
+            isolated(
+                &work,
+                &["update-ref", &format!("refs/tags/{base}"), &head(&work)],
+            );
+            let refs = isolated(&work, &["show-ref"]);
+            let remote_refs = isolated(&work, &["ls-remote", "--heads", "origin"]);
+            let config = isolated(&work, &["config", "--local", "--list"]);
+
+            let error = opened(&work, Opening::Pass)
+                .prepare_base_branch(Some(base))
+                .err()
+                .unwrap();
+
+            assert!(
+                error
+                    .to_string()
+                    .starts_with(&format!("base branch {base} does not exist on origin;"))
+            );
+            assert_eq!(isolated(&work, &["show-ref"]), refs);
+            assert_eq!(
+                isolated(&work, &["ls-remote", "--heads", "origin"]),
+                remote_refs
+            );
+            assert_eq!(isolated(&work, &["config", "--local", "--list"]), config);
+            assert_eq!(
+                isolated(&work, &["symbolic-ref", "--short", "HEAD"]),
+                "main"
+            );
+            run_suggested_push(&work, &error);
+            assert_eq!(
+                isolated(
+                    &work,
+                    &[
+                        "ls-remote",
+                        "--heads",
+                        "origin",
+                        &format!("refs/heads/{base}")
+                    ]
+                ),
+                format!("{expected}\trefs/heads/{base}")
+            );
+            assert_eq!(
+                isolated(&work, &["config", &format!("branch.{base}.remote")]),
+                "origin"
+            );
+            assert_eq!(
+                isolated(&work, &["config", &format!("branch.{base}.merge")]),
+                format!("refs/heads/{base}")
+            );
+            assert_eq!(
+                isolated(&work, &["symbolic-ref", "--short", "HEAD"]),
+                "main"
+            );
+        }
+    }
+
+    #[test]
+    fn a_base_branch_absent_locally_and_on_origin_gets_no_push_command() {
+        let (_temp, work) = launch_with_origin();
+        // A tag with that name is not a local Base branch.
+        isolated(&work, &["tag", "nowhere"]);
+        let refs = isolated(&work, &["show-ref"]);
+        let remote_refs = isolated(&work, &["ls-remote", "--heads", "origin"]);
+
+        let error = opened(&work, Opening::Pass)
+            .prepare_base_branch(Some("nowhere"))
+            .err()
+            .unwrap();
+
+        assert_eq!(
+            error.to_string(),
+            "base branch nowhere does not exist on origin or locally; \
+             create or obtain that branch first, or select a valid Base branch"
+        );
+        assert_eq!(isolated(&work, &["show-ref"]), refs);
+        assert_eq!(
+            isolated(&work, &["ls-remote", "--heads", "origin"]),
+            remote_refs
+        );
+        assert_eq!(
+            isolated(&work, &["symbolic-ref", "--short", "HEAD"]),
+            "main"
         );
     }
 

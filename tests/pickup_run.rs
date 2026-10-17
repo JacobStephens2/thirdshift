@@ -758,7 +758,8 @@ fn a_named_branch_that_is_not_on_origin_stops_the_pass_before_any_label_changes(
     assert_stopped_by_preflight(
         &scenario,
         &result,
-        "base branch nowhere does not exist on origin; push it first",
+        "base branch nowhere does not exist on origin or locally; \
+         create or obtain that branch first, or select a valid Base branch",
     );
 }
 
