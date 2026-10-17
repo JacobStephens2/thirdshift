@@ -143,15 +143,10 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
         result.stderr
     );
     // The Spec run owns the summary; relayed Ticket Runs add none.
-    let lines: Vec<_> = result.stderr.lines().collect();
-    let elapsed: Vec<_> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.contains("Took: "))
-        .collect();
-    assert_eq!(elapsed.len(), 1, "{}", result.stderr);
-    assert!(elapsed[0].1.starts_with("thirdshift: Took: "));
-    assert_eq!(elapsed[0].0, lines.len() - 2, "{}", result.stderr);
+    support::assert_elapsed_before(
+        &result.stderr,
+        &format!("thirdshift: PR {spec_pr_url} is ready for review"),
+    );
     assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
 
     let gh = scenario.gh_state();

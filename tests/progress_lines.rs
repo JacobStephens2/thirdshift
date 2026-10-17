@@ -8,7 +8,7 @@ use serde_json::json;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::process::Command;
-use support::Scenario;
+use support::{Scenario, assert_elapsed_before};
 
 /// The agent commits its work and opens a PR, but leaves the pushing to
 /// thirdshift.
@@ -158,19 +158,6 @@ fn ends_a_successful_run_by_naming_the_pr() {
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
 }
 
-/// The elapsed summary appears once, directly before the final outcome.
-fn assert_elapsed_before(stderr: &str, outcome: &str) {
-    let lines = stderr_lines(stderr);
-    let elapsed: Vec<_> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.contains("Took: "))
-        .collect();
-    assert_eq!(elapsed.len(), 1, "{stderr}");
-    assert!(elapsed[0].1.starts_with("thirdshift: Took: "), "{stderr}");
-    assert_eq!(lines.get(elapsed[0].0 + 1), Some(&outcome), "{stderr}");
-}
-
 #[test]
 fn a_failed_run_reports_elapsed_time_before_its_original_cause() {
     let scenario = Scenario::new();
@@ -200,6 +187,30 @@ fn a_gracefully_interrupted_run_reports_elapsed_time_before_its_cause() {
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert_eq!(result.stdout, "");
     assert_elapsed_before(&result.stderr, "thirdshift: interrupted");
+}
+
+#[test]
+fn passes_without_a_run_do_not_report_run_elapsed_time() {
+    for args in [
+        &["architect", "--plan-only", "no-email"][..],
+        &["secure", "no-email"][..],
+    ] {
+        let scenario = Scenario::new();
+        scenario.launch_git(&["remote", "remove", "origin"]);
+
+        let result = scenario.run(args);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(result.stdout, "");
+        assert!(
+            result
+                .stderr
+                .contains("git config remote.origin.url failed"),
+            "{}",
+            result.stderr
+        );
+        assert!(!result.stderr.contains("Took: "), "{}", result.stderr);
+    }
 }
 
 #[test]

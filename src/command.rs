@@ -154,7 +154,16 @@ impl Started {
             Err(skip) => return run_ending::show_skip(skip),
         };
         logs::ended(account.summary());
-        let code = account.show(self.started.map(|started| started.elapsed()));
+        let elapsed = match &ending {
+            Ending::Run(_)
+            | Ending::Architect {
+                dispatched: Some(_),
+                ..
+            }
+            | Ending::SecurityFix { .. } => self.started.map(|started| started.elapsed()),
+            _ => None,
+        };
+        let code = account.show(elapsed);
         if let Some(notification) = self.notification {
             notification.send(&account);
         }
