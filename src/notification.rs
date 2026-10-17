@@ -296,7 +296,7 @@ fn body(
         text += &format!("{built_with}\n");
     }
     text += &format!("Host:         {host}\n");
-    text += &format!("Took:         {}\n", self::took(took));
+    text += &format!("Took:         {}\n", progress::duration(took));
     if !account.ticket_lines.is_empty() {
         text += "\nTickets:\n";
         for line in account.ticket_lines {
@@ -304,19 +304,6 @@ fn body(
         }
     }
     text
-}
-
-/// `duration` to the second, as in `1h 2m 3s`, `2m 3s` or `3s`.
-fn took(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
-    if hours > 0 {
-        format!("{hours}h {minutes}m {seconds}s")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
-    } else {
-        format!("{seconds}s")
-    }
 }
 
 #[cfg(test)]
@@ -668,18 +655,5 @@ mod tests {
             architect_subject(None, "review failed"),
             "[thirdshift] Architect run: review failed"
         );
-    }
-
-    #[test]
-    fn took_is_to_the_second() {
-        for (seconds, text) in [
-            (0, "0s"),
-            (59, "59s"),
-            (60, "1m 0s"),
-            (3599, "59m 59s"),
-            (3723, "1h 2m 3s"),
-        ] {
-            assert_eq!(took(Duration::from_secs(seconds)), text);
-        }
     }
 }

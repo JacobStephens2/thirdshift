@@ -9,6 +9,7 @@
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use crate::architect::Reviewed;
 use crate::base_fix::Advice;
@@ -260,12 +261,16 @@ impl<'a> Account<'a> {
         self.ended.is_ok()
     }
 
-    /// Show how the command ended: on stderr, what became of its Base fix,
+    /// Show how the command ended: on stderr, its `elapsed` wall time if
+    /// this is the top-level command, then what became of its Base fix,
     /// if it took one, then the line that says how it ended once it
     /// succeeded; or its cause, its advice, if it has any, then its session
     /// log and the command's Command log; its URLs on stdout. Returns its
     /// exit code.
-    pub fn show(&self) -> ExitCode {
+    pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
+        if let Some(elapsed) = elapsed {
+            progress::step(format_args!("Took: {}", progress::duration(elapsed)));
+        }
         Shown::of(self).print()
     }
 

@@ -131,7 +131,7 @@ printf '%s\n' 'Security review: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
     let scenario = linear_spec();
 
-    let result = scenario.run(&[&spec_url(&scenario)]);
+    let result = scenario.run(&["no-email", &spec_url(&scenario)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let spec_pr_url = "https://github.com/acme/widgets/pull/2";
@@ -141,6 +141,11 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
         Some(format!("thirdshift: PR {spec_pr_url} is ready for review").as_str()),
         "stderr: {}",
         result.stderr
+    );
+    // The Spec run owns the summary; relayed Ticket Runs add none.
+    support::assert_elapsed_before(
+        &result.stderr,
+        &format!("thirdshift: PR {spec_pr_url} is ready for review"),
     );
     assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
 

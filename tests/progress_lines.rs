@@ -8,7 +8,7 @@ use serde_json::json;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::process::Command;
-use support::Scenario;
+use support::{Scenario, assert_elapsed_before};
 
 /// The agent commits its work and opens a PR, but leaves the pushing to
 /// thirdshift.
@@ -144,14 +144,73 @@ fn ends_a_successful_run_by_naming_the_pr() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
-    let result = scenario.run(&[&scenario.issue_url(7)]);
+    let result = scenario.run(&["no-email", &scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_elapsed_before(
+        &result.stderr,
+        "thirdshift: PR https://github.com/acme/widgets/pull/1 is ready for review",
+    );
     assert_eq!(
         stderr_lines(&result.stderr).last(),
         Some(&"thirdshift: PR https://github.com/acme/widgets/pull/1 is ready for review")
     );
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+}
+
+#[test]
+fn a_failed_run_reports_elapsed_time_before_its_original_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does("exit 3");
+
+    let result = scenario.run(&["no-email", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_elapsed_before(&result.stderr, "thirdshift: claude exited 3");
+}
+
+#[test]
+fn a_gracefully_interrupted_run_reports_elapsed_time_before_its_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "touch '{}'\nsleep 30\n",
+        scenario.path("agent-started").display()
+    ));
+
+    let result = scenario.run_and_signal(
+        &["no-email", &scenario.issue_url(7)],
+        "agent-started",
+        "INT",
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_elapsed_before(&result.stderr, "thirdshift: interrupted");
+}
+
+#[test]
+fn passes_without_a_run_do_not_report_run_elapsed_time() {
+    for args in [
+        &["architect", "--plan-only", "no-email"][..],
+        &["secure", "no-email"][..],
+    ] {
+        let scenario = Scenario::new();
+        scenario.launch_git(&["remote", "remove", "origin"]);
+
+        let result = scenario.run(args);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(result.stdout, "");
+        assert!(
+            result
+                .stderr
+                .contains("git config remote.origin.url failed"),
+            "{}",
+            result.stderr
+        );
+        assert!(!result.stderr.contains("Took: "), "{}", result.stderr);
+    }
 }
 
 #[test]

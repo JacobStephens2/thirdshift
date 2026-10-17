@@ -344,6 +344,19 @@ pub fn after_start<'a>(stderr: &'a str, starting: &str) -> &'a str {
     rest
 }
 
+/// The elapsed summary appears once, directly before the final outcome.
+pub fn assert_elapsed_before(stderr: &str, outcome: &str) {
+    let lines: Vec<_> = stderr.lines().collect();
+    let elapsed: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("Took: "))
+        .collect();
+    assert_eq!(elapsed.len(), 1, "{stderr}");
+    assert!(elapsed[0].1.starts_with("thirdshift: Took: "), "{stderr}");
+    assert_eq!(lines.get(elapsed[0].0 + 1), Some(&outcome), "{stderr}");
+}
+
 /// The lines that end a Failed run's `stderr` once its cause is given, the
 /// line naming its Command log left off.
 pub fn before_command_log(stderr: &str) -> Vec<&str> {
