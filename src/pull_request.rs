@@ -161,12 +161,37 @@ impl<A: Adapter> PullRequest<A> {
         Ok(())
     }
 
+    /// Gate further Delivery work on this identity. Before the opening
+    /// session has produced a PR, absence is allowed; a captured PR may not
+    /// disappear. Drafts are allowed only before initial readiness.
+    pub fn ensure_actionable(&mut self, ready: bool) -> Result<()> {
+        let captured = self.identified.is_some();
+        match self.observe(false)? {
+            Some(snapshot) => self.validate(&snapshot, ready),
+            None if !captured => Ok(()),
+            None => bail!("no PR found"),
+        }
+    }
+
+    /// Failed run preservation must never resurrect a terminal PR's branch.
+    /// Completion reads still finish after interruption. A failed observation
+    /// leaves publication uncertain, so the caller retains local work.
+    pub fn ensure_preservable(&mut self) -> Result<()> {
+        if let Some(snapshot) = self.observe(true)?
+            && !snapshot.pr.is_open()
+        {
+            bail!("PR {} is {}, not open", snapshot.pr.url, snapshot.pr.state);
+        }
+        Ok(())
+    }
+
     /// Missing PRs are a no-op; the caller warns on errors, then readiness
     /// supplies the decisive gate. Body reads and edits always use the number.
     pub fn write_built_with(&mut self, choice: &Choice) -> Result<()> {
         let Some(snapshot) = self.observe(false)? else {
             return Ok(());
         };
+        self.validate(&snapshot, false)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
         let written = with_built_with(&body, choice);
         if written != body {
