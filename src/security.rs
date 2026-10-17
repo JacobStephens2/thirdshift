@@ -46,7 +46,7 @@ pub enum Outcome {
 /// The Security run's outcome and the private records it reached, including before a failure.
 pub struct Ended {
     pub outcome: Result<Recorded, FailedRun>,
-    /// Whether the audit reached a session (or returned a completed report).
+    /// Whether an audit session was requested after preparation succeeded.
     pub audit_started: bool,
     /// A failed reproduction's number; its audit and private recording completed.
     pub failed_reproduction: Option<usize>,
@@ -298,10 +298,10 @@ fn audit_and_record(
         outside.check_harness()?;
         outside.check_node()?;
         outside.started(Work::SecurityRun(repo));
-        let (audited, session_log) = outside.audit(base);
-        audit_started = audited.is_ok() || session_log.is_some();
-        log = session_log;
-        let audited = audited?;
+        let attempt = outside.audit(base);
+        audit_started = attempt.started;
+        log = attempt.log;
+        let audited = attempt.outcome?;
         let mut recorded = Recorded {
             created: 0,
             existing: 0,

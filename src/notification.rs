@@ -315,7 +315,14 @@ fn body(
         text += &format!("Command log:  {}\n", log.display());
     }
     if let Some(built_with) = built_with {
-        text += &format!("{built_with}\n");
+        if account.pre_audit_failure.is_some() {
+            text += &format!(
+                "Configured:   {}\n",
+                built_with.strip_prefix("Built with ").unwrap_or(built_with)
+            );
+        } else {
+            text += &format!("{built_with}\n");
+        }
     }
     text += &format!("Host:         {host}\n");
     text += &format!("Took:         {}\n", progress::duration(took));
