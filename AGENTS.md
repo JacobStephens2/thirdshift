@@ -14,7 +14,7 @@ Before exploring, look up the issue's terms via `docs/agents/domain.md` and its 
 
 ### Reading and tests
 
-Use `rg -n` for terms/symbols, then bounded ranges (`sed -n '40,100p' file`), one large file per call, especially for `CONTEXT.md`, `README.md`, `tests/fakes/gh.rs` and `tests/spec_run.rs`. The fake executable entry is `tests/fakes.rs`; tool behavior lives in `tests/fakes/<tool>.rs`, with setup in `tests/support/fakes.rs`. For site browser-test setup and runner, see `site/tests/README.md`.
+Use `rg -n` for terms/symbols, then bounded ranges (`sed -n '40,100p' file`), one large file per call, especially for `CONTEXT.md`, `README.md`, `tests/fakes/gh.rs` and `tests/spec_run.rs`. For the fake-test layout, see `docs/code-navigation.md`; for site browser-test setup and runner, see `site/tests/README.md`.
 
 ### Generated prompts
 
