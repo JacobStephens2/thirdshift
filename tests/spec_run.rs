@@ -136,6 +136,10 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let spec_pr_url = "https://github.com/acme/widgets/pull/2";
     assert_eq!(result.stdout, format!("{spec_pr_url}\n"));
+    support::assert_elapsed_before(
+        &result.stderr,
+        &format!("PR {spec_pr_url} is ready for review"),
+    );
     assert_eq!(
         result.stderr.lines().last(),
         Some(format!("thirdshift: PR {spec_pr_url} is ready for review").as_str()),
@@ -1910,6 +1914,7 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
 
     let result = scenario.run_and_signal(&[&spec_url(&scenario)], "agent-started", "TERM");
 
+    support::assert_elapsed_before(&result.stderr, "interrupted");
     assert!(!outlived.exists(), "the Ticket's session was not stopped");
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "");

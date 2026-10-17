@@ -40,6 +40,21 @@ fn stderr_lines(stderr: &str) -> Vec<&str> {
 }
 
 #[test]
+fn a_run_without_notifications_shows_elapsed_time_before_its_pr_outcome() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7), "no-email"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    support::assert_elapsed_before(
+        &result.stderr,
+        "PR https://github.com/acme/widgets/pull/1 is ready for review",
+    );
+}
+
+#[test]
 fn prints_one_line_per_notable_session_event() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(

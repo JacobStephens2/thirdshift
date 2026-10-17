@@ -356,6 +356,26 @@ pub fn before_command_log(stderr: &str) -> Vec<&str> {
     lines
 }
 
+/// Exactly one elapsed summary, immediately before the command's outcome.
+/// Counting every occurrence also rejects summaries relayed from child Runs.
+pub fn assert_elapsed_before(stderr: &str, outcome: &str) {
+    let lines: Vec<_> = stderr.lines().collect();
+    let elapsed: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("Took: "))
+        .collect();
+    assert_eq!(elapsed.len(), 1, "{stderr}");
+    let (at, line) = elapsed[0];
+    assert!(line.starts_with("thirdshift: Took: "), "{stderr}");
+    assert!(line.ends_with('s'), "{stderr}");
+    assert_eq!(
+        lines.get(at + 1),
+        Some(&format!("thirdshift: {outcome}").as_str()),
+        "{stderr}"
+    );
+}
+
 impl Scenario {
     /// An origin with one commit on `main`, a launch clone of it with `main`
     /// checked out, and an open issue #7.

@@ -5,6 +5,7 @@
 //! Command log too, if the command keeps one.
 
 use std::fmt::Display;
+use std::time::Duration;
 
 use chrono::Local;
 
@@ -22,6 +23,19 @@ const STAMP: &str = "%H:%M:%S";
 /// Print one of thirdshift's own steps, stamped with the time now.
 pub fn step(message: impl Display) {
     logs::eprint(&stamped(message));
+}
+
+/// `duration` to the second, as in `1h 2m 3s`, `2m 3s` or `3s`.
+pub fn duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 /// Report `error`, then a warning saying what to do about it by hand.
@@ -213,6 +227,19 @@ mod tests {
                 ChildLine::Relayed,
                 "{line}"
             );
+        }
+    }
+
+    #[test]
+    fn duration_is_to_the_second() {
+        for (seconds, text) in [
+            (0, "0s"),
+            (59, "59s"),
+            (60, "1m 0s"),
+            (3599, "59m 59s"),
+            (3723, "1h 2m 3s"),
+        ] {
+            assert_eq!(duration(Duration::from_secs(seconds)), text);
         }
     }
 }

@@ -23,6 +23,7 @@ fn a_failing_session_pushes_a_failure_commit_with_the_uncommitted_work_saying_wh
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_failed(&scenario, &result, "");
+    support::assert_elapsed_before(&result.stderr, "claude exited 3");
     assert_eq!(
         scenario.origin_log("issue-7"),
         Some(vec![
@@ -198,6 +199,7 @@ fn sigint_while_the_session_runs_stops_it_and_fails_the_run() {
 
     assert!(!outlived.exists(), "the session was not stopped");
     assert_failed(&scenario, &result, "");
+    support::assert_elapsed_before(&result.stderr, "interrupted");
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
         "thirdshift: failed run (interrupted)"

@@ -9,6 +9,7 @@
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use crate::architect::Reviewed;
 use crate::base_fix::Advice;
@@ -261,12 +262,13 @@ impl<'a> Account<'a> {
     }
 
     /// Show how the command ended: on stderr, what became of its Base fix,
-    /// if it took one, then the line that says how it ended once it
-    /// succeeded; or its cause, its advice, if it has any, then its session
+    /// if it took one, then its elapsed time, if supplied, then the line
+    /// that says how it ended once it succeeded; or its cause, its advice,
+    /// if it has any, then its session
     /// log and the command's Command log; its URLs on stdout. Returns its
     /// exit code.
-    pub fn show(&self) -> ExitCode {
-        Shown::of(self).print()
+    pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
+        Shown::of(self, elapsed).print()
     }
 
     /// How the command ended, in short, as its Activity log end line gives
@@ -314,10 +316,13 @@ struct Shown {
 
 impl Shown {
     /// How a command that ended as `account` shows: see [`Account::show`].
-    fn of(account: &Account) -> Self {
+    fn of(account: &Account, elapsed: Option<Duration>) -> Self {
         let mut steps = Vec::new();
         if let Some(report) = account.base_fix {
             steps.push(format!("{BASE_FIX}{report}"));
+        }
+        if let Some(elapsed) = elapsed {
+            steps.push(format!("Took: {}", progress::duration(elapsed)));
         }
         match &account.ended {
             // Also on stderr, so the outcome shows even when stdout is captured.
@@ -772,8 +777,38 @@ mod tests {
     /// The lines `account` shows on stderr and stdout, and whether it exits
     /// 0.
     fn shown(account: &Account) -> (Vec<String>, Vec<String>, bool) {
-        let shown = Shown::of(account);
+        let shown = Shown::of(account, None);
         (shown.steps, shown.urls, shown.success)
+    }
+
+    #[test]
+    fn elapsed_time_precedes_the_outcome_at_second_minute_and_hour_boundaries() {
+        for (millis, expected) in [
+            (0, "0s"),
+            (999, "0s"),
+            (1_000, "1s"),
+            (59_999, "59s"),
+            (60_000, "1m 0s"),
+            (3_599_999, "59m 59s"),
+            (3_600_000, "1h 0m 0s"),
+            (3_723_000, "1h 2m 3s"),
+        ] {
+            let account = Account {
+                base_fix: Some("merged"),
+                ..reached_account(Goal::ReadyForReview)
+            };
+            let shown = Shown::of(&account, Some(Duration::from_millis(millis)));
+            assert_eq!(
+                shown.steps,
+                [
+                    "Base fix: merged".to_string(),
+                    format!("Took: {expected}"),
+                    format!("PR {PR} is ready for review"),
+                ]
+            );
+            assert_eq!(shown.urls, [PR]);
+            assert!(shown.success);
+        }
     }
 
     #[test]
@@ -943,7 +978,7 @@ mod tests {
     /// What a Run reads back from a child Run that `ended`, having first
     /// put the lines `before` on its stderr.
     fn read_back_after(before: &[String], ended: &Ended) -> ChildEnding {
-        let shown = Shown::of(&Account::of_run(ended));
+        let shown = Shown::of(&Account::of_run(ended), None);
         let mut reader = Reader::default();
         for line in before.iter().chain(&stderr(&shown)) {
             reader.read(ChildLine::of(line));
@@ -1105,7 +1140,7 @@ mod tests {
             ),
             "not merged",
         );
-        let relayed: Vec<String> = stderr(&Shown::of(&Account::of_run(&base_fix)))
+        let relayed: Vec<String> = stderr(&Shown::of(&Account::of_run(&base_fix), None))
             .iter()
             .map(|line| progress::relayed(8, line))
             .collect();
@@ -1139,7 +1174,7 @@ mod tests {
         // Nor is what it relayed from a child of its own what it showed.
         let mut reader = Reader::default();
         let base_fix = with_base_fix(failed("claude exited 1", Some(LOG), None), "not merged");
-        for line in stderr(&Shown::of(&Account::of_run(&base_fix))) {
+        for line in stderr(&Shown::of(&Account::of_run(&base_fix), None)) {
             reader.read(ChildLine::of(&progress::relayed(8, &line)));
         }
         assert_eq!(reader.finish("", false), nothing);
