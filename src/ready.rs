@@ -96,8 +96,8 @@ enum Reason {
     Blocked(Vec<u64>),
     /// It was started, as this shows, without a recorded hand-back.
     Started(Started),
-    /// It is a Spec whose Tickets are all closed, with nothing started: the
-    /// Spec run it would be dispatched as refuses it, having nothing to do.
+    /// It is a Spec whose Tickets are all closed: the Spec run it would be
+    /// dispatched as refuses it, having nothing to do.
     TicketsClosed,
     /// It is not settled: it was last shaped, by this, within the
     /// configured settling window.
