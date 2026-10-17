@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use anyhow::{Result, bail};
 
-use crate::pull_request::MergeAttempt;
+use crate::pull_request::{MergeAttempt, MergeConfirmation};
 
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::PolicyRefusal;
@@ -107,9 +107,13 @@ pub(super) trait Outside {
 /// last watched. A merge that fails goes back round the Repair loop and is
 /// tried again on the new head; if that round finds nothing to fix, this
 /// fails with a [`PolicyRefusal`]. Returns once the pull request has
-/// reached `goal`; fails as interrupted if an interrupt was requested before
-/// the merge.
-pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -> Result<()> {
+/// reached `goal`, with a confirmation for a merged result; fails as
+/// interrupted if an interrupt was requested before the merge.
+pub(super) fn take_to_goal(
+    outside: &mut impl Outside,
+    base: &str,
+    goal: Goal,
+) -> Result<Option<MergeConfirmation>> {
     let mut repair_loop = RepairLoop {
         outside,
         base,
@@ -130,11 +134,11 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
             bail!("interrupted");
         }
         if goal == Goal::ReadyForReview {
-            return Ok(());
+            return Ok(None);
         }
         outside.progress(format!("merging the PR into {base}"));
         let error = match outside.merge(&watched)? {
-            MergeAttempt::Merged => return Ok(()),
+            MergeAttempt::Merged(confirmation) => return Ok(Some(confirmation)),
             MergeAttempt::Refused(error) => error,
         };
         outside.progress(format!("the merge failed: {error:#}"));
@@ -694,7 +698,7 @@ mod tests {
             self.did.push(Did::Merge(head.to_string()));
             match self.script.merges.pop_front().expect("no merge scripted") {
                 Some(error) => Ok(MergeAttempt::Refused(anyhow!(error))),
-                None => Ok(MergeAttempt::Merged),
+                None => Ok(MergeAttempt::Merged(MergeConfirmation::Request)),
             }
         }
 
@@ -714,7 +718,7 @@ mod tests {
             script,
             did: Vec::new(),
         };
-        let delivered = take_to_goal(&mut outside, "main", goal);
+        let delivered = take_to_goal(&mut outside, "main", goal).map(|_| ());
         (delivered, outside.did)
     }
 

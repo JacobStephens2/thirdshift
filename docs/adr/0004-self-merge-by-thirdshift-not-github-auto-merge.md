@@ -13,6 +13,7 @@ A **Merge run** ends with thirdshift itself running `gh pr merge --merge --match
 
 ## Consequences
 
+- A failed local merge request can still have landed. A completion observation of the selected PR at the watched head and expected branches establishes the merged result and permits finishing cleanup, including after interruption. It cannot distinguish our successful request with a lost response from an external merge at that same head. In that case progress preserves the request failure and the closing comment reports an observed merge with an unconfirmed merger, rather than attributing it to thirdshift. A successful request keeps the usual attribution.
 - A merge that fails with nothing left to fix (no new commits, Base branch unchanged, mergeable, green) is a policy refusal, such as a disallowed merge method or a required review. The Run fails, but it leaves the pull request ready for review, not a draft. thirdshift never parses GitHub's error text to tell policy refusals apart from other failures.
 - Before each Self-merge attempt, thirdshift detects a blocking review up front from the PR's structured `reviewDecision` (`REVIEW_REQUIRED` or `CHANGES_REQUESTED`). It ends as a `review required` policy refusal without a merge attempt or another Repair round; an empty or approved decision, or a failed read, leaves the existing behavior in place.
 - A repository that requires reviews can't be used with a Merge run; that is the repository owner's choice to have a human look first.

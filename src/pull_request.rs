@@ -20,8 +20,16 @@ pub(crate) struct Identified {
 /// A gate error is terminal (`Err`); only a refused request can return to
 /// the Repair loop. A successful guarded command needs no additional read.
 pub(crate) enum MergeAttempt {
-    Merged,
+    Merged(MergeConfirmation),
     Refused(anyhow::Error),
+}
+
+/// A successful request identifies the operation thirdshift performed. A
+/// matching completion observation establishes the result, but not its author.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MergeConfirmation {
+    Request,
+    Observation,
 }
 
 /// Ticket accounting binds on resume or creation. Delivery binds lazily on
@@ -304,7 +312,7 @@ impl<A: Adapter> PullRequest<A> {
             .into());
         }
         let Err(error) = self.adapter.merge(&self.issue, number, watched) else {
-            return Ok(MergeAttempt::Merged);
+            return Ok(MergeAttempt::Merged(MergeConfirmation::Request));
         };
         // Completion never clears or changes the recorded interruption. Only
         // this PR, merged at the watched head and expected branches, counts.
@@ -313,7 +321,11 @@ impl<A: Adapter> PullRequest<A> {
             && snapshot.pr.base == self.base
             && snapshot.head_commit == watched
         {
-            return Ok(MergeAttempt::Merged);
+            progress::step(format!(
+                "merge request failed: {error:#}; PR {} is observed merged at the watched head; the merger is unconfirmed",
+                snapshot.pr.url
+            ));
+            return Ok(MergeAttempt::Merged(MergeConfirmation::Observation));
         }
         Ok(MergeAttempt::Refused(error))
     }
@@ -1457,7 +1469,10 @@ mod tests {
             ..World::default()
         });
         pr.mark_ready(None).unwrap();
-        assert!(matches!(pr.merge("watched").unwrap(), MergeAttempt::Merged));
+        assert!(matches!(
+            pr.merge("watched").unwrap(),
+            MergeAttempt::Merged(MergeConfirmation::Request)
+        ));
         assert_eq!(world.borrow().merges, [(12, "watched".to_string())]);
         assert!(
             world
@@ -1507,7 +1522,7 @@ mod tests {
             pr.mark_ready(None).unwrap();
             let attempt = pr.merge("watched").unwrap();
             assert_eq!(
-                matches!(attempt, MergeAttempt::Merged),
+                matches!(attempt, MergeAttempt::Merged(_)),
                 change == "none",
                 "{change}"
             );
@@ -1557,7 +1572,7 @@ mod tests {
             });
             pr.mark_ready(None).unwrap();
             let attempt = pr.merge("watched").unwrap();
-            assert_eq!(matches!(attempt, MergeAttempt::Merged), confirmed);
+            assert_eq!(matches!(attempt, MergeAttempt::Merged(_)), confirmed);
             if let MergeAttempt::Refused(error) = attempt {
                 assert_eq!(error.to_string(), "interrupted");
             }

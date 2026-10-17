@@ -565,6 +565,15 @@ impl<'a> Operation<'a> {
     }
 
     pub(super) fn push(&self, branch: &str) -> Result<()> {
+        let remote = self.run(&[
+            "ls-remote",
+            "--heads",
+            "origin",
+            &format!("refs/heads/{branch}"),
+        ])?;
+        if remote.split_whitespace().next() == Some(self.head()?.as_str()) {
+            return Ok(());
+        }
         self.git.push_checked(branch, || self.inspect().map(|_| ()))
     }
 

@@ -18,7 +18,7 @@ use anyhow::Result;
 
 mod repair_loop;
 
-use crate::pull_request::{Identified, MergeAttempt, PullRequest};
+use crate::pull_request::{Identified, MergeAttempt, MergeConfirmation, PullRequest};
 
 use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
@@ -198,15 +198,15 @@ impl Route<'_> {
         } else {
             self.goal
         };
-        outside.take_to_goal(&pr.url, goal)?;
+        let confirmation = outside.take_to_goal(&pr.url, goal)?;
         if let Some(hold) = hold {
             outside.step(hold.to_string());
             if self.goal == Goal::Merged {
                 return Err(hold.into());
             }
         }
-        if self.goal == Goal::Merged {
-            self.after_merge(outside, &pr);
+        if let Some(confirmation) = confirmation {
+            self.after_merge(outside, &pr, confirmation);
         }
         Ok(pr.url)
     }
@@ -225,14 +225,19 @@ impl Route<'_> {
         }
     }
 
-    /// The Self-merge's steps after the merge of `pr`: delete the Issue
+    /// Finish the confirmed merge of `pr`: delete the Issue
     /// branch on origin, and close the issue unless it is closed already.
     /// GitHub may close it too, a moment after the merge, or may not, so
     /// thirdshift does not wait to see. The merge can't be undone, so these
     /// never fail the Run, and an interrupt no longer stops it: a step that
     /// fails is tried once more if an interrupt was requested, then is a
     /// warning naming the fix to make by hand.
-    fn after_merge(&self, outside: &mut impl Outside, pr: &Identified) {
+    fn after_merge(
+        &self,
+        outside: &mut impl Outside,
+        pr: &Identified,
+        confirmation: MergeConfirmation,
+    ) {
         let branch = self.branch;
         if let Err(error) = retry_if_interrupted(outside, |outside| outside.delete_branch()) {
             outside.warn(
@@ -243,10 +248,16 @@ impl Route<'_> {
                 ),
             );
         }
-        let comment = format!(
-            "Closed by #{}, merged into {} by a thirdshift Merge run.",
-            pr.number, self.base
-        );
+        let comment = match confirmation {
+            MergeConfirmation::Request => format!(
+                "Closed by #{}, merged into {} by a thirdshift Merge run.",
+                pr.number, self.base
+            ),
+            MergeConfirmation::Observation => format!(
+                "Closed by #{}, observed merged into {} after a failed thirdshift merge request; the merger is unconfirmed.",
+                pr.number, self.base
+            ),
+        };
         if let Err(error) = retry_if_interrupted(outside, |outside| {
             self.close_unless_closed(outside, &comment)
         }) {
@@ -352,8 +363,8 @@ trait Outside {
     /// Validate and mark the captured pull request ready.
     fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified>;
     /// Take the ready pull request at `pr_url` to `goal` through the Repair
-    /// loop.
-    fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()>;
+    /// loop. Readiness returns `None`; a merged result carries its confirmation.
+    fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<Option<MergeConfirmation>>;
     /// Delete the Issue branch on origin.
     fn delete_branch(&mut self) -> Result<()>;
     /// Whether the issue is open.
@@ -434,7 +445,7 @@ impl Outside for InWorktree<'_> {
         self.pull_request.mark_ready(checklist)
     }
 
-    fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()> {
+    fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<Option<MergeConfirmation>> {
         self.stage.set(Stage::Repair);
         let mut outside = RunOutside {
             stage: self.stage,
@@ -724,12 +735,13 @@ mod tests {
                 url: PR_URL.to_string(),
             })
         }
-        fn take_to_goal(&mut self, _: &str, goal: Goal) -> Result<()> {
+        fn take_to_goal(&mut self, _: &str, goal: Goal) -> Result<Option<MergeConfirmation>> {
             self.calls.push(Call::Goal(goal));
             if self.refused {
                 return Err(anyhow!("merge refused").context(PolicyRefusal::NothingToFix));
             }
-            self.check(Fails::Goal)
+            self.check(Fails::Goal)?;
+            Ok((goal == Goal::Merged).then_some(MergeConfirmation::Request))
         }
         fn delete_branch(&mut self) -> Result<()> {
             self.calls.push(Call::Delete);

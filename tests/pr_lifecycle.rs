@@ -177,3 +177,53 @@ exit 3
         "unfinished\n"
     );
 }
+
+#[test]
+fn external_merge_during_refused_request_is_not_claimed_as_self_merge() {
+    let scenario = Scenario::new();
+    let external_merge = r#"
+gh fake pr issue-7 headRefOid "\"$(git rev-parse refs/remotes/origin/issue-7)\""
+gh fake pr issue-7 state '"MERGED"'
+git push -q origin --delete issue-7
+"#;
+    let quoted = external_merge.replace('\'', "'\\''");
+    scenario.agent_does(&format!(
+        "{OPEN}\ngh fake on-merge 1 '{quoted}'\ngh fake refuse-merges 1 'Already merged externally'\n"
+    ));
+    let result = scenario.run(&[&scenario.issue_url(7), "--merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("merge request failed"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("the merger is unconfirmed"),
+        "{}",
+        result.stderr
+    );
+    let comments = scenario.gh_state()["comments"].to_string();
+    assert!(comments.contains("the merger is unconfirmed"), "{comments}");
+    assert!(
+        !comments.contains("merged into main by a thirdshift Merge run"),
+        "external merge claimed as Self-merge: comments={comments}; stderr={}",
+        result.stderr
+    );
+}
+
+#[test]
+fn unchanged_repair_does_not_make_a_pointless_delivery_push() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(r#"{OPEN}
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"failure","url":"https://github.com/acme/widgets/actions/runs/900/job/1","rerun":{{"conclusion":"success"}}}}]'
+"#));
+    scenario.agent_does_in_session(2, "true\n");
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, after_repair) = result.stderr.split_once("starting Repair 1 of 5").unwrap();
+    assert!(
+        !after_repair.contains("thirdshift: pushing issue-7"),
+        "unchanged Repair still pushed without any upstream change: {}",
+        result.stderr
+    );
+}
