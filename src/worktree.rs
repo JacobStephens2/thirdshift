@@ -14,6 +14,8 @@ use crate::git::Git;
 use crate::progress;
 
 mod acquisition;
+mod advice;
+pub(crate) use advice::local_branch as advise_local_branch;
 #[cfg(test)]
 mod acquisition_tests;
 #[cfg(test)]
@@ -115,7 +117,8 @@ impl Worktree {
         let _lock = lock_launch(launch)?;
         launch.fetch(&[base])?;
         let origin = fetched_origin(base, |args| launch.run(args))?;
-        check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
+        check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)
+            .map_err(|error| advise_local_branch(launch, error))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
@@ -130,7 +133,8 @@ impl Worktree {
         launch.fetch(&[base, branch])?;
         let origin = fetched_origin(branch, |args| launch.run(args))?;
         let local = local_head(launch, branch)?;
-        check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
+        check_local_branch(branch, local.as_deref(), Some(&origin.commit))
+            .map_err(|error| advise_local_branch(launch, error))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
@@ -140,7 +144,8 @@ impl Worktree {
             "creating worktree {} on {branch} from {source}",
             path.display()
         ));
-        let checkout = acquisition::add(launch, Some(branch), &path, start)?;
+        let checkout = acquisition::add(launch, Some(branch), &path, start)
+            .map_err(|error| advice::occupied_add(launch, branch, &path, error))?;
         Ok(Worktree {
             checkout,
             launch: Git::new(root),
@@ -339,12 +344,11 @@ pub(crate) fn check_local_branch(
     };
     match origin_head {
         Some(origin_head) if origin_head == local_head => Ok(()),
-        Some(_) => bail!(
-            "the local branch {branch} differs from origin/{branch}; push, reset or delete it first"
-        ),
-        None => {
-            bail!("the local branch {branch} is not on origin; push, rename or delete it first")
+        origin => Err(advice::LocalBranchConflict {
+            branch: branch.to_string(),
+            on_origin: origin.is_some(),
         }
+        .into()),
     }
 }
 

@@ -104,7 +104,8 @@ impl<'a> Acquisition<'a> {
             .flatten();
         common.verify_repository(launch)?;
         if let Some(branch) = branch {
-            super::check_local_branch(branch, branch_before.as_deref(), Some(start))?;
+            super::check_local_branch(branch, branch_before.as_deref(), Some(start))
+                .map_err(|error| super::advise_local_branch(launch, error))?;
         }
         Ok(Self {
             launch,

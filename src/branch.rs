@@ -70,6 +70,7 @@ impl Selection {
 /// during acquisition and owns normal cleanup of the acquired branch.
 pub fn select(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<Selection> {
     select_through(&GitHubAndOrigin { launch, github }, issue)
+        .map_err(|error| worktree::advise_local_branch(launch, error))
 }
 
 /// What shows an issue was started.
@@ -541,7 +542,7 @@ mod tests {
         };
         assert_eq!(
             refusal(&reads),
-            "the local branch issue-5-branch-2 is not on origin; push, rename or delete it first"
+            "the local branch issue-5-branch-2 is not on origin"
         );
     }
 
