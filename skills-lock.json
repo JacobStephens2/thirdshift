@@ -49,12 +49,6 @@
       "skillPath": "skills/misc/git-guardrails-claude-code/SKILL.md",
       "computedHash": "ccf581d304132095c2787b0a3bcb7b4ff125863c9f796fb16311d8f1cacef470"
     },
-    "granola-transcripts": {
-      "source": "JacobStephens2/skills",
-      "sourceType": "github",
-      "skillPath": "skills/granola-transcripts/SKILL.md",
-      "computedHash": "6f1ee800bc02a96adbbb84848d18482ee1e0ab80cc98889fa64aaa4b9dafddc0"
-    },
     "grill-me": {
       "source": "mattpocock/skills",
       "sourceType": "github",
