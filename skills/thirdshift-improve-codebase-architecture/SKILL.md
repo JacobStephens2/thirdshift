@@ -28,7 +28,7 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 - If the Session prompt named a focus (a module, a subsystem, a pain point), take it, and skip the inference below.
 - Otherwise, walk back a good stretch of the commit history (`git log --oneline`) to find the codebase's hot spots, the files and areas that keep coming up, and let those paths pull your attention first. If the changes are scattered with no clear hot spot, widen the net.
 
-Read the project's domain glossary (`CONTEXT.md`) and any ADRs in the area you're touching first.
+Look up the focus area's terms in the relevant entries of the project's domain glossary (`CONTEXT.md`) first. Follow the repository's domain-reading guidance and any separate domain-to-code index; search terms/symbols with `rg -n` and read bounded ranges before widening the scan. Check applicable coding standards and read ADRs in the area you're touching.
 
 Read the open issues too, titles and bodies: Specs, Tickets and ideas alike, whatever their labels. They are what a candidate may already be covered by.
 

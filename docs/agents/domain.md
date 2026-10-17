@@ -2,11 +2,11 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-## Before exploring, read these
+## Before exploring, look up the issue's terms
 
-- **`CONTEXT.md`** at the repo root, or
-- **`CONTEXT-MAP.md`** at the repo root if it exists: it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`**: read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
+- Search **`CONTEXT.md`** for the issue's terms with `rg -n`, then read the matching definitions and nearby context in bounded ranges (for example, `sed -n '65,78p' CONTEXT.md`). If **`CONTEXT-MAP.md`** exists, use it to locate the relevant context's glossary first.
+- Follow the separate [domain-to-code index](../code-navigation.md) to the owning modules and supporting tests. Keep implementation paths there; glossary definitions stay implementation-free. Search the named symbols with `rg -n` and inspect bounded ranges before widening the read.
+- Check **`docs/adr/`** for decisions that touch the area you're about to work in and read the applicable ADRs. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions. Targeted reading still includes applicable coding standards.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
