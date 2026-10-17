@@ -3,16 +3,7 @@
 
 mod support;
 
-use support::Scenario;
-
-/// The agent commits its work and opens a PR, so a Run that passes pre-flight
-/// succeeds.
-const AGENT_COMMITS_AND_OPENS_PR: &str = r#"
-echo "feature" > feature.txt
-git add feature.txt
-git commit -q -m "Add feature"
-gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
-"#;
+use support::{AGENT_COMMITS_AND_OPENS_PR, Scenario};
 
 #[test]
 fn a_closed_issue_is_rejected() {
@@ -36,7 +27,6 @@ fn a_missing_argument_is_a_usage_error() {
 #[test]
 fn an_argument_that_is_not_a_github_issue_url_is_a_usage_error() {
     for url in [
-        "7",
         "https://gitlab.com/acme/widgets/issues/7",
         "https://github.example.com/acme/widgets/issues/7",
         "https://github.com/acme/widgets/pull/7",

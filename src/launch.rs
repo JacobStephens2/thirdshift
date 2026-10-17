@@ -21,7 +21,7 @@ use anyhow::{Context, Result, bail};
 use crate::config;
 use crate::git::Git;
 use crate::github::GitHub;
-use crate::issue::{IssueUrl, Repo};
+use crate::issue::{IssueInput, IssueUrl, Repo};
 use crate::progress;
 
 /// The Launch directory, opened by a Run or by a run with no Issue URL, and
@@ -328,6 +328,31 @@ pub fn start(base: Option<&str>) -> Result<Start> {
 /// is on.
 pub fn repo() -> Result<Repo> {
     LaunchDirectory::open(current_dir()?, Opening::Pass)?.repo()
+}
+
+/// Resolve a Run's shorthand before command startup. A full URL passes
+/// through unchanged and still undergoes Origin match when the Run opens.
+pub fn resolve_issue(input: IssueInput) -> Result<IssueUrl> {
+    let number = match input {
+        IssueInput::Url(issue) => return Ok(issue),
+        IssueInput::Number(number) => number,
+    };
+    let repo = (|| {
+        Git::new(current_dir()?).run(&["rev-parse", "--show-toplevel"])?;
+        repo()
+    })()
+    .with_context(|| {
+        format!(
+            "cannot resolve issue number {number} from origin in the Launch directory; \
+             start from a GitHub repository clone with an origin remote"
+        )
+    })?;
+    Ok(IssueUrl {
+        url: format!("https://github.com/{}/issues/{number}", repo.slug()),
+        owner: repo.owner,
+        repo: repo.name,
+        number: number.get(),
+    })
 }
 
 /// Try, without waiting, for the lock that makes its holder the one Pass on
