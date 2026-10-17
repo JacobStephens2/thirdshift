@@ -1043,7 +1043,12 @@ fn rejected_or_unreachable_origin_retains_the_failure_commit_and_work_after_drop
         let error = worktree
             .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap_err();
-        assert!(error.to_string().starts_with("git push"), "{error:#}");
+        let failed_command = if rejecting_origin {
+            "git push"
+        } else {
+            "git ls-remote"
+        };
+        assert!(error.to_string().starts_with(failed_command), "{error:#}");
         drop(worktree);
 
         assert_retained(&launch, &path);
