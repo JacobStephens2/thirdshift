@@ -2162,3 +2162,122 @@ fi
         }
     }
 }
+
+#[test]
+fn local_branch_advice_commands_preserve_then_recover_work_from_any_directory() {
+    for action in ["push", "branch -m", "branch -d"] {
+        let (temp, original) = super::tests::launch_directory();
+        let path = temp.path().join("work ' $(touch INJECTED); space");
+        std::fs::rename(original.dir(), &path).unwrap();
+        let launch = Git::new(&path);
+        launch.run(&["branch", BRANCH]).unwrap();
+        let before = launch.run(&["rev-parse", BRANCH]).unwrap();
+        let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+
+        let error = Worktree::create_fresh(&launch, "work", BRANCH, "main")
+            .err()
+            .expect("local branch must be refused")
+            .to_string();
+
+        assert!(error.contains("Alternatives"), "{error}");
+        assert!(error.contains("Continuation"), "{error}");
+        assert!(error.contains("git -C "), "{error}");
+        assert_eq!(launch.run(&["rev-parse", BRANCH]).unwrap(), before);
+        assert_eq!(
+            launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+            registrations
+        );
+        assert!(!launch.on_origin(BRANCH).unwrap());
+        let command = error
+            .lines()
+            .find(|line| line.starts_with("  git -C ") && line.contains(&format!(" {action} ")))
+            .unwrap_or_else(|| panic!("missing {action}: {error}"));
+        let output = std::process::Command::new("bash")
+            .args(["-c", command])
+            .current_dir(temp.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!temp.path().join("INJECTED").exists());
+        match action {
+            "push" => assert!(launch.on_origin(BRANCH).unwrap()),
+            "branch -m" => assert_eq!(
+                launch.run(&["rev-parse", "issue-7-preserved"]).unwrap(),
+                before
+            ),
+            _ => assert!(local_head(&launch, BRANCH).unwrap().is_none()),
+        }
+    }
+}
+
+#[test]
+fn occupied_checkout_advice_names_the_actual_path_and_removal_refuses_dirty_work() {
+    for expected_path in [false, true] {
+        let (temp, launch, head) = continuation();
+        let path = temp.path().join(if expected_path {
+            "work-issue-7"
+        } else {
+            "manual ' $(touch INJECTED); checkout"
+        });
+        launch
+            .run(&["worktree", "add", path.to_str().unwrap(), BRANCH])
+            .unwrap();
+        std::fs::write(path.join("untracked.txt"), "preserved work").unwrap();
+        let before = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+
+        let error = Worktree::continue_existing(&launch, "work", BRANCH, "main")
+            .err()
+            .expect("occupied branch must be refused")
+            .to_string();
+
+        assert!(error.contains("Occupied checkout"), "{error}");
+        assert!(error.contains("Continuation"), "{error}");
+        assert!(error.contains("leave or inspect this checkout"), "{error}");
+        assert!(!error.contains("--force"), "{error}");
+        assert_eq!(launch.run(&["rev-parse", BRANCH]).unwrap(), head);
+        assert_eq!(
+            launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+            before
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("untracked.txt")).unwrap(),
+            "preserved work"
+        );
+        let command = error
+            .lines()
+            .find(|line| line.starts_with("  git -C ") && line.contains(" worktree remove "))
+            .unwrap_or_else(|| panic!("missing removal: {error}"));
+        let remove = || {
+            std::process::Command::new("bash")
+                .args(["-c", command])
+                .current_dir(temp.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap()
+        };
+        assert!(!remove().status.success(), "dirty removal must refuse");
+        assert_eq!(
+            std::fs::read_to_string(path.join("untracked.txt")).unwrap(),
+            "preserved work"
+        );
+        std::fs::remove_file(path.join("untracked.txt")).unwrap();
+        let output = remove();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!path.exists());
+        assert!(!temp.path().join("INJECTED").exists());
+        assert_eq!(launch.run(&["rev-parse", BRANCH]).unwrap(), head);
+        let worktree = Worktree::continue_existing(&launch, "work", BRANCH, "main").unwrap();
+        assert_eq!(worktree.head().unwrap(), head);
+    }
+}

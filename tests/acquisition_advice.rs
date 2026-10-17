@@ -248,3 +248,49 @@ fn branch_switch_advice_is_only_offered_when_it_frees_acquisition() {
         assert!(occupied.join("README.md").exists());
     }
 }
+
+#[test]
+fn continuation_from_a_linked_launch_does_not_offer_to_remove_the_main_checkout() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    scenario.github_has_pr("issue-7", "main", "OPEN");
+    let linked = scenario.path("work/linked-launch");
+    scenario.launch_git(&[
+        "worktree",
+        "add",
+        "--detach",
+        linked.to_str().unwrap(),
+        "main",
+    ]);
+    scenario.launch_checks_out("issue-7");
+    std::fs::write(
+        scenario.launch_dir().join("untracked.txt"),
+        "keep this work\n",
+    )
+    .unwrap();
+    let before = scenario.launch_git(&["worktree", "list", "--porcelain", "-z"]);
+
+    let result = scenario.run_from(&linked, &[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("This is the main checkout"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains(" worktree remove "),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("Continuation"), "{}", result.stderr);
+    assert_eq!(
+        scenario.launch_git(&["worktree", "list", "--porcelain", "-z"]),
+        before
+    );
+    assert_eq!(
+        std::fs::read_to_string(scenario.launch_dir().join("untracked.txt")).unwrap(),
+        "keep this work\n"
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
