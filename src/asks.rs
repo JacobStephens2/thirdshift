@@ -131,7 +131,8 @@ impl Asks {
     /// not a Spec, as `is_spec` says, since the command can't know which
     /// the Pickup run will take. It is left out of the command a Base fix is
     /// offered with too, which retries the issue as a Run of its own:
-    /// another Pickup run never takes an issue that was started.
+    /// another Pickup run needs a deliberate hand-back after the last
+    /// Claim ended before it can take started work again.
     pub fn of_ready_issue(
         issue: &IssueUrl,
         is_spec: bool,

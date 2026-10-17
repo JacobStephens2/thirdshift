@@ -120,7 +120,7 @@ impl GitHub {
 
     /// The sub-issues of `issue`, its Tickets if it has any, in one query.
     pub fn tickets(&self, issue: &IssueUrl) -> Result<Vec<Ticket>> {
-        let json = self.issue_query(issue, TICKETS_QUERY)?;
+        let json = self.issue_query(issue, TICKETS_QUERY, None)?;
         nodes(
             &json["data"]["repository"]["issue"]["subIssues"],
             "subIssues",
@@ -148,20 +148,21 @@ impl GitHub {
     }
 
     /// The answer to `query`, a GraphQL query about `issue` that takes its
-    /// `$owner`, `$repo` and `$number`.
-    fn issue_query(&self, issue: &IssueUrl, query: &str) -> Result<Value> {
-        self.gh_json(&[
-            "api",
-            "graphql",
-            "-f",
-            &format!("query={query}"),
-            "-f",
-            &format!("owner={}", issue.owner),
-            "-f",
-            &format!("repo={}", issue.repo),
-            "-F",
-            &format!("number={}", issue.number),
-        ])
+    /// `$owner`, `$repo` and `$number`, and an optional label-history cursor.
+    fn issue_query(&self, issue: &IssueUrl, query: &str, after: Option<&str>) -> Result<Value> {
+        let query = format!("query={query}");
+        let owner = format!("owner={}", issue.owner);
+        let repo = format!("repo={}", issue.repo);
+        let number = format!("number={}", issue.number);
+        let mut args = vec![
+            "api", "graphql", "-f", &query, "-f", &owner, "-f", &repo, "-F", &number,
+        ];
+        let cursor;
+        if let Some(after) = after {
+            cursor = format!("after={after}");
+            args.extend(["-f", &cursor]);
+        }
+        self.gh_json(&args)
     }
 
     /// Close `issue` with `comment`.
@@ -318,9 +319,30 @@ impl GitHub {
     }
 
     /// `issue` as a Pickup run that lists issues by `label` reads it, in one
-    /// query.
+    /// query per page of label history, oldest first. Every page is read so
+    /// missing older Claims cannot be mistaken for never-Claimed work.
     pub fn candidate(&self, issue: &IssueUrl, label: Label) -> Result<Candidate> {
-        let json = self.issue_query(issue, CANDIDATE_QUERY)?;
+        let mut after = None;
+        let mut label_events = Vec::new();
+        let json = loop {
+            let json = self.issue_query(issue, CANDIDATE_QUERY, after.as_deref())?;
+            let page = &json["data"]["repository"]["issue"]["labelled"];
+            label_events.extend(nodes(page, "labelled")?.iter().cloned());
+            let info = &page["pageInfo"];
+            if !info["hasNextPage"]
+                .as_bool()
+                .context("label history has no hasNextPage")?
+            {
+                break json;
+            }
+            let next = info["endCursor"]
+                .as_str()
+                .context("label history has no endCursor")?;
+            if Some(next) == after.as_deref() {
+                bail!("label history cursor did not advance");
+            }
+            after = Some(next.to_string());
+        };
         let issue = &json["data"]["repository"]["issue"];
         let parent = issue["parent"]["url"]
             .as_str()
@@ -341,9 +363,16 @@ impl GitHub {
                 .to_utc())
         };
         let mut shaped = Vec::new();
-        for event in nodes(&issue["labelled"], "labelled")? {
+        let mut history = ClaimHistory::NeverClaimed;
+        for event in &label_events {
+            let applied = match event["__typename"].as_str() {
+                Some("LabeledEvent") => true,
+                Some("UnlabeledEvent") => false,
+                other => bail!("gh api graphql output has an unknown label event {other:?}"),
+            };
             let name = event["label"]["name"].as_str();
-            if name.is_some_and(|name| label.is_named(name)) {
+            history = history.after(name, applied, label);
+            if applied && name.is_some_and(|name| label.is_named(name)) {
                 shaped.push(Shaped {
                     by: Shaping::Labelled,
                     at: at(event)?,
@@ -366,6 +395,7 @@ impl GitHub {
                 .collect::<Result<_>>()?,
             open_blockers,
             last_shaped: shaped.into_iter().max_by_key(|shaped| shaped.at),
+            handed_back: matches!(history, ClaimHistory::HandedBack),
         })
     }
 
@@ -900,12 +930,45 @@ pub struct Candidate {
     pub open_blockers: Vec<u64>,
     /// The latest of the changes that shape it, if its timeline has one.
     pub last_shaped: Option<Shaped>,
+    /// Complete label history records the last Claim ending, followed by a
+    /// ready-label application, with neither withdrawn or superseded.
+    pub handed_back: bool,
 }
 
 impl Candidate {
     /// It has sub-issues of its own.
     pub fn has_sub_issues(&self) -> bool {
         !self.sub_issue_is_open.is_empty()
+    }
+}
+
+/// The last Claim and whether the Day shift subsequently handed it back.
+/// Timeline order, rather than timestamp comparisons, also distinguishes
+/// consecutive GitHub label operations made within the same second.
+enum ClaimHistory {
+    NeverClaimed,
+    Claimed,
+    Released,
+    HandedBack,
+}
+
+impl ClaimHistory {
+    fn after(self, name: Option<&str>, applied: bool, ready: Label) -> Self {
+        if name.is_some_and(|name| crate::claim::IN_PROGRESS.is_named(name)) {
+            return match (self, applied) {
+                (_, true) => Self::Claimed,
+                (Self::Claimed, false) => Self::Released,
+                (state, false) => state,
+            };
+        }
+        if name.is_some_and(|name| ready.is_named(name)) {
+            return match (self, applied) {
+                (Self::Released | Self::HandedBack, true) => Self::HandedBack,
+                (Self::HandedBack, false) => Self::Released,
+                (state, _) => state,
+            };
+        }
+        self
     }
 }
 
@@ -929,21 +992,26 @@ pub enum Shaping {
 
 /// An issue's parent, the state of each of its sub-issues, the issues it is
 /// blocked by, and the events of its timeline that shape it: each time a
-/// label was applied, of which only the last hundred are read, and the last
+/// label was applied or removed (paginated to completion), and the last
 /// sub-issue or "blocked by" link added or removed. They are read from the
 /// timeline because adding a sub-issue does not change the issue's update
 /// time. The sub-issues read are the first hundred, the ones
 /// [`TICKETS_QUERY`] reads, so a Pickup run and a Spec run see the same
 /// Tickets.
 const CANDIDATE_QUERY: &str = "\
-query($owner: String!, $repo: String!, $number: Int!) {
+query($owner: String!, $repo: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
     issue(number: $number) {
       parent { url }
       subIssues(first: 100) { nodes { state } }
       blockedBy(first: 100) { nodes { number state } }
-      labelled: timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
-        nodes { ... on LabeledEvent { createdAt label { name } } }
+      labelled: timelineItems(first: 100, after: $after, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          __typename
+          ... on LabeledEvent { createdAt label { name } }
+          ... on UnlabeledEvent { createdAt label { name } }
+        }
       }
       linked: timelineItems(
         last: 1

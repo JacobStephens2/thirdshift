@@ -96,7 +96,8 @@
 //! candidate with: issue `$number`'s parent, the issue whose `sub_issues` it is
 //! one of, the state of each of its sub-issues, the issues it is `blocked_by`
 //! with their states, and from its `timeline`, oldest first, every `labeled`
-//! event as `labelled` and the newest of its `sub_issue_added`,
+//! or `unlabeled` event as `labelled` in pages of 100, using the `$after`
+//! cursor and returning `pageInfo`, and the newest of its `sub_issue_added`,
 //! `sub_issue_removed`, `blocked_by_added` and `blocked_by_removed` events as
 //! `linked`. Any other query exits 2.
 //!
@@ -1717,7 +1718,7 @@ fn graphql(state: &Json, args: &[&str]) {
         );
     }
     let issue = if is_candidate {
-        candidate(state, n)
+        candidate(state, n, variables.get("after").map(String::as_str))
     } else {
         let nodes = listed(state, "sub_issues", n)
             .iter()
@@ -1788,7 +1789,7 @@ fn blockers(state: &Json, key: &str) -> Json {
 }
 
 /// Issue `n` as the candidate query reads it.
-fn candidate(state: &Json, n: &str) -> Json {
+fn candidate(state: &Json, n: &str, after: Option<&str>) -> Json {
     let parent = match state.get("sub_issues") {
         Some(Json::Object(specs)) => specs
             .iter()
@@ -1810,9 +1811,18 @@ fn candidate(state: &Json, n: &str) -> Json {
     for event in listed(state, "timeline", n) {
         let at = event.at("at").clone();
         let link = match event.at("event").str() {
-            "labeled" => {
+            "labeled" | "unlabeled" => {
                 let label = object([("name", event.at("label").clone())]);
-                labelled.push(object([("createdAt", at), ("label", label)]));
+                let kind = if event.at("event").str() == "labeled" {
+                    "LabeledEvent"
+                } else {
+                    "UnlabeledEvent"
+                };
+                labelled.push(object([
+                    ("__typename", string(kind)),
+                    ("createdAt", at),
+                    ("label", label),
+                ]));
                 continue;
             }
             "sub_issue_added" => "SubIssueAddedEvent",
@@ -1823,6 +1833,15 @@ fn candidate(state: &Json, n: &str) -> Json {
         };
         linked = Some(object([("__typename", string(link)), ("createdAt", at)]));
     }
+    let start = after
+        .map(|cursor| cursor.parse::<usize>().expect("label cursor"))
+        .unwrap_or(0);
+    let end = (start + 100).min(labelled.len());
+    let page_info = object([
+        ("hasNextPage", Bool(end < labelled.len())),
+        ("endCursor", string(end.to_string())),
+    ]);
+    let labelled = labelled[start..end].to_vec();
     let sub_issues = listed(state, "sub_issues", n)
         .iter()
         .map(|ticket| object([("state", numbered_issue(state, ticket).at("state").clone())]))
@@ -1831,7 +1850,10 @@ fn candidate(state: &Json, n: &str) -> Json {
         ("parent", parent),
         ("subIssues", object([("nodes", Array(sub_issues))])),
         ("blockedBy", blockers(state, n)),
-        ("labelled", object([("nodes", Array(labelled))])),
+        (
+            "labelled",
+            object([("nodes", Array(labelled)), ("pageInfo", page_info)]),
+        ),
         (
             "linked",
             object([("nodes", Array(linked.into_iter().collect()))]),

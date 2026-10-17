@@ -223,10 +223,13 @@ impl Drop for TerminalCommand {
 }
 
 /// An event on an issue's timeline that a Pickup run reads to tell whether
-/// the issue has settled.
+/// the issue has settled or been handed back after a Claim.
+#[derive(Clone, Copy)]
 pub enum TimelineEvent<'a> {
     /// This label was applied.
     Labelled(&'a str),
+    /// This label was removed.
+    Unlabelled(&'a str),
     SubIssueAdded,
     SubIssueRemoved,
     BlockedByAdded,
@@ -906,6 +909,9 @@ test -f {root}/{COPY_REPLACED}
                 let event = match event {
                     TimelineEvent::Labelled(label) => {
                         return json!({"event": "labeled", "label": label, "at": at});
+                    }
+                    TimelineEvent::Unlabelled(label) => {
+                        return json!({"event": "unlabeled", "label": label, "at": at});
                     }
                     TimelineEvent::SubIssueAdded => "sub_issue_added",
                     TimelineEvent::SubIssueRemoved => "sub_issue_removed",

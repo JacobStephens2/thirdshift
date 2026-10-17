@@ -94,7 +94,7 @@ enum Reason {
     SecurityFix,
     /// It is blocked by these open issues.
     Blocked(Vec<u64>),
-    /// It was started, as this shows.
+    /// It was started, as this shows, without a recorded hand-back.
     Started(Started),
     /// It is a Spec whose Tickets are all closed, with nothing started: the
     /// Spec run it would be dispatched as refuses it, having nothing to do.
@@ -206,10 +206,15 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
                     .collect();
                 format!("blocked by {}", blockers.join(", "))
             }
-            Reason::Started(Started::Branch(branch)) => {
-                format!("already started: {branch} is on origin")
+            Reason::Started(started) => {
+                let evidence = match started {
+                    Started::Branch(branch) => format!("{branch} is on origin"),
+                    Started::PullRequest(url) => format!("PR {url}"),
+                };
+                format!(
+                    "started: {evidence}; no ready-for-agent hand-back after the last Claim ended"
+                )
             }
-            Reason::Started(Started::PullRequest(url)) => format!("already started: PR {url}"),
             Reason::TicketsClosed => "every Ticket is closed".to_string(),
             Reason::Unsettled(shaping) => {
                 let shaped = match shaping {
@@ -229,7 +234,8 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
 /// `now`, reading what its listing doesn't give through `reads`. It is a
 /// Ready issue when it has no label that makes an Unready Ticket and no
 /// Claim, is not a sub-issue, has no `base-fix` or `security-fix` label and no
-/// open blocker, was never started, is not a Spec whose Tickets are all
+/// open blocker, was never started or has a recorded ready-for-agent
+/// hand-back after its last Claim ended, is not a Spec whose Tickets are all
 /// closed, and is settled: `wait` has passed since it was last labelled
 /// `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
 /// last added or removed.
@@ -259,7 +265,9 @@ fn standing_of(
     if !read.open_blockers.is_empty() {
         return passed_over(Reason::Blocked(read.open_blockers));
     }
-    if let Some(started) = reads.started(&candidate.issue)? {
+    if let Some(started) = reads.started(&candidate.issue)?
+        && !read.handed_back
+    {
         return passed_over(Reason::Started(started));
     }
     if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
@@ -308,6 +316,8 @@ mod tests {
         open_blockers: Vec<u64>,
         /// The latest of the changes that shape it, if there is one.
         last_shaped: Option<Shaped>,
+        /// Label history establishes hand-back after the last Claim ended.
+        handed_back: bool,
         /// What shows it was started, if it was.
         started: Option<Started>,
     }
@@ -341,6 +351,7 @@ mod tests {
                     .map(|facts| facts.open_blockers.clone())
                     .unwrap_or_default(),
                 last_shaped: facts.and_then(|facts| facts.last_shaped),
+                handed_back: facts.is_some_and(|facts| facts.handed_back),
             })
         }
 
@@ -573,16 +584,16 @@ mod tests {
     }
 
     #[test]
-    fn a_started_issue_says_what_shows_it_was_started() {
+    fn a_never_claimed_started_issue_explains_the_missing_hand_back() {
         let pr = "https://github.com/acme/widgets/pull/12";
         for (started, said) in [
             (
                 Started::Branch("issue-7-branch-2".to_string()),
-                "#7 already started: issue-7-branch-2 is on origin".to_string(),
+                "#7 started: issue-7-branch-2 is on origin; no ready-for-agent hand-back after the last Claim ended".to_string(),
             ),
             (
                 Started::PullRequest(pr.to_string()),
-                format!("#7 already started: PR {pr}"),
+                format!("#7 started: PR {pr}; no ready-for-agent hand-back after the last Claim ended"),
             ),
         ] {
             let facts = Facts {
@@ -594,6 +605,101 @@ mod tests {
             assert_eq!(ready, None);
             let [candidate, started] = every_read(7);
             assert_eq!(seen, [candidate, started, passed_over(&said)]);
+        }
+    }
+
+    #[test]
+    fn a_handed_back_issue_with_a_branch_or_open_pr_is_ready() {
+        for started in [
+            Started::Branch("issue-7".to_string()),
+            Started::PullRequest("https://github.com/acme/widgets/pull/12".to_string()),
+        ] {
+            let facts = Facts {
+                started: Some(started),
+                handed_back: true,
+                last_shaped: shaped(Shaping::Labelled, TimeDelta::minutes(31)),
+                ..Facts::default()
+            };
+            let (ready, _) = search(vec![listed(7, &[])], vec![(7, facts)]);
+            assert_eq!(ready, Some((7, false)));
+        }
+    }
+
+    #[test]
+    fn hand_back_preserves_every_other_readiness_gate_and_the_relabel_settling_window() {
+        for (labels, parent, blockers, tickets, recent, reason) in [
+            (
+                vec!["needs-triage"],
+                None,
+                vec![],
+                vec![],
+                false,
+                "labelled needs-triage",
+            ),
+            (
+                vec!["in-progress"],
+                None,
+                vec![],
+                vec![],
+                false,
+                "labelled in-progress",
+            ),
+            (
+                vec!["base-fix"],
+                None,
+                vec![],
+                vec![],
+                false,
+                "labelled base-fix",
+            ),
+            (
+                vec!["security-fix"],
+                None,
+                vec![],
+                vec![],
+                false,
+                "a Security fix: its Security run owns it",
+            ),
+            (
+                vec![],
+                Some(url(3)),
+                vec![],
+                vec![],
+                false,
+                "is a Ticket of #3, which is not ready",
+            ),
+            (vec![], None, vec![9], vec![], false, "blocked by #9"),
+            (
+                vec![],
+                None,
+                vec![],
+                vec![false],
+                false,
+                "every Ticket is closed",
+            ),
+            (
+                vec![],
+                None,
+                vec![],
+                vec![],
+                true,
+                "not settled: labelled ready-for-agent less than 30 minutes ago",
+            ),
+        ] {
+            let facts = Facts {
+                started: Some(Started::Branch("issue-7".to_string())),
+                handed_back: true,
+                parent,
+                open_blockers: blockers,
+                sub_issue_is_open: tickets,
+                last_shaped: shaped(
+                    Shaping::Labelled,
+                    TimeDelta::minutes(if recent { 29 } else { 31 }),
+                ),
+            };
+            let (ready, seen) = search(vec![listed(7, &labels)], vec![(7, facts)]);
+            assert_eq!(ready, None, "{reason}");
+            assert_eq!(seen.last(), Some(&passed_over(&format!("#7 {reason}"))));
         }
     }
 
@@ -618,7 +724,9 @@ mod tests {
         assert_eq!(ready, None);
         assert_eq!(
             seen.last(),
-            Some(&passed_over("#7 already started: issue-7 is on origin"))
+            Some(&passed_over(
+                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended"
+            ))
         );
     }
 
@@ -684,6 +792,7 @@ mod tests {
             open_blockers: if blocked { vec![5] } else { vec![] },
             last_shaped: shaped(Shaping::Labelled, TimeDelta::minutes(1)),
             started: started.then(|| Started::Branch("issue-7".to_string())),
+            handed_back: false,
         };
         for (labels, facts, said) in [
             (
@@ -710,7 +819,7 @@ mod tests {
             (
                 &[],
                 facts(false, false, true, true),
-                "#7 already started: issue-7 is on origin",
+                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended",
             ),
             (
                 &[],
@@ -757,7 +866,9 @@ mod tests {
             [
                 candidate_7,
                 started_7,
-                passed_over("#7 already started: issue-7 is on origin"),
+                passed_over(
+                    "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended"
+                ),
                 passed_over("#8 labelled wontfix"),
                 passed_over("#9 labelled in-progress"),
                 candidate_70,
