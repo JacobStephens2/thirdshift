@@ -266,9 +266,6 @@ fn body(
     if let Some(pr_url) = account.pr_url {
         text += &format!("Pull request: {pr_url}\n");
     }
-    for line in account.recovery_lines() {
-        text += &format!("{line}\n");
-    }
     // Security failure causes can quote private verifier work or Harness
     // diagnostics. Only the fixed safeguard category is safe to send.
     if let Err(cause) = &account.ended
@@ -297,6 +294,9 @@ fn body(
     }
     if let Some(built_with) = built_with {
         text += &format!("{built_with}\n");
+    }
+    for line in account.recovery_lines() {
+        text += &format!("{line}\n");
     }
     text += &format!("Host:         {host}\n");
     text += &format!("Took:         {}\n", progress::duration(took));

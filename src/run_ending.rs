@@ -279,17 +279,21 @@ impl<'a> Account<'a> {
         self.ended.is_ok()
     }
 
-    /// Show how the command ended: on stderr, its `elapsed` wall time if
-    /// this is the top-level command, then what became of its Base fix,
+    /// Show how the command ended: recovery facts first, then on stderr its
+    /// `elapsed` wall time if this is the top-level command, then its Base fix,
     /// if it took one, then the line that says how it ended once it
     /// succeeded; or its cause, its advice, if it has any, then its session
     /// log and the command's Command log; its URLs on stdout. Returns its
     /// exit code.
     pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
+        let mut shown = Shown::of(self);
         if let Some(elapsed) = elapsed {
-            progress::step(format_args!("Took: {}", progress::duration(elapsed)));
+            shown.steps.insert(
+                self.recovery_lines().len(),
+                format!("Took: {}", progress::duration(elapsed)),
+            );
         }
-        Shown::of(self).print()
+        shown.print()
     }
 
     /// How the command ended, in short, as its Activity log end line gives
@@ -344,11 +348,10 @@ struct Shown {
 impl Shown {
     /// How a command that ended as `account` shows: see [`Account::show`].
     fn of(account: &Account) -> Self {
-        let mut steps = Vec::new();
+        let mut steps = account.recovery_lines();
         if let Some(report) = account.base_fix {
             steps.push(format!("{BASE_FIX}{report}"));
         }
-        steps.extend(account.recovery_lines());
         match &account.ended {
             // Also on stderr, so the outcome shows even when stdout is captured.
             Ok(line) => steps.push(line.clone()),
