@@ -928,6 +928,59 @@ fn a_base_merge_keeps_its_selected_commit_when_the_shared_ref_rewinds() {
 }
 
 #[test]
+fn tree_comparison_tracks_committed_files_instead_of_commit_history() {
+    let (_temp, launch, worktree, foreign) = foreign_origin();
+    let own_head = worktree.head().unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert_eq!(worktree.head().unwrap(), foreign);
+    assert!(worktree.tree_matches(&own_head).unwrap());
+
+    fs::write(launch.dir().join("new.txt"), "new file\n").unwrap();
+    launch.run(&["add", "new.txt"]).unwrap();
+    commit(&launch, "Changed tree");
+    launch
+        .run(&["push", "-q", "origin", "HEAD:issue-7"])
+        .unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert!(!worktree.tree_matches(&own_head).unwrap());
+
+    launch.run(&["rm", "new.txt"]).unwrap();
+    commit(&launch, "Restore reviewed tree");
+    launch
+        .run(&["push", "-q", "origin", "HEAD:issue-7"])
+        .unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert!(worktree.tree_matches(&own_head).unwrap());
+}
+
+#[test]
+fn tree_comparison_reports_an_unreadable_original_tree() {
+    let (_temp, _launch, worktree) = fixture();
+    assert!(
+        worktree
+            .tree_matches("0000000000000000000000000000000000000000")
+            .is_err()
+    );
+}
+
+#[test]
+fn tree_comparison_refuses_a_switched_issue_branch() {
+    let (_temp, _launch, worktree) = fixture();
+    let own_head = worktree.head().unwrap();
+    Git::new(worktree.path())
+        .run(&["checkout", "-q", "-b", "manual"])
+        .unwrap();
+    let error = format!("{:#}", worktree.tree_matches(&own_head).unwrap_err());
+    assert!(error.contains("expected Issue branch issue-7"), "{error}");
+}
+
+#[test]
 fn a_foreign_commit_merge_consumes_only_the_batch_observed_before_the_ref_advanced() {
     let (_temp, launch) = super::tests::launch_directory();
     let worktree = Worktree::create_fresh(&launch, "work", "issue-7", "main").unwrap();

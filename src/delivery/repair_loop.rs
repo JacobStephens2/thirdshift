@@ -56,6 +56,9 @@ pub(super) trait Outside {
     fn push(&mut self) -> Result<()>;
     /// The Issue branch's head commit.
     fn head(&mut self) -> Result<String>;
+    /// Whether the current committed tree is identical to `commit`'s tree.
+    /// An unreadable tree is an error, never evidence to skip review.
+    fn tree_matches(&mut self, commit: &str) -> Result<bool>;
     /// Whether the Base branch on origin has commits the Issue branch has
     /// not merged yet.
     fn base_branch_moved(&mut self) -> Result<bool>;
@@ -370,8 +373,9 @@ impl<O: Outside> RepairLoop<'_, O> {
 
     /// Fetch the Issue branch from origin and merge in any Foreign commits on
     /// it (never rebase), counting that as a round and handing a conflict to
-    /// a conflict Repair. Then a review Repair reviews them from the head the
-    /// Run last knew as its own, the local head before the merge. Goes round
+    /// a conflict Repair. If the resulting tree differs, a review Repair
+    /// reviews it from the head the Run last knew as its own, the local head
+    /// before the merge. An identical tree needs no Review Repair. Goes round
     /// again until origin has nothing new, since more may land during either
     /// Repair, and the push after them would be rejected.
     fn take_in_foreign_commits(&mut self) -> Result<()> {
@@ -395,10 +399,12 @@ impl<O: Outside> RepairLoop<'_, O> {
                 )?;
                 self.outside.ensure_merged(&pending)?;
             }
-            self.repair(
-                &format!("new commits on {upstream} to review"),
-                Repair::Review { from: &own_head },
-            )?;
+            if !self.outside.tree_matches(&own_head)? {
+                self.repair(
+                    &format!("new commits on {upstream} to review"),
+                    Repair::Review { from: &own_head },
+                )?;
+            }
         }
     }
 
@@ -514,6 +520,8 @@ mod tests {
         base_conflicts: VecDeque<bool>,
         /// For each merge of new commits on origin, whether it conflicts.
         new_commit_conflicts: VecDeque<bool>,
+        /// Whether each reconciled Foreign batch leaves the original tree.
+        identical_trees: VecDeque<std::result::Result<bool, &'static str>>,
         base_moved: VecDeque<bool>,
         new_commits: VecDeque<ForeignCommits>,
         watches: VecDeque<Is>,
@@ -600,6 +608,14 @@ mod tests {
 
         fn head(&mut self) -> Result<String> {
             Ok(sticky(&mut self.script.heads, "head"))
+        }
+
+        fn tree_matches(&mut self, _: &str) -> Result<bool> {
+            self.script
+                .identical_trees
+                .pop_front()
+                .unwrap_or(Ok(false))
+                .map_err(|error| anyhow!(error))
         }
 
         fn base_branch_moved(&mut self) -> Result<bool> {
@@ -1421,6 +1437,168 @@ mod tests {
                 merge("h3").into(),
             ]
             .concat()
+        );
+    }
+
+    #[test]
+    fn tree_identical_foreign_commits_reconcile_without_a_review_repair() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["f1"]),
+                new_commits: script([ForeignCommits::fixture("own", &["f1"])]),
+                identical_trees: script([Ok(true)]),
+                watches: script([Is::Passed]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert!(!did.iter().any(|did| matches!(did, Did::Repair(..))));
+        assert!(did.contains(&Did::MergeNewCommits("f1".to_string())));
+        assert!(did.contains(&Did::Push));
+        assert!(did.contains(&Did::Merge("f1".to_string())));
+    }
+
+    #[test]
+    fn an_empty_foreign_batch_between_changed_batches_spends_no_repair_slot() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["f3"]),
+                new_commits: script([
+                    ForeignCommits::fixture("own", &["f1"]),
+                    ForeignCommits::fixture("reviewed", &["f2"]),
+                    ForeignCommits::fixture("f2", &["f3"]),
+                ]),
+                identical_trees: script([Ok(false), Ok(true), Ok(false)]),
+                watches: script([Is::Passed]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        let repairs: Vec<_> = did
+            .iter()
+            .filter(|did| matches!(did, Did::Repair(..)))
+            .collect();
+        assert_eq!(
+            repairs,
+            [
+                &repair(1, Started::Review("own".to_string())),
+                &repair(2, Started::Review("f2".to_string())),
+            ]
+        );
+        assert!(did.contains(&Did::MergeNewCommits("f2".to_string())));
+        assert!(did.contains(&Did::Merge("f3".to_string())));
+    }
+
+    #[test]
+    fn identical_foreign_trees_still_exhaust_the_upstream_move_budget() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                new_commits: script(
+                    (1..=6).map(|n| ForeignCommits::fixture(&format!("h{n}"), &[&format!("f{n}")])),
+                ),
+                identical_trees: script([Ok(true); 5]),
+                ..Script::default()
+            },
+        );
+
+        assert_eq!(
+            cause(delivered),
+            "origin/issue-7 kept moving: merged it again 5 times"
+        );
+        assert!(!did.iter().any(|did| matches!(did, Did::Repair(..))));
+        assert_eq!(
+            did.iter()
+                .filter(|did| matches!(did, Did::MergeNewCommits(_)))
+                .count(),
+            5
+        );
+    }
+
+    #[test]
+    fn an_identical_tree_after_conflict_repair_needs_no_review_repair() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["resolved"]),
+                new_commits: script([ForeignCommits::fixture("own", &["f1"])]),
+                new_commit_conflicts: script([true]),
+                identical_trees: script([Ok(true)]),
+                watches: script([Is::Passed]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert_eq!(
+            did.iter()
+                .filter(|did| matches!(did, Did::Repair(..)))
+                .collect::<Vec<_>>(),
+            [&repair(1, Started::Conflict(Upstream::IssueBranch))]
+        );
+        assert!(did.contains(&Did::CheckMerged("origin/issue-7")));
+        assert!(did.contains(&Did::Merge("resolved".to_string())));
+    }
+
+    #[test]
+    fn an_identical_foreign_tree_can_reconcile_after_all_repairs_are_spent() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["h1", "h2", "h3", "h4", "h5", "h6"]),
+                watches: script(
+                    (0..5)
+                        .map(|_| Is::Failed(&["test"], &[]))
+                        .chain([Is::Passed]),
+                ),
+                new_commits: script(
+                    (0..5)
+                        .map(|_| ForeignCommits::fixture("own", &[]))
+                        .chain([ForeignCommits::fixture("h6", &["f1"])]),
+                ),
+                identical_trees: script([Ok(true)]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert_eq!(
+            did.iter()
+                .filter(|did| matches!(did, Did::Repair(..)))
+                .count(),
+            5
+        );
+        assert!(
+            !did.iter()
+                .any(|did| matches!(did, Did::Repair(_, Started::Review(_))))
+        );
+        assert!(did.contains(&Did::MergeNewCommits("f1".to_string())));
+    }
+
+    #[test]
+    fn a_tree_comparison_error_stops_delivery_before_review_or_self_merge() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                new_commits: script([ForeignCommits::fixture("own", &["f1"])]),
+                identical_trees: script([Err("cannot read tree")]),
+                ..Script::default()
+            },
+        );
+
+        assert_eq!(cause(delivered), "cannot read tree");
+        assert!(did.contains(&Did::MergeNewCommits("f1".to_string())));
+        assert!(
+            !did.iter()
+                .any(|did| matches!(did, Did::Repair(..) | Did::Push | Did::Merge(_)))
         );
     }
 

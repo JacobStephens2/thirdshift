@@ -539,6 +539,10 @@ impl repair_loop::Outside for RunOutside<'_> {
         self.worktree.head()
     }
 
+    fn tree_matches(&mut self, commit: &str) -> Result<bool> {
+        self.worktree.tree_matches(commit)
+    }
+
     fn base_branch_moved(&mut self) -> Result<bool> {
         self.worktree.base_branch_moved(self.base)
     }

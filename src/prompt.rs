@@ -272,7 +272,8 @@ pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &st
          \n\
          {unaddressed_findings}\n\
          \n\
-         Commit and push {branch}. Do not rebase or force-push.\n\
+         If the review changes no files, make no commit; never use `--allow-empty`. If files change, commit them and push {branch}. Do not rebase or force-push.\n\
+         If there is no new review information, leave the PR body alone. Record actual declined findings under the review contract above even when no files change.\n\
          \n\
          {HEADLESS}",
         url = issue.url,

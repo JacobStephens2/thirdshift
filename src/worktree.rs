@@ -216,6 +216,22 @@ impl Worktree {
             .ordinary(&self.launch, |operation| operation.head())
     }
 
+    /// Whether the current committed tree is identical to `commit`'s tree.
+    /// Read both trees through the acquired-instance checks; failed reads
+    /// propagate rather than establishing that review can be skipped.
+    pub fn tree_matches(&self, commit: &str) -> Result<bool> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let tree = operation.run(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{commit}^{{tree}}"),
+            ])?;
+            let current = operation.run(&["rev-parse", "--verify", "HEAD^{tree}"])?;
+            Ok(tree == current)
+        })
+    }
+
     /// Observe the merge base against the published Base branch only while
     /// this is still the acquired checkout on the selected Issue branch.
     pub fn merge_base_commit(&self, base: &str) -> Result<String> {
