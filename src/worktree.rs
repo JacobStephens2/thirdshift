@@ -220,8 +220,12 @@ impl Worktree {
     /// Comparison errors are propagated, never treated as identical trees.
     pub fn same_tree_as(&self, commit: &str) -> Result<bool> {
         self.checkout.ordinary(&self.launch, |operation| {
-            let before =
-                operation.run(&["rev-parse", "--verify", &format!("{commit}^{{tree}}")])?;
+            let before = operation.run(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{commit}^{{tree}}"),
+            ])?;
             let after = operation.run(&["rev-parse", "--verify", "HEAD^{tree}"])?;
             Ok(before == after)
         })

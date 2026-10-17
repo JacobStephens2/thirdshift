@@ -1537,6 +1537,123 @@ mod tests {
     }
 
     #[test]
+    fn tree_identical_foreign_commits_reconcile_without_a_review_repair() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["f1"]),
+                new_commits: script([ForeignCommits::fixture("own", &["f1"])]),
+                tree_matches: script([Ok(true)]),
+                watches: script([Is::Passed]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert!(!did.iter().any(|did| matches!(did, Did::Repair(..))));
+        assert!(did.contains(&Did::MergeNewCommits("f1".to_string())));
+        assert!(did.contains(&Did::Push));
+        assert!(did.contains(&Did::Merge("f1".to_string())));
+    }
+
+    #[test]
+    fn an_empty_foreign_batch_between_changed_batches_spends_no_repair_slot() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["f3"]),
+                new_commits: script([
+                    ForeignCommits::fixture("own", &["f1"]),
+                    ForeignCommits::fixture("reviewed", &["f2"]),
+                    ForeignCommits::fixture("f2", &["f3"]),
+                ]),
+                tree_matches: script([Ok(false), Ok(true), Ok(false)]),
+                watches: script([Is::Passed]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        let repairs: Vec<_> = did
+            .iter()
+            .filter(|did| matches!(did, Did::Repair(..)))
+            .collect();
+        assert_eq!(
+            repairs,
+            [
+                &repair(1, Started::Review("own".to_string())),
+                &repair(2, Started::Review("f2".to_string())),
+            ]
+        );
+        assert!(did.contains(&Did::MergeNewCommits("f2".to_string())));
+        assert!(did.contains(&Did::Merge("f3".to_string())));
+    }
+
+    #[test]
+    fn an_identical_tree_after_conflict_repair_needs_no_review_repair() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["resolved"]),
+                new_commits: script([ForeignCommits::fixture("own", &["f1"])]),
+                new_commit_conflicts: script([true]),
+                tree_matches: script([Ok(true)]),
+                watches: script([Is::Passed]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert_eq!(
+            did.iter()
+                .filter(|did| matches!(did, Did::Repair(..)))
+                .collect::<Vec<_>>(),
+            [&repair(1, Started::Conflict(Upstream::IssueBranch))]
+        );
+        assert!(did.contains(&Did::CheckMerged("origin/issue-7")));
+        assert!(did.contains(&Did::Merge("resolved".to_string())));
+    }
+
+    #[test]
+    fn an_identical_foreign_tree_can_reconcile_after_all_repairs_are_spent() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["h1", "h2", "h3", "h4", "h5", "h6"]),
+                watches: script(
+                    (0..5)
+                        .map(|_| Is::Failed(&["test"], &[]))
+                        .chain([Is::Passed]),
+                ),
+                new_commits: script(
+                    (0..5)
+                        .map(|_| ForeignCommits::fixture("own", &[]))
+                        .chain([ForeignCommits::fixture("h6", &["f1"])]),
+                ),
+                tree_matches: script([Ok(true)]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert_eq!(
+            did.iter()
+                .filter(|did| matches!(did, Did::Repair(..)))
+                .count(),
+            5
+        );
+        assert!(
+            !did.iter()
+                .any(|did| matches!(did, Did::Repair(_, Started::Review(_))))
+        );
+        assert!(did.contains(&Did::MergeNewCommits("f1".to_string())));
+    }
+
+    #[test]
     fn foreign_commits_that_arrive_while_ci_ran_go_round_again() {
         let (delivered, did) = deliver(
             Goal::Merged,

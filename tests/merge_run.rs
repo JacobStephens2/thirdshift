@@ -690,6 +690,114 @@ fn an_empty_foreign_review_does_not_bounce_but_a_later_changed_batch_is_reviewed
 }
 
 #[test]
+fn tree_identical_commits_from_another_writer_terminate_without_review_repairs() {
+    let scenario = Scenario::new();
+    let empty_commits = r#"
+other="$(mktemp -d)"
+git clone -q -b issue-7 https://github.com/acme/widgets.git "$other"
+git -C "$other" commit -q --allow-empty -m "Other writer empty review"
+git -C "$other" push -q origin issue-7
+rm -rf "$other"
+"#;
+    scenario.agent_does_in_session(
+        1,
+        &format!("{AGENT_OPENS_PR}{}", on_ci_read(2, empty_commits)),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "no Review Repairs for either empty commit"
+    );
+    assert_eq!(
+        scenario
+            .origin_log("main")
+            .unwrap()
+            .iter()
+            .filter(|subject| *subject == "Other writer empty review")
+            .count(),
+        2
+    );
+    assert_issue_7_merged_into(&scenario, "main");
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["body"],
+        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_no_change_review_reconciles_an_empty_batch_and_still_reviews_later_changes() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("first.txt", "first", "First changed tree")
+            )
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{}{}",
+            // An unrelated writer has independently reviewed the same tree.
+            someone_pushes_to_issue_7("temporary.txt", "temporary", "Temporary tree")
+                + r#"
+other="$(mktemp -d)"
+git clone -q -b issue-7 https://github.com/acme/widgets.git "$other"
+git -C "$other" rm -q temporary.txt
+git -C "$other" commit -q -m "Restore reviewed tree"
+git -C "$other" push -q origin issue-7
+rm -rf "$other"
+"#,
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("later.txt", "later", "Later changed tree")
+            )
+        ),
+    );
+    // Review sessions deliberately make no file change and no commit.
+    scenario.agent_does_in_session(3, "true\n");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(
+        calls.len(),
+        3,
+        "implement and two changed-tree reviews only"
+    );
+    let first = sha_of(&scenario, "main", "First changed tree");
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &first));
+    let restored = sha_of(&scenario, "main", "Restore reviewed tree");
+    assert_review_repair_from(&calls[2]["prompt"], &restored);
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["body"],
+        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+    );
+    assert_eq!(
+        scenario.origin_file("main", "first.txt").unwrap(),
+        "first\n"
+    );
+    assert_eq!(
+        scenario.origin_file("main", "later.txt").unwrap(),
+        "later\n"
+    );
+    assert_eq!(
+        assert_issue_7_merged_into(&scenario, "main"),
+        sha_of(&scenario, "main", "Later changed tree")
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
 fn a_foreign_commit_that_conflicts_with_local_work_gets_a_conflict_repair_then_a_review() {
     let scenario = Scenario::new();
     // CI goes red; while the CI-fix Repair rewrites feature.txt, someone else

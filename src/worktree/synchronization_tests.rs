@@ -946,6 +946,38 @@ fn committed_tree_comparison_ignores_empty_history_but_detects_file_changes() {
 }
 
 #[test]
+fn tree_comparison_tracks_committed_files_instead_of_commit_history() {
+    let (_temp, launch, worktree, foreign) = foreign_origin();
+    let own_head = worktree.head().unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert_eq!(worktree.head().unwrap(), foreign);
+    assert!(worktree.same_tree_as(&own_head).unwrap());
+
+    fs::write(launch.dir().join("new.txt"), "new file\n").unwrap();
+    launch.run(&["add", "new.txt"]).unwrap();
+    commit(&launch, "Changed tree");
+    launch
+        .run(&["push", "-q", "origin", "HEAD:issue-7"])
+        .unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert!(!worktree.same_tree_as(&own_head).unwrap());
+
+    launch.run(&["rm", "new.txt"]).unwrap();
+    commit(&launch, "Restore reviewed tree");
+    launch
+        .run(&["push", "-q", "origin", "HEAD:issue-7"])
+        .unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert!(worktree.same_tree_as(&own_head).unwrap());
+}
+
+#[test]
 fn a_foreign_commit_merge_consumes_only_the_batch_observed_before_the_ref_advanced() {
     let (_temp, launch) = super::tests::launch_directory();
     let worktree = Worktree::create_fresh(&launch, "work", "issue-7", "main").unwrap();
