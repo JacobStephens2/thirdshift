@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::resend::ResendStandIn;
+use support::resend::{ResendStandIn, assert_one_issue_line};
 use support::{Scenario, WAIT_BOUND, leaves_running};
 
 const SPEC: u32 = 20;
@@ -2213,13 +2213,7 @@ fn a_ready_spec_run_sends_one_notification_with_a_line_per_ticket() {
     ] {
         assert_contains(&text, part);
     }
-    assert_eq!(
-        text.lines()
-            .filter(|line| line.starts_with("Issue:"))
-            .count(),
-        1,
-        "{text}"
-    );
+    assert_one_issue_line(&text);
     assert!(!text.contains("#23"), "{text}");
 }
 

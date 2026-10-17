@@ -17,7 +17,7 @@ mod support;
 
 use std::fs;
 
-use support::resend::ResendStandIn;
+use support::resend::{ResendStandIn, assert_one_issue_line};
 use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log};
 
 /// The label of an issue a Pickup run may take.
@@ -1090,13 +1090,7 @@ fn the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket() {
     );
     assert!(text.starts_with(&pull_request), "{text}");
     let (_, tickets) = text.split_once("\nTickets:\n").expect(&text);
-    assert_eq!(
-        text.lines()
-            .filter(|line| line.starts_with("Issue:"))
-            .count(),
-        1,
-        "{text}"
-    );
+    assert_one_issue_line(&text);
     for ticket in [8, 9] {
         let pr = pr_from(&scenario, &format!("issue-{ticket}"));
         let line = format!("#{ticket} landed with {}\n", pr["url"].as_str().unwrap());

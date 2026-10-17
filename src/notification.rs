@@ -386,26 +386,14 @@ mod tests {
     /// The subject and body of the notification about `subject` for a
     /// command that ended as `account` tells, if it sends one.
     fn told(subject: &Subject, account: &Account) -> Option<(String, String)> {
-        subject_line(subject, account.outcome).map(|line| {
-            (
-                line,
-                body(
-                    subject,
-                    account,
-                    None,
-                    None,
-                    "droplet-1",
-                    Duration::from_secs(4),
-                ),
-            )
-        })
+        subject_line(subject, account.outcome).map(|line| (line, body_of(subject, account)))
     }
 
     /// The body for a command that ended as `account` tells, run on
     /// `droplet-1` for 4s with no Command log.
-    fn body_of(account: &Account) -> String {
+    fn body_of(subject: &Subject, account: &Account) -> String {
         body(
-            &Subject::Pending,
+            subject,
             account,
             None,
             None,
@@ -580,7 +568,7 @@ mod tests {
     #[test]
     fn the_body_leaves_out_what_the_run_does_not_have() {
         assert_eq!(
-            body_of(&failed("origin mismatch")),
+            body_of(&Subject::Pending, &failed("origin mismatch")),
             "Result:       failed\n\
              Cause:        origin mismatch\n\
              Host:         droplet-1\n\
@@ -617,7 +605,7 @@ mod tests {
             ..failed("claude exited 1")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        claude exited 1\n\
@@ -646,7 +634,7 @@ mod tests {
             ..failed("CI red on test, which also fails on main at 362b9ca; fix main first")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        CI red on test, which also fails on main at 362b9ca; fix main first\n\
@@ -669,7 +657,7 @@ mod tests {
             ..failed("Tickets not done: #21, #22")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Cause:        Tickets not done: #21, #22\n\
              Host:         droplet-1\n\
