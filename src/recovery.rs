@@ -26,6 +26,7 @@ pub enum Stage {
     Repair,
     Ci,
     SelfMerge,
+    BaseFix,
 }
 
 impl Stage {
@@ -40,6 +41,7 @@ impl Stage {
             Self::Repair => "Repair",
             Self::Ci => "CI watching",
             Self::SelfMerge => "Self-merge",
+            Self::BaseFix => "Base fix",
         }
     }
 }

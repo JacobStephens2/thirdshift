@@ -584,6 +584,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn base_fix(&mut self, base_commit: &str, failed: &FailedChecks) -> Result<()> {
+        self.stage.set(Stage::BaseFix);
         self.base_fix.fix(
             self.worktree.launch(),
             self.issue,

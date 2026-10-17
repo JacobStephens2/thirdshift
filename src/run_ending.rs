@@ -953,6 +953,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn recovery_rows_do_not_replace_a_childs_cause_or_log() {
+        use crate::recovery::{Continuation, Preservation, Recovery, Stage, TicketProgress};
+        let mut ended = failed("claude exited 3", Some(LOG), Some(PR));
+        let failure = ended.outcome.as_mut().err().unwrap();
+        let mut recovery = Recovery::new(Stage::SpecReview, Preservation::Remote);
+        recovery.tickets = Some(TicketProgress {
+            landed: 17,
+            total: 17,
+            reviewed: false,
+        });
+        recovery.continuation = Some(Continuation {
+            command:
+                "thirdshift https://github.com/acme/widgets/issues/21 --no-merge harness claude"
+                    .into(),
+            launch: "/launch".into(),
+            branch: "issue-21".into(),
+            base: "main".into(),
+        });
+        failure.recovery = Some(Box::new(recovery));
+        let account = Account::of_run(&ended);
+        let shown = Shown::of(&account);
+        for line in account.recovery.unwrap().lines() {
+            assert!(shown.steps.contains(&line), "{line}");
+        }
+        assert_eq!(
+            read_back(&ended).outcome,
+            Err(ChildFailure {
+                cause: Some("claude exited 3".into()),
+                log: Some(LOG.into())
+            })
+        );
+        // Rows can also follow a cause when a child is relayed by another consumer.
+        let mut reader = Reader::default();
+        reader.read(ChildLine::Own("claude exited 3"));
+        for line in account.recovery.unwrap().lines() {
+            reader.read(ChildLine::Own(&line));
+        }
+        reader.read(ChildLine::Own(&format!("session log: {LOG}")));
+        assert_eq!(
+            reader.finish("", false).outcome,
+            Err(ChildFailure {
+                cause: Some("claude exited 3".into()),
+                log: Some(LOG.into())
+            })
+        );
+    }
+
     fn with_base_fix(ended: Ended, became: &str) -> Ended {
         Ended {
             base_fix: Some(format!("{BASE_FIX_ISSUE} {became}")),

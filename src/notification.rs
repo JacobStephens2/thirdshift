@@ -280,11 +280,6 @@ fn body(
             text += &format!("Cause:        {cause}\n");
         }
     }
-    if let Some(recovery) = account.recovery {
-        for line in recovery.lines() {
-            text += &format!("{line}\n");
-        }
-    }
     for line in account.advice {
         text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
     }
@@ -305,6 +300,11 @@ fn body(
     if !account.ticket_lines.is_empty() {
         text += "\nTickets:\n";
         for line in account.ticket_lines {
+            text += &format!("{line}\n");
+        }
+    }
+    if let Some(recovery) = account.recovery {
+        for line in recovery.lines() {
             text += &format!("{line}\n");
         }
     }

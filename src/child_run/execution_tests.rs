@@ -665,7 +665,11 @@ fn interruption_is_forwarded_once_and_waits_for_successful_graceful_cleanup() {
         return;
     }
     interrupt::install().unwrap();
-    let fixture = Fixture::new(GATED_STOP);
+    let script = GATED_STOP.replace(
+        "    raise SystemExit(0)",
+        "    os.write(2, b'thirdshift: Preserved: work may exist only locally on issue-248 at /kept/ticket; push was not confirmed\\n')\n    raise SystemExit(0)",
+    );
+    let fixture = Fixture::new(&script);
     let mut handle = fixture.start().unwrap();
     fixture.await_file("ready");
     signal_hook::low_level::raise(libc::SIGINT).unwrap();
@@ -673,7 +677,9 @@ fn interruption_is_forwarded_once_and_waits_for_successful_graceful_cleanup() {
     signal_hook::low_level::raise(libc::SIGTERM).unwrap();
     assert!(handle.try_wait().is_none());
     fs::write(fixture.0.path().join("finish"), "").unwrap();
-    assert!(matches!(handle.wait().unwrap(), Ended::Interrupted { .. }));
+    assert!(
+        matches!(handle.wait().unwrap(), Ended::Interrupted { local_work } if local_work.len() == 1 && local_work[0].contains("/kept/ticket"))
+    );
     assert_eq!(fixture.read("terms"), "TERM\n");
     assert!(fixture.0.path().join("saved").exists());
     fixture.assert_stopped();
