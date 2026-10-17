@@ -271,7 +271,7 @@ fn watch_to_end(
     rerun_checks: Option<&RerunChecks<'_>>,
 ) -> Result<Ci> {
     let short = short(sha);
-    let mut reported_pending = None;
+    let mut reported_counts = None;
     let checks = until(outside, |outside| {
         let checks = outside.checks_on(sha)?;
         ensure!(
@@ -282,12 +282,13 @@ fn watch_to_end(
         if pending == 0 {
             return Ok(Some(checks));
         }
-        if reported_pending != Some(pending) {
+        let counts = (pending, checks.len());
+        if reported_counts != Some(counts) {
             outside.step(format!(
-                "CI on {short}: {pending} of {} checks still running",
+                "CI on {short}: {pending} still running out of {} checks listed so far",
                 checks.len()
             ));
-            reported_pending = Some(pending);
+            reported_counts = Some(counts);
         }
         Ok(None)
     })?;
@@ -612,12 +613,78 @@ mod tests {
             github.steps,
             [
                 "waiting up to 60s for CI on abcdef0",
-                "CI on abcdef0: 2 of 2 checks still running",
-                "CI on abcdef0: 1 of 2 checks still running",
+                "CI on abcdef0: 2 still running out of 2 checks listed so far",
+                "CI on abcdef0: 1 still running out of 2 checks listed so far",
                 "CI passed on abcdef0",
             ]
         );
         assert_eq!(github.reads_of(BASE), 0);
+    }
+
+    #[test]
+    fn dependent_jobs_can_raise_both_pending_and_listed_counts() {
+        let mut github = InMemory::new().listing(
+            HEAD,
+            vec![
+                vec![pending("build"), pending("lint")],
+                vec![pending("build"), pending("lint")],
+                vec![green("build"), pending("lint")],
+                vec![
+                    green("build"),
+                    pending("lint"),
+                    pending("test/linux"),
+                    pending("test/macos"),
+                ],
+                vec![
+                    green("build"),
+                    green("lint"),
+                    green("test/linux"),
+                    green("test/macos"),
+                ],
+            ],
+        );
+
+        let ci = watch_through(&mut github, HEAD, Some(BASE)).unwrap();
+
+        assert!(matches!(ci, Ci::Passed));
+        assert_eq!(
+            github.steps,
+            [
+                "waiting up to 60s for CI on abcdef0",
+                "CI on abcdef0: 2 still running out of 2 checks listed so far",
+                "CI on abcdef0: 1 still running out of 2 checks listed so far",
+                "CI on abcdef0: 3 still running out of 4 checks listed so far",
+                "CI passed on abcdef0",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_changed_listed_count_is_reported_even_when_pending_is_unchanged() {
+        let mut github = InMemory::new().listing(
+            HEAD,
+            vec![
+                vec![pending("test")],
+                vec![pending("test")],
+                vec![pending("test")],
+                vec![pending("test"), green("lint")],
+                vec![pending("test"), green("lint")],
+                vec![green("test"), green("lint")],
+            ],
+        );
+
+        let ci = watch_through(&mut github, HEAD, Some(BASE)).unwrap();
+
+        assert!(matches!(ci, Ci::Passed));
+        assert_eq!(
+            github.steps,
+            [
+                "waiting up to 60s for CI on abcdef0",
+                "CI on abcdef0: 1 still running out of 1 checks listed so far",
+                "CI on abcdef0: 1 still running out of 2 checks listed so far",
+                "CI passed on abcdef0",
+            ]
+        );
     }
 
     #[test]
@@ -1008,9 +1075,9 @@ mod tests {
         assert_eq!(listed(&failed.on_base), ["lint: https://head/lint"]);
         assert_eq!(github.reruns, [1]);
         assert!(
-            github
-                .steps
-                .contains(&"CI on abcdef0: 1 of 2 checks still running".to_string())
+            github.steps.contains(
+                &"CI on abcdef0: 1 still running out of 2 checks listed so far".to_string()
+            )
         );
     }
 
@@ -1058,9 +1125,9 @@ mod tests {
         assert!(failed.inherited.is_empty());
         assert_eq!(github.reruns, [1, 2]);
         assert!(
-            github
-                .steps
-                .contains(&"CI on abcdef0: 1 of 3 checks still running".to_string())
+            github.steps.contains(
+                &"CI on abcdef0: 1 still running out of 3 checks listed so far".to_string()
+            )
         );
     }
 
