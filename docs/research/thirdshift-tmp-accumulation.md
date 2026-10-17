@@ -2,6 +2,8 @@
 
 Investigation for [#569](https://github.com/JacobStephens2/thirdshift/issues/569), observed **2026-10-17 09:40:52–09:41:29 UTC** (05:40:52–05:41:29 EDT), against source commit `a225cea0168d4cd8f6c6d53770ae4481cfa3bd5e`.
 
+Integration note: this report and its JSON were independently published in commit `6a39f52`, then merged with [another session's investigation](temporary-file-accumulation.md). That session observed 5,603 `/tmp` entries at overlapping times, versus the 6,608 recorded here, and could not access the original handoff files named below. Host/mount-namespace identity was not recorded; the views are uncorrelated and must not be combined or treated as before/after evidence. The measurements and original-handoff transcription in this report belong to its originating session and have not been independently reproduced by the integrating session.
+
 There are several independent lifetimes. Factory-skill extraction has a likely test-process cleanup gap; agent scratch/tooling is deliberately outside factory cleanup; test fixtures can outlive interrupted harnesses. The inventory establishes accumulation, not which entries are abandoned or what fraction each mechanism caused. **No leak was freshly reproduced.**
 
 ## Fresh inventory and limits
