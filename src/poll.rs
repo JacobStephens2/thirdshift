@@ -32,7 +32,7 @@ fn millis_from_env(name: &str) -> Option<Duration> {
 
 /// Sleep for `duration`, failing with `interrupted` as soon as the Run is
 /// interrupted.
-fn sleep(duration: Duration) -> Result<()> {
+pub(crate) fn sleep(duration: Duration) -> Result<()> {
     let deadline = Instant::now() + duration;
     loop {
         if interrupt::requested() {
