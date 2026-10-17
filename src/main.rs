@@ -60,6 +60,8 @@ const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
 
 usage: thirdshift <Issue URL>                         Run the factory on the issue
+       thirdshift <number>                            Run an issue from this clone
+       thirdshift merge <number>                      Run it, then merge the pull request
        thirdshift merge <Issue URL>                   Run, then merge the pull request
        thirdshift --no-merge <Issue URL>              Run, leaving the pull request for review
        thirdshift --email <Issue URL>                 Run, then email the outcome
@@ -77,6 +79,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift help                                Print this reference
 
 Start from the issue's repository clone. The Base branch is the branch checked out.
+Use a full Issue URL or a positive decimal issue number (e.g. thirdshift 106).
+A number uses this clone's GitHub origin, including from a nested directory.
+All Run options also work with a number.
 An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch.
 merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 

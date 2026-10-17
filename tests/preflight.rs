@@ -15,6 +15,27 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 "#;
 
 #[test]
+fn a_bare_issue_number_runs_the_same_issue_as_its_full_url() {
+    for input in ["url", "7", "0007"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+        let url = scenario.issue_url(7);
+
+        let result = scenario.run(&[if input == "url" { &url } else { input }]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+        assert!(
+            scenario.claude_calls()[0]["prompt"]
+                .as_str()
+                .unwrap()
+                .contains(&url)
+        );
+        scenario.assert_cleaned_up("issue-7");
+    }
+}
+
+#[test]
 fn a_closed_issue_is_rejected() {
     let scenario = Scenario::new();
     scenario.issue_is(7, "CLOSED");
@@ -36,7 +57,6 @@ fn a_missing_argument_is_a_usage_error() {
 #[test]
 fn an_argument_that_is_not_a_github_issue_url_is_a_usage_error() {
     for url in [
-        "7",
         "https://gitlab.com/acme/widgets/issues/7",
         "https://github.example.com/acme/widgets/issues/7",
         "https://github.com/acme/widgets/pull/7",
@@ -243,4 +263,142 @@ fn a_spec_run_stopped_by_a_preflight_check_changes_no_label() {
         &[&scenario.issue_url(20)],
         "every Ticket is closed and there is no Spec branch; nothing to do",
     );
+}
+
+#[test]
+fn bare_issue_numbers_resolve_https_and_ssh_origins_from_nested_directories() {
+    for origin in [
+        "https://github.com/ACME/Widgets.git",
+        "https://github.com/acme/widgets",
+        "git@github.com:acme/widgets.git",
+        "git@github.com:acme/widgets",
+        "ssh://git@github.com/acme/widgets.git",
+        "ssh://git@github.com/acme/widgets",
+    ] {
+        let scenario = Scenario::new();
+        scenario.set_origin_url(origin);
+        scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+        let nested = scenario.launch_dir().join("src/nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let result = scenario.run_from(&nested, &["7"]);
+
+        assert_eq!(result.code, Some(0), "{origin}: {}", result.stderr);
+        let prompt = scenario.claude_calls()[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let expected = if origin.contains("ACME") {
+            "https://github.com/ACME/Widgets/issues/7"
+        } else {
+            "https://github.com/acme/widgets/issues/7"
+        };
+        assert!(prompt.contains(expected), "{prompt}");
+        scenario.assert_cleaned_up("issue-7");
+    }
+}
+
+#[test]
+fn shorthand_keeps_merge_and_numeric_option_values_distinct() {
+    for ending in ["merge", "--no-merge"] {
+        let scenario = Scenario::new();
+        scenario.agent_does_for(7, AGENT_COMMITS_AND_OPENS_PR);
+
+        let result = scenario.run(&[
+            ending,
+            "--model",
+            "106",
+            "7",
+            "effort",
+            "3",
+            "no-email",
+            "no-base-fix",
+            "no-security-fix",
+            "no-security-review",
+        ]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+        assert_eq!(
+            scenario.gh_state()["prs"][0]["state"],
+            if ending == "merge" { "MERGED" } else { "OPEN" }
+        );
+        let argv = scenario.claude_calls()[0]["argv"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(argv.windows(2).any(|pair| pair == ["--model", "106"]));
+        assert!(argv.windows(2).any(|pair| pair == ["--effort", "3"]));
+    }
+}
+
+#[test]
+fn invalid_issue_numbers_fail_before_sessions_or_tracker_mutations() {
+    for number in [
+        "0",
+        "000",
+        "18446744073709551616",
+        "-7",
+        "+7",
+        "7x",
+        "7.0",
+        "#7",
+        " 7",
+        "７",
+    ] {
+        let scenario = Scenario::new();
+        let before = scenario.gh_state();
+
+        let result = scenario.run(&[number]);
+
+        scenario.assert_rejected_before_any_work(&result, number);
+        assert_eq!(result.code, Some(2), "{}", result.stderr);
+        assert_eq!(scenario.gh_state(), before);
+        assert!(scenario.gh_calls().is_empty());
+    }
+}
+
+#[test]
+fn a_bare_number_needs_a_github_origin_in_a_clone() {
+    for location in ["missing origin", "non-GitHub origin", "outside clone"] {
+        let scenario = Scenario::new();
+        let before = scenario.gh_state();
+        let dir = match location {
+            "missing origin" => {
+                scenario.launch_git(&["remote", "remove", "origin"]);
+                scenario.launch_dir()
+            }
+            "non-GitHub origin" => {
+                scenario.set_origin_url("https://gitlab.com/acme/widgets.git");
+                scenario.launch_dir()
+            }
+            _ => scenario.path("home"),
+        };
+
+        let result = scenario.run_from(&dir, &["7"]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            "cannot resolve issue number 7 from the Launch directory's GitHub origin",
+        );
+        assert_eq!(scenario.gh_state(), before);
+        assert!(scenario.gh_calls().is_empty());
+        if location == "non-GitHub origin" {
+            assert!(result.stderr.contains("is not a GitHub repository"));
+        }
+    }
+}
+
+#[test]
+fn parallel_consumes_its_number_before_the_issue_shorthand() {
+    let scenario = Scenario::new();
+    let before = scenario.gh_state();
+
+    let result = scenario.run(&["parallel", "2", "7"]);
+
+    scenario.assert_rejected_before_any_work(
+        &result,
+        "parallel is only for a Spec, and #7 has no sub-issues",
+    );
+    assert_eq!(scenario.gh_state(), before);
 }

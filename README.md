@@ -139,6 +139,20 @@ cd ~/repos/widgets          # a clone of the issue's repository, on the Base bra
 thirdshift https://github.com/acme/widgets/issues/7
 ```
 
+You can use a positive decimal issue number in place of the full Issue URL:
+
+```sh
+thirdshift 7
+thirdshift merge 7
+thirdshift --no-merge 7 model claude-opus-5-5
+```
+
+The number resolves against the Launch directory's GitHub `origin`, including
+from nested directories in the clone. HTTPS and SSH origins are supported;
+all Run options work with either form. A missing or non-GitHub origin, a launch
+outside a clone, or an invalid number stops before a session or tracker mutation.
+Full Issue URLs still require the Origin match.
+
 A Run takes minutes to tens of minutes.
 
 To have the Run merge its pull request instead of leaving it for your review, start a **Merge run**:

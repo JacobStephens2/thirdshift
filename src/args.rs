@@ -4,9 +4,9 @@
 
 use std::iter::Peekable;
 use std::mem::discriminant;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
@@ -175,8 +175,8 @@ fn shell_command(words: Vec<String>) -> String {
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
 /// `setup`, `email-test`, `architect`, `pickup` and `secure` are commands only as the
-/// first argument. Otherwise it is a Run: one Issue URL, with each Run flag at
-/// most once, before or after it.
+/// first argument. Otherwise it is a Run: one Issue URL or bare issue number,
+/// with each Run flag at most once, before or after it.
 /// `email` may be followed by the address to send the Run notification to,
 /// and `parallel` must be followed by a whole number from 1 up.
 /// `merge` and `no-merge` contradict each other, as do `email` and `no-email`,
@@ -223,7 +223,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         if issue.is_some() {
             bail!("unexpected argument after the Issue URL: {arg}");
         }
-        issue = Some(IssueUrl::parse(arg)?);
+        issue = Some(resolve_issue(arg)?);
     }
     let given = hidden.finish()?;
     let Some(issue) = issue else {
@@ -234,6 +234,25 @@ pub fn parse(args: &[String]) -> Result<Command> {
         flags,
         given,
     }))
+}
+
+/// Resolve a bare positive decimal number against the Launch directory's
+/// GitHub origin, or keep the existing full Issue URL parsing. Flag values
+/// have already been consumed before an argument reaches this function.
+fn resolve_issue(arg: &str) -> Result<IssueUrl> {
+    if arg.is_empty() || !arg.bytes().all(|byte| byte.is_ascii_digit()) {
+        return IssueUrl::parse(arg);
+    }
+    let number = arg.parse::<NonZeroU64>().with_context(|| {
+        format!("issue number must be a positive decimal integer fitting in u64: {arg}")
+    })?;
+    let repo = crate::launch::repo().with_context(|| {
+        format!("cannot resolve issue number {arg} from the Launch directory's GitHub origin")
+    })?;
+    IssueUrl::parse(&format!(
+        "https://github.com/{}/issues/{number}",
+        repo.slug()
+    ))
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,

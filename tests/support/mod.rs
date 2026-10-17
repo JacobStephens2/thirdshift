@@ -473,6 +473,11 @@ impl Scenario {
         self.command(args).output().unwrap().into()
     }
 
+    /// Like [`Scenario::run`], launched from a chosen directory.
+    pub fn run_from(&self, dir: &Path, args: &[&str]) -> RunResult {
+        self.command(args).current_dir(dir).output().unwrap().into()
+    }
+
     /// Like [`Scenario::run`], with extra environment variables.
     pub fn run_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> RunResult {
         let mut command = self.command(args);
