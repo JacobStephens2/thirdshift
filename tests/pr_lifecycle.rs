@@ -227,3 +227,47 @@ gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"failure",
         result.stderr
     );
 }
+
+#[test]
+fn externally_merged_pr_with_successful_gh_noop_is_not_attributed_to_factory() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = Scenario::new();
+    fs::create_dir(scenario.path("bin/delegate")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("bin/delegate/gh")).unwrap();
+    fs::write(
+        scenario.path("bin/gh"),
+        r#"#!/bin/bash
+set -e
+delegate="${0%/*}/delegate/gh"
+if [[ "${1-}" == pr && "${2-}" == merge ]]; then
+    "$delegate" fake pr issue-7 headRefOid "\"$(git rev-parse refs/remotes/origin/issue-7)\""
+    "$delegate" fake pr issue-7 state '"MERGED"'
+    git push -q origin --delete issue-7
+    printf '%s\n' '! Pull request #1 was already merged' >&2
+    exit 0
+fi
+exec "$delegate" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+    scenario.agent_does(
+        r#"
+echo feature > feature.txt
+git add feature.txt
+git commit -q -m 'Add feature'
+gh pr create --base main --head issue-7 --title Feature --body 'Closes #7'
+"#,
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "--merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    let comments = scenario.gh_state()["comments"].to_string();
+    assert!(
+        !comments.contains("merged into main by a thirdshift Merge run"),
+        "gh's successful no-op falsely attributed an external merge: {comments}; stderr={}",
+        result.stderr
+    );
+}

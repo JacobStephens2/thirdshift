@@ -698,7 +698,7 @@ mod tests {
             self.did.push(Did::Merge(head.to_string()));
             match self.script.merges.pop_front().expect("no merge scripted") {
                 Some(error) => Ok(MergeAttempt::Refused(anyhow!(error))),
-                None => Ok(MergeAttempt::Merged(MergeConfirmation::Request)),
+                None => Ok(MergeAttempt::Merged(MergeConfirmation::Command)),
             }
         }
 

@@ -24,11 +24,11 @@ pub(crate) enum MergeAttempt {
     Refused(anyhow::Error),
 }
 
-/// A successful request identifies the operation thirdshift performed. A
-/// matching completion observation establishes the result, but not its author.
+/// How the merged result was confirmed, without attributing its author.
+/// Even a successful gh command can have observed an already-merged PR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MergeConfirmation {
-    Request,
+    Command,
     Observation,
 }
 
@@ -312,7 +312,7 @@ impl<A: Adapter> PullRequest<A> {
             .into());
         }
         let Err(error) = self.adapter.merge(&self.issue, number, watched) else {
-            return Ok(MergeAttempt::Merged(MergeConfirmation::Request));
+            return Ok(MergeAttempt::Merged(MergeConfirmation::Command));
         };
         // Completion never clears or changes the recorded interruption. Only
         // this PR, merged at the watched head and expected branches, counts.
@@ -1471,7 +1471,7 @@ mod tests {
         pr.mark_ready(None).unwrap();
         assert!(matches!(
             pr.merge("watched").unwrap(),
-            MergeAttempt::Merged(MergeConfirmation::Request)
+            MergeAttempt::Merged(MergeConfirmation::Command)
         ));
         assert_eq!(world.borrow().merges, [(12, "watched".to_string())]);
         assert!(

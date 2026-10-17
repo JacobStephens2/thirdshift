@@ -30,7 +30,7 @@ fn merge_into_develop(scenario: &Scenario, then: &str) {
     ));
 }
 
-const CLOSING_COMMENT: &str = "Closed by #1, merged into develop by a thirdshift Merge run.";
+const CLOSING_COMMENT: &str = "Closed by #1, merged into develop.";
 
 /// Assert that `base`'s tip on origin is a merge commit of the head commit
 /// thirdshift asked `gh pr merge` to match, and return that head.
@@ -275,7 +275,7 @@ fn an_issue_close_failure_links_the_issue_and_keeps_the_manual_close_command() {
             "could not close issue #7 (https://github.com/acme/widgets/issues/7), \
              so if it is still open, close it by hand: \
              gh issue close 7 --repo acme/widgets --comment \
-             'Closed by #1, merged into develop by a thirdshift Merge run.'"
+             'Closed by #1, merged into develop.'"
         ),
         "stderr: {}",
         result.stderr
@@ -449,7 +449,9 @@ fn ctrl_c_after_the_merge_finishes_the_post_merge_steps_and_exits_as_merged() {
     assert_eq!(scenario.origin_log("issue-7"), None);
     assert_eq!(
         scenario.gh_state()["comments"]["7"],
-        serde_json::json!([CLOSING_COMMENT])
+        serde_json::json!([
+            "Closed by #1, observed merged into develop after a failed thirdshift merge request; the merger is unconfirmed."
+        ])
     );
     assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
     scenario.assert_cleaned_up("issue-7");

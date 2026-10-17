@@ -249,10 +249,9 @@ impl Route<'_> {
             );
         }
         let comment = match confirmation {
-            MergeConfirmation::Request => format!(
-                "Closed by #{}, merged into {} by a thirdshift Merge run.",
-                pr.number, self.base
-            ),
+            MergeConfirmation::Command => {
+                format!("Closed by #{}, merged into {}.", pr.number, self.base)
+            }
             MergeConfirmation::Observation => format!(
                 "Closed by #{}, observed merged into {} after a failed thirdshift merge request; the merger is unconfirmed.",
                 pr.number, self.base
@@ -741,7 +740,7 @@ mod tests {
                 return Err(anyhow!("merge refused").context(PolicyRefusal::NothingToFix));
             }
             self.check(Fails::Goal)?;
-            Ok((goal == Goal::Merged).then_some(MergeConfirmation::Request))
+            Ok((goal == Goal::Merged).then_some(MergeConfirmation::Command))
         }
         fn delete_branch(&mut self) -> Result<()> {
             self.calls.push(Call::Delete);
@@ -862,9 +861,11 @@ mod tests {
         let mut outside = Scripted::default();
         assert!(deliver(&mut outside, Goal::Merged, false).is_ok());
         assert!(outside.calls.contains(&Call::Delete));
-        assert!(outside.calls.contains(&Call::Close(
-            "Closed by #12, merged into main by a thirdshift Merge run.".to_string()
-        )));
+        assert!(
+            outside
+                .calls
+                .contains(&Call::Close("Closed by #12, merged into main.".to_string()))
+        );
     }
 
     #[test]
