@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::resend::ResendStandIn;
+use support::resend::{ResendStandIn, assert_one_issue_line};
 use support::{Scenario, WAIT_BOUND, leaves_running};
 
 const SPEC: u32 = 20;
@@ -2178,15 +2178,7 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
     let requests = resend.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
     let body = &requests[0].body;
-    assert_eq!(
-        body["text"]
-            .as_str()
-            .unwrap()
-            .lines()
-            .filter(|line| line.starts_with("Issue:"))
-            .count(),
-        1
-    );
+    assert_one_issue_line(body["text"].as_str().unwrap());
     (
         body["subject"].as_str().unwrap().to_string(),
         body["text"].as_str().unwrap().to_string(),

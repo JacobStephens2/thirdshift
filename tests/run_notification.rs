@@ -7,7 +7,7 @@ mod support;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-use support::resend::{Request, ResendStandIn};
+use support::resend::{Request, ResendStandIn, assert_one_issue_line};
 use support::{RunResult, Scenario, leaves_running};
 
 const KEY: &str = "re_test_123";
@@ -466,12 +466,7 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
         ),
         "{text}"
     );
-    assert_eq!(
-        text.lines()
-            .filter(|line| line.starts_with("Issue:"))
-            .count(),
-        1
-    );
+    assert_one_issue_line(text);
     assert_contains(text, PR_URL);
     assert_contains(text, &the_one_log(&scenario));
     assert_contains(text, &hostname());

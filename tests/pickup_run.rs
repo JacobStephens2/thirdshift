@@ -17,7 +17,7 @@ mod support;
 
 use std::fs;
 
-use support::resend::ResendStandIn;
+use support::resend::{ResendStandIn, assert_one_issue_line};
 use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log};
 
 /// The label of an issue a Pickup run may take.
@@ -912,12 +912,7 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
     let body = &requests[0].body;
     let part = |name: &str| body[name].as_str().unwrap().to_string();
     let text = part("text");
-    assert_eq!(
-        text.lines()
-            .filter(|line| line.starts_with("Issue:"))
-            .count(),
-        1
-    );
+    assert_one_issue_line(&text);
     (part("subject"), text)
 }
 
