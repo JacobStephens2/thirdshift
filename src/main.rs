@@ -60,7 +60,7 @@ const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
 
 usage: thirdshift <Issue URL>                         Run the factory on the issue
-       thirdshift <number>                            Run an issue from this clone
+       thirdshift <number>                            Resolve the issue from origin and run
        thirdshift merge <number>                      Run it, then merge the pull request
        thirdshift merge <Issue URL>                   Run, then merge the pull request
        thirdshift --no-merge <Issue URL>              Run, leaving the pull request for review
@@ -79,13 +79,12 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift help                                Print this reference
 
 Start from the issue's repository clone. The Base branch is the branch checked out.
-Use a full Issue URL or a positive decimal issue number (e.g. thirdshift 106).
-A number uses this clone's GitHub origin, including from a nested directory.
-All Run options also work with a number.
+Use a positive decimal number anywhere an Issue URL is accepted, e.g. thirdshift merge 106.
+Numbers use origin's GitHub repository, including from nested directories in the clone.
 An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch.
 merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 
-Shared options (before or after the Issue URL, or after a Pass command):
+Shared options (before or after the Issue URL or number, or after a Pass command):
   merge / no-merge                    Merge the pull request / leave it for review
   email [<address>] / no-email        Send a Run notification / skip it
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
@@ -138,6 +137,10 @@ fn main() -> ExitCode {
         Ok(Command::Secure(args)) => return secure(args),
         Ok(Command::Run(run_args)) => run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
+    };
+    let issue = match launch::resolve_issue(issue) {
+        Ok(issue) => issue,
+        Err(error) => return failure(&error),
     };
     let begin = match &given {
         Some(given) => Begin::ChildRun(&given.stamp, given.command),

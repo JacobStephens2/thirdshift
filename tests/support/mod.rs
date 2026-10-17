@@ -473,7 +473,7 @@ impl Scenario {
         self.command(args).output().unwrap().into()
     }
 
-    /// Like [`Scenario::run`], launched from a chosen directory.
+    /// Like [`Scenario::run`], launched from `dir` with the same isolated environment.
     pub fn run_from(&self, dir: &Path, args: &[&str]) -> RunResult {
         self.command(args).current_dir(dir).output().unwrap().into()
     }

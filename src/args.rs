@@ -4,15 +4,15 @@
 
 use std::iter::Peekable;
 use std::mem::discriminant;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{self, Given};
 use crate::harness::{self, Harness};
-use crate::issue::IssueUrl;
+use crate::issue::{IssueInput, IssueUrl};
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
 
@@ -71,7 +71,7 @@ const BASE_FIX: &str = "base-fix";
 
 /// A Run's arguments.
 pub struct RunArgs {
-    pub issue: IssueUrl,
+    pub issue: IssueInput,
     /// Its flags, as given: for each one the command left out, the User
     /// config decides.
     pub flags: Flags,
@@ -223,7 +223,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         if issue.is_some() {
             bail!("unexpected argument after the Issue URL: {arg}");
         }
-        issue = Some(resolve_issue(arg)?);
+        issue = Some(IssueInput::parse(arg)?);
     }
     let given = hidden.finish()?;
     let Some(issue) = issue else {
@@ -234,25 +234,6 @@ pub fn parse(args: &[String]) -> Result<Command> {
         flags,
         given,
     }))
-}
-
-/// Resolve a bare positive decimal number against the Launch directory's
-/// GitHub origin, or keep the existing full Issue URL parsing. Flag values
-/// have already been consumed before an argument reaches this function.
-fn resolve_issue(arg: &str) -> Result<IssueUrl> {
-    if arg.is_empty() || !arg.bytes().all(|byte| byte.is_ascii_digit()) {
-        return IssueUrl::parse(arg);
-    }
-    let number = arg.parse::<NonZeroU64>().with_context(|| {
-        format!("issue number must be a positive decimal integer fitting in u64: {arg}")
-    })?;
-    let repo = crate::launch::repo().with_context(|| {
-        format!("cannot resolve issue number {arg} from the Launch directory's GitHub origin")
-    })?;
-    IssueUrl::parse(&format!(
-        "https://github.com/{}/issues/{number}",
-        repo.slug()
-    ))
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,
@@ -514,7 +495,7 @@ mod tests {
                 ..flags
             }
         );
-        assert_eq!(run.issue.url, URL);
+        assert_eq!(run.issue, IssueInput::Url(IssueUrl::parse(URL).unwrap()));
         assert!(run.given.is_none());
     }
 
@@ -566,7 +547,7 @@ mod tests {
             let Command::Run(run) = parse(&words).unwrap() else {
                 panic!("{command}")
             };
-            assert_eq!(run.issue, issue);
+            assert_eq!(run.issue, IssueInput::Url(issue.clone()));
             assert!(run.given.is_none());
             assert_eq!(
                 run.flags,
@@ -721,6 +702,51 @@ mod tests {
             Ok(_) => panic!("{args:?}: not a Run"),
             Err(error) => panic!("{args:?}: {error:#}"),
         }
+    }
+
+    #[test]
+    fn issue_numbers_leave_numeric_option_values_with_their_flags() {
+        for input in ["106", "000106"] {
+            for args in [
+                vec![
+                    "parallel", "2", "model", "123", "effort", "456", "email", "merge", input,
+                ],
+                vec![
+                    input,
+                    "--parallel",
+                    "2",
+                    "--model",
+                    "123",
+                    "--effort",
+                    "456",
+                    "--email",
+                    "--merge",
+                ],
+            ] {
+                let run = run_args(&args);
+                assert_eq!(run.issue, IssueInput::Number(106.try_into().unwrap()));
+                assert_eq!(run.flags.parallel, NonZeroUsize::new(2));
+                assert_eq!(
+                    run.flags.harness.model_and_effort.model.as_deref(),
+                    Some("123")
+                );
+                assert_eq!(
+                    run.flags.harness.model_and_effort.effort.as_deref(),
+                    Some("456")
+                );
+                assert_eq!(run.flags.email, Some(NotificationAsk::Send(None)));
+                assert_eq!(run.flags.goal, Some(Goal::Merged));
+            }
+        }
+        for args in [
+            vec!["model", "106"],
+            vec!["effort", "106"],
+            vec!["parallel", "106"],
+        ] {
+            assert_eq!(rejection(&args), "missing Issue URL");
+        }
+        let run = run_args(&["18446744073709551615"]);
+        assert_eq!(run.issue, IssueInput::Number(u64::MAX.try_into().unwrap()));
     }
 
     /// The Architect run `args` parse to.
@@ -1277,7 +1303,11 @@ mod tests {
         ] {
             let run_args = run_args(&args);
             assert_eq!(run_args.flags.email, Some(asked), "{args:?}");
-            assert_eq!(run_args.issue.url, URL, "{args:?}");
+            assert_eq!(
+                run_args.issue,
+                IssueInput::Url(IssueUrl::parse(URL).unwrap()),
+                "{args:?}"
+            );
         }
     }
 
@@ -1298,7 +1328,11 @@ mod tests {
             (vec![URL, "--email", "merge"], bare(), Some(Goal::Merged)),
         ] {
             let run_args = run_args(&args);
-            assert_eq!(run_args.issue.url, URL, "{args:?}");
+            assert_eq!(
+                run_args.issue,
+                IssueInput::Url(IssueUrl::parse(URL).unwrap()),
+                "{args:?}"
+            );
             assert_eq!(run_args.flags.email, Some(asked), "{args:?}");
             assert_eq!(run_args.flags.goal, goal, "{args:?}");
         }
