@@ -24,6 +24,59 @@ pub use advisories::{
 #[cfg(test)]
 mod execution_tests;
 
+/// A failed gh command keeps its diagnostic locally; notifications use only
+/// its fixed operational category.
+#[derive(Debug)]
+enum CommandFailure {
+    Rejected { command: String, stderr: String },
+    InvalidJson { command: String },
+    InvalidResponse(String),
+    Execution,
+}
+
+impl CommandFailure {
+    fn rejected(command: String, output: &Output) -> Self {
+        Self::Rejected {
+            command,
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }
+    }
+}
+
+impl fmt::Display for CommandFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rejected { command, stderr } => write!(f, "{command} failed: {stderr}"),
+            Self::InvalidJson { command } => write!(f, "{command} returned invalid JSON"),
+            Self::InvalidResponse(message) => f.write_str(message),
+            Self::Execution => f.write_str("could not run gh"),
+        }
+    }
+}
+
+impl std::error::Error for CommandFailure {}
+
+/// A fixed cause for failed GitHub queries, never their original diagnostics.
+/// Only explicit quota messages establish exhaustion; a bare 403 does not.
+pub(crate) fn operational_cause(error: &anyhow::Error) -> Option<&'static str> {
+    let stderr = match error.downcast_ref::<CommandFailure>() {
+        Some(CommandFailure::Rejected { stderr, .. }) => stderr,
+        Some(_) => return Some("GitHub dependency failure"),
+        None => &error.downcast_ref::<check_read::ApiFailure>()?.stderr,
+    };
+    let stderr = stderr.to_ascii_lowercase();
+    Some(
+        if stderr.contains("api rate limit exceeded")
+            || stderr.contains("api rate limit already exceeded")
+            || stderr.contains("secondary rate limit")
+        {
+            "GitHub rate-limit exhaustion"
+        } else {
+            "GitHub dependency failure"
+        },
+    )
+}
+
 /// GitHub CLI operations bound to an immutable interruption policy.
 /// Ordinary views stop for Command interruption; completion views finish
 /// independently without changing the recorded request or other views.
@@ -67,7 +120,9 @@ impl GitHub {
         let json = self.issue_view(issue, "title")?;
         Ok(json["title"]
             .as_str()
-            .context("gh output has no title")?
+            .context(CommandFailure::InvalidResponse(
+                "gh output has no title".into(),
+            ))?
             .to_string())
     }
 
@@ -76,13 +131,19 @@ impl GitHub {
         let json = self.issue_view(issue, "title,state,labels,createdAt")?;
         let created = json["createdAt"]
             .as_str()
-            .context("gh output has no createdAt")?;
+            .context(CommandFailure::InvalidResponse(
+                "gh output has no createdAt".into(),
+            ))?;
         Ok(Issue {
             title: json["title"].as_str().map(String::from),
             is_open: state_is_open(&json)?,
             labels: labels_of(&json)?,
             created: DateTime::parse_from_rfc3339(created)
-                .with_context(|| format!("gh output has an unreadable createdAt {created}"))?
+                .with_context(|| {
+                    CommandFailure::InvalidResponse(format!(
+                        "gh output has an unreadable createdAt {created}"
+                    ))
+                })?
                 .to_utc(),
         })
     }
@@ -190,8 +251,9 @@ impl GitHub {
             "--jq",
             ".id",
         ])?;
-        json.as_u64()
-            .context("gh api did not return the issue's database id")
+        json.as_u64().context(CommandFailure::InvalidResponse(
+            "gh api did not return the issue's database id".into(),
+        ))
     }
 
     /// Link `child` as a native sub-issue of `parent`.
@@ -261,16 +323,24 @@ impl GitHub {
             "1000",
         ])?;
         json.as_array()
-            .context("gh issue list did not return a list")?
+            .context(CommandFailure::InvalidResponse(
+                "gh issue list did not return a list".into(),
+            ))?
             .iter()
             .map(|listed| {
                 let field = |name: &str| {
-                    listed[name]
-                        .as_str()
-                        .with_context(|| format!("gh issue list output has no {name}"))
+                    listed[name].as_str().with_context(|| {
+                        CommandFailure::InvalidResponse(format!(
+                            "gh issue list output has no {name}"
+                        ))
+                    })
                 };
                 Ok(ListedIssue {
-                    issue: IssueUrl::parse(field("url")?)?,
+                    issue: IssueUrl::parse(field("url")?).context(
+                        CommandFailure::InvalidResponse(
+                            "gh issue list output has an invalid issue URL".into(),
+                        ),
+                    )?,
                     title: field("title")?.to_string(),
                     labels: labels_of(listed)?,
                 })
@@ -298,23 +368,32 @@ impl GitHub {
                 "--limit",
                 "1000",
             ])?;
-            for listed in json
-                .as_array()
-                .context("gh issue list did not return a list")?
-            {
+            for listed in json.as_array().context(CommandFailure::InvalidResponse(
+                "gh issue list did not return a list".into(),
+            ))? {
                 let url = listed["url"]
                     .as_str()
-                    .context("gh issue list output has no url")?;
+                    .context(CommandFailure::InvalidResponse(
+                        "gh issue list output has no url".into(),
+                    ))?;
                 let at = listed["createdAt"]
                     .as_str()
-                    .context("gh issue list output has no createdAt")?;
+                    .context(CommandFailure::InvalidResponse(
+                        "gh issue list output has no createdAt".into(),
+                    ))?;
                 let at = DateTime::parse_from_rfc3339(at)
                     .with_context(|| {
-                        format!("gh issue list output has an unreadable createdAt {at}")
+                        CommandFailure::InvalidResponse(format!(
+                            "gh issue list output has an unreadable createdAt {at}"
+                        ))
                     })?
                     .to_utc();
                 if at.timestamp() >= since.timestamp() {
-                    found.push(IssueUrl::parse(url)?);
+                    found.push(
+                        IssueUrl::parse(url).context(CommandFailure::InvalidResponse(
+                            "gh issue list output has an invalid issue URL".into(),
+                        ))?,
+                    );
                 }
             }
         }
@@ -334,15 +413,21 @@ impl GitHub {
             let info = &page["pageInfo"];
             if !info["hasNextPage"]
                 .as_bool()
-                .context("label history has no hasNextPage")?
+                .context(CommandFailure::InvalidResponse(
+                    "label history has no hasNextPage".into(),
+                ))?
             {
                 break json;
             }
             let next = info["endCursor"]
                 .as_str()
-                .context("label history has no endCursor")?;
+                .context(CommandFailure::InvalidResponse(
+                    "label history has no endCursor".into(),
+                ))?;
             if Some(next) == after.as_deref() {
-                bail!("label history cursor did not advance");
+                bail!(CommandFailure::InvalidResponse(
+                    "label history cursor did not advance".into()
+                ));
             }
             after = Some(next.to_string());
         };
@@ -350,7 +435,10 @@ impl GitHub {
         let parent = issue["parent"]["url"]
             .as_str()
             .map(IssueUrl::parse)
-            .transpose()?;
+            .transpose()
+            .context(CommandFailure::InvalidResponse(
+                "gh api graphql output has an invalid parent issue URL".into(),
+            ))?;
         let mut open_blockers = Vec::new();
         for blocker in nodes(&issue["blockedBy"], "blockedBy")? {
             if node_is_open(blocker)? {
@@ -360,9 +448,15 @@ impl GitHub {
         let at = |event: &Value| -> Result<DateTime<Utc>> {
             let at = event["createdAt"]
                 .as_str()
-                .context("gh api graphql output has an event with no createdAt")?;
+                .context(CommandFailure::InvalidResponse(
+                    "gh api graphql output has an event with no createdAt".into(),
+                ))?;
             Ok(DateTime::parse_from_rfc3339(at)
-                .with_context(|| format!("gh api graphql output has an unreadable createdAt {at}"))?
+                .with_context(|| {
+                    CommandFailure::InvalidResponse(format!(
+                        "gh api graphql output has an unreadable createdAt {at}"
+                    ))
+                })?
                 .to_utc())
         };
         let mut shaped = Vec::new();
@@ -371,7 +465,9 @@ impl GitHub {
             let applied = match event["__typename"].as_str() {
                 Some("LabeledEvent") => true,
                 Some("UnlabeledEvent") => false,
-                other => bail!("gh api graphql output has an unknown label event {other:?}"),
+                other => bail!(CommandFailure::InvalidResponse(format!(
+                    "gh api graphql output has an unknown label event {other:?}"
+                ))),
             };
             let name = event["label"]["name"].as_str();
             history = history.after(name, applied, label);
@@ -386,7 +482,9 @@ impl GitHub {
             let by = match event["__typename"].as_str() {
                 Some("SubIssueAddedEvent" | "SubIssueRemovedEvent") => Shaping::SubIssues,
                 Some("BlockedByAddedEvent" | "BlockedByRemovedEvent") => Shaping::Blockers,
-                other => bail!("gh api graphql output has an unknown event {other:?}"),
+                other => bail!(CommandFailure::InvalidResponse(format!(
+                    "gh api graphql output has an unknown event {other:?}"
+                ))),
             };
             shaped.push(Shaped { by, at: at(event)? });
         }
@@ -408,11 +506,9 @@ impl GitHub {
         let known = self.gh_json(&[
             "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
         ])?;
-        let known = named(
-            known
-                .as_array()
-                .context("gh label list did not return a list")?,
-        );
+        let known = named(known.as_array().context(CommandFailure::InvalidResponse(
+            "gh label list did not return a list".into(),
+        ))?);
         for label in labels {
             if !known.has(*label) {
                 self.gh(&[
@@ -467,7 +563,9 @@ impl GitHub {
             "--label",
             &names.join(","),
         ])?;
-        IssueUrl::parse(&url).context("gh issue create did not print the issue's URL")
+        IssueUrl::parse(&url).context(CommandFailure::InvalidResponse(
+            "gh issue create did not print the issue's URL".into(),
+        ))
     }
 
     /// The public email of the signed-in user's GitHub profile, or `None` if it
@@ -518,18 +616,22 @@ impl GitHub {
             Some("MERGEABLE") => Mergeable::Yes,
             Some("CONFLICTING") => Mergeable::No,
             Some("UNKNOWN") => Mergeable::Unknown,
-            other => bail!("gh output has an unknown mergeable state {other:?}"),
+            other => bail!(CommandFailure::InvalidResponse(format!(
+                "gh output has an unknown mergeable state {other:?}"
+            ))),
         };
         Ok(Some(PrSnapshot {
             pr: PullRequest::from_json(&json)?,
             mergeable,
             head_commit: json["headRefOid"]
                 .as_str()
-                .context("gh output has no headRefOid")?
+                .context(CommandFailure::InvalidResponse(
+                    "gh output has no headRefOid".into(),
+                ))?
                 .to_string(),
-            from_fork: json["isCrossRepository"]
-                .as_bool()
-                .context("gh output has no isCrossRepository")?,
+            from_fork: json["isCrossRepository"].as_bool().context(
+                CommandFailure::InvalidResponse("gh output has no isCrossRepository".into()),
+            )?,
         }))
     }
 
@@ -556,7 +658,9 @@ impl GitHub {
             &format!("{PR_FIELDS},isCrossRepository"),
         ])?;
         json.as_array()
-            .context("gh pr list did not return a list")?
+            .context(CommandFailure::InvalidResponse(
+                "gh pr list did not return a list".into(),
+            ))?
             .iter()
             .filter(|pr| pr["isCrossRepository"] != Value::Bool(true))
             .map(PullRequest::from_json)
@@ -594,7 +698,9 @@ impl GitHub {
         let json = self.pr_view(issue, &number.to_string(), "body")?;
         Ok(json["body"]
             .as_str()
-            .context("gh output has no body")?
+            .context(CommandFailure::InvalidResponse(
+                "gh output has no body".into(),
+            ))?
             .to_string())
     }
 
@@ -682,7 +788,9 @@ impl GitHub {
             checks.push(Check {
                 name: run["name"]
                     .as_str()
-                    .context("a check run has no name")?
+                    .context(CommandFailure::InvalidResponse(
+                        "a check run has no name".into(),
+                    ))?
                     .to_string(),
                 state,
                 job: ActionsJob::of(run["id"].as_u64(), run["details_url"].as_str()),
@@ -698,7 +806,9 @@ impl GitHub {
             checks.push(Check {
                 name: status["context"]
                     .as_str()
-                    .context("a commit status has no context")?
+                    .context(CommandFailure::InvalidResponse(
+                        "a commit status has no context".into(),
+                    ))?
                     .to_string(),
                 state,
                 url: url(&status["target_url"]),
@@ -731,11 +841,10 @@ impl GitHub {
     fn gh_stdout(&self, args: &[&str]) -> Result<String> {
         let output = self.output(args)?;
         if !output.status.success() {
-            bail!(
-                "gh {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            bail!(CommandFailure::rejected(
+                format!("gh {}", args.join(" ")),
+                &output
+            ));
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
@@ -753,7 +862,9 @@ impl GitHub {
         serde_json::Deserializer::from_slice(&output.stdout)
             .into_iter()
             .collect::<Result<_, _>>()
-            .with_context(|| format!("gh api {path} returned invalid JSON"))
+            .with_context(|| CommandFailure::InvalidJson {
+                command: format!("gh api {path}"),
+            })
     }
 
     /// Run `gh <args>` and parse its stdout as JSON, failing with gh's stderr if
@@ -762,13 +873,10 @@ impl GitHub {
         let command = format!("gh {}", args[..2].join(" "));
         let output = self.output(args)?;
         if !output.status.success() {
-            bail!(
-                "{command} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            bail!(CommandFailure::rejected(command, &output));
         }
         serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("{command} returned invalid JSON"))
+            .with_context(|| CommandFailure::InvalidJson { command })
     }
     fn output(&self, args: &[&str]) -> Result<Output> {
         self.output_with_input(args, None)
@@ -784,12 +892,23 @@ impl GitHub {
                 stop: &|child| process::stop(child, &[libc::SIGTERM]),
             },
         )
+        .map_err(|error| {
+            self.interruption
+                .check()
+                .err()
+                .unwrap_or_else(|| error.context(CommandFailure::Execution))
+        })
     }
 }
 
 /// Whether the issue `json` describes, with its `state`, is open.
 fn state_is_open(json: &Value) -> Result<bool> {
-    Ok(json["state"].as_str().context("gh output has no state")? == "OPEN")
+    Ok(json["state"]
+        .as_str()
+        .context(CommandFailure::InvalidResponse(
+            "gh output has no state".into(),
+        ))?
+        == "OPEN")
 }
 
 /// An issue as an Architect run reads the issue its Architecture review
@@ -804,11 +923,9 @@ pub struct Issue {
 
 /// The labels of the issue `json` describes, with its `labels`.
 fn labels_of(json: &Value) -> Result<Labels> {
-    Ok(named(
-        json["labels"]
-            .as_array()
-            .context("gh output has no labels")?,
-    ))
+    Ok(named(json["labels"].as_array().context(
+        CommandFailure::InvalidResponse("gh output has no labels".into()),
+    )?))
 }
 
 /// The labels `labels` describe, each with its `name`.
@@ -878,16 +995,18 @@ query($owner: String!, $repo: String!, $number: Int!) {
 
 /// The `nodes` of `connection`, the `what` of a GraphQL answer.
 fn nodes<'a>(connection: &'a Value, what: &str) -> Result<&'a Vec<Value>> {
-    connection["nodes"]
-        .as_array()
-        .with_context(|| format!("gh api graphql output has no {what}"))
+    connection["nodes"].as_array().with_context(|| {
+        CommandFailure::InvalidResponse(format!("gh api graphql output has no {what}"))
+    })
 }
 
 /// Whether the issue a GraphQL answer's `node` describes is open.
 fn node_is_open(node: &Value) -> Result<bool> {
     Ok(node["state"]
         .as_str()
-        .context("gh api graphql output has an issue with no state")?
+        .context(CommandFailure::InvalidResponse(
+            "gh api graphql output has an issue with no state".into(),
+        ))?
         == "OPEN")
 }
 
@@ -896,22 +1015,31 @@ fn node_issue(node: &Value) -> Result<IssueUrl> {
     IssueUrl::parse(
         node["url"]
             .as_str()
-            .context("gh api graphql output has an issue with no URL")?,
+            .context(CommandFailure::InvalidResponse(
+                "gh api graphql output has an issue with no URL".into(),
+            ))?,
     )
+    .context(CommandFailure::InvalidResponse(
+        "gh api graphql output has an invalid issue URL".into(),
+    ))
 }
 
 /// The number of the issue a GraphQL answer's `node` describes.
 fn node_number(node: &Value) -> Result<u64> {
     node["number"]
         .as_u64()
-        .context("gh api graphql output has an issue with no number")
+        .context(CommandFailure::InvalidResponse(
+            "gh api graphql output has an issue with no number".into(),
+        ))
 }
 
 /// How many sub-issues the issue a GraphQL answer's `node` describes has.
 fn sub_issue_count(node: &Value) -> Result<u64> {
     node["subIssues"]["totalCount"]
         .as_u64()
-        .context("gh api graphql output has an issue with no subIssues count")
+        .context(CommandFailure::InvalidResponse(
+            "gh api graphql output has an issue with no subIssues count".into(),
+        ))
 }
 
 /// An issue as a listing of its repository's issues gives it.
@@ -1085,26 +1213,33 @@ impl PullRequest {
 
     fn from_json(json: &Value) -> Result<Self> {
         let field = |name: &str| -> Result<String> {
-            json[name]
-                .as_str()
-                .map(String::from)
-                .with_context(|| format!("gh output has no {name}"))
+            json[name].as_str().map(String::from).with_context(|| {
+                CommandFailure::InvalidResponse(format!("gh output has no {name}"))
+            })
         };
         let state = match field("state")?.as_str() {
             "OPEN" => PrState::Open,
             "CLOSED" => PrState::Closed,
             "MERGED" => PrState::Merged,
-            other => bail!("gh output has an unknown PR state {other}"),
+            other => bail!(CommandFailure::InvalidResponse(format!(
+                "gh output has an unknown PR state {other}"
+            ))),
         };
         Ok(PullRequest {
-            number: json["number"].as_u64().context("gh output has no number")?,
+            number: json["number"]
+                .as_u64()
+                .context(CommandFailure::InvalidResponse(
+                    "gh output has no number".into(),
+                ))?,
             url: field("url")?,
             state,
             head: field("headRefName")?,
             base: field("baseRefName")?,
             is_draft: json["isDraft"]
                 .as_bool()
-                .context("gh output has no isDraft")?,
+                .context(CommandFailure::InvalidResponse(
+                    "gh output has no isDraft".into(),
+                ))?,
         })
     }
 }
