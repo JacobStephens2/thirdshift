@@ -262,6 +262,55 @@ fn a_merge_into_a_branch_other_than_the_default_closes_the_issue_with_a_comment(
 }
 
 #[test]
+fn an_issue_close_failure_links_the_issue_and_keeps_the_manual_close_command() {
+    let scenario = Scenario::new();
+    merge_into_develop(&scenario, "");
+    scenario.gh_fails("issue close");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "could not close issue #7 (https://github.com/acme/widgets/issues/7), \
+             so if it is still open, close it by hand: \
+             gh issue close 7 --repo acme/widgets --comment \
+             'Closed by #1, merged into develop by a thirdshift Merge run.'"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: PR {PR_URL} is merged").as_str())
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn an_already_closed_issue_has_no_close_failure_warning() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake after-merge 'gh fake issue 7 CLOSED'\n"
+    ));
+    scenario.gh_fails("issue close");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(scenario.gh_calls_of("issue", "close").is_empty());
+    assert!(
+        !result.stderr.contains("could not close issue"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+}
+
+#[test]
 fn an_issue_branch_already_deleted_by_github_is_no_warning() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(

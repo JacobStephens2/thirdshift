@@ -237,9 +237,10 @@ impl Route<'_> {
             outside.warn(
                 &error,
                 format!(
-                    "could not close issue #{number}, so if it is still open, close it by hand: \
+                    "could not close issue #{number} ({url}), so if it is still open, close it by hand: \
                      gh issue close {number} --repo {repo} --comment '{quoted}'",
                     number = issue.number,
+                    url = issue.url,
                     repo = issue.repo_slug(),
                     quoted = comment.replace('\'', r"'\''")
                 ),
