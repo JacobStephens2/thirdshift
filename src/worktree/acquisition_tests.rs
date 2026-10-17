@@ -1038,8 +1038,14 @@ fn continuation_refuses_local_only_work_without_selection_and_preserves_its_head
         origin_head
     );
     assert_eq!(
-        result.err().expect("acquisition should refuse").to_string(),
-        "the local branch issue-7 differs from origin/issue-7; push, reset or delete it first"
+        result
+            .err()
+            .expect("acquisition should refuse")
+            .to_string()
+            .lines()
+            .next()
+            .unwrap(),
+        "the local branch issue-7 differs from origin/issue-7"
     );
 }
 
@@ -1059,8 +1065,14 @@ fn fresh_acquisition_refuses_an_existing_local_branch_even_at_the_base_head() {
         worktrees
     );
     assert_eq!(
-        result.err().expect("acquisition should refuse").to_string(),
-        "the local branch issue-7 is not on origin; push, rename or delete it first"
+        result
+            .err()
+            .expect("acquisition should refuse")
+            .to_string()
+            .lines()
+            .next()
+            .unwrap(),
+        "the local branch issue-7 is not on origin"
     );
 }
 
@@ -1094,8 +1106,14 @@ fn continuation_refuses_a_local_commit_added_after_successful_preflight() {
         worktrees
     );
     assert_eq!(
-        result.err().expect("acquisition should refuse").to_string(),
-        "the local branch issue-7 differs from origin/issue-7; push, reset or delete it first"
+        result
+            .err()
+            .expect("acquisition should refuse")
+            .to_string()
+            .lines()
+            .next()
+            .unwrap(),
+        "the local branch issue-7 differs from origin/issue-7"
     );
 }
 
@@ -1143,8 +1161,14 @@ fn continuation_refuses_a_local_ancestor_when_origin_advances_after_preflight() 
         worktrees
     );
     assert_eq!(
-        result.err().expect("acquisition should refuse").to_string(),
-        "the local branch issue-7 differs from origin/issue-7; push, reset or delete it first"
+        result
+            .err()
+            .expect("acquisition should refuse")
+            .to_string()
+            .lines()
+            .next()
+            .unwrap(),
+        "the local branch issue-7 differs from origin/issue-7"
     );
 }
 

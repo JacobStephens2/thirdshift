@@ -14,6 +14,8 @@ use crate::git::Git;
 use crate::progress;
 
 mod acquisition;
+mod advice;
+pub(crate) use advice::local_branch_advice;
 #[cfg(test)]
 mod acquisition_tests;
 #[cfg(test)]
@@ -115,7 +117,8 @@ impl Worktree {
         let _lock = lock_launch(launch)?;
         launch.fetch(&[base])?;
         let origin = fetched_origin(base, |args| launch.run(args))?;
-        check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
+        check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)
+            .map_err(|error| local_branch_advice(launch, error))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
@@ -130,7 +133,8 @@ impl Worktree {
         launch.fetch(&[base, branch])?;
         let origin = fetched_origin(branch, |args| launch.run(args))?;
         let local = local_head(launch, branch)?;
-        check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
+        check_local_branch(branch, local.as_deref(), Some(&origin.commit))
+            .map_err(|error| local_branch_advice(launch, error))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
@@ -339,12 +343,8 @@ pub(crate) fn check_local_branch(
     };
     match origin_head {
         Some(origin_head) if origin_head == local_head => Ok(()),
-        Some(_) => bail!(
-            "the local branch {branch} differs from origin/{branch}; push, reset or delete it first"
-        ),
-        None => {
-            bail!("the local branch {branch} is not on origin; push, rename or delete it first")
-        }
+        Some(_) => Err(advice::branch_conflict(branch, true)),
+        None => Err(advice::branch_conflict(branch, false)),
     }
 }
 

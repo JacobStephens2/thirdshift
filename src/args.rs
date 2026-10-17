@@ -155,7 +155,7 @@ fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
 }
 
 /// Render literal POSIX shell words; readable safe words need no quoting.
-fn shell_command(words: Vec<String>) -> String {
+pub(crate) fn shell_command(words: Vec<String>) -> String {
     words
         .into_iter()
         .map(|word| {

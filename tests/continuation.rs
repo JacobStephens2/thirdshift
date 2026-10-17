@@ -172,11 +172,22 @@ git checkout -q main
         assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
         assert_eq!(result.stdout, "");
         let message = if continuing {
-            "the local branch issue-7 differs from origin/issue-7; push, reset or delete it first"
+            "the local branch issue-7 differs from origin/issue-7"
         } else {
-            "the local branch issue-7 is not on origin; push, rename or delete it first"
+            "the local branch issue-7 is not on origin"
         };
         assert!(result.stderr.contains(message), "stderr: {}", result.stderr);
+        for operation in [
+            " push origin ",
+            " branch -m -- issue-7 ",
+            " branch -d -- issue-7",
+        ] {
+            assert!(
+                result.stderr.contains(operation),
+                "stderr: {}",
+                result.stderr
+            );
+        }
         assert_nothing_created(&scenario, "issue-7");
         assert_eq!(
             scenario.launch_git(&["rev-parse", "issue-7"]),
