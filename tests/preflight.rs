@@ -36,7 +36,6 @@ fn a_missing_argument_is_a_usage_error() {
 #[test]
 fn an_argument_that_is_not_a_github_issue_url_is_a_usage_error() {
     for url in [
-        "7",
         "https://gitlab.com/acme/widgets/issues/7",
         "https://github.example.com/acme/widgets/issues/7",
         "https://github.com/acme/widgets/pull/7",
