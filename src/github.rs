@@ -748,10 +748,7 @@ impl GitHub {
     fn gh_api_items(&self, path: &str, field: &str) -> Result<Vec<Value>> {
         let output = self
             .output(&["api", "--paginate", "--jq", &format!(".{field}[]"), path])
-            .with_context(|| failure::QueryFailure {
-                message: format!("gh api {path} could not run"),
-                stderr: None,
-            })?;
+            .map_err(|error| failure::execution_failed(error, &format!("gh api {path}")))?;
         if !output.status.success() {
             bail!(check_read::ApiFailure {
                 path: path.to_string(),
@@ -771,10 +768,9 @@ impl GitHub {
     /// it exits non-zero.
     fn gh_json(&self, args: &[&str]) -> Result<Value> {
         let command = format!("gh {}", args[..2].join(" "));
-        let output = self.output(args).with_context(|| failure::QueryFailure {
-            message: format!("{command} could not run"),
-            stderr: None,
-        })?;
+        let output = self
+            .output(args)
+            .map_err(|error| failure::execution_failed(error, &command))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             bail!(failure::QueryFailure {

@@ -16,6 +16,19 @@ impl fmt::Display for QueryFailure {
 
 impl std::error::Error for QueryFailure {}
 
+/// Preserve cancellation as a Command outcome rather than reclassifying it as
+/// a dependency failure. Completion operations retain the same recorded signal.
+pub(super) fn execution_failed(error: anyhow::Error, command: &str) -> anyhow::Error {
+    if crate::interrupt::requested() {
+        error
+    } else {
+        error.context(QueryFailure {
+            message: format!("{command} could not run"),
+            stderr: None,
+        })
+    }
+}
+
 /// Never return diagnostics: GitHub may include credentials or private data.
 pub(crate) fn safe_cause(error: &anyhow::Error) -> Option<&'static str> {
     let stderr = if let Some(failure) = error.downcast_ref::<QueryFailure>() {
