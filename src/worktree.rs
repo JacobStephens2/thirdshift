@@ -216,6 +216,17 @@ impl Worktree {
             .ordinary(&self.launch, |operation| operation.head())
     }
 
+    /// Whether the committed tree at the Issue branch's head equals `commit`'s.
+    /// Comparison errors are propagated, never treated as identical trees.
+    pub fn same_tree_as(&self, commit: &str) -> Result<bool> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let before =
+                operation.run(&["rev-parse", "--verify", &format!("{commit}^{{tree}}")])?;
+            let after = operation.run(&["rev-parse", "--verify", "HEAD^{tree}"])?;
+            Ok(before == after)
+        })
+    }
+
     /// Observe the merge base against the published Base branch only while
     /// this is still the acquired checkout on the selected Issue branch.
     pub fn merge_base_commit(&self, base: &str) -> Result<String> {

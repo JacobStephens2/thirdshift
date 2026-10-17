@@ -232,6 +232,7 @@ fn every_ordinary_operation_refuses_changed_or_uncertain_ownership_even_without_
         for result in [
             worktree.push(),
             worktree.head().map(|_| ()),
+            worktree.same_tree_as("HEAD").map(|_| ()),
             worktree.merge_base_branch("main").map(|_| ()),
             worktree.new_commits_on_origin().map(|_| ()),
             worktree.merge_new_commits(observed).map(|_| ()),
@@ -925,6 +926,23 @@ fn a_base_merge_keeps_its_selected_commit_when_the_shared_ref_rewinds() {
 
     assert_eq!(commit, base);
     assert_eq!(worktree.head().unwrap(), base);
+}
+
+#[test]
+fn committed_tree_comparison_ignores_empty_history_but_detects_file_changes() {
+    let (_temp, _launch, worktree, _foreign) = foreign_origin();
+    let own_head = worktree.head().unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert!(worktree.same_tree_as(&own_head).unwrap());
+
+    let git = Git::new(worktree.path());
+    fs::write(worktree.path().join("changed.txt"), "changed\n").unwrap();
+    git.run(&["add", "changed.txt"]).unwrap();
+    commit(&git, "Changed tree");
+    assert!(!worktree.same_tree_as(&own_head).unwrap());
+    assert!(worktree.same_tree_as("missing-commit").is_err());
 }
 
 #[test]

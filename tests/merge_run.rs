@@ -542,7 +542,10 @@ fn sha_of(scenario: &Scenario, branch: &str, subject: &str) -> String {
 
 /// The full sha of `commit`'s first parent in origin.
 fn parent_of(scenario: &Scenario, commit: &str) -> String {
-    scenario.origin_git(&["rev-parse", &format!("{commit}^")])
+    scenario
+        .origin_git(&["rev-parse", &format!("{commit}^")])
+        .trim()
+        .to_string()
 }
 
 /// Assert that `prompt` is a review Repair's, reviewing from `fixed_point`.
@@ -560,6 +563,33 @@ fn assert_review_repair_from(prompt: &serde_json::Value, fixed_point: &str) {
         "prompt: {prompt}"
     );
     assert!(prompt.contains("Unaddressed findings"), "prompt: {prompt}");
+}
+
+#[test]
+fn a_tree_identical_foreign_commit_is_merged_without_a_review_repair() {
+    let scenario = Scenario::new();
+    let empty_commit = someone_pushes_to_issue_7("feature.txt", "feature", "Empty review")
+        .replace("commit -q -m", "commit -q --allow-empty -m");
+    scenario.agent_does_in_session(
+        1,
+        &format!("{AGENT_OPENS_PR}{}", on_ci_read(1, &empty_commit)),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "only the implement session"
+    );
+    let foreign = sha_of(&scenario, "main", "Empty review");
+    assert_eq!(assert_issue_7_merged_into(&scenario, "main"), foreign);
+    assert_eq!(
+        scenario.origin_file("main", "feature.txt").unwrap(),
+        "feature\n"
+    );
+    scenario.assert_cleaned_up("issue-7");
 }
 
 #[test]
@@ -603,6 +633,59 @@ fn a_foreign_commit_pushed_during_ci_is_merged_in_reviewed_then_merged() {
     let head = assert_issue_7_merged_into(&scenario, "main");
     assert_eq!(head, late);
     assert_eq!(scenario.origin_file("main", "late.txt").unwrap(), "late\n");
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn an_empty_foreign_review_does_not_bounce_but_a_later_changed_batch_is_reviewed() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("late.txt", "late", "First changed tree")
+            )
+        ),
+    );
+    // The other writer records an empty review while this Run's review makes
+    // no changes. Later CI brings a genuinely changed tree from that writer.
+    let empty_review =
+        someone_pushes_to_issue_7("feature.txt", "feature", "Other writer empty review")
+            .replace("commit -q -m", "commit -q --allow-empty -m");
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{empty_review}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("later.txt", "later", "Second changed tree")
+            )
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 3, "implement and two reviews of changed trees");
+    let first = sha_of(&scenario, "main", "First changed tree");
+    let empty = sha_of(&scenario, "main", "Other writer empty review");
+    let second = sha_of(&scenario, "main", "Second changed tree");
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &first));
+    assert_review_repair_from(&calls[2]["prompt"], &empty);
+    assert_eq!(parent_of(&scenario, &empty), first);
+    assert_eq!(parent_of(&scenario, &second), empty);
+    assert_eq!(assert_issue_7_merged_into(&scenario, "main"), second);
+    assert_eq!(
+        scenario.origin_file("main", "later.txt").unwrap(),
+        "later\n"
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["body"],
+        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+    );
     scenario.assert_cleaned_up("issue-7");
 }
 

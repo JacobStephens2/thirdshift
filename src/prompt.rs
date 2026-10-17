@@ -272,7 +272,7 @@ pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &st
          \n\
          {unaddressed_findings}\n\
          \n\
-         Commit and push {branch}. Do not rebase or force-push.\n\
+         Commit only if the review changes files. If no files change, make no commit, including no `--allow-empty` commit. If there is no new review information, leave the PR body unchanged; still record actual declined findings as required above. Push {branch} when needed to publish changes or reconcile upstream commits. Do not rebase or force-push.\n\
          \n\
          {HEADLESS}",
         url = issue.url,
@@ -381,4 +381,29 @@ pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
          End your final message for a single public fix with exactly:\n{STAGED_PROPOSAL_MARKER}\n{STAGED_TITLE_MARKER} <title>\n{STAGED_BODY_MARKER}\n<body>\nFor a public spec, end with exactly:\n{STAGED_SPEC_MARKER}\n{STAGED_TITLE_MARKER} <spec title>\n{STAGED_BODY_MARKER}\n<spec body>\n{STAGED_TICKET_MARKER} <ticket 1 title>\n{STAGED_BODY_MARKER}\n<ticket 1 body>\n{STAGED_BLOCKED_BY_MARKER} none\n{STAGED_TICKET_MARKER} <ticket 2 title>\n{STAGED_BODY_MARKER}\n<ticket 2 body>\n{STAGED_BLOCKED_BY_MARKER} 1\nwith each later Ticket naming the 1-based positions of the Tickets that block it, or none. For a private bigger fix, end with exactly `{SECURITY_FIX_SPEC_LINE}<Issue URL>`, naming the top issue.\n\n\
          Private record:\n{finding}\n\n{HEADLESS}"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_review_without_file_changes_commits_nothing_and_preserves_review_information() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let prompt = review_repair(&issue, "issue-7", "<pr>", "abc123");
+
+        for instruction in [
+            "Commit only if the review changes files.",
+            "If no files change, make no commit, including no `--allow-empty` commit.",
+            "If there is no new review information, leave the PR body unchanged",
+            "still record actual declined findings as required above",
+            "Push issue-7 when needed to publish changes or reconcile upstream commits.",
+            "Add each skipped finding to the \"Unaddressed findings\" section",
+        ] {
+            assert!(
+                prompt.contains(instruction),
+                "missing {instruction}: {prompt}"
+            );
+        }
+    }
 }
