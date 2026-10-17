@@ -746,7 +746,12 @@ impl GitHub {
     /// Every item of the `field` list of the GitHub API's `path`, across all its
     /// pages.
     fn gh_api_items(&self, path: &str, field: &str) -> Result<Vec<Value>> {
-        let output = self.output(&["api", "--paginate", "--jq", &format!(".{field}[]"), path])?;
+        let output = self
+            .output(&["api", "--paginate", "--jq", &format!(".{field}[]"), path])
+            .with_context(|| failure::QueryFailure {
+                message: format!("gh api {path} could not run"),
+                stderr: None,
+            })?;
         if !output.status.success() {
             bail!(check_read::ApiFailure {
                 path: path.to_string(),
@@ -756,7 +761,10 @@ impl GitHub {
         serde_json::Deserializer::from_slice(&output.stdout)
             .into_iter()
             .collect::<Result<_, _>>()
-            .with_context(|| format!("gh api {path} returned invalid JSON"))
+            .with_context(|| failure::QueryFailure {
+                message: format!("gh api {path} returned invalid JSON"),
+                stderr: None,
+            })
     }
 
     /// Run `gh <args>` and parse its stdout as JSON, failing with gh's stderr if

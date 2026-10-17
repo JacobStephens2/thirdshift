@@ -20,10 +20,10 @@ impl std::error::Error for QueryFailure {}
 pub(crate) fn safe_cause(error: &anyhow::Error) -> Option<&'static str> {
     let stderr = if let Some(failure) = error.downcast_ref::<QueryFailure>() {
         failure.stderr.as_deref().unwrap_or_default()
-    } else if let Some(failure) = error.downcast_ref::<super::check_read::ApiFailure>() {
-        &failure.stderr
     } else {
-        return None;
+        &error
+            .downcast_ref::<super::check_read::ApiFailure>()?
+            .stderr
     };
     let stderr = stderr.to_ascii_lowercase();
     Some(
