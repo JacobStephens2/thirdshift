@@ -6,19 +6,12 @@ command replaces its skipped freshness check. Run from the repository root.
 """
 import argparse
 import difflib
+import re
 from pathlib import Path
 import subprocess
 import sys
 import tomllib
 
-
-CONCURRENCY = """# PR numbers distinguish forks with the same branch name. Unique non-PR
-# groups preserve even pending main/tag runs (GitHub replaces pending runs).
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name != 'pull_request' && github.run_id || '' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-"""
 
 # Cargo packages src/ and skills/ and dist also includes README and LICENSE.
 # Pipeline/toolchain changes must exercise the full release contract too.
@@ -63,9 +56,15 @@ def main():
     for anchor in ["  pull_request:\n", "\njobs:\n"]:
         if generated.count(anchor) != 1:
             raise RuntimeError(f"cargo-dist workflow shape changed: expected one {anchor!r}")
+    # CI owns the shared event identity; carry its complete root block into
+    # Release so the two workflows cannot silently drift apart.
+    blocks = re.findall(r"^concurrency:\n(?:[ \t]+[^\n]*\n)+", Path(".github/workflows/ci.yml").read_text(), re.MULTILINE)
+    if len(blocks) != 1:
+        raise RuntimeError("expected one root concurrency block in CI")
+    concurrency = blocks[0]
     paths = "    paths:\n" + "".join(f"      - '{path}'\n" for path in RELEASE_PATHS)
     generated = generated.replace("  pull_request:\n", "  pull_request:\n" + paths)
-    generated = generated.replace("\njobs:\n", "\n" + CONCURRENCY + "jobs:\n")
+    generated = generated.replace("\njobs:\n", "\n" + concurrency + "\njobs:\n")
     generated = "# Regenerate with python3 scripts/generate-release.py; do not edit.\n" + generated
     if args.check:
         previous = original.decode() if original else ""

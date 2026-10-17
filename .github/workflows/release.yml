@@ -56,8 +56,6 @@ on:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
 
-# PR numbers distinguish forks with the same branch name. Unique non-PR
-# groups preserve even pending main/tag runs (GitHub replaces pending runs).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name != 'pull_request' && github.run_id || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

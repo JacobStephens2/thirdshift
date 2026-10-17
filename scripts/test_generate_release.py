@@ -14,6 +14,9 @@ class GenerateRelease(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / ".github/workflows").mkdir(parents=True)
+            (root / ".github/workflows/ci.yml").write_text(
+                GENERATOR.parent.parent.joinpath(".github/workflows/ci.yml").read_text()
+            )
             workflow = root / ".github/workflows/release.yml"
             (root / "dist-workspace.toml").write_text('[dist]\ncargo-dist-version = "0.33.0"\nallow-dirty = ["ci"]\n')
             upstream = "name: Release\non:\n  pull_request:\n  push:\n    tags: ['v*']\n\njobs:\n  plan:\n    runs-on: ubuntu-24.04\n"

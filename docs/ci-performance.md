@@ -36,7 +36,7 @@ cancelled or skipped shards.
 Run `python3 scripts/generate-release.py` from the repository root; CI runs
 it with `--check`. Install the pinned cargo-dist from `dist-workspace.toml`.
 The generator checks that version, runs the real cargo-dist generator and adds
-only PR paths, concurrency and its regeneration header. It restores the exact
+only PR paths, concurrency copied from CI, and its regeneration header. It restores the exact
 original config and workflow on generation failure; `--check` also restores the
 workflow before comparing. Build, smoke, host and publication jobs still come
 entirely from cargo-dist and its configured reusable-workflow hooks.
