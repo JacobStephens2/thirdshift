@@ -406,12 +406,22 @@ impl Outside for InWorktree<'_> {
         } else {
             Stage::Implementation
         });
-        self.sessions.run(kind, prompt)
+        self.sessions.run(kind, prompt)?;
+        self.pull_request.ensure_actionable(false)
     }
 
     fn security_review(&mut self, prompt: &str) -> Result<Review> {
         self.stage.set(Stage::SecurityReview);
-        crate::security::review::run(self.sessions, self.worktree, self.issue, self.base, prompt)
+        self.pull_request.ensure_actionable(false)?;
+        let review = crate::security::review::run(
+            self.sessions,
+            self.worktree,
+            self.issue,
+            self.base,
+            prompt,
+        )?;
+        self.pull_request.ensure_actionable(false)?;
+        Ok(review)
     }
 
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()> {
@@ -420,6 +430,7 @@ impl Outside for InWorktree<'_> {
 
     fn push(&mut self) -> Result<()> {
         self.stage.set(Stage::Push);
+        self.pull_request.ensure_actionable(false)?;
         self.worktree.push()
     }
 
@@ -482,6 +493,10 @@ struct OnFailure<'a> {
 
 impl FailedOutside for OnFailure<'_> {
     fn preserve_failed_run(&mut self, reason: &str) -> Result<Preserved> {
+        if let Err(error) = self.pull_request.ensure_preservable() {
+            self.worktree.retain_local();
+            return Err(error);
+        }
         self.worktree.preserve_failed_run(self.base, reason)
     }
 
@@ -519,6 +534,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn merge_base_branch(&mut self) -> Result<Merge> {
+        self.pull_request.ensure_actionable(true)?;
         self.worktree.merge_base_branch(self.base)
     }
 
@@ -532,6 +548,7 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn push(&mut self) -> Result<()> {
         self.stage.set(Stage::Push);
+        self.pull_request.ensure_actionable(true)?;
         self.worktree.push()
     }
 
@@ -548,12 +565,15 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn new_commits_on_origin(&mut self) -> Result<ForeignCommits> {
+        self.pull_request.ensure_actionable(true)?;
         self.worktree.new_commits_on_origin()
     }
 
     fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
         self.stage.set(Stage::Ci);
-        ci::watch(self.issue, head, base_commit)
+        ci::watch(self.issue, head, base_commit, &mut || {
+            self.pull_request.ensure_actionable(true)
+        })
     }
 
     fn rerun(
@@ -563,7 +583,9 @@ impl repair_loop::Outside for RunOutside<'_> {
         failed: &FailedChecks,
     ) -> Result<Option<Ci>> {
         self.stage.set(Stage::Ci);
-        ci::rerun(self.issue, head, base_commit, failed)
+        ci::rerun(self.issue, head, base_commit, failed, &mut || {
+            self.pull_request.ensure_actionable(true)
+        })
     }
 
     fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
@@ -580,7 +602,9 @@ impl repair_loop::Outside for RunOutside<'_> {
             Repair::CiFix(failed) => prompt::ci_fix_repair(issue, base, branch, pr_url, failed),
             Repair::Review { from } => prompt::review_repair(issue, branch, pr_url, from),
         };
-        self.sessions.run(kind, &prompt)
+        self.pull_request.ensure_actionable(true)?;
+        self.sessions.run(kind, &prompt)?;
+        self.pull_request.ensure_actionable(true)
     }
 
     fn sees_inherited_failures(&mut self) -> bool {

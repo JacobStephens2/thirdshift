@@ -108,12 +108,14 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
          - deploy/preview: https://deploy.example/7\n\
          \n\
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
-         Run the affected checks locally, commit, and push issue-7.\n\
+         Run the affected checks locally. Commit only changed files, and push issue-7 only when needed to publish real changes or required upstream reconciliation.\n\
          \n\
          Compare the failing test or check with the branch's diff against main. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
          Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on main). Do not change code for those unrelated failures.\n\
          \n\
          Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.\n\
+         \n\
+         Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.\n\
          \n\
          You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
     );
@@ -220,6 +222,15 @@ fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_succe
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
     assert_one_repair(&scenario, &result);
     assert_eq!(rerun_requests(&scenario), ["900", "901"]);
+    assert_eq!(
+        result
+            .stderr
+            .matches("thirdshift: pushing issue-7\n")
+            .count(),
+        1,
+        "an unchanged Repair must not cause pointless pushes: {}",
+        result.stderr
+    );
     let head = scenario.origin_git(&["rev-parse", "issue-7"]);
     assert!(
         result.stderr.contains(&format!(
@@ -728,7 +739,12 @@ fn a_pr_closed_by_the_end_is_a_failed_run() {
         result.stderr
     );
     assert_eq!(result.stdout, "", "a closed PR is not printed");
-    scenario.assert_cleaned_up("issue-7");
+    assert!(
+        result.stderr.contains("work may exist only locally"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.origin_log("issue-7").unwrap()[0], "Add feature");
 }
 
 #[test]
@@ -922,12 +938,14 @@ fn with_mixed_failures_the_repair_fixes_only_the_branchs_own_and_the_run_then_fa
          - test: https://ci.example/test\n\
          \n\
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
-         Run the affected checks locally, commit, and push issue-7.\n\
+         Run the affected checks locally. Commit only changed files, and push issue-7 only when needed to publish real changes or required upstream reconciliation.\n\
          \n\
          Compare the failing test or check with the branch's diff against main. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
          Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on main). Do not change code for those unrelated failures.\n\
          \n\
          Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.\n\
+         \n\
+         Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.\n\
          \n\
          You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
     );

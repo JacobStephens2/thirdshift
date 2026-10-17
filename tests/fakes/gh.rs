@@ -327,6 +327,18 @@ fn pr_create(state: &mut Json, flags: &Flags) {
         ("head", string(flag(flags, "head").expect("no --head"))),
         ("base", string(flag(flags, "base").expect("no --base"))),
         ("state", string("OPEN")),
+        // A PR retains its head even before the scripted session's first
+        // push or after GitHub deletes its branch on merge.
+        (
+            "createdHead",
+            string(
+                String::from_utf8(
+                    git(&std::env::current_dir().unwrap(), &["rev-parse", "HEAD"]).stdout,
+                )
+                .unwrap()
+                .trim(),
+            ),
+        ),
         ("isDraft", Bool(flags.contains_key("draft"))),
         ("title", string(flag(flags, "title").unwrap_or(""))),
         ("body", string(flag(flags, "body").unwrap_or(""))),
@@ -439,7 +451,10 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
     if wanted.iter().any(|w| w == "headRefOid") {
         let head = match pr.get("headRefOid") {
             Some(head) if head.truthy() => head.clone(),
-            _ => string(branch_tip(pr.at("head").str())),
+            _ => string(
+                origin_tip(pr.at("head").str())
+                    .unwrap_or_else(|| pr.at("createdHead").str().to_owned()),
+            ),
         };
         fields.set("headRefOid", head);
     }

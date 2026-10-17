@@ -52,8 +52,13 @@ pub struct FailedChecks {
 /// is never waited for or triggered, and no log text is read. With no
 /// `base_commit`, as in a Base fix, every check that failed is the branch's
 /// own.
-pub fn watch(issue: &IssueUrl, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
-    watch_through(&mut OnGitHub { issue }, sha, base_commit)
+pub fn watch(
+    issue: &IssueUrl,
+    sha: &str,
+    base_commit: Option<&str>,
+    actionable: &mut dyn FnMut() -> Result<()>,
+) -> Result<Ci> {
+    watch_through(&mut OnGitHub { issue, actionable }, sha, base_commit)
 }
 
 /// The Check re-run of `sha`: ask GitHub to re-run the branch's own checks
@@ -77,8 +82,14 @@ pub fn rerun(
     sha: &str,
     base_commit: Option<&str>,
     failed: &FailedChecks,
+    actionable: &mut dyn FnMut() -> Result<()>,
 ) -> Result<Option<Ci>> {
-    rerun_through(&mut OnGitHub { issue }, sha, base_commit, failed)
+    rerun_through(
+        &mut OnGitHub { issue, actionable },
+        sha,
+        base_commit,
+        failed,
+    )
 }
 
 /// What the CI watch reads of GitHub and asks of it, how it waits, and
@@ -107,16 +118,21 @@ trait Outside {
 /// interval and grace period.
 struct OnGitHub<'a> {
     issue: &'a IssueUrl,
+    actionable: &'a mut dyn FnMut() -> Result<()>,
 }
 
 impl Outside for OnGitHub<'_> {
     type Deadline = Instant;
 
     fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>> {
-        GitHub::new().checks_on(self.issue, sha)
+        (self.actionable)()?;
+        let checks = GitHub::new().checks_on(self.issue, sha)?;
+        (self.actionable)()?;
+        Ok(checks)
     }
 
     fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
+        (self.actionable)()?;
         GitHub::new().rerun_failed_jobs(self.issue, workflow_run)
     }
 

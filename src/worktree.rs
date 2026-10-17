@@ -179,8 +179,9 @@ impl Worktree {
     /// gates the PR, so a local hook doesn't decide whether work reaches
     /// origin.
     pub fn push(&self) -> Result<()> {
-        self.checkout
-            .ordinary(&self.launch, |operation| operation.push(&self.branch))
+        self.checkout.ordinary(&self.launch, |operation| {
+            operation.push_if_needed(&self.branch)
+        })
     }
 
     /// Preserve all work from a Failed run against the last-fetched Base
@@ -198,6 +199,12 @@ impl Worktree {
             .preserve_failed_run(&self.launch, base, reason)?;
         self.kept = false;
         Ok(pushed)
+    }
+
+    /// Keep the acquired checkout and local branch without publishing obsolete
+    /// work after the PR became terminal or its lifecycle could not be read.
+    pub fn retain_local(&mut self) {
+        self.kept = true;
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone

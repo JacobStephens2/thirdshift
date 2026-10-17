@@ -564,6 +564,18 @@ impl<'a> Operation<'a> {
         self.inspect()
     }
 
+    /// Avoid a publication command when origin already has this exact head.
+    /// Compare commits, not trees: reconciled history still needs publishing.
+    pub(super) fn push_if_needed(&self, branch: &str) -> Result<()> {
+        let head = self.head()?;
+        let reference = format!("refs/heads/{branch}");
+        let remote = self.run(&["ls-remote", "--heads", "origin", &reference])?;
+        if remote.split_whitespace().next() == Some(head.as_str()) {
+            return Ok(());
+        }
+        self.push(branch)
+    }
+
     pub(super) fn push(&self, branch: &str) -> Result<()> {
         self.git.push_checked(branch, || self.inspect().map(|_| ()))
     }
