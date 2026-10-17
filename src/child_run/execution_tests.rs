@@ -55,7 +55,7 @@ fn distinct_children_deliver_out_of_order_with_their_own_endings_and_accounts() 
     let (number, ending) = runs.next_ending().unwrap();
     assert_eq!(number, 22);
     assert!(
-        matches!(ending.unwrap(), Ended::Failed { cause, log: Some(log) }
+        matches!(ending.unwrap(), Ended::Failed { cause, log: Some(log), .. }
         if cause == "checks failed" && log == "/logs/22.jsonl")
     );
     second.assert_stopped();
@@ -287,7 +287,7 @@ fn malformed_diagnostics_preserve_later_failure_cause_and_final_session_log() {
         "os.write(2, b'bad \\xff\\nthirdshift: inherited failure\\r\\nthirdshift: #9: descendant failure\\nthirdshift: session log: /logs/248.jsonl')\nraise SystemExit(7)",
     );
     let ended = fixture.start().unwrap().wait().unwrap();
-    assert!(matches!(ended, Ended::Failed { cause, log: Some(log) }
+    assert!(matches!(ended, Ended::Failed { cause, log: Some(log), .. }
         if cause == "inherited failure" && log == "/logs/248.jsonl"));
     fixture.assert_stopped();
 }
@@ -611,7 +611,7 @@ fn interruption_reaches_every_active_child_before_a_queued_ending_is_delivered()
     for _ in 0..2 {
         let (number, ending) = runs.next_ending().unwrap();
         numbers.push(number);
-        assert!(matches!(ending.unwrap(), Ended::Interrupted));
+        assert!(matches!(ending.unwrap(), Ended::Interrupted { .. }));
     }
     numbers.sort();
     assert_eq!(numbers, [23, 24]);
@@ -673,7 +673,7 @@ fn interruption_is_forwarded_once_and_waits_for_successful_graceful_cleanup() {
     signal_hook::low_level::raise(libc::SIGTERM).unwrap();
     assert!(handle.try_wait().is_none());
     fs::write(fixture.0.path().join("finish"), "").unwrap();
-    assert!(matches!(handle.wait().unwrap(), Ended::Interrupted));
+    assert!(matches!(handle.wait().unwrap(), Ended::Interrupted { .. }));
     assert_eq!(fixture.read("terms"), "TERM\n");
     assert!(fixture.0.path().join("saved").exists());
     fixture.assert_stopped();
@@ -691,7 +691,7 @@ fn interruption_during_transport_cleanup_takes_precedence() {
     signal_hook::low_level::raise(libc::SIGTERM).unwrap();
     assert!(handle.try_wait().is_none());
     fs::write(fixture.0.path().join("finish"), "").unwrap();
-    assert!(matches!(handle.wait().unwrap(), Ended::Interrupted));
+    assert!(matches!(handle.wait().unwrap(), Ended::Interrupted { .. }));
     assert_eq!(fixture.read("terms"), "TERM\n");
     fixture.assert_stopped();
 }

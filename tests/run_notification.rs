@@ -1062,13 +1062,14 @@ fn failure_reports_distinguish_remote_local_and_absent_work() {
 
 #[test]
 fn delivery_failures_name_the_stopped_stage_in_terminal_and_notification() {
-    for stage in ["Repair", "CI watching", "Self-merge"] {
+    for stage in ["Repair", "CI watching", "Self-merge", "Security review"] {
         let scenario = Scenario::new();
         let setup = match stage {
             "Repair" => {
                 "gh fake checks \"$(git rev-parse HEAD)\" '[{\"name\":\"test\",\"conclusion\":\"failure\"}]'\n"
             }
             "CI watching" => "gh fake fails 'api --paginate --jq .check_runs[]'\n",
+            "Security review" => "",
             _ => "gh fake refuse-merges 1 'Merge commits are not allowed'\n",
         };
         scenario.agent_does(&format!("{AGENT_OPENS_PR}{setup}"));
@@ -1077,7 +1078,17 @@ fn delivery_failures_name_the_stopped_stage_in_terminal_and_notification() {
         let result = run(
             &scenario,
             &resend,
-            &[&scenario.issue_url(7), "merge", "email", "me@example.com"],
+            &[
+                &scenario.issue_url(7),
+                "merge",
+                "email",
+                "me@example.com",
+                if stage == "Security review" {
+                    "security-review"
+                } else {
+                    "no-security-review"
+                },
+            ],
             Some(KEY),
         );
         assert_eq!(result.code, Some(1), "{}", result.stderr);

@@ -2,6 +2,18 @@
 
 use std::path::PathBuf;
 
+// Shared by rendering and child Run accounting: one owner for the line protocol.
+const STOPPED: &str = "Stopped at: ";
+const PROGRESS: &str = "Progress: ";
+const PRESERVED: &str = "Preserved: ";
+const BEFORE_RETRYING: &str = "Before retrying: ";
+const RECOVERY: &str = "Recovery: ";
+const LAUNCH: &str = "Run from the Launch directory ";
+const CONTINUING: &str = "Continuing reuses ";
+const RETRY: &str = "Retry starts work ";
+const TICKET_WORK: &str = "Ticket work: ";
+const LOCAL_WORK: &str = "work may exist only locally on ";
+
 /// The lifecycle operation underway when a Run stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -65,6 +77,8 @@ pub struct Recovery {
     /// Spec review completed, independently of any later delivery failure.
     pub tickets: Option<TicketProgress>,
     pub continuation: Option<Continuation>,
+    /// Factory-reported retention facts from child Tickets, including their paths.
+    pub local_ticket_work: Vec<String>,
 }
 
 impl Recovery {
@@ -75,12 +89,13 @@ impl Recovery {
             worktree: None,
             tickets: None,
             continuation: None,
+            local_ticket_work: Vec::new(),
         }
     }
 
     /// Literal lines shared by terminal, Activity and Run notification output.
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![format!("Stopped at: {}", self.stage.name())];
+        let mut lines = vec![format!("{STOPPED}{}", self.stage.name())];
         if let Some(TicketProgress {
             landed,
             total,
@@ -89,50 +104,64 @@ impl Recovery {
         {
             let review = if reviewed { "complete" } else { "incomplete" };
             lines.push(format!(
-                "Progress: {landed}/{total} Tickets landed; final review {review}"
+                "{PROGRESS}{landed}/{total} Tickets landed; final review {review}"
             ));
         }
         let Some(context) = &self.continuation else {
             return lines;
         };
         lines.push(match self.preservation {
-            Preservation::Remote => format!("Preserved: remotely on {}", context.branch),
+            Preservation::Remote => format!("{PRESERVED}remotely on {}", context.branch),
             Preservation::Local => format!(
-                "Preserved: work may exist only locally on {} at {}; push was not confirmed",
+                "{PRESERVED}{LOCAL_WORK}{} at {}; push was not confirmed",
                 context.branch,
                 self.worktree
                     .as_deref()
                     .unwrap_or(&context.launch)
                     .display()
             ),
-            Preservation::None => "Preserved: no work preserved".to_string(),
+            Preservation::None => format!("{PRESERVED}no work preserved"),
         });
-        if self.preservation == Preservation::Local {
-            lines.push("Before retrying: inspect and publish the retained work, reconcile with origin without forcing, then free the Issue branch and Worktree acquisition path. Do not discard local work.".into());
+        lines.extend(
+            self.local_ticket_work
+                .iter()
+                .map(|line| format!("{TICKET_WORK}{line}")),
+        );
+        if self.preservation == Preservation::Local || !self.local_ticket_work.is_empty() {
+            lines.push(format!("{BEFORE_RETRYING}inspect and publish the retained work, reconcile with origin without forcing, then free the Issue branch and Worktree acquisition path. Do not discard local work."));
         }
-        lines.push(format!("Recovery: {}", context.command));
+        lines.push(format!("{RECOVERY}{}", context.command));
         lines.push(format!(
-            "Run from the Launch directory {} with Base branch {} checked out (the command cannot encode the Base branch). Retry when the failure's cause is resolved.",
+            "{LAUNCH}{} with Base branch {} checked out (the command cannot encode the Base branch). Retry when the failure's cause is resolved.",
             context.launch.display(), context.base
         ));
         if self.preservation != Preservation::None {
-            lines.push("Continuing reuses the preserved branch and PR and skips completed Tickets. This starts a new Continuation, not the interrupted agent conversation; review and merge/CI repairs may still be needed.".into());
+            lines.push(format!("{CONTINUING}the preserved branch and PR and skips completed Tickets. This starts a new Continuation, not the interrupted agent conversation; review and merge/CI repairs may still be needed."));
         } else {
-            lines.push("Retry starts work on the original Issue URL; there is no preserved work to continue.".into());
+            lines.push(format!(
+                "{RETRY}on the original Issue URL; there is no preserved work to continue."
+            ));
         }
         lines
     }
 
+    /// Read only the factory's own preservation line, never agent output.
+    pub fn is_local_work(line: &str) -> bool {
+        line.strip_prefix(PRESERVED)
+            .is_some_and(|value| value.starts_with(LOCAL_WORK))
+    }
+
     pub fn is_line(line: &str) -> bool {
         [
-            "Stopped at: ",
-            "Progress: ",
-            "Preserved: ",
-            "Before retrying: ",
-            "Recovery: ",
-            "Run from the Launch directory ",
-            "Continuing reuses ",
-            "Retry starts work ",
+            STOPPED,
+            PROGRESS,
+            PRESERVED,
+            BEFORE_RETRYING,
+            RECOVERY,
+            LAUNCH,
+            CONTINUING,
+            RETRY,
+            TICKET_WORK,
         ]
         .iter()
         .any(|prefix| line.starts_with(prefix))

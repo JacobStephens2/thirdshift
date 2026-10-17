@@ -28,6 +28,13 @@ mod review_recovery_tests;
 #[cfg(test)]
 mod synchronization_tests;
 
+/// A successful preservation either published work or found no changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preserved {
+    Pushed,
+    NoChanges,
+}
+
 /// How merging the Base branch, or new commits on origin, into the Issue
 /// branch went.
 #[derive(Debug)]
@@ -184,7 +191,7 @@ impl Worktree {
     /// Retention is armed before salvage: any error or unwinding leaves the
     /// worktree and local Issue branch in place. Final verified ownership
     /// allows normal cleanup.
-    pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<bool> {
+    pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<Preserved> {
         self.kept = true;
         let pushed = self
             .checkout

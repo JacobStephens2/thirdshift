@@ -104,7 +104,7 @@ impl Checkout {
         launch: &Git,
         base: &str,
         reason: &str,
-    ) -> Result<bool> {
+    ) -> Result<super::Preserved> {
         let operation = Operation::new(self, launch, Purpose::Preservation);
         let branch = self
             .branch
@@ -142,7 +142,11 @@ impl Checkout {
             operation.push(branch)?;
         }
         operation.inspect()?;
-        Ok(has_work)
+        Ok(if has_work {
+            super::Preserved::Pushed
+        } else {
+            super::Preserved::NoChanges
+        })
     }
 
     /// Drop is best effort, including while another panic is unwinding.

@@ -416,6 +416,7 @@ pub struct Reader {
     /// The session log named since that line.
     log: Option<String>,
     base_fix: Option<String>,
+    local_work: Vec<String>,
 }
 
 impl Reader {
@@ -424,7 +425,9 @@ impl Reader {
         let ChildLine::Own(message) = line else {
             return;
         };
-        if let Some(report) = message.strip_prefix(BASE_FIX) {
+        if crate::recovery::Recovery::is_local_work(message) {
+            self.local_work.push(message.to_string());
+        } else if let Some(report) = message.strip_prefix(BASE_FIX) {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {
             self.log = Some(log.to_string());
@@ -432,6 +435,10 @@ impl Reader {
             self.cause = Some(message.to_string());
             self.log = None;
         }
+    }
+
+    pub fn local_work(&self) -> &[String] {
+        &self.local_work
     }
 
     /// How the child ended, given its `stdout` and whether it `exited_zero`.

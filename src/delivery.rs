@@ -11,7 +11,6 @@
 //! [`FailedOutside`]: [`InWorktree`] and [`OnFailure`] do each for real;
 //! `Scripted`, in tests, from a script, recording each call.
 
-use crate::recovery::{Preservation, Recovery, Stage};
 use std::cell::Cell;
 use std::path::PathBuf;
 
@@ -30,11 +29,12 @@ use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
 use crate::prompt;
+use crate::recovery::{Preservation, Recovery, Stage};
 use crate::run::{Goal, Reached};
 use crate::run_ending::Cause;
 use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
 use crate::session::{Logs, Sessions};
-use crate::worktree::{ForeignCommits, Merge, PendingMerge, Worktree};
+use crate::worktree::{ForeignCommits, Merge, PendingMerge, Preserved, Worktree};
 
 use repair_loop::{Repair, Upstream};
 /// A Delivery of the pull request for `issue`, the Run's issue or the Spec,
@@ -124,6 +124,9 @@ impl Delivery<'_> {
                 ticket_lines: Vec::new(),
             }),
             Err(error) => {
+                if error.is::<SecurityHold>() {
+                    stage.set(Stage::SecurityReview);
+                }
                 let path = worktree.path().to_path_buf();
                 let mut outside = OnFailure {
                     base: self.base,
@@ -306,8 +309,8 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
         Preservation::Remote
     } else {
         match outside.preserve_failed_run(&reason) {
-            Ok(true) => Preservation::Remote,
-            Ok(false) => Preservation::None,
+            Ok(Preserved::Pushed) => Preservation::Remote,
+            Ok(Preserved::NoChanges) => Preservation::None,
             Err(problem) => {
                 outside.step(format!(
                     "could not push the failed run's work, so it may exist only locally: {problem:#}"
@@ -371,7 +374,7 @@ trait Outside {
 trait FailedOutside {
     /// Preserve the Failed run's work for `reason`, retaining it locally if
     /// preservation fails.
-    fn preserve_failed_run(&mut self, reason: &str) -> Result<bool>;
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<Preserved>;
     /// Finish the captured PR through completion operations after preservation.
     fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>>;
     /// Whether an interrupt was requested.
@@ -441,14 +444,7 @@ impl Outside for InWorktree<'_> {
             sessions: self.sessions,
             pull_request: self.pull_request,
         };
-        let result = repair_loop::take_to_goal(&mut outside, self.base, goal);
-        if result
-            .as_ref()
-            .is_err_and(|error| error.is::<PolicyRefusal>())
-        {
-            self.stage.set(Stage::SelfMerge);
-        }
-        result
+        repair_loop::take_to_goal(&mut outside, self.base, goal)
     }
 
     fn delete_branch(&mut self) -> Result<()> {
@@ -485,7 +481,7 @@ struct OnFailure<'a> {
 }
 
 impl FailedOutside for OnFailure<'_> {
-    fn preserve_failed_run(&mut self, reason: &str) -> Result<bool> {
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<Preserved> {
         self.worktree.preserve_failed_run(self.base, reason)
     }
 
@@ -517,6 +513,10 @@ struct RunOutside<'a> {
 
 impl repair_loop::Outside for RunOutside<'_> {
     type Pending = PendingMerge;
+
+    fn stage(&mut self, stage: Stage) {
+        self.stage.set(stage);
+    }
 
     fn merge_base_branch(&mut self) -> Result<Merge> {
         self.worktree.merge_base_branch(self.base)
@@ -740,10 +740,10 @@ mod tests {
     }
 
     impl FailedOutside for Scripted {
-        fn preserve_failed_run(&mut self, reason: &str) -> Result<bool> {
+        fn preserve_failed_run(&mut self, reason: &str) -> Result<Preserved> {
             self.calls.push(Call::Preserve(reason.to_string()));
             self.check(Fails::Preserve)?;
-            Ok(true)
+            Ok(Preserved::Pushed)
         }
         fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>> {
             self.calls.push(Call::Finish(keep_ready));

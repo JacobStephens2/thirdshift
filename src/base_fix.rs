@@ -304,8 +304,8 @@ impl BaseFix {
                 ));
                 Ok(())
             }
-            Ended::Interrupted => bail!("interrupted"),
-            Ended::Failed { cause, log } => {
+            Ended::Interrupted { .. } => bail!("interrupted"),
+            Ended::Failed { cause, log, .. } => {
                 if let Some(log) = log {
                     outside.step(format!("Base fix #{number} session log: {log}"));
                 }
@@ -1034,6 +1034,7 @@ mod tests {
                 children: VecDeque::from([Ended::Failed {
                     cause: "CI red on test".to_string(),
                     log,
+                    local_work: Vec::new(),
                 }]),
                 ..Script::default()
             });
@@ -1056,7 +1057,9 @@ mod tests {
     fn an_interrupted_base_fix_fails_the_run_as_interrupted() {
         let mut base_fix = asked(BaseFixAsk::Allow);
         let mut outside = Scripted::new(Script {
-            children: VecDeque::from([Ended::Interrupted]),
+            children: VecDeque::from([Ended::Interrupted {
+                local_work: Vec::new(),
+            }]),
             ..Script::default()
         });
 

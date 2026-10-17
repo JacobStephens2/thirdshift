@@ -2762,3 +2762,111 @@ fn failed_ticket_reports_execution_progress_and_retains_the_child_cause() {
         "Progress: 2/3 Tickets landed; final review incomplete",
     );
 }
+
+#[test]
+fn issue_588_spec_existing_remote_survives_initial_push_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = linear_spec();
+    scenario.agent_does_for(SPEC, "exit 1\n");
+    let first = scenario.run(&[&spec_url(&scenario)]);
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    assert_eq!(
+        scenario.origin_file("issue-20", "second.txt"),
+        Some("22\n".into())
+    );
+    assert_eq!(spec_pr(&scenario)["state"], "OPEN");
+
+    let shim = scenario.path("bin/git");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\ncase \" $* \" in *\" push \"*) echo 'fatal: simulated push transport failure' >&2; exit 1;; esac\nPATH=\"${PATH#*:}\" exec git \"$@\"\n",
+    ).unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[&spec_url(&scenario), "email", "me@example.com"],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(&result.stderr, "simulated push transport failure");
+    assert_eq!(
+        scenario.origin_file("issue-20", "second.txt"),
+        Some("22\n".into())
+    );
+    assert_eq!(spec_pr(&scenario)["state"], "OPEN");
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    for output in [&*result.stderr, requests[0].body["text"].as_str().unwrap()] {
+        assert!(!output.contains("Preserved: no work preserved"), "{output}");
+        assert!(
+            !output.contains("there is no preserved work to continue"),
+            "{output}"
+        );
+    }
+}
+
+#[test]
+fn issue_588_spec_notification_keeps_child_local_retention() {
+    let scenario = linear_spec();
+    scenario.repo_has_hook(
+        &scenario.origin_dir(), "pre-receive",
+        "#!/bin/sh\nwhile read old new ref; do\ncase \"$ref\" in refs/heads/issue-22) echo 'reject Ticket salvage' >&2; exit 1;; esac\ndone\nexit 0\n",
+    );
+    scenario.agent_does_for(22, "echo partial > partial.txt\nexit 3\n");
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = run_emailing(
+        &scenario,
+        &resend,
+        &[&spec_url(&scenario), "email", "me@example.com"],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.origin_file("issue-22", "partial.txt"), None);
+    let retained = scenario.path("work/widgets-issue-22");
+    assert!(retained.join("partial.txt").exists(), "{}", result.stderr);
+    assert_contains(&result.stderr, "work may exist only locally on issue-22");
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let notification = requests[0].body["text"].as_str().unwrap();
+    assert_contains(notification, "only locally");
+    assert_contains(notification, retained.to_str().unwrap());
+}
+
+#[test]
+fn interrupted_ticket_local_retention_reaches_the_spec_notification() {
+    let scenario = linear_spec();
+    scenario.repo_has_hook(
+        &scenario.origin_dir(), "pre-receive",
+        "#!/bin/sh\nwhile read old new ref; do\ncase \"$ref\" in refs/heads/issue-21) exit 1;; esac\ndone\nexit 0\n",
+    );
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "echo partial > partial.txt\ntouch {}\nsleep 30\n",
+            scenario.path("agent-started").display()
+        ),
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_and_signal_with_env(
+        &[&spec_url(&scenario), "email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "test"),
+        ],
+        "agent-started",
+        "TERM",
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let requests = resend.requests();
+    let notification = requests[0].body["text"].as_str().unwrap();
+    assert_contains(notification, "only locally on issue-21");
+    assert_contains(
+        notification,
+        scenario.path("work/widgets-issue-21").to_str().unwrap(),
+    );
+    assert_contains(
+        notification,
+        "Before retrying: inspect and publish the retained work",
+    );
+}

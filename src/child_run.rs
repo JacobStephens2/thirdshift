@@ -312,9 +312,13 @@ pub enum Ended {
         base_fix: Option<String>,
     },
     /// Why, and its session log, as it reported them.
-    Failed { cause: String, log: Option<String> },
+    Failed {
+        cause: String,
+        log: Option<String>,
+        local_work: Vec<String>,
+    },
     /// Ended by an interrupt passed on to it.
-    Interrupted,
+    Interrupted { local_work: Vec<String> },
 }
 
 /// Own a child Run and both readers from spawn through reaping and joining.
@@ -638,8 +642,14 @@ impl Handle {
     }
 
     fn ending(&mut self) -> Result<Ended> {
+        let local_work = self
+            .stderr
+            .as_ref()
+            .and_then(|worker| worker.value.as_ref())
+            .map(|reader| reader.local_work().to_vec())
+            .unwrap_or_default();
         if self.interrupted || (self.error.is_some() && interrupt::requested()) {
-            return Ok(Ended::Interrupted);
+            return Ok(Ended::Interrupted { local_work });
         }
         if let Some(error) = self.error.take() {
             return Err(error);
@@ -655,10 +665,11 @@ impl Handle {
                 pr_url,
                 base_fix: ending.base_fix,
             },
-            Err(_) if interrupt::requested() => Ended::Interrupted,
+            Err(_) if interrupt::requested() => Ended::Interrupted { local_work },
             Err(failure) => Ended::Failed {
                 cause: failure.cause.unwrap_or_else(|| format!("the Run {status}")),
                 log: failure.log,
+                local_work,
             },
         })
     }
