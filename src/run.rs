@@ -485,7 +485,13 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn make_claim(&mut self) -> Result<()> {
-        self.claim = Some(claim::make(self.issue, self.directory.git())?);
+        self.claim = Some(claim::make(
+            self.issue,
+            self.directory.git(),
+            self.issue_branch
+                .as_deref()
+                .expect("branch selected before Claim"),
+        )?);
         logs::issue_title(GitHub::new().issue_title(self.issue).ok());
         Ok(())
     }

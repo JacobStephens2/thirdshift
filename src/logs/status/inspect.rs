@@ -346,6 +346,31 @@ pub fn show(input: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Resolve Stop through the same naming rules as show and logs. A dispatched
+/// Run belongs to its owning Command, whose process and record are stopped.
+pub(in crate::logs) fn stop_target(input: &str) -> Result<PathBuf> {
+    let status = super::read(true)?;
+    match select(&status.commands, input)? {
+        Selected::Record(command) if command.state == "live" => Ok(command
+            .record
+            .parent_record
+            .as_ref()
+            .unwrap_or(&command.record_path)
+            .clone()),
+        Selected::Record(command) => bail!(
+            "cannot stop {input}: Command {}{}",
+            command.state,
+            command
+                .record
+                .outcome
+                .as_ref()
+                .map(|outcome| format!(": {outcome}"))
+                .unwrap_or_default()
+        ),
+        Selected::History(command) => bail!("cannot stop {input}: Command {}", command.state),
+    }
+}
+
 fn stamp(path: &Path) -> Option<&str> {
     let stem = path.file_stem()?.to_str()?;
     let stamp = stem.get(stem.len().checked_sub(20)?..)?;

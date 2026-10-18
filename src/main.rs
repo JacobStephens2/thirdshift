@@ -77,6 +77,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift show <command> [--json]             Show one Command in full
+       thirdshift stop <command> [--requeue]          Stop a live Command and wait for cleanup
        thirdshift logs <command> [--session <kind>] [--follow]  Read or follow a log
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
@@ -130,6 +131,12 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::Stop { command, requeue }) => {
+            return match logs::stop::stop(&command, requeue) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
         Ok(Command::Show { command, json }) => {
             return match logs::status::inspect::show(&command, json) {
                 Ok(()) => ExitCode::SUCCESS,

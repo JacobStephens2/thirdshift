@@ -30,6 +30,10 @@ pub enum Command {
         command: String,
         json: bool,
     },
+    Stop {
+        command: String,
+        requeue: bool,
+    },
     Logs {
         command: String,
         session: Option<String>,
@@ -232,6 +236,21 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("stop") => {
+            return match &args[1..] {
+                [command] if !command.starts_with('-') => Ok(Command::Stop {
+                    command: command.clone(),
+                    requeue: false,
+                }),
+                [command, flag] if flag == "--requeue" && !command.starts_with('-') => {
+                    Ok(Command::Stop {
+                        command: command.clone(),
+                        requeue: true,
+                    })
+                }
+                _ => bail!("usage: thirdshift stop <command> [--requeue]"),
+            };
+        }
         Some("show") => {
             return match &args[1..] {
                 [command] if !command.starts_with('-') => Ok(Command::Show {
