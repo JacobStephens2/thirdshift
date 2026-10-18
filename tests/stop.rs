@@ -1,7 +1,18 @@
 mod support;
 
 use std::fs;
-use support::Scenario;
+use support::{HeldRun, RunResult, Scenario};
+
+fn stop_and_finish(scenario: &Scenario, mut held: HeldRun, args: &[&str]) -> RunResult {
+    let stopped = scenario.run(args);
+    if stopped.code != Some(0) {
+        held.signal("TERM");
+    }
+    let ended = held.finish();
+    assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    stopped
+}
 
 #[test]
 fn stopping_a_pass_with_no_issue_ends_it_without_changing_labels() {
@@ -14,7 +25,7 @@ fn stopping_a_pass_with_no_issue_ends_it_without_changing_labels() {
                 "touch '{}'\nwhile true; do sleep 0.05; done\n",
                 scenario.path("started").display()
             ));
-            let mut held = scenario.run_until(&[kind], &[], "started");
+            let held = scenario.run_until(&[kind], &[], "started");
             let status = scenario.run(&["status", "--json"]);
             let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
             let command = &status["commands"][0];
@@ -24,13 +35,7 @@ fn stopping_a_pass_with_no_issue_ends_it_without_changing_labels() {
             } else {
                 vec!["stop", name]
             };
-            let stopped = scenario.run(&args);
-            if stopped.code != Some(0) {
-                held.signal("TERM");
-            }
-            let ended = held.finish();
-            assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
-            assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+            let stopped = stop_and_finish(&scenario, held, &args);
             assert!(command["issue"].is_null(), "{command}");
             assert_eq!(
                 command["stage"]["name"],
@@ -65,19 +70,13 @@ fn stopping_a_pickups_run_triages_or_requeues_the_issue_it_took() {
             "echo work > work.txt\ngit add work.txt\ngit commit -qm Work\ngit push -q origin HEAD\ntouch '{}'\nwhile true; do sleep 0.05; done\n",
             scenario.path("started").display()
         ));
-        let mut held = scenario.run_until(&["pickup"], &[], "started");
+        let held = scenario.run_until(&["pickup"], &[], "started");
         let args = if requeue {
             vec!["stop", "widgets#7", "--requeue"]
         } else {
             vec!["stop", "widgets#7"]
         };
-        let stopped = scenario.run(&args);
-        if stopped.code != Some(0) {
-            held.signal("TERM");
-        }
-        let ended = held.finish();
-        assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
-        assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+        let stopped = stop_and_finish(&scenario, held, &args);
         assert_eq!(
             scenario.issue_labels(7),
             if requeue {
@@ -125,19 +124,13 @@ fn stopping_a_spec_ends_both_tickets_preserves_their_work_and_only_labels_the_sp
         } else {
             vec![url.as_str()]
         };
-        let mut held = scenario.run_until(&args, &[], "both-started");
+        let held = scenario.run_until(&args, &[], "both-started");
         let args = if requeue {
             vec!["stop", "widgets#20", "--requeue"]
         } else {
             vec!["stop", "widgets#20"]
         };
-        let stopped = scenario.run(&args);
-        if stopped.code != Some(0) {
-            held.signal("TERM");
-        }
-        let ended = held.finish();
-        assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
-        assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+        let stopped = stop_and_finish(&scenario, held, &args);
         assert!(stopped.stdout.contains("interrupted"), "{}", stopped.stdout);
         assert_eq!(
             scenario.issue_labels(20),
