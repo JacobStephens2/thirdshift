@@ -103,12 +103,14 @@ fn stopping_a_spec_ends_both_tickets_preserves_their_work_and_only_labels_the_sp
         let scenario = Scenario::new();
         scenario.spec_has_tickets(20, &[(21, &[]), (22, &[])]);
         scenario.issue_labelled(20, &["ready-for-agent"]);
+        // Let TERM handling outlast a cleanup poll, so a fake CLI exiting
+        // before its script has handled the signal reliably fails this test.
         for (ticket, sibling) in [(21, 22), (22, 21)] {
             scenario.issue_labelled(ticket, &["bug", "ready-for-agent"]);
             scenario.agent_does_for(
                 ticket,
                 &format!(
-                    "trap 'touch {root}/interrupted-{ticket}; exit 143' TERM\n\
+                    "trap 'sleep 0.25; touch {root}/interrupted-{ticket}; exit 143' TERM\n\
                  echo 'half done {ticket}' > work.txt\n\
                  touch {root}/started-{ticket}\n\
                  while ! test -f {root}/started-{sibling}; do sleep 0.02; done\n\
