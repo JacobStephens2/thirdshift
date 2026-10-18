@@ -1315,6 +1315,17 @@ test -f {root}/{COPY_REPLACED}
             .collect()
     }
 
+    /// The single retained Command record in a command folder.
+    pub fn command_record(&self, folder: &str) -> Value {
+        let records: Vec<_> = self
+            .entries(folder)
+            .into_iter()
+            .filter(|name| name.ends_with(".command.json"))
+            .collect();
+        assert_eq!(records.len(), 1, "{records:?}");
+        serde_json::from_slice(&fs::read(self.path(folder).join(&records[0])).unwrap()).unwrap()
+    }
+
     /// Point the launch clone's origin at `url`, another spelling of the
     /// GitHub URL, which git also redirects to the bare repo.
     pub fn set_origin_url(&self, url: &str) {

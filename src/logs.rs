@@ -211,6 +211,11 @@ pub fn dispatch_ended(ended: &crate::run::Ended) {
     record().dispatch_ended(&crate::run_ending::Account::of_run(ended));
 }
 
+/// Keep a Pass's dispatch before the Run's fallible launch checks.
+pub fn dispatching(work: Work, harness: &Choice) {
+    record().dispatching(work, harness);
+}
+
 /// Print the lines held from the terminal, as before a failure, and print
 /// every line from here on.
 pub fn show_held() {

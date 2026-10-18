@@ -1841,13 +1841,7 @@ fn status_nests_the_architect_plans_run_or_spec_run_under_its_pass() {
             text.stdout
         );
         let folder = "home/.thirdshift/logs/acme/widgets/commands/architect";
-        let names = scenario.entries(folder);
-        let record = names
-            .iter()
-            .find(|name| name.ends_with(".command.json"))
-            .unwrap();
-        let record: serde_json::Value =
-            serde_json::from_slice(&fs::read(scenario.path(folder).join(record)).unwrap()).unwrap();
+        let record = scenario.command_record(folder);
         assert_eq!(record["outcome"], "ready for review");
         assert_eq!(record["dispatched"][0]["outcome"], "ready for review");
         assert_eq!(record["dispatched"][0]["issue_branch"], "issue-8");
@@ -1856,6 +1850,31 @@ fn status_nests_the_architect_plans_run_or_spec_run_under_its_pass() {
             pr_from(&scenario, "issue-8")["url"]
         );
     }
+}
+
+#[test]
+fn a_dispatch_that_fails_its_launch_checks_still_has_a_record() {
+    let scenario = scenario();
+    scenario.agent_does_in_session(
+        1,
+        &format!("{AGENT_PUBLISHES_A_TICKET}\ngit config user.name ''\n"),
+    );
+    let ended = scenario.run(&["architect"]);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert!(
+        ended.stderr.contains("git user.name is not set"),
+        "{}",
+        ended.stderr
+    );
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/architect";
+    let record = scenario.command_record(folder);
+    assert_eq!(
+        record["dispatched"].as_array().unwrap().len(),
+        1,
+        "{record}"
+    );
+    assert_eq!(record["dispatched"][0]["issue"]["number"], 8);
+    assert_eq!(record["dispatched"][0]["outcome"], "failed");
 }
 
 #[test]

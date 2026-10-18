@@ -374,10 +374,7 @@ fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder(
                 "2026-10-03 12:00:00 {subject} started: {relative}, on claude · opus · high\n2026-10-03 12:00:00 {subject} ended: ready\n"
             )
         );
-        assert_eq!(
-            memory.0.lock().unwrap().files.len(),
-            if matches!(work, Work::Run(_)) { 3 } else { 2 }
-        );
+        assert_eq!(memory.0.lock().unwrap().files.len(), 3);
     }
 }
 

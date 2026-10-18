@@ -125,15 +125,13 @@ impl<O: Outside> Record<O> {
             if !self.child
                 && self.command != CommandKind::Issue
                 && matches!(work, Work::Run(_) | Work::SpecRun(_))
+                && let Some((_, tree)) = &mut self.command_record
+                && let Some(dispatched) = tree.dispatched.last_mut()
             {
-                let stamp = self.stamp();
-                let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
-                if let Some((_, tree)) = &mut self.command_record {
-                    facts.hostname = tree.command.hostname.clone();
-                    facts.process_start = tree.command.process_start.clone();
-                    tree.dispatched.push(facts);
-                    self.stage(work.initial_stage().unwrap(), None);
-                }
+                // The launch checks have now established whether the issue is
+                // a Spec. The dispatch itself was kept before those checks.
+                dispatched.kind = work.kind().to_string();
+                self.stage(work.initial_stage().unwrap(), None);
             }
             return;
         }
@@ -261,6 +259,17 @@ impl<O: Outside> Record<O> {
             && let Some(dispatched) = tree.dispatched.last_mut()
         {
             dispatched.finish(account);
+            self.write_record();
+        }
+    }
+
+    pub(super) fn dispatching(&mut self, work: Work, harness: &Choice) {
+        let stamp = self.stamp();
+        let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        if let Some((_, tree)) = &mut self.command_record {
+            facts.hostname = tree.command.hostname.clone();
+            facts.process_start = tree.command.process_start.clone();
+            tree.dispatched.push(facts);
             self.write_record();
         }
     }

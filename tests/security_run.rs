@@ -464,13 +464,7 @@ fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
             );
         }
         let folder = "home/.thirdshift/logs/acme/widgets/commands/secure";
-        let names = scenario.entries(folder);
-        let record = names
-            .iter()
-            .find(|name| name.ends_with(".command.json"))
-            .unwrap();
-        let record: Value =
-            serde_json::from_slice(&fs::read(scenario.path(folder).join(record)).unwrap()).unwrap();
+        let record = scenario.command_record(folder);
         let stages: Vec<_> = record["stages"]
             .as_array()
             .unwrap()
