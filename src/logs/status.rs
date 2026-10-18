@@ -78,8 +78,6 @@ struct Command {
     source: &'static str,
     command_log: PathBuf,
     dispatched: Vec<Command>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    latest_event: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -113,7 +111,6 @@ impl Command {
             source: "command_record",
             command_log,
             dispatched: Vec::new(),
-            latest_event: None,
         }
     }
 

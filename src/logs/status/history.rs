@@ -12,7 +12,7 @@ use crate::logs::activity::TIME_FORMAT;
 use crate::logs::command_record::Issue;
 use crate::progress::ChildLine;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct Command {
     pub repository: String,
     pub(super) kind: String,

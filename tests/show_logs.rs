@@ -8,6 +8,75 @@ use support::Scenario;
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
 #[test]
+fn show_activity_history_lists_its_session_logs() {
+    let scenario = Scenario::new();
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let shown = scenario.run(&["show", "widgets#7", "--json"]);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    let session = shown["command"]["session_log"].as_str().unwrap().to_owned();
+    let log = std::path::Path::new(shown["command"]["command_log"].as_str().unwrap());
+    for entry in fs::read_dir(log.parent().unwrap()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.to_string_lossy().ends_with(".command.json") {
+            fs::remove_file(path).unwrap();
+        }
+    }
+    let result = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let result: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(result["command"]["source"], "activity_log");
+    assert!(
+        result["command"]["session_logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str() == Some(session.as_str())),
+        "missing Session log: {result}"
+    );
+}
+
+#[test]
+fn show_lists_the_original_architect_session_and_its_resume() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent", "architecture"]);
+    scenario.agent_does(&support::leaves_running("cargo test"));
+    scenario.agent_does_in_session(
+        2,
+        r#"url=$(gh issue create --title 'Plan' --body 'The plan' --label needs-triage)
+printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let ended = scenario.run(&["architect", "--plan-only"]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let status = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    let name = status["commands"][0]["name"].as_str().unwrap();
+    let current = std::path::Path::new(status["commands"][0]["session_log"].as_str().unwrap());
+    let original = std::path::PathBuf::from(current.to_string_lossy().replace(
+        "-architecture-review-resume.jsonl",
+        "-architecture-review.jsonl",
+    ));
+    assert_ne!(current, original.as_path());
+    assert!(original.is_file(), "{}", original.display());
+    let text = scenario.run(&["show", name]);
+    let json = scenario.run(&["show", name, "--json"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    assert!(
+        text.stdout.contains(original.to_str().unwrap()),
+        "original Session log missing: {}",
+        text.stdout
+    );
+    assert!(
+        json.stdout.contains(original.to_str().unwrap()),
+        "original Session log missing: {}",
+        json.stdout
+    );
+}
+
+#[test]
 fn naming_prefers_a_live_command_then_the_latest_and_refuses_ambiguous_repositories() {
     let scenario = Scenario::new();
     scenario.agent_does(OPENS_PR);
@@ -368,8 +437,9 @@ fn show_names_one_command_and_logs_prints_its_exact_output() {
         assert!(command["stages"].as_array().unwrap().iter().all(|stage| {
             chrono::DateTime::parse_from_rfc3339(stage["began_at"].as_str().unwrap()).is_ok()
         }));
+        let identity = (command["process_id"].clone(), command["started_at"].clone());
         if let Some(expected) = &expected {
-            assert_eq!(&shown, expected);
+            assert_eq!(&identity, expected);
         }
         let log = fs::read_to_string(command["command_log"].as_str().unwrap()).unwrap();
         let result = scenario.run(&["logs", name]);
@@ -382,6 +452,6 @@ fn show_names_one_command_and_logs_prints_its_exact_output() {
             text.stdout
                 .contains(command["command_log"].as_str().unwrap())
         );
-        expected = Some(shown);
+        expected = Some(identity);
     }
 }

@@ -187,13 +187,14 @@ thirdshift logs 'widgets#7' --session repair --follow
     "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"}],
     "command_log": "/logs/acme/widgets/commands/issue/7-stamp.log",
     "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl",
+    "session_logs": ["/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"],
     "children": [],
     "dispatched": []
   }
 }
 ```
 
-The Command excerpt omits the common fields documented for `status --json`; all those fields are retained, including process identity, issue, Harness, Model, Effort and nullable outcome. `children` and `dispatched` retain the same recursive shape. `latest_event` is optional, present only when a live Run has a readable event, including in child Runs. History without a Command record uses the same Activity-log or Session-log shape as `status --all --json`, without invented stages or liveness.
+The Command excerpt omits the common fields documented for `status --json`; all those fields are retained, including process identity, issue, Harness, Model, Effort and nullable outcome. `children` and `dispatched` retain the same recursive shape. `session_logs` lists the selected Run's Session log paths, including original sessions and Resumes that share a stage. `latest_event` is optional, present only when a live Run has a readable event, including in child Runs. History without a Command record uses the same Activity-log or Session-log shape as `status --all --json`, with Session logs discovered by issue/kind and Command stamp, without invented stages or liveness.
 
 `logs` writes the Command log verbatim. `--session <kind>` writes that kind's latest Session log as raw JSON lines; `implement` and `spec-review` include a later Resume, and `repair` selects the latest numbered Repair. A missing log or session kind gives an error. `--follow` first prints the selected log, then flushes appended bytes until the owning Command ends or dies, including its final output. A Ticket shares its Command's Command log but selects its own Session logs. The selected Command and Session log stay fixed while following.
 

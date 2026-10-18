@@ -91,11 +91,8 @@ impl<'a> Selected<'a> {
             Name::Pass(name) => match self {
                 Self::Record(command) => command.record.name == *name,
                 Self::History(command) => command.command_log.as_ref().is_some_and(|path| {
-                    let kind = match command.kind.as_str() {
-                        "Architect run" => "architect",
-                        "Pickup run" => "pickup",
-                        "Security run" => "secure",
-                        _ => return false,
+                    let Some(kind) = pass_prefix(&command.kind) else {
+                        return false;
                     };
                     stamp(path).is_some_and(|stamp| *name == format!("{kind}-{stamp}"))
                 }),
@@ -143,7 +140,7 @@ impl<'a> Selected<'a> {
     }
 
     fn sessions(self) -> Result<Vec<PathBuf>> {
-        match self {
+        let (mut paths, issue, kind) = match self {
             Self::Record(command) => {
                 let mut paths = Vec::new();
                 for path in command
@@ -157,51 +154,51 @@ impl<'a> Selected<'a> {
                         paths.push(path.clone());
                     }
                 }
-                Ok(paths)
+                (
+                    paths,
+                    command.record.issue.as_ref(),
+                    command.record.kind.as_str(),
+                )
             }
-            Self::History(command) => {
-                let mut paths = command.session_logs.clone();
-                if let Some(log) = &command.command_log
-                    && let Some(stamp) = stamp(log)
+            Self::History(command) => (
+                command.session_logs.clone(),
+                command.issue.as_ref(),
+                command.kind.as_str(),
+            ),
+        };
+        // A stage can cover several sessions (for example Architecture review
+        // and its Resume), so stage references alone are not a log inventory.
+        if let Some(log) = self.command_log()
+            && let Some(stamp) = stamp(log)
+        {
+            let prefix = issue
+                .map(|issue| issue.number.to_string())
+                .or_else(|| pass_prefix(kind).map(String::from))
+                .context("cannot name Session logs for this Command kind")?;
+            let prefix = format!("{prefix}-{stamp}-");
+            for entry in super::entries(log.parent().context("Command log has no directory")?)? {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if entry.file_type()?.is_file()
+                    && name.starts_with(&prefix)
+                    && name.ends_with(".jsonl")
+                    && !paths.contains(&entry.path())
                 {
-                    let prefix = command
-                        .issue
-                        .as_ref()
-                        .map(|issue| issue.number.to_string())
-                        .unwrap_or_else(|| {
-                            match command.kind.as_str() {
-                                "Architect run" => "architect",
-                                "Security run" => "secure",
-                                _ => "pickup",
-                            }
-                            .into()
-                        });
-                    let prefix = format!("{prefix}-{stamp}-");
-                    for entry in
-                        super::entries(log.parent().context("Command log has no directory")?)?
-                    {
-                        let name = entry.file_name();
-                        let name = name.to_string_lossy();
-                        if entry.file_type()?.is_file()
-                            && name.starts_with(&prefix)
-                            && name.ends_with(".jsonl")
-                            && !paths.contains(&entry.path())
-                        {
-                            paths.push(entry.path());
-                        }
-                    }
+                    paths.push(entry.path());
                 }
-                let mut dated = paths
-                    .into_iter()
-                    .map(|path| {
-                        let modified = std::fs::metadata(&path)?.modified()?;
-                        Ok((modified, path))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                dated.sort();
-                Ok(dated.into_iter().map(|(_, path)| path).collect())
             }
         }
+        let mut dated = paths
+            .into_iter()
+            .map(|path| {
+                let modified = std::fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                (modified, path)
+            })
+            .collect::<Vec<_>>();
+        dated.sort();
+        Ok(dated.into_iter().map(|(_, path)| path).collect())
     }
 
     fn session(self, kind: &str) -> Result<PathBuf> {
@@ -228,6 +225,15 @@ impl<'a> Selected<'a> {
                             .is_some_and(|number| number.parse::<u32>().is_ok()))
             })
             .with_context(|| format!("no {kind} Session log for this Command"))
+    }
+}
+
+fn pass_prefix(kind: &str) -> Option<&'static str> {
+    match kind {
+        "Architect run" => Some("architect"),
+        "Pickup run" => Some("pickup"),
+        "Security run" => Some("secure"),
+        _ => None,
     }
 }
 
@@ -299,7 +305,7 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
     for path in Selected::Record(command).sessions()? {
         println!("{indent}Session log: {}", path.display());
     }
-    if let Some(event) = &command.latest_event {
+    if let Some(event) = latest_event(command) {
         println!("{indent}{event}");
     }
     super::print_tickets(&command.record, &format!("{indent}  "));
@@ -310,26 +316,28 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
 }
 
 pub fn show(input: &str, json: bool) -> Result<()> {
-    let mut status = super::read(true)?;
-    for entry in &mut status.commands {
-        if let Entry::Record(command) = entry {
-            latest_events(command);
-        }
-    }
+    let status = super::read(true)?;
     let command = select(&status.commands, input)?;
     if json {
         #[derive(Serialize)]
         struct Show<'a> {
             version: u32,
             hostname: String,
-            command: Selected<'a>,
+            command: Detailed<'a>,
         }
         println!(
             "{}",
             serde_json::to_string_pretty(&Show {
                 version: 1,
                 hostname: status.hostname,
-                command
+                command: match command {
+                    Selected::Record(command) => Detailed::Record(Box::new(Details::new(command)?)),
+                    Selected::History(command) => {
+                        let mut details = command.clone();
+                        details.session_logs = Selected::History(command).sessions()?;
+                        Detailed::History(Box::new(details))
+                    }
+                }
             })?
         );
     } else {
@@ -345,16 +353,10 @@ fn stamp(path: &Path) -> Option<&str> {
     Some(stamp)
 }
 
-fn latest_events(command: &mut Command) {
-    if command.state == "live" {
-        command.latest_event = latest_event(command);
-    }
-    for child in command.dispatched.iter_mut().chain(&mut command.children) {
-        latest_events(child);
-    }
-}
-
 fn latest_event(command: &Command) -> Option<String> {
+    if command.state != "live" {
+        return None;
+    }
     let path = command.record.session_log.as_ref()?;
     let mut file = std::fs::File::open(path).ok()?;
     // A show reads at most 64 KiB, independent of the transcript's size.
@@ -374,6 +376,54 @@ fn latest_event(command: &Command) -> Option<String> {
         .strip_prefix("$ ")
         .map_or_else(|| event.clone(), |command| format!("Bash: {command}"));
     Some(event.lines().collect::<Vec<_>>().join(" "))
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Detailed<'a> {
+    Record(Box<Details<'a>>),
+    History(Box<super::history::Command>),
+}
+
+/// The detailed view adds a complete Session inventory and a live event to
+/// each Run while retaining the status reader's version 1 field names.
+#[derive(Serialize)]
+struct Details<'a> {
+    #[serde(flatten)]
+    record: &'a crate::logs::command_record::CommandRecord,
+    state: &'static str,
+    stage: &'a Option<super::CurrentStage>,
+    source: &'static str,
+    command_log: &'a Path,
+    session_logs: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_event: Option<String>,
+    children: Vec<Details<'a>>,
+    dispatched: Vec<Details<'a>>,
+}
+
+impl<'a> Details<'a> {
+    fn new(command: &'a Command) -> Result<Self> {
+        Ok(Self {
+            record: &command.record,
+            state: command.state,
+            stage: &command.stage,
+            source: command.source,
+            command_log: &command.command_log,
+            session_logs: Selected::Record(command).sessions()?,
+            latest_event: latest_event(command),
+            children: command
+                .children
+                .iter()
+                .map(Self::new)
+                .collect::<Result<_>>()?,
+            dispatched: command
+                .dispatched
+                .iter()
+                .map(Self::new)
+                .collect::<Result<_>>()?,
+        })
+    }
 }
 
 pub fn logs(input: &str, session: Option<&str>, follow: bool) -> Result<()> {
