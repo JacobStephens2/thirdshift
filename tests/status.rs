@@ -7,6 +7,56 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
+#[test]
+fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[activity]\nquiet_skips = true\n");
+    for _ in 0..2 {
+        let skipped = scenario.run(&["pickup"]);
+        assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    }
+    scenario.issue_titled(7, "Make widgets");
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    for kind in ["architect", "secure"] {
+        let skipped = scenario.run(&[kind]);
+        assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    }
+    let result = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    let status: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(status["commands"], serde_json::json!([]));
+    let idle = status["idle_passes"].as_array().expect(&result.stdout);
+    assert_eq!(idle.len(), 3, "{status}");
+    assert!(
+        idle.iter().any(|pass| pass["kind"] == "Pickup run"
+            && pass["reason"] == "no Ready issue on acme/widgets")
+    );
+    for kind in ["Architect run", "Security run"] {
+        let reason =
+            "Ready issue #7 \"Make widgets\" goes first: https://github.com/acme/widgets/issues/7";
+        assert!(
+            idle.iter().any(|pass| pass["repository"] == "acme/widgets"
+                && pass["kind"] == kind
+                && pass["reason"] == reason),
+            "{status}"
+        );
+        assert!(
+            text.stdout
+                .contains(&format!("{kind} idle on acme/widgets: {reason}")),
+            "{}",
+            text.stdout
+        );
+    }
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&["pickup"]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let result = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&result.stdout).unwrap();
+    let idle = status["idle_passes"].as_array().unwrap();
+    assert_eq!(idle.len(), 2, "{status}");
+    assert!(!idle.iter().any(|pass| pass["kind"] == "Pickup run"));
+}
+
 fn retained(scenario: &Scenario) -> Value {
     let files: Vec<_> = scenario
         .entries(LOGS)

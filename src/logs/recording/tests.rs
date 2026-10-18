@@ -269,7 +269,7 @@ fn commands_started_on_the_same_issue_in_one_second_keep_separate_records() {
         .collect();
     let mut titles: Vec<_> = records
         .iter()
-        .map(|record| record.issue.title.as_deref().unwrap())
+        .map(|record| record.issue.as_ref().unwrap().title.as_deref().unwrap())
         .collect();
     titles.sort();
     assert_eq!(titles, ["first Command", "second Command"]);

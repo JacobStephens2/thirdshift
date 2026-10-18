@@ -71,7 +71,13 @@ The designed behaviour described in this README is implemented. Known gaps and p
 
 ## Machine status
 
-`thirdshift status` names this host and lists live Runs started on an Issue URL across every repository in `logs.dir`, with their issue and title, Harness, Model, Effort, current stage and its age. A Command with no outcome whose process has gone shows as `died at <stage>`. Process start identifiers distinguish a reused process id on Linux and macOS. Completed Commands leave the live list; their Command records remain beside their Command logs, as `*.command.json`. A record write failure warns once per Command and does not change its outcome.
+`thirdshift status` names this host and lists live Commands across every repository in `logs.dir`, with their issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Run or Spec run they dispatch beneath themselves. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. A Command with no outcome whose process has gone shows as `died at <stage>`. Process start identifiers distinguish a reused process id on Linux and macOS. Completed Commands leave the live list; their Command records remain beside their Command logs, as `*.command.json`. A record write failure warns once per Command and does not change its outcome.
+
+For each repository and kind of Pass whose latest Activity log line is a skip, status also shows that Pass as idle with its reason, even when the skip is older than another kind's activity. A later start or end for that kind clears its idle entry. For example:
+
+```text
+Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: https://github.com/acme/widgets/issues/7
+```
 
 `thirdshift status --json` is the versioned API for agents and the coming [Console](docs/adr/0016-the-console-is-a-long-running-reader.md). It runs outside a repository too. Version 1 has this shape:
 
@@ -83,6 +89,7 @@ The designed behaviour described in this README is implemented. Known gaps and p
     "version": 1,
     "kind": "Run",
     "repository": "acme/widgets",
+    "name": "acme/widgets#7",
     "issue": {"number": 7, "url": "https://github.com/acme/widgets/issues/7", "title": "Make widgets"},
     "hostname": "factory",
     "process_id": 1234,
@@ -97,13 +104,21 @@ The designed behaviour described in this README is implemented. Known gaps and p
     "pull_request": null,
     "outcome": null,
     "cause": null,
+    "dispatched": [],
     "state": "live",
     "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52}
+  }],
+  "idle_passes": [{
+    "repository": "acme/widgets",
+    "kind": "Pickup run",
+    "reason": "no Ready issue on acme/widgets"
   }]
 }
 ```
 
-Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `session_log`, `issue_branch`, `pull_request`, `outcome` and `cause` are nullable. The retained record has the same Command fields without the computed `state` and `stage`; it ends with its outcome, failure cause (null on success), and the Issue branch and pull request left behind. `state` is `live` or `died`; `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge` and `cleanup`. More Command kinds and history are tracked in [#711](https://github.com/JacobStephens2/thirdshift/issues/711).
+Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome` and `cause` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run` and `Security run`. `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Run or Spec run a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity. Its `state` may also be `ended`, and it retains its own outcome, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state` and `stage` or empty leaf `dispatched` arrays. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
+
+`state` is `live` or `died` for an unfinished Command; `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets`, `Spec review`, `Architecture review`, `Security audit`, `Security reproduction` and `Security fix publishing`. A Pass retains its own stages while its dispatched work records its stages separately. History and the remaining Command views are tracked in [#711](https://github.com/JacobStephens2/thirdshift/issues/711).
 
 ## Install
 

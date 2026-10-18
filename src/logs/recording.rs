@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
-use super::command_record::{CommandRecord, Stage, StageName};
+use super::command_record::{CommandRecord, CommandTree, Stage, StageName};
 use super::effects::{Outside, Stream};
 use super::{Begin, CommandKind, Pass, Work, root_under};
 use crate::config::UserConfig;
@@ -31,7 +31,7 @@ pub(super) struct Record<O: Outside> {
     command_log: Log<O::CommandLog>,
     activity_started: Option<Started>,
     activity_warned: bool,
-    command_record: Option<(PathBuf, CommandRecord)>,
+    command_record: Option<(PathBuf, CommandTree)>,
     record_warned: bool,
 }
 
@@ -122,17 +122,27 @@ impl<O: Outside> Record<O> {
         let first = !self.started;
         self.started = true;
         if !first || self.child {
+            if !self.child
+                && self.command != CommandKind::Issue
+                && matches!(work, Work::Run(_) | Work::SpecRun(_))
+            {
+                let stamp = self.stamp();
+                let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+                if let Some((_, tree)) = &mut self.command_record {
+                    facts.hostname = tree.command.hostname.clone();
+                    facts.process_start = tree.command.process_start.clone();
+                    tree.dispatched.push(facts);
+                    self.stage(work.initial_stage().unwrap(), None);
+                }
+            }
             return;
         }
         let root = self.root(&work.repo());
         let stamp = self.stamp();
         let began = matches!(self.command_log, Log::Held { .. });
         self.keep(work.command_log(&root, &stamp));
-        if began
-            && self.command == CommandKind::Issue
-            && let Work::Run(issue) = work
-        {
-            let mut facts = CommandRecord::new(issue, harness, self.outside.now());
+        if began {
+            let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
             facts.hostname = self.outside.hostname();
             facts.process_start = self
                 .outside
@@ -150,8 +160,18 @@ impl<O: Outside> Record<O> {
             let path = work
                 .command_log(&root, &stamp)
                 .with_extension(format!("{owner}.command.json"));
-            self.command_record = Some((path, facts));
-            self.stage(StageName::Implement, None);
+            self.command_record = Some((
+                path,
+                CommandTree {
+                    command: facts,
+                    dispatched: Vec::new(),
+                },
+            ));
+            if let Some(stage) = work.initial_stage() {
+                self.stage(stage, None);
+            } else {
+                self.write_record();
+            }
         }
         self.step(format_args!("sessions run on {harness}"));
         let command_log = match self.command_log_path() {
@@ -193,24 +213,27 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn issue_title(&mut self, title: Option<String>) {
-        if let Some((_, facts)) = &mut self.command_record {
-            facts.issue.title = title;
+        if let Some((_, tree)) = &mut self.command_record
+            && let Some(issue) = &mut tree.active().issue
+        {
+            issue.title = title;
             self.write_record();
         }
     }
 
     pub(super) fn issue_branch(&mut self, branch: Option<&str>) {
-        if let Some((_, facts)) = &mut self.command_record {
-            facts.issue_branch = branch.map(String::from);
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().issue_branch = branch.map(String::from);
             self.write_record();
         }
     }
 
     pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
         let name = stage.name();
-        let Some((_, facts)) = &mut self.command_record else {
+        let Some((_, tree)) = &mut self.command_record else {
             return;
         };
+        let facts = tree.active();
         if let Some(log) = log {
             facts.session_log = Some(log.into());
         }
@@ -227,14 +250,17 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
-        if let Some((_, facts)) = &mut self.command_record {
-            facts.outcome = Some(account.outcome.into());
-            facts.cause = account
-                .ended
-                .as_ref()
-                .err()
-                .map(|cause| cause.full().into());
-            facts.pull_request = account.pr_url.map(String::from);
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.finish(account);
+            self.write_record();
+        }
+    }
+
+    pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        if let Some((_, tree)) = &mut self.command_record
+            && let Some(dispatched) = tree.dispatched.last_mut()
+        {
+            dispatched.finish(account);
             self.write_record();
         }
     }

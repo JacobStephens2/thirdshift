@@ -415,6 +415,82 @@ printf 'Proposed public issue:\nTitle: Bound accepted input\nBody:\nReject overs
 }
 
 #[test]
+fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
+    for (held_session, stage) in [
+        (1, "Security audit"),
+        (2, "Security reproduction"),
+        (3, "Security fix publishing"),
+        (4, "implement"),
+    ] {
+        let scenario = Scenario::new();
+        scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+        let scripts = [
+            audit_script(&json!([finding("status-stages")]).to_string()),
+            reproduction_script("reproduced high single"),
+            stage_fix("GHSA-test-test-0001"),
+            implement_fix().into(),
+        ];
+        for (index, script) in scripts.iter().enumerate() {
+            let hold = if index + 1 == held_session {
+                "root=$(dirname \"$FAKE_CLAUDE_RECORD\")\ntouch \"$root/started\"\nwhile [ -d \"$root\" ] && [ ! -e \"$root/release\" ]; do sleep 0.05; done\n"
+            } else {
+                ""
+            };
+            scenario.agent_does_in_session(index + 1, &format!("{hold}{script}"));
+        }
+        let held = scenario.run_until(&["secure", "security-fix"], &[], "started");
+        let result = scenario.run(&["status", "--json"]);
+        let text = scenario.run(&["status"]);
+        fs::write(scenario.path("release"), "").unwrap();
+        let ended = held.finish();
+        assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+        let status: Value = serde_json::from_str(&result.stdout).unwrap();
+        let pass = &status["commands"][0];
+        assert_eq!(pass["kind"], "Security run", "{status}");
+        assert_eq!(pass["issue"], Value::Null);
+        let active = if held_session == 4 {
+            &pass["dispatched"][0]
+        } else {
+            pass
+        };
+        assert_eq!(active["stage"]["name"], stage, "{status}");
+        assert!(active["stage"]["age_seconds"].is_number());
+        if held_session == 4 {
+            assert_eq!(active["issue"]["number"], 8);
+            assert!(
+                text.stdout.contains("\n  acme/widgets#8"),
+                "{}",
+                text.stdout
+            );
+        }
+        let folder = "home/.thirdshift/logs/acme/widgets/commands/secure";
+        let names = scenario.entries(folder);
+        let record = names
+            .iter()
+            .find(|name| name.ends_with(".command.json"))
+            .unwrap();
+        let record: Value =
+            serde_json::from_slice(&fs::read(scenario.path(folder).join(record)).unwrap()).unwrap();
+        let stages: Vec<_> = record["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|stage| stage["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            stages,
+            [
+                "Security audit",
+                "Security reproduction",
+                "Security fix publishing"
+            ]
+        );
+        assert_eq!(record["outcome"], "ready for review");
+        assert_eq!(record["dispatched"][0]["outcome"], "ready for review");
+    }
+}
+
+#[test]
 fn public_fix_publishing_cannot_write_github_content_with_any_harness() {
     for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
         let scenario = with_reproduced_findings(&["high"]);

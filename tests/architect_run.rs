@@ -1767,6 +1767,98 @@ fn release(scenario: &Scenario) {
 }
 
 #[test]
+fn status_names_a_live_architecture_review_by_kind_and_command_stamp() {
+    let scenario = scenario();
+    scenario.agent_does(&format!(
+        "{AGENT_WAITS_FOR_RELEASE}{AGENT_PUBLISHES_A_TICKET}"
+    ));
+    let held = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    let result = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    release(&scenario);
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+    let command = &status["commands"][0];
+    assert_eq!(command["kind"], "Architect run", "{status}");
+    assert_eq!(command["issue"], serde_json::Value::Null);
+    assert_eq!(command["state"], "live");
+    assert_eq!(command["stage"]["name"], "Architecture review");
+    assert!(command["stage"]["age_seconds"].is_number());
+    let log = scenario.log_files(
+        "home/.thirdshift/logs/acme/widgets/commands/architect",
+        "log",
+    );
+    let name = format!("architect-{}", log[0].strip_suffix(".log").unwrap());
+    assert_eq!(command["name"], name);
+    assert!(text.stdout.contains(&name), "{}", text.stdout);
+    assert!(
+        text.stdout.contains("Architecture review ·"),
+        "{}",
+        text.stdout
+    );
+}
+
+#[test]
+fn status_nests_the_architect_plans_run_or_spec_run_under_its_pass() {
+    for (plan, held_issue, base, kind, stage) in [
+        (
+            single_ticket_plan as fn() -> Scenario,
+            8,
+            "main",
+            "Run",
+            "implement",
+        ),
+        (|| spec_plan(""), 9, "issue-8", "Spec run", "Tickets"),
+    ] {
+        let scenario = plan();
+        scenario.agent_does_for(
+            held_issue,
+            &format!(
+                "{AGENT_WAITS_FOR_RELEASE}{}",
+                agent_opens_pr(held_issue, base)
+            ),
+        );
+        let held = scenario.run_until(&["architect"], &[], "started");
+        let result = scenario.run(&["status", "--json"]);
+        let text = scenario.run(&["status"]);
+        release(&scenario);
+        let ended = held.finish();
+        assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+        let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(status["commands"].as_array().unwrap().len(), 1, "{status}");
+        let pass = &status["commands"][0];
+        assert_eq!(pass["kind"], "Architect run");
+        assert_eq!(pass["issue"], serde_json::Value::Null);
+        let dispatched = &pass["dispatched"][0];
+        assert_eq!(dispatched["kind"], kind, "{status}");
+        assert_eq!(dispatched["issue"]["number"], 8);
+        assert_eq!(dispatched["stage"]["name"], stage);
+        assert!(dispatched["stage"]["age_seconds"].is_number());
+        assert!(
+            text.stdout.contains("\n  acme/widgets#8"),
+            "{}",
+            text.stdout
+        );
+        let folder = "home/.thirdshift/logs/acme/widgets/commands/architect";
+        let names = scenario.entries(folder);
+        let record = names
+            .iter()
+            .find(|name| name.ends_with(".command.json"))
+            .unwrap();
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(scenario.path(folder).join(record)).unwrap()).unwrap();
+        assert_eq!(record["outcome"], "ready for review");
+        assert_eq!(record["dispatched"][0]["outcome"], "ready for review");
+        assert_eq!(record["dispatched"][0]["issue_branch"], "issue-8");
+        assert_eq!(
+            record["dispatched"][0]["pull_request"],
+            pr_from(&scenario, "issue-8")["url"]
+        );
+    }
+}
+
+#[test]
 fn a_second_architect_run_on_the_repository_is_skipped_while_the_first_is_mid_review() {
     let scenario = scenario();
     scenario.user_config_is("[launch]\npull = true\n");
