@@ -31,6 +31,17 @@ struct Memory {
 struct Scripted(Arc<Mutex<Memory>>);
 
 impl Scripted {
+    fn command_record(&self) -> CommandRecord {
+        let memory = self.0.lock().unwrap();
+        let records: Vec<_> = memory
+            .files
+            .iter()
+            .filter(|(path, _)| path.to_string_lossy().ends_with(".command.json"))
+            .collect();
+        assert_eq!(records.len(), 1);
+        serde_json::from_str(records[0].1).unwrap()
+    }
+
     fn terminal(&self) -> String {
         self.0
             .lock()
@@ -212,9 +223,7 @@ fn a_command_record_write_failure_warns_once_and_keeps_the_outcome() {
             .file(ACTIVITY)
             .contains("PR https://github.com/acme/widgets/pull/1 is ready for review")
     );
-    let facts: CommandRecord =
-        serde_json::from_str(&memory.file(Path::new(COMMAND).with_extension("command.json")))
-            .unwrap();
+    let facts = memory.command_record();
     assert_eq!(facts.outcome.as_deref(), Some("ready for review"));
 }
 
@@ -225,12 +234,45 @@ fn a_reused_process_id_is_not_a_live_command() {
     record.begin(Begin::Run(&issue()));
     record.configured(&config(false));
     record.started(Work::Run(&issue()), &harness());
-    let facts: CommandRecord =
-        serde_json::from_str(&memory.file(Path::new(COMMAND).with_extension("command.json")))
-            .unwrap();
+    let facts = memory.command_record();
     assert!(facts.live(&mut memory));
     memory.0.lock().unwrap().reused_pid = true;
     assert!(!facts.live(&mut memory));
+}
+
+#[test]
+fn commands_started_on_the_same_issue_in_one_second_keep_separate_records() {
+    let memory = Scripted::default();
+    let issue = issue();
+    let mut first = Record::new(memory.clone());
+    first.begin(Begin::Run(&issue));
+    first.configured(&config(false));
+    first.started(Work::Run(&issue), &harness());
+    first.issue_title(Some("first Command".into()));
+
+    let mut second = Record::new(memory.clone());
+    second.begin(Begin::Run(&issue));
+    second.configured(&config(false));
+    second.started(Work::Run(&issue), &harness());
+    second.issue_title(Some("second Command".into()));
+
+    // The effects adapter keeps its clock fixed, so both owners have the same
+    // issue, repository, and second-resolution Command-log stamp.
+    let records: Vec<CommandRecord> = memory
+        .0
+        .lock()
+        .unwrap()
+        .files
+        .iter()
+        .filter(|(path, _)| path.to_string_lossy().ends_with(".command.json"))
+        .map(|(_, bytes)| serde_json::from_str(bytes).unwrap())
+        .collect();
+    let mut titles: Vec<_> = records
+        .iter()
+        .map(|record| record.issue.title.as_deref().unwrap())
+        .collect();
+    titles.sort();
+    assert_eq!(titles, ["first Command", "second Command"]);
 }
 
 fn config(quiet: bool) -> UserConfig {

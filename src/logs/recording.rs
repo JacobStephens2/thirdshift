@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 
@@ -18,6 +19,7 @@ use crate::issue::Repo;
 use crate::progress;
 
 const STAMP_FORMAT: &str = "%Y%m%dT%H%M%S%z";
+static NEXT_RECORD: AtomicU64 = AtomicU64::new(0);
 
 pub(super) struct Record<O: Outside> {
     outside: O,
@@ -130,15 +132,24 @@ impl<O: Outside> Record<O> {
             && self.command == CommandKind::Issue
             && let Work::Run(issue) = work
         {
-            let path = work
-                .command_log(&root, &stamp)
-                .with_extension("command.json");
             let mut facts = CommandRecord::new(issue, harness, self.outside.now());
             facts.hostname = self.outside.hostname();
             facts.process_start = self
                 .outside
                 .process_start(facts.process_id)
                 .unwrap_or_default();
+            // Command-log stamps have second precision. A process identity
+            // separates concurrent Commands, and a serial separates owned
+            // recorders within one process (including effects-adapter tests).
+            let owner = format!(
+                "{}-{}-{}",
+                facts.process_id,
+                facts.process_start.replace(':', "-"),
+                NEXT_RECORD.fetch_add(1, Ordering::Relaxed)
+            );
+            let path = work
+                .command_log(&root, &stamp)
+                .with_extension(format!("{owner}.command.json"));
             self.command_record = Some((path, facts));
             self.stage(StageName::Implement, None);
         }
