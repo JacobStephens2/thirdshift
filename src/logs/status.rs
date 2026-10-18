@@ -3,7 +3,7 @@
 mod history;
 pub mod inspect;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -176,35 +176,10 @@ fn read(all: bool) -> Result<Status> {
             let mut covered = HashSet::new();
             idle_passes.extend(read_idle_passes(&repo)?);
             for folder in directories(&repo.join("commands"))? {
-                for entry in entries(&folder)? {
-                    let name = entry.file_name();
-                    let name = name.to_string_lossy();
-                    if !entry.file_type()?.is_file()
-                        || (!name.ends_with(".command.json") && !name.ends_with(".child.json"))
-                    {
-                        continue;
-                    }
-                    let path = entry.path();
-                    let bytes = fs::read(&path)
-                        .with_context(|| format!("could not read {}", path.display()))?;
-                    let Ok(mut tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
-                        continue;
-                    };
-                    let record = &mut tree.command;
-                    if record.version != 1 {
-                        continue;
-                    }
+                for (path, tree) in read_records(&folder)? {
+                    let record = &tree.command;
                     if record.parent_record.is_none() {
                         covered.insert(command_log(&path));
-                    }
-                    // Records written before completion times existed were last
-                    // replaced when their outcome was recorded.
-                    if record.outcome.is_some() && record.ended_at.is_none() {
-                        record.ended_at = entry
-                            .metadata()?
-                            .modified()
-                            .ok()
-                            .map(|time| DateTime::<Local>::from(time).to_rfc3339());
                     }
                     records.insert(path, tree);
                 }
@@ -241,9 +216,75 @@ fn read(all: bool) -> Result<Status> {
     })
 }
 
+fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
+    let mut records = BTreeMap::new();
+    for entry in entries(folder)? {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !entry.file_type()?.is_file()
+            || (!name.ends_with(".command.json") && !name.ends_with(".child.json"))
+        {
+            continue;
+        }
+        let path = entry.path();
+        let bytes =
+            fs::read(&path).with_context(|| format!("could not read {}", path.display()))?;
+        let Ok(mut tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
+            continue;
+        };
+        let record = &mut tree.command;
+        if record.version != 1 {
+            continue;
+        }
+        // Records written before completion times existed were last
+        // replaced when their outcome was recorded.
+        if record.outcome.is_some() && record.ended_at.is_none() {
+            record.ended_at = entry
+                .metadata()?
+                .modified()
+                .ok()
+                .map(|time| DateTime::<Local>::from(time).to_rfc3339());
+        }
+        records.insert(path, tree);
+    }
+    Ok(records)
+}
+
+/// Stop uses the same exact-parent tree as status, including child-owned files.
+pub(super) fn retained_resources(path: &Path) -> Result<BTreeSet<String>> {
+    let mut records = read_records(path.parent().context("Command record has no directory")?)?;
+    anyhow::ensure!(records.contains_key(path), "Command record is unavailable");
+    let command = tree(path, &mut records, &Local::now());
+    let mut resources = BTreeSet::new();
+    fn collect(command: &Command, resources: &mut BTreeSet<String>) {
+        if let Some(branch) = &command.record.issue_branch {
+            resources.insert(format!("Issue branch left: {branch}"));
+        }
+        if let Some(pr) = &command.record.pull_request {
+            resources.insert(format!("Pull request left: {pr}"));
+        }
+        for child in command.dispatched.iter().chain(&command.children) {
+            collect(child, resources);
+        }
+    }
+    collect(&command, &mut resources);
+    Ok(resources)
+}
+
 fn command_log(path: &Path) -> PathBuf {
     let name = path.file_name().unwrap().to_string_lossy();
     path.with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)))
+}
+
+fn parse_stamp(stamp: &str) -> Option<DateTime<chrono::FixedOffset>> {
+    DateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%z").ok()
+}
+
+/// Keep the filename spelling alongside its parsed time for naming and history.
+fn command_stamp(path: &Path) -> Option<(&str, DateTime<chrono::FixedOffset>)> {
+    let stem = path.file_stem()?.to_str()?;
+    let stamp = stem.get(stem.len().checked_sub(20)?..)?;
+    Some((stamp, parse_stamp(stamp)?))
 }
 
 fn tree(

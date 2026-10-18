@@ -1,6 +1,5 @@
 //! Stop a Command by its durable record, retaining the request for its cleanup.
 
-use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -117,7 +116,7 @@ fn wait(path: &Path, clock: &mut impl Clock, output: &mut impl Write) -> Result<
     loop {
         let tree = read(path)?;
         if tree.command.outcome.is_some() || !tree.command.live(&mut OnMachine) {
-            print_ending(&tree, output)?;
+            print_ending(path, &tree, output)?;
             return Ok(());
         }
         if clock.elapsed().saturating_sub(reminder) >= Duration::from_secs(60) {
@@ -129,7 +128,7 @@ fn wait(path: &Path, clock: &mut impl Clock, output: &mut impl Write) -> Result<
     }
 }
 
-fn print_ending(tree: &CommandTree, output: &mut impl Write) -> Result<()> {
+fn print_ending(path: &Path, tree: &CommandTree, output: &mut impl Write) -> Result<()> {
     writeln!(
         output,
         "{}: {}",
@@ -139,16 +138,7 @@ fn print_ending(tree: &CommandTree, output: &mut impl Write) -> Result<()> {
             .as_deref()
             .unwrap_or("died before recording an outcome")
     )?;
-    let mut resources = BTreeSet::new();
-    for record in std::iter::once(&tree.command).chain(&tree.dispatched) {
-        if let Some(branch) = &record.issue_branch {
-            resources.insert(format!("Issue branch left: {branch}"));
-        }
-        if let Some(pr) = &record.pull_request {
-            resources.insert(format!("Pull request left: {pr}"));
-        }
-    }
-    for resource in resources {
+    for resource in super::status::retained_resources(path)? {
         writeln!(output, "{resource}")?;
     }
     Ok(())
@@ -164,7 +154,7 @@ mod tests {
     #[test]
     fn waiting_reports_still_ending_each_minute_then_the_outcome_and_resources() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("command.json");
+        let path = dir.path().join("example.command.json");
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
         let mut command = CommandRecord::new(
             Work::Run(&issue),

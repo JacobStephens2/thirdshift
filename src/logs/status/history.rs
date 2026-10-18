@@ -201,9 +201,9 @@ pub(super) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<Vec<Comman
         if let Some(path) = &start.command.command_log {
             covered.insert(path.clone());
             if start.command.kind != "Run"
-                && let Some(stamp) = log_stamp(path)
+                && let Some((stamp, _)) = super::command_stamp(path)
             {
-                shared_stamps.insert((path.parent().unwrap().to_path_buf(), stamp));
+                shared_stamps.insert((path.parent().unwrap().to_path_buf(), stamp.into()));
             }
         }
     }
@@ -252,12 +252,7 @@ fn start(
     {
         return Ok(None);
     }
-    let Some(stamp) = relative
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.get(name.len().checked_sub(20)?..))
-        .and_then(parse_stamp)
-    else {
+    let Some((_, stamp)) = super::command_stamp(relative) else {
         return Ok(None);
     };
     let path = repo.join(relative);
@@ -293,13 +288,6 @@ fn start(
     }))
 }
 
-fn log_stamp(path: &Path) -> Option<String> {
-    let name = path.file_stem()?.to_str()?;
-    let stamp = name.get(name.len().checked_sub(20)?..)?;
-    parse_stamp(stamp)?;
-    Some(stamp.into())
-}
-
 fn sessions(
     repo: &Path,
     repository: &str,
@@ -319,7 +307,7 @@ fn sessions(
             let Some((prefix, rest)) = name.split_once('-') else {
                 continue;
             };
-            let Some(stamp) = rest.get(..20).and_then(parse_stamp) else {
+            let Some(stamp) = rest.get(..20).and_then(super::parse_stamp) else {
                 continue;
             };
             if rest
@@ -354,10 +342,6 @@ fn sessions(
         command.session_logs.sort();
     }
     Ok(groups.into_values().collect())
-}
-
-fn parse_stamp(stamp: &str) -> Option<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%z").ok()
 }
 
 fn read_optional(path: &Path) -> Result<String> {

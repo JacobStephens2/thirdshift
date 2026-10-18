@@ -94,7 +94,8 @@ impl<'a> Selected<'a> {
                     let Some(kind) = pass_prefix(&command.kind) else {
                         return false;
                     };
-                    stamp(path).is_some_and(|stamp| *name == format!("{kind}-{stamp}"))
+                    super::command_stamp(path)
+                        .is_some_and(|(stamp, _)| *name == format!("{kind}-{stamp}"))
                 }),
             },
         }
@@ -169,7 +170,7 @@ impl<'a> Selected<'a> {
         // A stage can cover several sessions (for example Architecture review
         // and its Resume), so stage references alone are not a log inventory.
         if let Some(log) = self.command_log()
-            && let Some(stamp) = stamp(log)
+            && let Some((stamp, _)) = super::command_stamp(log)
         {
             let prefix = issue
                 .map(|issue| issue.number.to_string())
@@ -386,13 +387,6 @@ pub(in crate::logs) fn stop_target(input: &str) -> Result<PathBuf> {
         ),
         Selected::History(command) => bail!("cannot stop {input}: Command {}", command.state),
     }
-}
-
-fn stamp(path: &Path) -> Option<&str> {
-    let stem = path.file_stem()?.to_str()?;
-    let stamp = stem.get(stem.len().checked_sub(20)?..)?;
-    chrono::DateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%z").ok()?;
-    Some(stamp)
 }
 
 fn latest_event(command: &Command) -> Option<String> {

@@ -172,6 +172,30 @@ fn stopping_a_spec_ends_both_tickets_preserves_their_work_and_only_labels_the_sp
 }
 
 #[test]
+fn stop_reports_retained_ticket_branches() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(20, &[(21, &[])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "echo unfinished > work.txt\ntouch '{}'\nwhile true; do sleep 0.05; done\n",
+            scenario.path("started").display()
+        ),
+    );
+    let held = scenario.run_until(&[&scenario.issue_url(20)], &[], "started");
+    let stopped = stop_and_finish(&scenario, held, &["stop", "widgets#20"]);
+    assert_eq!(
+        scenario.origin_file("issue-21", "work.txt"),
+        Some("unfinished\n".into())
+    );
+    assert!(
+        stopped.stdout.contains("Issue branch left: issue-21"),
+        "missing retained Ticket branch: {}",
+        stopped.stdout
+    );
+}
+
+#[test]
 fn stopping_a_tickets_issue_is_refused_naming_its_spec_without_sending_a_signal() {
     for pickup in [false, true] {
         let scenario = Scenario::new();
