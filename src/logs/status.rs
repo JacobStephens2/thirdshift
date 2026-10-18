@@ -11,6 +11,7 @@ use serde::Serialize;
 use super::command_record::CommandRecord;
 use super::effects::OnMachine;
 use crate::config::UserConfig;
+use crate::issue::IssueUrl;
 
 #[derive(Serialize)]
 struct Status {
@@ -189,7 +190,15 @@ fn print_command(command: &Command, depth: usize) {
                 ticket
                     .blockers
                     .iter()
-                    .map(|issue| format!("#{}", issue.number))
+                    .map(|issue| {
+                        if IssueUrl::parse(&issue.url).is_ok_and(|blocker| {
+                            blocker.repo_slug().eq_ignore_ascii_case(&facts.repository)
+                        }) {
+                            format!("#{}", issue.number)
+                        } else {
+                            issue.url.clone()
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             ),

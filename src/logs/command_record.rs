@@ -125,6 +125,16 @@ impl StageName {
 }
 
 impl CommandRecord {
+    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>) {
+        self.outcome = Some(account.outcome.into());
+        self.cause = account
+            .ended
+            .as_ref()
+            .err()
+            .map(|cause| cause.full().into());
+        self.pull_request = account.pr_url.map(String::from);
+    }
+
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
         self.outcome.is_none()
             && !self.process_start.is_empty()

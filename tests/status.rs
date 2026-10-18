@@ -259,6 +259,49 @@ fn status_reads_all_repositories_under_configured_logs_and_ignores_unknown_stage
 }
 
 #[test]
+fn status_names_a_foreign_blocker_without_making_a_ticket_look_self_blocked() {
+    let scenario = Scenario::new();
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let mut record = retained(&scenario);
+    record["kind"] = serde_json::json!("Spec run");
+    record["outcome"] = Value::Null;
+    record["tickets"] = serde_json::json!([{
+        "issue": {
+            "number": 21,
+            "url": "https://github.com/acme/widgets/issues/21",
+            "title": null
+        },
+        "state": "waiting",
+        "blockers": [{
+            "number": 21,
+            "url": "https://github.com/other/widgets/issues/21",
+            "title": null
+        }]
+    }]);
+    let name = scenario
+        .entries(LOGS)
+        .into_iter()
+        .find(|name| name.ends_with(".command.json"))
+        .unwrap();
+    fs::write(
+        scenario.path(LOGS).join(name),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(
+        text.stdout
+            .contains("https://github.com/other/widgets/issues/21")
+            || text.stdout.contains("other/widgets#21"),
+        "{}",
+        text.stdout
+    );
+}
+
+#[test]
 fn repair_resume_and_security_review_keep_their_own_session_logs() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, &support::leaves_running("cargo test"));

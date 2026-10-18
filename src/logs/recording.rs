@@ -283,23 +283,11 @@ impl<O: Outside> Record<O> {
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
         if let Some((_, facts)) = &mut self.command_record {
-            facts.outcome = Some(account.outcome.into());
-            facts.cause = account
-                .ended
-                .as_ref()
-                .err()
-                .map(|cause| cause.full().into());
-            facts.pull_request = account.pr_url.map(String::from);
+            facts.finish(account);
             self.write_record();
         }
         if let Some((path, mut facts)) = self.dispatched_from.take() {
-            facts.outcome = Some(account.outcome.into());
-            facts.cause = account
-                .ended
-                .as_ref()
-                .err()
-                .map(|cause| cause.full().into());
-            facts.pull_request = account.pr_url.map(String::from);
+            facts.finish(account);
             if let Some((_, dispatched)) = &self.command_record {
                 facts.issue.title.clone_from(&dispatched.issue.title);
                 facts.issue_branch.clone_from(&dispatched.issue_branch);
