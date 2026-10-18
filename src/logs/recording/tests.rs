@@ -269,7 +269,7 @@ fn commands_started_on_the_same_issue_in_one_second_keep_separate_records() {
         .collect();
     let mut titles: Vec<_> = records
         .iter()
-        .map(|record| record.issue.title.as_deref().unwrap())
+        .map(|record| record.issue.as_ref().unwrap().title.as_deref().unwrap())
         .collect();
     titles.sort();
     assert_eq!(titles, ["first Command", "second Command"]);
@@ -318,12 +318,43 @@ fn concurrent_child_writes_keep_both_runs_and_leave_the_parent_untouched() {
     assert_eq!(children.len(), 2);
     for (child, (number, stage)) in children.iter().zip([(8, "CI watch"), (9, "Repair")]) {
         assert_eq!(child.parent_record.as_ref(), Some(&path));
-        assert_eq!(child.issue.number, number);
+        assert_eq!(child.issue.as_ref().unwrap().number, number);
         assert_eq!(
-            child.issue.title.as_deref(),
+            child.issue.as_ref().unwrap().title.as_deref(),
             Some(format!("Ticket {number}").as_str())
         );
         assert_eq!(child.current_stage().unwrap().name, stage);
+    }
+}
+
+#[test]
+fn children_of_different_dispatches_keep_separate_records_for_the_same_issue() {
+    let memory = Scripted::default();
+    let parent = PathBuf::from("/logs/acme/widgets/commands/secure/pass.command.json");
+    for number in [20, 30] {
+        let mut child = Record::new(memory.clone());
+        child.child_of(Some(parent.clone()));
+        child.child_dispatch(Some(format!(
+            "https://github.com/acme/widgets/issues/{number}"
+        )));
+        child.begin(Begin::ChildRun(STAMP, crate::logs::CommandKind::Secure));
+        child.configured(&config(false));
+        child.started(Work::BaseFix(&issue()), &harness());
+    }
+    let memory = memory.0.lock().unwrap();
+    let children: Vec<CommandRecord> = memory
+        .files
+        .values()
+        .map(|bytes| serde_json::from_str(bytes).unwrap())
+        .collect();
+    assert_eq!(children.len(), 2);
+    for (child, number) in children.iter().zip([20, 30]) {
+        assert_eq!(child.parent_record.as_ref(), Some(&parent));
+        assert_eq!(
+            child.parent_dispatch.as_deref(),
+            Some(format!("https://github.com/acme/widgets/issues/{number}").as_str())
+        );
+        assert_eq!(child.kind, "Base fix");
     }
 }
 
@@ -426,14 +457,7 @@ fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder(
                 "2026-10-03 12:00:00 {subject} started: {relative}, on claude · opus · high\n2026-10-03 12:00:00 {subject} ended: ready\n"
             )
         );
-        assert_eq!(
-            memory.0.lock().unwrap().files.len(),
-            match work {
-                Work::Run(_) | Work::BaseFix(_) | Work::SpecRun(_) => 3,
-                Work::PickupRun(_) => 4, // Command, dispatched Run, and the two logs.
-                Work::ArchitectRun(_) | Work::SecurityRun(_) => 2,
-            }
-        );
+        assert_eq!(memory.0.lock().unwrap().files.len(), 3);
     }
 }
 

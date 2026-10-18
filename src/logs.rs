@@ -118,6 +118,7 @@ static RECORD: LazyLock<Mutex<Record<OnMachine>>> =
     LazyLock::new(|| Mutex::new(Record::new(OnMachine)));
 
 const PARENT_RECORD: &str = "THIRDSHIFT_PARENT_RECORD";
+const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
 
 /// Begin the command as `begin` says. A Run or a pass makes its stamp now
 /// and prints its first line, dated, as in `starting on <Issue URL>,
@@ -129,6 +130,7 @@ pub fn begin(begin: Begin) {
     let mut record = record();
     if matches!(begin, Begin::ChildRun(..)) {
         record.child_of(std::env::var_os(PARENT_RECORD).map(PathBuf::from));
+        record.child_dispatch(std::env::var(PARENT_DISPATCH).ok());
     }
     record.begin(begin);
 }
@@ -139,6 +141,11 @@ pub fn inherit_record(command: &mut std::process::Command) {
         command.env(PARENT_RECORD, path);
     } else {
         command.env_remove(PARENT_RECORD);
+    }
+    if let Some(issue) = record().dispatch_issue() {
+        command.env(PARENT_DISPATCH, issue);
+    } else {
+        command.env_remove(PARENT_DISPATCH);
     }
 }
 
@@ -159,9 +166,10 @@ pub fn configured(config: &UserConfig) {
 /// Record that the command starts `work`, its sessions on `harness`: keep its
 /// Command log, showing any lines held from the terminal, with a line naming
 /// the Harness, Model and Effort, then write the Activity log's line that it
-/// started, naming that log and those. Only the outermost Command keeps
-/// those logs. A Pickup run also records its dispatched Run or Spec run,
-/// and each child Run keeps its own record linked to its immediate parent.
+/// started, naming that log and those. Only the outermost command's first
+/// call keeps the logs. A Pass also records the Run or Spec run it dispatches
+/// beneath itself; each child process keeps its own record linked to its
+/// immediate parent, with no Command log of its own.
 pub fn started(work: Work, harness: &Choice) {
     record().started(work, harness);
 }
@@ -194,7 +202,16 @@ pub fn stage(stage: Stage) {
 
 /// Keep the current Session log, including a Resume's own log.
 pub fn session(kind: &str, path: &Path) {
-    let stage = if kind.ends_with("-resume") {
+    let original = kind.strip_suffix("-resume").unwrap_or(kind);
+    let stage = if original == "architecture-review" {
+        Stage::ArchitectureReview
+    } else if original == "security-audit" {
+        Stage::SecurityAudit
+    } else if original.starts_with("security-reproduction-") {
+        Stage::SecurityReproduction
+    } else if original == "security-fix-publishing" {
+        Stage::SecurityFixPublishing
+    } else if kind.ends_with("-resume") {
         Stage::Resume
     } else if kind.starts_with("repair-") {
         Stage::Repair
@@ -218,6 +235,16 @@ pub fn issue_branch(branch: Option<&str>) {
 /// Complete the durable facts from the same account used by other renderers.
 pub fn finished(account: &crate::run_ending::Account<'_>) {
     record().finished(account);
+}
+
+/// Finish a Pass's dispatched Run without ending its owning Command.
+pub fn dispatch_ended(ended: &crate::run::Ended) {
+    record().dispatch_ended(&crate::run_ending::Account::of_run(ended));
+}
+
+/// Keep a Pass's dispatch before the Run's fallible launch checks.
+pub fn dispatching(work: Work, harness: &Choice) {
+    record().dispatching(work, harness);
 }
 
 /// Print the lines held from the terminal, as before a failure, and print
@@ -279,6 +306,15 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
 }
 
 impl Work<'_> {
+    fn initial_stage(self) -> Option<Stage> {
+        match self {
+            Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
+            Work::SpecRun(_) => Some(Stage::Tickets),
+            Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
+            Work::PickupRun(_) | Work::SecurityRun(_) => None,
+        }
+    }
+
     /// The repository whose work it records.
     fn repo(self) -> Repo {
         match self {

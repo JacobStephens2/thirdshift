@@ -68,7 +68,7 @@ fn status_nests_a_pickups_spec_with_running_waiting_merged_and_not_started_ticke
     assert_eq!(commands.len(), 1, "{status:#}");
     let pickup = &commands[0];
     assert_eq!(pickup["kind"], "Pickup run");
-    let spec = &pickup["children"][0];
+    let spec = &pickup["dispatched"][0];
     assert_eq!(spec["kind"], "Spec run");
     assert_eq!(spec["stage"]["name"], "Tickets");
     let tickets = spec["tickets"].as_array().unwrap();

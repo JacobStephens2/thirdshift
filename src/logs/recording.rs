@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
-use super::command_record::{CommandRecord, Stage, StageName, TicketRecord};
+use super::command_record::{CommandRecord, CommandTree, Stage, StageName, TicketRecord};
 use super::effects::{Outside, Stream};
 use super::{Begin, CommandKind, Pass, Work, root_under};
 use crate::config::UserConfig;
@@ -31,9 +31,9 @@ pub(super) struct Record<O: Outside> {
     command_log: Log<O::CommandLog>,
     activity_started: Option<Started>,
     activity_warned: bool,
-    command_record: Option<(PathBuf, CommandRecord)>,
+    command_record: Option<(PathBuf, CommandTree)>,
     parent_record: Option<PathBuf>,
-    dispatched_from: Option<(PathBuf, CommandRecord)>,
+    parent_dispatch: Option<String>,
     record_warned: bool,
 }
 
@@ -81,7 +81,7 @@ impl<O: Outside> Record<O> {
             activity_warned: false,
             command_record: None,
             parent_record: None,
-            dispatched_from: None,
+            parent_dispatch: None,
             record_warned: false,
         }
     }
@@ -125,22 +125,23 @@ impl<O: Outside> Record<O> {
     pub(super) fn started(&mut self, work: Work, harness: &Choice) {
         let first = !self.started;
         self.started = true;
-        if !first {
-            if self
-                .command_record
-                .as_ref()
-                .is_some_and(|(_, facts)| facts.kind == "Pickup run")
-                && matches!(work, Work::Run(_) | Work::SpecRun(_))
-            {
-                self.parent_record = self.record_path();
-                self.dispatched_from = self.command_record.take();
+        if self.child && first {
+            if self.parent_record.is_some() {
                 self.start_record(work, harness);
             }
             return;
         }
-        if self.child {
-            if self.parent_record.is_some() {
-                self.start_record(work, harness);
+        if !first || self.child {
+            if !self.child
+                && self.command != CommandKind::Issue
+                && matches!(work, Work::Run(_) | Work::SpecRun(_))
+                && let Some((_, tree)) = &mut self.command_record
+                && let Some(dispatched) = tree.dispatched.last_mut()
+            {
+                // The launch checks have now established whether the issue is
+                // a Spec. The dispatch itself was kept before those checks.
+                dispatched.kind = work.kind().to_string();
+                self.stage(work.initial_stage().unwrap(), None);
             }
             return;
         }
@@ -176,31 +177,46 @@ impl<O: Outside> Record<O> {
         self.parent_record = parent;
     }
 
+    pub(super) fn child_dispatch(&mut self, issue: Option<String>) {
+        self.parent_dispatch = issue;
+    }
+
+    pub(super) fn dispatch_issue(&self) -> Option<String> {
+        self.command_record
+            .as_ref()?
+            .1
+            .dispatched
+            .last()
+            .filter(|record| record.outcome.is_none())?
+            .issue
+            .as_ref()
+            .map(|issue| issue.url.clone())
+    }
+
     pub(super) fn record_path(&self) -> Option<PathBuf> {
         self.command_record.as_ref().map(|(path, _)| path.clone())
     }
 
     fn start_record(&mut self, work: Work, harness: &Choice) {
-        let issue = match work {
-            Work::Run(issue)
-            | Work::BaseFix(issue)
-            | Work::SpecRun(issue)
-            | Work::PickupRun(issue) => issue,
-            Work::ArchitectRun(_) | Work::SecurityRun(_) => return,
-        };
-        let mut facts = CommandRecord::new(issue, harness, self.outside.now());
-        facts.kind = work.kind().to_string();
-        if matches!(work, Work::BaseFix(_)) {
-            facts.kind = "Base fix".into();
-        }
+        let stamp = self.stamp();
+        let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
         facts.hostname = self.outside.hostname();
         facts.process_start = self
             .outside
             .process_start(facts.process_id)
             .unwrap_or_default();
         facts.parent_record = self.parent_record.clone();
+        facts.parent_dispatch = self.parent_dispatch.clone();
         let path = if let Some(parent) = &self.parent_record {
-            parent.with_extension(format!("issue-{}.child.json", issue.number))
+            let dispatch = self
+                .parent_dispatch
+                .as_ref()
+                .and_then(|issue| crate::issue::IssueUrl::parse(issue).ok())
+                .map_or_else(String::new, |issue| format!("dispatch-{}-", issue.number));
+            parent.with_extension(format!(
+                "{dispatch}issue-{}.child.json",
+                work.issue().unwrap()
+            ))
         } else {
             // Process identity and a serial separate Commands sharing a stamp.
             let owner = format!(
@@ -210,21 +226,26 @@ impl<O: Outside> Record<O> {
                 NEXT_RECORD.fetch_add(1, Ordering::Relaxed)
             );
             let root = self.root(&work.repo());
-            let stamp = self.stamp();
             work.command_log(&root, &stamp)
                 .with_extension(format!("{owner}.command.json"))
         };
-        self.command_record = Some((path, facts));
-        match work {
-            Work::SpecRun(_) => self.stage(StageName::Tickets, None),
-            Work::Run(_) | Work::BaseFix(_) => self.stage(StageName::Implement, None),
-            _ => self.write_record(),
+        self.command_record = Some((
+            path,
+            CommandTree {
+                command: facts,
+                dispatched: Vec::new(),
+            },
+        ));
+        if let Some(stage) = work.initial_stage() {
+            self.stage(stage, None);
+        } else {
+            self.write_record();
         }
     }
 
     pub(super) fn tickets(&mut self, tickets: Vec<TicketRecord>) {
-        if let Some((_, facts)) = &mut self.command_record {
-            facts.tickets = tickets;
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().tickets = tickets;
             self.write_record();
         }
     }
@@ -248,24 +269,27 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn issue_title(&mut self, title: Option<String>) {
-        if let Some((_, facts)) = &mut self.command_record {
-            facts.issue.title = title;
+        if let Some((_, tree)) = &mut self.command_record
+            && let Some(issue) = &mut tree.active().issue
+        {
+            issue.title = title;
             self.write_record();
         }
     }
 
     pub(super) fn issue_branch(&mut self, branch: Option<&str>) {
-        if let Some((_, facts)) = &mut self.command_record {
-            facts.issue_branch = branch.map(String::from);
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().issue_branch = branch.map(String::from);
             self.write_record();
         }
     }
 
     pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
         let name = stage.name();
-        let Some((_, facts)) = &mut self.command_record else {
+        let Some((_, tree)) = &mut self.command_record else {
             return;
         };
+        let facts = tree.active();
         if let Some(log) = log {
             facts.session_log = Some(log.into());
         }
@@ -282,20 +306,29 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
-        if let Some((_, facts)) = &mut self.command_record {
-            facts.finish(account);
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.finish(account);
             self.write_record();
         }
-        if let Some((path, mut facts)) = self.dispatched_from.take() {
-            facts.finish(account);
-            if let Some((_, dispatched)) = &self.command_record {
-                facts.issue.title.clone_from(&dispatched.issue.title);
-                facts.issue_branch.clone_from(&dispatched.issue_branch);
-            }
-            // Both records belong to this process; no child writes either one.
-            let dispatched = self.command_record.replace((path, facts));
+    }
+
+    pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        if let Some((_, tree)) = &mut self.command_record
+            && let Some(dispatched) = tree.dispatched.last_mut()
+        {
+            dispatched.finish(account);
             self.write_record();
-            self.command_record = dispatched;
+        }
+    }
+
+    pub(super) fn dispatching(&mut self, work: Work, harness: &Choice) {
+        let stamp = self.stamp();
+        let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        if let Some((_, tree)) = &mut self.command_record {
+            facts.hostname = tree.command.hostname.clone();
+            facts.process_start = tree.command.process_start.clone();
+            tree.dispatched.push(facts);
+            self.write_record();
         }
     }
 

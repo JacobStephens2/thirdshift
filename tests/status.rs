@@ -7,14 +7,54 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
-fn retained(scenario: &Scenario) -> Value {
-    let files: Vec<_> = scenario
-        .entries(LOGS)
-        .into_iter()
-        .filter(|name| name.ends_with(".command.json"))
-        .collect();
-    assert_eq!(files.len(), 1, "{files:?}");
-    serde_json::from_str(&fs::read_to_string(scenario.path(LOGS).join(&files[0])).unwrap()).unwrap()
+#[test]
+fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[activity]\nquiet_skips = true\n");
+    for _ in 0..2 {
+        let skipped = scenario.run(&["pickup"]);
+        assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    }
+    scenario.issue_titled(7, "Make widgets");
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    for kind in ["architect", "secure"] {
+        let skipped = scenario.run(&[kind]);
+        assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    }
+    let result = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    let status: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(status["commands"], serde_json::json!([]));
+    let idle = status["idle_passes"].as_array().expect(&result.stdout);
+    assert_eq!(idle.len(), 3, "{status}");
+    assert!(
+        idle.iter().any(|pass| pass["kind"] == "Pickup run"
+            && pass["reason"] == "no Ready issue on acme/widgets")
+    );
+    for kind in ["Architect run", "Security run"] {
+        let reason =
+            "Ready issue #7 \"Make widgets\" goes first: https://github.com/acme/widgets/issues/7";
+        assert!(
+            idle.iter().any(|pass| pass["repository"] == "acme/widgets"
+                && pass["kind"] == kind
+                && pass["reason"] == reason),
+            "{status}"
+        );
+        assert!(
+            text.stdout
+                .contains(&format!("{kind} idle on acme/widgets: {reason}")),
+            "{}",
+            text.stdout
+        );
+    }
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&["pickup"]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let result = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&result.stdout).unwrap();
+    let idle = status["idle_passes"].as_array().unwrap();
+    assert_eq!(idle.len(), 2, "{status}");
+    assert!(!idle.iter().any(|pass| pass["kind"] == "Pickup run"));
 }
 
 #[test]
@@ -69,7 +109,7 @@ gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
     let result = scenario.run(&["status", "--json"]);
     let status: Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(status["commands"], serde_json::json!([]));
-    let record = retained(&scenario);
+    let record = scenario.command_record(LOGS);
     assert_eq!(record["outcome"], "ready for review");
     assert_eq!(record["cause"], Value::Null);
     assert_eq!(record["issue_branch"], "issue-7");
@@ -85,7 +125,7 @@ fn a_merge_run_retains_delivery_stages_and_their_start_times() {
     scenario.agent_does(OPENS_PR);
     let ended = scenario.run(&["merge", &scenario.issue_url(7)]);
     assert_eq!(ended.code, Some(0), "{}", ended.stderr);
-    let record = retained(&scenario);
+    let record = scenario.command_record(LOGS);
     let stages = record["stages"].as_array().unwrap();
     let names: Vec<_> = stages
         .iter()
@@ -120,7 +160,7 @@ fn a_failed_run_retains_its_cause_and_does_not_stay_live() {
     scenario.agent_does("exit 3\n");
     let ended = scenario.run(&[&scenario.issue_url(7)]);
     assert_eq!(ended.code, Some(1), "{}", ended.stderr);
-    let record = retained(&scenario);
+    let record = scenario.command_record(LOGS);
     assert_eq!(record["outcome"], "failed");
     assert!(
         record["cause"]
@@ -153,7 +193,7 @@ fn failed_acquisition_does_not_claim_a_branch_was_left() {
         .unwrap();
     assert!(!local.status.success());
     assert_eq!(
-        retained(&scenario)["issue_branch"],
+        scenario.command_record(LOGS)["issue_branch"],
         Value::Null,
         "{}",
         ended.stderr
@@ -170,7 +210,7 @@ fn refused_remote_deletion_keeps_branch_in_record() {
     assert_eq!(ended.code, Some(0), "{}", ended.stderr);
     assert!(scenario.origin_log("issue-7").is_some(), "{}", ended.stderr);
     assert_eq!(
-        retained(&scenario)["issue_branch"],
+        scenario.command_record(LOGS)["issue_branch"],
         "issue-7",
         "{}",
         ended.stderr
@@ -187,7 +227,7 @@ fn failed_continuation_acquisition_keeps_existing_remote_branch() {
     assert_eq!(ended.code, Some(1), "{}", ended.stderr);
     assert!(scenario.origin_log("issue-7").is_some(), "{}", ended.stderr);
     assert_eq!(
-        retained(&scenario)["issue_branch"],
+        scenario.command_record(LOGS)["issue_branch"],
         "issue-7",
         "{}",
         ended.stderr
@@ -215,7 +255,7 @@ fn a_killed_run_shows_as_died_at_its_last_stage() {
     assert_eq!(status["commands"][0]["state"], "died");
     assert_eq!(status["commands"][0]["stage"]["name"], "implement");
     assert!(text.stdout.contains("died at implement"), "{}", text.stdout);
-    assert_eq!(retained(&scenario)["outcome"], Value::Null);
+    assert_eq!(scenario.command_record(LOGS)["outcome"], Value::Null);
 }
 
 #[test]
@@ -224,7 +264,7 @@ fn status_reads_all_repositories_under_configured_logs_and_ignores_unknown_stage
     scenario.agent_does(OPENS_PR);
     let ended = scenario.run(&[&scenario.issue_url(7)]);
     assert_eq!(ended.code, Some(0), "{}", ended.stderr);
-    let mut record = retained(&scenario);
+    let mut record = scenario.command_record(LOGS);
     record["outcome"] = Value::Null;
     record["process_start"] = "different process start".into();
     record["stages"] = serde_json::json!([
@@ -264,7 +304,7 @@ fn status_names_a_foreign_blocker_without_making_a_ticket_look_self_blocked() {
     scenario.agent_does(OPENS_PR);
     let ended = scenario.run(&[&scenario.issue_url(7)]);
     assert_eq!(ended.code, Some(0), "{}", ended.stderr);
-    let mut record = retained(&scenario);
+    let mut record = scenario.command_record(LOGS);
     record["kind"] = serde_json::json!("Spec run");
     record["outcome"] = Value::Null;
     record["tickets"] = serde_json::json!([{
@@ -302,6 +342,71 @@ fn status_names_a_foreign_blocker_without_making_a_ticket_look_self_blocked() {
 }
 
 #[test]
+fn status_keeps_children_under_their_own_security_dispatch() {
+    let scenario = Scenario::new();
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let mut pass = scenario.command_record(LOGS);
+    let mut dispatched = Vec::new();
+    for number in [20, 30] {
+        let mut run = pass.clone();
+        run["issue"]["number"] = number.into();
+        run["issue"]["url"] = scenario.issue_url(number).into();
+        run["outcome"] = if number == 20 {
+            "ready for review".into()
+        } else {
+            Value::Null
+        };
+        let mut child = pass.clone();
+        child["kind"] = "Base fix".into();
+        child["issue"]["number"] = 42.into();
+        child["issue"]["url"] = scenario.issue_url(42).into();
+        child["parent_record"] = scenario
+            .path(LOGS)
+            .join("pass.command.json")
+            .to_str()
+            .unwrap()
+            .into();
+        child["parent_dispatch"] = scenario.issue_url(number).into();
+        child["outcome"] = if number == 20 {
+            "merged".into()
+        } else {
+            Value::Null
+        };
+        fs::write(
+            scenario
+                .path(LOGS)
+                .join(format!("dispatch-{number}.child.json")),
+            serde_json::to_vec(&child).unwrap(),
+        )
+        .unwrap();
+        dispatched.push(run);
+    }
+    pass["kind"] = "Security run".into();
+    pass["issue"] = Value::Null;
+    pass["outcome"] = Value::Null;
+    pass["dispatched"] = dispatched.into();
+    fs::write(
+        scenario.path(LOGS).join("pass.command.json"),
+        serde_json::to_vec(&pass).unwrap(),
+    )
+    .unwrap();
+    let result = scenario.run(&["status", "--json"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status: Value = serde_json::from_str(&result.stdout).unwrap();
+    let pass = &status["commands"][0];
+    assert_eq!(status["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(pass["children"], serde_json::json!([]));
+    for (index, state) in ["ended", "died"].into_iter().enumerate() {
+        let run = &pass["dispatched"][index];
+        assert_eq!(run["children"].as_array().unwrap().len(), 1, "{status}");
+        assert_eq!(run["children"][0]["issue"]["number"], 42);
+        assert_eq!(run["children"][0]["state"], state);
+    }
+}
+
+#[test]
 fn repair_resume_and_security_review_keep_their_own_session_logs() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, &support::leaves_running("cargo test"));
@@ -310,7 +415,7 @@ fn repair_resume_and_security_review_keep_their_own_session_logs() {
     scenario.agent_does_in_session(4, "echo fix > fix.txt\ngit add fix.txt\ngit commit -qm 'Fix CI'\ngh fake checks \"$(git rev-parse HEAD)\" '[{\"name\":\"test\",\"conclusion\":\"success\"}]'\n");
     let ended = scenario.run(&[&scenario.issue_url(7), "security-review"]);
     assert_eq!(ended.code, Some(0), "{}", ended.stderr);
-    let record = retained(&scenario);
+    let record = scenario.command_record(LOGS);
     let stages = record["stages"].as_array().unwrap();
     for (name, log) in [
         ("Resume", "-implement-resume.jsonl"),
