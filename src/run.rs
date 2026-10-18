@@ -182,6 +182,7 @@ fn run(
         harness: &asks.harness,
         claim: None,
         issue_branch: None,
+        child: started_by.child().is_some(),
     };
     let outcome = start(
         &mut outside,
@@ -398,6 +399,7 @@ struct LaunchAndGitHub<'a> {
     harness: &'a Choice,
     claim: Option<Claim<'a>>,
     issue_branch: Option<String>,
+    child: bool,
 }
 
 impl LaunchAndGitHub<'_> {
@@ -458,7 +460,9 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
 
     fn started(&mut self, work: Work) {
         logs::started(work, self.harness);
-        logs::issue_title(GitHub::new().issue_title(self.issue).ok());
+        if self.child {
+            logs::issue_title(GitHub::new().issue_title(self.issue).ok());
+        }
     }
 
     fn select(&mut self) -> Result<Selection> {
@@ -482,6 +486,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
 
     fn make_claim(&mut self) -> Result<()> {
         self.claim = Some(claim::make(self.issue, self.directory.git())?);
+        logs::issue_title(GitHub::new().issue_title(self.issue).ok());
         Ok(())
     }
 
