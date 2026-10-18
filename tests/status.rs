@@ -81,7 +81,7 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
     let dispatched = text
         .stdout
         .lines()
-        .find(|line| line.starts_with("  acme/widgets#7"))
+        .find(|line| line.starts_with("  Run acme/widgets#7"))
         .expect(&text.stdout);
     assert!(dispatched.ends_with("ready for review"), "{dispatched}");
 }
@@ -265,6 +265,74 @@ fn status_shows_recent_outcomes_and_all_history_newest_first() {
             .collect();
         assert_eq!(issues, [8, 7]);
     }
+}
+
+#[test]
+fn status_keeps_completed_ticket_trees_with_recent_and_all_history() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now();
+    let old = (now - chrono::Duration::days(2)).to_rfc3339();
+    let recent = (now - chrono::Duration::hours(1)).to_rfc3339();
+    for (number, ended) in [(7, &old), (8, &recent)] {
+        write_record(&scenario, number, &old, Some(ended));
+        let path = scenario
+            .path(LOGS)
+            .join(format!("{number}-fixture.command.json"));
+        let mut spec: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        spec["kind"] = "Spec run".into();
+        spec["tickets"] = serde_json::json!([{
+            "issue": {"number": 21, "url": scenario.issue_url(21), "title": "Ticket"},
+            "state": "merged", "blockers": []
+        }]);
+        let mut child = spec.clone();
+        child["kind"] = "Run".into();
+        child["issue"] = spec["tickets"][0]["issue"].clone();
+        child["tickets"] = serde_json::json!([]);
+        child["parent_record"] = path.to_str().unwrap().into();
+        child["ended_at"] = old.clone().into();
+        child["outcome"] = "merged".into();
+        child["stages"] = serde_json::json!([{
+            "name": "cleanup", "began_at": old, "session_log": null
+        }]);
+        fs::write(&path, serde_json::to_vec(&spec).unwrap()).unwrap();
+        fs::write(
+            path.with_extension("issue-21.child.json"),
+            serde_json::to_vec(&child).unwrap(),
+        )
+        .unwrap();
+    }
+    for (flags, expected) in [
+        (vec!["status", "--json"], 1),
+        (vec!["status", "--all", "--json"], 2),
+    ] {
+        let result = scenario.run(&flags);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let status: Value = serde_json::from_str(&result.stdout).unwrap();
+        let commands = status["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), expected, "{status}");
+        for spec in commands {
+            assert_eq!(spec["state"], "ended");
+            assert_eq!(spec["tickets"][0]["state"], "merged");
+            let children = spec["children"].as_array().unwrap();
+            assert_eq!(children.len(), 1, "{spec}");
+            assert_eq!(children[0]["issue"]["number"], 21);
+            assert_eq!(children[0]["state"], "ended");
+            assert_eq!(children[0]["stage"]["name"], "cleanup");
+            assert_eq!(children[0]["command_log"], spec["command_log"]);
+        }
+    }
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(
+        text.stdout.contains("Ticket #21 · merged"),
+        "{}",
+        text.stdout
+    );
+    assert!(
+        text.stdout.contains("  Run acme/widgets#21 Ticket"),
+        "{}",
+        text.stdout
+    );
 }
 
 fn fixture_log(scenario: &Scenario, relative: &str, contents: &str) {
@@ -676,6 +744,118 @@ fn status_reads_all_repositories_under_configured_logs_and_ignores_unknown_stage
         assert_eq!(command["state"], "died");
         assert_eq!(command["stage"]["name"], "CI watch");
         assert!(command["stage"]["age_seconds"].as_i64().unwrap() >= 3120);
+    }
+}
+
+#[test]
+fn status_names_a_foreign_blocker_without_making_a_ticket_look_self_blocked() {
+    let scenario = Scenario::new();
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let mut record = scenario.command_record(LOGS);
+    record["kind"] = serde_json::json!("Spec run");
+    record["outcome"] = Value::Null;
+    record["tickets"] = serde_json::json!([{
+        "issue": {
+            "number": 21,
+            "url": "https://github.com/acme/widgets/issues/21",
+            "title": null
+        },
+        "state": "waiting",
+        "blockers": [{
+            "number": 21,
+            "url": "https://github.com/other/widgets/issues/21",
+            "title": null
+        }]
+    }]);
+    let name = scenario
+        .entries(LOGS)
+        .into_iter()
+        .find(|name| name.ends_with(".command.json"))
+        .unwrap();
+    fs::write(
+        scenario.path(LOGS).join(name),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(
+        text.stdout
+            .contains("https://github.com/other/widgets/issues/21")
+            || text.stdout.contains("other/widgets#21"),
+        "{}",
+        text.stdout
+    );
+}
+
+#[test]
+fn status_keeps_children_under_their_own_security_dispatch() {
+    let scenario = Scenario::new();
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let mut pass = scenario.command_record(LOGS);
+    let mut dispatched = Vec::new();
+    for number in [20, 30] {
+        let mut run = pass.clone();
+        run["issue"]["number"] = number.into();
+        run["issue"]["url"] = scenario.issue_url(number).into();
+        run["outcome"] = if number == 20 {
+            "ready for review".into()
+        } else {
+            Value::Null
+        };
+        let mut child = pass.clone();
+        child["kind"] = "Base fix".into();
+        child["issue"]["number"] = 42.into();
+        child["issue"]["url"] = scenario.issue_url(42).into();
+        child["parent_record"] = scenario
+            .path(LOGS)
+            .join("pass.command.json")
+            .to_str()
+            .unwrap()
+            .into();
+        child["parent_dispatch"] = scenario.issue_url(number).into();
+        child["outcome"] = if number == 20 {
+            "merged".into()
+        } else {
+            Value::Null
+        };
+        fs::write(
+            scenario
+                .path(LOGS)
+                .join(format!("dispatch-{number}.child.json")),
+            serde_json::to_vec(&child).unwrap(),
+        )
+        .unwrap();
+        dispatched.push(run);
+    }
+    pass["kind"] = "Security run".into();
+    pass["issue"] = Value::Null;
+    pass["outcome"] = Value::Null;
+    pass["dispatched"] = dispatched.into();
+    fs::write(
+        scenario.path(LOGS).join("pass.command.json"),
+        serde_json::to_vec(&pass).unwrap(),
+    )
+    .unwrap();
+    let result = scenario.run(&["status", "--json"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status: Value = serde_json::from_str(&result.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 2);
+    let pass = commands
+        .iter()
+        .find(|command| command["kind"] == "Security run")
+        .unwrap();
+    assert_eq!(pass["children"], serde_json::json!([]));
+    for (index, state) in ["ended", "died"].into_iter().enumerate() {
+        let run = &pass["dispatched"][index];
+        assert_eq!(run["children"].as_array().unwrap().len(), 1, "{status}");
+        assert_eq!(run["children"][0]["issue"]["number"], 42);
+        assert_eq!(run["children"][0]["state"], state);
     }
 }
 

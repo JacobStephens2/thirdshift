@@ -1835,8 +1835,13 @@ fn status_nests_the_architect_plans_run_or_spec_run_under_its_pass() {
         assert_eq!(dispatched["issue"]["number"], 8);
         assert_eq!(dispatched["stage"]["name"], stage);
         assert!(dispatched["stage"]["age_seconds"].is_number());
+        if kind == "Spec run" {
+            assert_eq!(dispatched["children"][0]["issue"]["number"], held_issue);
+            assert_eq!(dispatched["children"][0]["stage"]["name"], "implement");
+            assert_eq!(dispatched["children"][0]["state"], "live");
+        }
         assert!(
-            text.stdout.contains("\n  acme/widgets#8"),
+            text.stdout.contains(&format!("\n  {kind} acme/widgets#8")),
             "{}",
             text.stdout
         );

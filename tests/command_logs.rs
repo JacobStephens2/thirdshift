@@ -48,15 +48,15 @@ fn run_in_zone(scenario: &Scenario, args: &[&str], env: &[(&str, &str)]) -> RunR
     scenario.run_with_env(args, &[&[ZONE], env].concat())
 }
 
-/// Log file names in `folder`, sorted, excluding retained Command records;
-/// none if the folder is missing.
+/// Log and folder names under the logs, sorted, excluding Command and child
+/// records kept beside them; none if the folder is missing.
 fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
     let Ok(entries) = fs::read_dir(scenario.path(LOGS).join(folder)) else {
         return Vec::new();
     };
     let mut names: Vec<String> = entries
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| !name.ends_with(".command.json"))
+        .filter(|name| !name.ends_with(".command.json") && !name.ends_with(".child.json"))
         .collect();
     names.sort();
     names
@@ -134,10 +134,7 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
         result.stderr
     );
     assert_eq!(
-        logs_in(&scenario, "commands/issue")
-            .into_iter()
-            .filter(|name| !name.ends_with(".command.json"))
-            .collect::<Vec<_>>(),
+        logs_in(&scenario, "commands/issue"),
         [
             format!("7-{stamp}-implement.jsonl"),
             format!("7-{stamp}-implement.models.json"),

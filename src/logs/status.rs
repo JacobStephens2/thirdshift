@@ -2,7 +2,7 @@
 
 mod history;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,7 @@ use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
 use super::{Pass, activity};
 use crate::config::UserConfig;
+use crate::issue::IssueUrl;
 
 #[derive(Serialize)]
 struct Status {
@@ -72,6 +73,7 @@ struct Command {
     record: CommandRecord,
     state: &'static str,
     stage: Option<CurrentStage>,
+    children: Vec<Command>,
     source: &'static str,
     command_log: PathBuf,
     dispatched: Vec<Command>,
@@ -104,6 +106,7 @@ impl Command {
             record,
             state,
             stage,
+            children: Vec::new(),
             source: "command_record",
             command_log,
             dispatched: Vec::new(),
@@ -112,18 +115,7 @@ impl Command {
 
     fn print(&self, indent: &str) {
         let facts = &self.record;
-        let stage = facts.outcome.clone().unwrap_or_else(|| {
-            self.stage.as_ref().map_or_else(
-                || "starting".into(),
-                |stage| {
-                    if self.state == "died" {
-                        format!("died at {}", stage.name)
-                    } else {
-                        format!("{} · {}", stage.name, age(stage.age_seconds))
-                    }
-                },
-            )
-        });
+        let stage = stage_text(self);
         let subject = match &facts.issue {
             Some(issue) => format!(
                 "{}#{} {}",
@@ -134,13 +126,18 @@ impl Command {
             None => format!("{} on {}", facts.name, facts.repository),
         };
         println!(
-            "{indent}{subject} · {} · {} · {} · {stage}",
+            "{indent}{} {subject} · {} · {} · {} · {stage}",
+            facts.kind,
             facts.harness,
             facts.model.as_deref().unwrap_or("default Model"),
             facts.effort.as_deref().unwrap_or("default Effort")
         );
+        print_tickets(facts, &format!("{indent}  "));
         for dispatched in &self.dispatched {
             dispatched.print(&format!("{indent}  "));
+        }
+        for child in &self.children {
+            child.print(&format!("{indent}  "));
         }
     }
 }
@@ -148,6 +145,7 @@ impl Command {
 pub fn show(json: bool, all: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let now = Local::now();
+    let mut records = BTreeMap::new();
     let mut commands = Vec::new();
     let mut idle_passes = Vec::new();
     for owner in directories(&config.logs_dir)? {
@@ -156,11 +154,10 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             idle_passes.extend(read_idle_passes(&repo)?);
             for folder in directories(&repo.join("commands"))? {
                 for entry in entries(&folder)? {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
                     if !entry.file_type()?.is_file()
-                        || !entry
-                            .file_name()
-                            .to_string_lossy()
-                            .ends_with(".command.json")
+                        || (!name.ends_with(".command.json") && !name.ends_with(".child.json"))
                     {
                         continue;
                     }
@@ -174,11 +171,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                     if record.version != 1 {
                         continue;
                     }
-                    let name = entry.file_name();
-                    let name = name.to_string_lossy();
-                    let command_log = path
-                        .with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)));
-                    covered.insert(command_log.clone());
+                    if record.parent_record.is_none() {
+                        covered.insert(command_log(&path));
+                    }
                     // Records written before completion times existed were last
                     // replaced when their outcome was recorded.
                     if record.outcome.is_some() && record.ended_at.is_none() {
@@ -188,17 +183,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                             .ok()
                             .map(|time| DateTime::<Local>::from(time).to_rfc3339());
                     }
-                    if !all && record.outcome.is_some() && !recent(record.ended_at.as_deref(), now)
-                    {
-                        continue;
-                    }
-                    let mut command = Command::new(tree.command, command_log.clone(), now);
-                    command.dispatched = tree
-                        .dispatched
-                        .into_iter()
-                        .map(|record| Command::new(record, command_log.clone(), now))
-                        .collect();
-                    commands.push(Entry::Record(Box::new(command)));
+                    records.insert(path, tree);
                 }
             }
             commands.extend(
@@ -209,6 +194,20 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             );
         }
     }
+    let roots: Vec<_> = records
+        .iter()
+        .filter(|(_, tree)| {
+            let record = &tree.command;
+            record.parent_record.is_none()
+                && (all || record.outcome.is_none() || recent(record.ended_at.as_deref(), now))
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    commands.extend(
+        roots
+            .into_iter()
+            .map(|path| Entry::Record(Box::new(tree(&path, &mut records, &now)))),
+    );
     commands.sort_by(|a, b| a.ordering(all).cmp(&b.ordering(all)));
     idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
     let status = Status {
@@ -232,6 +231,111 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn command_log(path: &Path) -> PathBuf {
+    let name = path.file_name().unwrap().to_string_lossy();
+    path.with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)))
+}
+
+fn tree(
+    path: &Path,
+    records: &mut BTreeMap<PathBuf, CommandTree>,
+    now: &DateTime<Local>,
+) -> Command {
+    let tree = records.remove(path).expect("a discovered record exists");
+    let log = command_log(path);
+    let mut command = Command::new(tree.command, log.clone(), *now);
+    command.children = children(path, None, records, now);
+    command.dispatched = tree
+        .dispatched
+        .into_iter()
+        .map(|record| {
+            let mut dispatched = Command::new(record, log.clone(), *now);
+            let issue = dispatched
+                .record
+                .issue
+                .as_ref()
+                .map(|issue| issue.url.as_str());
+            dispatched.children = children(path, issue, records, now);
+            dispatched
+        })
+        .collect();
+    command
+}
+
+fn children(
+    path: &Path,
+    dispatch: Option<&str>,
+    records: &mut BTreeMap<PathBuf, CommandTree>,
+    now: &DateTime<Local>,
+) -> Vec<Command> {
+    let paths: Vec<_> = records
+        .iter()
+        .filter(|(_, child)| {
+            child.command.parent_record.as_deref() == Some(path)
+                && child.command.parent_dispatch.as_deref() == dispatch
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    let mut children: Vec<_> = paths
+        .into_iter()
+        .map(|path| tree(&path, records, now))
+        .collect();
+    children.sort_by_key(|child| child.record.issue.as_ref().map(|issue| issue.number));
+    children
+}
+
+fn stage_text(command: &Command) -> String {
+    if let Some(outcome) = &command.record.outcome {
+        return outcome.clone();
+    }
+    command.stage.as_ref().map_or_else(
+        || {
+            if command.state == "died" {
+                "died before first stage".into()
+            } else {
+                "starting".into()
+            }
+        },
+        |stage| {
+            if command.state == "died" {
+                format!("died at {}", stage.name)
+            } else {
+                format!("{} · {}", stage.name, age(stage.age_seconds))
+            }
+        },
+    )
+}
+
+fn print_tickets(facts: &CommandRecord, indent: &str) {
+    for ticket in &facts.tickets {
+        use super::command_record::TicketState;
+        let state = match ticket.state {
+            TicketState::Running => "running".into(),
+            TicketState::Merged => "merged".into(),
+            TicketState::Failed => "failed".into(),
+            TicketState::NotStarted => "not started".into(),
+            TicketState::Waiting => format!(
+                "waiting on {}",
+                ticket
+                    .blockers
+                    .iter()
+                    .map(|issue| {
+                        if IssueUrl::parse(&issue.url).is_ok_and(|blocker| {
+                            blocker.repo_slug().eq_ignore_ascii_case(&facts.repository)
+                        }) {
+                            format!("#{}", issue.number)
+                        } else {
+                            issue.url.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        println!("{indent}Ticket #{} · {state}", ticket.issue.number);
+    }
 }
 
 fn recent(ended: Option<&str>, now: DateTime<Local>) -> bool {

@@ -275,6 +275,89 @@ fn commands_started_on_the_same_issue_in_one_second_keep_separate_records() {
     assert_eq!(titles, ["first Command", "second Command"]);
 }
 
+#[test]
+fn concurrent_child_writes_keep_both_runs_and_leave_the_parent_untouched() {
+    let memory = Scripted::default();
+    let mut parent = Record::new(memory.clone());
+    parent.begin(Begin::Run(&issue()));
+    parent.configured(&config(false));
+    parent.started(Work::SpecRun(&issue()), &harness());
+    let path = parent.record_path().unwrap();
+    let before = memory.file(&path);
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|threads| {
+        for (number, stage) in [(8, StageName::CiWatch), (9, StageName::Repair)] {
+            let memory = memory.clone();
+            let path = path.clone();
+            let barrier = &barrier;
+            threads.spawn(move || {
+                let issue =
+                    IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}"))
+                        .unwrap();
+                let mut child = Record::new(memory);
+                child.child_of(Some(path));
+                child.begin(Begin::ChildRun(STAMP, crate::logs::CommandKind::Issue));
+                child.configured(&config(false));
+                child.started(Work::Run(&issue), &harness());
+                barrier.wait();
+                for _ in 0..100 {
+                    child.issue_title(Some(format!("Ticket {number}")));
+                    child.stage(stage, None);
+                }
+            });
+        }
+    });
+    assert_eq!(memory.file(&path), before);
+    let memory = memory.0.lock().unwrap();
+    let children: Vec<CommandRecord> = memory
+        .files
+        .iter()
+        .filter(|(path, _)| path.to_string_lossy().ends_with(".child.json"))
+        .map(|(_, bytes)| serde_json::from_str(bytes).unwrap())
+        .collect();
+    assert_eq!(children.len(), 2);
+    for (child, (number, stage)) in children.iter().zip([(8, "CI watch"), (9, "Repair")]) {
+        assert_eq!(child.parent_record.as_ref(), Some(&path));
+        assert_eq!(child.issue.as_ref().unwrap().number, number);
+        assert_eq!(
+            child.issue.as_ref().unwrap().title.as_deref(),
+            Some(format!("Ticket {number}").as_str())
+        );
+        assert_eq!(child.current_stage().unwrap().name, stage);
+    }
+}
+
+#[test]
+fn children_of_different_dispatches_keep_separate_records_for_the_same_issue() {
+    let memory = Scripted::default();
+    let parent = PathBuf::from("/logs/acme/widgets/commands/secure/pass.command.json");
+    for number in [20, 30] {
+        let mut child = Record::new(memory.clone());
+        child.child_of(Some(parent.clone()));
+        child.child_dispatch(Some(format!(
+            "https://github.com/acme/widgets/issues/{number}"
+        )));
+        child.begin(Begin::ChildRun(STAMP, crate::logs::CommandKind::Secure));
+        child.configured(&config(false));
+        child.started(Work::BaseFix(&issue()), &harness());
+    }
+    let memory = memory.0.lock().unwrap();
+    let children: Vec<CommandRecord> = memory
+        .files
+        .values()
+        .map(|bytes| serde_json::from_str(bytes).unwrap())
+        .collect();
+    assert_eq!(children.len(), 2);
+    for (child, number) in children.iter().zip([20, 30]) {
+        assert_eq!(child.parent_record.as_ref(), Some(&parent));
+        assert_eq!(
+            child.parent_dispatch.as_deref(),
+            Some(format!("https://github.com/acme/widgets/issues/{number}").as_str())
+        );
+        assert_eq!(child.kind, "Base fix");
+    }
+}
+
 fn config(quiet: bool) -> UserConfig {
     UserConfig::parse(
         &format!("[logs]\ndir = '/logs'\n[activity]\nquiet_skips = {quiet}\n"),

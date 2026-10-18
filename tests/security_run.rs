@@ -458,7 +458,7 @@ fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
         if held_session == 4 {
             assert_eq!(active["issue"]["number"], 8);
             assert!(
-                text.stdout.contains("\n  acme/widgets#8"),
+                text.stdout.contains("\n  Run acme/widgets#8"),
                 "{}",
                 text.stdout
             );

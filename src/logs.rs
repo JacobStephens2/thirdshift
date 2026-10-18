@@ -29,6 +29,7 @@ use crate::issue::{IssueUrl, Repo};
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
+pub(crate) use command_record::{TicketRecord, TicketState};
 use effects::OnMachine;
 use recording::Record;
 
@@ -82,6 +83,8 @@ pub enum Begin<'a> {
 pub enum Work<'a> {
     /// A Run on its issue.
     Run(&'a IssueUrl),
+    /// A Base fix, a child Run into the Run's Base branch.
+    BaseFix(&'a IssueUrl),
     /// A Spec run on its Spec.
     SpecRun(&'a IssueUrl),
     /// A Pickup run, on the Ready issue it took.
@@ -114,6 +117,9 @@ impl Display for Pass {
 static RECORD: LazyLock<Mutex<Record<OnMachine>>> =
     LazyLock::new(|| Mutex::new(Record::new(OnMachine)));
 
+const PARENT_RECORD: &str = "THIRDSHIFT_PARENT_RECORD";
+const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
+
 /// Begin the command as `begin` says. A Run or a pass makes its stamp now
 /// and prints its first line, dated, as in `starting on <Issue URL>,
 /// 2026-10-03 -0400`, then holds its lines for its Command log until it
@@ -121,7 +127,31 @@ static RECORD: LazyLock<Mutex<Record<OnMachine>>> =
 /// shows them, so a skipped pass may print nothing. A child Run prints no
 /// such line, and takes the stamp it was given.
 pub fn begin(begin: Begin) {
-    record().begin(begin);
+    let mut record = record();
+    if matches!(begin, Begin::ChildRun(..)) {
+        record.child_of(std::env::var_os(PARENT_RECORD).map(PathBuf::from));
+        record.child_dispatch(std::env::var(PARENT_DISPATCH).ok());
+    }
+    record.begin(begin);
+}
+
+/// Give a child Run its exact parent, independently of second-resolution stamps.
+pub fn inherit_record(command: &mut std::process::Command) {
+    if let Some(path) = record().record_path() {
+        command.env(PARENT_RECORD, path);
+    } else {
+        command.env_remove(PARENT_RECORD);
+    }
+    if let Some(issue) = record().dispatch_issue() {
+        command.env(PARENT_DISPATCH, issue);
+    } else {
+        command.env_remove(PARENT_DISPATCH);
+    }
+}
+
+/// Replace the Spec run's Ticket accounting without touching child-owned files.
+pub(crate) fn tickets(tickets: Vec<TicketRecord>) {
+    record().tickets(tickets);
 }
 
 /// Take `config`'s `logs.dir` as the root of the logs, and, unless its
@@ -138,7 +168,8 @@ pub fn configured(config: &UserConfig) {
 /// the Harness, Model and Effort, then write the Activity log's line that it
 /// started, naming that log and those. Only the outermost command's first
 /// call keeps the logs. A Pass also records the Run or Spec run it dispatches
-/// beneath itself; a child process keeps no Command log of its own.
+/// beneath itself; each child process keeps its own record linked to its
+/// immediate parent, with no Command log of its own.
 pub fn started(work: Work, harness: &Choice) {
     record().started(work, harness);
 }
@@ -277,7 +308,7 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
 impl Work<'_> {
     fn initial_stage(self) -> Option<Stage> {
         match self {
-            Work::Run(_) => Some(Stage::Implement),
+            Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
             Work::PickupRun(_) | Work::SecurityRun(_) => None,
@@ -287,7 +318,10 @@ impl Work<'_> {
     /// The repository whose work it records.
     fn repo(self) -> Repo {
         match self {
-            Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => issue.repo(),
+            Work::Run(issue)
+            | Work::BaseFix(issue)
+            | Work::SpecRun(issue)
+            | Work::PickupRun(issue) => issue.repo(),
             Work::ArchitectRun(repo) | Work::SecurityRun(repo) => repo.clone(),
         }
     }
@@ -295,7 +329,7 @@ impl Work<'_> {
     /// Its kind, in the Activity log.
     fn kind(self) -> Kind {
         match self {
-            Work::Run(_) => Kind::Run,
+            Work::Run(_) | Work::BaseFix(_) => Kind::Run,
             Work::SpecRun(_) => Kind::SpecRun,
             Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
             Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
@@ -306,7 +340,10 @@ impl Work<'_> {
     /// Its issue's number, if it has one.
     fn issue(self) -> Option<u64> {
         match self {
-            Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => Some(issue.number),
+            Work::Run(issue)
+            | Work::BaseFix(issue)
+            | Work::SpecRun(issue)
+            | Work::PickupRun(issue) => Some(issue.number),
             Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
         }
     }
@@ -320,7 +357,7 @@ impl Work<'_> {
     /// `thirdshift architect` in `architect/`.
     fn command_log(self, root: &Path, stamp: &str) -> PathBuf {
         let (folder, prefix) = match self {
-            Work::Run(issue) | Work::SpecRun(issue) => {
+            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
                 (CommandKind::Issue, format!("{}-", issue.number))
             }
             Work::PickupRun(issue) => (CommandKind::Pickup, format!("{}-", issue.number)),

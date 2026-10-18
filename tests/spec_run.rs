@@ -42,6 +42,223 @@ fn linear_spec() -> Scenario {
     scenario
 }
 
+#[test]
+fn status_nests_a_pickups_spec_with_running_waiting_merged_and_not_started_tickets() {
+    let scenario = linear_spec();
+    scenario.issue_labelled(SPEC, &["ready-for-agent"]);
+    scenario.spec_has_tickets(SPEC, &[(21, &[]), (22, &[21]), (23, &[]), (24, &[])]);
+    scenario.agent_does_for(
+        21,
+        &format!(
+            "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n{}",
+            scenario.path("started").display(),
+            scenario.path("release").display(),
+            agent_lands(21, "first.txt")
+        ),
+    );
+    scenario.agent_does_for(24, &agent_lands(24, "last.txt"));
+    let held = scenario.run_until(&["pickup", "parallel", "1"], &[], "started");
+    let json = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    std::fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let status: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 1, "{status:#}");
+    let pickup = &commands[0];
+    assert_eq!(pickup["kind"], "Pickup run");
+    let spec = &pickup["dispatched"][0];
+    assert_eq!(spec["kind"], "Spec run");
+    assert_eq!(spec["stage"]["name"], "Tickets");
+    let tickets = spec["tickets"].as_array().unwrap();
+    assert_eq!(tickets.len(), 4);
+    assert_eq!(tickets[0]["issue"]["number"], 21);
+    assert_eq!(tickets[0]["state"], "running");
+    assert_eq!(tickets[1]["state"], "waiting");
+    assert_eq!(tickets[1]["blockers"][0]["number"], 21);
+    assert_eq!(tickets[2]["state"], "merged");
+    assert_eq!(tickets[3]["state"], "not started");
+    let run = &spec["children"][0];
+    assert_eq!(run["issue"]["number"], 21);
+    assert_eq!(run["state"], "live");
+    assert_eq!(run["stage"]["name"], "implement");
+    assert!(run["stage"]["age_seconds"].is_number());
+    for expected in [
+        "Pickup run",
+        "Spec run",
+        "#21",
+        "implement ·",
+        "waiting on #21",
+        "#23",
+        "merged",
+        "#24",
+        "not started",
+    ] {
+        assert!(
+            text.stdout.contains(expected),
+            "{expected}: {}",
+            text.stdout
+        );
+    }
+}
+
+#[test]
+fn status_keeps_concurrent_ticket_runs_separate_and_detects_a_killed_child() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(SPEC, &[(21, &[]), (22, &[])]);
+    for ticket in [21, 22] {
+        let rendezvous = if ticket == 21 {
+            format!(
+                "while ! test -f '{}'; do sleep 0.02; done\ntouch '{}'\n",
+                scenario.path("22-started").display(),
+                scenario.path("both-started").display()
+            )
+        } else {
+            String::new()
+        };
+        scenario.agent_does_for(
+            ticket,
+            &format!(
+                "touch '{}'\n{rendezvous}while ! test -f '{}'; do sleep 0.02; done\n{}",
+                scenario.path(&format!("{ticket}-started")).display(),
+                scenario.path("release").display(),
+                agent_lands(ticket, &format!("{ticket}.txt"))
+            ),
+        );
+    }
+    let held = scenario.run_until(&[&spec_url(&scenario)], &[], "both-started");
+    let before = scenario.run(&["status", "--json"]);
+    let before: serde_json::Value = serde_json::from_str(&before.stdout).unwrap();
+    let children = before["commands"][0]["children"].as_array();
+    let pid = children
+        .and_then(|children| children.iter().find(|child| child["issue"]["number"] == 21))
+        .and_then(|child| child["process_id"].as_u64());
+    let killed = pid.is_some_and(|pid| {
+        std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    });
+    let after = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    std::fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert!(killed, "{before:#}");
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    let children = children.unwrap();
+    assert_eq!(children.len(), 2, "{before:#}");
+    assert_ne!(children[0]["process_id"], children[1]["process_id"]);
+    for (child, ticket) in children.iter().zip([21, 22]) {
+        assert_eq!(child["issue"]["number"], ticket);
+        assert_eq!(child["state"], "live");
+        assert_eq!(child["stage"]["name"], "implement");
+    }
+    let after: serde_json::Value = serde_json::from_str(&after.stdout).unwrap();
+    let killed = &after["commands"][0]["children"][0];
+    assert_eq!(killed["issue"]["number"], 21);
+    assert_eq!(killed["state"], "died");
+    assert_eq!(killed["stage"]["name"], "implement");
+    assert_eq!(after["commands"][0]["children"][1]["state"], "live");
+    assert!(text.stdout.contains("died at implement"), "{}", text.stdout);
+}
+
+#[test]
+fn status_retains_merged_children_during_spec_review() {
+    let scenario = linear_spec();
+    scenario.agent_does_for(
+        SPEC,
+        &format!(
+            "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n",
+            scenario.path("review-started").display(),
+            scenario.path("release").display()
+        ),
+    );
+    let held = scenario.run_until(&[&spec_url(&scenario)], &[], "review-started");
+    let json = scenario.run(&["status", "--json"]);
+    std::fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let status: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    let spec = &status["commands"][0];
+    assert_eq!(spec["stage"]["name"], "Spec review");
+    assert_eq!(spec["stages"][0]["name"], "Tickets");
+    assert!(
+        spec["session_log"]
+            .as_str()
+            .unwrap()
+            .ends_with("-spec-review.jsonl")
+    );
+    assert!(
+        spec["tickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|ticket| ticket["state"] == "merged")
+    );
+    let children = spec["children"].as_array().unwrap();
+    assert_eq!(children.len(), 2);
+    for child in children {
+        assert_eq!(child["state"], "ended");
+        assert_eq!(child["outcome"], "merged");
+        assert_eq!(child["issue_branch"], serde_json::Value::Null);
+        let stages: Vec<_> = child["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|stage| stage["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            stages,
+            [
+                "implement",
+                "pull request",
+                "CI watch",
+                "Self-merge",
+                "cleanup"
+            ]
+        );
+    }
+}
+
+#[test]
+fn status_records_a_failed_ticket_while_its_independent_sibling_keeps_running() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(SPEC, &[(21, &[]), (22, &[]), (23, &[21])]);
+    scenario.agent_does_for(21, "exit 3\n");
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n{}",
+            scenario.path("started").display(),
+            scenario.path("release").display(),
+            agent_lands(22, "second.txt")
+        ),
+    );
+    let held = scenario.run_until(&[&spec_url(&scenario)], &[], "started");
+    let deadline = std::time::Instant::now() + WAIT_BOUND;
+    let status = loop {
+        let json = scenario.run(&["status", "--json"]);
+        let status: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+        if status["commands"][0]["tickets"][0]["state"] == "failed"
+            || std::time::Instant::now() >= deadline
+        {
+            break status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    std::fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    let spec = &status["commands"][0];
+    assert_eq!(spec["tickets"][0]["state"], "failed", "{status:#}");
+    assert_eq!(spec["tickets"][1]["state"], "running");
+    assert_eq!(spec["tickets"][2]["state"], "waiting");
+    assert_eq!(spec["children"][0]["outcome"], "failed");
+    assert_eq!(spec["children"][1]["state"], "live");
+}
+
 fn spec_url(scenario: &Scenario) -> String {
     scenario.issue_url(SPEC)
 }

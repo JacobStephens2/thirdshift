@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Work;
 use crate::harness::Choice;
+use crate::issue::IssueUrl;
 
 /// A Pass owns its dispatched work in the same process and atomic record.
 #[derive(Serialize, Deserialize)]
@@ -49,13 +50,47 @@ pub(super) struct CommandRecord {
     pub cause: Option<String>,
     pub issue_branch: Option<String>,
     pub pull_request: Option<String>,
+    #[serde(default)]
+    pub parent_record: Option<PathBuf>,
+    #[serde(default)]
+    pub parent_dispatch: Option<String>,
+    #[serde(default)]
+    pub tickets: Vec<TicketRecord>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct Issue {
+pub(crate) struct Issue {
     pub number: u64,
     pub url: String,
     pub title: Option<String>,
+}
+
+impl From<&IssueUrl> for Issue {
+    fn from(issue: &IssueUrl) -> Self {
+        Self {
+            number: issue.number,
+            url: issue.url.clone(),
+            title: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct TicketRecord {
+    pub issue: Issue,
+    pub state: TicketState,
+    pub blockers: Vec<Issue>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum TicketState {
+    Running,
+    Merged,
+    Failed,
+    Waiting,
+    #[serde(rename = "not started")]
+    NotStarted,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -127,6 +162,17 @@ impl StageName {
 }
 
 impl CommandRecord {
+    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>, now: DateTime<FixedOffset>) {
+        self.ended_at = Some(now.to_rfc3339());
+        self.outcome = Some(account.outcome.into());
+        self.cause = account
+            .ended
+            .as_ref()
+            .err()
+            .map(|cause| cause.full().into());
+        self.pull_request = account.pr_url.map(String::from);
+    }
+
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
         self.outcome.is_none()
             && !self.process_start.is_empty()
@@ -135,7 +181,10 @@ impl CommandRecord {
 
     pub fn new(work: Work<'_>, stamp: &str, harness: &Choice, now: DateTime<FixedOffset>) -> Self {
         let issue = match work {
-            Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => Some(Issue {
+            Work::Run(issue)
+            | Work::BaseFix(issue)
+            | Work::SpecRun(issue)
+            | Work::PickupRun(issue) => Some(Issue {
                 number: issue.number,
                 url: issue.url.clone(),
                 title: None,
@@ -146,13 +195,17 @@ impl CommandRecord {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
-            Work::Run(issue) | Work::SpecRun(issue) => {
+            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
                 format!("{}#{}", issue.repo_slug(), issue.number)
             }
         };
         Self {
             version: 1,
-            kind: work.kind().to_string(),
+            kind: if matches!(work, Work::BaseFix(_)) {
+                "Base fix".into()
+            } else {
+                work.kind().to_string()
+            },
             repository: work.repo().slug(),
             name,
             issue,
@@ -170,6 +223,9 @@ impl CommandRecord {
             cause: None,
             issue_branch: None,
             pull_request: None,
+            parent_record: None,
+            parent_dispatch: None,
+            tickets: Vec::new(),
         }
     }
 
@@ -179,16 +235,5 @@ impl CommandRecord {
             .iter()
             .rev()
             .find(|stage| StageName::known(&stage.name))
-    }
-
-    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>, now: DateTime<FixedOffset>) {
-        self.ended_at = Some(now.to_rfc3339());
-        self.outcome = Some(account.outcome.into());
-        self.cause = account
-            .ended
-            .as_ref()
-            .err()
-            .map(|cause| cause.full().into());
-        self.pull_request = account.pr_url.map(String::from);
     }
 }

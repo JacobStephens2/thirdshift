@@ -71,7 +71,7 @@ The designed behaviour described in this README is implemented. Known gaps and p
 
 ## Machine status
 
-`thirdshift status` names this host and lists live Commands across every repository in `logs.dir`, with their issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Run or Spec run they dispatch beneath themselves. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. After the live Commands it lists those that ended in the last 24 hours, with their outcomes. `thirdshift status --all` lists every Command this machine has logs for, newest start first. A Command record with no outcome whose process has gone shows as `died at <stage>` in either view. Process start identifiers distinguish a reused process id on Linux and macOS. Command records remain beside their Command logs, as `*.command.json`. A record write failure warns once per Command and does not change its outcome.
+`thirdshift status` names this host and lists live Commands across every repository in `logs.dir`, with their issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Runs or Spec runs they dispatch beneath themselves, each Spec's Tickets and their Runs, and each Run's Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. After the live Commands it lists those that ended in the last 24 hours, with their outcomes. `thirdshift status --all` lists every Command this machine has logs for, newest start first. A Command or child Run with no outcome whose process has gone shows as `died at <stage>` in either view. Process start identifiers distinguish a reused process id on Linux and macOS. Records remain beside their Command logs, as `*.command.json`, with child records named for their issue as `*.issue-<n>.child.json`. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.
 
 History uses each source only for Commands missing from the preceding sources: Command records, then Activity log start/end lines with their Command logs, then Session logs in the current `<logs.dir>/<owner>/<repo>/commands/<kind>/` layout. Activity entries have start and end times and outcomes, with no stages. Session entries group logs by issue and Command stamp; they have no known end or outcome and appear only with `--all`. Sessions covered by a Spec run or Pass's stamp belong to that Command. The flat layout from before [ADR 0011](docs/adr/0011-thirdshift-keeps-a-per-repository-activity-log.md) is ignored.
 
@@ -111,7 +111,11 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
     "command_log": "/logs/acme/widgets/commands/issue/7-stamp.log",
     "dispatched": [],
     "state": "live",
-    "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52}
+    "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+    "parent_record": null,
+    "parent_dispatch": null,
+    "tickets": [],
+    "children": []
   }],
   "idle_passes": [{
     "repository": "acme/widgets",
@@ -121,10 +125,36 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
 }
 ```
 
-Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause` and `ended_at` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run` and `Security run`. `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Run or Spec run a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source` and `command_log` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
+Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause`, `ended_at`, `parent_record` and `parent_dispatch` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run`, `Security run` and `Base fix`. `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source`, `command_log` and `children` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
 
 `state` is `live`, `died`, `ended`, or `unknown` when historical evidence has no ending. `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets`, `Spec review`, `Architecture review`, `Security audit`, `Security reproduction` and `Security fix publishing`. A Pass retains its own stages while its dispatched work records its stages separately. The remaining Command views are tracked in [#711](https://github.com/JacobStephens2/thirdshift/issues/711).
 
+`children` recursively contains the immediate child Runs in separate processes, with the same fields as their parent. A Pickup's `dispatched` contains its Run or Spec run. A Spec's `tickets` is its complete roster in issue-number order; each entry has `issue` (`number`, `url`, nullable `title`), `state` (`running`, `merged`, `failed`, `waiting`, or `not started`) and `blockers` (the named open blocking issues, with the same issue fields). Match a Ticket's `issue.url` to the Run in that Spec's `children` for its stage, age, liveness and Base fix descendants. Tickets without a Run remain in the roster. Completed child Runs stay in the tree while its Command is listed. A killed child's `state: "died"` remains independent of the Spec's Ticket accounting. `parent_record` links each child to its parent's exact file; `parent_dispatch`, when present, names the dispatched issue's URL within that file. A top-level Command has null for both. Records from before these fields existed read as having no children or Tickets.
+
+For example, this tree excerpt omits the common Run fields shown above:
+
+```json
+{
+  "kind": "Pickup run",
+  "dispatched": [{
+    "kind": "Spec run",
+    "stage": {"name": "Tickets", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+    "tickets": [
+      {"issue": {"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": null}, "state": "running", "blockers": []},
+      {"issue": {"number": 22, "url": "https://github.com/acme/widgets/issues/22", "title": null}, "state": "waiting", "blockers": [{"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": null}]},
+      {"issue": {"number": 23, "url": "https://github.com/acme/widgets/issues/23", "title": null}, "state": "merged", "blockers": []},
+      {"issue": {"number": 24, "url": "https://github.com/acme/widgets/issues/24", "title": null}, "state": "not started", "blockers": []}
+    ],
+    "children": [{
+      "kind": "Run",
+      "issue": {"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": "Make widgets"},
+      "state": "live",
+      "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+      "children": []
+    }]
+  }]
+}
+```
 Every entry has `source`: `command_record`, `activity_log` or `session_log`. The latter two carry `repository`, `kind`, nullable `issue` (number, URL, nullable title), `harness`, `model`, `effort`, `started_at`, nullable `ended_at` and `outcome`, nullable `command_log`, `session_logs` (paths), `state`, `stages: []` and `stage: null`. They omit record-only fields such as process identity and branch information. Activity times use the UTC offset in the Command log's stamp; their outcome is the Activity log's full ending text. A Session entry has null Harness, Model, Effort, end time and outcome, and lists its grouped Session logs. Both flags can be combined as `status --all --json`.
 
 ## Install

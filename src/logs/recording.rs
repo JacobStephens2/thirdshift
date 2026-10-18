@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
-use super::command_record::{CommandRecord, CommandTree, Stage, StageName};
+use super::command_record::{CommandRecord, CommandTree, Stage, StageName, TicketRecord};
 use super::effects::{Outside, Stream};
 use super::{Begin, CommandKind, Pass, Work, root_under};
 use crate::config::UserConfig;
@@ -32,6 +32,8 @@ pub(super) struct Record<O: Outside> {
     activity_started: Option<Started>,
     activity_warned: bool,
     command_record: Option<(PathBuf, CommandTree)>,
+    parent_record: Option<PathBuf>,
+    parent_dispatch: Option<String>,
     record_warned: bool,
 }
 
@@ -78,6 +80,8 @@ impl<O: Outside> Record<O> {
             activity_started: None,
             activity_warned: false,
             command_record: None,
+            parent_record: None,
+            parent_dispatch: None,
             record_warned: false,
         }
     }
@@ -121,6 +125,12 @@ impl<O: Outside> Record<O> {
     pub(super) fn started(&mut self, work: Work, harness: &Choice) {
         let first = !self.started;
         self.started = true;
+        if self.child && first {
+            if self.parent_record.is_some() {
+                self.start_record(work, harness);
+            }
+            return;
+        }
         if !first || self.child {
             if !self.child
                 && self.command != CommandKind::Issue
@@ -140,36 +150,7 @@ impl<O: Outside> Record<O> {
         let began = matches!(self.command_log, Log::Held { .. });
         self.keep(work.command_log(&root, &stamp));
         if began {
-            let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
-            facts.hostname = self.outside.hostname();
-            facts.process_start = self
-                .outside
-                .process_start(facts.process_id)
-                .unwrap_or_default();
-            // Command-log stamps have second precision. A process identity
-            // separates concurrent Commands, and a serial separates owned
-            // recorders within one process (including effects-adapter tests).
-            let owner = format!(
-                "{}-{}-{}",
-                facts.process_id,
-                facts.process_start.replace(':', "-"),
-                NEXT_RECORD.fetch_add(1, Ordering::Relaxed)
-            );
-            let path = work
-                .command_log(&root, &stamp)
-                .with_extension(format!("{owner}.command.json"));
-            self.command_record = Some((
-                path,
-                CommandTree {
-                    command: facts,
-                    dispatched: Vec::new(),
-                },
-            ));
-            if let Some(stage) = work.initial_stage() {
-                self.stage(stage, None);
-            } else {
-                self.write_record();
-            }
+            self.start_record(work, harness);
         }
         self.step(format_args!("sessions run on {harness}"));
         let command_log = match self.command_log_path() {
@@ -189,6 +170,83 @@ impl<O: Outside> Record<O> {
         if self.activity_started.is_none() {
             self.activity_started = Some(started);
             self.activity_write(&root, &line, None);
+        }
+    }
+
+    pub(super) fn child_of(&mut self, parent: Option<PathBuf>) {
+        self.parent_record = parent;
+    }
+
+    pub(super) fn child_dispatch(&mut self, issue: Option<String>) {
+        self.parent_dispatch = issue;
+    }
+
+    pub(super) fn dispatch_issue(&self) -> Option<String> {
+        self.command_record
+            .as_ref()?
+            .1
+            .dispatched
+            .last()
+            .filter(|record| record.outcome.is_none())?
+            .issue
+            .as_ref()
+            .map(|issue| issue.url.clone())
+    }
+
+    pub(super) fn record_path(&self) -> Option<PathBuf> {
+        self.command_record.as_ref().map(|(path, _)| path.clone())
+    }
+
+    fn start_record(&mut self, work: Work, harness: &Choice) {
+        let stamp = self.stamp();
+        let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        facts.hostname = self.outside.hostname();
+        facts.process_start = self
+            .outside
+            .process_start(facts.process_id)
+            .unwrap_or_default();
+        facts.parent_record = self.parent_record.clone();
+        facts.parent_dispatch = self.parent_dispatch.clone();
+        let path = if let Some(parent) = &self.parent_record {
+            let dispatch = self
+                .parent_dispatch
+                .as_ref()
+                .and_then(|issue| crate::issue::IssueUrl::parse(issue).ok())
+                .map_or_else(String::new, |issue| format!("dispatch-{}-", issue.number));
+            parent.with_extension(format!(
+                "{dispatch}issue-{}.child.json",
+                work.issue().unwrap()
+            ))
+        } else {
+            // Process identity and a serial separate Commands sharing a stamp.
+            let owner = format!(
+                "{}-{}-{}",
+                facts.process_id,
+                facts.process_start.replace(':', "-"),
+                NEXT_RECORD.fetch_add(1, Ordering::Relaxed)
+            );
+            let root = self.root(&work.repo());
+            work.command_log(&root, &stamp)
+                .with_extension(format!("{owner}.command.json"))
+        };
+        self.command_record = Some((
+            path,
+            CommandTree {
+                command: facts,
+                dispatched: Vec::new(),
+            },
+        ));
+        if let Some(stage) = work.initial_stage() {
+            self.stage(stage, None);
+        } else {
+            self.write_record();
+        }
+    }
+
+    pub(super) fn tickets(&mut self, tickets: Vec<TicketRecord>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().tickets = tickets;
+            self.write_record();
         }
     }
 
