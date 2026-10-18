@@ -584,6 +584,27 @@ A [Pickup run](#pickup-runs) takes the same flags and the same `email.always` to
 
 A notification that can't be sent is a `warning:` line on stderr with Resend's error. It never changes the Run's outcome, stdout or exit code.
 
+### Stopping a Command
+
+`thirdshift stop widgets#7` stops a live Run and waits for its cleanup. It accepts
+the same Command names as `show`: `owner/repo#number`, an Issue URL, or a Pass's
+`kind-stamp` name. It works from any directory and never prompts. Ended and died
+Commands are refused; Stop sends SIGTERM only to the recorded process, with no
+forced kill.
+
+By default, Stop leaves the issue for the Day shift: it adds `needs-triage` and
+does not put `ready-for-agent` back. It removes `in-progress` when nothing reached
+`origin`, and keeps it when an Issue branch or pull request remains. Add
+`--requeue` to release the Claim and put `ready-for-agent` back even after a push;
+the next Run continues that Issue branch. Ordinary interruption without a Stop
+keeps its usual Claim rules.
+
+The Stop request is kept beside the Command record with the Unix user who asked
+and whether to requeue. The Command writes `<subject> stopped from the CLI by
+<who>` to its Activity log before its `ended:` line. Stop prints `still ending`
+each minute while cleanup runs, then the outcome and any Issue branch or pull
+request left behind.
+
 ### Logs
 
 Everything thirdshift logs goes under `~/.thirdshift/logs/`, or the `logs.dir` set in the [User config](#user-config), in a folder per repository, `<owner>/<repo>/`, named for the GitHub repository rather than your checkout, so a fork and its upstream never share one and every checkout or worktree of a repository logs to the same place. thirdshift creates each folder as it needs it, so a repository's first pass needs nothing made by hand:

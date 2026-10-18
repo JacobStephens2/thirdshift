@@ -4,7 +4,8 @@
 //! ended once with how the run ended: removed once its Self-merge has left the
 //! issue closed, kept while its pull request waits for review, and released
 //! when the run failed with nothing on origin to take over, except a failed
-//! Security fix, which stays with the Day shift.
+//! Security fix, which stays with the Day shift. A Stop instead leaves the
+//! issue for triage, or explicitly releases it when asked to requeue.
 //!
 //! What it reads and changes of GitHub and origin, whether the run is
 //! interrupted, and its progress lines all go through [`Outside`]:
@@ -65,6 +66,8 @@ impl Claim<'_> {
     /// - Ready for review: the Claim stays while the pull request waits.
     /// - Failed: the Claim is released if nothing of the run is on origin to
     ///   take over, except a Security fix, whose Claim stays.
+    /// - Stopped: the issue goes to triage, keeping its Claim only while work
+    ///   remains on origin, or is released even with work when asked to requeue.
     ///
     /// The run has ended as it has, so this never fails: a failure is a
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
@@ -95,6 +98,8 @@ trait Outside {
     fn apply(&mut self, edit: &Edit) -> Result<()>;
     /// Whether the run was interrupted.
     fn interrupted(&mut self) -> bool;
+    /// The requested Stop ending, if this Command is handling a Stop.
+    fn stop(&mut self) -> Option<crate::logs::stop::Ending>;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
     /// Hand on `error`, then the warning `warning` saying what to do about it
@@ -137,6 +142,10 @@ impl Outside for OnGitHub<'_> {
 
     fn interrupted(&mut self) -> bool {
         interrupt::requested()
+    }
+
+    fn stop(&mut self) -> Option<crate::logs::stop::Ending> {
+        crate::logs::stop_requested().map(|request| request.ending())
     }
 
     fn step(&mut self, line: String) {
@@ -199,11 +208,41 @@ impl<'a> Claimed<'a> {
 
     /// [`Claim::end`], through `outside`.
     fn end(&self, outside: &mut impl Outside, reached: Option<Goal>) {
+        if let Some(ending) = outside.stop() {
+            self.stopped(outside, ending);
+            return;
+        }
         match reached {
             Some(Goal::Merged) => self.remove_if_closed(outside),
             Some(Goal::ReadyForReview) => {}
             None if self.security_fix => {}
             None => self.release_if_nothing_on_origin(outside),
+        }
+    }
+
+    fn stopped(&self, outside: &mut impl Outside, ending: crate::logs::stop::Ending) {
+        use crate::logs::stop::Ending;
+        if let Err(error) = retry_if_interrupted(outside, |outside| {
+            let state = outside.state(self.issue)?;
+            if !state.is_open {
+                return self.unlabel_if_closed(outside);
+            }
+            let (off, on): (&[Label], &[Label]) = match ending {
+                Ending::Requeue => (&[IN_PROGRESS], &[READY_FOR_AGENT]),
+                Ending::Triage if outside.started(self.issue)? => {
+                    (&[READY_FOR_AGENT], &[labels::NEEDS_TRIAGE])
+                }
+                Ending::Triage => (&[IN_PROGRESS, READY_FOR_AGENT], &[labels::NEEDS_TRIAGE]),
+            };
+            outside.apply(&Edit::of(self.issue, state.labels, off, on))
+        }) {
+            outside.warn(
+                &error,
+                format!(
+                    "could not end the Stop's Claim on #{}; check its labels by hand",
+                    self.issue.number
+                ),
+            );
         }
     }
 
@@ -389,6 +428,7 @@ mod in_memory {
         pub open: bool,
         pub started: bool,
         pub interrupted: bool,
+        pub stop: Option<crate::logs::stop::Ending>,
         /// Each read or edit that fails, with how many times more it does.
         failing: Vec<(Fails, usize)>,
         /// Every call made, in order.
@@ -476,6 +516,10 @@ mod in_memory {
             self.interrupted
         }
 
+        fn stop(&mut self) -> Option<crate::logs::stop::Ending> {
+            self.stop
+        }
+
         fn step(&mut self, line: String) {
             self.calls.push(Call::Step(line));
         }
@@ -525,6 +569,53 @@ mod tests {
          is on origin, release it by hand: \
          gh api --method DELETE repos/acme/widgets/issues/7/labels/in-progress && \
          gh api --method POST repos/acme/widgets/issues/7/labels -f 'labels[]=ready-for-agent'";
+
+    #[test]
+    fn a_stop_leaves_the_issue_for_triage_keeping_the_claim_only_with_work_on_origin() {
+        for started in [false, true] {
+            for before in [&["bug", "ready-for-agent"][..], &["bug", "in-progress"][..]] {
+                let url = seven();
+                let mut issue = InMemory::labelled(before);
+                let claimed = claimed(&mut issue, &url);
+                issue.started = started;
+                issue.stop = Some(crate::logs::stop::Ending::Triage);
+                issue.interrupted = true;
+                claimed.end(&mut issue, None);
+                assert_eq!(
+                    labels(&issue),
+                    if started {
+                        vec!["bug", "in-progress", "needs-triage"]
+                    } else {
+                        vec!["bug", "needs-triage"]
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_requeue_stop_releases_even_an_existing_claim_with_work_on_origin() {
+        for started in [false, true] {
+            let url = seven();
+            let mut issue = InMemory::labelled(&["bug", "in-progress"]);
+            let claimed = claimed(&mut issue, &url);
+            issue.started = started;
+            issue.stop = Some(crate::logs::stop::Ending::Requeue);
+            claimed.end(&mut issue, None);
+            assert_eq!(labels(&issue), ["bug", "ready-for-agent"]);
+        }
+    }
+
+    #[test]
+    fn a_stop_does_not_requeue_an_issue_already_closed_by_self_merge() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.open = false;
+        issue.stop = Some(crate::logs::stop::Ending::Requeue);
+        claimed.end(&mut issue, Some(Goal::Merged));
+        assert_eq!(labels(&issue), ["bug"]);
+    }
 
     #[test]
     fn the_claim_is_made_in_place_of_ready_for_agent_keeping_the_other_labels() {

@@ -197,6 +197,14 @@ impl<O: Outside> Record<O> {
         self.command_record.as_ref().map(|(path, _)| path.clone())
     }
 
+    pub(super) fn stop_request(&self) -> Option<super::stop::Request> {
+        let path = self
+            .parent_record
+            .as_ref()
+            .or_else(|| self.command_record.as_ref().map(|(path, _)| path))?;
+        super::stop::requested(path)
+    }
+
     fn start_record(&mut self, work: Work, harness: &Choice) {
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
@@ -263,7 +271,15 @@ impl<O: Outside> Record<O> {
         self.show_held();
         if let Some(started) = &self.activity_started {
             let root = started.root.clone();
-            let line = format!("{} ended: {outcome}", started.subject());
+            let subject = started.subject();
+            if let Some(request) = self.stop_request() {
+                self.activity_write(
+                    &root,
+                    &format!("{subject} stopped from the CLI by {}", request.who),
+                    None,
+                );
+            }
+            let line = format!("{subject} ended: {outcome}");
             self.activity_write(&root, &line, None);
         }
     }

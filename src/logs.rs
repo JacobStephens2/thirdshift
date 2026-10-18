@@ -18,6 +18,7 @@ mod effects;
 mod process_identity;
 mod recording;
 pub mod status;
+pub mod stop;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
@@ -235,6 +236,14 @@ pub fn issue_branch(branch: Option<&str>) {
 /// Complete the durable facts from the same account used by other renderers.
 pub fn finished(account: &crate::run_ending::Account<'_>) {
     record().finished(account);
+}
+
+/// The Stop given to this Command, if interruption is being handled.
+pub fn stop_requested() -> Option<stop::Request> {
+    if !crate::interrupt::requested() {
+        return None;
+    }
+    record().stop_request()
 }
 
 /// Finish a Pass's dispatched Run without ending its owning Command.

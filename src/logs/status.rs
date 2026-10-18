@@ -70,6 +70,8 @@ impl Entry {
 
 #[derive(Serialize)]
 struct Command {
+    #[serde(skip)]
+    record_path: PathBuf,
     #[serde(flatten)]
     record: CommandRecord,
     state: &'static str,
@@ -88,7 +90,7 @@ struct CurrentStage {
 }
 
 impl Command {
-    fn new(record: CommandRecord, command_log: PathBuf, now: DateTime<Local>) -> Self {
+    fn new(record: CommandRecord, record_path: PathBuf, now: DateTime<Local>) -> Self {
         let state = if record.outcome.is_some() {
             "ended"
         } else if record.live(&mut OnMachine) {
@@ -104,12 +106,13 @@ impl Command {
                 .unwrap_or(0),
         });
         Self {
+            command_log: command_log(&record_path),
+            record_path,
             record,
             state,
             stage,
             children: Vec::new(),
             source: "command_record",
-            command_log,
             dispatched: Vec::new(),
         }
     }
@@ -249,14 +252,13 @@ fn tree(
     now: &DateTime<Local>,
 ) -> Command {
     let tree = records.remove(path).expect("a discovered record exists");
-    let log = command_log(path);
-    let mut command = Command::new(tree.command, log.clone(), *now);
+    let mut command = Command::new(tree.command, path.to_owned(), *now);
     command.children = children(path, None, records, now);
     command.dispatched = tree
         .dispatched
         .into_iter()
         .map(|record| {
-            let mut dispatched = Command::new(record, log.clone(), *now);
+            let mut dispatched = Command::new(record, path.to_owned(), *now);
             let issue = dispatched
                 .record
                 .issue
