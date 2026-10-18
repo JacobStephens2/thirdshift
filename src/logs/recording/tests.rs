@@ -96,6 +96,11 @@ impl Write for Writer {
 impl Outside for Scripted {
     type CommandLog = Writer;
 
+    fn stop_request(&mut self, record: &Path) -> Option<crate::logs::stop::Request> {
+        let memory = self.0.lock().unwrap();
+        serde_json::from_str(memory.files.get(&record.with_extension("stop.json"))?).ok()
+    }
+
     fn hostname(&mut self) -> String {
         "factory".into()
     }
@@ -183,6 +188,25 @@ impl Outside for Scripted {
 
 fn issue() -> IssueUrl {
     IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
+}
+
+#[test]
+fn a_stop_request_in_the_file_adapter_is_logged_before_the_ending() {
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    memory.0.lock().unwrap().files.insert(
+        record.record_path().unwrap().with_extension("stop.json"),
+        r#"{"who":"jacob","requeue":false}"#.into(),
+    );
+    record.ended("interrupted");
+    let activity = memory.file(ACTIVITY);
+    let stopped = activity
+        .find("Run #7 stopped from the CLI by jacob")
+        .expect(&activity);
+    assert!(stopped < activity.find("Run #7 ended: interrupted").unwrap());
 }
 
 #[test]

@@ -197,12 +197,12 @@ impl<O: Outside> Record<O> {
         self.command_record.as_ref().map(|(path, _)| path.clone())
     }
 
-    pub(super) fn stop_request(&self) -> Option<super::stop::Request> {
+    pub(super) fn stop_request(&mut self) -> Option<super::stop::Request> {
         let path = self
             .parent_record
             .as_ref()
             .or_else(|| self.command_record.as_ref().map(|(path, _)| path))?;
-        super::stop::requested(path)
+        self.outside.stop_request(path)
     }
 
     fn start_record(&mut self, work: Work, harness: &Choice) {

@@ -33,12 +33,17 @@ pub(super) trait Outside {
     fn hostname(&mut self) -> String;
     fn process_start(&mut self, pid: u32) -> Option<String>;
     fn replace_record(&mut self, path: &Path, bytes: &[u8]) -> Result<()>;
+    fn stop_request(&mut self, record: &Path) -> Option<super::stop::Request>;
 }
 
 pub(super) struct OnMachine;
 
 impl Outside for OnMachine {
     type CommandLog = File;
+
+    fn stop_request(&mut self, record: &Path) -> Option<super::stop::Request> {
+        super::stop::requested(record)
+    }
 
     fn hostname(&mut self) -> String {
         crate::host::name().unwrap_or_else(|| "unknown".into())

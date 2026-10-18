@@ -38,6 +38,7 @@ pub fn is_on(labels: &Labels) -> bool {
 pub struct Claim<'a> {
     launch: &'a Git,
     claimed: Claimed<'a>,
+    branch: String,
 }
 
 /// Make the Claim on `issue`, from its Launch directory `launch`: label it
@@ -46,15 +47,20 @@ pub struct Claim<'a> {
 /// repository if it lacks it. An issue already Claimed, `in-progress` and not
 /// `ready-for-agent`, is left as it is, with no request made. A failure names
 /// the Claim as what could not be made.
-pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git) -> Result<Claim<'a>> {
+pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git, branch: &str) -> Result<Claim<'a>> {
     let claimed = Claimed::make(
         &mut OnGitHub {
             launch,
             github: GitHub::new(),
+            branch,
         },
         issue,
     )?;
-    Ok(Claim { launch, claimed })
+    Ok(Claim {
+        launch,
+        claimed,
+        branch: branch.into(),
+    })
 }
 
 impl Claim<'_> {
@@ -77,6 +83,7 @@ impl Claim<'_> {
             &mut OnGitHub {
                 launch: &launch,
                 github: GitHub::new().completion(),
+                branch: &self.branch,
             },
             reached,
         );
@@ -94,6 +101,8 @@ trait Outside {
     /// which for a Spec is its Spec branch, or a pull request from one,
     /// open, merged or closed.
     fn started(&mut self, issue: &IssueUrl) -> Result<bool>;
+    /// Whether this Run's selected Issue branch or an open PR from it remains.
+    fn remaining(&mut self, issue: &IssueUrl) -> Result<bool>;
     /// Make `edit`.
     fn apply(&mut self, edit: &Edit) -> Result<()>;
     /// Whether the run was interrupted.
@@ -117,6 +126,7 @@ struct State {
 struct OnGitHub<'a> {
     launch: &'a Git,
     github: GitHub,
+    branch: &'a str,
 }
 
 impl Outside for OnGitHub<'_> {
@@ -134,6 +144,17 @@ impl Outside for OnGitHub<'_> {
 
     fn started(&mut self, issue: &IssueUrl) -> Result<bool> {
         Ok(branch::started(self.launch, &self.github, issue)?.is_some())
+    }
+
+    fn remaining(&mut self, issue: &IssueUrl) -> Result<bool> {
+        if self.launch.on_origin(self.branch)? {
+            return Ok(true);
+        }
+        Ok(self
+            .github
+            .pull_requests_with_head_prefix(issue, self.branch)?
+            .iter()
+            .any(|pr| pr.head == self.branch && pr.state == crate::github::PrState::Open))
     }
 
     fn apply(&mut self, edit: &Edit) -> Result<()> {
@@ -229,7 +250,7 @@ impl<'a> Claimed<'a> {
             }
             let (off, on): (&[Label], &[Label]) = match ending {
                 Ending::Requeue => (&[IN_PROGRESS], &[READY_FOR_AGENT]),
-                Ending::Triage if outside.started(self.issue)? => {
+                Ending::Triage if outside.remaining(self.issue)? => {
                     (&[READY_FOR_AGENT], &[labels::NEEDS_TRIAGE])
                 }
                 Ending::Triage => (&[IN_PROGRESS, READY_FOR_AGENT], &[labels::NEEDS_TRIAGE]),
@@ -496,6 +517,10 @@ mod in_memory {
             self.calls.push(Call::Started);
             self.fail_if(Fails::Started)?;
             Ok(self.started)
+        }
+
+        fn remaining(&mut self, issue: &IssueUrl) -> Result<bool> {
+            self.started(issue)
         }
 
         fn apply(&mut self, edit: &Edit) -> Result<()> {
