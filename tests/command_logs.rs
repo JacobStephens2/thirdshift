@@ -137,6 +137,7 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
         [
             format!("7-{stamp}-implement.jsonl"),
             format!("7-{stamp}-implement.models.json"),
+            format!("7-{stamp}.command.json"),
             format!("7-{stamp}.log")
         ]
     );

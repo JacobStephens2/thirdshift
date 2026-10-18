@@ -69,6 +69,42 @@ An issue closed some other way, as when you merge its pull request by hand, keep
 
 The designed behaviour described in this README is implemented. Known gaps and planned work are tracked in the [open issues](https://github.com/JacobStephens2/thirdshift/issues).
 
+## Machine status
+
+`thirdshift status` names this host and lists live Runs started on an Issue URL across every repository in `logs.dir`, with their issue and title, Harness, Model, Effort, current stage and its age. A Command with no outcome whose process has gone shows as `died at <stage>`. Process start identifiers distinguish a reused process id on Linux and macOS. Completed Commands leave the live list; their Command records remain beside their Command logs, as `*.command.json`. A record write failure warns once per Command and does not change its outcome.
+
+`thirdshift status --json` is the versioned API for agents and the coming [Console](docs/adr/0016-the-console-is-a-long-running-reader.md). It runs outside a repository too. Version 1 has this shape:
+
+```json
+{
+  "version": 1,
+  "hostname": "factory",
+  "commands": [{
+    "version": 1,
+    "kind": "Run",
+    "repository": "acme/widgets",
+    "issue": {"number": 7, "url": "https://github.com/acme/widgets/issues/7", "title": "Make widgets"},
+    "hostname": "factory",
+    "process_id": 1234,
+    "process_start": "<OS process start identifier>",
+    "harness": "claude",
+    "model": "opus",
+    "effort": "high",
+    "started_at": "2026-10-18T12:00:00-04:00",
+    "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"}],
+    "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl",
+    "issue_branch": "issue-7",
+    "pull_request": null,
+    "outcome": null,
+    "cause": null,
+    "state": "live",
+    "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52}
+  }]
+}
+```
+
+Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `session_log`, `issue_branch`, `pull_request`, `outcome` and `cause` are nullable. The retained record has the same Command fields without the computed `state` and `stage`; it ends with its outcome, failure cause (null on success), and the Issue branch and pull request left behind. `state` is `live` or `died`; `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge` and `cleanup`. More Command kinds and history are tracked in [#711](https://github.com/JacobStephens2/thirdshift/issues/711).
+
 ## Install
 
 ```sh

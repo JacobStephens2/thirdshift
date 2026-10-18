@@ -424,6 +424,9 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
 
     fn started(&mut self, work: Work) {
         logs::started(work, self.harness);
+        if matches!(work, Work::Run(_)) {
+            logs::issue_title(GitHub::new().issue_title(self.issue).ok());
+        }
     }
 
     fn select(&mut self) -> Result<Selection> {
@@ -454,6 +457,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Worktree> {
+        logs::issue_branch(branch);
         let (launch, repo) = (self.directory.git(), &self.issue.repo);
         match checkout {
             Checkout::Fresh => Worktree::create_fresh(launch, repo, branch, base),

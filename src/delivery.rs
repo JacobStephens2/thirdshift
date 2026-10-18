@@ -412,6 +412,7 @@ impl Outside for InWorktree<'_> {
 
     fn security_review(&mut self, prompt: &str) -> Result<Review> {
         self.stage.set(Stage::SecurityReview);
+        crate::logs::stage("Security review");
         self.pull_request.ensure_actionable(false)?;
         let review = crate::security::review::run(
             self.sessions,
@@ -430,6 +431,7 @@ impl Outside for InWorktree<'_> {
 
     fn push(&mut self) -> Result<()> {
         self.stage.set(Stage::Push);
+        crate::logs::stage("pull request");
         self.pull_request.ensure_actionable(false)?;
         self.worktree
             .push_if_actionable(&mut || self.pull_request.ensure_actionable(false))
@@ -441,6 +443,7 @@ impl Outside for InWorktree<'_> {
 
     fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified> {
         self.stage.set(Stage::PullRequest);
+        crate::logs::stage("pull request");
         self.pull_request.mark_ready(checklist)
     }
 
@@ -535,6 +538,11 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn stage(&mut self, stage: Stage) {
         self.stage.set(stage);
+        match stage {
+            Stage::SelfMerge => crate::logs::stage("Self-merge"),
+            Stage::PullRequest => crate::logs::stage("pull request"),
+            _ => {}
+        }
     }
 
     fn merge_base_branch(&mut self) -> Result<Merge> {
@@ -552,6 +560,7 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn push(&mut self) -> Result<()> {
         self.stage.set(Stage::Push);
+        crate::logs::stage("pull request");
         self.pull_request.ensure_actionable(true)?;
         self.worktree
             .push_if_actionable(&mut || self.pull_request.ensure_actionable(true))
@@ -576,6 +585,7 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
         self.stage.set(Stage::Ci);
+        crate::logs::stage("CI watch");
         ci::watch(self.issue, head, base_commit, &mut || {
             self.pull_request.ensure_actionable(true)
         })
@@ -588,6 +598,7 @@ impl repair_loop::Outside for RunOutside<'_> {
         failed: &FailedChecks,
     ) -> Result<Option<Ci>> {
         self.stage.set(Stage::Ci);
+        crate::logs::stage("CI watch");
         ci::rerun(self.issue, head, base_commit, failed, &mut || {
             self.pull_request.ensure_actionable(true)
         })
@@ -595,6 +606,7 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
         self.stage.set(Stage::Repair);
+        crate::logs::stage("Repair");
         let (issue, base, pr_url) = (self.issue, self.base, self.pr_url);
         let branch = self.worktree.branch();
         let prompt = match repair {
@@ -634,6 +646,7 @@ impl repair_loop::Outside for RunOutside<'_> {
 
     fn merge(&mut self, head: &str) -> Result<MergeAttempt> {
         self.stage.set(Stage::SelfMerge);
+        crate::logs::stage("Self-merge");
         self.pull_request.merge(head)
     }
 

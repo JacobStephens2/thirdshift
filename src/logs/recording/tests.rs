@@ -23,6 +23,8 @@ struct Memory {
     activity_read_fails: bool,
     activity_write_fails: bool,
     terminal_fails: bool,
+    record_write_fails: bool,
+    reused_pid: bool,
 }
 
 #[derive(Clone, Default)]
@@ -82,6 +84,31 @@ impl Write for Writer {
 
 impl Outside for Scripted {
     type CommandLog = Writer;
+
+    fn hostname(&mut self) -> String {
+        "factory".into()
+    }
+    fn process_start(&mut self, _: u32) -> Option<String> {
+        Some(
+            if self.0.lock().unwrap().reused_pid {
+                "start-2"
+            } else {
+                "start-1"
+            }
+            .into(),
+        )
+    }
+    fn replace_record(&mut self, path: &Path, bytes: &[u8]) -> Result<()> {
+        if self.0.lock().unwrap().record_write_fails {
+            anyhow::bail!("disk full");
+        }
+        self.0
+            .lock()
+            .unwrap()
+            .files
+            .insert(path.into(), String::from_utf8(bytes.to_vec())?);
+        Ok(())
+    }
 
     fn now(&mut self) -> DateTime<FixedOffset> {
         self.0
@@ -145,6 +172,65 @@ impl Outside for Scripted {
 
 fn issue() -> IssueUrl {
     IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
+}
+
+#[test]
+fn a_command_record_write_failure_warns_once_and_keeps_the_outcome() {
+    let memory = Scripted::default();
+    memory.0.lock().unwrap().record_write_fails = true;
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    record.stage("implement", None);
+    record.stage("pull request", None);
+    // A later successful atomic write still retains completion facts.
+    memory.0.lock().unwrap().record_write_fails = false;
+    let ended = crate::run::Ended {
+        outcome: Ok(crate::run::Reached {
+            pr_url: "https://github.com/acme/widgets/pull/1".into(),
+            goal: crate::run::Goal::ReadyForReview,
+            log: None,
+            ticket_lines: Vec::new(),
+        }),
+        base_fix: None,
+        advice: Vec::new(),
+    };
+    let ending = crate::command::Ending::Run(ended);
+    let account = crate::run_ending::read(&ending).ok().unwrap();
+    record.finished(&account);
+    record.ended(account.summary());
+    assert_eq!(
+        memory
+            .terminal()
+            .matches("warning: could not keep the Command record:")
+            .count(),
+        1
+    );
+    assert!(
+        memory
+            .file(ACTIVITY)
+            .contains("PR https://github.com/acme/widgets/pull/1 is ready for review")
+    );
+    let facts: CommandRecord =
+        serde_json::from_str(&memory.file(Path::new(COMMAND).with_extension("command.json")))
+            .unwrap();
+    assert_eq!(facts.outcome.as_deref(), Some("ready for review"));
+}
+
+#[test]
+fn a_reused_process_id_is_not_a_live_command() {
+    let mut memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    let facts: CommandRecord =
+        serde_json::from_str(&memory.file(Path::new(COMMAND).with_extension("command.json")))
+            .unwrap();
+    assert!(facts.live(&mut memory));
+    memory.0.lock().unwrap().reused_pid = true;
+    assert!(!facts.live(&mut memory));
 }
 
 fn config(quiet: bool) -> UserConfig {
@@ -246,7 +332,10 @@ fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder(
                 "2026-10-03 12:00:00 {subject} started: {relative}, on claude · opus · high\n2026-10-03 12:00:00 {subject} ended: ready\n"
             )
         );
-        assert_eq!(memory.0.lock().unwrap().files.len(), 2);
+        assert_eq!(
+            memory.0.lock().unwrap().files.len(),
+            if matches!(work, Work::Run(_)) { 3 } else { 2 }
+        );
     }
 }
 

@@ -22,6 +22,9 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Status {
+        json: bool,
+    },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
     /// `email-test`, with the address it was given, if any.
@@ -219,6 +222,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("status") => {
+            return match &args[1..] {
+                [] => Ok(Command::Status { json: false }),
+                [flag] if flag == "--json" => Ok(Command::Status { json: true }),
+                _ => bail!("usage: thirdshift status [--json]"),
+            };
+        }
         Some("--release-summary") => {
             return match &args[1..] {
                 [] => Ok(Command::ReleaseSummary),

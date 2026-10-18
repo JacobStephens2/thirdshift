@@ -257,6 +257,7 @@ impl<'a> Sessions<'a> {
         reports: Option<&ReviewReports>,
     ) -> Result<Ended> {
         let log = self.logs.path(kind);
+        logs::session(kind, &log);
         self.step(format!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
         let prompt = reports.map_or_else(
