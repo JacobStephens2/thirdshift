@@ -1,0 +1,5 @@
+I might want to use a garden metaphor for the thirdshift console style - probably leaning that way to get the users to think about it like a garden management thing - way of tending self improving software for example, more so than a construction metaphor, which can lead to up front big plans rather than something which you curate the environment for self-growth of. Or that thirdshift is like a gardener for your codebase, so maybe flora type visual elements and style in the UI - or alternatively it could just be kept less themed and more just basic informational. Maybe /prototype ui would be a useful skill to run on this at some point in this grilling to decide this. We could /handoff for another agent to create the prototypes.
+
+-
+
+maybe one of the prototypes could be the press floor style we already have for thirdshift.app. No /handoff skill? Are you sure?

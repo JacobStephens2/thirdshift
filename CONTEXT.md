@@ -69,7 +69,7 @@ One invocation of the factory on a single issue that is not a **Spec**, from lau
 A factory-owned checkout, on an **Issue branch** for a **Run** or detached for an **Architecture review**. Acquisition accounts for partial local effects: failed-acquisition recovery rechecks clean-only, instance-specific authority before and after every destructive attempt, including retries, advances only on verified transitions, and retains and names remaining work or uncertain partial effects. Failed-acquisition retention survives later Architecture review attempts. Successful acquisition carries checkout and registration identity through its lifetime; ordinary synchronization, observations and Failed run preservation share acquired-instance checks before and after every Git subprocess attempt, including retries, acting only on that acquired checkout and selected Issue branch and refusing changed or uncertain ownership. Failed run preservation retains work when ownership has changed or is uncertain and finishes after Command interruption without clearing it; ordinary synchronization remains interruptible. Confirmed Self-merge branch deletion uses the captured Launch repository independently of checkout validity. Cleanup checks stage-specific disposal authority before and after every destructive Git attempt, including retries: acquired identity and the captured cleanup head for checkout removal, removed-path absence and an unused expected head for local branch removal, then ref absence and the exact original local subsection for branch configuration removal. Only successful, verified transitions advance disposal; partial failures retain and name every remaining or uncertain resource. Live cleanup finishes after Command interruption without clearing it; stale disposal stays interruptible. Stale Architecture review scratch is disposable only with evidence of successful detached acquisition and unchanged ownership; unmarked or uncertain checkouts are retained.
 
 **Claim**:
-The mark that the factory has taken an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Run** or a **Spec run** starts on it, whether started on its **Issue URL** or by an **Architect run**, a **Pickup run** or a **Security run**. A **Ticket**'s Run in a Spec run and a **Base fix** make none. Ending a Claim finishes even after Command interruption. A failed Security fix keeps its Claim even with nothing on `origin`, so it stays with the Day shift. For other Runs, a Claim is released, `ready-for-agent` put back, only when the Run ends with nothing on `origin` to take over: no **Issue branch** and no pull request. Otherwise it stays while the issue is open, whether its pull request is ready for review or the Run failed, until the **Day shift** relabels it, and thirdshift takes the label off once the issue is closed.
+The mark that the factory has taken an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Run** or a **Spec run** starts on it, whether started on its **Issue URL** or by an **Architect run**, a **Pickup run** or a **Security run**. A **Ticket**'s Run in a Spec run and a **Base fix** make none. Ending a Claim finishes even after Command interruption. A failed Security fix keeps its Claim even with nothing on `origin`, so it stays with the Day shift. For other Runs, a Claim is released, `ready-for-agent` put back, only when the Run ends with nothing on `origin` to take over and was not ended by a **Stop**: no **Issue branch** and no pull request. Otherwise it stays while the issue is open, whether its pull request is ready for review or the Run failed, until the **Day shift** relabels it, and thirdshift takes the label off once the issue is closed.
 _Avoid_: lock (a lock is per machine and ends with its process), assignment
 
 **Spec run**:
@@ -163,7 +163,7 @@ _Avoid_: completion email, alert
 The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Run** started on that machine, such as the **Run notification** address, whether every Run is a **Merge run**, whether a Run may start a **Base fix**, whether a Run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`, and the **Harness**, with a **Model** and **Effort** for each Harness. With no User config, or one that says nothing about a setting, a Run does only what its command asks for.
 
 **Credentials**:
-The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key a **Run notification** is sent with. The key in the environment wins over it; it is what lets a **Run** started from cron, `nohup` or an agent's shell find the key. Only commands that send email read it, so the User config holds no secret.
+The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key a **Run notification** is sent with, and the **Console**'s sign-in emails. The key in the environment wins over it; it is what lets a **Run** started from cron, `nohup` or an agent's shell find the key. Only commands that send email read it, so the User config holds no secret.
 _Avoid_: secrets file, key file
 
 **Setup**:
@@ -228,5 +228,25 @@ Everything one **Run**, **Spec run**, **Architect run**, **Pickup run** or **Sec
 _Avoid_: cron log, output log, run log (a **Run** is one kind of command)
 
 **Activity log**:
-One running record per repository of what the factory did there: a line when a **Run**, **Spec run**, **Architect run**, **Pickup run** or **Security run** starts work, naming its **Command log**, and a line when it ends, with its outcome. A skipped Architect run, Pickup run or Security run writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
+One running record per repository of what the factory did there: a line when a **Run**, **Spec run**, **Architect run**, **Pickup run** or **Security run** starts work, naming its **Command log**, a line when it is given a **Stop**, naming who asked and whether from the CLI or the **Console**, and a line when it ends, with its outcome. A skipped Architect run, Pickup run or Security run writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
 _Avoid_: cron log, pass log, history
+
+**Console**:
+The web page a machine serves that shows every **Command** started on it, live ones first, with each one's child **Runs**, their stages and their logs, and from which a live Command can be stopped. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
+_Avoid_: dashboard, floor, UI, web UI
+
+**Command record**:
+What a **Command** keeps on its machine about where it is: its process, its issue if it has one, each child **Run** with the stages it has been through and when each began, and, once it ends, its outcome. Kept beside its **Command log** after the Command ends, so the **Console** and the CLI can show live and past Commands alike. A record whose process is gone, with no outcome, belongs to a Command that died at its last stage.
+_Avoid_: live record, state file, status file
+
+**Stop**:
+Ending a live **Command** on request, from the CLI or the **Console**. It is an interruption, and the Command cleans up as after any other, but its issue is left for the **Day shift**: labelled `needs-triage`, with `ready-for-agent` not put back, unless the Stop asks for the issue to go back in line. Stop waits for the Command to end, then reports its outcome and any branch or pull request it left. The **Activity log** records who asked for it. A Stop of a **Spec run** stops its **Tickets**' Runs with it.
+_Avoid_: kill, cancel, abort
+
+**Console account**:
+An email address allowed by the **User config** to sign in to a machine's **Console**, with its password. Created, and its password reset, by proving the address with a code sent to it, or from the CLI. Taking an address off the allowlist ends its sign-ins at once; the account is kept, so adding it back restores it.
+_Avoid_: user, login
+
+**Console log**:
+One running record per machine of what happened to its **Console accounts**: sign-ins, failed sign-ins, codes sent, passwords set and sign-outs, each naming the account. What people did to **Commands** goes in the **Activity log** instead, and what they only looked at is recorded nowhere.
+_Avoid_: audit log, access log
