@@ -24,6 +24,7 @@ pub enum Command {
     Setup,
     Status {
         json: bool,
+        all: bool,
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
@@ -224,9 +225,25 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("update") => return Ok(Command::Update),
         Some("status") => {
             return match &args[1..] {
-                [] => Ok(Command::Status { json: false }),
-                [flag] if flag == "--json" => Ok(Command::Status { json: true }),
-                _ => bail!("usage: thirdshift status [--json]"),
+                [] => Ok(Command::Status {
+                    json: false,
+                    all: false,
+                }),
+                [flag] if flag == "--json" => Ok(Command::Status {
+                    json: true,
+                    all: false,
+                }),
+                [flag] if flag == "--all" => Ok(Command::Status {
+                    json: false,
+                    all: true,
+                }),
+                [a, b] if (a == "--all" && b == "--json") || (a == "--json" && b == "--all") => {
+                    Ok(Command::Status {
+                        json: true,
+                        all: true,
+                    })
+                }
+                _ => bail!("usage: thirdshift status [--all] [--json]"),
             };
         }
         Some("--release-summary") => {

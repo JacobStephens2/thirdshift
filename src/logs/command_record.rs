@@ -41,6 +41,8 @@ pub(super) struct CommandRecord {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub started_at: String,
+    #[serde(default)]
+    pub ended_at: Option<String>,
     pub stages: Vec<Stage>,
     pub session_log: Option<PathBuf>,
     pub outcome: Option<String>,
@@ -161,6 +163,7 @@ impl CommandRecord {
             model: harness.model.clone(),
             effort: harness.effort.clone(),
             started_at: now.to_rfc3339(),
+            ended_at: None,
             stages: Vec::new(),
             session_log: None,
             outcome: None,
@@ -178,7 +181,8 @@ impl CommandRecord {
             .find(|stage| StageName::known(&stage.name))
     }
 
-    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>) {
+    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>, now: DateTime<FixedOffset>) {
+        self.ended_at = Some(now.to_rfc3339());
         self.outcome = Some(account.outcome.into());
         self.cause = account
             .ended

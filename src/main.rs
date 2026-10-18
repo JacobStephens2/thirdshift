@@ -75,7 +75,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
-       thirdshift status [--json]                     List this machine's live Commands
+       thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
@@ -128,8 +128,8 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
-        Ok(Command::Status { json }) => {
-            return match logs::status::show(json) {
+        Ok(Command::Status { json, all }) => {
+            return match logs::status::show(json, all) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

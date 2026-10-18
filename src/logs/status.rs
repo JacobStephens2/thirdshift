@@ -1,5 +1,8 @@
 //! Read machine-wide Command records without entering a Launch directory.
 
+mod history;
+
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,7 +19,7 @@ use crate::config::UserConfig;
 struct Status {
     version: u32,
     hostname: String,
-    commands: Vec<Command>,
+    commands: Vec<Entry>,
     idle_passes: Vec<IdlePass>,
 }
 
@@ -28,11 +31,49 @@ struct IdlePass {
 }
 
 #[derive(Serialize)]
+#[serde(untagged)]
+enum Entry {
+    Record(Box<Command>),
+    History(Box<history::Command>),
+}
+
+impl Entry {
+    fn ordering(
+        &self,
+        all: bool,
+    ) -> (
+        bool,
+        std::cmp::Reverse<Option<DateTime<chrono::FixedOffset>>>,
+        &str,
+    ) {
+        let (state, started, repo) = match self {
+            Self::Record(command) => (
+                command.state,
+                command.record.started_at.as_str(),
+                command.record.repository.as_str(),
+            ),
+            Self::History(command) => (
+                command.state,
+                command.started_at.as_str(),
+                command.repository.as_str(),
+            ),
+        };
+        (
+            !all && state != "live",
+            std::cmp::Reverse(DateTime::parse_from_rfc3339(started).ok()),
+            repo,
+        )
+    }
+}
+
+#[derive(Serialize)]
 struct Command {
     #[serde(flatten)]
     record: CommandRecord,
     state: &'static str,
     stage: Option<CurrentStage>,
+    source: &'static str,
+    command_log: PathBuf,
     dispatched: Vec<Command>,
 }
 
@@ -44,7 +85,7 @@ struct CurrentStage {
 }
 
 impl Command {
-    fn new(record: CommandRecord, now: DateTime<Local>) -> Self {
+    fn new(record: CommandRecord, command_log: PathBuf, now: DateTime<Local>) -> Self {
         let state = if record.outcome.is_some() {
             "ended"
         } else if record.live(&mut OnMachine) {
@@ -63,22 +104,26 @@ impl Command {
             record,
             state,
             stage,
+            source: "command_record",
+            command_log,
             dispatched: Vec::new(),
         }
     }
 
     fn print(&self, indent: &str) {
         let facts = &self.record;
-        let stage = self.stage.as_ref().map_or_else(
-            || "starting".into(),
-            |stage| {
-                if self.state == "died" {
-                    format!("died at {}", stage.name)
-                } else {
-                    format!("{} · {}", stage.name, age(stage.age_seconds))
-                }
-            },
-        );
+        let stage = facts.outcome.clone().unwrap_or_else(|| {
+            self.stage.as_ref().map_or_else(
+                || "starting".into(),
+                |stage| {
+                    if self.state == "died" {
+                        format!("died at {}", stage.name)
+                    } else {
+                        format!("{} · {}", stage.name, age(stage.age_seconds))
+                    }
+                },
+            )
+        });
         let subject = match &facts.issue {
             Some(issue) => format!(
                 "{}#{} {}",
@@ -100,56 +145,71 @@ impl Command {
     }
 }
 
-pub fn show(json: bool) -> Result<()> {
+pub fn show(json: bool, all: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let now = Local::now();
     let mut commands = Vec::new();
     let mut idle_passes = Vec::new();
     for owner in directories(&config.logs_dir)? {
         for repo in directories(&owner)? {
+            let mut covered = HashSet::new();
             idle_passes.extend(read_idle_passes(&repo)?);
             for folder in directories(&repo.join("commands"))? {
                 for entry in entries(&folder)? {
-                    if !entry
-                        .file_name()
-                        .to_string_lossy()
-                        .ends_with(".command.json")
+                    if !entry.file_type()?.is_file()
+                        || !entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".command.json")
                     {
                         continue;
                     }
                     let path = entry.path();
                     let bytes = fs::read(&path)
                         .with_context(|| format!("could not read {}", path.display()))?;
-                    let Ok(tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
+                    let Ok(mut tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
                         continue;
                     };
-                    let record = tree.command;
-                    if record.version != 1 || record.outcome.is_some() {
+                    let record = &mut tree.command;
+                    if record.version != 1 {
                         continue;
                     }
-                    let mut command = Command::new(record, now);
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    let command_log = path
+                        .with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)));
+                    covered.insert(command_log.clone());
+                    // Records written before completion times existed were last
+                    // replaced when their outcome was recorded.
+                    if record.outcome.is_some() && record.ended_at.is_none() {
+                        record.ended_at = entry
+                            .metadata()?
+                            .modified()
+                            .ok()
+                            .map(|time| DateTime::<Local>::from(time).to_rfc3339());
+                    }
+                    if !all && record.outcome.is_some() && !recent(record.ended_at.as_deref(), now)
+                    {
+                        continue;
+                    }
+                    let mut command = Command::new(tree.command, command_log.clone(), now);
                     command.dispatched = tree
                         .dispatched
                         .into_iter()
-                        .map(|record| Command::new(record, now))
+                        .map(|record| Command::new(record, command_log.clone(), now))
                         .collect();
-                    commands.push(command);
+                    commands.push(Entry::Record(Box::new(command)));
                 }
             }
+            commands.extend(
+                history::read(&repo, &covered)?
+                    .into_iter()
+                    .filter(|command| all || recent(command.ended_at.as_deref(), now))
+                    .map(|command| Entry::History(Box::new(command))),
+            );
         }
     }
-    commands.sort_by(|a, b| {
-        (
-            a.state != "live",
-            &a.record.repository,
-            &a.record.started_at,
-        )
-            .cmp(&(
-                b.state != "live",
-                &b.record.repository,
-                &b.record.started_at,
-            ))
-    });
+    commands.sort_by(|a, b| a.ordering(all).cmp(&b.ordering(all)));
     idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
     let status = Status {
         version: 1,
@@ -161,14 +221,23 @@ pub fn show(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
-        for command in &status.commands {
-            command.print("");
+        for entry in status.commands {
+            match entry {
+                Entry::Record(command) => command.print(""),
+                Entry::History(command) => command.print(),
+            }
         }
         for pass in status.idle_passes {
             println!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason);
         }
     }
     Ok(())
+}
+
+fn recent(ended: Option<&str>, now: DateTime<Local>) -> bool {
+    ended
+        .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
+        .is_some_and(|ended| ended >= now - chrono::Duration::hours(24))
 }
 
 fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
