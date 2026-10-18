@@ -5,10 +5,12 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
+use super::command_record::{CommandRecord, Stage, StageName};
 use super::effects::{Outside, Stream};
 use super::{Begin, CommandKind, Pass, Work, root_under};
 use crate::config::UserConfig;
@@ -17,6 +19,7 @@ use crate::issue::Repo;
 use crate::progress;
 
 const STAMP_FORMAT: &str = "%Y%m%dT%H%M%S%z";
+static NEXT_RECORD: AtomicU64 = AtomicU64::new(0);
 
 pub(super) struct Record<O: Outside> {
     outside: O,
@@ -28,6 +31,8 @@ pub(super) struct Record<O: Outside> {
     command_log: Log<O::CommandLog>,
     activity_started: Option<Started>,
     activity_warned: bool,
+    command_record: Option<(PathBuf, CommandRecord)>,
+    record_warned: bool,
 }
 
 enum Log<W> {
@@ -72,6 +77,8 @@ impl<O: Outside> Record<O> {
             command_log: Log::NotKept,
             activity_started: None,
             activity_warned: false,
+            command_record: None,
+            record_warned: false,
         }
     }
 
@@ -119,7 +126,33 @@ impl<O: Outside> Record<O> {
         }
         let root = self.root(&work.repo());
         let stamp = self.stamp();
+        let began = matches!(self.command_log, Log::Held { .. });
         self.keep(work.command_log(&root, &stamp));
+        if began
+            && self.command == CommandKind::Issue
+            && let Work::Run(issue) = work
+        {
+            let mut facts = CommandRecord::new(issue, harness, self.outside.now());
+            facts.hostname = self.outside.hostname();
+            facts.process_start = self
+                .outside
+                .process_start(facts.process_id)
+                .unwrap_or_default();
+            // Command-log stamps have second precision. A process identity
+            // separates concurrent Commands, and a serial separates owned
+            // recorders within one process (including effects-adapter tests).
+            let owner = format!(
+                "{}-{}-{}",
+                facts.process_id,
+                facts.process_start.replace(':', "-"),
+                NEXT_RECORD.fetch_add(1, Ordering::Relaxed)
+            );
+            let path = work
+                .command_log(&root, &stamp)
+                .with_extension(format!("{owner}.command.json"));
+            self.command_record = Some((path, facts));
+            self.stage(StageName::Implement, None);
+        }
         self.step(format_args!("sessions run on {harness}"));
         let command_log = match self.command_log_path() {
             Some(path) => path
@@ -156,6 +189,70 @@ impl<O: Outside> Record<O> {
             let root = started.root.clone();
             let line = format!("{} ended: {outcome}", started.subject());
             self.activity_write(&root, &line, None);
+        }
+    }
+
+    pub(super) fn issue_title(&mut self, title: Option<String>) {
+        if let Some((_, facts)) = &mut self.command_record {
+            facts.issue.title = title;
+            self.write_record();
+        }
+    }
+
+    pub(super) fn issue_branch(&mut self, branch: Option<&str>) {
+        if let Some((_, facts)) = &mut self.command_record {
+            facts.issue_branch = branch.map(String::from);
+            self.write_record();
+        }
+    }
+
+    pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
+        let name = stage.name();
+        let Some((_, facts)) = &mut self.command_record else {
+            return;
+        };
+        if let Some(log) = log {
+            facts.session_log = Some(log.into());
+        }
+        if facts.stages.last().is_none_or(|stage| stage.name != name) {
+            facts.stages.push(Stage {
+                name: name.into(),
+                began_at: self.outside.now().to_rfc3339(),
+                session_log: facts.session_log.clone(),
+            });
+        } else if let Some(stage) = facts.stages.last_mut() {
+            stage.session_log = facts.session_log.clone();
+        }
+        self.write_record();
+    }
+
+    pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
+        if let Some((_, facts)) = &mut self.command_record {
+            facts.outcome = Some(account.outcome.into());
+            facts.cause = account
+                .ended
+                .as_ref()
+                .err()
+                .map(|cause| cause.full().into());
+            facts.pull_request = account.pr_url.map(String::from);
+            self.write_record();
+        }
+    }
+
+    fn write_record(&mut self) {
+        let Some((path, facts)) = &self.command_record else {
+            return;
+        };
+        let written = serde_json::to_vec_pretty(facts)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| self.outside.replace_record(path, &bytes));
+        if let Err(error) = written
+            && !self.record_warned
+        {
+            self.record_warned = true;
+            self.step(format_args!(
+                "warning: could not keep the Command record: {error:#}"
+            ));
         }
     }
 

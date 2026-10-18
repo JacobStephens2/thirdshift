@@ -23,12 +23,25 @@ struct Memory {
     activity_read_fails: bool,
     activity_write_fails: bool,
     terminal_fails: bool,
+    record_write_fails: bool,
+    reused_pid: bool,
 }
 
 #[derive(Clone, Default)]
 struct Scripted(Arc<Mutex<Memory>>);
 
 impl Scripted {
+    fn command_record(&self) -> CommandRecord {
+        let memory = self.0.lock().unwrap();
+        let records: Vec<_> = memory
+            .files
+            .iter()
+            .filter(|(path, _)| path.to_string_lossy().ends_with(".command.json"))
+            .collect();
+        assert_eq!(records.len(), 1);
+        serde_json::from_str(records[0].1).unwrap()
+    }
+
     fn terminal(&self) -> String {
         self.0
             .lock()
@@ -82,6 +95,31 @@ impl Write for Writer {
 
 impl Outside for Scripted {
     type CommandLog = Writer;
+
+    fn hostname(&mut self) -> String {
+        "factory".into()
+    }
+    fn process_start(&mut self, _: u32) -> Option<String> {
+        Some(
+            if self.0.lock().unwrap().reused_pid {
+                "start-2"
+            } else {
+                "start-1"
+            }
+            .into(),
+        )
+    }
+    fn replace_record(&mut self, path: &Path, bytes: &[u8]) -> Result<()> {
+        if self.0.lock().unwrap().record_write_fails {
+            anyhow::bail!("disk full");
+        }
+        self.0
+            .lock()
+            .unwrap()
+            .files
+            .insert(path.into(), String::from_utf8(bytes.to_vec())?);
+        Ok(())
+    }
 
     fn now(&mut self) -> DateTime<FixedOffset> {
         self.0
@@ -145,6 +183,96 @@ impl Outside for Scripted {
 
 fn issue() -> IssueUrl {
     IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
+}
+
+#[test]
+fn a_command_record_write_failure_warns_once_and_keeps_the_outcome() {
+    let memory = Scripted::default();
+    memory.0.lock().unwrap().record_write_fails = true;
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    record.stage(StageName::Implement, None);
+    record.stage(StageName::PullRequest, None);
+    // A later successful atomic write still retains completion facts.
+    memory.0.lock().unwrap().record_write_fails = false;
+    let ended = crate::run::Ended {
+        outcome: Ok(crate::run::Reached {
+            pr_url: "https://github.com/acme/widgets/pull/1".into(),
+            goal: crate::run::Goal::ReadyForReview,
+            log: None,
+            ticket_lines: Vec::new(),
+        }),
+        base_fix: None,
+        advice: Vec::new(),
+    };
+    let ending = crate::command::Ending::Run(ended);
+    let account = crate::run_ending::read(&ending).ok().unwrap();
+    record.finished(&account);
+    record.ended(account.summary());
+    assert_eq!(
+        memory
+            .terminal()
+            .matches("warning: could not keep the Command record:")
+            .count(),
+        1
+    );
+    assert!(
+        memory
+            .file(ACTIVITY)
+            .contains("PR https://github.com/acme/widgets/pull/1 is ready for review")
+    );
+    let facts = memory.command_record();
+    assert_eq!(facts.outcome.as_deref(), Some("ready for review"));
+}
+
+#[test]
+fn a_reused_process_id_is_not_a_live_command() {
+    let mut memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    let facts = memory.command_record();
+    assert!(facts.live(&mut memory));
+    memory.0.lock().unwrap().reused_pid = true;
+    assert!(!facts.live(&mut memory));
+}
+
+#[test]
+fn commands_started_on_the_same_issue_in_one_second_keep_separate_records() {
+    let memory = Scripted::default();
+    let issue = issue();
+    let mut first = Record::new(memory.clone());
+    first.begin(Begin::Run(&issue));
+    first.configured(&config(false));
+    first.started(Work::Run(&issue), &harness());
+    first.issue_title(Some("first Command".into()));
+
+    let mut second = Record::new(memory.clone());
+    second.begin(Begin::Run(&issue));
+    second.configured(&config(false));
+    second.started(Work::Run(&issue), &harness());
+    second.issue_title(Some("second Command".into()));
+
+    // The effects adapter keeps its clock fixed, so both owners have the same
+    // issue, repository, and second-resolution Command-log stamp.
+    let records: Vec<CommandRecord> = memory
+        .0
+        .lock()
+        .unwrap()
+        .files
+        .iter()
+        .filter(|(path, _)| path.to_string_lossy().ends_with(".command.json"))
+        .map(|(_, bytes)| serde_json::from_str(bytes).unwrap())
+        .collect();
+    let mut titles: Vec<_> = records
+        .iter()
+        .map(|record| record.issue.title.as_deref().unwrap())
+        .collect();
+    titles.sort();
+    assert_eq!(titles, ["first Command", "second Command"]);
 }
 
 fn config(quiet: bool) -> UserConfig {
@@ -246,7 +374,10 @@ fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder(
                 "2026-10-03 12:00:00 {subject} started: {relative}, on claude · opus · high\n2026-10-03 12:00:00 {subject} ended: ready\n"
             )
         );
-        assert_eq!(memory.0.lock().unwrap().files.len(), 2);
+        assert_eq!(
+            memory.0.lock().unwrap().files.len(),
+            if matches!(work, Work::Run(_)) { 3 } else { 2 }
+        );
     }
 }
 

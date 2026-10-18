@@ -30,12 +30,34 @@ pub(super) trait Outside {
     fn command_log_exists(&mut self, path: &Path) -> bool;
     fn activity_tail(&mut self, path: &Path, limit: u64) -> Result<Tail>;
     fn append_activity(&mut self, path: &Path, line: &str) -> Result<()>;
+    fn hostname(&mut self) -> String;
+    fn process_start(&mut self, pid: u32) -> Option<String>;
+    fn replace_record(&mut self, path: &Path, bytes: &[u8]) -> Result<()>;
 }
 
 pub(super) struct OnMachine;
 
 impl Outside for OnMachine {
     type CommandLog = File;
+
+    fn hostname(&mut self) -> String {
+        crate::host::name().unwrap_or_else(|| "unknown".into())
+    }
+
+    fn process_start(&mut self, pid: u32) -> Option<String> {
+        super::process_identity::start(pid)
+    }
+
+    fn replace_record(&mut self, path: &Path, bytes: &[u8]) -> Result<()> {
+        let parent = path
+            .parent()
+            .context("Command record has no parent directory")?;
+        std::fs::create_dir_all(parent)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(bytes)?;
+        temporary.persist(path)?;
+        Ok(())
+    }
 
     fn now(&mut self) -> DateTime<FixedOffset> {
         Local::now().fixed_offset()

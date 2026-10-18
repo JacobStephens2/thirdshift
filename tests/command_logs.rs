@@ -133,7 +133,10 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
         result.stderr
     );
     assert_eq!(
-        logs_in(&scenario, "commands/issue"),
+        logs_in(&scenario, "commands/issue")
+            .into_iter()
+            .filter(|name| !name.ends_with(".command.json"))
+            .collect::<Vec<_>>(),
         [
             format!("7-{stamp}-implement.jsonl"),
             format!("7-{stamp}-implement.models.json"),

@@ -18,6 +18,7 @@ Start with the issue's terms in `CONTEXT.md`, then use this index to find their 
 | Session prompt, Factory skills | `src/prompt.rs`; `src/skills.rs`; `skills/` | `src/skills/tests.rs`, `tests/packaging.rs` |
 | Session log, Resume | `src/session.rs` and `src/session/` | `src/session/execution_tests.rs`, `tests/background_work.rs` |
 | Command log, Activity log | `src/logs.rs`; `src/logs/recording.rs` — `Record` | `src/logs/recording/tests.rs`, `tests/command_logs.rs`, `tests/activity_log.rs` |
+| Command record, status | `src/logs/recording.rs`; `src/logs/command_record.rs`; `src/logs/status.rs`; `src/logs/process_identity.rs` | `tests/status.rs`, `src/logs/recording/tests.rs` |
 | User config, Setup | `src/config.rs`; `src/setup.rs` | `tests/user_config.rs`, `tests/setup.rs` |
 | Architecture review, Architect run | `src/architect.rs` | `tests/architect_run.rs` |
 | Security audit, Security review, Security run | `src/security.rs` and `src/security/` | `tests/security_review.rs`, `tests/security_run.rs` |

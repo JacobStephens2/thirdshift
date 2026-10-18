@@ -392,6 +392,7 @@ pub(crate) fn check_local_branch(
 
 impl Drop for Worktree {
     fn drop(&mut self) {
+        crate::logs::stage(crate::logs::Stage::Cleanup);
         self.checkout.cleanup(&self.launch, self.kept);
     }
 }

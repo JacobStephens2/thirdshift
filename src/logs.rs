@@ -13,8 +13,11 @@
 
 mod activity;
 mod command_log;
+mod command_record;
 mod effects;
+mod process_identity;
 mod recording;
+pub mod status;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
@@ -25,6 +28,7 @@ use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 
 use activity::Kind;
+pub use command_record::StageName as Stage;
 use effects::OnMachine;
 use recording::Record;
 
@@ -154,6 +158,42 @@ pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
 /// `activity.quiet_skips` its lines stay held.
 pub fn ended(outcome: impl Display) {
     record().ended(outcome);
+}
+
+/// Add the Run's title once its work has started.
+pub fn issue_title(title: Option<String>) {
+    record().issue_title(title);
+}
+
+/// Begin a stage, retaining its start time until the next transition.
+pub fn stage(stage: Stage) {
+    record().stage(stage, None);
+}
+
+/// Keep the current Session log, including a Resume's own log.
+pub fn session(kind: &str, path: &Path) {
+    let stage = if kind.ends_with("-resume") {
+        Stage::Resume
+    } else if kind.starts_with("repair-") {
+        Stage::Repair
+    } else if kind == "security-review" {
+        Stage::SecurityReview
+    } else if kind == "implement" {
+        Stage::Implement
+    } else {
+        return;
+    };
+    record().stage(stage, Some(path));
+}
+
+/// The selected Issue branch, retained unless completion says it was removed.
+pub fn issue_branch(branch: Option<&str>) {
+    record().issue_branch(branch);
+}
+
+/// Complete the durable facts from the same account used by other renderers.
+pub fn finished(account: &crate::run_ending::Account<'_>) {
+    record().finished(account);
 }
 
 /// Print the lines held from the terminal, as before a failure, and print
