@@ -28,6 +28,7 @@ use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 
 use activity::Kind;
+pub use command_record::StageName as Stage;
 use effects::OnMachine;
 use recording::Record;
 
@@ -165,26 +166,28 @@ pub fn issue_title(title: Option<String>) {
 }
 
 /// Begin a stage, retaining its start time until the next transition.
-pub fn stage(name: &str) {
-    record().stage(name, None);
+pub fn stage(stage: Stage) {
+    record().stage(stage, None);
 }
 
 /// Keep the current Session log, including a Resume's own log.
 pub fn session(kind: &str, path: &Path) {
-    let name = if kind.ends_with("-resume") {
-        "Resume"
+    let stage = if kind.ends_with("-resume") {
+        Stage::Resume
     } else if kind.starts_with("repair-") {
-        "Repair"
+        Stage::Repair
     } else if kind == "security-review" {
-        "Security review"
+        Stage::SecurityReview
+    } else if kind == "implement" {
+        Stage::Implement
     } else {
-        kind
+        return;
     };
-    record().stage(name, Some(path));
+    record().stage(stage, Some(path));
 }
 
 /// The selected Issue branch, retained unless completion says it was removed.
-pub fn issue_branch(branch: &str) {
+pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
 }
 

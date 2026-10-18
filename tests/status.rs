@@ -138,6 +138,63 @@ fn a_failed_run_retains_its_cause_and_does_not_stay_live() {
 }
 
 #[test]
+fn failed_acquisition_does_not_claim_a_branch_was_left() {
+    let scenario = Scenario::new();
+    fs::create_dir(scenario.path("work/widgets-issue-7")).unwrap();
+    fs::write(scenario.path("work/widgets-issue-7/manual.txt"), "keep me").unwrap();
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert_eq!(scenario.origin_log("issue-7"), None);
+    let local = std::process::Command::new("git")
+        .arg("-C")
+        .arg(scenario.launch_dir())
+        .args(["show-ref", "--verify", "refs/heads/issue-7"])
+        .output()
+        .unwrap();
+    assert!(!local.status.success());
+    assert_eq!(
+        retained(&scenario)["issue_branch"],
+        Value::Null,
+        "{}",
+        ended.stderr
+    );
+}
+
+#[test]
+fn refused_remote_deletion_keeps_branch_in_record() {
+    let scenario = Scenario::new();
+    scenario.repo_has_hook(&scenario.origin_dir(), "pre-receive",
+        "#!/bin/sh\nwhile read old new ref; do\n  if [ \"$new\" = 0000000000000000000000000000000000000000 ]; then exit 1; fi\ndone\n");
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&["merge", &scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    assert!(scenario.origin_log("issue-7").is_some(), "{}", ended.stderr);
+    assert_eq!(
+        retained(&scenario)["issue_branch"],
+        "issue-7",
+        "{}",
+        ended.stderr
+    );
+}
+
+#[test]
+fn failed_continuation_acquisition_keeps_existing_remote_branch() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("issue-7", "main", &["Prior work"]);
+    fs::create_dir(scenario.path("work/widgets-issue-7")).unwrap();
+    fs::write(scenario.path("work/widgets-issue-7/manual.txt"), "keep me").unwrap();
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert!(scenario.origin_log("issue-7").is_some(), "{}", ended.stderr);
+    assert_eq!(
+        retained(&scenario)["issue_branch"],
+        "issue-7",
+        "{}",
+        ended.stderr
+    );
+}
+
+#[test]
 fn a_killed_run_shows_as_died_at_its_last_stage() {
     let scenario = Scenario::new();
     scenario.agent_does_for(

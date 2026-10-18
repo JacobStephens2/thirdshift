@@ -34,9 +34,9 @@ pub(super) fn start(pid: u32) -> Option<String> {
     }
     // SAFETY: proc_pidinfo returned a complete initialized proc_bsdinfo.
     let info = unsafe { info.assume_init() };
-    if info.pbi_status == 5 {
+    if info.pbi_status == libc::SZOMB {
         return None;
-    } // SZOMB
+    }
     Some(format!(
         "{}:{}",
         info.pbi_start_tvsec, info.pbi_start_tvusec

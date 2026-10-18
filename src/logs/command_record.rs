@@ -43,6 +43,49 @@ pub(super) struct Stage {
     pub session_log: Option<PathBuf>,
 }
 
+/// Internal transitions are typed; persisted names stay tolerant of new stages.
+#[derive(Clone, Copy)]
+pub enum StageName {
+    Implement,
+    Resume,
+    SecurityReview,
+    PullRequest,
+    CiWatch,
+    Repair,
+    SelfMerge,
+    Cleanup,
+}
+
+impl StageName {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Implement => "implement",
+            Self::Resume => "Resume",
+            Self::SecurityReview => "Security review",
+            Self::PullRequest => "pull request",
+            Self::CiWatch => "CI watch",
+            Self::Repair => "Repair",
+            Self::SelfMerge => "Self-merge",
+            Self::Cleanup => "cleanup",
+        }
+    }
+
+    fn known(name: &str) -> bool {
+        [
+            Self::Implement,
+            Self::Resume,
+            Self::SecurityReview,
+            Self::PullRequest,
+            Self::CiWatch,
+            Self::Repair,
+            Self::SelfMerge,
+            Self::Cleanup,
+        ]
+        .into_iter()
+        .any(|stage| stage.name() == name)
+    }
+}
+
 impl CommandRecord {
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
         self.outcome.is_none()
@@ -81,20 +124,6 @@ impl CommandRecord {
         self.stages
             .iter()
             .rev()
-            .find(|stage| known_stage(&stage.name))
+            .find(|stage| StageName::known(&stage.name))
     }
-}
-
-pub(super) fn known_stage(name: &str) -> bool {
-    matches!(
-        name,
-        "implement"
-            | "Resume"
-            | "Security review"
-            | "pull request"
-            | "CI watch"
-            | "Repair"
-            | "Self-merge"
-            | "cleanup"
-    )
 }

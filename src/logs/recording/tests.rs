@@ -182,8 +182,8 @@ fn a_command_record_write_failure_warns_once_and_keeps_the_outcome() {
     record.begin(Begin::Run(&issue()));
     record.configured(&config(false));
     record.started(Work::Run(&issue()), &harness());
-    record.stage("implement", None);
-    record.stage("pull request", None);
+    record.stage(StageName::Implement, None);
+    record.stage(StageName::PullRequest, None);
     // A later successful atomic write still retains completion facts.
     memory.0.lock().unwrap().record_write_fails = false;
     let ended = crate::run::Ended {

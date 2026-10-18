@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
-use super::command_record::{CommandRecord, Stage, known_stage};
+use super::command_record::{CommandRecord, Stage, StageName};
 use super::effects::{Outside, Stream};
 use super::{Begin, CommandKind, Pass, Work, root_under};
 use crate::config::UserConfig;
@@ -140,7 +140,7 @@ impl<O: Outside> Record<O> {
                 .process_start(facts.process_id)
                 .unwrap_or_default();
             self.command_record = Some((path, facts));
-            self.stage("implement", None);
+            self.stage(StageName::Implement, None);
         }
         self.step(format_args!("sessions run on {harness}"));
         let command_log = match self.command_log_path() {
@@ -188,17 +188,15 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    pub(super) fn issue_branch(&mut self, branch: &str) {
+    pub(super) fn issue_branch(&mut self, branch: Option<&str>) {
         if let Some((_, facts)) = &mut self.command_record {
-            facts.issue_branch = Some(branch.into());
+            facts.issue_branch = branch.map(String::from);
             self.write_record();
         }
     }
 
-    pub(super) fn stage(&mut self, name: &str, log: Option<&Path>) {
-        if !known_stage(name) {
-            return;
-        }
+    pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
+        let name = stage.name();
         let Some((_, facts)) = &mut self.command_record else {
             return;
         };
@@ -226,13 +224,6 @@ impl<O: Outside> Record<O> {
                 .err()
                 .map(|cause| cause.full().into());
             facts.pull_request = account.pr_url.map(String::from);
-            if account.outcome == "merged"
-                || account.recovery.is_some_and(|recovery| {
-                    recovery.preservation == crate::recovery::Preservation::None
-                })
-            {
-                facts.issue_branch = None;
-            }
             self.write_record();
         }
     }
