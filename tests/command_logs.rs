@@ -48,14 +48,15 @@ fn run_in_zone(scenario: &Scenario, args: &[&str], env: &[(&str, &str)]) -> RunR
     scenario.run_with_env(args, &[&[ZONE], env].concat())
 }
 
-/// The names of the files in `folder` under the logs, sorted, none if it is
-/// missing.
+/// Log file names in `folder`, sorted, excluding retained Command records;
+/// none if the folder is missing.
 fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
     let Ok(entries) = fs::read_dir(scenario.path(LOGS).join(folder)) else {
         return Vec::new();
     };
     let mut names: Vec<String> = entries
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| !name.ends_with(".command.json"))
         .collect();
     names.sort();
     names
