@@ -18,6 +18,9 @@ Start with the issue's terms in `CONTEXT.md`, then use this index to find their 
 | Session prompt, Factory skills | `src/prompt.rs`; `src/skills.rs`; `skills/` | `src/skills/tests.rs`, `tests/packaging.rs` |
 | Session log, Resume | `src/session.rs` and `src/session/` | `src/session/execution_tests.rs`, `tests/background_work.rs` |
 | Command log, Activity log | `src/logs.rs`; `src/logs/recording.rs` — `Record` | `src/logs/recording/tests.rs`, `tests/command_logs.rs`, `tests/activity_log.rs` |
+| Command record, status | `src/logs/recording.rs`; `src/logs/command_record.rs`; `src/logs/status.rs` and `src/logs/status/history.rs`; `src/logs/process_identity.rs` | `tests/status.rs`, `src/logs/recording/tests.rs` |
+| Command naming, show, logs | `src/logs/status/inspect.rs` — Command resolution, detailed state, Session selection and log following | `tests/show_logs.rs` |
+| Stop | `src/logs/stop.rs` — request, signaling and waiting; `src/claim.rs` — Stop endings | `tests/stop.rs`; inline Claim and Stop tests |
 | User config, Setup | `src/config.rs`; `src/setup.rs` | `tests/user_config.rs`, `tests/setup.rs` |
 | Architecture review, Architect run | `src/architect.rs` | `tests/architect_run.rs` |
 | Security audit, Security review, Security run | `src/security.rs` and `src/security/` | `tests/security_review.rs`, `tests/security_run.rs` |

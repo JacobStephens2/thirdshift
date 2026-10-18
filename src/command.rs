@@ -154,6 +154,7 @@ impl Started {
             Err(skip) => return run_ending::show_skip(skip),
         };
         logs::ended(account.summary());
+        logs::finished(&account);
         let elapsed = match &ending {
             Ending::Run(_)
             | Ending::Architect {

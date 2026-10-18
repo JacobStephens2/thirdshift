@@ -181,14 +181,18 @@ fn run(
         logs: Logs::of_run(issue),
         harness: &asks.harness,
         claim: None,
+        issue_branch: None,
+        child: started_by.child().is_some(),
     };
-    start(
+    let outcome = start(
         &mut outside,
         issue,
         asks,
         started_by,
         directory.checked_out(),
-    )
+    );
+    outside.record_branch_left();
+    outcome
 }
 
 /// [`run`], once the Launch directory is open, with `checked_out` the branch
@@ -223,9 +227,10 @@ fn start<O: Outside>(
         Some(_) => Vec::new(),
         None => outside.tickets()?,
     };
-    outside.started(match tickets.is_empty() {
-        true => Work::Run(issue),
-        false => Work::SpecRun(issue),
+    outside.started(match (started_by.child(), tickets.is_empty()) {
+        (Some(Kind::BaseFix { .. }), _) => Work::BaseFix(issue),
+        (_, true) => Work::Run(issue),
+        (_, false) => Work::SpecRun(issue),
     });
     if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(
@@ -393,9 +398,40 @@ struct LaunchAndGitHub<'a> {
     logs: Logs,
     harness: &'a Choice,
     claim: Option<Claim<'a>>,
+    issue_branch: Option<String>,
+    child: bool,
 }
 
 impl LaunchAndGitHub<'_> {
+    /// Observe retained resources after acquisition, preservation and cleanup
+    /// have finished. Neither success nor failure implies branch absence.
+    fn record_branch_left(&self) {
+        let Some(branch) = self.issue_branch.as_deref() else {
+            return;
+        };
+        let git = self.directory.git().completion();
+        let observed = (|| -> Result<bool> {
+            let reference = format!("refs/heads/{branch}");
+            if git
+                .run(&["for-each-ref", "--format=%(refname)", &reference])?
+                .lines()
+                .any(|name| name == reference)
+            {
+                return Ok(true);
+            }
+            git.on_origin(branch)
+        })();
+        match observed {
+            Ok(left) => logs::issue_branch(left.then_some(branch)),
+            Err(error) => {
+                logs::issue_branch(Some(branch));
+                progress::step(format_args!(
+                    "warning: could not check whether Issue branch {branch} remains: {error:#}"
+                ));
+            }
+        }
+    }
+
     /// The Delivery of the issue into the Base branch `base`.
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
@@ -424,10 +460,16 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
 
     fn started(&mut self, work: Work) {
         logs::started(work, self.harness);
+        if self.child {
+            logs::issue_title(GitHub::new().issue_title(self.issue).ok());
+        }
     }
 
     fn select(&mut self) -> Result<Selection> {
-        branch::select(self.directory.git(), &GitHub::new(), self.issue)
+        let selection = branch::select(self.directory.git(), &GitHub::new(), self.issue)?;
+        self.issue_branch = Some(selection.branch().into());
+        logs::issue_branch(Some(selection.branch()));
+        Ok(selection)
     }
 
     fn prepare_base_branch(&mut self, named: Option<&str>, pull: bool) -> Result<String> {
@@ -443,7 +485,14 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn make_claim(&mut self) -> Result<()> {
-        self.claim = Some(claim::make(self.issue, self.directory.git())?);
+        self.claim = Some(claim::make(
+            self.issue,
+            self.directory.git(),
+            self.issue_branch
+                .as_deref()
+                .expect("branch selected before Claim"),
+        )?);
+        logs::issue_title(GitHub::new().issue_title(self.issue).ok());
         Ok(())
     }
 
@@ -602,7 +651,7 @@ mod tests {
 
         fn started(&mut self, work: Work) {
             let spec_run = match work {
-                Work::Run(_) => false,
+                Work::Run(_) | Work::BaseFix(_) => false,
                 Work::SpecRun(_) => true,
                 Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
                     panic!("not a Run's work")

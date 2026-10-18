@@ -171,7 +171,7 @@ impl Cause {
 
 impl<'a> Account<'a> {
     /// A Run or a Spec run that `ended`.
-    fn of_run(ended: &'a Ended) -> Self {
+    pub(crate) fn of_run(ended: &'a Ended) -> Self {
         let base_fix = ended.base_fix.as_deref();
         match &ended.outcome {
             Ok(reached) => Account {

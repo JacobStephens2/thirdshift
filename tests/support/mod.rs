@@ -529,6 +529,18 @@ impl Scenario {
         self.spawn_until_started(command, started)
     }
 
+    /// Start a reader with stdout in a file, so tests can observe streaming
+    /// output before the Command being read ends. The caller must finish it.
+    pub fn read_to_file(&self, args: &[&str], output: &Path) -> HeldRun {
+        let mut command = self.command(args);
+        command.stdout(fs::File::create(output).unwrap());
+        command.stderr(Stdio::piped());
+        HeldRun {
+            child: command.spawn().unwrap(),
+            exited: false,
+        }
+    }
+
     /// Run a copy of thirdshift, `installed/thirdshift` in the scenario root,
     /// as an installed one is run, and call `replace` with the copy's path
     /// once a session whose script has [`Scenario::waits_to_be_replaced`]
@@ -1313,6 +1325,17 @@ test -f {root}/{COPY_REPLACED}
                     .is_some_and(|ext| ext == extension)
             })
             .collect()
+    }
+
+    /// The single retained Command record in a command folder.
+    pub fn command_record(&self, folder: &str) -> Value {
+        let records: Vec<_> = self
+            .entries(folder)
+            .into_iter()
+            .filter(|name| name.ends_with(".command.json"))
+            .collect();
+        assert_eq!(records.len(), 1, "{records:?}");
+        serde_json::from_slice(&fs::read(self.path(folder).join(&records[0])).unwrap()).unwrap()
     }
 
     /// Point the launch clone's origin at `url`, another spelling of the
