@@ -307,7 +307,7 @@ impl<O: Outside> Record<O> {
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
         if let Some((_, tree)) = &mut self.command_record {
-            tree.command.finish(account);
+            tree.command.finish(account, self.outside.now());
             self.write_record();
         }
     }
@@ -316,7 +316,7 @@ impl<O: Outside> Record<O> {
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.dispatched.last_mut()
         {
-            dispatched.finish(account);
+            dispatched.finish(account, self.outside.now());
             self.write_record();
         }
     }
