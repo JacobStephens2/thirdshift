@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, NaiveTime};
 use serde::Serialize;
 
 use crate::logs::activity::TIME_FORMAT;
@@ -32,6 +32,36 @@ pub(super) struct Command {
 }
 
 impl Command {
+    fn from_logs(
+        repository: &str,
+        kind: &str,
+        number: Option<u64>,
+        started: DateTime<FixedOffset>,
+        source: &'static str,
+    ) -> Self {
+        Self {
+            repository: repository.into(),
+            kind: kind.into(),
+            issue: number.map(|number| Issue {
+                number,
+                url: format!("https://github.com/{repository}/issues/{number}"),
+                title: None,
+            }),
+            harness: None,
+            model: None,
+            effort: None,
+            started_at: started.to_rfc3339(),
+            ended_at: None,
+            outcome: None,
+            command_log: None,
+            session_logs: Vec::new(),
+            stages: [],
+            stage: None,
+            source,
+            state: "unknown",
+        }
+    }
+
     pub fn print(&self) {
         let issue = self
             .issue
@@ -54,6 +84,50 @@ struct Started {
     offset: FixedOffset,
     log: String,
     command: Command,
+}
+
+impl Started {
+    fn ending_distance(&self, time: NaiveDateTime, summary: &str) -> Option<i64> {
+        let ending = summary
+            .strip_prefix("plan ")
+            .and_then(|summary| summary.split_once(" dispatched: "))
+            .map_or(summary, |(_, ending)| ending);
+        let ending = ending
+            .strip_prefix("failed: ")
+            .or_else(|| ending.strip_prefix("review required: "))
+            .unwrap_or(ending);
+        self.log
+            .lines()
+            .filter_map(|line| {
+                let ChildLine::Own(message) = ChildLine::of(line) else {
+                    return None;
+                };
+                // Activity summaries wrap a failure's first line and append recovery
+                // facts; terminal output prints the cause and those facts separately.
+                if message.is_empty()
+                    || !(summary == message
+                        || ending == message
+                        || ending
+                            .strip_prefix(message)
+                            .is_some_and(|suffix| suffix.starts_with("; ")))
+                {
+                    return None;
+                }
+                let clock = line
+                    .strip_prefix("thirdshift: ")
+                    .and_then(|line| line.split_once(' '))
+                    .and_then(|(clock, _)| NaiveTime::parse_from_str(clock, "%H:%M:%S").ok());
+                // The terminal ending follows the Activity write, possibly across a
+                // second or midnight. Its nearest clock disambiguates equal causes.
+                Some(clock.map_or(i64::MAX, |clock| {
+                    clock
+                        .signed_duration_since(time.time())
+                        .num_seconds()
+                        .rem_euclid(24 * 3600)
+                }))
+            })
+            .min()
+    }
 }
 
 pub(super) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<Vec<Command>> {
@@ -89,7 +163,25 @@ pub(super) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<Vec<Comman
                 .filter(|(_, start)| start.subject == subject && start.command.ended_at.is_none())
                 .map(|(index, _)| index)
                 .collect();
-            let matched = candidates.iter().copied().find(|&index| starts[index].log.lines().any(|line| matches!(ChildLine::of(line), ChildLine::Own(message) if message == outcome)));
+            let matches: Vec<_> = candidates
+                .iter()
+                .filter_map(|&index| {
+                    starts[index]
+                        .ending_distance(time, outcome)
+                        .map(|distance| (index, distance))
+                })
+                .collect();
+            let matched = matches
+                .iter()
+                .min_by_key(|(_, distance)| distance)
+                .filter(|(_, distance)| {
+                    matches
+                        .iter()
+                        .filter(|(_, other)| other == distance)
+                        .count()
+                        == 1
+                })
+                .map(|&(index, _)| index);
             let index = matched.or_else(|| (candidates.len() == 1).then(|| candidates[0]));
             if let Some(index) = index {
                 let start = &mut starts[index];
@@ -149,9 +241,9 @@ fn start(
     ) {
         return Ok(None);
     }
-    let Some((path, choice)) = detail.rsplit_once(", on ") else {
-        return Ok(None);
-    };
+    // Early Activity logs named only the Command log, before Harness metadata
+    // was added. Their known outcome still takes precedence over Session logs.
+    let (path, choice) = detail.rsplit_once(", on ").unwrap_or((detail, ""));
     let relative = Path::new(path);
     if !relative.starts_with("commands")
         || relative
@@ -170,7 +262,10 @@ fn start(
     };
     let path = repo.join(relative);
     let mut choice = choice.split(" · ");
-    let harness = choice.next().map(String::from);
+    let harness = choice
+        .next()
+        .filter(|name| !name.is_empty())
+        .map(String::from);
     let model = choice
         .next()
         .filter(|value| *value != "default model")
@@ -179,35 +274,22 @@ fn start(
         .next()
         .filter(|value| *value != "default effort")
         .map(String::from);
+    let mut command = Command::from_logs(
+        repository,
+        kind,
+        number,
+        time.and_local_timezone(*stamp.offset()).single().unwrap(),
+        "activity_log",
+    );
+    command.harness = harness;
+    command.model = model;
+    command.effort = effort;
+    command.command_log = Some(path.clone());
     Ok(Some(Started {
         subject: subject.into(),
         offset: *stamp.offset(),
         log: read_optional(&path)?,
-        command: Command {
-            repository: repository.into(),
-            kind: kind.into(),
-            issue: number.map(|number| Issue {
-                number,
-                url: format!("https://github.com/{repository}/issues/{number}"),
-                title: None,
-            }),
-            harness,
-            model,
-            effort,
-            started_at: time
-                .and_local_timezone(*stamp.offset())
-                .single()
-                .unwrap()
-                .to_rfc3339(),
-            ended_at: None,
-            outcome: None,
-            command_log: Some(path),
-            session_logs: Vec::new(),
-            stages: [],
-            stage: None,
-            source: "activity_log",
-            state: "unknown",
-        },
+        command,
     }))
 }
 
@@ -259,29 +341,12 @@ fn sessions(
             {
                 continue;
             }
-            let command = groups
-                .entry(command_log.clone())
-                .or_insert_with(|| Command {
-                    repository: repository.into(),
-                    kind: kind.into(),
-                    issue: number.map(|number| Issue {
-                        number,
-                        url: format!("https://github.com/{repository}/issues/{number}"),
-                        title: None,
-                    }),
-                    harness: None,
-                    model: None,
-                    effort: None,
-                    started_at: stamp.to_rfc3339(),
-                    ended_at: None,
-                    outcome: None,
-                    command_log: command_log.is_file().then_some(command_log),
-                    session_logs: Vec::new(),
-                    stages: [],
-                    stage: None,
-                    source: "session_log",
-                    state: "unknown",
-                });
+            let command = groups.entry(command_log.clone()).or_insert_with(|| {
+                let mut command =
+                    Command::from_logs(repository, kind, number, stamp, "session_log");
+                command.command_log = command_log.is_file().then_some(command_log);
+                command
+            });
             command.session_logs.push(entry.path());
         }
     }

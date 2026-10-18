@@ -207,6 +207,115 @@ fn fixture_log(scenario: &Scenario, relative: &str, contents: &str) {
 }
 
 #[test]
+fn status_reads_activity_starts_from_before_harness_metadata() {
+    let scenario = Scenario::new();
+    fixture_log(
+        &scenario,
+        "activity.log",
+        concat!(
+            "2026-10-04 12:00:00 Run #7 started: commands/issue/7-20261004T120000-0400.log\n",
+            "2026-10-04 13:00:00 Run #7 ended: PR https://github.com/acme/widgets/pull/1 is ready for review\n"
+        ),
+    );
+    fixture_log(
+        &scenario,
+        "commands/issue/7-20261004T120000-0400.log",
+        "thirdshift: 13:00:00 PR https://github.com/acme/widgets/pull/1 is ready for review\n",
+    );
+    fixture_log(
+        &scenario,
+        "commands/issue/7-20261004T120000-0400-implement.jsonl",
+        "{}\n",
+    );
+    let result = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(status["commands"].as_array().unwrap().len(), 1);
+    let command = &status["commands"][0];
+    assert_eq!(command["source"], "activity_log");
+    assert_eq!(command["started_at"], "2026-10-04T12:00:00-04:00");
+    assert_eq!(command["ended_at"], "2026-10-04T13:00:00-04:00");
+    assert_eq!(
+        command["outcome"],
+        "PR https://github.com/acme/widgets/pull/1 is ready for review"
+    );
+    assert_eq!(command["harness"], Value::Null);
+    assert_eq!(command["model"], Value::Null);
+    assert_eq!(command["effort"], Value::Null);
+}
+
+#[test]
+fn status_matches_overlapping_failures_using_command_log_endings() {
+    let scenario = Scenario::new();
+    let first = chrono::Local::now() - chrono::Duration::hours(1);
+    let second = first + chrono::Duration::minutes(1);
+    let second_end = first + chrono::Duration::minutes(2);
+    let first_end = first + chrono::Duration::minutes(3);
+    let first_log = format!("commands/issue/7-{}.log", first.format("%Y%m%dT%H%M%S%z"));
+    let second_log = format!("commands/issue/7-{}.log", second.format("%Y%m%dT%H%M%S%z"));
+    // Identical causes require the Command log's ending time to distinguish
+    // them. Recovery details are part of the Activity summary only.
+    fixture_log(
+        &scenario,
+        "activity.log",
+        &format!(
+            "{} Run #7 started: {first_log}, on claude · default model · default effort\n{} Run #7 started: {second_log}, on claude · default model · default effort\n{} Run #7 ended: failed: claude exited 3; Stopped at: Implementation\n{} Run #7 ended: failed: claude exited 3\n",
+            first.format("%Y-%m-%d %H:%M:%S"),
+            second.format("%Y-%m-%d %H:%M:%S"),
+            second_end.format("%Y-%m-%d %H:%M:%S"),
+            first_end.format("%Y-%m-%d %H:%M:%S")
+        ),
+    );
+    fixture_log(
+        &scenario,
+        &first_log,
+        &format!(
+            "thirdshift: {} claude exited 3\n",
+            first_end.format("%H:%M:%S")
+        ),
+    );
+    fixture_log(
+        &scenario,
+        &second_log,
+        &format!(
+            "thirdshift: {} Stopped at: Implementation\nthirdshift: {} claude exited 3\n",
+            second_end.format("%H:%M:%S"),
+            second_end.format("%H:%M:%S")
+        ),
+    );
+    for flags in [vec!["status", "--all", "--json"], vec!["status", "--json"]] {
+        let result = scenario.run(&flags);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let status: Value = serde_json::from_str(&result.stdout).unwrap();
+        let commands = status["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(
+            commands[0]["outcome"],
+            "failed: claude exited 3; Stopped at: Implementation"
+        );
+        assert_eq!(commands[1]["outcome"], "failed: claude exited 3");
+        for command in commands {
+            assert_eq!(command["source"], "activity_log");
+            assert_eq!(command["state"], "ended");
+            assert!(command["ended_at"].is_string());
+        }
+        // Activity times have second precision.
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(commands[0]["ended_at"].as_str().unwrap())
+                .unwrap()
+                .timestamp(),
+            second_end.timestamp()
+        );
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(commands[1]["ended_at"].as_str().unwrap())
+                .unwrap()
+                .timestamp(),
+            first_end.timestamp()
+        );
+    }
+}
+
+#[test]
 fn status_reads_activity_history_and_command_logs_without_stages() {
     let scenario = Scenario::new();
     fixture_log(
