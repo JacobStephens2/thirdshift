@@ -351,12 +351,29 @@ pub fn show(input: &str, json: bool) -> Result<()> {
 pub(in crate::logs) fn stop_target(input: &str) -> Result<PathBuf> {
     let status = super::read(true)?;
     match select(&status.commands, input)? {
-        Selected::Record(command) if command.state == "live" => Ok(command
-            .record
-            .parent_record
-            .as_ref()
-            .unwrap_or(&command.record_path)
-            .clone()),
+        Selected::Record(command) if command.record.parent_record.is_some() => {
+            let owner = status
+                .commands
+                .iter()
+                .find_map(|entry| {
+                    let Entry::Record(root) = entry else {
+                        return None;
+                    };
+                    contains(root, command).then(|| {
+                        root.dispatched
+                            .iter()
+                            .find(|dispatch| contains(dispatch, command))
+                            .unwrap_or(root)
+                    })
+                })
+                .context("could not find the Command owning this child Run")?;
+            bail!(
+                "cannot stop {input}: child Run; stop {} {} instead",
+                owner.record.kind,
+                owner.record.name
+            );
+        }
+        Selected::Record(command) if command.state == "live" => Ok(command.record_path.clone()),
         Selected::Record(command) => bail!(
             "cannot stop {input}: Command {}{}",
             command.state,

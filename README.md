@@ -592,6 +592,13 @@ the same Command names as `show`: `owner/repo#number`, an Issue URL, or a Pass's
 Commands are refused; Stop sends SIGTERM only to the recorded process, with no
 forced kill.
 
+Stopping a Spec run ends its Tickets' Runs too, saving their unfinished work.
+Only the Spec's issue receives Stop labels; its Tickets' labels stay as they
+were. A Stop on a Pickup run applies to the issue it took, whether a Run or a
+Spec run. A Pass still without an issue, such as an Architect run in its
+Architecture review or a Security run in its audit, ends without changing
+labels. Stop refuses a Ticket's issue and names the Spec run to stop instead.
+
 By default, Stop leaves the issue for the Day shift: it adds `needs-triage` and
 does not put `ready-for-agent` back. It removes `in-progress` when nothing reached
 `origin`, and keeps it when an Issue branch or pull request remains. Add
