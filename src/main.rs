@@ -76,6 +76,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
+       thirdshift show <command> [--json]             Show one Command in full
+       thirdshift logs <command> [--session <kind>] [--follow]  Read or follow a log
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
@@ -128,6 +130,22 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::Show { command, json }) => {
+            return match logs::status::inspect::show(&command, json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Logs {
+            command,
+            session,
+            follow,
+        }) => {
+            return match logs::status::inspect::logs(&command, session.as_deref(), follow) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
         Ok(Command::Status { json, all }) => {
             return match logs::status::show(json, all) {
                 Ok(()) => ExitCode::SUCCESS,

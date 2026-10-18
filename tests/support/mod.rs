@@ -529,6 +529,18 @@ impl Scenario {
         self.spawn_until_started(command, started)
     }
 
+    /// Start a reader with stdout in a file, so tests can observe streaming
+    /// output before the Command being read ends. The caller must finish it.
+    pub fn read_to_file(&self, args: &[&str], output: &Path) -> HeldRun {
+        let mut command = self.command(args);
+        command.stdout(fs::File::create(output).unwrap());
+        command.stderr(Stdio::piped());
+        HeldRun {
+            child: command.spawn().unwrap(),
+            exited: false,
+        }
+    }
+
     /// Run a copy of thirdshift, `installed/thirdshift` in the scenario root,
     /// as an installed one is run, and call `replace` with the copy's path
     /// once a session whose script has [`Scenario::waits_to_be_replaced`]
