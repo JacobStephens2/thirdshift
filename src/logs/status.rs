@@ -1,6 +1,7 @@
 //! Read machine-wide Command records without entering a Launch directory.
 
 mod history;
+pub mod inspect;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -143,6 +144,25 @@ impl Command {
 }
 
 pub fn show(json: bool, all: bool) -> Result<()> {
+    let status = read(all)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+    } else {
+        println!("{}", status.hostname);
+        for entry in status.commands {
+            match entry {
+                Entry::Record(command) => command.print(""),
+                Entry::History(command) => command.print(),
+            }
+        }
+        for pass in status.idle_passes {
+            println!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason);
+        }
+    }
+    Ok(())
+}
+
+fn read(all: bool) -> Result<Status> {
     let config = UserConfig::load()?;
     let now = Local::now();
     let mut records = BTreeMap::new();
@@ -210,27 +230,12 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     );
     commands.sort_by(|a, b| a.ordering(all).cmp(&b.ordering(all)));
     idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
-    let status = Status {
+    Ok(Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
         commands,
         idle_passes,
-    };
-    if json {
-        println!("{}", serde_json::to_string_pretty(&status)?);
-    } else {
-        println!("{}", status.hostname);
-        for entry in status.commands {
-            match entry {
-                Entry::Record(command) => command.print(""),
-                Entry::History(command) => command.print(),
-            }
-        }
-        for pass in status.idle_passes {
-            println!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason);
-        }
-    }
-    Ok(())
+    })
 }
 
 fn command_log(path: &Path) -> PathBuf {

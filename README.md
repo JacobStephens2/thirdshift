@@ -127,7 +127,7 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
 
 Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause`, `ended_at`, `parent_record` and `parent_dispatch` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run`, `Security run` and `Base fix`. `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source`, `command_log` and `children` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
 
-`state` is `live`, `died`, `ended`, or `unknown` when historical evidence has no ending. `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets`, `Spec review`, `Architecture review`, `Security audit`, `Security reproduction` and `Security fix publishing`. A Pass retains its own stages while its dispatched work records its stages separately. The remaining Command views are tracked in [#711](https://github.com/JacobStephens2/thirdshift/issues/711).
+`state` is `live`, `died`, `ended`, or `unknown` when historical evidence has no ending. `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets`, `Spec review`, `Architecture review`, `Security audit`, `Security reproduction` and `Security fix publishing`. A Pass retains its own stages while its dispatched work records its stages separately.
 
 `children` recursively contains the immediate child Runs in separate processes, with the same fields as their parent. A Pickup's `dispatched` contains its Run or Spec run. A Spec's `tickets` is its complete roster in issue-number order; each entry has `issue` (`number`, `url`, nullable `title`), `state` (`running`, `merged`, `failed`, `waiting`, or `not started`) and `blockers` (the named open blocking issues, with the same issue fields). Match a Ticket's `issue.url` to the Run in that Spec's `children` for its stage, age, liveness and Base fix descendants. Tickets without a Run remain in the roster. Completed child Runs stay in the tree while its Command is listed. A killed child's `state: "died"` remains independent of the Spec's Ticket accounting. `parent_record` links each child to its parent's exact file; `parent_dispatch`, when present, names the dispatched issue's URL within that file. A top-level Command has null for both. Records from before these fields existed read as having no children or Tickets.
 
@@ -156,6 +156,47 @@ For example, this tree excerpt omits the common Run fields shown above:
 }
 ```
 Every entry has `source`: `command_record`, `activity_log` or `session_log`. The latter two carry `repository`, `kind`, nullable `issue` (number, URL, nullable title), `harness`, `model`, `effort`, `started_at`, nullable `ended_at` and `outcome`, nullable `command_log`, `session_logs` (paths), `state`, `stages: []` and `stage: null`. They omit record-only fields such as process identity and branch information. Activity times use the UTC offset in the Command log's stamp; their outcome is the Activity log's full ending text. A Session entry has null Harness, Model, Effort, end time and outcome, and lists its grouped Session logs. Both flags can be combined as `status --all --json`.
+
+## Show and read one Command
+
+Name a Command by `widgets#7`, `acme/widgets#7`, or its full Issue URL. The owner is needed only when repositories on this machine share the name; an ambiguous short name is refused with the matching repositories. When several Commands worked on the issue, the live one wins, otherwise the latest start wins. A Ticket's issue names its Run within the Spec run. A Pass with no issue is named by kind and stamp, such as `architect-20261018T120000-0400`, as listed by `status`.
+
+```sh
+thirdshift show 'widgets#7'
+thirdshift show https://github.com/acme/widgets/issues/7 --json
+thirdshift logs 'widgets#7'
+thirdshift logs 'widgets#7' --session implement
+thirdshift logs 'widgets#7' --session repair --follow
+```
+
+`show` includes the Runs, stage history with start times, outcomes, and Command and Session log paths. Each live Run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session log. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session logs leave the event unavailable.
+
+`show --json` is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:
+
+```json
+{
+  "version": 1,
+  "hostname": "factory",
+  "command": {
+    "version": 1,
+    "kind": "Run",
+    "repository": "acme/widgets",
+    "name": "acme/widgets#7",
+    "state": "live",
+    "latest_event": "Bash: cargo test",
+    "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"}],
+    "command_log": "/logs/acme/widgets/commands/issue/7-stamp.log",
+    "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl",
+    "session_logs": ["/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"],
+    "children": [],
+    "dispatched": []
+  }
+}
+```
+
+The Command excerpt omits the common fields documented for `status --json`; all those fields are retained, including process identity, issue, Harness, Model, Effort and nullable outcome. `children` and `dispatched` retain the same recursive shape. `session_logs` lists the selected Run's Session log paths, including original sessions and Resumes that share a stage. `latest_event` is optional, present only when a live Run has a readable event, including in child Runs. History without a Command record uses the same Activity-log or Session-log shape as `status --all --json`, with Session logs discovered by issue/kind and Command stamp, without invented stages or liveness.
+
+`logs` writes the Command log verbatim. `--session <kind>` writes that kind's latest Session log as raw JSON lines; `implement` and `spec-review` include a later Resume, and `repair` selects the latest numbered Repair. A missing log or session kind gives an error. `--follow` first prints the selected log, then flushes appended bytes until the owning Command ends or dies, including its final output. A Ticket shares its Command's Command log but selects its own Session logs. The selected Command and Session log stay fixed while following.
 
 ## Install
 

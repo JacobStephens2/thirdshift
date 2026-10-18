@@ -26,6 +26,15 @@ pub enum Command {
         json: bool,
         all: bool,
     },
+    Show {
+        command: String,
+        json: bool,
+    },
+    Logs {
+        command: String,
+        session: Option<String>,
+        follow: bool,
+    },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
     /// `email-test`, with the address it was given, if any.
@@ -223,6 +232,51 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("show") => {
+            return match &args[1..] {
+                [command] if !command.starts_with('-') => Ok(Command::Show {
+                    command: command.clone(),
+                    json: false,
+                }),
+                [command, flag] if flag == "--json" && !command.starts_with('-') => {
+                    Ok(Command::Show {
+                        command: command.clone(),
+                        json: true,
+                    })
+                }
+                _ => bail!("usage: thirdshift show <command> [--json]"),
+            };
+        }
+        Some("logs") => {
+            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow]";
+            let command = args
+                .get(1)
+                .filter(|name| !name.starts_with('-'))
+                .ok_or_else(|| anyhow::anyhow!(usage))?;
+            let mut session = None;
+            let mut follow = false;
+            let mut flags = args[2..].iter();
+            while let Some(flag) = flags.next() {
+                match flag.as_str() {
+                    "--follow" if !follow => follow = true,
+                    "--session" if session.is_none() => {
+                        session = Some(
+                            flags
+                                .next()
+                                .filter(|kind| !kind.starts_with('-'))
+                                .ok_or_else(|| anyhow::anyhow!(usage))?
+                                .clone(),
+                        );
+                    }
+                    _ => bail!(usage),
+                }
+            }
+            return Ok(Command::Logs {
+                command: command.clone(),
+                session,
+                follow,
+            });
+        }
         Some("status") => {
             return match &args[1..] {
                 [] => Ok(Command::Status {

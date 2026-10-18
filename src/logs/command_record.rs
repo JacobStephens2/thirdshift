@@ -58,7 +58,7 @@ pub(super) struct CommandRecord {
     pub tickets: Vec<TicketRecord>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Issue {
     pub number: u64,
     pub url: String,
