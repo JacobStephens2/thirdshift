@@ -1,5 +1,6 @@
 //! Read machine-wide Command records without entering a Launch directory.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,7 @@ struct Command {
     record: CommandRecord,
     state: &'static str,
     stage: Option<CurrentStage>,
+    children: Vec<Command>,
 }
 
 #[derive(Serialize)]
@@ -36,16 +38,14 @@ struct CurrentStage {
 pub fn show(json: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let now = Local::now();
-    let mut commands = Vec::new();
+    let mut records = BTreeMap::new();
     for owner in directories(&config.logs_dir)? {
         for repo in directories(&owner)? {
             for folder in directories(&repo.join("commands"))? {
                 for entry in entries(&folder)? {
-                    if !entry
-                        .file_name()
-                        .to_string_lossy()
-                        .ends_with(".command.json")
-                    {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if !name.ends_with(".command.json") && !name.ends_with(".child.json") {
                         continue;
                     }
                     let path = entry.path();
@@ -54,30 +54,23 @@ pub fn show(json: bool) -> Result<()> {
                     let Ok(record) = serde_json::from_slice::<CommandRecord>(&bytes) else {
                         continue;
                     };
-                    if record.version != 1 || record.outcome.is_some() {
+                    if record.version != 1 {
                         continue;
                     }
-                    let state = if record.live(&mut OnMachine) {
-                        "live"
-                    } else {
-                        "died"
-                    };
-                    let stage = record.current_stage().map(|stage| CurrentStage {
-                        name: stage.name.clone(),
-                        began_at: stage.began_at.clone(),
-                        age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
-                            .map(|began| now.signed_duration_since(began).num_seconds().max(0))
-                            .unwrap_or(0),
-                    });
-                    commands.push(Command {
-                        record,
-                        state,
-                        stage,
-                    });
+                    records.insert(path, record);
                 }
             }
         }
     }
+    let roots: Vec<_> = records
+        .iter()
+        .filter(|(_, record)| record.parent_record.is_none() && record.outcome.is_none())
+        .map(|(path, _)| path.clone())
+        .collect();
+    let mut commands: Vec<_> = roots
+        .into_iter()
+        .map(|path| tree(&path, &mut records, &now))
+        .collect();
     commands.sort_by(|a, b| {
         (
             a.state != "live",
@@ -100,33 +93,116 @@ pub fn show(json: bool) -> Result<()> {
     } else {
         println!("{}", status.hostname);
         for command in status.commands {
-            let facts = command.record;
-            let stage = command.stage.map_or_else(
-                || "starting".into(),
-                |stage| {
-                    if command.state == "died" {
-                        format!("died at {}", stage.name)
-                    } else {
-                        format!("{} · {}", stage.name, age(stage.age_seconds))
-                    }
-                },
-            );
-            println!(
-                "{}#{} {} · {} · {} · {} · {stage}",
-                facts.repository,
-                facts.issue.number,
-                facts
-                    .issue
-                    .title
-                    .as_deref()
-                    .unwrap_or("(title unavailable)"),
-                facts.harness,
-                facts.model.as_deref().unwrap_or("default Model"),
-                facts.effort.as_deref().unwrap_or("default Effort")
-            );
+            print_command(&command, 0);
         }
     }
     Ok(())
+}
+
+fn tree(
+    path: &Path,
+    records: &mut BTreeMap<PathBuf, CommandRecord>,
+    now: &DateTime<Local>,
+) -> Command {
+    let record = records.remove(path).expect("a discovered record exists");
+    let paths: Vec<_> = records
+        .iter()
+        .filter(|(_, child)| child.parent_record.as_deref() == Some(path))
+        .map(|(path, _)| path.clone())
+        .collect();
+    let mut children: Vec<_> = paths
+        .into_iter()
+        .map(|path| tree(&path, records, now))
+        .collect();
+    children.sort_by_key(|child| child.record.issue.number);
+    let state = if record.outcome.is_some() {
+        "ended"
+    } else if record.live(&mut OnMachine) {
+        "live"
+    } else {
+        "died"
+    };
+    let stage = record.current_stage().map(|stage| CurrentStage {
+        name: stage.name.clone(),
+        began_at: stage.began_at.clone(),
+        age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
+            .map(|began| now.signed_duration_since(began).num_seconds().max(0))
+            .unwrap_or(0),
+    });
+    Command {
+        record,
+        state,
+        stage,
+        children,
+    }
+}
+
+fn stage_text(command: &Command) -> String {
+    if let Some(outcome) = &command.record.outcome {
+        return outcome.clone();
+    }
+    command.stage.as_ref().map_or_else(
+        || {
+            if command.state == "died" {
+                "died before first stage".into()
+            } else {
+                "starting".into()
+            }
+        },
+        |stage| {
+            if command.state == "died" {
+                format!("died at {}", stage.name)
+            } else {
+                format!("{} · {}", stage.name, age(stage.age_seconds))
+            }
+        },
+    )
+}
+
+fn print_command(command: &Command, depth: usize) {
+    let facts = &command.record;
+    println!(
+        "{}{} {}#{} {} · {} · {} · {} · {}",
+        "  ".repeat(depth),
+        facts.kind,
+        facts.repository,
+        facts.issue.number,
+        facts
+            .issue
+            .title
+            .as_deref()
+            .unwrap_or("(title unavailable)"),
+        facts.harness,
+        facts.model.as_deref().unwrap_or("default Model"),
+        facts.effort.as_deref().unwrap_or("default Effort"),
+        stage_text(command)
+    );
+    for ticket in &facts.tickets {
+        use super::command_record::TicketState;
+        let state = match ticket.state {
+            TicketState::Running => "running".into(),
+            TicketState::Merged => "merged".into(),
+            TicketState::Failed => "failed".into(),
+            TicketState::NotStarted => "not started".into(),
+            TicketState::Waiting => format!(
+                "waiting on {}",
+                ticket
+                    .blockers
+                    .iter()
+                    .map(|issue| format!("#{}", issue.number))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        println!(
+            "{}Ticket #{} · {state}",
+            "  ".repeat(depth + 1),
+            ticket.issue.number
+        );
+    }
+    for child in &command.children {
+        print_command(child, depth + 1);
+    }
 }
 
 fn age(seconds: i64) -> String {

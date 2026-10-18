@@ -177,6 +177,8 @@ fn review_and_deliver(
 /// branch, the Tickets' child Runs, the graph read again, the Spec PR, the
 /// Delivery, the interrupt and its progress lines.
 trait Outside {
+    /// Record the board independently of the children's owned records.
+    fn record_tickets(&mut self, _board: &TicketBoard) {}
     /// Push the Spec branch to origin.
     fn push(&mut self) -> Result<()>;
     /// Start `ticket`'s Run, a Merge run into the Spec branch.
@@ -254,6 +256,9 @@ impl<'a> ChildRunsAndGitHub<'a> {
 }
 
 impl Outside for ChildRunsAndGitHub<'_> {
+    fn record_tickets(&mut self, board: &TicketBoard) {
+        crate::logs::tickets(board.records());
+    }
     fn push(&mut self) -> Result<()> {
         self.worktree().push()
     }
@@ -353,6 +358,7 @@ fn land_tickets(
     parallel: NonZeroUsize,
 ) -> Landing {
     let mut board = TicketBoard::new(spec, tickets, parallel);
+    outside.record_tickets(&board);
     if let Err(error) = outside.push() {
         return Landing {
             lines: Vec::new(),
@@ -404,6 +410,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             match outside.start_ticket(&ticket) {
                 Ok(()) => {
                     board.started(&ticket);
+                    outside.record_tickets(board);
                     started = true;
                 }
                 Err(start_error) => error = Some(start_error),
@@ -436,6 +443,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             }
         }
         let list = board.checklist();
+        outside.record_tickets(board);
         if landed {
             if let Err(open_error) = outside.landed(&list) {
                 error.get_or_insert(open_error);

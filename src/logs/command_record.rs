@@ -27,13 +27,45 @@ pub(super) struct CommandRecord {
     pub cause: Option<String>,
     pub issue_branch: Option<String>,
     pub pull_request: Option<String>,
+    #[serde(default)]
+    pub parent_record: Option<PathBuf>,
+    #[serde(default)]
+    pub tickets: Vec<TicketRecord>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct Issue {
+pub(crate) struct Issue {
     pub number: u64,
     pub url: String,
     pub title: Option<String>,
+}
+
+impl From<&IssueUrl> for Issue {
+    fn from(issue: &IssueUrl) -> Self {
+        Self {
+            number: issue.number,
+            url: issue.url.clone(),
+            title: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct TicketRecord {
+    pub issue: Issue,
+    pub state: TicketState,
+    pub blockers: Vec<Issue>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum TicketState {
+    Running,
+    Merged,
+    Failed,
+    Waiting,
+    #[serde(rename = "not started")]
+    NotStarted,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -54,6 +86,8 @@ pub enum StageName {
     Repair,
     SelfMerge,
     Cleanup,
+    Tickets,
+    SpecReview,
 }
 
 impl StageName {
@@ -67,6 +101,8 @@ impl StageName {
             Self::Repair => "Repair",
             Self::SelfMerge => "Self-merge",
             Self::Cleanup => "cleanup",
+            Self::Tickets => "Tickets",
+            Self::SpecReview => "Spec review",
         }
     }
 
@@ -80,6 +116,8 @@ impl StageName {
             Self::Repair,
             Self::SelfMerge,
             Self::Cleanup,
+            Self::Tickets,
+            Self::SpecReview,
         ]
         .into_iter()
         .any(|stage| stage.name() == name)
@@ -116,6 +154,8 @@ impl CommandRecord {
             cause: None,
             issue_branch: None,
             pull_request: None,
+            parent_record: None,
+            tickets: Vec::new(),
         }
     }
 

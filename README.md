@@ -71,7 +71,7 @@ The designed behaviour described in this README is implemented. Known gaps and p
 
 ## Machine status
 
-`thirdshift status` names this host and lists live Runs started on an Issue URL across every repository in `logs.dir`, with their issue and title, Harness, Model, Effort, current stage and its age. A Command with no outcome whose process has gone shows as `died at <stage>`. Process start identifiers distinguish a reused process id on Linux and macOS. Completed Commands leave the live list; their Command records remain beside their Command logs, as `*.command.json`. A record write failure warns once per Command and does not change its outcome.
+`thirdshift status` names this host and lists live Runs, Spec runs and Pickup runs across every repository in `logs.dir`, with their issue and title, Harness, Model, Effort, current stage and its age. It nests a Pickup run's dispatched Run or Spec run, each Spec's Tickets and their Runs, and each Run's Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Command or child Run with no outcome whose process has gone shows as `died at <stage>`. Process start identifiers distinguish a reused process id on Linux and macOS. Completed Commands leave the live list; their records remain beside their Command logs, as `*.command.json`, with child records named for their issue as `*.issue-<n>.child.json`. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.
 
 `thirdshift status --json` is the versioned API for agents and the coming [Console](docs/adr/0016-the-console-is-a-long-running-reader.md). It runs outside a repository too. Version 1 has this shape:
 
@@ -98,12 +98,42 @@ The designed behaviour described in this README is implemented. Known gaps and p
     "outcome": null,
     "cause": null,
     "state": "live",
-    "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52}
+    "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+    "parent_record": null,
+    "tickets": [],
+    "children": []
   }]
 }
 ```
 
-Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `session_log`, `issue_branch`, `pull_request`, `outcome` and `cause` are nullable. The retained record has the same Command fields without the computed `state` and `stage`; it ends with its outcome, failure cause (null on success), and the Issue branch and pull request left behind. `state` is `live` or `died`; `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge` and `cleanup`. More Command kinds and history are tracked in [#711](https://github.com/JacobStephens2/thirdshift/issues/711).
+Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause` and `parent_record` are nullable. The retained record has the same fields without the computed `state`, `stage` and `children`; it ends with its outcome, failure cause (null on success), and the Issue branch and pull request left behind. `state` is `live`, `died`, or `ended` (for completed descendants); `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets` and `Spec review`. More Command kinds and history are tracked in [#711](https://github.com/JacobStephens2/thirdshift/issues/711).
+
+`children` recursively contains the immediate child Runs with the same fields as their parent. `kind` is `Run`, `Spec run`, `Pickup run` or `Base fix`. A Pickup's child is its dispatched Run or Spec run. A Spec's `tickets` is its complete roster in issue-number order; each entry has `issue` (`number`, `url`, nullable `title`), `state` (`running`, `merged`, `failed`, `waiting`, or `not started`) and `blockers` (the named open blocking issues, with the same issue fields). Match a Ticket's `issue.url` to the Run in that Spec's `children` for its stage, age, liveness and Base fix descendants. Tickets without a Run remain in the roster. Completed child Runs stay in the tree while its Command is listed. A killed child's `state: "died"` remains independent of the Spec's Ticket accounting. `parent_record` links each child to its parent's exact file; a top-level Command has null, and records from before these fields existed read as having no children or Tickets.
+
+For example, this tree excerpt omits the common Run fields shown above:
+
+```json
+{
+  "kind": "Pickup run",
+  "children": [{
+    "kind": "Spec run",
+    "stage": {"name": "Tickets", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+    "tickets": [
+      {"issue": {"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": null}, "state": "running", "blockers": []},
+      {"issue": {"number": 22, "url": "https://github.com/acme/widgets/issues/22", "title": null}, "state": "waiting", "blockers": [{"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": null}]},
+      {"issue": {"number": 23, "url": "https://github.com/acme/widgets/issues/23", "title": null}, "state": "merged", "blockers": []},
+      {"issue": {"number": 24, "url": "https://github.com/acme/widgets/issues/24", "title": null}, "state": "not started", "blockers": []}
+    ],
+    "children": [{
+      "kind": "Run",
+      "issue": {"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": "Make widgets"},
+      "state": "live",
+      "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+      "children": []
+    }]
+  }]
+}
+```
 
 ## Install
 

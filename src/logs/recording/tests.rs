@@ -275,6 +275,58 @@ fn commands_started_on_the_same_issue_in_one_second_keep_separate_records() {
     assert_eq!(titles, ["first Command", "second Command"]);
 }
 
+#[test]
+fn concurrent_child_writes_keep_both_runs_and_leave_the_parent_untouched() {
+    let memory = Scripted::default();
+    let mut parent = Record::new(memory.clone());
+    parent.begin(Begin::Run(&issue()));
+    parent.configured(&config(false));
+    parent.started(Work::SpecRun(&issue()), &harness());
+    let path = parent.record_path().unwrap();
+    let before = memory.file(&path);
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|threads| {
+        for (number, stage) in [(8, StageName::CiWatch), (9, StageName::Repair)] {
+            let memory = memory.clone();
+            let path = path.clone();
+            let barrier = &barrier;
+            threads.spawn(move || {
+                let issue =
+                    IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}"))
+                        .unwrap();
+                let mut child = Record::new(memory);
+                child.child_of(Some(path));
+                child.begin(Begin::ChildRun(STAMP, crate::logs::CommandKind::Issue));
+                child.configured(&config(false));
+                child.started(Work::Run(&issue), &harness());
+                barrier.wait();
+                for _ in 0..100 {
+                    child.issue_title(Some(format!("Ticket {number}")));
+                    child.stage(stage, None);
+                }
+            });
+        }
+    });
+    assert_eq!(memory.file(&path), before);
+    let memory = memory.0.lock().unwrap();
+    let children: Vec<CommandRecord> = memory
+        .files
+        .iter()
+        .filter(|(path, _)| path.to_string_lossy().ends_with(".child.json"))
+        .map(|(_, bytes)| serde_json::from_str(bytes).unwrap())
+        .collect();
+    assert_eq!(children.len(), 2);
+    for (child, (number, stage)) in children.iter().zip([(8, "CI watch"), (9, "Repair")]) {
+        assert_eq!(child.parent_record.as_ref(), Some(&path));
+        assert_eq!(child.issue.number, number);
+        assert_eq!(
+            child.issue.title.as_deref(),
+            Some(format!("Ticket {number}").as_str())
+        );
+        assert_eq!(child.current_stage().unwrap().name, stage);
+    }
+}
+
 fn config(quiet: bool) -> UserConfig {
     UserConfig::parse(
         &format!("[logs]\ndir = '/logs'\n[activity]\nquiet_skips = {quiet}\n"),
@@ -376,7 +428,11 @@ fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder(
         );
         assert_eq!(
             memory.0.lock().unwrap().files.len(),
-            if matches!(work, Work::Run(_)) { 3 } else { 2 }
+            match work {
+                Work::Run(_) | Work::BaseFix(_) | Work::SpecRun(_) => 3,
+                Work::PickupRun(_) => 4, // Command, dispatched Run, and the two logs.
+                Work::ArchitectRun(_) | Work::SecurityRun(_) => 2,
+            }
         );
     }
 }

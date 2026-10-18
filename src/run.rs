@@ -190,9 +190,7 @@ fn run(
         started_by,
         directory.checked_out(),
     );
-    if matches!(started_by, StartedBy::Command) {
-        outside.record_branch_left();
-    }
+    outside.record_branch_left();
     outcome
 }
 
@@ -228,9 +226,10 @@ fn start<O: Outside>(
         Some(_) => Vec::new(),
         None => outside.tickets()?,
     };
-    outside.started(match tickets.is_empty() {
-        true => Work::Run(issue),
-        false => Work::SpecRun(issue),
+    outside.started(match (started_by.child(), tickets.is_empty()) {
+        (Some(Kind::BaseFix { .. }), _) => Work::BaseFix(issue),
+        (_, true) => Work::Run(issue),
+        (_, false) => Work::SpecRun(issue),
     });
     if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(
@@ -459,6 +458,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
 
     fn started(&mut self, work: Work) {
         logs::started(work, self.harness);
+        logs::issue_title(GitHub::new().issue_title(self.issue).ok());
     }
 
     fn select(&mut self) -> Result<Selection> {
@@ -482,7 +482,6 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
 
     fn make_claim(&mut self) -> Result<()> {
         self.claim = Some(claim::make(self.issue, self.directory.git())?);
-        logs::issue_title(GitHub::new().issue_title(self.issue).ok());
         Ok(())
     }
 
@@ -641,7 +640,7 @@ mod tests {
 
         fn started(&mut self, work: Work) {
             let spec_run = match work {
-                Work::Run(_) => false,
+                Work::Run(_) | Work::BaseFix(_) => false,
                 Work::SpecRun(_) => true,
                 Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
                     panic!("not a Run's work")
