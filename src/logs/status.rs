@@ -1,5 +1,8 @@
 //! Read machine-wide Command records without entering a Launch directory.
 
+mod history;
+
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +18,43 @@ use crate::config::UserConfig;
 struct Status {
     version: u32,
     hostname: String,
-    commands: Vec<Command>,
+    commands: Vec<Entry>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Entry {
+    Record(Box<Command>),
+    History(Box<history::Command>),
+}
+
+impl Entry {
+    fn ordering(
+        &self,
+        all: bool,
+    ) -> (
+        bool,
+        std::cmp::Reverse<Option<DateTime<chrono::FixedOffset>>>,
+        &str,
+    ) {
+        let (state, started, repo) = match self {
+            Self::Record(command) => (
+                command.state,
+                command.record.started_at.as_str(),
+                command.record.repository.as_str(),
+            ),
+            Self::History(command) => (
+                command.state,
+                command.started_at.as_str(),
+                command.repository.as_str(),
+            ),
+        };
+        (
+            !all && state != "live",
+            std::cmp::Reverse(DateTime::parse_from_rfc3339(started).ok()),
+            repo,
+        )
+    }
 }
 
 #[derive(Serialize)]
@@ -24,6 +63,8 @@ struct Command {
     record: CommandRecord,
     state: &'static str,
     stage: Option<CurrentStage>,
+    source: &'static str,
+    command_log: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -33,31 +74,53 @@ struct CurrentStage {
     age_seconds: i64,
 }
 
-pub fn show(json: bool) -> Result<()> {
+pub fn show(json: bool, all: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let now = Local::now();
     let mut commands = Vec::new();
     for owner in directories(&config.logs_dir)? {
         for repo in directories(&owner)? {
+            let mut covered = HashSet::new();
             for folder in directories(&repo.join("commands"))? {
                 for entry in entries(&folder)? {
-                    if !entry
-                        .file_name()
-                        .to_string_lossy()
-                        .ends_with(".command.json")
+                    if !entry.file_type()?.is_file()
+                        || !entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".command.json")
                     {
                         continue;
                     }
                     let path = entry.path();
                     let bytes = fs::read(&path)
                         .with_context(|| format!("could not read {}", path.display()))?;
-                    let Ok(record) = serde_json::from_slice::<CommandRecord>(&bytes) else {
+                    let Ok(mut record) = serde_json::from_slice::<CommandRecord>(&bytes) else {
                         continue;
                     };
-                    if record.version != 1 || record.outcome.is_some() {
+                    if record.version != 1 {
                         continue;
                     }
-                    let state = if record.live(&mut OnMachine) {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    let command_log = path
+                        .with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)));
+                    covered.insert(command_log.clone());
+                    // Records written before completion times existed were last
+                    // replaced when their outcome was recorded.
+                    if record.outcome.is_some() && record.ended_at.is_none() {
+                        record.ended_at = entry
+                            .metadata()?
+                            .modified()
+                            .ok()
+                            .map(|time| DateTime::<Local>::from(time).to_rfc3339());
+                    }
+                    if !all && record.outcome.is_some() && !recent(record.ended_at.as_deref(), now)
+                    {
+                        continue;
+                    }
+                    let state = if record.outcome.is_some() {
+                        "ended"
+                    } else if record.live(&mut OnMachine) {
                         "live"
                     } else {
                         "died"
@@ -69,27 +132,24 @@ pub fn show(json: bool) -> Result<()> {
                             .map(|began| now.signed_duration_since(began).num_seconds().max(0))
                             .unwrap_or(0),
                     });
-                    commands.push(Command {
+                    commands.push(Entry::Record(Box::new(Command {
                         record,
                         state,
                         stage,
-                    });
+                        source: "command_record",
+                        command_log,
+                    })));
                 }
             }
+            commands.extend(
+                history::read(&repo, &covered)?
+                    .into_iter()
+                    .filter(|command| all || recent(command.ended_at.as_deref(), now))
+                    .map(|command| Entry::History(Box::new(command))),
+            );
         }
     }
-    commands.sort_by(|a, b| {
-        (
-            a.state != "live",
-            &a.record.repository,
-            &a.record.started_at,
-        )
-            .cmp(&(
-                b.state != "live",
-                &b.record.repository,
-                &b.record.started_at,
-            ))
-    });
+    commands.sort_by(|a, b| a.ordering(all).cmp(&b.ordering(all)));
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
@@ -99,18 +159,32 @@ pub fn show(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
-        for command in status.commands {
-            let facts = command.record;
-            let stage = command.stage.map_or_else(
-                || "starting".into(),
-                |stage| {
-                    if command.state == "died" {
-                        format!("died at {}", stage.name)
-                    } else {
-                        format!("{} · {}", stage.name, age(stage.age_seconds))
-                    }
-                },
-            );
+        for entry in status.commands {
+            let command = match entry {
+                Entry::Record(command) => command,
+                Entry::History(command) => {
+                    command.print();
+                    continue;
+                }
+            };
+            let Command {
+                record: facts,
+                stage,
+                state,
+                ..
+            } = *command;
+            let stage = facts.outcome.clone().unwrap_or_else(|| {
+                stage.map_or_else(
+                    || "starting".into(),
+                    |stage| {
+                        if state == "died" {
+                            format!("died at {}", stage.name)
+                        } else {
+                            format!("{} · {}", stage.name, age(stage.age_seconds))
+                        }
+                    },
+                )
+            });
             println!(
                 "{}#{} {} · {} · {} · {} · {stage}",
                 facts.repository,
@@ -127,6 +201,12 @@ pub fn show(json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn recent(ended: Option<&str>, now: DateTime<Local>) -> bool {
+    ended
+        .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
+        .is_some_and(|ended| ended >= now - chrono::Duration::hours(24))
 }
 
 fn age(seconds: i64) -> String {

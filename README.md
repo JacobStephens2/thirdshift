@@ -71,7 +71,9 @@ The designed behaviour described in this README is implemented. Known gaps and p
 
 ## Machine status
 
-`thirdshift status` names this host and lists live Runs started on an Issue URL across every repository in `logs.dir`, with their issue and title, Harness, Model, Effort, current stage and its age. A Command with no outcome whose process has gone shows as `died at <stage>`. Process start identifiers distinguish a reused process id on Linux and macOS. Completed Commands leave the live list; their Command records remain beside their Command logs, as `*.command.json`. A record write failure warns once per Command and does not change its outcome.
+`thirdshift status` names this host and lists live Runs started on an Issue URL across every repository in `logs.dir`, with their issue and title, Harness, Model, Effort, current stage and its age. After the live Commands it lists those that ended in the last 24 hours, with their outcomes. `thirdshift status --all` lists every Command this machine has logs for, newest start first. A Command record with no outcome whose process has gone shows as `died at <stage>` in either view. Process start identifiers distinguish a reused process id on Linux and macOS. Command records remain beside their Command logs, as `*.command.json`. A record write failure warns once per Command and does not change its outcome.
+
+History uses each source only for Commands missing from the preceding sources: Command records, then Activity log start/end lines with their Command logs, then Session logs in the current `<logs.dir>/<owner>/<repo>/commands/<kind>/` layout. Activity entries have start and end times and outcomes, with no stages. Session entries group logs by issue and Command stamp; they have no known end or outcome and appear only with `--all`. Sessions covered by a Spec run or Pass's stamp belong to that Command. The flat layout from before [ADR 0011](docs/adr/0011-thirdshift-keeps-a-per-repository-activity-log.md) is ignored.
 
 `thirdshift status --json` is the versioned API for agents and the coming [Console](docs/adr/0016-the-console-is-a-long-running-reader.md). It runs outside a repository too. Version 1 has this shape:
 
@@ -91,19 +93,24 @@ The designed behaviour described in this README is implemented. Known gaps and p
     "model": "opus",
     "effort": "high",
     "started_at": "2026-10-18T12:00:00-04:00",
+    "ended_at": null,
     "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"}],
     "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl",
     "issue_branch": "issue-7",
     "pull_request": null,
     "outcome": null,
     "cause": null,
+    "source": "command_record",
+    "command_log": "/logs/acme/widgets/commands/issue/7-stamp.log",
     "state": "live",
     "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52}
   }]
 }
 ```
 
-Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `session_log`, `issue_branch`, `pull_request`, `outcome` and `cause` are nullable. The retained record has the same Command fields without the computed `state` and `stage`; it ends with its outcome, failure cause (null on success), and the Issue branch and pull request left behind. `state` is `live` or `died`; `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge` and `cleanup`. More Command kinds and history are tracked in [#711](https://github.com/JacobStephens2/thirdshift/issues/711).
+Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause` and `ended_at` are nullable. The retained record has the same Command fields without the computed `state`, `stage`, `source` and `command_log`; it ends with its outcome, end time, failure cause (null on success), and the Issue branch and pull request left behind. Older records without an end time use their last modification time. `state` is `live`, `died`, `ended`, or `unknown` when historical evidence has no ending. `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge` and `cleanup`.
+
+Every entry has `source`: `command_record`, `activity_log` or `session_log`. The latter two carry `repository`, `kind`, nullable `issue` (number, URL, nullable title), `harness`, `model`, `effort`, `started_at`, nullable `ended_at` and `outcome`, nullable `command_log`, `session_logs` (paths), `state`, `stages: []` and `stage: null`. They omit record-only fields such as process identity and branch information. Activity times use the UTC offset in the Command log's stamp; their outcome is the Activity log's full ending text. A Session entry has null Harness, Model, Effort, end time and outcome, and lists its grouped Session logs. Both flags can be combined as `status --all --json`.
 
 ## Install
 

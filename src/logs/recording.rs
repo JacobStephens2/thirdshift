@@ -228,6 +228,7 @@ impl<O: Outside> Record<O> {
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
         if let Some((_, facts)) = &mut self.command_record {
+            facts.ended_at = Some(self.outside.now().to_rfc3339());
             facts.outcome = Some(account.outcome.into());
             facts.cause = account
                 .ended
