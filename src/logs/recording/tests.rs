@@ -269,7 +269,7 @@ fn commands_started_on_the_same_issue_in_one_second_keep_separate_records() {
         .collect();
     let mut titles: Vec<_> = records
         .iter()
-        .map(|record| record.issue.title.as_deref().unwrap())
+        .map(|record| record.issue.as_ref().unwrap().title.as_deref().unwrap())
         .collect();
     titles.sort();
     assert_eq!(titles, ["first Command", "second Command"]);
@@ -374,10 +374,7 @@ fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder(
                 "2026-10-03 12:00:00 {subject} started: {relative}, on claude · opus · high\n2026-10-03 12:00:00 {subject} ended: ready\n"
             )
         );
-        assert_eq!(
-            memory.0.lock().unwrap().files.len(),
-            if matches!(work, Work::Run(_)) { 3 } else { 2 }
-        );
+        assert_eq!(memory.0.lock().unwrap().files.len(), 3);
     }
 }
 

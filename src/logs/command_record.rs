@@ -5,15 +5,35 @@ use std::path::PathBuf;
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
+use super::Work;
 use crate::harness::Choice;
-use crate::issue::IssueUrl;
+
+/// A Pass owns its dispatched work in the same process and atomic record.
+#[derive(Serialize, Deserialize)]
+pub(super) struct CommandTree {
+    #[serde(flatten)]
+    pub command: CommandRecord,
+    #[serde(default)]
+    pub dispatched: Vec<CommandRecord>,
+}
+
+impl CommandTree {
+    pub fn active(&mut self) -> &mut CommandRecord {
+        match self.dispatched.last_mut() {
+            Some(dispatched) if dispatched.outcome.is_none() => dispatched,
+            _ => &mut self.command,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct CommandRecord {
     pub version: u32,
     pub kind: String,
     pub repository: String,
-    pub issue: Issue,
+    #[serde(default)]
+    pub name: String,
+    pub issue: Option<Issue>,
     pub hostname: String,
     pub process_id: u32,
     pub process_start: String,
@@ -54,6 +74,12 @@ pub enum StageName {
     Repair,
     SelfMerge,
     Cleanup,
+    ArchitectureReview,
+    Tickets,
+    SpecReview,
+    SecurityAudit,
+    SecurityReproduction,
+    SecurityFixPublishing,
 }
 
 impl StageName {
@@ -67,6 +93,12 @@ impl StageName {
             Self::Repair => "Repair",
             Self::SelfMerge => "Self-merge",
             Self::Cleanup => "cleanup",
+            Self::ArchitectureReview => "Architecture review",
+            Self::Tickets => "Tickets",
+            Self::SpecReview => "Spec review",
+            Self::SecurityAudit => "Security audit",
+            Self::SecurityReproduction => "Security reproduction",
+            Self::SecurityFixPublishing => "Security fix publishing",
         }
     }
 
@@ -80,6 +112,12 @@ impl StageName {
             Self::Repair,
             Self::SelfMerge,
             Self::Cleanup,
+            Self::ArchitectureReview,
+            Self::Tickets,
+            Self::SpecReview,
+            Self::SecurityAudit,
+            Self::SecurityReproduction,
+            Self::SecurityFixPublishing,
         ]
         .into_iter()
         .any(|stage| stage.name() == name)
@@ -93,16 +131,29 @@ impl CommandRecord {
             && outside.process_start(self.process_id).as_deref() == Some(&self.process_start)
     }
 
-    pub fn new(issue: &IssueUrl, harness: &Choice, now: DateTime<FixedOffset>) -> Self {
-        Self {
-            version: 1,
-            kind: "Run".into(),
-            repository: issue.repo_slug(),
-            issue: Issue {
+    pub fn new(work: Work<'_>, stamp: &str, harness: &Choice, now: DateTime<FixedOffset>) -> Self {
+        let issue = match work {
+            Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => Some(Issue {
                 number: issue.number,
                 url: issue.url.clone(),
                 title: None,
-            },
+            }),
+            Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
+        };
+        let name = match work {
+            Work::ArchitectRun(_) => format!("architect-{stamp}"),
+            Work::SecurityRun(_) => format!("secure-{stamp}"),
+            Work::PickupRun(_) => format!("pickup-{stamp}"),
+            Work::Run(issue) | Work::SpecRun(issue) => {
+                format!("{}#{}", issue.repo_slug(), issue.number)
+            }
+        };
+        Self {
+            version: 1,
+            kind: work.kind().to_string(),
+            repository: work.repo().slug(),
+            name,
+            issue,
             hostname: String::new(),
             process_id: std::process::id(),
             process_start: String::new(),
@@ -125,5 +176,15 @@ impl CommandRecord {
             .iter()
             .rev()
             .find(|stage| StageName::known(&stage.name))
+    }
+
+    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>) {
+        self.outcome = Some(account.outcome.into());
+        self.cause = account
+            .ended
+            .as_ref()
+            .err()
+            .map(|cause| cause.full().into());
+        self.pull_request = account.pr_url.map(String::from);
     }
 }
