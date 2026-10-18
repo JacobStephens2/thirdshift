@@ -10,8 +10,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
 use serde::Serialize;
 
-use super::command_record::CommandRecord;
+use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
+use super::{Pass, activity};
 use crate::config::UserConfig;
 
 #[derive(Serialize)]
@@ -19,6 +20,14 @@ struct Status {
     version: u32,
     hostname: String,
     commands: Vec<Entry>,
+    idle_passes: Vec<IdlePass>,
+}
+
+#[derive(Serialize)]
+struct IdlePass {
+    repository: String,
+    kind: String,
+    reason: String,
 }
 
 #[derive(Serialize)]
@@ -65,6 +74,7 @@ struct Command {
     stage: Option<CurrentStage>,
     source: &'static str,
     command_log: PathBuf,
+    dispatched: Vec<Command>,
 }
 
 #[derive(Serialize)]
@@ -74,13 +84,76 @@ struct CurrentStage {
     age_seconds: i64,
 }
 
+impl Command {
+    fn new(record: CommandRecord, command_log: PathBuf, now: DateTime<Local>) -> Self {
+        let state = if record.outcome.is_some() {
+            "ended"
+        } else if record.live(&mut OnMachine) {
+            "live"
+        } else {
+            "died"
+        };
+        let stage = record.current_stage().map(|stage| CurrentStage {
+            name: stage.name.clone(),
+            began_at: stage.began_at.clone(),
+            age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
+                .map(|began| now.signed_duration_since(began).num_seconds().max(0))
+                .unwrap_or(0),
+        });
+        Self {
+            record,
+            state,
+            stage,
+            source: "command_record",
+            command_log,
+            dispatched: Vec::new(),
+        }
+    }
+
+    fn print(&self, indent: &str) {
+        let facts = &self.record;
+        let stage = facts.outcome.clone().unwrap_or_else(|| {
+            self.stage.as_ref().map_or_else(
+                || "starting".into(),
+                |stage| {
+                    if self.state == "died" {
+                        format!("died at {}", stage.name)
+                    } else {
+                        format!("{} · {}", stage.name, age(stage.age_seconds))
+                    }
+                },
+            )
+        });
+        let subject = match &facts.issue {
+            Some(issue) => format!(
+                "{}#{} {}",
+                facts.repository,
+                issue.number,
+                issue.title.as_deref().unwrap_or("(title unavailable)")
+            ),
+            None => format!("{} on {}", facts.name, facts.repository),
+        };
+        println!(
+            "{indent}{subject} · {} · {} · {} · {stage}",
+            facts.harness,
+            facts.model.as_deref().unwrap_or("default Model"),
+            facts.effort.as_deref().unwrap_or("default Effort")
+        );
+        for dispatched in &self.dispatched {
+            dispatched.print(&format!("{indent}  "));
+        }
+    }
+}
+
 pub fn show(json: bool, all: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let now = Local::now();
     let mut commands = Vec::new();
+    let mut idle_passes = Vec::new();
     for owner in directories(&config.logs_dir)? {
         for repo in directories(&owner)? {
             let mut covered = HashSet::new();
+            idle_passes.extend(read_idle_passes(&repo)?);
             for folder in directories(&repo.join("commands"))? {
                 for entry in entries(&folder)? {
                     if !entry.file_type()?.is_file()
@@ -94,9 +167,10 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                     let path = entry.path();
                     let bytes = fs::read(&path)
                         .with_context(|| format!("could not read {}", path.display()))?;
-                    let Ok(mut record) = serde_json::from_slice::<CommandRecord>(&bytes) else {
+                    let Ok(mut tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
                         continue;
                     };
+                    let record = &mut tree.command;
                     if record.version != 1 {
                         continue;
                     }
@@ -118,27 +192,13 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                     {
                         continue;
                     }
-                    let state = if record.outcome.is_some() {
-                        "ended"
-                    } else if record.live(&mut OnMachine) {
-                        "live"
-                    } else {
-                        "died"
-                    };
-                    let stage = record.current_stage().map(|stage| CurrentStage {
-                        name: stage.name.clone(),
-                        began_at: stage.began_at.clone(),
-                        age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
-                            .map(|began| now.signed_duration_since(began).num_seconds().max(0))
-                            .unwrap_or(0),
-                    });
-                    commands.push(Entry::Record(Box::new(Command {
-                        record,
-                        state,
-                        stage,
-                        source: "command_record",
-                        command_log,
-                    })));
+                    let mut command = Command::new(tree.command, command_log.clone(), now);
+                    command.dispatched = tree
+                        .dispatched
+                        .into_iter()
+                        .map(|record| Command::new(record, command_log.clone(), now))
+                        .collect();
+                    commands.push(Entry::Record(Box::new(command)));
                 }
             }
             commands.extend(
@@ -150,54 +210,25 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         }
     }
     commands.sort_by(|a, b| a.ordering(all).cmp(&b.ordering(all)));
+    idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
         commands,
+        idle_passes,
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
         for entry in status.commands {
-            let command = match entry {
-                Entry::Record(command) => command,
-                Entry::History(command) => {
-                    command.print();
-                    continue;
-                }
-            };
-            let Command {
-                record: facts,
-                stage,
-                state,
-                ..
-            } = *command;
-            let stage = facts.outcome.clone().unwrap_or_else(|| {
-                stage.map_or_else(
-                    || "starting".into(),
-                    |stage| {
-                        if state == "died" {
-                            format!("died at {}", stage.name)
-                        } else {
-                            format!("{} · {}", stage.name, age(stage.age_seconds))
-                        }
-                    },
-                )
-            });
-            println!(
-                "{}#{} {} · {} · {} · {} · {stage}",
-                facts.repository,
-                facts.issue.number,
-                facts
-                    .issue
-                    .title
-                    .as_deref()
-                    .unwrap_or("(title unavailable)"),
-                facts.harness,
-                facts.model.as_deref().unwrap_or("default Model"),
-                facts.effort.as_deref().unwrap_or("default Effort")
-            );
+            match entry {
+                Entry::Record(command) => command.print(""),
+                Entry::History(command) => command.print(),
+            }
+        }
+        for pass in status.idle_passes {
+            println!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason);
         }
     }
     Ok(())
@@ -207,6 +238,40 @@ fn recent(ended: Option<&str>, now: DateTime<Local>) -> bool {
     ended
         .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
         .is_some_and(|ended| ended >= now - chrono::Duration::hours(24))
+}
+
+fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
+    let path = repo.join(activity::FILE);
+    let activity = match fs::read_to_string(&path) {
+        Ok(activity) => activity,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not read {}", path.display()));
+        }
+    };
+    let repository = format!(
+        "{}/{}",
+        repo.parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy(),
+        repo.file_name().unwrap().to_string_lossy()
+    );
+    let mut idle = Vec::new();
+    for pass in [Pass::Architect, Pass::Pickup, Pass::Security] {
+        let kind = activity::Kind::Pass(pass);
+        if let Some(line) = activity::last_of(&activity, kind)
+            && let Some(reason) = line.strip_prefix(&format!("{kind} skipped: "))
+        {
+            idle.push(IdlePass {
+                repository: repository.clone(),
+                kind: kind.to_string(),
+                reason: reason.into(),
+            });
+        }
+    }
+    Ok(idle)
 }
 
 fn age(seconds: i64) -> String {

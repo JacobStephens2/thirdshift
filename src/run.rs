@@ -190,7 +190,7 @@ fn run(
         started_by,
         directory.checked_out(),
     );
-    if matches!(started_by, StartedBy::Command) {
+    if matches!(started_by, StartedBy::Command | StartedBy::Dispatch { .. }) {
         outside.record_branch_left();
     }
     outcome

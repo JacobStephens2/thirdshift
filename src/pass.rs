@@ -235,6 +235,7 @@ impl Outside for LaunchAndGitHub<'_> {
     }
 
     fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+        logs::stage(logs::Stage::SecurityAudit);
         crate::security::audit::run(self.launch.git(), self.repo, base, self.harness)
     }
 
@@ -262,6 +263,7 @@ impl Outside for LaunchAndGitHub<'_> {
         record: &SecurityRecord,
         number: usize,
     ) -> (Result<Reproduction>, Option<PathBuf>) {
+        logs::stage(logs::Stage::SecurityReproduction);
         crate::security::reproduction::run(
             self.launch.git(),
             self.repo,
@@ -282,7 +284,7 @@ impl Outside for LaunchAndGitHub<'_> {
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
-        let (issue, asks, base) = match dispatch {
+        let (issue, asks, base, is_spec) = match dispatch {
             Dispatch::SecurityFix {
                 issue,
                 is_spec,
@@ -296,18 +298,30 @@ impl Outside for LaunchAndGitHub<'_> {
                 issue,
                 Asks::of_ready_issue(issue, is_spec, self.flags, self.config),
                 base,
+                is_spec,
             ),
             Dispatch::ArchitectPlan { plan, base } => (
                 plan,
                 Asks::of_architect_plan(plan, self.flags, self.config),
                 base,
+                false, // The Run's launch checks discover an Architect plan's Tickets.
             ),
         };
         let mut asks = Asks {
             harness: self.harness.clone(),
             ..asks
         };
-        run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base })
+        logs::dispatching(
+            if is_spec {
+                Work::SpecRun(issue)
+            } else {
+                Work::Run(issue)
+            },
+            self.harness,
+        );
+        let ended = run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base });
+        logs::dispatch_ended(&ended);
+        ended
     }
 
     fn publish_security_fix(
@@ -316,6 +330,7 @@ impl Outside for LaunchAndGitHub<'_> {
         record: &SecurityRecord,
         url: &str,
     ) -> (Result<IssueUrl>, Option<PathBuf>) {
+        logs::stage(logs::Stage::SecurityFixPublishing);
         crate::security::fixing::publish(
             self.launch.git(),
             self.repo,
