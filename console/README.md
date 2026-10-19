@@ -30,3 +30,22 @@ The header names this machine and links to those addresses, without fetching
 them. The first page pairs with `thirdshift status`. A refresh reads the current
 records; server-push updates are a later Ticket. Replacing the installed binary
 makes the Console re-execute itself with its original arguments.
+
+The available pages are Inbox (`1`), History (`5`) and Security (`7`). Links
+keep the page in `?page=`. History includes every ended Command, including old
+logs, and filters by outcome and repository. Security shows retained findings
+and Session logs. Older records without finding metadata still show their logs.
+
+`j` / `k` select headings and visible rows, wrapping at either end. `Space`
+folds a heading or toggles a row's peek; `Enter` opens that row's full Command
+log. `z` folds the current section. `Escape` closes help, jumps or the peek,
+one layer at a time, then clears selection. `?` opens the key list. `g` opens
+the jump list: `i` Inbox, `h` History, `s` Security, or a section's displayed
+letter. Text fields keep their normal keys. The peek starts closed and sits
+beside the list on a wide screen or at the bottom of a phone.
+
+For an exact older Command, `show` and `logs` also accept the absolute record
+or Command-log path. The Console adds `::name` to a record path to distinguish
+a dispatched Run from its enclosing Command. A retained Session-log path can
+select a historical Command without a record; `logs --session` accepts an exact
+path from that Command's Session inventory as well as a session kind.
