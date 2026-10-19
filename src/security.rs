@@ -46,6 +46,8 @@ pub enum Outcome {
 /// The Security run's outcome and the private records it reached, including before a failure.
 pub struct Ended {
     pub outcome: Result<Recorded, FailedRun>,
+    /// Whether an audit session was requested after preparation succeeded.
+    pub audit_started: bool,
     /// A failed reproduction's number; its audit and private recording completed.
     pub failed_reproduction: Option<usize>,
     pub findings: Vec<RecordedFinding>,
@@ -56,6 +58,7 @@ impl From<anyhow::Error> for Ended {
     fn from(error: anyhow::Error) -> Self {
         Self {
             outcome: Err(error.into()),
+            audit_started: false,
             failed_reproduction: None,
             findings: Vec::new(),
             advice: Vec::new(),
@@ -290,13 +293,15 @@ fn audit_and_record(
     let mut findings = Vec::new();
     let mut log = None;
     let mut reproduction = None;
+    let mut audit_started = false;
     let recorded = (|| -> Result<Recorded> {
         outside.check_harness()?;
         outside.check_node()?;
         outside.started(Work::SecurityRun(repo));
-        let (audited, session_log) = outside.audit(base);
-        log = session_log;
-        let audited = audited?;
+        let attempt = outside.audit(base);
+        audit_started = attempt.started;
+        log = attempt.log;
+        let audited = attempt.outcome?;
         let mut recorded = Recorded {
             created: 0,
             existing: 0,
@@ -380,6 +385,7 @@ fn audit_and_record(
             log,
             ..error.into()
         }),
+        audit_started,
         failed_reproduction,
         findings,
         advice,

@@ -26,6 +26,7 @@
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
 //!  "failing"?: ["<command> <subcommand>", ...],
+//!  "failing_stderr"?: "<stderr for failing commands>",
 //!  "fail_next"?: {"call": "<command prefix>", "times": <count>, "error": "<stderr>"},
 //!  "advisory_create_fails_after"?: <number of records>,
 //!  "user_email"?: "<address>" | null,
@@ -2106,7 +2107,13 @@ pub fn main(args: Vec<String>) {
         .iter()
         .any(|failing| failing.as_str().is_some_and(starts_with))
     {
-        die("HTTP 502: Bad Gateway (https://api.github.com/graphql)", 1);
+        die(
+            state
+                .get("failing_stderr")
+                .and_then(Json::as_str)
+                .unwrap_or("HTTP 502: Bad Gateway (https://api.github.com/graphql)"),
+            1,
+        );
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let parsed = |rest: &[&str]| {
