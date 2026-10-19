@@ -146,7 +146,7 @@ pub fn run(
                 return Ok(None);
             };
             Ok(
-                crate::ready::refresh(directory.git(), ready.listed.issue, config.pickup_wait)?
+                crate::ready::refresh(directory.git(), ready, config.pickup_wait)?
                     .map(|ready| (ready, reservation)),
             )
         },
@@ -155,7 +155,8 @@ pub fn run(
 
 /// [`run`], once it holds its repository's lock, on `repo` with the Base
 /// branch `base` and the Claim limit `limit`, through `outside`: its
-/// [`gates`], a skip recorded with its reason if one skips; then the line
+/// [`gates`], then `reserve` acquiring cross-machine ownership and refreshing
+/// the selection, with a skip recorded if either refuses it; then the line
 /// naming the issue taken; then the check of its Harness, failing before
 /// any work if it can't run; then the record that it started work on the
 /// issue, which keeps its Command log; then the issue dispatched, a Spec
@@ -177,7 +178,13 @@ fn run_through<R>(
     let unavailable = Skipped::IssueUnavailable(ready.listed.issue.clone());
     // A reservation spans dispatch, including Claim ending and Failed run
     // preservation. No start is recorded and no Claim made by a losing host.
-    let Some((ReadyIssue { listed, is_spec }, _reservation)) = reserve(ready)? else {
+    let Some((
+        ReadyIssue {
+            listed, is_spec, ..
+        },
+        _reservation,
+    )) = reserve(ready)?
+    else {
         outside.skipped(Pass::Pickup, &unavailable);
         return Ok(Outcome::Skipped(unavailable));
     };

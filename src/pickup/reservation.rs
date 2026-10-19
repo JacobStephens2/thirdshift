@@ -21,7 +21,9 @@ impl Reservation {
     pub(super) fn take(launch: &Git, issue: &IssueUrl) -> Result<Option<Self>> {
         let reference = format!("refs/heads/thirdshift/pickup/{}", issue.number);
         let nonce = tempfile::Builder::new().rand_bytes(32).tempfile()?;
-        let tree = launch.run(&["rev-parse", "HEAD^{tree}"])?;
+        // A reservation carries no source tree or parent: naming a Base branch
+        // permits a Launch directory with unrelated, unpublished local work.
+        let tree = launch.run(&["mktree"])?;
         let message = format!(
             "thirdshift Pickup reservation for {}\n\nToken: {}\nLaunch: {}\nProcess: {}\nStarted: {}",
             issue.url,

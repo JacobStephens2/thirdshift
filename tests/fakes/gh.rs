@@ -735,6 +735,40 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
     if !state.at("issues").has(n) {
         die("gh: Not Found (HTTP 404)", 1);
     }
+    // GitHub records real label transitions in timeline order, including
+    // consecutive Claim applications/removals within the same second.
+    let before = issue_labels(state, n).to_vec();
+    let contains = |labels: &[Json], name: &Json| {
+        labels
+            .iter()
+            .any(|label| label.str().eq_ignore_ascii_case(name.str()))
+    };
+    let at = string(&now());
+    let events = before
+        .iter()
+        .filter(|label| !contains(&labels, label))
+        .map(|label| ("unlabeled", label))
+        .chain(
+            labels
+                .iter()
+                .filter(|label| !contains(&before, label))
+                .map(|label| ("labeled", label)),
+        )
+        .map(|(event, label)| {
+            object([
+                ("event", string(event)),
+                ("label", label.clone()),
+                ("at", at.clone()),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if !events.is_empty() {
+        state
+            .entry("timeline", object([]))
+            .entry(n, Array(Vec::new()))
+            .items_mut()
+            .extend(events);
+    }
     state.entry("labels", object([])).set(n, Array(labels));
     save(state);
 }

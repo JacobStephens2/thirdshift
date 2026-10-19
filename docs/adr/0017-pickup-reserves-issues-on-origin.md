@@ -7,11 +7,18 @@ elects a winner. Issue #712's two-clone regression reproduces two implement
 sessions from one Ready issue, including when both hosts use the same identity.
 
 A Pickup run creates `refs/heads/thirdshift/pickup/<issue-number>` on origin
-with an empty `--force-with-lease` expectation and a unique reservation commit.
+with an empty `--force-with-lease` expectation and a unique reservation commit
+containing an empty tree and no parent. It never publishes the Launch directory's
+unrelated local files or history.
 Only one creator succeeds. This ref is separate from every Issue branch and
 Spec branch, so losing does not write either branch or a PR. After acquiring
 it, Pickup refreshes the selected issue's Ready state and Spec status before
-dispatch. A busy or no-longer-Ready selection skips with exit 0 and no
+dispatch. It also compares the number of Claim applications in the complete
+label history with the observation made during selection. An intervening Claim
+invalidates that selection even if a failed winner restored Ready. Timeline
+order handles same-second changes without comparing the hosts' clocks, and
+still works with settling disabled. A new later pass can select Ready again.
+A busy or stale selection skips with exit 0 and no
 notification. A remote error without evidence of another owner fails closed.
 
 The reservation spans the Run or Spec run, including failed-work preservation
