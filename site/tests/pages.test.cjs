@@ -35,39 +35,28 @@ async function pageForTest(t, options) {
   return page;
 }
 
-test("the shared documentation is reachable and readable without JavaScript", async (t) => {
-  const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+test("the homepage links to the shared Markdown manual without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
   await page.goto(`${origin}/`);
-  await page.getByRole("link", { name: "Documentation", exact: true }).first().click();
+  await page.getByRole("link", { name: "Documentation", exact: true }).first().click({ timeout: 2000 });
   assert.equal(new URL(page.url()).pathname, "/docs/");
-  await page.locator("main").getByRole("link", { name: "Configuration", exact: true }).click();
-  assert.equal(await page.locator("#user-config").isVisible(), true);
-  assert.ok(await page.locator("pre").first().textContent().then(text => text.includes("[merge]")));
-  await page.locator("main").getByRole("link", { name: "Harness, Model and Effort", exact: true }).first().click();
-  assert.equal(new URL(page.url()).hash, "#harness-model-and-effort");
-  assert.equal(await page.locator("#harness-model-and-effort").isVisible(), true);
+  assert.equal(await page.getByRole("heading", { name: "thirdshift", exact: true, level: 1 }).isVisible(), true);
+  await page.getByRole("navigation", { name: "Manual sections" }).getByRole("link", { name: "Install", exact: true }).click();
+  assert.equal(new URL(page.url()).hash, "#install");
+  assert.equal(await page.locator("#install + pre code").textContent(),
+    "curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh\n");
+  assert.equal(await page.getByRole("link", { name: "Markdown source", exact: true }).getAttribute("href"),
+    "https://github.com/JacobStephens2/thirdshift/blob/main/docs/guide.md");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-});
-
-test("every documentation link reaches a page and its named section", async (t) => {
-  const page = await pageForTest(t, { javaScriptEnabled: false });
-  const links = new Set();
-  for (const topic of ["", "installation/", "commands/", "configuration/", "runs/", "observing/", "passes/", "development/"]) {
-    const response = await page.goto(`${origin}/docs/${topic}`);
-    assert.equal(response.status(), 200);
-    for (const href of await page.locator('a[href]').evaluateAll(nodes => nodes.map(node => node.href))) {
-      if (href.startsWith(origin)) links.add(href);
-    }
-    assert.equal(await page.locator("main h1").count(), 1);
+  const fragments = await page.locator('main a[href^="#"]').evaluateAll(nodes => nodes.map(node => node.hash.slice(1)));
+  for (const fragment of fragments) {
+    assert.equal(await page.locator(`[id="${fragment}"]`).count(), 1, fragment);
   }
-  for (const href of links) {
-    const response = await page.request.get(href);
-    assert.equal(response.status(), 200, href);
-    const fragment = new URL(href).hash.slice(1);
-    if (fragment) {
-      await page.goto(href);
-      assert.equal(await page.evaluate(id => document.getElementById(id) !== null, decodeURIComponent(fragment)), true, href);
-    }
+  assert.ok((await page.locator("main code").allTextContents()).some(text => text.includes("<Issue URL>")), "command placeholders remain text");
+  assert.equal(await page.getByRole("link", { name: "ADR-0001", exact: true }).first().getAttribute("href"),
+    "https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0001-rust-binary-with-embedded-skills.md");
+  for (const path of ["/styles.css", "/docs/docs.css"]) {
+    assert.equal((await page.request.get(`${origin}${path}`)).status(), 200, path);
   }
 });
 
@@ -109,6 +98,11 @@ test("guide navigation and Repair loop links reach visible explanations without 
 
 test("the guide's local links and styles resolve, including prompt deep links", async (t) => {
   const page = await pageForTest(t);
+  // Exercise navigation before the deferred fragment-reveal script finishes loading.
+  await page.route("**/main.js", async route => {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await route.continue();
+  });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(`${origin}/how-it-works/`);
@@ -118,7 +112,7 @@ test("the guide's local links and styles resolve, including prompt deep links", 
     assert.equal(response.status(), 200, path);
   }
   await page.getByRole("link", { name: "the review procedure" }).click();
-  assert.equal(await page.locator("#skill-thirdshift-code-review .job-body").isVisible(), true);
+  await page.locator("#skill-thirdshift-code-review .job-body").waitFor({ state: "visible", timeout: 5000 });
   assert.deepEqual(errors, []);
 });
 

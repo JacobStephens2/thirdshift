@@ -54,7 +54,7 @@
         <div class="proof-row">
           <div>
             <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into tickets. The agents work the <b>third shift</b>: give thirdshift an Issue URL and it implements the issue, reviews its own work and delivers a pull request ready for review, or merges it when asked. Start a Run whenever you like, or let your operating system start passes on a schedule.</p>
-            <p class="credit"><a href="/how-it-works/">How thirdshift works</a>: an engineer's guide from issue to pull request, through Worktrees, agent review and Delivery. <a href="/docs/">Documentation</a>: installation, commands, configuration and the full reference.</p>
+            <p class="credit"><a href="/how-it-works/">How thirdshift works</a>: an engineer's guide from issue to pull request, through Worktrees, agent review and Delivery. <a href="/docs/">Documentation</a> covers installation, commands and configuration.</p>
             <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a>. Read <a href="/prompts/">every prompt and skill thirdshift sends</a>.</p>
           </div>
           <div>
@@ -341,11 +341,11 @@
         <p class="eyebrow">Plan view · the press hall</p>
         <h2 id="grows-title">The factory grows</h2>
         <p>One Run is the first primitive: one Issue URL in, one pull request out. The factory now builds with six workflows. Every line on this floor is installed; follow it to the documentation.</p>
-        <p>A <a href="/docs/commands/#usage">Merge run</a> merges its own reviewed, green pull request when you ask. A <a href="/docs/runs/#spec-runs">Spec run</a> works through Tickets in dependency order, up to three at once by default. They merge into a Spec branch, then one Spec PR gets reviewed against the whole Spec.</p>
-        <p>An <a href="/docs/passes/#architect-runs">Architect run</a> looks for architecture improvements and builds its top Strong plan. Without a Strong recommendation, it leaves an Architect idea for the Day shift. Use <code>--plan-only</code> to publish a plan and stop.</p>
-        <p>A <a href="/docs/passes/#pickup-runs">Pickup run</a> takes the lowest-numbered Ready issue, after it has settled and while the repository is below its Claim limit. Failed work stays with the Day shift; a later Pickup run does not retry a started issue.</p>
-        <p>A <a href="/docs/passes/#security-runs">Security run</a> audits the Base branch and records findings privately. It is report-only by default. With <code>security-fix</code>, it can fix a reproduced finding through a Run or Spec run. An optional <a href="/docs/passes/#security-review">Security review</a> checks an individual change and holds Self-merge if introduced findings remain unaddressed or the review is incomplete.</p>
-        <p>Start passes with <code>thirdshift architect base main</code>, <code>thirdshift pickup base main</code> or <code>thirdshift secure base main</code>. Your operating system schedules them. Frequent Architect runs are <a href="/docs/passes/#weeding">Weeding</a>; scheduled Security runs with fixing allowed are <a href="/docs/passes/#fencing">Fencing</a>. Both yield to work the Day shift shaped, and pause when a decision needs you.</p>
+        <p>A <a href="https://github.com/JacobStephens2/thirdshift#usage">Merge run</a> merges its own reviewed, green pull request when you ask. A <a href="https://github.com/JacobStephens2/thirdshift#spec-runs">Spec run</a> works through Tickets in dependency order, up to three at once by default. They merge into a Spec branch, then one Spec PR gets reviewed against the whole Spec.</p>
+        <p>An <a href="https://github.com/JacobStephens2/thirdshift#architect-runs">Architect run</a> looks for architecture improvements and builds its top Strong plan. Without a Strong recommendation, it leaves an Architect idea for the Day shift. Use <code>--plan-only</code> to publish a plan and stop.</p>
+        <p>A <a href="https://github.com/JacobStephens2/thirdshift#pickup-runs">Pickup run</a> takes the lowest-numbered Ready issue, after it has settled and while the repository is below its Claim limit. Failed work stays with the Day shift; a later Pickup run does not retry a started issue.</p>
+        <p>A <a href="https://github.com/JacobStephens2/thirdshift#security-runs">Security run</a> audits the Base branch and records findings privately. It is report-only by default. With <code>security-fix</code>, it can fix a reproduced finding through a Run or Spec run. An optional <a href="https://github.com/JacobStephens2/thirdshift#security-review">Security review</a> checks an individual change and holds Self-merge if introduced findings remain unaddressed or the review is incomplete.</p>
+        <p>Start passes with <code>thirdshift architect base main</code>, <code>thirdshift pickup base main</code> or <code>thirdshift secure base main</code>. Your operating system schedules them. Frequent Architect runs are <a href="https://github.com/JacobStephens2/thirdshift#weeding">Weeding</a>; scheduled Security runs with fixing allowed are <a href="https://github.com/JacobStephens2/thirdshift#fencing">Fencing</a>. Both yield to work the Day shift shaped, and pause when a decision needs you.</p>
       </div>
       <figure class="floor grid-bg">
         <!-- Static plan: visible names, statuses and hints also work without JavaScript.
@@ -370,7 +370,7 @@
             <text class="north" x="456" y="38">N ↑</text>
           </g>
           <g transform="translate(0 60)">
-            <a href="/docs/runs/#what-a-run-does" class="line">
+            <a href="https://github.com/JacobStephens2/thirdshift#what-a-run-does" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 1 · ONE RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -383,7 +383,7 @@
             </a>
           </g>
           <g transform="translate(0 210)">
-            <a href="/docs/commands/#usage" class="line">
+            <a href="https://github.com/JacobStephens2/thirdshift#usage" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 2 · MERGE RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -396,7 +396,7 @@
             </a>
           </g>
           <g transform="translate(0 360)">
-            <a href="/docs/passes/#architect-runs" class="line">
+            <a href="https://github.com/JacobStephens2/thirdshift#architect-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 3 · ARCHITECT RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -409,7 +409,7 @@
             </a>
           </g>
           <g transform="translate(0 510)">
-            <a href="/docs/runs/#spec-runs" class="line">
+            <a href="https://github.com/JacobStephens2/thirdshift#spec-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 4 · SPEC RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -422,7 +422,7 @@
             </a>
           </g>
           <g transform="translate(0 660)">
-            <a href="/docs/passes/#pickup-runs" class="line">
+            <a href="https://github.com/JacobStephens2/thirdshift#pickup-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 5 · PICKUP RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -435,7 +435,7 @@
             </a>
           </g>
           <g transform="translate(0 810)">
-            <a href="/docs/passes/#security-runs" class="line">
+            <a href="https://github.com/JacobStephens2/thirdshift#security-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 6 · SECURITY RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -495,7 +495,7 @@
             <li><b>macOS</b> Tahoe 26.5.2 and later, Apple Silicon.</li>
           </ul></div>
       </div>
-      <p class="reqs-note">Choose the Harness, Model and Effort with <code>thirdshift setup</code> or per command. See <a href="/docs/configuration/#harness-model-and-effort">Harness configuration</a> and <a href="/docs/installation/#supported-platforms">supported platforms</a>.</p>
+      <p class="reqs-note">Choose the Harness, Model and Effort with <code>thirdshift setup</code> or per command. See <a href="https://github.com/JacobStephens2/thirdshift#harness-model-and-effort">Harness configuration</a> and <a href="https://github.com/JacobStephens2/thirdshift#supported-platforms">supported platforms</a>.</p>
     </div>
   </section>
 
@@ -516,6 +516,7 @@
   <a href="https://github.com/JacobStephens2/thirdshift">GitHub</a>
   <a href="https://github.com/JacobStephens2/thirdshift/releases">Releases</a>
   <a href="/how-it-works/">How thirdshift works</a>
+  <a href="/docs/">Documentation</a>
   <a href="/prompts/">Prompts and skills</a>
   <a href="https://github.com/JacobStephens2/thirdshift/blob/main/LICENSE">MIT License</a>
   <span>Factory skills adapted from <a href="https://github.com/mattpocock/skills">Matt Pocock's skills</a></span>
