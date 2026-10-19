@@ -16,7 +16,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Run notification | `src/notification.rs` — `RunNotification`; `src/email.rs` | `tests/run_notification.rs`, `tests/email_test.rs` |
 | Harness, Model, Effort | `src/harness.rs` and `src/harness/` | `tests/harness_choice.rs`, `tests/harness.rs` |
 | Session prompt, Factory skills | `src/prompt.rs`; `src/skills.rs`; `skills/` | `src/skills/tests.rs`, `tests/packaging.rs` |
-| Trusted account, the issue a session gets | `src/github/trust.rs`; `src/github/session_issue.rs` — `issue_for_session`; `src/delivery.rs` — `hand_over_issue` | Inline tests; `tests/fresh_run.rs`, `tests/pickup_run.rs` |
+| Trusted account, the issue a session gets | `src/github/trust.rs`; `src/github/session_issue.rs` — `issue_for_session`; `src/delivery.rs` — `hand_over_issue` | Inline tests, including `src/prompt.rs`; `tests/fresh_run.rs` |
 | Session log, Resume | `src/session.rs` and `src/session/` | `src/session/execution_tests.rs`, `tests/background_work.rs` |
 | Command log, Activity log | `src/logs.rs`; `src/logs/recording.rs` — `Record` | `src/logs/recording/tests.rs`, `tests/command_logs.rs`, `tests/activity_log.rs` |
 | Command-log allocation, Session naming, child inheritance and filename decoding | `src/logs/owner.rs` — `allocate`, `Owner`, `decode`, `session_matches`; `src/session/recording.rs` — captured Model recording | `src/logs/owner/tests.rs`, `src/logs/recording/tests.rs`, `src/session/recording/tests.rs`, `tests/command_logs.rs`, `tests/status.rs`, `tests/show_logs.rs` |

@@ -20,13 +20,13 @@ impl GitHub {
     pub fn issue_for_session(&self, issue: &IssueUrl) -> Result<String> {
         let (json, comments) =
             self.paged_nodes(issue, COMMENTS_QUERY, "comments", "issue comments")?;
-        session_issue(issue, &json["data"]["repository"]["issue"], &comments)
+        issue_markdown(issue, &json["data"]["repository"]["issue"], &comments)
     }
 }
 
 /// The Markdown [`GitHub::issue_for_session`] gives: `node`'s title and body,
 /// then each of `comments`, oldest first.
-fn session_issue(issue: &IssueUrl, node: &Value, comments: &[Value]) -> Result<String> {
+fn issue_markdown(issue: &IssueUrl, node: &Value, comments: &[Value]) -> Result<String> {
     let mut markdown = format!(
         "# {title}\n\n{url}\n\n{body}\n",
         title = text(node, "title")?,
@@ -106,7 +106,7 @@ mod tests {
             comment(None, "OWNER", "From a deleted account."),
         ];
 
-        let text = session_issue(&seven(), &node, &comments).unwrap();
+        let text = issue_markdown(&seven(), &node, &comments).unwrap();
 
         assert_eq!(
             text,
@@ -129,7 +129,7 @@ mod tests {
     fn an_issue_with_no_comments_is_its_title_and_body() {
         let node = json!({"title": "Add widgets", "body": ""});
 
-        let text = session_issue(&seven(), &node, &[]).unwrap();
+        let text = issue_markdown(&seven(), &node, &[]).unwrap();
 
         assert_eq!(
             text,
@@ -142,6 +142,6 @@ mod tests {
         let node = json!({"title": "Add widgets", "body": ""});
         let comments = [json!({"author": {"login": "owner"}, "body": "Hi."})];
 
-        assert!(session_issue(&seven(), &node, &comments).is_err());
+        assert!(issue_markdown(&seven(), &node, &comments).is_err());
     }
 }
