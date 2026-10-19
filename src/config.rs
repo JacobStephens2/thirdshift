@@ -36,6 +36,8 @@ pub struct UserConfig {
     pub waiting_line_interval: Duration,
     /// `inbox.silent_minutes`: how long both logs may be quiet, default ten minutes.
     pub silent_interval: Duration,
+    /// `inbox.days`: retention of ended problems and Resolved, default seven days.
+    pub inbox_days: i64,
     /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
     pub quiet_skips: bool,
@@ -107,6 +109,7 @@ impl UserConfig {
             logs_dir: home.join(".thirdshift/logs"),
             waiting_line_interval: Duration::from_secs(5 * 60),
             silent_interval: Duration::from_secs(10 * 60),
+            inbox_days: 7,
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
@@ -171,6 +174,14 @@ impl UserConfig {
                     }
                     ("inbox", "silent_minutes", value) => {
                         config.silent_interval = minutes(value, "inbox.silent_minutes", &file)?;
+                    }
+                    ("inbox", "days", value) => {
+                        config.inbox_days = value
+                            .as_integer()
+                            .filter(|days| *days >= 1 && TimeDelta::try_days(*days).is_some())
+                            .context(format!(
+                                "inbox.days must be a positive whole number of days in {file}"
+                            ))?;
                     }
                     ("activity", "quiet_skips", Value::Boolean(quiet)) => {
                         config.quiet_skips = *quiet
@@ -759,6 +770,7 @@ dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
 
 [inbox]
+days = 7             # days to keep ended problems and Resolved; default 7
 silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
 
 [activity]
@@ -937,6 +949,7 @@ mod tests {
                 "email.from",
                 "logs.dir",
                 "logs.waiting_line_minutes",
+                "inbox.days",
                 "inbox.silent_minutes",
                 "activity.quiet_skips",
                 "spec.parallel",
