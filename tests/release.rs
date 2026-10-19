@@ -333,7 +333,7 @@ impl Release {
 
     /// Records a CI run on main's tip on origin, newer than any before it.
     fn main_ci(&self, status: &str, conclusion: &str) {
-        self.main_ci_on(&self.origin(&["rev-parse", "main"]), status, conclusion);
+        self.main_ci_on(&self.origin(&["rev-parse", "main"]), status, conclusion, 0);
     }
 
     /// Makes each bump PR merged from now on record a release workflow run
@@ -374,8 +374,9 @@ impl Release {
             .clone()
     }
 
-    /// Records a CI run on main at `sha`, newer than any before it.
-    fn main_ci_on(&self, sha: &str, status: &str, conclusion: &str) {
+    /// Records a CI run on main at `sha`, newer than any before it, pending
+    /// for `pending_polls` reads before reporting its final status.
+    fn main_ci_on(&self, sha: &str, status: &str, conclusion: &str, pending_polls: u32) {
         let run = json!({
             "branch": "main",
             "workflow": "ci.yml",
@@ -383,6 +384,7 @@ impl Release {
             "headSha": sha,
             "status": status,
             "conclusion": conclusion,
+            "pending_polls": pending_polls,
         });
         self.gh(&["fake", "run", &run.to_string()]);
     }
@@ -1300,7 +1302,7 @@ fn ci_on_main_for_the_merge_neither_holds_up_nor_fails_the_release() {
         let head = release.push_bump("0.2.0");
         release.open_bump_pr("0.2.0");
         let merge = release.merge_bump_pr("0.2.0", &head);
-        release.main_ci_on(&merge, status, conclusion);
+        release.main_ci_on(&merge, status, conclusion, 0);
 
         let output = release.run_script("0.2.0");
 
@@ -1736,16 +1738,12 @@ fn a_red_ci_run_on_main_is_refused() {
 fn an_unfinished_ci_run_on_main_is_watched_before_releasing() {
     let release = Release::new();
     release.ci_reports(GREEN);
-    let run = json!({
-        "branch": "main",
-        "workflow": "ci.yml",
-        "event": "push",
-        "headSha": release.origin(&["rev-parse", "main"]),
-        "status": "completed",
-        "conclusion": "success",
-        "pending_polls": 3,
-    });
-    release.gh(&["fake", "run", &run.to_string()]);
+    release.main_ci_on(
+        &release.origin(&["rev-parse", "main"]),
+        "completed",
+        "success",
+        3,
+    );
 
     let output = release.run_script("0.2.0");
 
@@ -1759,16 +1757,12 @@ fn an_unfinished_ci_run_on_main_is_watched_before_releasing() {
 fn an_unfinished_ci_run_on_main_that_does_not_succeed_pushes_nothing() {
     for conclusion in ["failure", "cancelled", "timed_out", "skipped"] {
         let release = Release::new();
-        let run = json!({
-            "branch": "main",
-            "workflow": "ci.yml",
-            "event": "push",
-            "headSha": release.origin(&["rev-parse", "main"]),
-            "status": "completed",
-            "conclusion": conclusion,
-            "pending_polls": 2,
-        });
-        release.gh(&["fake", "run", &run.to_string()]);
+        release.main_ci_on(
+            &release.origin(&["rev-parse", "main"]),
+            "completed",
+            conclusion,
+            2,
+        );
 
         assert_refused(&release, "0.2.0", &["CI on main", conclusion]);
         assert!(release.agent_calls().is_empty());
