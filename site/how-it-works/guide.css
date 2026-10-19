@@ -11,10 +11,10 @@
 .guide-map > .eyebrow { margin-bottom: 20px; }
 .guide-next { margin: 20px 0 0; font-size: 13px; color: var(--dim); }
 .guide-section { max-width: 1000px; }
-.guide-section > p { max-width: 76ch; margin-block: 22px; }
+.guide-content > p { max-width: 76ch; margin-block: 22px; }
 .guide-section .sec-head h2 { font-size: clamp(36px, 5.5vw, 64px); }
 .guide-section code { overflow-wrap: anywhere; }
-.guide section, .guide li[id] { scroll-margin-top: 24px; }
+.guide [id] { scroll-margin-top: 24px; }
 .guide-diagram { margin: 30px 0; padding: clamp(16px, 3vw, 30px); border: 1px solid var(--rule); }
 .guide-diagram figcaption { margin-bottom: 20px; color: var(--c); font-size: 13px; }
 .guide-flow { display: flex; gap: 28px; list-style: none; margin: 0; padding: 0; }

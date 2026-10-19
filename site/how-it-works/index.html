@@ -24,6 +24,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800&family=JetBrains+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="/styles.css">
 <link rel="stylesheet" href="/how-it-works/guide.css">
+<script src="/main.js" defer></script>
 </head>
 <body class="guide">
 <a class="skip-guide" href="#handoff">Skip to the process</a>
@@ -52,9 +53,10 @@
     <p class="guide-next">Then scale up: <a href="#specs">06 / Specs and Tickets</a> · <a href="#scheduled">07 / Scheduled work</a></p>
   </nav>
 
-  <section class="sec" id="handoff" aria-labelledby="handoff-title">
-    <div class="wrap guide-section">
-      <div class="sec-head"><p class="eyebrow">01 / The human handoff</p><h2 id="handoff-title">Start with work you can describe</h2></div>
+  <section class="sec" aria-labelledby="handoff-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">01 / The human handoff</p><h2 id="handoff-title">Start with work you can describe</h2></summary>
+      <div class="guide-content" id="handoff">
       <p>The <strong>Day shift</strong> is you: settle what should change, what success looks like, and what is out of scope. Put that in a GitHub issue. One session's worth of work can stand alone; a larger <strong>Spec</strong> is an issue with <strong>Tickets</strong> as GitHub sub-issues. We'll follow a standalone issue first.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>Human intent becomes the agent's brief</figcaption>
@@ -68,12 +70,14 @@
       <pre class="guide-command"><code>cd ~/repos/widgets
 thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       <p><code>--no-merge</code> explicitly leaves the pull request for review, even if your User config normally requests merging. Before starting, install and authenticate GitHub CLI (<code>gh</code>) and your chosen <strong>Harness</strong> (the agent CLI, such as Claude Code or Codex), configure Git's commit identity and push access, and install the repository's test toolchain. <code>thirdshift setup</code> chooses machine defaults.</p>
-    </div>
+      </div>
+    </details>
   </section>
 
-  <section class="sec" id="checkout" aria-labelledby="checkout-title">
-    <div class="wrap guide-section">
-      <div class="sec-head"><p class="eyebrow">02 / Where the work happens</p><h2 id="checkout-title">Give the Run its own checkout</h2></div>
+  <section class="sec" aria-labelledby="checkout-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">02 / Where the work happens</p><h2 id="checkout-title">Give the Run its own checkout</h2></summary>
+      <div class="guide-content" id="checkout">
       <p>thirdshift checks that the Issue URL matches the clone's <code>origin</code>, that the issue is open, and that the Base branch, Harness and Git identity are usable. It selects an <strong>Issue branch</strong>, marks the issue <code>in-progress</code> (its <strong>Claim</strong>), then acquires a sibling Git <strong>Worktree</strong>. A fresh Issue branch starts from the fetched Base branch on <code>origin</code>.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>Example: two checkouts, one Git repository</figcaption>
@@ -85,12 +89,14 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       </figure>
       <p>The work happens in the Worktree rather than switching your Launch directory to the Issue branch. If an existing Issue branch has no pull request or an open one, thirdshift continues it instead of starting over. An open pull request supplies its Base branch. Once a branch's pull request is closed or merged, later work uses a new numbered Issue branch.</p>
       <aside class="guide-callout"><strong>A checkout is not a sandbox.</strong> Sessions run unattended as your user. The Harness has access to that account's files, credentials and tools; the separate Worktree keeps edits apart, but does not confine the process. <a href="/docs/#unattended-sessions">Read the permissions and cleanup details</a>.</aside>
-    </div>
+      </div>
+    </details>
   </section>
 
-  <section class="sec" id="session" aria-labelledby="session-title">
-    <div class="wrap guide-section">
-      <div class="sec-head"><p class="eyebrow">03 / What the agent does</p><h2 id="session-title">Let the agent implement and review</h2></div>
+  <section class="sec" aria-labelledby="session-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">03 / What the agent does</p><h2 id="session-title">Let the agent implement and review</h2></summary>
+      <div class="guide-content" id="session">
       <p>thirdshift starts a headless session in the selected Harness, in the Worktree. The <strong>Session prompt</strong> supplies the issue, Base branch, Issue branch and review instructions. <strong>Factory skills</strong> are linked where that Harness discovers them. The opening session carries the change from implementation through review to a committed branch and pull request.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>Inside the opening agent session</figcaption>
@@ -102,12 +108,14 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       </figure>
       <p>The <strong>Standards</strong> axis checks repository coding standards and code smells. The <strong>Spec</strong> axis checks the change against the issue. For findings that say behavior is wrong, the implementing agent must run the reviewer's reproducer before deciding: a demonstrated failure gets fixed with its test kept; a declined finding needs evidence that exercises it. Skipped findings go in the pull request's <strong>Unaddressed findings</strong> section, and decisions for the Day shift get a linked triage issue.</p>
       <p>These are agent reviews, followed by deterministic Git and CI checks in Delivery. They do not guarantee correctness or replace your judgment. You can inspect <a href="/prompts/">the exact prompts and Factory skills</a>, including <a href="/prompts/#skill-thirdshift-code-review">the review procedure</a>.</p>
-    </div>
+      </div>
+    </details>
   </section>
 
-  <section class="sec" id="delivery" aria-labelledby="delivery-title">
-    <div class="wrap guide-section">
-      <div class="sec-head"><p class="eyebrow">04 / From a published change to a checked result</p><h2 id="delivery-title">Deliver against the latest Base branch</h2></div>
+  <section class="sec" aria-labelledby="delivery-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">04 / From a published change to a checked result</p><h2 id="delivery-title">Deliver against the latest Base branch</h2></summary>
+      <div class="guide-content" id="delivery">
       <p>A pull request existing is not the finish line. <strong>Delivery</strong> runs the opening session, then keeps the captured pull request mergeable and checks CI. This orchestration is thirdshift's code; a <strong>Repair</strong> is another agent session started when the branch needs work.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>The Repair loop, after the opening session publishes</figcaption>
@@ -124,12 +132,14 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       <p>Repair and upstream-move budgets keep the loop bounded. If a CI-fix Repair leaves the same failing head, that head gets one <strong>Check re-run</strong>; if its own checks stay red, the Run fails rather than spending more Repairs on unchanged code.</p>
       <p>An <strong>Inherited failure</strong> is a check that also failed under the same name on the Base branch commit last merged in. thirdshift does not ask a Repair to fix that on this Issue branch. It fails the Run, or, when allowed, starts a separate <strong>Base fix</strong> and waits before trying again.</p>
       <p>An optional <strong>Security review</strong> runs after the opening session (or after the Spec review for a Spec PR). It fixes reproduced vulnerabilities introduced by this change; an introduced finding left unfixed holds Self-merge. <a href="/docs/#security-review">Security review details</a>.</p>
-    </div>
+      </div>
+    </details>
   </section>
 
-  <section class="sec" id="outcomes" aria-labelledby="outcomes-title">
-    <div class="wrap guide-section">
-      <div class="sec-head"><p class="eyebrow">05 / The result and your next move</p><h2 id="outcomes-title">Know what comes back</h2></div>
+  <section class="sec" aria-labelledby="outcomes-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">05 / The result and your next move</p><h2 id="outcomes-title">Know what comes back</h2></summary>
+      <div class="guide-content" id="outcomes">
       <div class="guide-outcomes">
         <article class="guide-node"><h3>Ready for review</h3><p>The usual successful result: an open pull request into the Base branch, ready, mergeable and passing CI (or with no checks). You review the diff, tests and Unaddressed findings before merging.</p></article>
         <article class="guide-node"><h3>Merged, when requested</h3><p>A <code>thirdshift merge &lt;Issue URL&gt;</code> command requests a <strong>Merge run</strong>. thirdshift itself merges the exact head whose CI it watched. Foreign commits on the Issue branch are reconciled and their resulting changes reviewed first. Required human reviews can still block it, leaving the pull request ready for review.</p></article>
@@ -141,12 +151,14 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
 thirdshift show https://github.com/acme/widgets/issues/7
 thirdshift logs https://github.com/acme/widgets/issues/7 --follow</code></pre>
       <p>The <strong>Command log</strong> records the whole command; <strong>Session logs</strong> record the individual agent sessions, and the <strong>Activity log</strong> records starts and outcomes per repository. Optional email notifications report how the Run ended. <a href="/docs/#logs">Inspecting logs</a>.</p>
-    </div>
+      </div>
+    </details>
   </section>
 
-  <section class="sec" id="specs" aria-labelledby="specs-title">
-    <div class="wrap guide-section">
-      <div class="sec-head"><p class="eyebrow">06 / The same primitive, composed</p><h2 id="specs-title">Scale one Run into a Spec run</h2></div>
+  <section class="sec" aria-labelledby="specs-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">06 / The same primitive, composed</p><h2 id="specs-title">Scale one Run into a Spec run</h2></summary>
+      <div class="guide-content" id="specs">
       <p>When the Issue URL has Tickets as GitHub sub-issues, thirdshift starts a <strong>Spec run</strong>. GitHub's “blocked by” links determine when a Ticket can start. Independent Tickets can run in parallel, each in its own Worktree; a blocked Ticket waits for its prerequisites to land.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>Example dependency graph: A and B are independent; C needs both</figcaption>
@@ -162,12 +174,14 @@ thirdshift logs https://github.com/acme/widgets/issues/7 --follow</code></pre>
       </figure>
       <p>Each Ticket is a Merge run into the <strong>Spec branch</strong>, not directly into <code>main</code>. The <strong>Spec PR</strong> gathers the result into the Base branch. A Ticket closing means its work landed on the Spec branch; the whole Spec has not shipped yet.</p>
       <p>A failed Ticket stops only its dependents; other reachable Tickets can still run. Tickets marked for human work or triage also hold their dependents. An incomplete Spec leaves a draft Spec PR with a Tickets checklist. Rerunning continues existing branches. <a href="/docs/#spec-runs">Spec run controls and limits</a>.</p>
-    </div>
+      </div>
+    </details>
   </section>
 
-  <section class="sec" id="scheduled" aria-labelledby="scheduled-title">
-    <div class="wrap guide-section">
-      <div class="sec-head"><p class="eyebrow">07 / Where the next issue comes from</p><h2 id="scheduled-title">Choose how the next work starts</h2></div>
+  <section class="sec" aria-labelledby="scheduled-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">07 / Where the next issue comes from</p><h2 id="scheduled-title">Choose how the next work starts</h2></summary>
+      <div class="guide-content" id="scheduled">
       <p>A direct Issue URL starts work you have already chosen. Other commands find work, then dispatch the same Run or Spec run you just followed. Each invocation makes one pass; your operating system's scheduler starts the next one.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>Different entry points, the same implementation and Delivery</figcaption>
@@ -180,7 +194,8 @@ thirdshift logs https://github.com/acme/widgets/issues/7 --follow</code></pre>
       </figure>
       <p>Pickup respects issue readiness, open blockers and the Claim limit. Architect and Security runs yield to ready human-shaped work. Gates can skip a pass without failure, and unresolved plans, ideas or findings can leave the next decision with the Day shift. This is scheduled CLI work on your machine, using your authenticated tools.</p>
       <p>Next: <a href="/prompts/">inspect every prompt and skill</a>, see <a href="/#how-a-run-works">a real Run's recorded output</a>, or use the <a href="/docs/">manual for installation, commands and configuration</a>.</p>
-    </div>
+      </div>
+    </details>
   </section>
 </main>
 <footer class="wrap foot">

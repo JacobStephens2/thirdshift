@@ -37,6 +37,49 @@ async function pageForTest(t, options) {
   return page;
 }
 
+async function checkSectionToggles(page, contentSelector, closeKey) {
+  for (const heading of await page.locator("main h2").all()) {
+    assert.equal(await heading.isVisible(), true);
+    const fold = heading.locator("xpath=ancestor::details[1]");
+    const content = fold.locator(contentSelector);
+    assert.equal(await content.isVisible(), false);
+    await heading.click();
+    assert.equal(await content.isVisible(), true);
+    assert.equal(await page.locator("main details[open]").count(), 1);
+    await fold.locator(":scope > summary").focus();
+    await page.keyboard.press(closeKey);
+    assert.equal(await content.isVisible(), false);
+  }
+}
+
+test("the guide starts with a folded overview and its sections toggle independently without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/how-it-works/`);
+  assert.equal(await page.locator("main h2").count(), 7);
+  assert.equal(await page.locator("main details[open]").count(), 0);
+  await checkSectionToggles(page, ":scope > .guide-content", "Space");
+});
+
+test("the manual starts folded and readers can unfold nested sections without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
+  await page.goto(`${origin}/docs/`);
+  const headings = page.locator("main h2");
+  assert.ok(await headings.count() > 10);
+  assert.equal(await page.locator("main details[open]").count(), 0);
+  assert.equal(await page.locator("main details").count(), await page.locator("main :is(h2,h3,h4)").count());
+  await checkSectionToggles(page, ":scope > .manual-content", "Enter");
+  await page.getByRole("heading", { name: "What a Run does", exact: true }).click();
+  const claim = page.getByRole("heading", { name: "The Claim", exact: true });
+  assert.equal(await claim.isVisible(), true);
+  const ends = page.getByRole("heading", { name: "When the Claim ends", exact: true });
+  assert.equal(await ends.isVisible(), false);
+  await claim.click();
+  assert.equal(await ends.isVisible(), true);
+  await ends.click();
+  assert.equal(await page.getByRole("link", { name: "Sweep", exact: true }).first().isVisible(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+});
+
 test("every public page identifies its canonical URL, purpose and share metadata without JavaScript", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   const titles = new Set();
@@ -118,7 +161,7 @@ test("the homepage links to the shared Markdown manual without JavaScript", asyn
   assert.equal(await page.getByRole("heading", { name: "thirdshift", exact: true, level: 1 }).isVisible(), true);
   await page.getByRole("navigation", { name: "Manual sections" }).getByRole("link", { name: "Install", exact: true }).click();
   assert.equal(new URL(page.url()).hash, "#install");
-  assert.equal(await page.locator("#install + pre code").textContent(),
+  assert.equal(await page.locator("#install > pre code").first().textContent(),
     "curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh\n");
   assert.equal(await page.getByRole("link", { name: "Markdown source", exact: true }).getAttribute("href"),
     "https://github.com/JacobStephens2/thirdshift/blob/main/docs/guide.md");
@@ -128,7 +171,7 @@ test("the homepage links to the shared Markdown manual without JavaScript", asyn
     assert.equal(await page.locator(`[id="${fragment}"]`).count(), 1, fragment);
   }
   assert.ok((await page.locator("main code").allTextContents()).some(text => text.includes("<Issue URL>")), "command placeholders remain text");
-  assert.equal(await page.getByRole("link", { name: "ADR-0001", exact: true }).first().getAttribute("href"),
+  assert.equal(await page.getByRole("link", { name: "ADR-0001", exact: true, includeHidden: true }).first().getAttribute("href"),
     "https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0001-rust-binary-with-embedded-skills.md");
   for (const path of ["/styles.css", "/docs/docs.css"]) {
     assert.equal((await page.request.get(`${origin}${path}`)).status(), 200, path);
@@ -161,7 +204,7 @@ test("guide navigation and Repair loop links reach visible explanations without 
     const href = await link.getAttribute("href");
     await link.click();
     assert.equal(new URL(page.url()).hash, href);
-    assert.equal(await page.locator(`${href} h2`).isVisible(), true);
+    assert.equal(await page.locator(href).isVisible(), true);
     assert.ok(await page.locator(href).evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40), `${href} scrolls into view`);
   }
   await page.getByRole("link", { name: "Then return to merging the Base branch" }).click();
@@ -186,6 +229,7 @@ test("the guide's local links and styles resolve, including prompt deep links", 
     const response = await page.request.get(`${origin}${path}`);
     assert.equal(response.status(), 200, path);
   }
+  await page.getByRole("heading", { name: "Let the agent implement and review", exact: true }).click();
   await page.getByRole("link", { name: "the review procedure" }).click();
   await page.locator("#skill-thirdshift-code-review .job-body").waitFor({ state: "visible", timeout: 5000 });
   assert.deepEqual(errors, []);
@@ -199,6 +243,7 @@ for (const width of [320, 390, 768, 1280]) {
       viewport: { width, height: 900 },
     });
     await page.goto(`${origin}/how-it-works/`);
+    for (const heading of await page.locator("main h2").all()) await heading.click();
     const diagrams = page.locator("main figure");
     assert.equal(await diagrams.count(), 6);
     for (const diagram of await diagrams.all()) {
@@ -209,6 +254,31 @@ for (const width of [320, 390, 768, 1280]) {
       nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
     assert.deepEqual(overflow, [], "text and diagrams fit their containers");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
+  });
+}
+
+for (const javaScriptEnabled of [false, true]) {
+  test(`guide and manual deep links unfold their content (JavaScript: ${javaScriptEnabled})`, async (t) => {
+    const page = await pageForTest(t, { javaScriptEnabled });
+    for (const [path, fragment, text] of [
+      ["/how-it-works/", "delivery-sync", "Bring the latest upstream changes"],
+      ["/docs/", "when-the-claim-ends", "Sweep"],
+    ]) {
+      await page.goto(`${origin}${path}#${fragment}`);
+      const target = page.locator(`#${fragment}`);
+      await target.waitFor({ state: "visible", timeout: 2000 });
+      assert.match(await target.textContent(), new RegExp(text));
+      assert.ok(await target.evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40), "fragment scrolls into view");
+    }
+    await page.goto(`${origin}/docs/`);
+    const installLink = page.getByRole("navigation", { name: "Manual sections" }).getByRole("link", { name: "Install", exact: true });
+    await installLink.click();
+    assert.equal(await page.locator("#install > pre").first().isVisible(), true);
+    await page.getByRole("heading", { name: "Install", exact: true }).click();
+    assert.equal(await page.locator("#install > pre").first().isVisible(), false);
+    await installLink.click();
+    await page.locator("#install > pre").first().waitFor({ state: "visible", timeout: 2000 });
+    assert.equal(await page.locator("#workflows").isVisible(), false, "unrelated sections stay folded");
   });
 }
 
