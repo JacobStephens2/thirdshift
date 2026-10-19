@@ -34,6 +34,7 @@ pub enum NotificationAsk {
 struct Checked {
     resend: Resend,
     started: Instant,
+    started_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl Checked {
@@ -42,8 +43,13 @@ impl Checked {
     /// address is known and a Resend API key is found.
     fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
         let started = Instant::now();
+        let started_at = chrono::Utc::now();
         let resend = Resend::new(to, settings)?;
-        Ok(Checked { resend, started })
+        Ok(Checked {
+            resend,
+            started,
+            started_at,
+        })
     }
 }
 
@@ -82,7 +88,7 @@ pub struct RunNotification {
     checked: Checked,
     subject: Subject,
     /// The command's configured Harness, Model and Effort, once known.
-    built_with: Option<String>,
+    configured: Option<String>,
 }
 
 impl RunNotification {
@@ -111,7 +117,7 @@ impl RunNotification {
         Ok(RunNotification {
             checked,
             subject,
-            built_with: None,
+            configured: None,
         })
     }
 
@@ -129,7 +135,7 @@ impl RunNotification {
     /// Name the configured Harness, Model and Effort without claiming
     /// that the Harness confirmed which Model executed.
     pub fn built_with(&mut self, harness: &Choice) {
-        self.built_with = Some(format!("{} (configured)", harness.built_with()));
+        self.configured = Some(format!("{harness} (configured)"));
     }
 
     /// Send the one notification for the command that ended as `account`
@@ -146,11 +152,18 @@ impl RunNotification {
         let mut text = body(
             &self.subject,
             account,
-            self.built_with.as_deref(),
+            self.configured.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
         );
+        if account.pre_audit_failure.is_some() {
+            text += &format!(
+                "Started (UTC): {}\nDiagnostics:  Check this command's stderr on {} at that time (or the scheduler's captured stderr, if scheduled).\n",
+                self.checked.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                host.as_deref().unwrap_or("unknown host"),
+            );
+        }
         let lines = crate::session::recording::Recording::capture().notification_lines();
         if !lines.is_empty() {
             text += "\nSession models:\n";
@@ -205,7 +218,7 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 }
 
 /// The plain-text body of the notification for a command that ended as
-/// `account` tells, about `subject`, with its configured `built_with` line, if known,
+/// `account` tells, about `subject`, with its `configured` Harness, Model and Effort, if known,
 /// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
 /// outcome, as the subject gives it, then the original Issue URL when the
@@ -215,7 +228,7 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 fn body(
     subject: &Subject,
     account: &Account,
-    built_with: Option<&str>,
+    configured: Option<&str>,
     command_log: Option<&Path>,
     host: &str,
     took: Duration,
@@ -226,6 +239,7 @@ fn body(
     }
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
+            Err(_) if account.pre_audit_failure.is_some() => "not started",
             Err(_) if account.failed_reproduction.is_some() => "audit complete",
             Ok(line) => line.as_str(),
             Err(_) => account.outcome,
@@ -273,12 +287,14 @@ fn body(
         text += &format!("Pull request: {pr_url}\n");
     }
     // Security failure causes can quote private verifier work or Harness
-    // diagnostics. Only the fixed safeguard category is safe to send.
+    // diagnostics. Only fixed operational and safeguard categories are safe to send.
     if let Err(cause) = &account.ended
         && !account.interrupted
     {
         let cause = if account.security_findings.is_some() {
-            cause.safeguard_refusal()
+            account
+                .pre_audit_failure
+                .or_else(|| cause.safeguard_refusal())
         } else {
             Some(cause.full())
         };
@@ -298,8 +314,12 @@ fn body(
     if let Some(log) = command_log {
         text += &format!("Command log:  {}\n", log.display());
     }
-    if let Some(built_with) = built_with {
-        text += &format!("{built_with}\n");
+    if let Some(configured) = configured {
+        if account.pre_audit_failure.is_some() {
+            text += &format!("Configured:   {configured}\n");
+        } else {
+            text += &format!("Built with {configured}\n");
+        }
     }
     text += &format!("Host:         {host}\n");
     text += &format!("Took:         {}\n", progress::duration(took));
@@ -358,6 +378,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            pre_audit_failure: None,
             recovery: None,
             urls: vec![PR],
         }
@@ -378,6 +399,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            pre_audit_failure: None,
             recovery: None,
             urls: Vec::new(),
         }
@@ -582,7 +604,7 @@ mod tests {
             body(
                 &Subject::Pending,
                 &account,
-                Some("Built with claude · opus · high"),
+                Some("claude · opus · high"),
                 Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
                 "droplet-1",
                 Duration::from_secs(4)
