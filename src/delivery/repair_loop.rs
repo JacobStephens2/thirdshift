@@ -433,7 +433,7 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::github::{Check, CheckState};
+    use crate::github::{Check, Conclusion};
 
     /// What the Repair loop did outside itself, in the order it did it.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -490,7 +490,7 @@ mod tests {
                     .iter()
                     .map(|name| Check {
                         name: name.to_string(),
-                        state: CheckState::Failed,
+                        conclusion: Conclusion::Failure,
                         url: None,
                         job: None,
                     })

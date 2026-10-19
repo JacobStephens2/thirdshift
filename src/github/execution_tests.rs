@@ -697,14 +697,57 @@ esac
             let checks = github.checks_on(&issue(), "abc").unwrap();
             let answers: Vec<_> = checks
                 .iter()
-                .map(|check| (check.name.as_str(), check.state))
+                .map(|check| (check.name.as_str(), check.conclusion.clone()))
                 .collect();
             assert_eq!(
                 answers,
                 [
-                    ("build", CheckState::Passed),
-                    ("lint", CheckState::Failed),
-                    ("external", CheckState::Pending)
+                    ("build", Conclusion::Success),
+                    ("lint", Conclusion::Failure),
+                    ("external", Conclusion::Pending)
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn github_reports_each_check_as_github_named_it() {
+    with_recorded_signal(
+        "github::execution_tests::github_reports_each_check_as_github_named_it",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"
+case "$1 $2" in
+  'api --paginate')
+    if test "$4" = '.check_runs[]'; then
+      printf '%s\n' \
+        '{"name":"build","status":"completed","conclusion":"cancelled"}' \
+        '{"name":"test","status":"completed","conclusion":"timed_out"}' \
+        '{"name":"lint","status":"in_progress","conclusion":null}' \
+        '{"name":"docs","status":"completed","conclusion":null}' \
+        '{"name":"audit","status":"completed","conclusion":"someday"}'
+    else
+      printf '%s\n' '{"context":"external","state":"error"}'
+    fi ;;
+  *) exit 1 ;;
+esac
+"#,
+            );
+            let checks = GitHub::new().checks_on(&issue(), "abc").unwrap();
+            let answers: Vec<_> = checks
+                .iter()
+                .map(|check| (check.name.as_str(), check.conclusion.clone()))
+                .collect();
+            assert_eq!(
+                answers,
+                [
+                    ("build", Conclusion::Cancelled),
+                    ("test", Conclusion::TimedOut),
+                    ("lint", Conclusion::Unfinished),
+                    ("docs", Conclusion::Unrecognised(String::new())),
+                    ("audit", Conclusion::Unrecognised("someday".into())),
+                    ("external", Conclusion::Error),
                 ]
             );
         },
