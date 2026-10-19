@@ -128,17 +128,41 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
 
 #[test]
 fn two_machines_racing_for_a_ready_issue_start_exactly_one_run() {
-    for (is_spec, winner_finishes_first) in [(false, false), (true, false), (false, true)] {
-        pickup_race(is_spec, winner_finishes_first, false);
+    for race in [
+        PickupRace::Issue,
+        PickupRace::Spec,
+        PickupRace::SuccessfulWinner,
+    ] {
+        pickup_race(race);
     }
 }
 
 #[test]
 fn delayed_selector_after_failed_winner_still_starts_only_one_run() {
-    pickup_race(false, true, true);
+    pickup_race(PickupRace::FailedWinner);
 }
 
-fn pickup_race(is_spec: bool, winner_finishes_first: bool, winner_fails: bool) {
+#[test]
+fn stale_listing_must_not_adopt_an_active_claim_generation() {
+    pickup_race(PickupRace::ActiveClaimHistory);
+}
+
+enum PickupRace {
+    Issue,
+    Spec,
+    SuccessfulWinner,
+    FailedWinner,
+    ActiveClaimHistory,
+}
+
+fn pickup_race(race: PickupRace) {
+    let (is_spec, winner_finishes_first, winner_fails, active_history) = match race {
+        PickupRace::Issue => (false, false, false, false),
+        PickupRace::Spec => (true, false, false, false),
+        PickupRace::SuccessfulWinner => (false, true, false, false),
+        PickupRace::FailedWinner => (false, true, true, false),
+        PickupRace::ActiveClaimHistory => (false, true, true, true),
+    };
     let scenario = Scenario::new();
     // The generation check must protect even a repository that disables
     // settling, regardless of timestamp precision or either host's clock.
@@ -190,7 +214,49 @@ exec "{git}" "$@"
     };
     scenario.agent_does(&format!("if [ \"$HOLD_READY_READ\" = 1 ]; then exit 1; fi\ntouch \"$TMPDIR/winner-started\"\nwhile [ -d \"$TMPDIR\" ] && [ ! -f \"$TMPDIR/finish-winner\" ]; do sleep 0.02; done\n{ending}"));
 
-    let stale = scenario.run_until(&["pickup"], &[("HOLD_READY_READ", "1")], "tmp/ready-read");
+    if active_history {
+        // Preserve the old listing, then preserve the candidate response
+        // sampled while the winner's Claim is active. This barrier lets a
+        // correct search reject that history before any Issue branch read.
+        fs::create_dir_all(scenario.path("bin/real")).unwrap();
+        fs::rename(scenario.path("bin/gh"), scenario.path("bin/real/gh")).unwrap();
+        fs::write(
+            scenario.path("bin/gh"),
+            r#"#!/bin/sh
+if [ "$HOLD_READY_READ" = 1 ]; then
+    case "$1 $2 $*" in
+    'issue list '*ready-for-agent*)
+        if [ ! -f "$TMPDIR/listing-read" ]; then
+            "$(dirname "$0")/real/gh" "$@" > "$TMPDIR/listing-answer" || exit $?
+            touch "$TMPDIR/listing-read"
+            while [ -d "$TMPDIR" ] && [ ! -f "$TMPDIR/release-listing" ]; do sleep 0.02; done
+            cat "$TMPDIR/listing-answer"
+            exit 0
+        fi
+        ;;
+    'api graphql '*timelineItems*)
+        if [ ! -f "$TMPDIR/candidate-read" ]; then
+            "$(dirname "$0")/real/gh" "$@" > "$TMPDIR/candidate-answer" || exit $?
+            touch "$TMPDIR/candidate-read"
+            while [ -d "$TMPDIR" ] && [ ! -f "$TMPDIR/release-candidate" ]; do sleep 0.02; done
+            cat "$TMPDIR/candidate-answer"
+            exit 0
+        fi
+        ;;
+    esac
+fi
+exec "$(dirname "$0")/real/gh" "$@"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let started = if active_history {
+        "tmp/listing-read"
+    } else {
+        "tmp/ready-read"
+    };
+    let stale = scenario.run_until(&["pickup"], &[("HOLD_READY_READ", "1")], started);
     let other_home = scenario.path("other-home");
     let winner = std::panic::catch_unwind(|| {
         scenario.run_from_until(
@@ -204,10 +270,23 @@ exec "{git}" "$@"
         Ok(winner) => winner,
         Err(panic) => {
             fs::write(scenario.path("tmp/release-ready"), "").unwrap();
+            fs::write(scenario.path("tmp/release-listing"), "").unwrap();
+            fs::write(scenario.path("tmp/release-candidate"), "").unwrap();
             fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
             stale.finish();
             std::panic::resume_unwind(panic);
         }
+    };
+    let candidate_seen = if active_history {
+        fs::write(scenario.path("tmp/release-listing"), "").unwrap();
+        let deadline = std::time::Instant::now() + support::WAIT_BOUND;
+        while !scenario.path("tmp/candidate-read").exists() && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        scenario.path("tmp/candidate-read").exists()
+    } else {
+        true
     };
     let mut winner = Some(winner);
     let winner_result = if winner_finishes_first {
@@ -220,6 +299,7 @@ exec "{git}" "$@"
     let branches = scenario.origin_git(&["show-ref"]);
     let prs = scenario.gh_state()["prs"].clone();
     fs::write(scenario.path("tmp/release-ready"), "").unwrap();
+    fs::write(scenario.path("tmp/release-candidate"), "").unwrap();
     let stale = stale.finish();
     let labels_after = scenario.issue_labels(7);
     let branches_after = scenario.origin_git(&["show-ref"]);
@@ -229,6 +309,10 @@ exec "{git}" "$@"
         winner.finish();
     }
 
+    assert!(
+        candidate_seen,
+        "stale selector never sampled active Claim history"
+    );
     assert_eq!(stale.code, Some(0), "{}", stale.stderr);
     if let Some(winner) = winner_result {
         assert_eq!(

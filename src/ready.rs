@@ -300,6 +300,9 @@ fn standing_of(
         return passed_over(Reason::SecurityFix);
     }
     let read = reads.candidate(&candidate.issue)?;
+    if read.claimed {
+        return passed_over(Reason::Claimed);
+    }
     if let Some(spec) = read.parent {
         return passed_over(Reason::Ticket(spec));
     }
@@ -389,6 +392,7 @@ mod tests {
             let facts = self.facts(issue);
             Ok(Candidate {
                 claim_generation: 0,
+                claimed: false,
                 parent: facts.and_then(|facts| facts.parent.clone()),
                 sub_issue_is_open: facts
                     .map(|facts| facts.sub_issue_is_open.clone())

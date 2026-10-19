@@ -404,6 +404,7 @@ impl GitHub {
             last_shaped: shaped.into_iter().max_by_key(|shaped| shaped.at),
             handed_back: matches!(history, ClaimHistory::HandedBack),
             claim_generation,
+            claimed: matches!(history, ClaimHistory::Claimed),
         })
     }
 
@@ -944,6 +945,9 @@ pub struct Candidate {
     /// Number of Claim applications in complete timeline order. Detects a
     /// Claim made since selection, even if it ended in the same second.
     pub claim_generation: usize,
+    /// A Claim is active at the history sample, even if a prior issue listing
+    /// still showed only `ready-for-agent`.
+    pub claimed: bool,
 }
 
 impl Candidate {

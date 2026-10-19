@@ -18,6 +18,8 @@ label history with the observation made during selection. An intervening Claim
 invalidates that selection even if a failed winner restored Ready. Timeline
 order handles same-second changes without comparing the hosts' clocks, and
 still works with settling disabled. A new later pass can select Ready again.
+Selection also rejects an active Claim in that history, even when an older
+issue listing still showed Ready; it cannot adopt the winner's active generation.
 A busy or stale selection skips with exit 0 and no
 notification. A remote error without evidence of another owner fails closed.
 

@@ -756,7 +756,7 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
             .iter()
             .any(|label| label.str().eq_ignore_ascii_case(name.str()))
     };
-    let at = string(&now());
+    let at = string(now());
     let events = before
         .iter()
         .filter(|label| !contains(&labels, label))
