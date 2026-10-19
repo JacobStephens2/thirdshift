@@ -139,7 +139,7 @@ fn a_notification_keeps_current_models_when_an_owned_record_is_corrupt() {
     let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
     let command_logs = scenario.log_files(folder, "log");
     assert_eq!(command_logs.len(), 1, "{command_logs:?}");
-    let stamp = command_logs[0]
+    let identity_fragment = command_logs[0]
         .strip_prefix("7-")
         .unwrap()
         .strip_suffix(".log")
@@ -147,7 +147,7 @@ fn a_notification_keeps_current_models_when_an_owned_record_is_corrupt() {
     std::fs::write(
         scenario
             .path(folder)
-            .join(format!("8-{stamp}-implement.models.json")),
+            .join(format!("8-{identity_fragment}-implement.models.json")),
         "{ truncated",
     )
     .unwrap();
