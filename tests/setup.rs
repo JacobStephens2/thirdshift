@@ -215,6 +215,7 @@ fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then
  {
     let scenario = Scenario::new();
     let original = "# my machine\n[logs]\ndir = '/var/log/ts' # custom\n\
+                    waiting_line_minutes = 2 # waiting\n\
                     [merge]\nalways = true # merge\n\
                     [pickup]\nwait_minutes = 60 # time to attach Tickets\n";
     let path = scenario.user_config_is(original);
@@ -229,6 +230,7 @@ fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then
     assert!(text.starts_with(original), "{text}");
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["logs"]["dir"].as_str(), Some("/var/log/ts"));
+    assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(2));
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(60));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
     let metadata = fs::metadata(&path).unwrap();
