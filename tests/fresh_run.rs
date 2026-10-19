@@ -27,6 +27,72 @@ fn prints_only_the_pr_url_and_exits_zero() {
 }
 
 #[test]
+fn a_direct_run_warns_about_an_untrusted_author_and_still_delivers_its_pr() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert!(
+        result
+            .stderr
+            .contains("warning: #7 issue author is not a Trusted account"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn a_direct_run_warns_about_missing_ready_label_history_and_still_delivers_its_pr() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": []});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert!(
+        result.stderr.contains(
+            "warning: #7 most recent ready-for-agent label actor is not a Trusted account"
+        ),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn a_direct_run_warns_when_trust_cannot_be_checked_and_still_delivers_its_pr() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+    let mut state = scenario.gh_state();
+    state["failing"] = serde_json::json!(["api repos/acme/widgets/issues/7"]);
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert!(
+        result
+            .stderr
+            .contains("warning: could not check trust for #7"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_push() {
     let scenario = Scenario::new();
     scenario.launch_has_rejecting_pre_push_hook();

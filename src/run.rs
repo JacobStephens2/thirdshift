@@ -166,6 +166,14 @@ fn run(
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
+        match GitHub::new().issue_trust(issue) {
+            Ok(Some(check)) => progress::step(format!("warning: #{} {check}", issue.number)),
+            Ok(None) => {}
+            Err(error) => progress::step(format!(
+                "warning: could not check trust for #{}: {error:#}",
+                issue.number
+            )),
+        }
         asks.harness.check()?;
         base_fix.runs_on(asks.harness.clone());
     }
