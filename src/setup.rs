@@ -1130,6 +1130,11 @@ waiting_line_minutes = 5
 days = 7
 silent_minutes = 10
 
+[console]
+port = 8711
+other_consoles = []
+theme = \"focus-auto\"
+
 [activity]
 quiet_skips = true
 
