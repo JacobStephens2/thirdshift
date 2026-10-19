@@ -14,18 +14,18 @@ use crate::logs::owner;
 use crate::progress::ChildLine;
 
 #[derive(Clone, Serialize)]
-pub(super) struct Command {
+pub(in crate::logs) struct Command {
     pub repository: String,
-    pub(super) kind: String,
-    pub(super) issue: Option<Issue>,
+    pub(in crate::logs) kind: String,
+    pub(in crate::logs) issue: Option<Issue>,
     harness: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     pub started_at: String,
     pub ended_at: Option<String>,
-    outcome: Option<String>,
-    pub(super) command_log: Option<PathBuf>,
-    pub(super) session_logs: Vec<PathBuf>,
+    pub(in crate::logs) outcome: Option<String>,
+    pub(in crate::logs) command_log: Option<PathBuf>,
+    pub(in crate::logs) session_logs: Vec<PathBuf>,
     stages: [(); 0],
     stage: Option<()>,
     source: &'static str,
@@ -61,22 +61,6 @@ impl Command {
             source,
             state: "unknown",
         }
-    }
-
-    pub fn print(&self) {
-        let issue = self
-            .issue
-            .as_ref()
-            .map(|issue| format!("#{}", issue.number))
-            .unwrap_or_default();
-        println!(
-            "{}{issue} {} · {} → {} · {}",
-            self.repository,
-            self.kind,
-            self.started_at,
-            self.ended_at.as_deref().unwrap_or("unknown end"),
-            self.outcome.as_deref().unwrap_or("unknown outcome")
-        );
     }
 }
 
@@ -131,7 +115,7 @@ impl Started {
     }
 }
 
-pub(super) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<Vec<Command>> {
+pub(in crate::logs) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<Vec<Command>> {
     let repository = format!(
         "{}/{}",
         repo.parent()

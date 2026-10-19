@@ -16,6 +16,7 @@ mod command_record;
 mod effects;
 pub(crate) mod owner;
 mod process_identity;
+mod reading;
 mod recording;
 pub mod status;
 pub mod stop;
