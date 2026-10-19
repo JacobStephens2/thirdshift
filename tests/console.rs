@@ -281,7 +281,14 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     let binary = home.path().join("thirdshift");
-    fs::copy(env!("CARGO_BIN_EXE_thirdshift"), &binary).unwrap();
+    // A child forked by another test can inherit fs::copy's writer and keep
+    // the executable "Text file busy". Only the copying process opens it here.
+    let copied = Command::new("cp")
+        .arg(env!("CARGO_BIN_EXE_thirdshift"))
+        .arg(&binary)
+        .status()
+        .unwrap();
+    assert!(copied.success());
     let console = Console::start(&binary, home.path());
     assert_eq!(console.get("/").status(), 200);
     let replacement = home.path().join("replacement");
