@@ -1,4 +1,4 @@
-// Fragment links on the Prompts and skills page reveal their folded target.
+// Fragment links reveal folded content on the guide, manual and prompts pages.
 function revealFoldedTarget() {
   let id;
   try {

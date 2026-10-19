@@ -7,13 +7,23 @@ const source = new URL("../docs/guide.md", import.meta.url);
 const output = new URL("docs/index.html", import.meta.url);
 const slugger = new GithubSlugger();
 const sections = [];
+const folds = [];
 const markdown = new Marked({
   renderer: {
     heading({ tokens, depth, text }) {
       const id = slugger.slug(text);
       const content = this.parser.parseInline(tokens);
       if (depth === 2) sections.push(`<li><a href="#${id}">${content}</a></li>`);
-      return `<h${depth} id="${id}">${content}</h${depth}>\n`;
+      if (depth === 1) return `<h1 id="${id}">${content}</h1>\n`;
+      let closed = "";
+      while (folds.length && folds.at(-1) >= depth) {
+        folds.pop();
+        closed += "</div></details>\n";
+      }
+      folds.push(depth);
+      // Keep the existing fragment on the content: native fragment navigation
+      // reveals its containing disclosures even when JavaScript is disabled.
+      return `${closed}<details class="fold"><summary><h${depth}>${content}</h${depth}></summary>\n<div class="manual-content" id="${id}">\n`;
     },
   },
   walkTokens(token) {
@@ -24,7 +34,7 @@ const markdown = new Marked({
     token.href = new URL(token.href, "https://github.com/JacobStephens2/thirdshift/blob/main/docs/").href;
   },
 });
-const content = markdown.parse(await readFile(source, "utf8"));
+const content = markdown.parse(await readFile(source, "utf8")) + "</div></details>\n".repeat(folds.length);
 const page = `<!doctype html>
 <!-- Generated from docs/guide.md by site/generate-docs.mjs. Run: cd site && npm run docs -->
 <html lang="en">
@@ -49,6 +59,7 @@ const page = `<!doctype html>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 <link rel="stylesheet" href="/docs/docs.css">
+<script src="/main.js" defer></script>
 </head>
 <body class="manual">
 <a class="skip-manual" href="#thirdshift">Skip to the manual</a>
