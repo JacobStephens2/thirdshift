@@ -18,7 +18,7 @@ use anyhow::Result;
 
 mod repair_loop;
 
-use crate::pull_request::{Identified, MergeAttempt, PullRequest};
+use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 
 use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
@@ -82,7 +82,9 @@ impl Delivery<'_> {
     /// is tried again on the new head; if that round finds nothing to fix,
     /// this fails with a `PolicyRefusal`. Any failure goes through the Failed
     /// run path, which keeps the worktree if its work did not reach origin;
-    /// otherwise it is cleaned up when this returns.
+    /// otherwise it is cleaned up when this returns. A gate observing an
+    /// already merged PR completes as merged only if that head includes all
+    /// local work; no further publication or PR mutations are performed.
     pub fn deliver(
         self,
         worktree: Worktree,
@@ -125,6 +127,17 @@ impl Delivery<'_> {
                 ticket_lines: Vec::new(),
             }),
             Err(error) => {
+                if let Some(merged) = error.downcast_ref::<AlreadyMerged>()
+                    && worktree.fully_landed_at(&merged.head).unwrap_or(false)
+                {
+                    progress::step("the pull request was merged while Delivery was running");
+                    return Ok(Reached {
+                        pr_url: merged.pr.url.clone(),
+                        goal: Goal::Merged,
+                        log,
+                        ticket_lines: Vec::new(),
+                    });
+                }
                 if error.is::<SecurityHold>() {
                     stage.set(Stage::SecurityReview);
                 }
