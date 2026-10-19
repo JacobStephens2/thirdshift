@@ -310,7 +310,6 @@ impl<O: Outside> Record<O> {
                 name: name.into(),
                 began_at: self.outside.now().to_rfc3339(),
                 session_log: facts.session_log.clone(),
-                usual_range: None,
             });
         } else if let Some(stage) = facts.stages.last_mut() {
             stage.session_log = facts.session_log.clone();

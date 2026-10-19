@@ -162,7 +162,7 @@ fn slow_uses_the_repositorys_last_thirty_records_and_escalates_at_twice_the_top(
     assert_eq!(run.status()["health"]["state"], "ok");
     let shown = run.scenario.run(&["show", "widgets#7", "--json"]);
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-    assert!(shown["command"]["stages"][0]["usual_range"].is_null());
+    assert!(shown["command"]["usual_ranges"]["implement"].is_null());
     run.history(12, Some(20), 100, "acme/widgets");
     for number in 20..46 {
         run.history(number, None, 200, "acme/widgets");
@@ -184,7 +184,7 @@ fn slow_uses_the_repositorys_last_thirty_records_and_escalates_at_twice_the_top(
         assert_eq!(shown.code, Some(0), "{}", shown.stderr);
         let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
         assert_eq!(
-            shown["command"]["stages"][0]["usual_range"],
+            shown["command"]["usual_ranges"]["implement"],
             json!({"lower_seconds":720.0, "upper_seconds":1020.0})
         );
         assert_eq!(shown["command"]["health"]["state"], "slow");

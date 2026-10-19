@@ -196,6 +196,7 @@ pub(super) struct Command {
     pub(super) command_log: PathBuf,
     pub(super) dispatched: Vec<Command>,
     pub(super) health: Option<Health>,
+    pub(super) usual_ranges: BTreeMap<String, UsualRange>,
 }
 
 #[derive(Serialize)]
@@ -231,6 +232,7 @@ impl Command {
             source: "command_record",
             dispatched: Vec::new(),
             health: None,
+            usual_ranges: BTreeMap::new(),
         }
     }
 }

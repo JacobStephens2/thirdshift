@@ -39,8 +39,9 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
         );
     }
     for stage in &command.record.stages {
-        let usual = stage
-            .usual_range
+        let usual = command
+            .usual_ranges
+            .get(&stage.name)
             .map(|range| format!(" · usual {}", range.text()))
             .unwrap_or_default();
         println!("{indent}  {} · {}{usual}", stage.name, stage.began_at);

@@ -162,9 +162,16 @@ pub(super) fn observe(
     ranges: &UsualRanges,
 ) {
     let log = outer_log.unwrap_or(&command.command_log);
-    for stage in &mut command.record.stages {
-        stage.usual_range = ranges.get(&command.record.repository, &stage.name);
-    }
+    command.usual_ranges = command
+        .record
+        .stages
+        .iter()
+        .filter_map(|stage| {
+            ranges
+                .get(&command.record.repository, &stage.name)
+                .map(|range| (stage.name.clone(), range))
+        })
+        .collect();
     if command.state == "live" {
         command.health = Some(Health::Ok);
         if let Some(stage) = &command.stage {

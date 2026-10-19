@@ -98,9 +98,6 @@ pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
     pub session_log: Option<PathBuf>,
-    /// Reader enrichment only; a writer never sets or retains this observation.
-    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
-    pub usual_range: Option<super::reading::UsualRange>,
 }
 
 /// Internal transitions are typed; persisted names stay tolerant of new stages.
