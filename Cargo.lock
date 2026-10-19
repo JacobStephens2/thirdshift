@@ -1601,6 +1601,7 @@ dependencies = [
  "axoupdater",
  "axum",
  "chrono",
+ "futures-util",
  "include_dir",
  "libc",
  "reqwest",

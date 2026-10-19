@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Logs · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"></head>
+<body><header><p class="brand">thirdshift / Console</p><nav aria-label="Pages"><a href="/">1 Inbox</a><a href="/logs" aria-current="page">6 Logs</a></nav></header>
+<main><div class="page-title"><h1>Logs</h1><code>thirdshift logs --json</code></div>
+<ul class="log-list">{% for log in logs %}<li><a href="/logs/{{ log.id }}">{{ log.kind }} · {{ log.name }}</a> {% if log.live %}<strong>live</strong>{% endif %}<span>{{ log.command }}</span></li>{% endfor %}</ul>
+{% if logs.is_empty() %}<p>No logs found.</p>{% endif %}
+</main></body></html>

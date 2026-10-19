@@ -30,3 +30,19 @@ The header names this machine and links to those addresses, without fetching
 them. The first page pairs with `thirdshift status`. A refresh reads the current
 records; server-push updates are a later Ticket. Replacing the installed binary
 makes the Console re-execute itself with its original arguments.
+
+Page 6, `/logs`, lists every Command log and Session log in the current
+`commands/` layout, including Security logs, and marks the live ones. Every
+Command row links to its Run and Session logs, including child Ticket Runs.
+Older `sessions/` folders are not linked. The same inventory is available with
+`thirdshift logs` or `thirdshift logs --json`; `thirdshift logs --file <id>`
+reads an exact listed file and accepts `--follow`.
+
+Command logs are plain text. Claude and Codex Session logs are conversations
+with folded tool groups, collapsed thinking, Bash, Edit, Read and Grep views,
+and plain output for unfamiliar events. A live reader uses its own SSE stream
+to append escaped HTML from a byte offset. Reconnecting resumes from the last
+event's byte offset; incomplete live lines wait until their newline arrives.
+The Follow newest line checkbox lets you read back while the Session grows.
+The Playwright log test checks appends, retained DOM identity, folding across
+batches, incomplete lines, reconnection and following on a phone viewport.
