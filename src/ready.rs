@@ -41,6 +41,29 @@ pub fn first(launch: &Git, repo: &Repo, wait: TimeDelta) -> Result<Option<ReadyI
     Search::new(&reads, candidates, Utc::now(), wait, progress::step).first_ready()
 }
 
+/// Recheck only the selected issue after Pickup reserves it on origin. A
+/// stale selection must not start a Continuation after the winner finished.
+/// Refresh Spec status as well: shaping may have changed since the listing.
+pub fn refresh(launch: &Git, issue: IssueUrl, wait: TimeDelta) -> Result<Option<ReadyIssue>> {
+    let reads = GitHubAndOrigin {
+        launch,
+        github: GitHub::new(),
+    };
+    let current = reads.github.issue(&issue)?;
+    if !current.is_open || !current.labels.has(READY_FOR_AGENT) {
+        return Ok(None);
+    }
+    let listed = ListedIssue {
+        issue,
+        title: current.title.unwrap_or_default(),
+        labels: current.labels,
+    };
+    match standing_of(&reads, &listed, Utc::now(), wait)? {
+        Standing::Ready { is_spec } => Ok(Some(ReadyIssue { listed, is_spec })),
+        Standing::PassedOver(_) => Ok(None),
+    }
+}
+
 /// What the search reads of an issue beyond its listing, each only when a
 /// rule needs it.
 trait Reads {

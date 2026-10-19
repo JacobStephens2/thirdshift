@@ -107,6 +107,264 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
         "{prompt}"
     );
     scenario.assert_cleaned_up("issue-7");
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        ""
+    );
+}
+
+#[test]
+fn two_machines_racing_for_a_ready_issue_start_exactly_one_run() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for (is_spec, winner_finishes_first) in [(false, false), (true, false), (false, true)] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        if is_spec {
+            scenario.spec_has_tickets(7, &[(8, &[])]);
+        }
+        fs::create_dir_all(scenario.path("machine-2")).unwrap();
+        scenario.launch_git(&[
+            "clone",
+            "-q",
+            &scenario.github_url(),
+            scenario.path("machine-2/widgets").to_str().unwrap(),
+        ]);
+        fs::create_dir_all(scenario.path("other-home")).unwrap();
+        fs::copy(
+            scenario.path("home/.gitconfig"),
+            scenario.path("other-home/.gitconfig"),
+        )
+        .unwrap();
+
+        // Both hosts read Ready before either makes its Claim. Keep the first
+        // host's empty origin listing even after the second has started work.
+        let git = std::process::Command::new("which")
+            .arg("git")
+            .output()
+            .unwrap();
+        let git = String::from_utf8(git.stdout).unwrap();
+        let wrapper = format!(
+            r#"#!/bin/sh
+if [ "$HOLD_READY_READ" = 1 ] && [ "$*" = 'ls-remote --heads origin refs/heads/issue-7 refs/heads/issue-7-branch-*' ] && [ ! -f "$TMPDIR/ready-read" ]; then
+    "{git}" "$@" > "$TMPDIR/ready-answer" || exit $?
+    touch "$TMPDIR/ready-read"
+    while [ ! -f "$TMPDIR/release-ready" ]; do sleep 0.02; done
+    cat "$TMPDIR/ready-answer"
+    exit 0
+fi
+exec "{git}" "$@"
+"#,
+            git = git.trim(),
+        );
+        fs::write(scenario.path("bin/git"), wrapper).unwrap();
+        fs::set_permissions(scenario.path("bin/git"), fs::Permissions::from_mode(0o755)).unwrap();
+        let ending = if winner_finishes_first {
+            agent_opens_pr(7, "main")
+        } else {
+            "exit 1\n".to_string()
+        };
+        scenario.agent_does(&format!("if [ \"$HOLD_READY_READ\" = 1 ]; then exit 1; fi\ntouch \"$TMPDIR/winner-started\"\nwhile [ -d \"$TMPDIR\" ] && [ ! -f \"$TMPDIR/finish-winner\" ]; do sleep 0.02; done\n{ending}"));
+
+        let stale = scenario.run_until(&["pickup"], &[("HOLD_READY_READ", "1")], "tmp/ready-read");
+        let other_home = scenario.path("other-home");
+        let winner = std::panic::catch_unwind(|| {
+            scenario.run_from_until(
+                &scenario.path("machine-2/widgets"),
+                &["pickup"],
+                &[("HOME", other_home.to_str().unwrap())],
+                "tmp/winner-started",
+            )
+        });
+        let winner = match winner {
+            Ok(winner) => winner,
+            Err(panic) => {
+                fs::write(scenario.path("tmp/release-ready"), "").unwrap();
+                fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
+                stale.finish();
+                std::panic::resume_unwind(panic);
+            }
+        };
+        let mut winner = Some(winner);
+        let winner_result = if winner_finishes_first {
+            fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
+            Some(winner.take().unwrap().finish())
+        } else {
+            None
+        };
+        let labels = scenario.issue_labels(7);
+        let branches = scenario.origin_git(&["show-ref"]);
+        let prs = scenario.gh_state()["prs"].clone();
+        fs::write(scenario.path("tmp/release-ready"), "").unwrap();
+        let stale = stale.finish();
+        let labels_after = scenario.issue_labels(7);
+        let branches_after = scenario.origin_git(&["show-ref"]);
+        let prs_after = scenario.gh_state()["prs"].clone();
+        fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
+        if let Some(winner) = winner {
+            winner.finish();
+        }
+
+        assert_eq!(stale.code, Some(0), "{}", stale.stderr);
+        if let Some(winner) = winner_result {
+            assert_eq!(winner.code, Some(0), "{}", winner.stderr);
+        }
+        assert!(stale.stdout.is_empty(), "{}", stale.stdout);
+        assert_eq!(scenario.claude_calls().len(), 1, "{}", stale.stderr);
+        assert_eq!(labels_after, labels);
+        assert_eq!(branches_after, branches);
+        assert_eq!(prs_after, prs);
+    }
+}
+
+#[test]
+fn a_reservation_left_by_a_crashed_host_is_not_stolen() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("thirdshift/pickup/7", "main", &[]);
+    let before = scenario.origin_git(&["show-ref"]);
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("reserved by another Pickup run"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stdout.is_empty());
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.origin_git(&["show-ref"]), before);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn ending_a_pickup_does_not_delete_a_replaced_reservation() {
+    let scenario = Scenario::new();
+    let held = pickup_run_held_on_issue_7(&scenario);
+    let replacement = scenario.origin_git(&["rev-parse", "main"]);
+    scenario.origin_git(&[
+        "update-ref",
+        "refs/heads/thirdshift/pickup/7",
+        replacement.trim(),
+    ]);
+
+    release(&scenario);
+    let result = held.finish();
+
+    assert!(
+        result
+            .stderr
+            .contains("could not release Pickup reservation"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.origin_git(&["rev-parse", "refs/heads/thirdshift/pickup/7"]),
+        replacement
+    );
+}
+
+#[test]
+fn a_reservation_push_rejection_fails_before_any_claim_or_session() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let hook = scenario.origin_dir().join("hooks/pre-receive");
+    fs::write(
+        &hook,
+        "#!/bin/sh\necho 'reservations forbidden' >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(hook, fs::Permissions::from_mode(0o755)).unwrap();
+    let before = scenario.origin_git(&["show-ref"]);
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("could not reserve refs/heads/thirdshift/pickup/7"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.origin_git(&["show-ref"]), before);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn an_uncertain_successful_push_retains_the_reservation_without_dispatching() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let git = std::process::Command::new("which")
+        .arg("git")
+        .output()
+        .unwrap();
+    let git = String::from_utf8(git.stdout).unwrap();
+    let wrapper = format!(
+        r#"#!/bin/sh
+if [ "$1" = push ]; then
+    "{git}" "$@" || exit $?
+    echo 'lost push acknowledgement' >&2
+    exit 1
+fi
+exec "{git}" "$@"
+"#,
+        git = git.trim()
+    );
+    fs::write(scenario.path("bin/git"), wrapper).unwrap();
+    fs::set_permissions(scenario.path("bin/git"), fs::Permissions::from_mode(0o755)).unwrap();
+
+    let failed = scenario.run(&["pickup"]);
+    let reservation = scenario.origin_git(&["rev-parse", "refs/heads/thirdshift/pickup/7"]);
+    let retried = scenario.run(&["pickup"]);
+
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    assert!(
+        failed.stderr.contains("check origin by hand"),
+        "{}",
+        failed.stderr
+    );
+    assert_eq!(retried.code, Some(0), "{}", retried.stderr);
+    assert!(retried.stderr.contains("reserved by another Pickup run"));
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert_eq!(
+        scenario.origin_git(&["rev-parse", "refs/heads/thirdshift/pickup/7"]),
+        reservation
+    );
+    assert!(scenario.origin_log("issue-7").is_none());
+}
+
+#[test]
+fn an_interrupted_pickup_releases_its_reservation_after_ending_its_claim() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let mut held = scenario.run_until(&["pickup"], &[], "started");
+    assert!(
+        !scenario
+            .origin_git(&["show-ref", "--heads", "thirdshift/pickup/7"])
+            .is_empty()
+    );
+
+    held.signal("INT");
+    release(&scenario);
+    let result = held.finish();
+
+    assert_ne!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        ""
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
 }
 
 /// What a skipped Pickup run says when the scenario's repository has no

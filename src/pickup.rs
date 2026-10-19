@@ -25,6 +25,8 @@ use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
 use crate::ready::ReadyIssue;
 use crate::run::Ended;
 
+mod reservation;
+
 /// How a Pickup run ended, short of a failure.
 pub enum Outcome {
     /// It took a Ready issue and dispatched it.
@@ -57,6 +59,8 @@ pub enum Skipped {
     },
     /// The repository has no Ready issue.
     NoReadyIssue(Repo),
+    /// A Ready issue was reserved by another host or ceased to be Ready.
+    IssueUnavailable(IssueUrl),
 }
 
 impl fmt::Display for Skipped {
@@ -75,6 +79,12 @@ impl fmt::Display for Skipped {
                 claim::IN_PROGRESS
             ),
             Self::NoReadyIssue(repo) => write!(f, "no Ready issue on {}", repo.slug()),
+            Self::IssueUnavailable(issue) => write!(
+                f,
+                "#{} is reserved by another Pickup run or is no longer Ready; \
+                 check refs/heads/thirdshift/pickup/{} on origin if it stays reserved",
+                issue.number, issue.number
+            ),
         }
     }
 }
@@ -86,8 +96,9 @@ impl fmt::Display for Skipped {
 /// the Pickup run's Base branch. The Base branch is `base`, the branch the
 /// command named, whatever the Launch directory has checked out, or without
 /// one the branch checked out there. Nothing is changed in the Launch
-/// directory, nor on the issue taken: the run it is dispatched as makes the
-/// Claim.
+/// directory's checkout, nor on the issue taken: the run it is dispatched as
+/// makes the Claim. An auxiliary origin ref reserves the issue across hosts
+/// before dispatch; a stale Ready selection is rechecked while it is held.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
 /// skipped if another Pass on the same repository
@@ -123,7 +134,23 @@ pub fn run(
         flags,
         config,
     };
-    run_through(&mut outside, &repo, base.name(), config.pickup_limit)
+    run_through(
+        &mut outside,
+        &repo,
+        base.name(),
+        config.pickup_limit,
+        |ready| {
+            let Some(reservation) =
+                reservation::Reservation::take(directory.git(), &ready.listed.issue)?
+            else {
+                return Ok(None);
+            };
+            Ok(
+                crate::ready::refresh(directory.git(), ready.listed.issue, config.pickup_wait)?
+                    .map(|ready| (ready, reservation)),
+            )
+        },
+    )
 }
 
 /// [`run`], once it holds its repository's lock, on `repo` with the Base
@@ -133,18 +160,26 @@ pub fn run(
 /// any work if it can't run; then the record that it started work on the
 /// issue, which keeps its Command log; then the issue dispatched, a Spec
 /// run on a Spec and a Run otherwise, on `base`.
-fn run_through(
+fn run_through<R>(
     outside: &mut impl Outside,
     repo: &Repo,
     base: &str,
     limit: NonZeroUsize,
+    reserve: impl FnOnce(ReadyIssue) -> Result<Option<(ReadyIssue, R)>>,
 ) -> Result<Outcome> {
-    let ReadyIssue { listed, is_spec } = match gates(outside, repo, limit)? {
+    let ready = match gates(outside, repo, limit)? {
         Decision::Take(ready) => ready,
         Decision::Skip(skipped) => {
             outside.skipped(Pass::Pickup, &skipped);
             return Ok(Outcome::Skipped(skipped));
         }
+    };
+    let unavailable = Skipped::IssueUnavailable(ready.listed.issue.clone());
+    // A reservation spans dispatch, including Claim ending and Failed run
+    // preservation. No start is recorded and no Claim made by a losing host.
+    let Some((ReadyIssue { listed, is_spec }, _reservation)) = reserve(ready)? else {
+        outside.skipped(Pass::Pickup, &unavailable);
+        return Ok(Outcome::Skipped(unavailable));
     };
     outside.step(format!(
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
@@ -448,7 +483,9 @@ mod tests {
     fn pickup(repo: InMemory) -> (Result<Outcome>, Vec<Call>) {
         let mut repo = repo.dispatched_ending(ready_for_review());
         let limit = NonZeroUsize::new(3).unwrap();
-        let outcome = run_through(&mut repo, &widgets(), "main", limit);
+        let outcome = run_through(&mut repo, &widgets(), "main", limit, |ready| {
+            Ok(Some((ready, ())))
+        });
         (outcome, repo.calls)
     }
 
