@@ -1378,6 +1378,50 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
 }
 
 #[test]
+fn a_transient_github_read_recovers_without_a_failure_notification() {
+    let scenario = scenario();
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    let mut github = scenario.gh_state();
+    github["fail_next"] = serde_json::json!({
+        "call": "issue list",
+        "times": 1,
+        "error": "HTTP 504: Gateway Timeout (https://api.github.com/graphql)",
+    });
+    scenario.write_gh_state(&github);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--plan-only", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+    let retry = "gh issue list failed (attempt 1/3)";
+    assert_eq!(result.stderr.matches(retry).count(), 1, "{}", result.stderr);
+    assert!(result.stderr.contains("HTTP 504"));
+    let calls = scenario.gh_calls_of("issue", "list");
+    assert_eq!(
+        calls[0], calls[1],
+        "the failed observation was not repeated"
+    );
+    let (subject, _) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: plan published"
+    );
+    let command_logs =
+        fs::read_dir(scenario.path("home/.thirdshift/logs/acme/widgets/commands/architect"))
+            .unwrap();
+    let log = command_logs
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "log"))
+        .unwrap();
+    assert!(fs::read_to_string(log).unwrap().contains(retry));
+}
+
+#[test]
 fn plan_only_sends_one_notification_naming_the_plan() {
     let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
