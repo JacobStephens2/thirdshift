@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::process::{Command, Output};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -62,7 +63,7 @@ pub(crate) fn operational_cause(error: &anyhow::Error) -> Option<&'static str> {
     let stderr = match error.downcast_ref::<CommandFailure>() {
         Some(CommandFailure::Rejected { stderr, .. }) => stderr,
         Some(_) => return Some("GitHub dependency failure"),
-        None => &error.downcast_ref::<check_read::ApiFailure>()?.stderr,
+        None => &error.downcast_ref::<check_read::ReadFailure>()?.stderr,
     };
     let stderr = stderr.to_ascii_lowercase();
     Some(
@@ -461,6 +462,7 @@ impl GitHub {
         };
         let mut shaped = Vec::new();
         let mut history = ClaimHistory::NeverClaimed;
+        let mut claim_generation = 0;
         for event in &label_events {
             let applied = match event["__typename"].as_str() {
                 Some("LabeledEvent") => true,
@@ -470,6 +472,9 @@ impl GitHub {
                 ))),
             };
             let name = event["label"]["name"].as_str();
+            if applied && name.is_some_and(|name| crate::claim::IN_PROGRESS.is_named(name)) {
+                claim_generation += 1;
+            }
             history = history.after(name, applied, label);
             if applied && name.is_some_and(|name| label.is_named(name)) {
                 shaped.push(Shaped {
@@ -497,6 +502,8 @@ impl GitHub {
             open_blockers,
             last_shaped: shaped.into_iter().max_by_key(|shaped| shaped.at),
             handed_back: matches!(history, ClaimHistory::HandedBack),
+            claim_generation,
+            claimed: matches!(history, ClaimHistory::Claimed),
         })
     }
 
@@ -769,8 +776,11 @@ impl GitHub {
     /// here.
     pub fn checks_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
         let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
-        let runs = self.gh_api_items(&format!("{commit}/check-runs?per_page=100"), "check_runs")?;
-        let statuses = self.gh_api_items(&format!("{commit}/status?per_page=100"), "statuses")?;
+        // CI retries the complete observation, not its individual requests.
+        let runs =
+            self.gh_api_items_once(&format!("{commit}/check-runs?per_page=100"), "check_runs")?;
+        let statuses =
+            self.gh_api_items_once(&format!("{commit}/status?per_page=100"), "statuses")?;
         let url = |value: &Value| {
             value
                 .as_str()
@@ -852,11 +862,18 @@ impl GitHub {
     /// Every item of the `field` list of the GitHub API's `path`, across all its
     /// pages.
     fn gh_api_items(&self, path: &str, field: &str) -> Result<Vec<Value>> {
+        self.retry_read(&format!("gh api {path}"), || {
+            self.gh_api_items_once(path, field)
+        })
+    }
+
+    fn gh_api_items_once(&self, path: &str, field: &str) -> Result<Vec<Value>> {
         let output = self.output(&["api", "--paginate", "--jq", &format!(".{field}[]"), path])?;
         if !output.status.success() {
-            bail!(check_read::ApiFailure {
-                path: path.to_string(),
+            bail!(check_read::ReadFailure {
+                command: format!("gh api {path}"),
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                private_status: None,
             });
         }
         serde_json::Deserializer::from_slice(&output.stdout)
@@ -867,16 +884,47 @@ impl GitHub {
             })
     }
 
-    /// Run `gh <args>` and parse its stdout as JSON, failing with gh's stderr if
-    /// it exits non-zero.
+    /// Read-only JSON commands get three attempts, separated by one then two
+    /// seconds, for transient failures only. Mutations use `gh_stdout` or
+    /// `output_with_input` instead.
     fn gh_json(&self, args: &[&str]) -> Result<Value> {
         let command = format!("gh {}", args[..2].join(" "));
+        self.retry_read(&command, || self.gh_json_once(args, &command))
+    }
+
+    fn retry_read<T>(&self, command: &str, mut read: impl FnMut() -> Result<T>) -> Result<T> {
+        for attempt in 1..=3 {
+            let error = match read() {
+                Ok(value) => return Ok(value),
+                Err(error) => error,
+            };
+            if attempt == 3 || !check_read::is_transient(&error) {
+                return Err(error);
+            }
+            crate::progress::step(format!(
+                "{command} failed (attempt {attempt}/3): {error:#}; retrying in {attempt}s"
+            ));
+            let delay = Duration::from_secs(attempt);
+            match self.interruption {
+                Interruption::Ordinary => crate::poll::sleep(delay)?,
+                Interruption::Completion => std::thread::sleep(delay),
+            }
+        }
+        unreachable!("the third attempt returns success or the last cause")
+    }
+
+    fn gh_json_once(&self, args: &[&str], command: &str) -> Result<Value> {
         let output = self.output(args)?;
         if !output.status.success() {
-            bail!(CommandFailure::rejected(command, &output));
+            bail!(check_read::ReadFailure {
+                command: command.to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                private_status: None,
+            });
         }
-        serde_json::from_slice(&output.stdout)
-            .with_context(|| CommandFailure::InvalidJson { command })
+        serde_json::from_slice(&output.stdout).with_context(|| CommandFailure::InvalidJson {
+            command: command.to_string(),
+        })
     }
     fn output(&self, args: &[&str]) -> Result<Output> {
         self.output_with_input(args, None)
@@ -1064,6 +1112,12 @@ pub struct Candidate {
     /// Complete label history records the last Claim ending, followed by a
     /// ready-label application, with neither withdrawn or superseded.
     pub handed_back: bool,
+    /// Number of Claim applications in complete timeline order. Detects a
+    /// Claim made since selection, even if it ended in the same second.
+    pub claim_generation: usize,
+    /// A Claim is active at the history sample, even if a prior issue listing
+    /// still showed only `ready-for-agent`.
+    pub claimed: bool,
 }
 
 impl Candidate {

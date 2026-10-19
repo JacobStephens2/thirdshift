@@ -13,44 +13,51 @@ use serde::{Deserialize, Serialize};
 
 use crate::harness::interpretation::{Ended, Interpretation};
 use crate::harness::{Choice, process};
+use crate::logs::owner::Owner;
 use crate::{logs, progress};
-
-const PARENT_COMMAND_LOG: &str = "THIRDSHIFT_PARENT_COMMAND_LOG";
 
 /// Immutable Command identity, captured after Command logging is established.
 #[derive(Clone)]
 pub struct Recording {
-    command_log: Option<PathBuf>,
-    stamp: String,
+    owner: std::result::Result<Owner, String>,
 }
 
 impl Recording {
     /// Capture current logging facts once, preferring a local Command log to
     /// inherited ownership. Child Runs retain their parent's exact path.
     pub fn capture() -> Self {
-        Self::new(
-            logs::command_log_path(),
-            std::env::var_os(PARENT_COMMAND_LOG).map(PathBuf::from),
-            logs::stamp(),
-        )
+        Self {
+            owner: logs::captured_owner(),
+        }
     }
 
     /// Construct from captured facts; fixtures need no process-global changes.
+    #[cfg(test)]
     pub fn new(local: Option<PathBuf>, inherited: Option<PathBuf>, stamp: String) -> Self {
         Self {
-            command_log: local.or(inherited),
-            stamp,
+            owner: local
+                .or(inherited)
+                .map(|log| Owner::fixture(Some(log), stamp))
+                .ok_or_else(|| "no owner in fixture".into()),
         }
+    }
+
+    pub fn session_path(&self, dir: &Path, subject: &str, kind: &str) -> Result<PathBuf> {
+        let owner = self
+            .owner
+            .as_ref()
+            .map_err(|cause| anyhow::anyhow!("cannot name Session log: {cause}"))?;
+        Ok(owner.session_path(dir, subject, kind))
+    }
+
+    fn command_log(&self) -> Option<&Path> {
+        self.owner.as_ref().ok()?.log_path()
     }
 
     /// Give a child this exact owning Command, including through nested Runs.
     /// Absence removes stale ownership from the child's environment.
     pub fn inherit_command(&self, command: &mut Command) {
-        if let Some(log) = &self.command_log {
-            command.env(PARENT_COMMAND_LOG, log);
-        } else {
-            command.env_remove(PARENT_COMMAND_LOG);
-        }
+        Owner::inherit(self.owner.as_ref().ok(), command);
     }
 
     /// Collection failures cost attribution, never notification delivery.
@@ -127,7 +134,7 @@ impl Recording {
     /// Record only model metadata; failure costs attribution, never the session.
     fn keep(&self, kind: &str, log: &Path, choice: &Choice, observed: Vec<String>) {
         let record = SessionModels {
-            command_log: self.command_log.clone(),
+            command_log: self.command_log().map(Path::to_path_buf),
             kind: kind.to_string(),
             harness: choice.harness.name().to_string(),
             requested: choice.model.clone(),
@@ -145,23 +152,22 @@ impl Recording {
         }
     }
 
-    /// Read this command's evidence, including child Runs sharing its start stamp.
+    /// Read this Command's evidence, including child Runs sharing its owner.
     /// Other commands in the same repository and folder are excluded.
     fn collect(&self) -> Result<Vec<String>> {
-        let Some(command_log) = &self.command_log else {
+        let Some(command_log) = self.command_log() else {
             return Ok(Vec::new());
         };
         let Some(dir) = command_log.parent() else {
             return Ok(Vec::new());
         };
-        let marker = format!("-{}-", self.stamp);
         let mut paths = Vec::new();
         for entry in fs::read_dir(dir)? {
             let path = entry?.path();
-            if path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(&marker) && name.ends_with(".models.json"))
+            if self
+                .owner
+                .as_ref()
+                .is_ok_and(|owner| owner.models_match(&path))
             {
                 paths.push(path);
             }
@@ -184,7 +190,7 @@ impl Recording {
                     continue;
                 }
             };
-            if record.command_log.as_deref() != Some(command_log.as_path()) {
+            if record.command_log.as_deref() != Some(command_log) {
                 continue;
             }
             let models = if record.observed.is_empty() {

@@ -1,6 +1,6 @@
 # Browser tests
 
-The site still serves static files with no build step. To run its browser tests:
+The site serves checked-in static files; deployment needs no build step. To run its browser tests:
 
 ```sh
 cd site
@@ -11,3 +11,14 @@ npm test
 
 The tests start a local server on an unused port and close it and the browser
 before exiting. CI runs them in the `site-test` job.
+
+The page tests also consume the site without JavaScript to check canonical URLs,
+distinct search metadata, homepage site-name structured data and sitemap discovery
+through `robots.txt`. When adding a public page, give it a canonical URL and unique
+title and description, then include it in `site/sitemap.xml` and the page tests.
+
+The user manual's source is `docs/guide.md` at the repository root. After editing
+it or `site/generate-docs.mjs`, run `cd site && npm run docs` and commit the generated
+`site/docs/index.html` in the same pull request. `npm test` first runs
+`npm run docs:check` to reject stale output. The browser tests check navigation,
+section anchors, command escaping and reading at mobile widths without JavaScript.
