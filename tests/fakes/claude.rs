@@ -34,6 +34,9 @@
 //! Called without --output-format, as `claude -p` with its prompt on stdin,
 //! it records stdin as `stdin` and prints only what the script prints, as
 //! print mode's plain text output does.
+//!
+//! Like the other session fakes, it catches stop signals and waits for its
+//! script to finish handling them before exiting.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -251,6 +254,7 @@ pub fn main(argv: Vec<String>) {
     }
 
     let session = records.len();
+    crate::outlast_interrupts();
     let init = object([
         ("type", string("system")),
         ("subtype", string("init")),

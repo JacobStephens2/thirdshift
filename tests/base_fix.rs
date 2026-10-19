@@ -40,6 +40,40 @@ const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
 
 const BASE_FIX_URL: &str = "https://github.com/acme/widgets/issues/8";
 
+#[test]
+fn status_shows_a_base_fix_under_the_run_that_started_it() {
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    scenario.agent_does_for(8, &format!(
+        "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}",
+        scenario.path("started").display(), scenario.path("release").display()
+    ));
+    let held = scenario.run_until(&[&scenario.issue_url(7), "base-fix"], &[], "started");
+    let json = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    std::fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let status: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    assert_eq!(
+        status["commands"].as_array().unwrap().len(),
+        1,
+        "{status:#}"
+    );
+    let run = &status["commands"][0];
+    assert_eq!(run["issue"]["number"], 7);
+    let fix = &run["children"][0];
+    assert_eq!(fix["issue"]["number"], 8);
+    assert_eq!(fix["kind"], "Base fix");
+    assert_eq!(fix["state"], "live");
+    assert_eq!(fix["stage"]["name"], "implement");
+    assert!(
+        text.stdout.contains("  Base fix acme/widgets#8"),
+        "{}",
+        text.stdout
+    );
+}
+
 /// The prompt of each session, in order.
 fn prompts(scenario: &Scenario) -> Vec<String> {
     scenario

@@ -11,6 +11,7 @@ use std::num::NonZeroUsize;
 use crate::child_run::Ended;
 use crate::github::Ticket;
 use crate::issue::{IssueIdentity, IssueUrl};
+use crate::logs::{TicketRecord, TicketState};
 
 /// Where a Ticket this Spec run started stands.
 enum Standing {
@@ -102,6 +103,27 @@ impl TicketBoard {
             total: self.tickets.len(),
             reviewed: false,
         }
+    }
+
+    /// Durable Ticket accounting; a child Run owns its stage and liveness.
+    pub(super) fn records(&self) -> Vec<TicketRecord> {
+        self.by_number()
+            .into_iter()
+            .map(|ticket| {
+                let state = match self.standings.get(&ticket.issue.identity()) {
+                    Some(Standing::Running) => TicketState::Running,
+                    _ if !ticket.is_open => TicketState::Merged,
+                    Some(Standing::Ended(_)) => TicketState::Failed,
+                    _ if !ticket.open_blockers.is_empty() => TicketState::Waiting,
+                    _ => TicketState::NotStarted,
+                };
+                TicketRecord {
+                    issue: (&ticket.issue).into(),
+                    state,
+                    blockers: ticket.open_blockers.iter().map(Into::into).collect(),
+                }
+            })
+            .collect()
     }
 
     pub(super) fn local_work(&self) -> Vec<String> {

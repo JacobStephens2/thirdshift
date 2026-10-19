@@ -1,0 +1,455 @@
+//! Read machine-wide Command records without entering a Launch directory.
+
+mod history;
+pub mod inspect;
+
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, Local};
+use serde::Serialize;
+
+use super::command_record::{CommandRecord, CommandTree};
+use super::effects::OnMachine;
+use super::{Pass, activity};
+use crate::config::UserConfig;
+use crate::issue::IssueUrl;
+
+#[derive(Serialize)]
+struct Status {
+    version: u32,
+    hostname: String,
+    commands: Vec<Entry>,
+    idle_passes: Vec<IdlePass>,
+}
+
+#[derive(Serialize)]
+struct IdlePass {
+    repository: String,
+    kind: String,
+    reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Entry {
+    Record(Box<Command>),
+    History(Box<history::Command>),
+}
+
+impl Entry {
+    fn ordering(
+        &self,
+        all: bool,
+    ) -> (
+        bool,
+        std::cmp::Reverse<Option<DateTime<chrono::FixedOffset>>>,
+        &str,
+    ) {
+        let (state, started, repo) = match self {
+            Self::Record(command) => (
+                command.state,
+                command.record.started_at.as_str(),
+                command.record.repository.as_str(),
+            ),
+            Self::History(command) => (
+                command.state,
+                command.started_at.as_str(),
+                command.repository.as_str(),
+            ),
+        };
+        (
+            !all && state != "live",
+            std::cmp::Reverse(DateTime::parse_from_rfc3339(started).ok()),
+            repo,
+        )
+    }
+}
+
+#[derive(Serialize)]
+struct Command {
+    #[serde(skip)]
+    record_path: PathBuf,
+    #[serde(flatten)]
+    record: CommandRecord,
+    state: &'static str,
+    stage: Option<CurrentStage>,
+    children: Vec<Command>,
+    source: &'static str,
+    command_log: PathBuf,
+    dispatched: Vec<Command>,
+}
+
+#[derive(Serialize)]
+struct CurrentStage {
+    name: String,
+    began_at: String,
+    age_seconds: i64,
+}
+
+impl Command {
+    fn new(record: CommandRecord, record_path: PathBuf, now: DateTime<Local>) -> Self {
+        let state = if record.outcome.is_some() {
+            "ended"
+        } else if record.live(&mut OnMachine) {
+            "live"
+        } else {
+            "died"
+        };
+        let stage = record.current_stage().map(|stage| CurrentStage {
+            name: stage.name.clone(),
+            began_at: stage.began_at.clone(),
+            age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
+                .map(|began| now.signed_duration_since(began).num_seconds().max(0))
+                .unwrap_or(0),
+        });
+        Self {
+            command_log: command_log(&record_path),
+            record_path,
+            record,
+            state,
+            stage,
+            children: Vec::new(),
+            source: "command_record",
+            dispatched: Vec::new(),
+        }
+    }
+
+    fn print(&self, indent: &str) {
+        let facts = &self.record;
+        let stage = stage_text(self);
+        let subject = match &facts.issue {
+            Some(issue) => format!(
+                "{}#{} {}",
+                facts.repository,
+                issue.number,
+                issue.title.as_deref().unwrap_or("(title unavailable)")
+            ),
+            None => format!("{} on {}", facts.name, facts.repository),
+        };
+        println!(
+            "{indent}{} {subject} · {} · {} · {} · {stage}",
+            facts.kind,
+            facts.harness,
+            facts.model.as_deref().unwrap_or("default Model"),
+            facts.effort.as_deref().unwrap_or("default Effort")
+        );
+        print_tickets(facts, &format!("{indent}  "));
+        for dispatched in &self.dispatched {
+            dispatched.print(&format!("{indent}  "));
+        }
+        for child in &self.children {
+            child.print(&format!("{indent}  "));
+        }
+    }
+}
+
+pub fn show(json: bool, all: bool) -> Result<()> {
+    let status = read(all)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+    } else {
+        println!("{}", status.hostname);
+        for entry in status.commands {
+            match entry {
+                Entry::Record(command) => command.print(""),
+                Entry::History(command) => command.print(),
+            }
+        }
+        for pass in status.idle_passes {
+            println!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason);
+        }
+    }
+    Ok(())
+}
+
+fn read(all: bool) -> Result<Status> {
+    let config = UserConfig::load()?;
+    let now = Local::now();
+    let mut records = BTreeMap::new();
+    let mut commands = Vec::new();
+    let mut idle_passes = Vec::new();
+    for owner in directories(&config.logs_dir)? {
+        for repo in directories(&owner)? {
+            let mut covered = HashSet::new();
+            idle_passes.extend(read_idle_passes(&repo)?);
+            for folder in directories(&repo.join("commands"))? {
+                for (path, tree) in read_records(&folder)? {
+                    let record = &tree.command;
+                    if record.parent_record.is_none() {
+                        covered.insert(command_log(&path));
+                    }
+                    records.insert(path, tree);
+                }
+            }
+            commands.extend(
+                history::read(&repo, &covered)?
+                    .into_iter()
+                    .filter(|command| all || recent(command.ended_at.as_deref(), now))
+                    .map(|command| Entry::History(Box::new(command))),
+            );
+        }
+    }
+    let roots: Vec<_> = records
+        .iter()
+        .filter(|(_, tree)| {
+            let record = &tree.command;
+            record.parent_record.is_none()
+                && (all || record.outcome.is_none() || recent(record.ended_at.as_deref(), now))
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    commands.extend(
+        roots
+            .into_iter()
+            .map(|path| Entry::Record(Box::new(tree(&path, &mut records, &now)))),
+    );
+    commands.sort_by(|a, b| a.ordering(all).cmp(&b.ordering(all)));
+    idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
+    Ok(Status {
+        version: 1,
+        hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
+        commands,
+        idle_passes,
+    })
+}
+
+fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
+    let mut records = BTreeMap::new();
+    for entry in entries(folder)? {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !entry.file_type()?.is_file()
+            || (!name.ends_with(".command.json") && !name.ends_with(".child.json"))
+        {
+            continue;
+        }
+        let path = entry.path();
+        let bytes =
+            fs::read(&path).with_context(|| format!("could not read {}", path.display()))?;
+        let Ok(mut tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
+            continue;
+        };
+        let record = &mut tree.command;
+        if record.version != 1 {
+            continue;
+        }
+        // Records written before completion times existed were last
+        // replaced when their outcome was recorded.
+        if record.outcome.is_some() && record.ended_at.is_none() {
+            record.ended_at = entry
+                .metadata()?
+                .modified()
+                .ok()
+                .map(|time| DateTime::<Local>::from(time).to_rfc3339());
+        }
+        records.insert(path, tree);
+    }
+    Ok(records)
+}
+
+/// Stop uses the same exact-parent tree as status, including child-owned files.
+pub(super) fn retained_resources(path: &Path) -> Result<BTreeSet<String>> {
+    let mut records = read_records(path.parent().context("Command record has no directory")?)?;
+    anyhow::ensure!(records.contains_key(path), "Command record is unavailable");
+    let command = tree(path, &mut records, &Local::now());
+    let mut resources = BTreeSet::new();
+    fn collect(command: &Command, resources: &mut BTreeSet<String>) {
+        if let Some(branch) = &command.record.issue_branch {
+            resources.insert(format!("Issue branch left: {branch}"));
+        }
+        if let Some(pr) = &command.record.pull_request {
+            resources.insert(format!("Pull request left: {pr}"));
+        }
+        for child in command.dispatched.iter().chain(&command.children) {
+            collect(child, resources);
+        }
+    }
+    collect(&command, &mut resources);
+    Ok(resources)
+}
+
+fn command_log(path: &Path) -> PathBuf {
+    let name = path.file_name().unwrap().to_string_lossy();
+    path.with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)))
+}
+
+fn parse_stamp(stamp: &str) -> Option<DateTime<chrono::FixedOffset>> {
+    DateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%z").ok()
+}
+
+/// Keep the filename spelling alongside its parsed time for naming and history.
+fn command_stamp(path: &Path) -> Option<(&str, DateTime<chrono::FixedOffset>)> {
+    let stem = path.file_stem()?.to_str()?;
+    let stamp = stem.get(stem.len().checked_sub(20)?..)?;
+    Some((stamp, parse_stamp(stamp)?))
+}
+
+fn tree(
+    path: &Path,
+    records: &mut BTreeMap<PathBuf, CommandTree>,
+    now: &DateTime<Local>,
+) -> Command {
+    let tree = records.remove(path).expect("a discovered record exists");
+    let mut command = Command::new(tree.command, path.to_owned(), *now);
+    command.children = children(path, None, records, now);
+    command.dispatched = tree
+        .dispatched
+        .into_iter()
+        .map(|record| {
+            let mut dispatched = Command::new(record, path.to_owned(), *now);
+            let issue = dispatched
+                .record
+                .issue
+                .as_ref()
+                .map(|issue| issue.url.as_str());
+            dispatched.children = children(path, issue, records, now);
+            dispatched
+        })
+        .collect();
+    command
+}
+
+fn children(
+    path: &Path,
+    dispatch: Option<&str>,
+    records: &mut BTreeMap<PathBuf, CommandTree>,
+    now: &DateTime<Local>,
+) -> Vec<Command> {
+    let paths: Vec<_> = records
+        .iter()
+        .filter(|(_, child)| {
+            child.command.parent_record.as_deref() == Some(path)
+                && child.command.parent_dispatch.as_deref() == dispatch
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    let mut children: Vec<_> = paths
+        .into_iter()
+        .map(|path| tree(&path, records, now))
+        .collect();
+    children.sort_by_key(|child| child.record.issue.as_ref().map(|issue| issue.number));
+    children
+}
+
+fn stage_text(command: &Command) -> String {
+    if let Some(outcome) = &command.record.outcome {
+        return outcome.clone();
+    }
+    command.stage.as_ref().map_or_else(
+        || {
+            if command.state == "died" {
+                "died before first stage".into()
+            } else {
+                "starting".into()
+            }
+        },
+        |stage| {
+            if command.state == "died" {
+                format!("died at {}", stage.name)
+            } else {
+                format!("{} · {}", stage.name, age(stage.age_seconds))
+            }
+        },
+    )
+}
+
+fn print_tickets(facts: &CommandRecord, indent: &str) {
+    for ticket in &facts.tickets {
+        use super::command_record::TicketState;
+        let state = match ticket.state {
+            TicketState::Running => "running".into(),
+            TicketState::Merged => "merged".into(),
+            TicketState::Failed => "failed".into(),
+            TicketState::NotStarted => "not started".into(),
+            TicketState::Waiting => format!(
+                "waiting on {}",
+                ticket
+                    .blockers
+                    .iter()
+                    .map(|issue| {
+                        if IssueUrl::parse(&issue.url).is_ok_and(|blocker| {
+                            blocker.repo_slug().eq_ignore_ascii_case(&facts.repository)
+                        }) {
+                            format!("#{}", issue.number)
+                        } else {
+                            issue.url.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        println!("{indent}Ticket #{} · {state}", ticket.issue.number);
+    }
+}
+
+fn recent(ended: Option<&str>, now: DateTime<Local>) -> bool {
+    ended
+        .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
+        .is_some_and(|ended| ended >= now - chrono::Duration::hours(24))
+}
+
+fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
+    let path = repo.join(activity::FILE);
+    let activity = match fs::read_to_string(&path) {
+        Ok(activity) => activity,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not read {}", path.display()));
+        }
+    };
+    let repository = format!(
+        "{}/{}",
+        repo.parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy(),
+        repo.file_name().unwrap().to_string_lossy()
+    );
+    let mut idle = Vec::new();
+    for pass in [Pass::Architect, Pass::Pickup, Pass::Security] {
+        let kind = activity::Kind::Pass(pass);
+        if let Some(line) = activity::last_of(&activity, kind)
+            && let Some(reason) = line.strip_prefix(&format!("{kind} skipped: "))
+        {
+            idle.push(IdlePass {
+                repository: repository.clone(),
+                kind: kind.to_string(),
+                reason: reason.into(),
+            });
+        }
+    }
+    Ok(idle)
+}
+
+fn age(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{seconds} sec")
+    } else if seconds < 3600 {
+        format!("{} min", seconds / 60)
+    } else {
+        format!("{} hr {} min", seconds / 3600, seconds % 3600 / 60)
+    }
+}
+
+fn entries(path: &Path) -> Result<Vec<fs::DirEntry>> {
+    match fs::read_dir(path) {
+        Ok(entries) => entries.collect::<std::io::Result<_>>().map_err(Into::into),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error).with_context(|| format!("could not list {}", path.display())),
+    }
+}
+
+fn directories(path: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in entries(path)? {
+        if entry.file_type()?.is_dir() {
+            paths.push(entry.path());
+        }
+    }
+    Ok(paths)
+}
