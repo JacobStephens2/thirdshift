@@ -81,7 +81,7 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
     let dispatched = text
         .stdout
         .lines()
-        .find(|line| line.starts_with("  ended · Run acme/widgets#7"))
+        .find(|line| line.starts_with("  Run acme/widgets#7"))
         .expect(&text.stdout);
     assert!(dispatched.ends_with("ready for review"), "{dispatched}");
 }
@@ -475,7 +475,7 @@ fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicati
         text.stdout
     );
     assert!(
-        text.stdout.contains("live · Run acme/widgets#10"),
+        text.stdout.contains("Run acme/widgets#10 Fixture · live ·"),
         "{}",
         text.stdout
     );
@@ -735,7 +735,7 @@ fn status_keeps_completed_ticket_trees_with_recent_and_all_history() {
         text.stdout
     );
     assert!(
-        text.stdout.contains("  ended · Run acme/widgets#21 Ticket"),
+        text.stdout.contains("  Run acme/widgets#21 Ticket"),
         "{}",
         text.stdout
     );

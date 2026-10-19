@@ -35,9 +35,9 @@ fn print_command(command: &Command, indent: &str) {
         subject.push_str(&format!(" · {pull_request}"));
     }
     println!(
-        "{indent}{} · {} {subject} · {} · {} · {} · {stage}",
-        command.state,
+        "{indent}{} {subject} · {} · {} · {} · {} · {stage}",
         facts.kind,
+        command.state,
         facts.harness,
         facts.model.as_deref().unwrap_or("default Model"),
         facts.effort.as_deref().unwrap_or("default Effort")
