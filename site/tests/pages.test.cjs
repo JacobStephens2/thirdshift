@@ -37,7 +37,7 @@ async function pageForTest(t, options) {
   return page;
 }
 
-test("every public page identifies its canonical URL and purpose without JavaScript", async (t) => {
+test("every public page identifies its canonical URL, purpose and share metadata without JavaScript", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   const titles = new Set();
   const descriptions = new Set();
@@ -51,6 +51,23 @@ test("every public page identifies its canonical URL and purpose without JavaScr
     assert.ok(description.length > 50, path);
     titles.add(title);
     descriptions.add(description);
+    for (const [selector, expected] of [
+      ['meta[property="og:type"]', "website"],
+      ['meta[property="og:site_name"]', "thirdshift"],
+      ['meta[property="og:url"]', `https://thirdshift.app${path}`],
+      ['meta[property="og:title"]', title],
+      ['meta[property="og:description"]', description],
+      ['meta[property="og:image"]', "https://thirdshift.app/share-card.png"],
+      ['meta[name="twitter:card"]', "summary_large_image"],
+      ['meta[name="twitter:title"]', title],
+      ['meta[name="twitter:description"]', description],
+      ['meta[name="twitter:image"]', "https://thirdshift.app/share-card.png"],
+    ]) {
+      const tag = page.locator(`head ${selector}`);
+      assert.equal(await tag.count(), 1, `${path}: ${selector}`);
+      assert.equal(await tag.getAttribute("content"), expected, `${path}: ${selector}`);
+    }
+    assert.equal(await page.locator('meta[name="robots"][content*="noindex"]').count(), 0);
     assert.equal(await page.locator("h1").count(), 1, path);
     assert.ok((await page.locator("body").textContent()).includes("GitHub"), path);
   }
@@ -91,12 +108,6 @@ test("the homepage declares the site name as static structured data", async (t) 
   assert.equal(site.url, "https://thirdshift.app/");
   assert.equal(site.url, await page.locator('link[rel="canonical"]').getAttribute("href"));
   assert.equal(site.name, await page.locator('meta[property="og:site_name"]').getAttribute("content"));
-  assert.equal(await page.locator('meta[property="og:title"]').getAttribute("content"), await page.title());
-  assert.equal(await page.locator('meta[name="twitter:title"]').getAttribute("content"), await page.title());
-  for (const selector of ['meta[property="og:description"]', 'meta[name="twitter:description"]']) {
-    assert.equal(await page.locator(selector).getAttribute("content"),
-      await page.locator('meta[name="description"]').getAttribute("content"));
-  }
 });
 
 test("the homepage links to the shared Markdown manual without JavaScript", async (t) => {
