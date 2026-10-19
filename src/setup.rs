@@ -1124,6 +1124,7 @@ from = \"ts@acme.dev\"
 
 [logs]
 dir = \"/var/log/thirdshift\"
+waiting_line_minutes = 5
 
 [activity]
 quiet_skips = true

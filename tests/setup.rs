@@ -72,6 +72,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     );
     assert!(config["email"].get("to").is_none(), "{text}");
     assert_eq!(config["logs"]["dir"].as_str(), Some("~/.thirdshift/logs"));
+    assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(5));
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
