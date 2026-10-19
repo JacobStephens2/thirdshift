@@ -240,6 +240,7 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            console: crate::config::ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
             launch_pull: false,

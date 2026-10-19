@@ -8,6 +8,7 @@ mod ci;
 mod claim;
 mod command;
 mod config;
+mod console;
 mod delivery;
 mod email;
 mod failed_run;
@@ -76,6 +77,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
+       thirdshift console --no-sign-in                Serve this machine's Inbox on localhost
        thirdshift show <command> [--json]             Show one Command in full
        thirdshift stop <command> [--requeue]          Stop a live Command and wait for cleanup
        thirdshift logs <command> [--session <kind>] [--follow]  Read or follow a log
@@ -131,6 +133,12 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::Console { no_sign_in }) => {
+            return match console::serve(no_sign_in) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
         Ok(Command::Stop { command, requeue }) => {
             return match logs::stop::stop(&command, requeue) {
                 Ok(()) => ExitCode::SUCCESS,

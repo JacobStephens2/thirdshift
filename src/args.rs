@@ -22,6 +22,9 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Console {
+        no_sign_in: bool,
+    },
     Status {
         json: bool,
         all: bool,
@@ -236,6 +239,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("console") => {
+            return match &args[1..] {
+                [] => Ok(Command::Console { no_sign_in: false }),
+                [flag] if flag == "--no-sign-in" => Ok(Command::Console { no_sign_in: true }),
+                _ => bail!("usage: thirdshift console [--no-sign-in]"),
+            };
+        }
         Some("stop") => {
             return match &args[1..] {
                 [command] if !command.starts_with('-') => Ok(Command::Stop {

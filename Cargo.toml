@@ -8,10 +8,12 @@ repository = "https://github.com/JacobStephens2/thirdshift"
 homepage = "https://thirdshift.app"
 # The crate carries the sources and the Factory skills the binary embeds;
 # the repository's agent tooling, docs and tests stay out of it.
-include = ["/src", "/skills", "/README.md", "/LICENSE"]
+include = ["/src", "/skills", "/askama.toml", "/README.md", "/LICENSE"]
 
 [dependencies]
 anyhow = "1.0.104"
+askama = "0.16.1"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 # axoupdater needs axoasset's `remote` feature, which always pulls in `image`
 # (with moxcms and pxfm) and turns on reqwest's `default-tls`, which is rustls
 # with aws-lc. No flag turns either off, and features unify, so switching
@@ -29,6 +31,10 @@ signal-hook = "0.4.4"
 tempfile = "3.27.0"
 toml = "1.1.6"
 toml_edit = "0.25.15"
+tokio = { version = "1.53.1", features = ["rt", "net", "time"] }
+
+[dev-dependencies]
+tower-layer = "0.3.3"
 
 # Line tables keep file and line in the crate's backtraces, and dependencies
 # get no debuginfo, so their frames show no file or line. Full debuginfo made

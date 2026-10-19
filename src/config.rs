@@ -16,10 +16,14 @@ use toml_edit::{DocumentMut, Item};
 
 use crate::harness::{self, Harness, ModelAndEffort};
 
+mod console;
+pub use console::ConsoleSettings;
+
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    pub console: ConsoleSettings,
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
     /// `base.fix`: every Run may start a Base fix unless told `no-base-fix`.
@@ -103,6 +107,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            console: ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
             launch_pull: false,
@@ -133,6 +138,17 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "console" {
+                config.console = value
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("invalid [console] in {file}"))?;
+                config
+                    .console
+                    .validate()
+                    .with_context(|| format!("invalid [console] in {file}"))?;
+                continue;
+            }
             let known = matches!(
                 section.as_str(),
                 "merge"
@@ -773,6 +789,11 @@ waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting li
 days = 7             # days to keep ended problems and Resolved; default 7
 silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
 
+[console]
+port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
+other_consoles = []   # http or https addresses linked in the header, never fetched; default []
+theme = "focus-auto" # Focus follows the system, or focus-light / focus-dark; default focus-auto
+
 [activity]
 quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
 
@@ -951,6 +972,9 @@ mod tests {
                 "logs.waiting_line_minutes",
                 "inbox.days",
                 "inbox.silent_minutes",
+                "console.port",
+                "console.other_consoles",
+                "console.theme",
                 "activity.quiet_skips",
                 "spec.parallel",
                 "pickup.limit",
