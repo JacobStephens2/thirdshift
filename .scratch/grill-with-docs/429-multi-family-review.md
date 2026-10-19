@@ -94,7 +94,7 @@ The options:
 - (b) **Separate terms,** such as "Plan check" for the plan.
 - (c) **"Cross-family review"** or **"Multi-family review"**.
 
-*Recommended:* (a). The family is a setting, not the point: your config could give it the same family at a higher Effort. One term keeps the config and the vocabulary small. The terms should go into `CONTEXT.md` with the Ticket that builds the feature, not now. Every factory session reads `CONTEXT.md`, so an Architecture review would take the term for something that already exists.
+*Recommended:* (a). The family is a setting, not the point: your config could give it the same family at a higher Effort. One term keeps the config and the vocabulary small. The terms should go into `GLOSSARY.md` with the Ticket that builds the feature, not now. Every factory session reads `GLOSSARY.md`, so an Architecture review would take the term for something that already exists.
 
 *Answer:* agree, though why avoid cross-family review? to make the technique more open to same-family second opinion review? I like the term second opinion for that flexibility.
 
@@ -148,7 +148,7 @@ The options:
 *Answer:* agree
 
 **Q12 - Who writes the timing checklist?** The third arm of the six-bug replay is the same model with a timing checklist. Whoever writes the checklist after seeing the six bugs will, knowingly or not, write it to catch them, and the arm will look better than it is. Claude has seen them. The options:
-- (a) **A fresh agent that hasn't seen the bugs** writes it from `CONTEXT.md` and the ADRs, without the issues or the git history: the timing risks a reviewer of thirdshift should check.
+- (a) **A fresh agent that hasn't seen the bugs** writes it from `GLOSSARY.md` and the ADRs, without the issues or the git history: the timing risks a reviewer of thirdshift should check.
 - (b) **Claude writes it** from a generic list of timing failures: shared state across processes, state that changes while you wait, repeated passes, cleanup on every exit path.
 - (c) **Drop the checklist arm.**
 
@@ -306,7 +306,7 @@ The skill's own text has no test seam: the Spec review reads it, and the replays
      - The reviewers write out a test or command for each finding that says behaviour is wrong, and the author runs it as written. A failure means a fix and a kept test; a pass allows a decline that cites the run.
      - Every Unaddressed finding cites what refutes it.
      - A call that isn't the agent's becomes a `needs-triage` issue, linked from its entry, unless an open issue covers it.
-     - The Unaddressed finding entry in `CONTEXT.md`.
+     - The Unaddressed finding entry in `GLOSSARY.md`.
 3. **Reviewers list the files they read.**
    - Blocked by: 2.
    - Delivers: each reviewer's list of the files it read. A changed file it skipped goes back to it once, and any file still unread is named in the review's summary and the PR body.
@@ -315,7 +315,7 @@ The skill's own text has no test seam: the Spec review reads it, and the replays
    - Delivers:
      - In each prompt that runs the review, thirdshift names a place that git ignores, and the skill writes each axis's report there.
      - When the session ends, thirdshift keeps the reports beside its Session log, the same on every Harness. No reports means a progress line, not a failure.
-     - The Session log entry in `CONTEXT.md`.
+     - The Session log entry in `GLOSSARY.md`.
 
 Each Ticket is labelled `ready-for-agent`. #486 swaps from `needs-triage` to `ready-for-agent` once all four are published. The options:
 - (a) **These four, in this order.**
@@ -541,19 +541,19 @@ And if it's refused, ends early, or fails:
 - **The replays change nothing in thirdshift.** A script outside it, which Claude writes once this grilling ends, runs review sessions over past commits. (Q4)
 - **The first replays test Codex (GPT-6.1 Sol) reviewing Claude-written work, plus the reverse plan and bug replays.** The reverse Spec replay waits for more Codex Specs, and a reverse timing-bug replay waits for timing bugs in Codex's work. A pass in one direction is half the answer. (Q5, Q16, Q30)
 - **The plan replay has two arms in each direction:** the other family, and a fresh session of the same family. You grade the plans they stop without knowing which arm stopped them, and a plan both stop is graded once. The reverse bar is 3 of 20, the same as the forward bar. (Q10, Q16, Q29)
-- **The plan check re-applies the Architecture review's four Strong tests** to the published plan: real friction visible in the code, the deletion test, a settled design, no ADR contradicted. It reads the plan, `CONTEXT.md`, the ADRs and the code as they stood when the plan was made. It never reads the Architecture review's session. (Q2, Q10)
+- **The plan check re-applies the Architecture review's four Strong tests** to the published plan: real friction visible in the code, the deletion test, a settled design, no ADR contradicted. It reads the plan, `GLOSSARY.md`, the ADRs and the code as they stood when the plan was made. It never reads the Architecture review's session. (Q2, Q10)
 - **Replay reviewers only read:** no builds and no tests, one session at a time, in a throwaway worktree. This holds for every arm, the new Harnesses' included. (Q11, Q17)
-- **The timing checklist comes first.** A fresh agent writes it from `CONTEXT.md` and the ADRs, without the issues or the git history, before the six-bug replay runs. (Q12)
+- **The timing checklist comes first.** A fresh agent writes it from `GLOSSARY.md` and the ADRs, without the issues or the git history, before the six-bug replay runs. (Q12)
 - **Each new Harness gets one arm on the six-bug replay,** at its best setting: Gemini 3.8 Flash at high, Grok 4.7 at xhigh, Muse Spark 1.3 at max, and MiMo-V2.6-Pro at its one setting. An arm that passes Q6's bar has to pass the Spec replay too before it's suggested. (Q17, Q9)
 - **A pass overstates the gain a little.** The replays measure what a Second opinion adds to today's review, and the evidence-backed review will catch some of the same things. (Q4, Q8)
 - **The Second opinion's Harness, Model and Effort are set in the User config.** The replays' settings become its suggested defaults: Codex at xhigh, and Claude at high, the setting Claude is tried at as a Second opinion. (Q9, Q31)
 - **The bars in Q6 are fixed** before any replay runs. Claude grades the six bugs against their fixes; you read the plans the check stops and grade about 20 Spec findings. (Q6)
 - **The six-bug replay reviews each PR as it stood when it merged.** A Second opinion runs after the implement session, so that's what it would see, and #175's faulty check only exists from that point. The six bugs come from five PRs, so each arm runs five reviews. (Q6, Q7)
-- **The term is Second opinion,** and the family is a setting. The entry reaches `CONTEXT.md` with the Ticket that builds it, along with the changes to Harness, Model and Effort. (Q7)
+- **The term is Second opinion,** and the family is a setting. The entry reaches `GLOSSARY.md` with the Ticket that builds it, along with the changes to Harness, Model and Effort. (Q7)
 - **The evidence-backed work is a Spec, filed now** with `to-spec` and `to-tickets`. It has at least two Tickets, more if that keeps each implement session's context small, and is labelled `ready-for-agent` so a Pickup run takes it. (Q8, Q21)
 - **The six-bug replay and the reverse bug replay use today's review skill,** in every arm, the checklist arm included. The Spec replay keeps the old skill, pinned at 479a1fb, to match its recorded baseline. The plan check doesn't use the review skill. (Q26, Q30)
 - **The evidence-backed change covers every session that runs the review skill:** the implement session, fresh or continuing, the Spec review and the review Repair. (Q8)
-- **Unaddressed findings carry each decline's citation** in place of a one-line reason, and the Unaddressed finding entry in `CONTEXT.md` changes with that Spec. (Q8, Q21)
+- **Unaddressed findings carry each decline's citation** in place of a one-line reason, and the Unaddressed finding entry in `GLOSSARY.md` changes with that Spec. (Q8, Q21)
 - **In the evidence-backed review, the reviewer writes the evidence and the author runs it.** A correctness finding's test or command is run as written. A failure obliges the fix, and the test is kept; a pass lets the author decline, citing the run. (Q13)
 - **Unread changed files go back to their reviewer once.** Any still unread are named in the review's summary and the PR body. (Q14)
 - **A finding declined because someone else must decide becomes a `needs-triage` issue,** linked from the PR's Unaddressed findings, unless an open issue already covers it. (Q15)
@@ -586,7 +586,7 @@ And if it's refused, ends early, or fails:
 - Until 5 October, almost everything was written and reviewed by Claude Opus 5.5; the one Codex PR was docs (#426). Confirmed by the Session logs and the Activity log.
 - Since 5 October, Weeding on thirdshift has run on Codex (GPT-6.1 Sol, xhigh): about 21 merged PRs from 11 plans, plus two Spec runs (#432, #465). Confirmed by the Activity log and the merged PRs.
 - Codex Session logs hold none of the reviewers' reports. The sessions wrote them to files in `/tmp`, and only #475's pair survives. Confirmed by tracing #475's Session log and listing `/tmp`.
-- Main now supports six Harnesses: Claude Code, Codex, Antigravity (`agy`), Grok Build (`grok`), Muse Code (`muse`) and OpenCode (`opencode`). `CONTEXT.md` still says one Harness per Command. Confirmed by `CONTEXT.md` and `src/harness.rs` on `origin/main`.
+- Main now supports six Harnesses: Claude Code, Codex, Antigravity (`agy`), Grok Build (`grok`), Muse Code (`muse`) and OpenCode (`opencode`). `GLOSSARY.md` still says one Harness per Command. Confirmed by `GLOSSARY.md` and `src/harness.rs` on `origin/main`.
 - The four new Harnesses' models all score below both current reviewers on AA's index: Muse Spark 1.3 48.1 (max), Grok 4.7 46.4 (xhigh), MiMo-V2.6-Pro 46.3, Gemini 3.8 Flash 40.9 (high), against GPT-6.1 Sol 51.0 (xhigh) and Opus 5.5 57.6 (max). All four can start sub-agents. Confirmed by `docs/research/model-strength-for-review.md` §0 and `docs/research/harness-candidates.md`.
 - 16 bugs reached main on thirdshift. About 10 showed up only in live runs (environment, tool versions, harness behaviour). About 6 are timing bugs: what happens when other Runs act at the same moment, or a pass repeats (#24, #57, #102, #175, #182, #303). Confirmed by the issues and their fixes (an agent's sorting, with the six titles checked).
 - **Correction:** two of the six timing bugs were caught by a same-model review, then declined as needing a decision nobody made, because the PRs merged themselves. An earlier version of this file said no review raised any of them.
@@ -618,7 +618,7 @@ And if it's refused, ends early, or fails:
 - None of the replay plan has run yet: no script, no checklist, nothing in `~/.thirdshift/replays/`, and nothing on the `429-multi-family` or `grilling-429-second-opinion` branches past main. Weeding on thirdshift is still on. Confirmed by listing the folder, `git log` and `crontab -l`.
 - #486 and its four Tickets merged on 7 October (#494, #497, #498, #512, #496). They're in every release since 0.10.1, and the factory runs 0.11.0. Confirmed by `git tag --contains` and `thirdshift --version`.
 - The User config now runs the factory on Codex at **high** Effort, not xhigh, and Claude at medium. Security runs use Muse Code (`security.harness = "muse"`), and every Run reviews its change for Security findings (`security.review = true`). Confirmed by `~/.thirdshift/config.toml`.
-- `security.harness` only picks the Harness for a Security run. Every other Command still picks one Harness for all its sessions. Confirmed by `CONTEXT.md`'s Harness entry and `src/asks.rs`.
+- `security.harness` only picks the Harness for a Security run. Every other Command still picks one Harness for all its sessions. Confirmed by `GLOSSARY.md`'s Harness entry and `src/asks.rs`.
 - Weeding on thirdshift was paused from 8 October by Architect idea #564. It started again at 10:37 pm on 9 October, on Codex at high, once #564 was closed. Security runs are being skipped because a Security finding waits for the Day shift. Confirmed by the Activity log.
 - **Codex's review sub-agents haven't carried the implementer's work.** Confirmed by reading the parent and child rollouts of 54 Codex implement and Spec-review sessions from 7–9 October, on Codex 0.160.1–0.162.0. What each child saw at first was 17.8k–23k tokens, against 34k–200k in its parent. Forked children held the opening prompt and the implement skill, about 2.5k tokens more, and nothing after that.
   - The model picks `fork_turns` itself: `"none"` 23 times, `"all"` 6 times, and left out 25 times.
@@ -653,7 +653,7 @@ And if it's refused, ends early, or fails:
 - **Codex has run 5 Spec reviews over 4 Specs, all on thirdshift:** #432 (PR #442), #465 (#470), #486 (#496, reviewed twice) and #427 (#556). They ran between 6 and 9 October, all at xhigh. Only #427's used the evidence-backed review skill. No other repository has had a Codex Spec run, and both reviewers' reports survive for all five. #486's second review saw the first one's fix, so only the first is independent. Confirmed by an agent from the Session, Command and Activity logs, the Codex sub-agent rollouts and the clones; every sha was checked with `git cat-file`. The manifest is in `~/.thirdshift/replays/2026-10-09/inputs/codex-specs/`.
 
 - **The factory runs everything on Codex (GPT-6.1 Sol) at high:** `harness.default = "codex"`, with Security runs on Muse. So today's plans, Spec branches and Spec reviews are Codex's. Confirmed by `~/.thirdshift/config.toml`.
-- **A Spec run's order:** the Spec review, then the Security review on the Spec PR if the User config asks for one, then Repairs in the Repair loop. A Security review that didn't finish holds the Self-merge. Confirmed by `CONTEXT.md` (Spec review, Security review, Repair).
+- **A Spec run's order:** the Spec review, then the Security review on the Spec PR if the User config asks for one, then Repairs in the Repair loop. A Security review that didn't finish holds the Self-merge. Confirmed by `GLOSSARY.md` (Spec review, Security review, Repair).
 - **#616 merged on 10 October:** Codex sessions that run the review now ask for fresh sub-agents. Confirmed by `gh issue view 616`.
 - **agy 1.3.3's `-p` change breaks thirdshift's agy adapter.** Filed as #658, fixed by #661 on 12 October. Confirmed by the replay's agy stderr logs and `src/harness/agy.rs` on main.
 

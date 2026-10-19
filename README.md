@@ -52,7 +52,7 @@ The operating system schedules Architect, Pickup and Security runs. See [schedul
 - [Machine status](docs/guide.md#machine-status), [showing Commands and reading logs](docs/guide.md#show-and-read-one-command), and [stopping a Command](docs/guide.md#stopping-a-command).
 - [Building and testing](docs/guide.md#building-from-source) and [releasing](docs/guide.md#releasing).
 - [Exact prompts](prompts/README.md) and [Factory skills](skills/), also [readable on the site](https://thirdshift.app/prompts/).
-- [Domain vocabulary](CONTEXT.md) and [architectural decisions](docs/adr/).
+- [Domain vocabulary](GLOSSARY.md) and [architectural decisions](docs/adr/).
 - [Open issues](https://github.com/JacobStephens2/thirdshift/issues) for known gaps and planned work.
 
 ## Credits and license

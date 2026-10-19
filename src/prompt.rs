@@ -210,7 +210,7 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
          \n\
          If it is not Strong, file it as one issue labelled `{NEEDS_TRIAGE}`, unless an open issue already covers it.\n\
          \n\
-         Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to CONTEXT.md or an ADR is a Ticket's work, not yours.\n\
+         Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to GLOSSARY.md or an ADR is a Ticket's work, not yours.\n\
          \n\
          End your final message with one of these lines, as its last line, with the issue's full URL and nothing else on the line:\n\
          {PLAN_LINE}<URL of the Spec or the single Ticket you published>\n\

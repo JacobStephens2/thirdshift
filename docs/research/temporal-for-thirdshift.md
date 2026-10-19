@@ -185,7 +185,7 @@ A code search of the `temporalio` organization for `claude -p` and `codex exec` 
 
 ## 6. What thirdshift already does, side by side
 
-Facts about thirdshift come from [CONTEXT.md](../../CONTEXT.md), [README.md](../../README.md) and the ADRs.
+Facts about thirdshift come from [GLOSSARY.md](../../GLOSSARY.md), [README.md](../../README.md) and the ADRs.
 
 | Concern | thirdshift today | With Temporal |
 |---|---|---|
@@ -194,7 +194,7 @@ Facts about thirdshift come from [CONTEXT.md](../../CONTEXT.md), [README.md](../
 | Concurrency cap | Spec run `parallel`, the **Claim limit**, and the Pass lock | Worker Activity slots per Task Queue; excess work queues |
 | Retries and Repairs | A **Repair loop** with fixed budgets (5 Repairs), one **Check re-run** per head, one **Resume** for killed background work | Retry Policies per Activity. The budgets would still be Workflow logic. |
 | Crash or reboot mid-Run | "A process killed outright, with `kill -9` or by a power cut, releases nothing: the issue stays `in-progress` for you to relabel" (README). A **Continuation** must be started again. | The Workflow carries on once a Worker is back. The interrupted session Activity times out on heartbeat and retries, and could resume the agent session by id. |
-| Interruption | Command interruption finishes salvage, Self-merge completion and Claim ending (CONTEXT.md) | Cancellation through heartbeats, plus cleanup Activities, which would have to be written |
+| Interruption | Command interruption finishes salvage, Self-merge completion and Claim ending (GLOSSARY.md) | Cancellation through heartbeats, plus cleanup Activities, which would have to be written |
 | Observability | Command log, Activity log, Session logs, Run notifications | Web UI with live Event History and pending Activities; the logs would still be needed for transcripts |
 | Deploy and update | One static binary; `thirdshift update` takes effect on the next Pass | A server (or Cloud), a Worker service, and Workflow versioning for in-flight Runs across updates |
 
