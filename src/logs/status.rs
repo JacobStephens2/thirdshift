@@ -1,6 +1,8 @@
 //! Format machine-wide Command observations.
 
+mod inbox;
 pub mod inspect;
+pub(crate) use inbox::{Inbox, Row, inbox};
 
 use anyhow::Result;
 use chrono::Local;
@@ -168,32 +170,36 @@ pub(super) fn stage_text(command: &Command) -> String {
 
 pub(super) fn print_tickets(facts: &CommandRecord, indent: &str) {
     for ticket in &facts.tickets {
-        use super::command_record::TicketState;
-        let state = match ticket.state {
-            TicketState::Running => "running".into(),
-            TicketState::Merged => "merged".into(),
-            TicketState::Failed => "failed".into(),
-            TicketState::NotStarted => "not started".into(),
-            TicketState::Waiting => format!(
-                "waiting on {}",
-                ticket
-                    .blockers
-                    .iter()
-                    .map(|issue| {
-                        if IssueUrl::parse(&issue.url).is_ok_and(|blocker| {
-                            blocker.repo_slug().eq_ignore_ascii_case(&facts.repository)
-                        }) {
-                            format!("#{}", issue.number)
-                        } else {
-                            issue.url.clone()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        };
-        println!("{indent}Ticket #{} · {state}", ticket.issue.number);
+        println!("{indent}{}", ticket_text(ticket, &facts.repository));
     }
+}
+
+fn ticket_text(ticket: &super::command_record::TicketRecord, repository: &str) -> String {
+    use super::command_record::TicketState;
+    let state = match ticket.state {
+        TicketState::Running => "running".into(),
+        TicketState::Merged => "merged".into(),
+        TicketState::Failed => "failed".into(),
+        TicketState::NotStarted => "not started".into(),
+        TicketState::Waiting => format!(
+            "waiting on {}",
+            ticket
+                .blockers
+                .iter()
+                .map(|issue| {
+                    if IssueUrl::parse(&issue.url)
+                        .is_ok_and(|blocker| blocker.repo_slug().eq_ignore_ascii_case(repository))
+                    {
+                        format!("#{}", issue.number)
+                    } else {
+                        issue.url.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    format!("Ticket #{} · {state}", ticket.issue.number)
 }
 
 fn age(seconds: i64) -> String {

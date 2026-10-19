@@ -1,0 +1,70 @@
+@font-face { font-family: "IBM Plex Sans"; src: url("/assets/fonts/ibm-plex-sans-latin.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "IBM Plex Mono"; src: url("/assets/fonts/ibm-plex-mono-latin.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+
+/* Focus tokens from prototype/711-console themes.js (05b1b0a), ADR 0018. */
+:root {
+  color-scheme: light;
+  --bg: #F7F7F5; --panel: #FFFFFF; --panel-2: #F0F0EE; --sel-bg: #EEEEEB;
+  --text: #18181A; --head: #18181A; --dim: #6B6B70; --rule: #E3E3E0; --link: #18181A;
+  --urgent: #D7263D; --urgent-text: #9A1424; --look: #B06800; --look-text: #7E4C00;
+  --working: #5E5E63; --working-text: #4A4A4F; --landing: #6B6B70;
+  --ready: #3F3F44; --ready-text: #3F3F44; --done: #6B6B70;
+  --font-head: "IBM Plex Sans", sans-serif; --font-body: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace; --body-size: 14px; --head-weight: 600; --radius: 4px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="focus-light"]) {
+    color-scheme: dark;
+    --bg: #121214; --panel: #19191C; --panel-2: #212125; --sel-bg: #2A2A2F;
+    --text: #E8E8EA; --head: #E8E8EA; --dim: #A0A0A8; --rule: #2C2C31; --link: #E8E8EA;
+    --urgent: #FF6B78; --urgent-text: #FFB0B5; --look: #FFB020; --look-text: #FFB52E;
+    --working: #A8A8B0; --working-text: #B4B4BC; --landing: #9A9AA2;
+    --ready: #C4C4CA; --ready-text: #C4C4CA; --done: #9A9AA2;
+  }
+}
+:root[data-theme="focus-dark"] {
+  color-scheme: dark;
+  --bg: #121214; --panel: #19191C; --panel-2: #212125; --sel-bg: #2A2A2F;
+  --text: #E8E8EA; --head: #E8E8EA; --dim: #A0A0A8; --rule: #2C2C31; --link: #E8E8EA;
+  --urgent: #FF6B78; --urgent-text: #FFB0B5; --look: #FFB020; --look-text: #FFB52E;
+  --working: #A8A8B0; --working-text: #B4B4BC; --landing: #9A9AA2;
+  --ready: #C4C4CA; --ready-text: #C4C4CA; --done: #9A9AA2;
+}
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 1120px; padding: 20px 28px; background: var(--bg); color: var(--text); font: var(--body-size)/1.4 var(--font-body); }
+header { border-bottom: 2px solid var(--head); padding-bottom: 14px; }
+.brand, .harness, .age, .empty, aside { color: var(--dim); }
+.brand { margin: 0; }
+h1 { margin: 4px 0; font: var(--head-weight) clamp(24px, 4vw, 40px)/1.1 var(--font-head); overflow-wrap: anywhere; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; }
+a { color: var(--link); overflow-wrap: anywhere; }
+.page-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0 8px; }
+h2 { margin: 0; font-weight: var(--head-weight); }
+code, .now, .subject, .plan { font-family: var(--font-mono); font-size: 12px; }
+.group { border-bottom: 1px solid var(--rule); }
+summary { padding: 10px 2px; cursor: pointer; font-size: 17px; }
+summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
+.commands, .children, .plan { list-style: none; padding: 0; margin: 0; }
+.commands { max-height: 300px; overflow: auto; }
+.command { padding: 8px 10px; margin-bottom: 4px; border-radius: var(--radius); color: var(--dim); overflow-wrap: anywhere; }
+.row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.state { color: var(--text); }
+.age { margin-left: auto; white-space: nowrap; }
+.issue-title { flex: 1 1 160px; }
+.command p { margin: 4px 0 0; }
+.now { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.command[data-state="Died"], .command[data-state="Failed"], .command[data-state="Silent"], .command[data-state="Finding"], .command[data-state="Triage"] { background: var(--panel); border-left: 3px solid var(--urgent); color: var(--urgent-text); }
+.command[data-state="Slow"] { border-left: 3px solid var(--look); color: var(--look-text); }
+.command[data-state="Died"] .state, .command[data-state="Failed"] .state, .command[data-state="Silent"] .state, .command[data-state="Finding"] .state, .command[data-state="Triage"] .state { color: var(--urgent-text); font-weight: var(--head-weight); }
+.plan { margin-top: 6px; }
+.plan li::before { content: "☐ "; }
+.children { border-left: 1px solid var(--rule); padding-left: 14px; margin-top: 8px; }
+.empty { margin: 0 0 12px 16px; }
+aside { font-size: 12px; }
+:focus-visible { outline: 2px solid var(--head); outline-offset: 2px; }
+@media (max-width: 500px) {
+  body { padding: 14px 12px; }
+  .issue-title { flex-basis: 100%; order: 1; }
+  .commands { max-height: none; }
+  .children { padding-left: 8px; }
+}

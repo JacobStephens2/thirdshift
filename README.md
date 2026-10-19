@@ -50,6 +50,7 @@ The operating system schedules Architect, Pickup and Security runs. See [schedul
 
 - [Configuration](docs/guide.md#user-config), [Harness, Model and Effort](docs/guide.md#harness-model-and-effort), and [email notifications](docs/guide.md#email).
 - [Machine status](docs/guide.md#machine-status), [showing Commands and reading logs](docs/guide.md#show-and-read-one-command), and [stopping a Command](docs/guide.md#stopping-a-command).
+- [The local Console](console/README.md): `thirdshift console --no-sign-in` serves the Inbox on localhost.
 - [Building and testing](docs/guide.md#building-from-source) and [releasing](docs/guide.md#releasing).
 - [Exact prompts](prompts/README.md) and [Factory skills](skills/), also [readable on the site](https://thirdshift.app/prompts/).
 - [Domain vocabulary](CONTEXT.md) and [architectural decisions](docs/adr/).

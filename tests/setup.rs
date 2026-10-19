@@ -49,6 +49,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[email]",
             "[logs]",
             "[inbox]",
+            "[console]",
             "[activity]",
             "[spec]",
             "[pickup]",
@@ -75,6 +76,14 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["logs"]["dir"].as_str(), Some("~/.thirdshift/logs"));
     assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(5));
     assert_eq!(config["inbox"]["silent_minutes"].as_integer(), Some(10));
+    assert_eq!(config["console"]["port"].as_integer(), Some(8711));
+    assert_eq!(config["console"]["theme"].as_str(), Some("focus-auto"));
+    assert!(
+        config["console"]["other_consoles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
@@ -143,6 +152,7 @@ effort = 'high' # my Effort
             "[harness.claude]",
             "[harness.codex]",
             "[inbox]",
+            "[console]",
             "[harness.agy]",
             "[harness.grok]",
             "[harness.muse]",
