@@ -106,6 +106,7 @@ pub fn start(
         .and_then(|()| UserConfig::load())
         .map_err(|error| failure(&error))?;
     logs::configured(&config);
+    crate::poll::configure_waiting_lines(config.waiting_line_interval);
     // First, so no interrupt can end the command once its notification is
     // checked.
     interrupt::install().map_err(|error| failure(&error))?;

@@ -7,6 +7,7 @@
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::TimeDelta;
@@ -30,6 +31,9 @@ pub struct UserConfig {
     /// each repository's in `<owner>/<repo>/`, by default
     /// `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
+    /// `logs.waiting_line_minutes`: time between unchanged waiting lines,
+    /// by default five minutes.
+    pub waiting_line_interval: Duration,
     /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
     pub quiet_skips: bool,
@@ -90,6 +94,7 @@ impl UserConfig {
             base_fix: false,
             launch_pull: false,
             logs_dir: home.join(".thirdshift/logs"),
+            waiting_line_interval: Duration::from_secs(5 * 60),
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
@@ -147,6 +152,17 @@ impl UserConfig {
                         ),
                     },
                     ("logs", "dir", _) => bail!("logs.dir must be a string in {file}"),
+                    ("logs", "waiting_line_minutes", value) => {
+                        config.waiting_line_interval = value
+                            .as_integer()
+                            .filter(|minutes| *minutes > 0)
+                            .and_then(|minutes| u64::try_from(minutes).ok()?.checked_mul(60))
+                            .map(Duration::from_secs)
+                            .with_context(|| format!(
+                                "logs.waiting_line_minutes must be a whole number of minutes from 1 up \
+                                 within the supported range in {file}"
+                            ))?;
+                    }
                     ("activity", "quiet_skips", Value::Boolean(quiet)) => {
                         config.quiet_skips = *quiet
                     }
@@ -731,6 +747,7 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
+waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
 
 [activity]
 quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
@@ -899,6 +916,7 @@ mod tests {
                 "email.to",
                 "email.from",
                 "logs.dir",
+                "logs.waiting_line_minutes",
                 "activity.quiet_skips",
                 "spec.parallel",
                 "pickup.limit",
@@ -1093,6 +1111,37 @@ mod tests {
         );
         for text in ["", "[activity]\n", "[activity]\nquiet_skips = false\n"] {
             assert!(!parse(text).unwrap().quiet_skips, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn waiting_line_interval_defaults_to_five_minutes_and_reads_whole_minutes() {
+        for text in ["", "[logs]\n"] {
+            assert_eq!(
+                parse(text).unwrap().waiting_line_interval,
+                Duration::from_secs(300)
+            );
+        }
+        let text = "[logs]\nwaiting_line_minutes = 2\n";
+        assert_eq!(
+            parse(text).unwrap().waiting_line_interval,
+            Duration::from_secs(120)
+        );
+        let path = Path::new("/home/me/.thirdshift/config.toml");
+        let document = UserConfigDocument::existing(text, path, Path::new("/home/me")).unwrap();
+        let rendered = document.render(None);
+        assert_eq!(
+            parse(&rendered).unwrap().waiting_line_interval,
+            Duration::from_secs(120)
+        );
+        for value in ["0", "-1", "1.5", "true", "'5'", "9223372036854775807"] {
+            let error = parse(&format!("[logs]\nwaiting_line_minutes = {value}\n")).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("logs.waiting_line_minutes must be a whole number"),
+                "{error:#}"
+            );
         }
     }
 

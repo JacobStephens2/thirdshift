@@ -72,6 +72,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     );
     assert!(config["email"].get("to").is_none(), "{text}");
     assert_eq!(config["logs"]["dir"].as_str(), Some("~/.thirdshift/logs"));
+    assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(5));
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
@@ -214,6 +215,7 @@ fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then
  {
     let scenario = Scenario::new();
     let original = "# my machine\n[logs]\ndir = '/var/log/ts' # custom\n\
+                    waiting_line_minutes = 2 # waiting\n\
                     [merge]\nalways = true # merge\n\
                     [pickup]\nwait_minutes = 60 # time to attach Tickets\n";
     let path = scenario.user_config_is(original);
@@ -228,6 +230,7 @@ fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then
     assert!(text.starts_with(original), "{text}");
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["logs"]["dir"].as_str(), Some("/var/log/ts"));
+    assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(2));
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(60));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
     let metadata = fs::metadata(&path).unwrap();

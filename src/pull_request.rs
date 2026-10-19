@@ -268,6 +268,7 @@ impl<A: Adapter> PullRequest<A> {
     pub fn ensure_ready_and_mergeable(&mut self) -> Result<()> {
         progress::step("checking the PR is open, ready and mergeable");
         let deadline = std::time::Instant::now() + self.adapter.grace_period();
+        let mut waiting_line = poll::WaitingLine::new();
         loop {
             let snapshot = self.observe(false)?.context("no PR found")?;
             self.validate(&snapshot, true)?;
@@ -280,7 +281,15 @@ impl<A: Adapter> PullRequest<A> {
                         snapshot.pr.url
                     );
                 }
-                Mergeable::Unknown => self.adapter.pause()?,
+                Mergeable::Unknown => {
+                    if waiting_line.should_report(()) {
+                        progress::step(format!(
+                            "waiting for GitHub to calculate mergeability of PR {}",
+                            snapshot.pr.url
+                        ));
+                    }
+                    self.adapter.pause()?;
+                }
             }
         }
     }

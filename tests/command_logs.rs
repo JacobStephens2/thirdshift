@@ -85,6 +85,41 @@ fn the_one_command_log(scenario: &Scenario, folder: &str, prefix: &str) -> (Path
     (path, format!("{stamp}~{token}"))
 }
 
+#[test]
+fn self_merge_keeps_writing_waiting_lines_while_github_calculates_mergeability() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[logs]\nwaiting_line_minutes = 1\n");
+    scenario.agent_does(&format!(
+        "{}gh fake checks \"$(git rev-parse HEAD)\" '[{{\"name\":\"test\",\"conclusion\":\"success\"}}]'\n\
+         gh fake on-ci-read 1 'gh fake pr issue-7 unknown_polls 20'\n",
+        agent_opens_pr(7, "main")
+    ));
+
+    let result = run_in_zone(
+        &scenario,
+        &["merge", &scenario.issue_url(7)],
+        &[
+            ("THIRDSHIFT_WAITING_MINUTE_MS", "150"),
+            ("THIRDSHIFT_CI_GRACE_MS", "10000"),
+        ],
+    );
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    let waiting = "waiting for GitHub to calculate mergeability of PR";
+    assert!(
+        result.stderr.matches(waiting).count() >= 3,
+        "{}",
+        result.stderr
+    );
+    let (path, _) = the_one_command_log(&scenario, "issue", "7-");
+    let log = fs::read_to_string(path).unwrap();
+    assert_eq!(
+        log.matches(waiting).count(),
+        result.stderr.matches(waiting).count()
+    );
+}
+
 /// Assert `stamp` is a local time with [`OFFSET`], as in
 /// `20261003T120000-0400`.
 fn assert_local_stamp(stamp: &str) {

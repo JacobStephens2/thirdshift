@@ -81,6 +81,49 @@ fn checks_pending_then_green_is_success() {
 }
 
 #[test]
+fn unchanged_running_checks_keep_writing_waiting_lines_to_the_command_log() {
+    for merge in [false, true] {
+        let scenario = Scenario::new();
+        scenario.user_config_is("[logs]\nwaiting_line_minutes = 1\n");
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}{}",
+            checks_on_head(r#"[{"name": "test", "conclusion": "success", "pending_polls": 8}]"#)
+        ));
+        let mut args = vec![scenario.issue_url(7)];
+        if merge {
+            args.push("merge".to_string());
+        }
+
+        let result = scenario.run_with_env(
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[("THIRDSHIFT_WAITING_MINUTE_MS", "150")],
+        );
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        let waiting = "1 still running out of 1 checks listed so far";
+        assert!(
+            result.stderr.matches(waiting).count() >= 3,
+            "{}",
+            result.stderr
+        );
+        let logs = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+        let log = std::fs::read_dir(logs)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "log"))
+            .unwrap();
+        let log = std::fs::read_to_string(log).unwrap();
+        assert_eq!(
+            log.matches(waiting).count(),
+            result.stderr.matches(waiting).count()
+        );
+        if merge {
+            assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+        }
+    }
+}
+
+#[test]
 fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
