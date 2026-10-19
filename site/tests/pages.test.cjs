@@ -35,6 +35,84 @@ async function pageForTest(t, options) {
   return page;
 }
 
+test("public pages expose canonical search and share metadata without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const titles = new Set();
+  const descriptions = new Set();
+  for (const path of ["/", "/how-it-works/", "/docs/", "/prompts/"]) {
+    assert.equal((await page.goto(`${origin}${path}`)).status(), 200);
+    const canonical = page.locator('head link[rel="canonical"]');
+    assert.equal(await canonical.count(), 1, path);
+    assert.equal(await canonical.getAttribute("href"), `https://thirdshift.app${path}`);
+    const title = await page.title();
+    const description = await page.locator('head meta[name="description"]').getAttribute("content");
+    assert.ok(title.includes("thirdshift"), path);
+    assert.ok(description.length > 0, path);
+    titles.add(title);
+    descriptions.add(description);
+    for (const [selector, expected] of [
+      ['meta[property="og:type"]', "website"],
+      ['meta[property="og:site_name"]', "thirdshift"],
+      ['meta[property="og:url"]', `https://thirdshift.app${path}`],
+      ['meta[property="og:title"]', title],
+      ['meta[property="og:description"]', description],
+      ['meta[property="og:image"]', "https://thirdshift.app/share-card.png"],
+      ['meta[name="twitter:card"]', "summary_large_image"],
+      ['meta[name="twitter:title"]', title],
+      ['meta[name="twitter:description"]', description],
+      ['meta[name="twitter:image"]', "https://thirdshift.app/share-card.png"],
+    ]) {
+      const tag = page.locator(`head ${selector}`);
+      assert.equal(await tag.count(), 1, `${path}: ${selector}`);
+      assert.equal(await tag.getAttribute("content"), expected, `${path}: ${selector}`);
+    }
+    assert.equal(await page.locator('meta[name="robots"][content*="noindex"]').count(), 0);
+  }
+  assert.equal(titles.size, 4, "each page has a distinct search title");
+  assert.equal(descriptions.size, 4, "each page has a distinct search description");
+  await page.goto(`${origin}/`);
+  assert.match(await page.title(), /AI coding agents.*GitHub issue.*pull request/);
+});
+
+test("robots advertises a sitemap of the public canonical pages", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const robots = await page.request.get(`${origin}/robots.txt`);
+  assert.equal(robots.status(), 200);
+  assert.match(await robots.text(), /^Sitemap: https:\/\/thirdshift\.app\/sitemap\.xml$/m);
+  const sitemap = await page.request.get(`${origin}/sitemap.xml`);
+  assert.equal(sitemap.status(), 200);
+  const urls = await page.evaluate(xml => {
+    const document = new DOMParser().parseFromString(xml, "application/xml");
+    if (document.querySelector("parsererror")) throw new Error("Invalid sitemap XML");
+    if (document.documentElement.namespaceURI !== "http://www.sitemaps.org/schemas/sitemap/0.9") {
+      throw new Error("Invalid sitemap namespace");
+    }
+    return Array.from(document.querySelectorAll("urlset > url > loc"), node => node.textContent);
+  }, await sitemap.text());
+  assert.deepEqual(urls.sort(), [
+    "https://thirdshift.app/",
+    "https://thirdshift.app/docs/",
+    "https://thirdshift.app/how-it-works/",
+    "https://thirdshift.app/prompts/",
+  ]);
+  for (const url of urls) {
+    assert.equal((await page.goto(`${origin}${new URL(url).pathname}`)).status(), 200);
+    assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), url);
+  }
+});
+
+test("the homepage identifies the site to search engines without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/`);
+  const data = page.locator('head script[type="application/ld+json"]');
+  assert.equal(await data.count(), 1);
+  const site = JSON.parse(await data.textContent());
+  assert.equal(site["@context"], "https://schema.org");
+  assert.equal(site["@type"], "WebSite");
+  assert.equal(site.name, "thirdshift");
+  assert.equal(site.url, "https://thirdshift.app/");
+});
+
 test("the homepage links to the shared Markdown manual without JavaScript", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
   await page.goto(`${origin}/`);
