@@ -264,6 +264,7 @@ fn persistent_read_failures_stop_after_three_attempts_with_the_last_cause() {
         "github::execution_tests::persistent_read_failures_stop_after_three_attempts_with_the_last_cause",
         |_| {
             let fixture = Fixture::new("");
+            // macOS wc pads the count; format the attempt as an integer.
             fixture.script(&format!(
                 "echo read >> '{reads}'\nn=$(wc -l < '{reads}')\necho \"HTTP 504: failure $((n))\" >&2\nexit 1",
                 reads = fixture.path("reads").display(),
