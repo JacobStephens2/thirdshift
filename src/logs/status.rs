@@ -181,6 +181,12 @@ fn read(all: bool) -> Result<Status> {
                     if record.parent_record.is_none() {
                         covered.insert(command_log(&path));
                     }
+                    for session in std::iter::once(record)
+                        .chain(&tree.dispatched)
+                        .flat_map(CommandRecord::session_references)
+                    {
+                        covered.insert(session.clone());
+                    }
                     records.insert(path, tree);
                 }
             }
@@ -272,19 +278,13 @@ pub(super) fn retained_resources(path: &Path) -> Result<BTreeSet<String>> {
 }
 
 fn command_log(path: &Path) -> PathBuf {
-    let name = path.file_name().unwrap().to_string_lossy();
-    path.with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)))
-}
-
-fn parse_stamp(stamp: &str) -> Option<DateTime<chrono::FixedOffset>> {
-    DateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%z").ok()
+    super::owner::record_log(path)
 }
 
 /// Keep the filename spelling alongside its parsed time for naming and history.
 fn command_stamp(path: &Path) -> Option<(&str, DateTime<chrono::FixedOffset>)> {
-    let stem = path.file_stem()?.to_str()?;
-    let stamp = stem.get(stem.len().checked_sub(20)?..)?;
-    Some((stamp, parse_stamp(stamp)?))
+    let decoded = super::owner::decode(path)?;
+    Some((decoded.identity.stamp, decoded.time()))
 }
 
 fn tree(

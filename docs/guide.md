@@ -75,7 +75,7 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 
 `thirdshift status` names this host and lists live Commands across every repository in `logs.dir`, with their issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Runs or Spec runs they dispatch beneath themselves, each Spec's Tickets and their Runs, and each Run's Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. After the live Commands it lists those that ended in the last 24 hours, with their outcomes. `thirdshift status --all` lists every Command this machine has logs for, newest start first. A Command or child Run with no outcome whose process has gone shows as `died at <stage>` in either view. Process start identifiers distinguish a reused process id on Linux and macOS. Records remain beside their Command logs, as `*.command.json`, with child records named for their issue as `*.issue-<n>.child.json`. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.
 
-History uses each source only for Commands missing from the preceding sources: Command records, then Activity log start/end lines with their Command logs, then Session logs in the current `<logs.dir>/<owner>/<repo>/commands/<kind>/` layout. Activity entries have start and end times and outcomes, with no stages. Session entries group logs by issue and Command stamp; they have no known end or outcome and appear only with `--all`. Sessions covered by a Spec run or Pass's stamp belong to that Command. The flat layout from before [ADR 0011](adr/0011-thirdshift-keeps-a-per-repository-activity-log.md) is ignored.
+History uses each source only for Commands missing from the preceding sources: Command records, then Activity log start/end lines with their Command logs, then Session logs in the current `<logs.dir>/<owner>/<repo>/commands/<kind>/` layout. Activity entries have start and end times and outcomes, with no stages. Session entries group logs by issue and exact Command owner; they have no known end or outcome and appear only with `--all`. A Spec run or Pass's Sessions share that Command's stamp and owner token. Legacy tokenless logs retain their existing grouping. The flat layout from before [ADR 0011](adr/0011-thirdshift-keeps-a-per-repository-activity-log.md) is ignored.
 
 For each repository and kind of Pass whose latest Activity log line is a skip, status also shows that Pass as idle with its reason, even when the skip is older than another kind's activity. A later start or end for that kind clears its idle entry. For example:
 
@@ -103,14 +103,14 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
     "effort": "high",
     "started_at": "2026-10-18T12:00:00-04:00",
     "ended_at": null,
-    "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"}],
-    "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl",
+    "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-20261018T120000-0400~ownerA-implement.jsonl"}],
+    "session_log": "/logs/acme/widgets/commands/issue/7-20261018T120000-0400~ownerA-implement.jsonl",
     "issue_branch": "issue-7",
     "pull_request": null,
     "outcome": null,
     "cause": null,
     "source": "command_record",
-    "command_log": "/logs/acme/widgets/commands/issue/7-stamp.log",
+    "command_log": "/logs/acme/widgets/commands/issue/7-20261018T120000-0400~ownerA.log",
     "dispatched": [],
     "state": "live",
     "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
@@ -186,17 +186,17 @@ thirdshift logs 'widgets#7' --session repair --follow
     "name": "acme/widgets#7",
     "state": "live",
     "latest_event": "Bash: cargo test",
-    "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"}],
-    "command_log": "/logs/acme/widgets/commands/issue/7-stamp.log",
-    "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl",
-    "session_logs": ["/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"],
+    "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-20261018T120000-0400~ownerA-implement.jsonl"}],
+    "command_log": "/logs/acme/widgets/commands/issue/7-20261018T120000-0400~ownerA.log",
+    "session_log": "/logs/acme/widgets/commands/issue/7-20261018T120000-0400~ownerA-implement.jsonl",
+    "session_logs": ["/logs/acme/widgets/commands/issue/7-20261018T120000-0400~ownerA-implement.jsonl"],
     "children": [],
     "dispatched": []
   }
 }
 ```
 
-The Command excerpt omits the common fields documented for `status --json`; all those fields are retained, including process identity, issue, Harness, Model, Effort and nullable outcome. `children` and `dispatched` retain the same recursive shape. `session_logs` lists the selected Run's Session log paths, including original sessions and Resumes that share a stage. `latest_event` is optional, present only when a live Run has a readable event, including in child Runs. History without a Command record uses the same Activity-log or Session-log shape as `status --all --json`, with Session logs discovered by issue/kind and Command stamp, without invented stages or liveness.
+The Command excerpt omits the common fields documented for `status --json`; all those fields are retained, including process identity, issue, Harness, Model, Effort and nullable outcome. `children` and `dispatched` retain the same recursive shape. `session_logs` lists the selected Run's Session log paths, including original sessions and Resumes that share a stage. `latest_event` is optional, present only when a live Run has a readable event, including in child Runs. History without a Command record uses the same Activity-log or Session-log shape as `status --all --json`, with Session logs discovered by issue/kind and exact Command owner, without invented stages or liveness.
 
 `logs` writes the Command log verbatim. `--session <kind>` writes that kind's latest Session log as raw JSON lines; `implement` and `spec-review` include a later Resume, and `repair` selects the latest numbered Repair. A missing log or session kind gives an error. `--follow` first prints the selected log, then flushes appended bytes until the owning Command ends or dies, including its final output. A Ticket shares its Command's Command log but selects its own Session logs. The selected Command and Session log stay fixed while following.
 
@@ -624,21 +624,21 @@ Everything thirdshift logs goes under `~/.thirdshift/logs/`, or the `logs.dir` s
 ├── audits/                   each Security audit's report, with its evidence
 ├── security-reviews/         each Security review's private report of old findings
 └── commands/
-    ├── architect/            <stamp>.log and Session logs
-    ├── pickup/               <n>-<stamp>.log and Session logs
-    ├── secure/               <stamp>.log and Session logs
-    └── issue/                <n>-<stamp>.log and Session logs
+    ├── architect/            <stamp>~<token>.log and Session logs
+    ├── pickup/               <n>-<stamp>~<token>.log and Session logs
+    ├── secure/               <stamp>~<token>.log and Session logs
+    └── issue/                <n>-<stamp>~<token>.log and Session logs
 ```
 
 The folder already names the repository, so no file name repeats it. `audits/` and `security-reviews/` hold vulnerability evidence, so keep the logs private (see [Security runs](#security-runs)). A **Session log** is one session's full transcript, as the Harness's JSON output, such as Claude Code's `stream-json`:
 
 ```
-~/.thirdshift/logs/<owner>/<repo>/commands/issue/<n>-<stamp>-implement.jsonl
-~/.thirdshift/logs/<owner>/<repo>/commands/issue/<n>-<stamp>-repair-<i>.jsonl
-~/.thirdshift/logs/<owner>/<repo>/commands/architect/architect-<stamp>-architecture-review.jsonl
+~/.thirdshift/logs/<owner>/<repo>/commands/issue/<n>-<stamp>~<token>-implement.jsonl
+~/.thirdshift/logs/<owner>/<repo>/commands/issue/<n>-<stamp>~<token>-repair-<i>.jsonl
+~/.thirdshift/logs/<owner>/<repo>/commands/architect/architect-<stamp>~<token>-architecture-review.jsonl
 ```
 
-Session logs share the owning command's folder: a Pickup run's dispatched Run logs in `commands/pickup/`, an Architect run's in `commands/architect/`, and a Security run's in `commands/secure/`. Tickets and Base fixes inherit that folder too.
+Session logs share the owning command's folder, stamp and owner token: a Pickup run's dispatched Run logs in `commands/pickup/`, an Architect run's in `commands/architect/`, and a Security run's in `commands/secure/`. Tickets and nested Base fixes inherit that same ownership too.
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.jsonl`.
 
@@ -646,11 +646,13 @@ A **Command log** is everything one command printed, stderr and stdout in the or
 
 The stamp is the local time the command started, with its UTC offset, as in `20261003T120000-0400`, in the machine's time zone, or `TZ`'s if set, so it agrees with `date` and `ls -l`. A command's Command log and all of its Session logs, its Tickets' Runs' and its Base fix's included, share that one stamp, so they sort together and each can be found from the other. When a Run fails, stderr ends with the path of its most recent Session log, the place to start looking, then that of its Command log.
 
+New Command and Session logs insert `~<token>` immediately after the stamp. The random token gives each Command its own storage even when start times agree; its Command record uses the exact Command-log stem followed by `.command.json`. Model sidecars (`.models.json`) and review reports (`.standards` and `.spec`) use the exact Session-log stem. Human Command names stay the same, and start stamps remain display and grouping facts. A matching stamp alone does not attach a tokenless Session to a new Command: a record reference or exact Model evidence must establish that ownership. Legacy logs and records remain readable without renaming. A failed Command-log writer retains its allocated owner; if allocation itself failed, a Session fails with that cause instead of choosing a shared timestamp-only filename.
+
 The **Activity log**, `activity.log`, is a short running record of what the factory did on the repository ([ADR-0011](adr/0011-thirdshift-keeps-a-per-repository-activity-log.md)). A Run, a Spec run or a Pass writes a line when it starts work, naming its Command log, and one when it ends, with its outcome; a Run you type by hand writes them too, and the run a Pass dispatched, a Spec run's Tickets and a Base fix write none of their own. A skipped Pass writes a line only when its reason differs from the last line of its own kind, so a repository that sits idle shows one line, not one per pass, and the first skip after a pass that did work always shows: that is when the repository went idle. Every line starts with the local date and time:
 
 ```
 2026-10-03 02:00:01 Pickup run skipped: no Ready issue on acme/widgets
-2026-10-03 09:30:01 Pickup run #41 started: commands/pickup/41-20261003T093001-0400.log
+2026-10-03 09:30:01 Pickup run #41 started: commands/pickup/41-20261003T093001-0400~aB3cD4eF5gH6iJ7k.log
 2026-10-03 09:52:17 Pickup run #41 ended: PR https://github.com/acme/widgets/pull/42 is merged
 2026-10-03 10:00:01 Pickup run skipped: no Ready issue on acme/widgets
 ```
@@ -975,7 +977,7 @@ A Security run checks its gates in order: another **Pass** on the repository run
 
 The Security audit runs in a throwaway worktree detached at origin's Base branch head, leaving the Launch directory and local work untouched, including when `launch.pull` is set. Its Session prompt runs `thirdshift-security-audit` in full audit mode with the `quick` profile, auditing the whole repository except vendored and third-party code. It names a `SECURITY.md` or conventional threat-model document when present, reads compatible earlier runs and ends `incomplete` instead of asking for input.
 
-Each audit keeps a new output directory under `<logs.dir>/<owner>/<repo>/audits/`, outside the worktree. The audit artifacts and private advisory descriptions contain evidence; keep the logs directory private. thirdshift runs both embedded validators before recording anything. A missing final line, an incomplete session or an invalid report fails the run and names its Session log. Command logs and Session logs are in `commands/secure/`; Session logs are named `secure-<stamp>-security-audit.jsonl`; the Activity log records the start and ending as for other Passes.
+Each audit keeps a new output directory under `<logs.dir>/<owner>/<repo>/audits/`, outside the worktree. The audit artifacts and private advisory descriptions contain evidence; keep the logs directory private. thirdshift runs both embedded validators before recording anything. A missing final line, an incomplete session or an invalid report fails the run and names its Session log. Command logs and Session logs are in `commands/secure/`; Session logs are named `secure-<stamp>~<token>-security-audit.jsonl`; the Activity log records the start and ending as for other Passes.
 
 A finding's title becomes the advisory summary. Its description preserves its write-up, trace, evidence and validation plan, with the fingerprint and audited commit. thirdshift claims no severity, CWE or affected version range. It uses the package in the repository's manifest, or the `other` ecosystem when none is identified. Matching fingerprints in any advisory state are kept rather than recorded again. Rejected candidates stay in the local report and produce no advisory. Draft advisories require GitHub repository security manager or administrator access. On a private repository whose advisory endpoint is unavailable, the private record is an issue labelled `security-finding` and `needs-triage`. It is never replaced by a public finding issue.
 
@@ -1086,7 +1088,7 @@ thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400
 thirdshift: 03:00:02 #18 labelled needs-info
 thirdshift: 03:00:03 #20 blocked by #17
 thirdshift: 03:00:04 taking Ready issue #22 "Sharpen the widgets", as thirdshift https://github.com/acme/widgets/issues/22 would
-thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/commands/pickup/22-20261003T030001-0400.log
+thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/commands/pickup/22-20261003T030001-0400~aB3cD4eF5gH6iJ7k.log
 ```
 
 ### One Run notification for the issue taken
