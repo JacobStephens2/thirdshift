@@ -14,7 +14,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 mod repair_loop;
@@ -24,7 +24,7 @@ use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
-use crate::github::GitHub;
+use crate::github::{GitHub, IssueText};
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -111,7 +111,7 @@ impl Delivery<'_> {
         };
         pull_request.begin_delivery();
         let (issue, started) = (self.issue, self.started);
-        let unedited = move || unedited_since(issue, started);
+        let unedited = move || no_untrusted_edit_since(issue, started);
         let (delivered, log) = Sessions::checked_within(
             self.logs,
             worktree.path(),
@@ -196,13 +196,13 @@ impl Route<'_> {
             outside.catch_up()?;
         }
         outside.session(opening.kind, &opening.prompt)?;
-        let review = self.security_review.then(|| {
-            SecurityOutcome::of(outside.security_review(&prompt::security_review(
-                self.issue,
-                self.base,
-                self.branch,
-            )))
-        });
+        let review = match self.security_review.then(|| {
+            outside.security_review(&prompt::security_review(self.issue, self.base, self.branch))
+        }) {
+            // Not a Security review outcome: the Run itself must stop.
+            Some(Err(error)) if error.is::<UntrustedEdit>() => return Err(error),
+            review => review.map(SecurityOutcome::of),
+        };
         outside.push()?;
         self.write_built_with(outside);
         let pr = outside.mark_pr_ready(checklist)?;
@@ -408,18 +408,40 @@ trait FailedOutside {
     fn step(&mut self, line: String);
 }
 
-/// Fail unless `issue` has had no edit to its body or title, since its Run
-/// `started`, by an account that is not a Trusted account: a session started
-/// now would work from text no Trusted account wrote.
-fn unedited_since(issue: &IssueUrl, started: DateTime<Utc>) -> Result<()> {
+/// Fail with [`UntrustedEdit`] if `issue` has had an edit to its body or
+/// title, since its Run `started`, by an account that is not a Trusted
+/// account: a session started now would work from text no Trusted account
+/// wrote.
+fn no_untrusted_edit_since(issue: &IssueUrl, started: DateTime<Utc>) -> Result<()> {
     match GitHub::new().untrusted_edit(issue, Some(started))? {
-        Some(edit) => bail!(
-            "#{} {edit} edited since the Run started by an account that is not a Trusted account; starting no further session",
-            issue.number
-        ),
+        Some(text) => Err(UntrustedEdit {
+            number: issue.number,
+            text,
+        }
+        .into()),
         None => Ok(()),
     }
 }
+
+/// Issue `number`'s `text` was edited during its Run by an account that is
+/// not a Trusted account, so the Run starts no further session.
+#[derive(Debug)]
+struct UntrustedEdit {
+    number: u64,
+    text: IssueText,
+}
+
+impl std::fmt::Display for UntrustedEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "#{} {} edited since the Run started by an account that is not a Trusted account; starting no further session",
+            self.number, self.text
+        )
+    }
+}
+
+impl std::error::Error for UntrustedEdit {}
 
 /// A Delivery's worktree, its sessions, its Base fix, and its issue and pull
 /// request on GitHub.

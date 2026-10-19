@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::{CommandFailure, GitHub, nodes};
+use super::{CommandFailure, GitHub};
 use crate::issue::IssueUrl;
 use crate::labels::READY_FOR_AGENT;
 
@@ -15,9 +15,9 @@ use crate::labels::READY_FOR_AGENT;
 pub enum UntrustedIssue {
     Author,
     ReadyLabel,
-    /// Its `Edit` was made, after it was last marked ready, by an account
+    /// Its `IssueText` was edited, after it was last marked ready, by an account
     /// that is not a Trusted account.
-    Edited(Edit),
+    Edited(IssueText),
 }
 
 impl fmt::Display for UntrustedIssue {
@@ -35,14 +35,14 @@ impl fmt::Display for UntrustedIssue {
     }
 }
 
-/// What an untrusted edit changed: the issue's body or its title.
+/// The part of an issue an edit changed: its body or its title.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Edit {
+pub enum IssueText {
     Body,
     Title,
 }
 
-impl fmt::Display for Edit {
+impl fmt::Display for IssueText {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Body => "body",
@@ -107,15 +107,15 @@ impl GitHub {
         &self,
         issue: &IssueUrl,
         since: Option<DateTime<Utc>>,
-    ) -> Result<Option<Edit>> {
+    ) -> Result<Option<IssueText>> {
         let mut trusted: Vec<String> = Vec::new();
         for (edit, query, field) in [
-            (Edit::Body, BODY_EDITS_QUERY, "editedAt"),
-            (Edit::Title, TITLE_EDITS_QUERY, "createdAt"),
+            (IssueText::Body, BODY_EDITS_QUERY, "editedAt"),
+            (IssueText::Title, TITLE_EDITS_QUERY, "createdAt"),
         ] {
             for node in self.edits(issue, query)? {
                 if let Some(since) = since
-                    && edited_at(&node, field)? <= since
+                    && time_at(&node, field)? <= since
                 {
                     continue;
                 }
@@ -140,33 +140,7 @@ impl GitHub {
     /// Every edit `query` reads of `issue`, its `edits` connection read page
     /// by page so that no edit is missed.
     fn edits(&self, issue: &IssueUrl, query: &str) -> Result<Vec<Value>> {
-        let mut after: Option<String> = None;
-        let mut edits = Vec::new();
-        loop {
-            let json = self.issue_query(issue, query, after.as_deref())?;
-            let page = &json["data"]["repository"]["issue"]["edits"];
-            edits.extend(nodes(page, "edits")?.iter().cloned());
-            let info = &page["pageInfo"];
-            if !info["hasNextPage"]
-                .as_bool()
-                .context(CommandFailure::InvalidResponse(
-                    "edit history has no hasNextPage".into(),
-                ))?
-            {
-                return Ok(edits);
-            }
-            let next = info["endCursor"]
-                .as_str()
-                .context(CommandFailure::InvalidResponse(
-                    "edit history has no endCursor".into(),
-                ))?;
-            if Some(next) == after.as_deref() {
-                bail!(CommandFailure::InvalidResponse(
-                    "edit history cursor did not advance".into()
-                ));
-            }
-            after = Some(next.to_string());
-        }
+        Ok(self.paged_nodes(issue, query, "edits", "edit history")?.1)
     }
 
     /// When `issue` was last labelled ready-for-agent by a Trusted account,
@@ -205,7 +179,7 @@ impl GitHub {
             .map(|event| {
                 Ok(Labelling {
                     actor: event["actor"]["login"].as_str().map(str::to_string),
-                    at: edited_at(event, "created_at")?,
+                    at: time_at(event, "created_at")?,
                 })
             })
             .collect()
@@ -266,7 +240,7 @@ impl GitHub {
 }
 
 /// The time in `node`'s `field`, when an event or edit was made.
-fn edited_at(node: &Value, field: &str) -> Result<DateTime<Utc>> {
+fn time_at(node: &Value, field: &str) -> Result<DateTime<Utc>> {
     let at = node[field].as_str().with_context(|| {
         CommandFailure::InvalidResponse(format!("issue history has an entry with no {field}"))
     })?;

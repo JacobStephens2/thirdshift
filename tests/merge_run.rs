@@ -1019,9 +1019,13 @@ fn a_review_repair_whose_background_work_was_killed_gets_a_resume() {
     );
 }
 
-/// Bash that records an outsider's edit to issue 7's body, dated after any
-/// Run's start.
-const OUTSIDER_EDITS_ISSUE_7: &str = "gh fake edits 7 '[{\"kind\": \"body\", \"by\": \"outsider\", \"at\": \"2999-01-01T00:00:00Z\"}]'\n";
+/// Bash that records `by`'s edit to issue 7's `kind`, its body or title, dated
+/// after any Run's start.
+fn edits_issue_7(kind: &str, by: &str) -> String {
+    format!(
+        "gh fake edits 7 '[{{\"kind\": \"{kind}\", \"by\": \"{by}\", \"at\": \"2999-01-01T00:00:00Z\"}}]'\n"
+    )
+}
 
 #[test]
 fn an_untrusted_edit_while_the_run_is_under_way_starts_no_repair() {
@@ -1029,8 +1033,9 @@ fn an_untrusted_edit_while_the_run_is_under_way_starts_no_repair() {
     scenario.agent_does_in_session(
         1,
         &format!(
-            "{AGENT_OPENS_PR}{}{OUTSIDER_EDITS_ISSUE_7}",
-            checks_on_head(RED)
+            "{AGENT_OPENS_PR}{}{}",
+            checks_on_head(RED),
+            edits_issue_7("body", "outsider")
         ),
     );
 
@@ -1053,7 +1058,8 @@ fn an_untrusted_edit_while_the_run_is_under_way_starts_no_resume() {
     scenario.agent_does_in_session(
         1,
         &format!(
-            "{AGENT_OPENS_PR}{OUTSIDER_EDITS_ISSUE_7}{}",
+            "{AGENT_OPENS_PR}{}{}",
+            edits_issue_7("body", "outsider"),
             leaves_running("cargo test")
         ),
     );
@@ -1075,8 +1081,9 @@ fn a_trusted_edit_while_the_run_is_under_way_leaves_its_repairs_running() {
     scenario.agent_does_in_session(
         1,
         &format!(
-            "{AGENT_OPENS_PR}{}gh fake edits 7 '[{{\"kind\": \"title\", \"by\": \"acme\", \"at\": \"2999-01-01T00:00:00Z\"}}]'\n",
-            checks_on_head(RED)
+            "{AGENT_OPENS_PR}{}{}",
+            checks_on_head(RED),
+            edits_issue_7("title", "acme")
         ),
     );
     scenario.agent_does_in_session(2, "echo fixed > feature.txt\ngit commit -q -am 'Fix CI'\n");
@@ -1085,6 +1092,29 @@ fn a_trusted_edit_while_the_run_is_under_way_leaves_its_repairs_running() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(scenario.claude_calls().len(), 2);
+}
+
+#[test]
+fn an_untrusted_edit_dated_just_before_the_runs_local_start_still_stops_repairs() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}{}",
+            checks_on_head(RED),
+            // GitHub dates the edit before this machine's clock says the Run
+            // started: the gap since the trust check, or clock lag.
+            "gh fake edits 7 \"[{\\\"kind\\\": \\\"body\\\", \\\"by\\\": \\\"outsider\\\", \\\"at\\\": \\\"$(date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)\\\"}]\"\n"
+        ),
+    );
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("starting no further session"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "no Repair session");
 }
 
 /// Bash that has the next `times` merge attempts fail with `error`.

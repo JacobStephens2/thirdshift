@@ -849,3 +849,24 @@ fn reproduced_old_review_finding_sets_the_private_advisory_severity() {
         "The validated old finding already has a failing proof of concept and scored severity; record it as a Security run does"
     );
 }
+
+#[test]
+fn an_untrusted_edit_before_the_security_review_fails_the_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!("{OPENS_PR}gh fake edits 7 '[{{\"kind\": \"body\", \"by\": \"outsider\", \"at\": \"2999-01-01T00:00:00Z\"}}]'\n"),
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("#7 body edited since the Run started by an account that is not a Trusted account; starting no further session"),
+        "{}", result.stderr
+    );
+    assert!(
+        !result.stderr.contains("Security review incomplete"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}

@@ -12,7 +12,7 @@
 //!  "bodies"?: {"<number>": "<body>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "author_associations"?: {"<number>": "OWNER" | "MEMBER" | "COLLABORATOR" | "NONE"},
-//!  "trust_events"?: {"<number>": [<REST issue event>, ...]},
+//!  "trust_events"?: {"<number>": [<REST issue event with created_at>, ...]},
 //!  "edits"?: {"<number>": [{"kind": "body" | "title", "by": "<login>" | null, "at"}, ...]},
 //!  "collaborators"?: ["<login>", ...],
 //!  "org_members"?: ["<login>", ...],
