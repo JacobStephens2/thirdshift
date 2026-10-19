@@ -10,7 +10,7 @@
 //!  "titles"?: {"<number>": "<title>"},
 //!  "created"?: {"<number>": "<ISO 8601 time>"},
 //!  "bodies"?: {"<number>": "<body>"},
-//!  "comments"?: {"<number>": ["<body>", ...]},
+//!  "comments"?: {"<number>": ["<body>" | {"body", "by", "association"}, ...]},
 //!  "author_associations"?: {"<number>": "OWNER" | "MEMBER" | "COLLABORATOR" | "NONE"},
 //!  "trust_events"?: {"<number>": [<REST issue event with created_at>, ...]},
 //!  "edits"?: {"<number>": [{"kind": "body" | "title", "by": "<login>" | null, "at"}, ...]},
@@ -115,8 +115,12 @@
 //! `linked`. A query that asks for `userContentEdits`, or for
 //! `RENAMED_TITLE_EVENT`s, answers with issue `$number`'s `body` or `title`
 //! `edits`, oldest first, as `edits` in pages of 100 using the `$after`
-//! cursor, each with its `at` time and its `by` account as `actor`. Any
-//! other query exits 2.
+//! cursor, each with its `at` time and its `by` account as `actor`. A query
+//! that asks for `comments` with their `authorAssociation` answers with issue
+//! `$number`'s title, body and `comments`, oldest first, in pages of 100 using
+//! the `$after` cursor: a plain body is by the repository owner, as `OWNER`,
+//! and an object names its `by` account, null for a deleted one, and its
+//! `association`. Any other query exits 2.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
@@ -1874,6 +1878,7 @@ fn graphql(state: &Json, args: &[&str]) {
     let query = variables.remove("query").unwrap_or_default();
     let asks_for = |fields: &[&str]| fields.iter().all(|field| query.contains(field));
     let is_candidate = asks_for(&["parent", "subIssues", "blockedBy", "timelineItems"]);
+    let is_comments = asks_for(&["comments(", "authorAssociation"]);
     let edits = if asks_for(&["userContentEdits"]) {
         Some(("body", "editedAt"))
     } else if asks_for(&["RENAMED_TITLE_EVENT"]) {
@@ -1882,6 +1887,7 @@ fn graphql(state: &Json, args: &[&str]) {
         None
     };
     if !is_candidate
+        && !is_comments
         && edits.is_none()
         && !asks_for(&["subIssues", "blockedBy", "labels", "totalCount"])
     {
@@ -1903,6 +1909,8 @@ fn graphql(state: &Json, args: &[&str]) {
     let after = variables.get("after").map(String::as_str);
     let issue = if let Some((kind, field)) = edits {
         edit_history(state, n, kind, field, after)
+    } else if is_comments {
+        issue_comments(state, n, after)
     } else if is_candidate {
         candidate(state, n, after)
     } else {
@@ -2003,6 +2011,57 @@ fn edit_history(state: &Json, n: &str, kind: &str, field: &str, after: Option<&s
             ("pageInfo", page_info),
         ]),
     )])
+}
+
+/// Issue `n`'s title, body and comments, as the session issue query reads
+/// them, the comments in pages of 100 from the `after` cursor.
+fn issue_comments(state: &Json, n: &str, after: Option<&str>) -> Json {
+    let owner = state.at("repo").str().split('/').next().unwrap().to_owned();
+    let comments: Vec<Json> = listed(state, "comments", n)
+        .into_iter()
+        .map(|comment| {
+            let (body, by, association) = match &comment {
+                Json::Object(_) => (
+                    comment.at("body").clone(),
+                    comment.at("by").clone(),
+                    comment.at("association").clone(),
+                ),
+                _ => (comment.clone(), string(owner.clone()), string("OWNER")),
+            };
+            let author = match by {
+                Null => Null,
+                login => object([("login", login)]),
+            };
+            object([
+                ("author", author),
+                ("authorAssociation", association),
+                ("createdAt", string("2020-01-01T00:00:00Z")),
+                ("body", body),
+            ])
+        })
+        .collect();
+    let start = after
+        .map(|cursor| cursor.parse::<usize>().expect("comment cursor"))
+        .unwrap_or(0);
+    let end = (start + 100).min(comments.len());
+    let fields = issue_fields(state, n, state.at("issues").at(n));
+    object([
+        ("title", fields.at("title").clone()),
+        ("body", fields.at("body").clone()),
+        (
+            "comments",
+            object([
+                ("nodes", Array(comments[start..end].to_vec())),
+                (
+                    "pageInfo",
+                    object([
+                        ("hasNextPage", Bool(end < comments.len())),
+                        ("endCursor", string(end.to_string())),
+                    ]),
+                ),
+            ]),
+        ),
+    ])
 }
 
 /// Issue `n` as the candidate query reads it.

@@ -194,7 +194,7 @@ impl GitHub {
         let association = json["author_association"]
             .as_str()
             .context("gh api output has no author_association")?;
-        if !matches!(association, "OWNER" | "MEMBER" | "COLLABORATOR") {
+        if !trusted_association(association) {
             return Ok(Some(UntrustedIssue::Author));
         }
         Ok(None)
@@ -237,6 +237,13 @@ impl GitHub {
             ),
         }
     }
+}
+
+/// Whether an author's `authorAssociation` with the repository makes them a
+/// Trusted account: its owner, a member of the organization that owns it, or
+/// a collaborator on it.
+pub(super) fn trusted_association(association: &str) -> bool {
+    matches!(association, "OWNER" | "MEMBER" | "COLLABORATOR")
 }
 
 /// The time in `node`'s `field`, when an event or edit was made.
