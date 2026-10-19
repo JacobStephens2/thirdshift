@@ -73,6 +73,130 @@ fn issue() -> IssueUrl {
 }
 
 #[test]
+fn a_transient_private_security_issue_listing_recovers() {
+    with_recorded_signal(
+        "github::execution_tests::a_transient_private_security_issue_listing_recovers",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(&format!(
+                r#"
+if [ "$2" = 'repos/acme/widgets' ]; then
+  printf '%s' '{{"private":true}}'
+  exit 0
+fi
+case "$*" in
+  *security-advisories*)
+    echo 'gh: Not Found (HTTP 404)' >&2
+    exit 1
+    ;;
+esac
+echo read >> '{reads}'
+if [ ! -f '{failed}' ]; then
+  touch '{failed}'
+  echo 'HTTP 504: Gateway Timeout' >&2
+  exit 1
+fi
+exit 0
+"#,
+                reads = fixture.path("reads").display(),
+                failed = fixture.path("failed").display(),
+            ));
+            let result = GitHub::new().security_records("acme/widgets");
+            assert!(
+                result.is_ok(),
+                "private issue listing did not recover: {:?}",
+                result.err()
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.path("reads")).unwrap(),
+                "read\nread\n"
+            );
+        },
+    );
+}
+
+#[test]
+fn private_record_reads_recover_without_repeating_the_following_write() {
+    with_recorded_signal(
+        "github::execution_tests::private_record_reads_recover_without_repeating_the_following_write",
+        |_| {
+            use crate::security::reproduction::{Outcome, Reproduction};
+            let fixture = Fixture::new("");
+            let value = serde_json::json!({
+                "number": 42, "title": "Bound input", "state": "open",
+                "html_url": "https://github.com/acme/widgets/issues/42",
+                "labels": [{"name": "needs-triage"}],
+                "body": "Fingerprint: `bounded`\nAudited commit: `0123456789abcdef0123456789abcdef01234567`\nPrivate evidence.\n",
+            });
+            let record = SecurityRecords::issues(Vec::new())
+                .decode_created(value.clone())
+                .unwrap();
+            let reproduction = Reproduction {
+                outcome: Outcome::NotReproduced,
+                notes: "Private reproduction notes.".into(),
+                test: "bounded_input()".into(),
+            };
+            for operation in ["link", "reproduction"] {
+                fixture.script(&format!(
+                    r#"
+if [ "$2" = '--method' ]; then
+  echo write >> '{writes}'
+  cat > '{body}'
+  echo 'HTTP 504: private mutation evidence' >&2
+  exit 1
+fi
+echo read >> '{reads}'
+if [ ! -f '{failed}' ]; then
+  touch '{failed}'
+  echo 'HTTP 504: private read evidence' >&2
+  exit 1
+fi
+cat <<'JSON'
+{value}
+JSON
+"#,
+                    reads = fixture.path("reads").display(),
+                    writes = fixture.path("writes").display(),
+                    body = fixture.path("body").display(),
+                    failed = fixture.path("failed").display(),
+                ));
+                let github = GitHub::new();
+                let result = match operation {
+                    "link" => github.link_security_fix("acme/widgets", &record, &issue()),
+                    "reproduction" => {
+                        github.update_security_record("acme/widgets", &record, &reproduction)
+                    }
+                    _ => unreachable!(),
+                };
+                let error = format!("{:#}", result.unwrap_err());
+                assert!(
+                    !error.contains("private read evidence")
+                        && !error.contains("private mutation evidence")
+                );
+                assert_eq!(
+                    fs::read_to_string(fixture.path("reads")).unwrap(),
+                    "read\nread\n",
+                    "{operation}: {error}"
+                );
+                assert_eq!(
+                    fs::read_to_string(fixture.path("writes")).unwrap(),
+                    "write\n"
+                );
+                let body = fs::read_to_string(fixture.path("body")).unwrap();
+                assert!(body.contains(if operation == "link" {
+                    "Fix Ticket:"
+                } else {
+                    "Private reproduction notes."
+                }));
+                for name in ["reads", "writes", "failed"] {
+                    fs::remove_file(fixture.path(name)).unwrap();
+                }
+            }
+        },
+    );
+}
+
+#[test]
 fn a_transient_issue_read_recovers_without_exposing_the_failure() {
     with_recorded_signal(
         "github::execution_tests::a_transient_issue_read_recovers_without_exposing_the_failure",

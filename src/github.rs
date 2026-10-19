@@ -670,8 +670,11 @@ impl GitHub {
     /// here.
     pub fn checks_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
         let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
-        let runs = self.gh_api_items(&format!("{commit}/check-runs?per_page=100"), "check_runs")?;
-        let statuses = self.gh_api_items(&format!("{commit}/status?per_page=100"), "statuses")?;
+        // CI retries the complete observation, not its individual requests.
+        let runs =
+            self.gh_api_items_once(&format!("{commit}/check-runs?per_page=100"), "check_runs")?;
+        let statuses =
+            self.gh_api_items_once(&format!("{commit}/status?per_page=100"), "statuses")?;
         let url = |value: &Value| {
             value
                 .as_str()
@@ -750,11 +753,18 @@ impl GitHub {
     /// Every item of the `field` list of the GitHub API's `path`, across all its
     /// pages.
     fn gh_api_items(&self, path: &str, field: &str) -> Result<Vec<Value>> {
+        self.retry_read(&format!("gh api {path}"), || {
+            self.gh_api_items_once(path, field)
+        })
+    }
+
+    fn gh_api_items_once(&self, path: &str, field: &str) -> Result<Vec<Value>> {
         let output = self.output(&["api", "--paginate", "--jq", &format!(".{field}[]"), path])?;
         if !output.status.success() {
             bail!(check_read::ReadFailure {
                 command: format!("gh api {path}"),
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                private_status: None,
             });
         }
         serde_json::Deserializer::from_slice(&output.stdout)
@@ -765,12 +775,16 @@ impl GitHub {
 
     /// Read-only JSON commands get three attempts, separated by one then two
     /// seconds, for transient failures only. Mutations use `gh_stdout` or
-    /// `output_with_input` instead; CI observations own their retry budget.
+    /// `output_with_input` instead.
     fn gh_json(&self, args: &[&str]) -> Result<Value> {
         let command = format!("gh {}", args[..2].join(" "));
+        self.retry_read(&command, || self.gh_json_once(args, &command))
+    }
+
+    fn retry_read<T>(&self, command: &str, mut read: impl FnMut() -> Result<T>) -> Result<T> {
         for attempt in 1..=3 {
-            let error = match self.gh_json_once(args, &command) {
-                Ok(json) => return Ok(json),
+            let error = match read() {
+                Ok(value) => return Ok(value),
                 Err(error) => error,
             };
             if attempt == 3 || !check_read::is_transient(&error) {
@@ -794,6 +808,7 @@ impl GitHub {
             bail!(check_read::ReadFailure {
                 command: command.to_string(),
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                private_status: None,
             });
         }
         serde_json::from_slice(&output.stdout)

@@ -2,6 +2,7 @@
 //! failures remain causal errors, never successful empty observations.
 
 use std::fmt;
+use std::process::ExitStatus;
 
 /// A non-success API response, retaining gh's original diagnostics. This
 /// carries evidence only: the caller owns whether and when to retry it.
@@ -9,11 +10,17 @@ use std::fmt;
 pub(super) struct ReadFailure {
     pub command: String,
     pub stderr: String,
+    /// Private record diagnostics may contain evidence. Classify the raw
+    /// stderr, but expose only this status in errors and retry progress.
+    pub private_status: Option<ExitStatus>,
 }
 
 impl fmt::Display for ReadFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} failed: {}", self.command, self.stderr)
+        match self.private_status {
+            Some(status) => write!(f, "{} failed ({status})", self.command),
+            None => write!(f, "{} failed: {}", self.command, self.stderr),
+        }
     }
 }
 
