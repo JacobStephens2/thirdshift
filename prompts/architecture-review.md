@@ -17,7 +17,7 @@ If it is Strong, settle its design yourself and publish it as the plan with the 
 
 If it is not Strong, file it as one issue labelled `needs-triage`, unless an open issue already covers it.
 
-Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to CONTEXT.md or an ADR is a Ticket's work, not yours.
+Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to GLOSSARY.md or an ADR is a Ticket's work, not yours.
 
 End your final message with one of these lines, as its last line, with the issue's full URL and nothing else on the line:
 Architecture review plan: <URL of the Spec or the single Ticket you published>

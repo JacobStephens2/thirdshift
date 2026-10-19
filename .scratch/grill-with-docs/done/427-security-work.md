@@ -392,7 +392,7 @@ The options:
 
 *Recommended:* (a). Fencing's repetition does over time what `standard` does in one run, at a price the trial has measured. A word for `standard` can come later, if a repo ever needs it.
 
-*Answer:* agree. Add fencing to CONTEXT.md on https://github.com/JacobStephens2/thirdshift/pull/519
+*Answer:* agree. Add fencing to GLOSSARY.md on https://github.com/JacobStephens2/thirdshift/pull/519
 
 ## Round 6 (answered)
 
@@ -492,7 +492,7 @@ The options:
 - GitHub's interaction limits restrict commenting, opening issues and opening pull requests on a public repo to existing users, contributors or collaborators, for one day up to six months, and owners and admins are exempt, confirmed by docs. They're now on all five public repos, collaborators only, until 2027-04-07, confirmed by test.
 - The security advisories API returns 404 on chart35 and clave, confirmed by test, and GitHub's docs scope repository security advisories to public repos, confirmed by docs.
 - This file is on `main` of the public repo (commit 8fd5992), confirmed by test.
-- A Base fix is allowed by the word `base-fix` on the command (`no-base-fix` forbids one) or by `fix` under `[base]` in the User config, off by default, confirmed by source (`src/args.rs`, `CONTEXT.md`). A Pickup run takes the same words for the Run it starts, confirmed by source (`src/args.rs`).
+- A Base fix is allowed by the word `base-fix` on the command (`no-base-fix` forbids one) or by `fix` under `[base]` in the User config, off by default, confirmed by source (`src/args.rs`, `GLOSSARY.md`). A Pickup run takes the same words for the Run it starts, confirmed by source (`src/args.rs`).
 - No upstream skill beats Cloudflare's for these two uses. The runner-up, OpenAI's Codex Security skills, needs the Codex runtime, its own MCP server and helper scripts, confirmed by source (the candidates' repositories).
 - Cloudflare's skill is asked for a scoped diff run in plain words. Asked loosely ("security review of this branch"), it falls into guidance mode, which runs none of its phases and writes no findings, confirmed by source (its `SKILL.md`).
 - Even scoped to a diff, a full audit starts at least seven sub-agents, four of them reading the whole repo, confirmed by source (its `SKILL.md` and `RECONNAISSANCE.md`).

@@ -150,7 +150,7 @@ Three points behind the Anthropic cell for path A:
 
 ## 3. Capability map
 
-The thirdshift terms are from [CONTEXT.md](../../CONTEXT.md). "Software Factory" means the four catalog automations in `OpenHands/extensions`: triage, issue-to-PR, PR reviewer and delivery watchdog ([Software Factory doc](https://docs.openhands.dev/openhands/usage/use-cases/software-factory)).
+The thirdshift terms are from [GLOSSARY.md](../../GLOSSARY.md). "Software Factory" means the four catalog automations in `OpenHands/extensions`: triage, issue-to-PR, PR reviewer and delivery watchdog ([Software Factory doc](https://docs.openhands.dev/openhands/usage/use-cases/software-factory)).
 
 | thirdshift capability | OpenHands equivalent | Gap |
 |---|---|---|

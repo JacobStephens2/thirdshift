@@ -22,7 +22,7 @@ Research: `docs/research/harness-candidates.md`, `docs/research/model-strength-f
 - *Answer:* agree. Plan for repositories to use `AGENTS.md`, but still handle the other cases. Keep any deliberate difference between `AGENTS.md` and `CLAUDE.md` (Jacob himself keeps only `AGENTS.md`).
 
 **Q6 - Harness names.** The CLI names: `agy`, `grok`, `muse` and `mimo` (or whatever Q1 settles for MiMo).
-- *Answer:* agree. Recorded in `CONTEXT.md` for agy, Grok and Muse.
+- *Answer:* agree. Recorded in `GLOSSARY.md` for agy, Grok and Muse.
 
 **Q7 - Checking the Model on Muse.** Read Muse's cached catalog under `~/.local/share/muse/model-catalog/` when it exists; otherwise make a test call.
 - *Answer:* agree. Use `muse-spark-1.3`, not `-contributor`.
@@ -87,7 +87,7 @@ The options:
 5. Muse. Blocked by 1.
 6. MiMo-V2.6-Pro, on the route Q1 settles. Blocked by 1 and 2.
 
-Each Harness Ticket also updates `CONTEXT.md`, the docs and Setup's list.
+Each Harness Ticket also updates `GLOSSARY.md`, the docs and Setup's list.
 
 *Recommended:* one Spec rather than one per Harness.
 *Answer:* we'll end by running the to-spec skill and then the to-tickets skill after we reach understanding, but this is sounding good.
@@ -154,7 +154,7 @@ opencode run --format json -m 'primalabs/primalabs-ai/MiMo-V2.6-Pro#high' --auto
 
 *Answer:* agree
 
-Recorded: OpenCode (`opencode`) added to the Harness entry in `CONTEXT.md`.
+Recorded: OpenCode (`opencode`) added to the Harness entry in `GLOSSARY.md`.
 
 ## Settled by earlier answers (shout if any is wrong)
 
@@ -234,7 +234,7 @@ If the export fails, fall back to the stream's last `text` and show no usage. Th
 
 ## Written so far
 
-- `CONTEXT.md`: the **Harness** entry names agy, Grok Build, Muse Code and OpenCode.
+- `GLOSSARY.md`: the **Harness** entry names agy, Grok Build, Muse Code and OpenCode.
 - `docs/adr/0013-every-harness-runs-unattended-and-fully-trusted.md` (Q14), with a pointer to it at the end of ADR 0012.
 - `docs/research/harness-candidates.md` §6 (Q16): OpenCode, the agy update switch, agy 1.3.0, Claude's `AGENTS.md` fallback, and MiMo Code's Effort override.
 
@@ -267,7 +267,7 @@ If the export fails, fall back to the stream's last `text` and show no usage. Th
    - Muse: from its session log, falling back to the stream.
    - OpenCode: from `session export`, where `outcome == failed` fails the session, falling back to the stream.
 9. **Setup** lists only the installed Harnesses. For Muse it proposes `muse-spark-1.3`; for OpenCode it proposes no default.
-10. **The Spec:** one Spec. Ticket 1 deepens the Harness module; Ticket 2 adds the tree-stop and is blocked by 1. Then one Ticket per Harness: agy and Muse blocked by 1, Grok and OpenCode blocked by 1 and 2. Each Harness Ticket updates `CONTEXT.md`, the docs and Setup.
+10. **The Spec:** one Spec. Ticket 1 deepens the Harness module; Ticket 2 adds the tree-stop and is blocked by 1. Then one Ticket per Harness: agy and Muse blocked by 1, Grok and OpenCode blocked by 1 and 2. Each Harness Ticket updates `GLOSSARY.md`, the docs and Setup.
 11. **Out of scope:** retrying on transient backend errors (Q22), a sandboxed mode, MiMo Code, and #429's reviewers.
 
 Is this the shared understanding? If so, the next steps are to-spec, then to-tickets.

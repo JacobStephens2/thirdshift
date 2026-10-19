@@ -1297,7 +1297,7 @@ Each item is labelled **measured**, **vendor-reported**, or **inference**. Most 
 - **Claude Code.** `ANTHROPIC_API_KEY` "is always used when present" with `-p`. "A single burst of heavy activity … can exhaust the weekly allowance before the session window resets" ([errors](https://code.claude.com/docs/en/errors)). Anthropic's policy on subscription use in automation was changed and then paused in June 2026 (help-centre article 15036540, as read by the agent).
 - **Repository facts.**
   - Codex's bubblewrap sandbox cannot start on this machine (`docs/research/codex-headless-harness.md` §8), so a Codex reviewer would run unsandboxed as Codex sessions already do (ADR 0012).
-  - CONTEXT.md defines one Harness per Command, so a reviewer on another Harness is a new concept with its own config, logs and failure handling (inference).
+  - GLOSSARY.md defines one Harness per Command, so a reviewer on another Harness is a new concept with its own config, logs and failure handling (inference).
 - **Absent.** No vendor or study measures the overhead of running both CLIs.
 
 ### 6.8 "Different family" is less independent than it looks (measured)
@@ -1412,7 +1412,7 @@ The closest studied analogue is "fresh-context same-model review, author adjudic
    - **For:** coverage. The mixed pair beat two same-model reviews on recall in 2610.01471. Greptile measured +2–3 points of high-severity recall on real PRs. Errors overlap less across families (§3.2).
      - (updated in the recency sweep) At today's frontier that last point is weaker. Judges from different providers were as error-correlated as judges within one provider (2609.22512, not code). A cross-family check at matched accuracy added only AUROC +0.03–0.04 over self-check (2609.34864, not code).
    - **Against:**
-     - A second CLI per Run, with its own login, cost and failure modes. Today CONTEXT.md has one Harness per Command, so this would need a "reviewer Harness" concept.
+     - A second CLI per Run, with its own login, cost and failure modes. Today GLOSSARY.md has one Harness per Command, so this would need a "reviewer Harness" concept.
      - New false positives, including the "model bias" kind (§3.5).
      - No evidence it beats a second, differently prompted same-model reviewer at equal cost.
 2. **Use the cross-family reviewer only where it is likely to be stronger than the author, or only at the Spec review.**
@@ -1826,7 +1826,7 @@ Grouped by kind. "Read" means the full text or source file was read, by me or by
 
 **thirdshift files**
 
-- [CONTEXT.md](../../CONTEXT.md)
+- [GLOSSARY.md](../../GLOSSARY.md)
 - [skills/thirdshift-code-review/SKILL.md](../../skills/thirdshift-code-review/SKILL.md)
 - [src/prompt.rs](../../src/prompt.rs)
 - [docs/adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md](../adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)

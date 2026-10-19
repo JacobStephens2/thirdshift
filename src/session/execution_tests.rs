@@ -338,7 +338,7 @@ reports=$(printf '%s\n' "$prompt" | sed -n 's/.*`\([^`]*\)\/standards\.md`.*/\1/
 test -d "$reports"
 git check-ignore -q "$reports/standards.md"
 printf 'Standards report\nFiles read: src/session.rs\n' > "$reports/standards.md"
-printf 'Spec report\nFiles read: CONTEXT.md\n' > "$reports/spec.md"
+printf 'Spec report\nFiles read: GLOSSARY.md\n' > "$reports/spec.md"
 "#;
 
 fn review_fixture(script: &str) -> Fixture {
@@ -412,7 +412,7 @@ fn keeps_review_reports_beside_each_harness_session_log() {
         );
         assert_eq!(
             fs::read_to_string(log.with_extension("spec")).unwrap(),
-            "Spec report\nFiles read: CONTEXT.md\n"
+            "Spec report\nFiles read: GLOSSARY.md\n"
         );
         return;
     }
