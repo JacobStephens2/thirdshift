@@ -35,6 +35,31 @@ async function pageForTest(t, options) {
   return page;
 }
 
+test("the homepage links to the shared Markdown manual without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
+  await page.goto(`${origin}/`);
+  await page.getByRole("link", { name: "Documentation", exact: true }).first().click({ timeout: 2000 });
+  assert.equal(new URL(page.url()).pathname, "/docs/");
+  assert.equal(await page.getByRole("heading", { name: "thirdshift", exact: true, level: 1 }).isVisible(), true);
+  await page.getByRole("navigation", { name: "Manual sections" }).getByRole("link", { name: "Install", exact: true }).click();
+  assert.equal(new URL(page.url()).hash, "#install");
+  assert.equal(await page.locator("#install + pre code").textContent(),
+    "curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh\n");
+  assert.equal(await page.getByRole("link", { name: "Markdown source", exact: true }).getAttribute("href"),
+    "https://github.com/JacobStephens2/thirdshift/blob/main/docs/guide.md");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  const fragments = await page.locator('main a[href^="#"]').evaluateAll(nodes => nodes.map(node => node.hash.slice(1)));
+  for (const fragment of fragments) {
+    assert.equal(await page.locator(`[id="${fragment}"]`).count(), 1, fragment);
+  }
+  assert.ok((await page.locator("main code").allTextContents()).some(text => text.includes("<Issue URL>")), "command placeholders remain text");
+  assert.equal(await page.getByRole("link", { name: "ADR-0001", exact: true }).first().getAttribute("href"),
+    "https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0001-rust-binary-with-embedded-skills.md");
+  for (const path of ["/styles.css", "/docs/docs.css"]) {
+    assert.equal((await page.request.get(`${origin}${path}`)).status(), 200, path);
+  }
+});
+
 test("the homepage leads to a guide that teaches the process in order", async (t) => {
   const page = await pageForTest(t);
   await page.goto(`${origin}/`);
