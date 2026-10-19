@@ -406,6 +406,64 @@ fn logs_follow_streams_appended_bytes_and_exits_when_the_command_ends() {
 }
 
 #[test]
+fn logs_follow_drains_final_bytes_after_an_outcome_or_selected_child_ends() {
+    for selected in ["widgets#7", "widgets#21"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{{\"command\":\"echo final bytes after durable outcome\"}}}}]}}}}'\n{OPENS_PR}",
+            scenario.path("started").display(),
+            scenario.path("release").display()
+        ));
+        let held = scenario.run_until(&[&scenario.issue_url(7)], &[], "started");
+        let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+        let path = fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.to_string_lossy().ends_with(".command.json"))
+            .unwrap();
+        let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        record["outcome"] = "ready for review".into();
+        // The durable outcome can precede the outer process's last output.
+        fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        let mut child = record.clone();
+        child["name"] = "acme/widgets#21".into();
+        child["issue"]["number"] = 21.into();
+        child["issue"]["url"] = scenario.issue_url(21).into();
+        child["parent_record"] = serde_json::json!(path);
+        fs::write(
+            path.with_extension("issue-21.child.json"),
+            serde_json::to_vec(&child).unwrap(),
+        )
+        .unwrap();
+        let status = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&status.stdout).unwrap();
+        let ended_for_display = status["commands"][0]["state"] == "ended";
+        let output = scenario.path("followed.txt");
+        let follower = scenario.read_to_file(&["logs", selected, "--follow"], &output);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fs::read_to_string(&output).unwrap().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Allow a follower that wrongly treats the outcome as process exit to
+        // finish its first poll before releasing the final output.
+        std::thread::sleep(Duration::from_millis(200));
+        fs::write(scenario.path("release"), "").unwrap();
+        let ended = held.finish();
+        let followed = follower.finish();
+        assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+        assert_eq!(followed.code, Some(0), "{}", followed.stderr);
+        assert!(ended_for_display, "{status}");
+        let followed = fs::read_to_string(output).unwrap();
+        assert!(
+            followed.contains("final bytes after durable outcome"),
+            "{selected}: {followed}"
+        );
+        let log = status["commands"][0]["command_log"].as_str().unwrap();
+        assert_eq!(followed, fs::read_to_string(log).unwrap());
+    }
+}
+
+#[test]
 fn logs_session_repair_selects_the_latest_numbered_repair() {
     let scenario = Scenario::new();
     let red = r#"gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'

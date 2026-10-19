@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
+use super::reading::{self, Snapshot};
+use crate::config::UserConfig;
 
 #[derive(Clone, Copy)]
 pub enum Ending {
@@ -59,7 +61,9 @@ fn require_live(record: &CommandRecord) -> Result<()> {
 }
 
 pub fn stop(input: &str, requeue: bool) -> Result<()> {
-    let path = super::status::inspect::stop_target(input)?;
+    let config = UserConfig::load()?;
+    let snapshot = Snapshot::load(&config.logs_dir, chrono::Local::now())?;
+    let path = snapshot.resolve(input)?.stop_target(input)?;
     let tree = read(&path)?;
     require_live(&tree.command)?;
     let user = std::process::Command::new("id")
@@ -138,8 +142,12 @@ fn print_ending(path: &Path, tree: &CommandTree, output: &mut impl Write) -> Res
             .as_deref()
             .unwrap_or("died before recording an outcome")
     )?;
-    for resource in super::status::retained_resources(path)? {
-        writeln!(output, "{resource}")?;
+    let work = reading::retained_work(path, chrono::Local::now())?;
+    for branch in work.branches {
+        writeln!(output, "Issue branch left: {branch}")?;
+    }
+    for pr in work.pull_requests {
+        writeln!(output, "Pull request left: {pr}")?;
     }
     Ok(())
 }
