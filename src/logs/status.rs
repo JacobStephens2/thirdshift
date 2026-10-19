@@ -181,18 +181,9 @@ fn read(all: bool) -> Result<Status> {
                     if record.parent_record.is_none() {
                         covered.insert(command_log(&path));
                     }
-                    for session in record
-                        .stages
-                        .iter()
-                        .filter_map(|stage| stage.session_log.as_ref())
-                        .chain(record.session_log.as_ref())
-                        .chain(tree.dispatched.iter().flat_map(|record| {
-                            record
-                                .stages
-                                .iter()
-                                .filter_map(|stage| stage.session_log.as_ref())
-                                .chain(record.session_log.as_ref())
-                        }))
+                    for session in std::iter::once(record)
+                        .chain(&tree.dispatched)
+                        .flat_map(CommandRecord::session_references)
                     {
                         covered.insert(session.clone());
                     }

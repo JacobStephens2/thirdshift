@@ -444,12 +444,10 @@ impl<O: Outside> Record<O> {
         let Log::Held { lines, .. } = std::mem::replace(&mut self.command_log, Log::NotKept) else {
             unreachable!()
         };
-        let mut acquired = false;
         let created: Result<O::CommandLog> = (|| {
             let allocation = owner::allocate(&mut self.outside, root, work, stamp)?;
             self.owner = Some(allocation.owner);
-            let mut writer = allocation.writer?;
-            acquired = true;
+            let mut writer = allocation.writer;
             let path = self.owner.as_ref().unwrap().log_path();
             for (_, line) in lines {
                 writeln!(writer, "{line}")
@@ -468,7 +466,10 @@ impl<O: Outside> Record<O> {
             }
             Err(error) => {
                 self.command_log = Log::Failed {
-                    path: acquired.then(|| self.owner.as_ref().unwrap().log_path().to_path_buf()),
+                    path: self
+                        .owner
+                        .as_ref()
+                        .map(|owner| owner.log_path().to_path_buf()),
                 };
                 self.step(format_args!(
                     "warning: could not keep the Command log: {error:#}"

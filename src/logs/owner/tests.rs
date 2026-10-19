@@ -11,10 +11,10 @@ fn real_files_keep_interleaved_command_output_and_records_separate() {
     let mut files = OnMachine;
     let first = allocate(&mut files, root.path(), Work::Run(&issue), STAMP).unwrap();
     let first_path = first.owner.log_path().to_path_buf();
-    let mut first_writer = first.writer.unwrap();
+    let mut first_writer = first.writer;
     first_writer.write_all(b"first before\n").unwrap();
     let second = allocate(&mut files, root.path(), Work::Run(&issue), STAMP).unwrap();
-    let mut second_writer = second.writer.unwrap();
+    let mut second_writer = second.writer;
     second_writer.write_all(b"second before\n").unwrap();
     first_writer.write_all(b"first after\n").unwrap();
     second_writer.write_all(b"second after\n").unwrap();
@@ -56,12 +56,8 @@ fn a_forced_collision_preserves_the_existing_file_and_retries_with_a_fresh_token
     let root = tempfile::tempdir().unwrap();
     let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
     let mut files = Colliding { occupied: None };
-    let allocated = allocate(&mut files, root.path(), Work::Run(&issue), STAMP).unwrap();
-    allocated
-        .writer
-        .unwrap()
-        .write_all(b"new output\n")
-        .unwrap();
+    let mut allocated = allocate(&mut files, root.path(), Work::Run(&issue), STAMP).unwrap();
+    allocated.writer.write_all(b"new output\n").unwrap();
     let occupied = files.occupied.unwrap();
     assert_ne!(occupied, allocated.owner.log_path());
     assert_eq!(fs::read(occupied).unwrap(), b"another Command's output\n");

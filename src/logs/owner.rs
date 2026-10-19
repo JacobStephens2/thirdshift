@@ -34,12 +34,12 @@ impl Owner {
 
 pub(super) struct Allocation<W> {
     pub owner: Owner,
-    pub writer: io::Result<W>,
+    pub writer: W,
 }
 
 /// tempfile supplies opaque randomness and collision retries; the adapter
-/// supplies exclusive file effects. Non-collision failures retain the selected
-/// identity, but do not claim that a file was acquired.
+/// supplies exclusive file effects. Only a successful acquisition establishes
+/// an owner; a failed candidate must never be exposed through a root record.
 pub(super) fn allocate<F: Files>(
     files: &mut F,
     root: &Path,
@@ -60,10 +60,7 @@ pub(super) fn allocate<F: Files>(
         .suffix(".log")
         .rand_bytes(16)
         .disable_cleanup(true)
-        .make_in(folder, |path| match files.create_command_log(path) {
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
-            result => Ok(result),
-        })?;
+        .make_in(folder, |path| files.create_command_log(path))?;
     let (writer, path) = allocated.into_parts();
     Ok(Allocation {
         owner: Owner {

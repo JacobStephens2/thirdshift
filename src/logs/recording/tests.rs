@@ -849,7 +849,7 @@ fn command_creation_failure_warns_once_and_never_adopts_an_existing_path() {
         assert!(
             memory
                 .terminal()
-                .contains("warning: could not keep the Command log: Command open failed\n")
+                .contains("warning: could not keep the Command log: Command open failed")
         );
         assert!(!memory.terminal().contains("logging this command to"));
         assert!(memory.terminal().ends_with("carried on\nresult\n"));
@@ -862,7 +862,7 @@ fn command_creation_failure_warns_once_and_never_adopts_an_existing_path() {
                 .clone()
                 .unwrap();
             assert_eq!(memory.file(&path), "previous content\n");
-            assert_eq!(owner::record_log(&record.record_path().unwrap()), path);
+            assert_eq!(record.record_path(), None);
         }
         let named = "no Command log";
         assert_eq!(
@@ -870,6 +870,40 @@ fn command_creation_failure_warns_once_and_never_adopts_an_existing_path() {
             format!(
                 "2026-10-03 12:00:00 Run #7 started: {named}, on claude · opus · high\n2026-10-03 12:00:00 Run #7 ended: ready\n"
             )
+        );
+    }
+}
+
+#[test]
+fn acquisition_failure_does_not_publish_a_record_claiming_the_existing_log() {
+    let memory = Scripted::default();
+    {
+        let mut files = memory.0.lock().unwrap();
+        files.command_open_fails = true;
+        files.existing_on_open_failure = Some(PathBuf::new());
+    }
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+
+    let occupied = memory
+        .0
+        .lock()
+        .unwrap()
+        .existing_on_open_failure
+        .clone()
+        .unwrap();
+    assert_eq!(memory.file(&occupied), "previous content\n");
+    assert_eq!(record.command_log_path(), None);
+
+    if let Some(path) = record.record_path() {
+        // status::Command::new uses this exact reconstruction for the log
+        // returned by status/show and selected by logs.
+        assert_ne!(
+            owner::record_log(&path),
+            occupied,
+            "a persisted record claims a Command log that was never acquired"
         );
     }
 }

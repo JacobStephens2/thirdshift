@@ -145,13 +145,7 @@ impl<'a> Selected<'a> {
         let (mut paths, issue, kind) = match self {
             Self::Record(command) => {
                 let mut paths = Vec::new();
-                for path in command
-                    .record
-                    .stages
-                    .iter()
-                    .filter_map(|stage| stage.session_log.as_ref())
-                    .chain(command.record.session_log.as_ref())
-                {
+                for path in command.record.session_references() {
                     if !paths.contains(path) {
                         paths.push(path.clone());
                     }
