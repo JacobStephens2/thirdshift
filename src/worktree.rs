@@ -235,6 +235,24 @@ impl Worktree {
             .ordinary(&self.launch, |operation| operation.head())
     }
 
+    /// Whether a merged PR includes all local work. Observe the acquired
+    /// checkout under the synchronization lock, without staging or committing.
+    pub fn fully_landed_at(&self, head: &str) -> Result<bool> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            Ok(operation.head()? == head
+                && operation
+                    .run(&[
+                        "-c",
+                        "core.fsmonitor=false",
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=all",
+                        "--ignore-submodules=none",
+                    ])?
+                    .is_empty())
+        })
+    }
+
     /// Whether the committed tree at the Issue branch's head equals `commit`'s.
     /// Comparison errors are propagated, never treated as identical trees.
     pub fn same_tree_as(&self, commit: &str) -> Result<bool> {
