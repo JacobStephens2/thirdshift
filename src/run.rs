@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Utc};
 
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
@@ -191,6 +192,7 @@ fn run(
         claim: None,
         issue_branch: None,
         child: started_by.child().is_some(),
+        started: Utc::now(),
     };
     let outcome = start(
         &mut outside,
@@ -408,6 +410,8 @@ struct LaunchAndGitHub<'a> {
     claim: Option<Claim<'a>>,
     issue_branch: Option<String>,
     child: bool,
+    /// When the Run began, for its sessions' check for untrusted edits.
+    started: DateTime<Utc>,
 }
 
 impl LaunchAndGitHub<'_> {
@@ -451,6 +455,7 @@ impl LaunchAndGitHub<'_> {
             base_fix: self.base_fix,
             logs: &self.logs,
             harness: self.harness,
+            started: self.started,
         }
     }
 }

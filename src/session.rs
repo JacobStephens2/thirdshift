@@ -109,6 +109,9 @@ pub struct Sessions<'a> {
     /// passed to each call as the other seams' are, since the steps reach
     /// it through the `&Sessions` they are given.
     outside: RefCell<Box<dyn Outside>>,
+    /// What must still hold before each session starts, a Resume included:
+    /// a session it fails is not started, and the step fails with it.
+    before_each: &'a dyn Fn() -> Result<()>,
     /// The log of the session started last, a Resume included.
     last_log: RefCell<Option<PathBuf>>,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -132,6 +135,18 @@ impl<'a> Sessions<'a> {
         harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
+        Self::checked_within(logs, worktree, harness, &|| Ok(()), steps)
+    }
+
+    /// [`Sessions::within`], checking `before_each` before each session
+    /// starts, a Resume included: a session it fails is not started.
+    pub fn checked_within<T>(
+        logs: &'a Logs,
+        worktree: &'a Path,
+        harness: &'a Choice,
+        before_each: &'a dyn Fn() -> Result<()>,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>) {
         let adapter = harness.harness.adapter();
         if let Err(error) = skills::link_into(worktree, adapter)
             .and_then(|()| adapter.link_instruction_fallback(worktree))
@@ -144,7 +159,8 @@ impl<'a> Sessions<'a> {
             adapter,
             recording: logs.recording().clone(),
         };
-        let (taken, log) = Sessions::taking(logs, worktree, Box::new(on_machine), steps);
+        let (taken, log) =
+            Sessions::taking(logs, worktree, Box::new(on_machine), before_each, steps);
         (taken, log.filter(|log| log.exists()))
     }
 
@@ -155,12 +171,14 @@ impl<'a> Sessions<'a> {
         logs: &'a Logs,
         worktree: &'a Path,
         outside: Box<dyn Outside>,
+        before_each: &'a dyn Fn() -> Result<()>,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let sessions = Sessions {
             logs,
             worktree,
             outside: RefCell::new(outside),
+            before_each,
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
         };
@@ -257,7 +275,7 @@ impl<'a> Sessions<'a> {
     }
 
     /// Run one session as `kind`, logged under its own path, which becomes
-    /// the last log.
+    /// the last log, once `before_each` holds.
     fn start(
         &self,
         purpose: Purpose,
@@ -266,6 +284,7 @@ impl<'a> Sessions<'a> {
         prompt: &str,
         reports: Option<&ReviewReports>,
     ) -> Result<Ended> {
+        (self.before_each)()?;
         let log = self.logs.path(kind)?;
         logs::session(kind, &log);
         self.step(format!("logging the session to {}", log.display()));
@@ -579,7 +598,13 @@ mod tests {
             calls: Rc::clone(&calls),
         };
         let logs = logs();
-        let (taken, log) = Sessions::taking(&logs, Path::new("/unused"), Box::new(scripted), steps);
+        let (taken, log) = Sessions::taking(
+            &logs,
+            Path::new("/unused"),
+            Box::new(scripted),
+            &|| Ok(()),
+            steps,
+        );
         let calls = calls.take();
         (taken, log, calls)
     }

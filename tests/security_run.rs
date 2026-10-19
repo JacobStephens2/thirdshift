@@ -2599,7 +2599,7 @@ fn an_untrusted_ready_label_does_not_skip_the_security_audit() {
     scenario.issue_labelled(7, &["ready-for-agent"]);
     let mut state = scenario.gh_state();
     state["trust_events"] = json!({"7": [
-        {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
+        {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
     ]});
     scenario.write_gh_state(&state);
     scenario.agent_does(&audit_script("[]"));

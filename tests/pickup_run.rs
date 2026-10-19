@@ -1926,11 +1926,11 @@ fn an_issue_labelled_by_an_untrusted_account_is_passed_over() {
     ready_issue(&scenario, 7, &[]);
     let mut state = scenario.gh_state();
     state["trust_events"] = serde_json::json!({"7": [
-        {"event": "labeled", "label": {"name": "ready-for-agent"},
+        {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"},
          "actor": {"login": "acme"}},
-        {"event": "unlabeled", "label": {"name": "ready-for-agent"},
+        {"created_at": "2020-01-01T00:00:00Z", "event": "unlabeled", "label": {"name": "ready-for-agent"},
          "actor": {"login": "acme"}},
-        {"event": "labeled", "label": {"name": "ready-for-agent"},
+        {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"},
          "actor": {"login": "outsider"}}
     ]});
     scenario.write_gh_state(&state);
@@ -1952,7 +1952,7 @@ fn missing_ready_label_history_or_actor_cannot_authorize_pickup() {
     for events in [
         serde_json::json!([]),
         serde_json::json!([
-            {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": null}
+            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": null}
         ]),
     ] {
         let scenario = Scenario::new();
@@ -1990,11 +1990,95 @@ fn trusted_authors_and_the_latest_trusted_ready_label_authorize_pickup() {
         state["collaborators"] = serde_json::json!(collaborators);
         state["org_members"] = serde_json::json!(members);
         state["trust_events"] = serde_json::json!({"7": [
-            {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}},
-            {"event": "unlabeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
-            {"event": "labeled", "label": {"name": "READY-for-AGENT"}, "actor": {"login": actor}},
-            {"event": "labeled", "label": {"name": "bug"}, "actor": {"login": "outsider"}}
+            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}},
+            {"created_at": "2020-01-01T00:00:00Z", "event": "unlabeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "READY-for-AGENT"}, "actor": {"login": actor}},
+            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "bug"}, "actor": {"login": "outsider"}}
         ]});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+        assert!(!result.stderr.contains("warning:"), "{}", result.stderr);
+    }
+}
+
+#[test]
+fn an_issue_edited_by_an_untrusted_account_after_it_was_marked_ready_is_passed_over() {
+    for (kind, line) in [
+        (
+            "body",
+            "#7 body edited after it was marked ready by an account that is not a Trusted account",
+        ),
+        (
+            "title",
+            "#7 title edited after it was marked ready by an account that is not a Trusted account",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        let mut state = scenario.gh_state();
+        state["edits"] = serde_json::json!({"7": [
+            {"kind": kind, "by": "outsider", "at": "2019-12-31T00:00:00Z"},
+            {"kind": kind, "by": "acme", "at": "2020-01-02T00:00:00Z"},
+            {"kind": kind, "by": "outsider", "at": "2020-01-03T00:00:00Z"}
+        ]});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_skipped(&scenario, &result, &no_ready_issue_after(&[line]));
+        assert!(scenario.claude_calls().is_empty());
+    }
+}
+
+#[test]
+fn an_edit_whose_account_github_no_longer_knows_is_untrusted() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["edits"] = serde_json::json!({"7": [
+        {"kind": "body", "by": null, "at": "2020-01-03T00:00:00Z"}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[
+            "#7 body edited after it was marked ready by an account that is not a Trusted account",
+        ]),
+    );
+}
+
+#[test]
+fn edits_by_trusted_accounts_or_before_the_trusted_ready_label_leave_an_issue_ready() {
+    for relabelled in [false, true] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+        let mut state = scenario.gh_state();
+        state["collaborators"] = serde_json::json!(["reader"]);
+        let mut edits = vec![
+            serde_json::json!({"kind": "body", "by": "reader", "at": "2020-01-02T00:00:00Z"}),
+            serde_json::json!({"kind": "title", "by": "acme", "at": "2020-01-02T00:00:00Z"}),
+        ];
+        if relabelled {
+            // An outsider's edit, then a Trusted account marking it ready again.
+            edits.push(serde_json::json!(
+                {"kind": "body", "by": "outsider", "at": "2020-01-03T00:00:00Z"}
+            ));
+            state["trust_events"] = serde_json::json!({"7": [
+                {"created_at": "2020-01-01T00:00:00Z", "event": "labeled",
+                 "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+                {"created_at": "2020-01-04T00:00:00Z", "event": "labeled",
+                 "label": {"name": "ready-for-agent"}, "actor": {"login": "reader"}}
+            ]});
+        }
+        state["edits"] = serde_json::json!({ "7": edits });
         scenario.write_gh_state(&state);
 
         let result = scenario.run(&["pickup"]);
@@ -2010,7 +2094,7 @@ fn a_failed_label_actor_membership_lookup_starts_no_work() {
     ready_issue(&scenario, 7, &[]);
     let mut state = scenario.gh_state();
     state["trust_events"] = serde_json::json!({"7": [
-        {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "reader"}}
+        {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "reader"}}
     ]});
     state["failing"] = serde_json::json!(["api --include repos/acme/widgets/collaborators/reader"]);
     scenario.write_gh_state(&state);

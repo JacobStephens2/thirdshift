@@ -14,7 +14,8 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
+use chrono::{DateTime, Utc};
 
 mod repair_loop;
 
@@ -55,6 +56,9 @@ pub struct Delivery<'a> {
     /// The Harness, Model and Effort its sessions run on, and its child
     /// Runs' too.
     pub harness: &'a Choice,
+    /// When the Run began: an untrusted edit to `issue` made since then
+    /// starts no further session.
+    pub started: DateTime<Utc>,
 }
 
 /// The session a Delivery opens with: the implement session, or the Spec
@@ -106,8 +110,14 @@ impl Delivery<'_> {
             harness: self.harness,
         };
         pull_request.begin_delivery();
-        let (delivered, log) =
-            Sessions::within(self.logs, worktree.path(), self.harness, |sessions| {
+        let (issue, started) = (self.issue, self.started);
+        let unedited = move || unedited_since(issue, started);
+        let (delivered, log) = Sessions::checked_within(
+            self.logs,
+            worktree.path(),
+            self.harness,
+            &unedited,
+            |sessions| {
                 let mut outside = InWorktree {
                     stage: &stage,
                     issue: self.issue,
@@ -118,7 +128,8 @@ impl Delivery<'_> {
                     pull_request,
                 };
                 route.steps(&mut outside, &opening, checklist)
-            });
+            },
+        );
         match delivered {
             Ok(pr_url) => Ok(Reached {
                 pr_url,
@@ -395,6 +406,19 @@ trait FailedOutside {
     fn interrupted(&mut self) -> bool;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
+}
+
+/// Fail unless `issue` has had no edit to its body or title, since its Run
+/// `started`, by an account that is not a Trusted account: a session started
+/// now would work from text no Trusted account wrote.
+fn unedited_since(issue: &IssueUrl, started: DateTime<Utc>) -> Result<()> {
+    match GitHub::new().untrusted_edit(issue, Some(started))? {
+        Some(edit) => bail!(
+            "#{} {edit} edited since the Run started by an account that is not a Trusted account; starting no further session",
+            issue.number
+        ),
+        None => Ok(()),
+    }
 }
 
 /// A Delivery's worktree, its sessions, its Base fix, and its issue and pull

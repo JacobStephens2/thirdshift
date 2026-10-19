@@ -3,8 +3,10 @@
 use std::fmt;
 
 use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Utc};
+use serde_json::Value;
 
-use super::GitHub;
+use super::{CommandFailure, GitHub, nodes};
 use crate::issue::IssueUrl;
 use crate::labels::READY_FOR_AGENT;
 
@@ -13,25 +15,177 @@ use crate::labels::READY_FOR_AGENT;
 pub enum UntrustedIssue {
     Author,
     ReadyLabel,
+    /// Its `Edit` was made, after it was last marked ready, by an account
+    /// that is not a Trusted account.
+    Edited(Edit),
 }
 
 impl fmt::Display for UntrustedIssue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Author => f.write_str("issue author is not a Trusted account"),
+            Self::ReadyLabel => {
+                f.write_str("most recent ready-for-agent label actor is not a Trusted account")
+            }
+            Self::Edited(edit) => write!(
+                f,
+                "{edit} edited after it was marked ready by an account that is not a Trusted account"
+            ),
+        }
+    }
+}
+
+/// What an untrusted edit changed: the issue's body or its title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edit {
+    Body,
+    Title,
+}
+
+impl fmt::Display for Edit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Author => "issue author is not a Trusted account",
-            Self::ReadyLabel => "most recent ready-for-agent label actor is not a Trusted account",
+            Self::Body => "body",
+            Self::Title => "title",
         })
     }
 }
 
+/// One `ready-for-agent` labelling from an issue's event history.
+struct Labelling {
+    actor: Option<String>,
+    at: DateTime<Utc>,
+}
+
 impl GitHub {
-    /// Check the issue author and the most recent ready-for-agent label actor.
+    /// Check the issue author, the most recent ready-for-agent label actor,
+    /// and every edit to its body or title made since that labelling.
     pub fn issue_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
         if let Some(check) = self.author_trust(issue)? {
             return Ok(Some(check));
         }
-        // A Claim removes the label, but its historical event still matters.
-        // Read every page: a later reapplication supersedes an earlier one.
+        let Some(Labelling {
+            actor: Some(actor),
+            at,
+        }) = self.ready_labellings(issue)?.pop()
+        else {
+            return Ok(Some(UntrustedIssue::ReadyLabel));
+        };
+        if !self.trusted_actor(issue, &actor)? {
+            return Ok(Some(UntrustedIssue::ReadyLabel));
+        }
+        Ok(self
+            .untrusted_edit(issue, Some(at))?
+            .map(UntrustedIssue::Edited))
+    }
+
+    /// Check a Ticket before its Run starts: its author, and every edit to
+    /// its body or title made since the later of the Ticket's and its
+    /// `spec`'s last ready-for-agent labellings by a Trusted account, or
+    /// every edit if neither has one. A Ticket needs no label of its own:
+    /// its Spec's labelling already passed the full check.
+    pub fn ticket_trust(
+        &self,
+        ticket: &IssueUrl,
+        spec: &IssueUrl,
+    ) -> Result<Option<UntrustedIssue>> {
+        if let Some(check) = self.author_trust(ticket)? {
+            return Ok(Some(check));
+        }
+        let since = self
+            .trusted_ready_at(ticket)?
+            .max(self.trusted_ready_at(spec)?);
+        Ok(self
+            .untrusted_edit(ticket, since)?
+            .map(UntrustedIssue::Edited))
+    }
+
+    /// The first edit to `issue`'s body or title made after `since`, or ever
+    /// if `since` is `None`, by an account that is not a Trusted account, if
+    /// there is one. An edit whose account GitHub no longer knows counts.
+    pub fn untrusted_edit(
+        &self,
+        issue: &IssueUrl,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Option<Edit>> {
+        let mut trusted: Vec<String> = Vec::new();
+        for (edit, query, field) in [
+            (Edit::Body, BODY_EDITS_QUERY, "editedAt"),
+            (Edit::Title, TITLE_EDITS_QUERY, "createdAt"),
+        ] {
+            for node in self.edits(issue, query)? {
+                if let Some(since) = since
+                    && edited_at(&node, field)? <= since
+                {
+                    continue;
+                }
+                let Some(login) = node["actor"]["login"].as_str() else {
+                    return Ok(Some(edit));
+                };
+                if trusted
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(login))
+                {
+                    continue;
+                }
+                if !self.trusted_actor(issue, login)? {
+                    return Ok(Some(edit));
+                }
+                trusted.push(login.to_string());
+            }
+        }
+        Ok(None)
+    }
+
+    /// Every edit `query` reads of `issue`, its `edits` connection read page
+    /// by page so that no edit is missed.
+    fn edits(&self, issue: &IssueUrl, query: &str) -> Result<Vec<Value>> {
+        let mut after: Option<String> = None;
+        let mut edits = Vec::new();
+        loop {
+            let json = self.issue_query(issue, query, after.as_deref())?;
+            let page = &json["data"]["repository"]["issue"]["edits"];
+            edits.extend(nodes(page, "edits")?.iter().cloned());
+            let info = &page["pageInfo"];
+            if !info["hasNextPage"]
+                .as_bool()
+                .context(CommandFailure::InvalidResponse(
+                    "edit history has no hasNextPage".into(),
+                ))?
+            {
+                return Ok(edits);
+            }
+            let next = info["endCursor"]
+                .as_str()
+                .context(CommandFailure::InvalidResponse(
+                    "edit history has no endCursor".into(),
+                ))?;
+            if Some(next) == after.as_deref() {
+                bail!(CommandFailure::InvalidResponse(
+                    "edit history cursor did not advance".into()
+                ));
+            }
+            after = Some(next.to_string());
+        }
+    }
+
+    /// When `issue` was last labelled ready-for-agent by a Trusted account,
+    /// if it ever was.
+    fn trusted_ready_at(&self, issue: &IssueUrl) -> Result<Option<DateTime<Utc>>> {
+        for labelling in self.ready_labellings(issue)?.into_iter().rev() {
+            if let Some(actor) = &labelling.actor
+                && self.trusted_actor(issue, actor)?
+            {
+                return Ok(Some(labelling.at));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Every ready-for-agent labelling of `issue`, oldest first. A Claim
+    /// removes the label, but its historical event still matters. Every page
+    /// is read: a later reapplication supersedes an earlier one.
+    fn ready_labellings(&self, issue: &IssueUrl) -> Result<Vec<Labelling>> {
         let events = self.gh_api_items(
             &format!(
                 "repos/{}/issues/{}/events?per_page=100",
@@ -40,27 +194,25 @@ impl GitHub {
             ),
             "",
         )?;
-        let actor = events
+        events
             .iter()
-            .rfind(|event| {
+            .filter(|event| {
                 event["event"] == "labeled"
                     && event["label"]["name"]
                         .as_str()
                         .is_some_and(|name| READY_FOR_AGENT.is_named(name))
             })
-            .and_then(|event| event["actor"]["login"].as_str());
-        let Some(actor) = actor else {
-            return Ok(Some(UntrustedIssue::ReadyLabel));
-        };
-        if !self.trusted_actor(issue, actor)? {
-            return Ok(Some(UntrustedIssue::ReadyLabel));
-        }
-        Ok(None)
+            .map(|event| {
+                Ok(Labelling {
+                    actor: event["actor"]["login"].as_str().map(str::to_string),
+                    at: edited_at(event, "created_at")?,
+                })
+            })
+            .collect()
     }
 
-    /// Check only the issue author. A Ticket needs no label of its own: its
-    /// Spec's ready-for-agent labelling already passed the full check.
-    pub fn author_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
+    /// Check only the issue author.
+    fn author_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
         let json = self.gh_json(&[
             "api",
             &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
@@ -112,3 +264,42 @@ impl GitHub {
         }
     }
 }
+
+/// The time in `node`'s `field`, when an event or edit was made.
+fn edited_at(node: &Value, field: &str) -> Result<DateTime<Utc>> {
+    let at = node[field].as_str().with_context(|| {
+        CommandFailure::InvalidResponse(format!("issue history has an entry with no {field}"))
+    })?;
+    Ok(DateTime::parse_from_rfc3339(at)
+        .with_context(|| {
+            CommandFailure::InvalidResponse(format!("issue history has an unreadable {field} {at}"))
+        })?
+        .to_utc())
+}
+
+/// The edits to an issue's body, each with the account that made it as
+/// `actor`. GitHub keeps the first revision here too, by its author.
+const BODY_EDITS_QUERY: &str = "\
+query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      edits: userContentEdits(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { editedAt actor: editor { login } }
+      }
+    }
+  }
+}";
+
+/// The edits to an issue's title: its `RenamedTitleEvent`s.
+const TITLE_EDITS_QUERY: &str = "\
+query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      edits: timelineItems(first: 100, after: $after, itemTypes: [RENAMED_TITLE_EVENT]) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ... on RenamedTitleEvent { createdAt actor { login } } }
+      }
+    }
+  }
+}";

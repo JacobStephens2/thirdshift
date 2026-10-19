@@ -270,7 +270,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
         };
-        if let Some(check) = GitHub::new().author_trust(ticket)? {
+        if let Some(check) = GitHub::new().ticket_trust(ticket, self.spec)? {
             bail!("Ticket #{}: {check}", ticket.number);
         }
         self.children.start(
