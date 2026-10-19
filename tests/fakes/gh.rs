@@ -748,8 +748,9 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
     if !state.at("issues").has(n) {
         die("gh: Not Found (HTTP 404)", 1);
     }
-    // GitHub records real label transitions in timeline order, including
-    // consecutive Claim applications/removals within the same second.
+    // Model the real Claim and Ready transitions consumed by Pickup, including
+    // consecutive applications/removals within the same second. Other label
+    // histories are supplied explicitly by fixtures that need them.
     let before = issue_labels(state, n).to_vec();
     let contains = |labels: &[Json], name: &Json| {
         labels
@@ -767,6 +768,12 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
                 .filter(|label| !contains(&before, label))
                 .map(|label| ("labeled", label)),
         )
+        .filter(|(_, label)| {
+            matches!(
+                label.str().to_ascii_lowercase().as_str(),
+                "in-progress" | "ready-for-agent"
+            )
+        })
         .map(|(event, label)| {
             object([
                 ("event", string(event)),

@@ -300,9 +300,6 @@ fn standing_of(
         return passed_over(Reason::SecurityFix);
     }
     let read = reads.candidate(&candidate.issue)?;
-    if read.claimed {
-        return passed_over(Reason::Claimed);
-    }
     if let Some(spec) = read.parent {
         return passed_over(Reason::Ticket(spec));
     }
@@ -316,6 +313,9 @@ fn standing_of(
         && !read.handed_back
     {
         return passed_over(Reason::Started(started));
+    }
+    if read.claimed {
+        return passed_over(Reason::Claimed);
     }
     if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
         return passed_over(Reason::TicketsClosed);
