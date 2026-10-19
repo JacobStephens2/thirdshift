@@ -10,12 +10,12 @@ Surface architectural friction and propose **deepening opportunities**: refactor
 
 This is an **Architecture review**. It runs headless: nobody reads a report, picks a candidate or answers a question. Never open a browser, ask a question or wait for an answer. Every decision is yours, and each one is written down with its reason.
 
-It changes nothing in the repository. Never commit, push, create a branch or open a pull request, and never edit `CONTEXT.md` or an ADR: any change the refactor needs to them is work for a Ticket. The worktree is thrown away when the session ends, so a throwaway prototype in it is fine, and nothing in it survives. What the review produces is issues on the issue tracker.
+It changes nothing in the repository. Never commit, push, create a branch or open a pull request, and never edit `GLOSSARY.md` or an ADR: any change the refactor needs to them is work for a Ticket. The worktree is thrown away when the session ends, so a throwaway prototype in it is fine, and nothing in it survives. What the review produces is issues on the issue tracker.
 
 This command is _informed_ by the project's domain model and built on a shared design vocabulary:
 
 - Use the `thirdshift-codebase-design` skill for the architecture vocabulary (**module**, **interface**, **depth**, **seam**, **adapter**, **leverage**, **locality**) and its principles (the deletion test, "the interface is the test surface", "one adapter = hypothetical seam, two = real"). Use these terms exactly in every suggestion, and don't drift into "component," "service," "API," or "boundary."
-- The domain language in `CONTEXT.md` gives names to good seams; ADRs in `docs/adr/` record decisions this command should not re-litigate.
+- The domain language in `GLOSSARY.md` gives names to good seams; ADRs in `docs/adr/` record decisions this command should not re-litigate.
 
 The issue tracker and triage label vocabulary should have been provided to you. If `docs/agents/issue-tracker.md` is missing, fall back to the `gh` CLI. If `docs/agents/triage-labels.md` is missing, use the label names as written here, creating a label the tracker lacks (`gh label create`).
 
@@ -28,7 +28,7 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 - If the Session prompt named a focus (a module, a subsystem, a pain point), take it, and skip the inference below.
 - Otherwise, walk back a good stretch of the commit history (`git log --oneline`) to find the codebase's hot spots, the files and areas that keep coming up, and let those paths pull your attention first. If the changes are scattered with no clear hot spot, widen the net.
 
-Look up the focus area's terms in the relevant entries of the project's domain glossary (`CONTEXT.md`) first. Follow the repository's domain-reading guidance and any separate domain-to-code index; search terms/symbols with `rg -n` and read bounded ranges before widening the scan. Check applicable coding standards and read ADRs in the area you're touching.
+Look up the focus area's terms in the relevant entries of the project's domain glossary (`GLOSSARY.md`) first. Follow the repository's domain-reading guidance and any separate domain-to-code index; search terms/symbols with `rg -n` and read bounded ranges before widening the scan. Check applicable coding standards and read ADRs in the area you're touching.
 
 Read the open issues too, titles and bodies: Specs, Tickets and ideas alike, whatever their labels. They are what a candidate may already be covered by.
 
@@ -57,7 +57,7 @@ A candidate is **Strong** only when all of these hold:
 
 - The friction is real and you can point to it in the code.
 - The deepening passes the deletion test.
-- You can settle its whole design from the code, `CONTEXT.md` and the ADRs. A candidate with a decision only a human can make is `Worth exploring` at most.
+- You can settle its whole design from the code, `GLOSSARY.md` and the ADRs. A candidate with a decision only a human can make is `Worth exploring` at most.
 - It contradicts no ADR, or the friction is real enough to warrant reopening that ADR.
 
 A candidate is **covered** when an open issue proposes the same deepening of the same modules, whether as a Spec, a Ticket or an idea. An issue that only touches the same files doesn't cover it.
@@ -71,7 +71,7 @@ Every other candidate is dropped. Don't file it, and don't list it in the plan o
 
 If the scan surfaced no candidate at all, file nothing, and say so plainly in place of the final line of step 6: there is no issue for it to name.
 
-**Use CONTEXT.md vocabulary for the domain, and the `thirdshift-codebase-design` skill's vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
+**Use GLOSSARY.md vocabulary for the domain, and the `thirdshift-codebase-design` skill's vocabulary for the architecture.** If `GLOSSARY.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
 
 **ADR conflicts**: if a candidate contradicts an existing ADR, only keep it when the friction is real enough to warrant revisiting the ADR. Mark it clearly in the report (e.g. a warning callout: _"contradicts ADR-0007, but worth reopening because…"_). Don't raise every theoretical refactor an ADR forbids.
 
@@ -89,7 +89,7 @@ If a decision turns out to need a human, the candidate was not `Strong`: make it
 
 Side effects are recorded, never written:
 
-- **Naming a deepened module after a concept not in `CONTEXT.md`?** Record the term and its definition as work for a Ticket.
+- **Naming a deepened module after a concept not in `GLOSSARY.md`?** Record the term and its definition as work for a Ticket.
 - **Sharpening a fuzzy term as you decide?** Record the sharper definition as work for a Ticket.
 - **Reopening an ADR, or making a decision worth one?** Record the new or changed ADR as work for a Ticket. A decision is worth an ADR only when it is hard to reverse, surprising without context, and the result of a real trade-off.
 - **Want to explore alternative interfaces for the deepened module?** Use the `thirdshift-codebase-design` skill and its design-it-twice parallel sub-agent pattern.
@@ -110,7 +110,7 @@ The plan's top issue carries, whichever shape it takes:
 - **Every decision from step 3, each with its reason.** In a Spec, under Implementation Decisions and Testing Decisions. In a single Ticket, under a `## Decisions` heading added after the issue template's sections.
 - **The report**: the candidate's card as Markdown with a Mermaid before/after diagram. In a Spec, under Further Notes. In a single Ticket, under an `## Architecture review` heading added last, after `## Decisions`. See [REPORT.md](REPORT.md) for the card.
 
-The `CONTEXT.md` and ADR changes recorded in step 3 go into the acceptance criteria of the Ticket whose work they belong to, a Spec's Ticket or the single Ticket, so they land through its pull request.
+The `GLOSSARY.md` and ADR changes recorded in step 3 go into the acceptance criteria of the Ticket whose work they belong to, a Spec's Ticket or the single Ticket, so they land through its pull request.
 
 ### 5. File the idea
 

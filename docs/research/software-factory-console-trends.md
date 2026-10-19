@@ -20,7 +20,7 @@ Research date: 2026-10-18, for issue #711 (the Console) and its Q27 UI prototype
   - Warp (Agent Management Panel, notifications);
   - Replit (Agent task board).
 - **Open source:** Vibe Kanban, Claude Squad, Conductor and Sculptor.
-- Mapped each trend onto [CONTEXT.md](../../CONTEXT.md) vocabulary and onto the existing variants: `garden`, `plain`, `accent`, `press`, `pressplain`, `pixel`, `briefing`, `briefingwide`, `trace`, `grid`, `lanes`.
+- Mapped each trend onto [GLOSSARY.md](../../GLOSSARY.md) vocabulary and onto the existing variants: `garden`, `plain`, `accent`, `press`, `pressplain`, `pixel`, `briefing`, `briefingwide`, `trace`, `grid`, `lanes`.
 
 **Out of scope.**
 

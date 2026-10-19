@@ -48,7 +48,7 @@ Every session exited before its 2.5-hour timeout. None changed its repository: `
 | Follow-up: Codex's plans | othermax | Claude, max | 20 | 15.4 |
 | Follow-up: Codex's Spec branches | fresh | Codex, xhigh | 4 | 9.5 |
 
-**Prompts.** The bug replays used today's review skill, `thirdshift-code-review` with #486's evidence-backed findings, in every arm (Q26). The Spec replay pinned the skill at 479a1fb, the version the recorded Spec reviews ran. The plan check re-applied the Architecture review's four Strong tests to the published plan, reading the plan, `CONTEXT.md`, the ADRs and the code as they stood when the plan was made (Q2, Q10). A fresh agent that hadn't seen the bugs wrote the timing checklist from `CONTEXT.md` and the ADRs alone (Q12). Codex arms were told to start their sub-agents fresh, as #616 makes the factory do (Q28).
+**Prompts.** The bug replays used today's review skill, `thirdshift-code-review` with #486's evidence-backed findings, in every arm (Q26). The Spec replay pinned the skill at 479a1fb, the version the recorded Spec reviews ran. The plan check re-applied the Architecture review's four Strong tests to the published plan, reading the plan, `GLOSSARY.md`, the ADRs and the code as they stood when the plan was made (Q2, Q10). A fresh agent that hadn't seen the bugs wrote the timing checklist from `GLOSSARY.md` and the ADRs alone (Q12). Codex arms were told to start their sub-agents fresh, as #616 makes the factory do (Q28).
 
 **The Spec replay's fresh arm was added after the fact.** The plan had only the Codex arm. Codex passed the bar, but elsewhere a fresh Claude session had matched or beaten it. So 30 fresh Claude sessions at max ran over the same branches, to tell a second family apart from a second look.
 

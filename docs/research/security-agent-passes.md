@@ -609,7 +609,7 @@ So the API can do everything **except** test and merge a fix in private. An unat
 
 **The recommended path for a maintainer fixing their own repository.** OpenSSF: "If you test a particular patch in public, an observant attacker may see and exploit the vulnerability before you're able to issue a patch", so "**our recommendation is that you typically use the private development features to generate your patch there if you are a project using GitHub**". The exception: "If the vulnerability is _already_ publicly known and widely exploited, there's no advantage to trying to keep things private." Embargoed notification of other vendors "is probably not necessary" without "a significant vendor ecosystem". Neither GitHub nor OpenSSF says how to word commit messages or whether to commit a test that reproduces the vulnerability (neither the background agent's search nor my reading of those pages found any).
 
-**What each public artefact would carry in thirdshift today** (inference from the Session prompts and CONTEXT.md):
+**What each public artefact would carry in thirdshift today** (inference from the Session prompts and GLOSSARY.md):
 
 - **An Architect-style plan issue.** A full description, published before any fix exists. The Architecture review publishes to the issue tracker by design.
 - **A Run's pull request.** A title, a body with the change summary and "Unaddressed findings", commits, and any regression test, all public from the push. In a Merge run, which every Run is under this User config (`merge.always = true`), the pull request stays open until CI is green, often minutes, sometimes longer.
@@ -913,7 +913,7 @@ All accessed 5–6 October 2026. "Read" means the full text or file was read, by
 
 **thirdshift itself**
 
-- [CONTEXT.md](../../CONTEXT.md); [skills/thirdshift-code-review/SKILL.md](../../skills/thirdshift-code-review/SKILL.md); [skills/thirdshift-improve-codebase-architecture/SKILL.md](../../skills/thirdshift-improve-codebase-architecture/SKILL.md)
+- [GLOSSARY.md](../../GLOSSARY.md); [skills/thirdshift-code-review/SKILL.md](../../skills/thirdshift-code-review/SKILL.md); [skills/thirdshift-improve-codebase-architecture/SKILL.md](../../skills/thirdshift-improve-codebase-architecture/SKILL.md)
 - [src/session.rs](../../src/session.rs) (`claude_args`, `codex_args`), [src/prompt.rs](../../src/prompt.rs) (`fresh`, `architecture_review`, `ci_fix_repair`), [src/ci.rs](../../src/ci.rs), [src/harness.rs](../../src/harness.rs)
 - ADRs [0001](../adr/0001-rust-binary-with-embedded-skills.md), [0008](../adr/0008-inherited-failures-fail-the-run.md), [0012](../adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)
 - [multi-family-review.md](multi-family-review.md), [codex-headless-harness.md](codex-headless-harness.md)

@@ -707,6 +707,6 @@ All accessed 7 October 2026. Grades as in the table above. Repositories were rea
 
 **thirdshift itself**
 
-- [CONTEXT.md](../../CONTEXT.md), [security-agent-passes.md](security-agent-passes.md), [codex-headless-harness.md](codex-headless-harness.md)
+- [GLOSSARY.md](../../GLOSSARY.md), [security-agent-passes.md](security-agent-passes.md), [codex-headless-harness.md](codex-headless-harness.md)
 - [ADR 0001](../adr/0001-rust-binary-with-embedded-skills.md), [ADR 0012](../adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md), [src/skills.rs](../../src/skills.rs), [src/prompts_page.rs](../../src/prompts_page.rs), [skills/LICENSE](../../skills/LICENSE), [README.md](../../README.md) ("Credits and license")
 - Issue [#427](https://github.com/JacobStephens2/thirdshift/issues/427)
