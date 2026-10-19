@@ -11,6 +11,11 @@
 //!  "created"?: {"<number>": "<ISO 8601 time>"},
 //!  "bodies"?: {"<number>": "<body>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
+//!  "author_associations"?: {"<number>": "OWNER" | "MEMBER" | "COLLABORATOR" | "NONE"},
+//!  "trust_events"?: {"<number>": [<REST issue event>, ...]},
+//!  "collaborators"?: ["<login>", ...],
+//!  "org_members"?: ["<login>", ...],
+//!  "owner_type"?: "User" | "Organization",
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
 //!           "mergeable"?, "unknown_polls"?, "reviewDecision"?}],
 //!  "checks": {"<sha>": [{"id", "name", "conclusion", "url", "pending_polls"?,
@@ -50,6 +55,10 @@
 //!
 //! An issue's title is its entry in `titles`, else `Issue <number>`, and its
 //! `createdAt` its entry in `created`, else the first second of 2020.
+//! Trust defaults to an OWNER author and a historical ready-for-agent event
+//! by the repository owner. `trust_events` overrides that history, including
+//! an empty array for an issue never labelled ready-for-agent. The REST
+//! events endpoint streams every supplied event with --paginate --jq '.[]'.
 //!
 //! `gh api --method PUT repos/<repo>/issues/<number>/labels -f
 //! labels[]=<label> ...` sets an issue's labels to exactly those given.
@@ -224,7 +233,9 @@ fn save(state: &Json) {
     fs::write(state_path(), state.dump()).unwrap();
 }
 
-const BOOLEAN_FLAGS: [&str; 6] = ["draft", "undo", "paginate", "merge", "silent", "failed"];
+const BOOLEAN_FLAGS: [&str; 7] = [
+    "draft", "undo", "paginate", "merge", "silent", "failed", "include",
+];
 
 /// `--flag` values by name; a boolean flag's is `None`.
 type Flags = BTreeMap<String, Option<String>>;
@@ -690,6 +701,14 @@ fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
         None => string("2020-01-01T00:00:00Z"),
     };
     object([
+        (
+            "author_association",
+            state
+                .get("author_associations")
+                .and_then(|authors| authors.get(n))
+                .cloned()
+                .unwrap_or_else(|| string("OWNER")),
+        ),
         ("number", number(n.parse::<i64>().unwrap())),
         // The fake's database ids are the issue numbers.
         ("id", number(n.parse::<i64>().unwrap())),
@@ -1235,8 +1254,70 @@ fn finding_issue_patch(state: &mut Json, rest: &[&str]) {
     println!("{}", issue_fields(state, n, &issue_state));
 }
 
+/// Answer either membership endpoint from its list of account logins.
+fn membership_response(state: &Json, key: &str, login: &str) {
+    let member = state.get(key).is_some_and(|users| {
+        users
+            .items()
+            .iter()
+            .any(|user| user.str().eq_ignore_ascii_case(login))
+    });
+    println!(
+        "HTTP/2.0 {}\r\n",
+        if member {
+            "204 No Content"
+        } else {
+            "404 Not Found"
+        }
+    );
+    if !member {
+        std::process::exit(1);
+    }
+}
+
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
+    if let Some((repo, rest)) = repo_prefix(path) {
+        if let Some(n) = rest
+            .strip_prefix("issues/")
+            .and_then(|s| s.strip_suffix("/events?per_page=100"))
+        {
+            check_repo_is(state, Some(repo));
+            assert!(flags.contains_key("paginate"));
+            assert_eq!(flag(flags, "jq"), Some(".[]"));
+            let defaults = vec![object([
+                ("event", string("labeled")),
+                ("label", object([("name", string("ready-for-agent"))])),
+                (
+                    "actor",
+                    object([("login", string(repo.split('/').next().unwrap()))]),
+                ),
+            ])];
+            let events = state
+                .get("trust_events")
+                .and_then(|events| events.get(n))
+                .map(Json::items)
+                .unwrap_or(&defaults);
+            for event in events {
+                println!("{event}");
+            }
+            return;
+        }
+        if let Some(login) = rest.strip_prefix("collaborators/") {
+            check_repo_is(state, Some(repo));
+            assert!(flags.contains_key("include"));
+            membership_response(state, "collaborators", login);
+            return;
+        }
+    }
+    if let Some(login) = path
+        .strip_prefix("orgs/")
+        .and_then(|s| s.split_once("/members/").map(|(_, login)| login))
+    {
+        assert!(flags.contains_key("include"));
+        membership_response(state, "org_members", login);
+        return;
+    }
     if let Some((repo, rest)) = repo_prefix(path)
         && let Some(n) = rest.strip_prefix("issues/")
         && n.parse::<u64>().is_ok()
@@ -1252,10 +1333,22 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     if path == &format!("repos/{}", state.at("repo").str()) {
         println!(
             "{}",
-            object([(
-                "private",
-                Bool(state.get("private").is_some_and(Json::truthy))
-            )])
+            object([
+                (
+                    "owner",
+                    object([(
+                        "type",
+                        state
+                            .get("owner_type")
+                            .cloned()
+                            .unwrap_or_else(|| string("User"))
+                    )])
+                ),
+                (
+                    "private",
+                    Bool(state.get("private").is_some_and(Json::truthy))
+                )
+            ])
         );
         return;
     }

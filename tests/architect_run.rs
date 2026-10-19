@@ -2494,6 +2494,29 @@ fn a_ready_issue_skips_the_architect_run_before_any_review() {
 }
 
 #[test]
+fn an_untrusted_ready_issue_does_not_skip_the_architecture_review() {
+    let scenario = scenario();
+    ready_issue(&scenario, 7, "Untrusted work", &[]);
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    scenario.write_gh_state(&state);
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+    assert!(
+        result
+            .stderr
+            .contains("#7 issue author is not a Trusted account"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn the_skip_names_the_lowest_numbered_ready_issue_after_the_lines_on_those_passed_over() {
     let scenario = scenario();
     ready_issue(&scenario, 5, "Fix the logout page", &[IN_PROGRESS]);
