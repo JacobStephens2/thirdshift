@@ -276,7 +276,7 @@ fn a_log_failure_still_recovers_and_reports_warnings_and_usage() {
     );
     let logs = scenario.path("home/.thirdshift/logs/acme/widgets");
     // Install the failing log before the session opens it. The Command log
-    // supplies the actual start stamp, so this never predicts the clock.
+    // supplies the captured stamp and owner, so this never predicts the clock.
     scenario.repo_has_hook(
         &scenario.launch_dir(),
         "post-checkout",
@@ -284,12 +284,11 @@ fn a_log_failure_still_recovers_and_reports_warnings_and_usage() {
             r#"#!/bin/sh
 for log in "{logs}/commands/issue/"*.log; do
     name=${{log##*/}}
-    stamp=${{name#7-}}
-    stamp=${{stamp%.log}}
-    stamp=${{stamp%%~*}}
+    identity_fragment=${{name#7-}}
+    identity_fragment=${{identity_fragment%.log}}
 done
 mkdir -p "{logs}/commands/issue"
-ln -s "{pipe}" "{logs}/commands/issue/7-$stamp-implement.jsonl"
+ln -s "{pipe}" "{logs}/commands/issue/7-$identity_fragment-implement.jsonl"
 touch "{ready}"
 "#,
             logs = logs.display(),
