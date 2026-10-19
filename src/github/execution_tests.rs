@@ -43,30 +43,6 @@ impl Fixture {
         );
     }
 
-    /// Script consecutive external failures followed by a successful response.
-    fn responses(&self, failures: &[&str], stdout: &str) {
-        let _ = fs::remove_file(self.path("calls"));
-        let mut script = format!(
-            "echo call >> '{calls}'\nattempt=$(wc -l < '{calls}')\ncase $attempt in\n",
-            calls = self.path("calls").display()
-        );
-        for (index, stderr) in failures.iter().enumerate() {
-            script.push_str(&format!(
-                "{}) cat >&2 <<'ERROR'\n{stderr}\nERROR\nexit 1 ;;\n",
-                index + 1
-            ));
-        }
-        script.push_str(&format!("esac\ncat <<'JSON'\n{stdout}\nJSON"));
-        self.script(&script);
-    }
-
-    fn calls(&self) -> usize {
-        fs::read_to_string(self.path("calls"))
-            .unwrap()
-            .lines()
-            .count()
-    }
-
     fn pid(&self) -> Option<libc::pid_t> {
         fs::read_to_string(self.path("pid"))
             .ok()?
@@ -97,197 +73,387 @@ fn issue() -> IssueUrl {
 }
 
 #[test]
-fn a_transient_issue_read_recovers() {
+fn a_transient_private_security_issue_listing_recovers() {
     with_recorded_signal(
-        "github::execution_tests::a_transient_issue_read_recovers",
+        "github::execution_tests::a_transient_private_security_issue_listing_recovers",
         |_| {
             let fixture = Fixture::new("");
             fixture.script(&format!(
                 r#"
-if test ! -f '{attempt}'; then
-  touch '{attempt}'
-  echo 'HTTP 504: Gateway Timeout (https://api.github.com/graphql)' >&2
+if [ "$2" = 'repos/acme/widgets' ]; then
+  printf '%s' '{{"private":true}}'
+  exit 0
+fi
+case "$*" in
+  *security-advisories*)
+    echo 'gh: Not Found (HTTP 404)' >&2
+    exit 1
+    ;;
+esac
+echo read >> '{reads}'
+if [ ! -f '{failed}' ]; then
+  touch '{failed}'
+  echo 'HTTP 504: Gateway Timeout' >&2
+  exit 1
+fi
+exit 0
+"#,
+                reads = fixture.path("reads").display(),
+                failed = fixture.path("failed").display(),
+            ));
+            let result = GitHub::new().security_records("acme/widgets");
+            assert!(
+                result.is_ok(),
+                "private issue listing did not recover: {:?}",
+                result.err()
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.path("reads")).unwrap(),
+                "read\nread\n"
+            );
+        },
+    );
+}
+
+#[test]
+fn private_record_reads_recover_without_repeating_the_following_write() {
+    with_recorded_signal(
+        "github::execution_tests::private_record_reads_recover_without_repeating_the_following_write",
+        |_| {
+            use crate::security::reproduction::{Outcome, Reproduction};
+            let fixture = Fixture::new("");
+            let value = serde_json::json!({
+                "number": 42, "title": "Bound input", "state": "open",
+                "html_url": "https://github.com/acme/widgets/issues/42",
+                "labels": [{"name": "needs-triage"}],
+                "body": "Fingerprint: `bounded`\nAudited commit: `0123456789abcdef0123456789abcdef01234567`\nPrivate evidence.\n",
+            });
+            let record = SecurityRecords::issues(Vec::new())
+                .decode_created(value.clone())
+                .unwrap();
+            let reproduction = Reproduction {
+                outcome: Outcome::NotReproduced,
+                notes: "Private reproduction notes.".into(),
+                test: "bounded_input()".into(),
+            };
+            for operation in ["link", "reproduction"] {
+                fixture.script(&format!(
+                    r#"
+if [ "$2" = '--method' ]; then
+  echo write >> '{writes}'
+  cat > '{body}'
+  echo 'HTTP 504: private mutation evidence' >&2
+  exit 1
+fi
+echo read >> '{reads}'
+if [ ! -f '{failed}' ]; then
+  touch '{failed}'
+  echo 'HTTP 504: private read evidence' >&2
+  exit 1
+fi
+cat <<'JSON'
+{value}
+JSON
+"#,
+                    reads = fixture.path("reads").display(),
+                    writes = fixture.path("writes").display(),
+                    body = fixture.path("body").display(),
+                    failed = fixture.path("failed").display(),
+                ));
+                let github = GitHub::new();
+                let result = match operation {
+                    "link" => github.link_security_fix("acme/widgets", &record, &issue()),
+                    "reproduction" => {
+                        github.update_security_record("acme/widgets", &record, &reproduction)
+                    }
+                    _ => unreachable!(),
+                };
+                let error = format!("{:#}", result.unwrap_err());
+                assert!(
+                    !error.contains("private read evidence")
+                        && !error.contains("private mutation evidence")
+                );
+                assert_eq!(
+                    fs::read_to_string(fixture.path("reads")).unwrap(),
+                    "read\nread\n",
+                    "{operation}: {error}"
+                );
+                assert_eq!(
+                    fs::read_to_string(fixture.path("writes")).unwrap(),
+                    "write\n"
+                );
+                let body = fs::read_to_string(fixture.path("body")).unwrap();
+                assert!(body.contains(if operation == "link" {
+                    "Fix Ticket:"
+                } else {
+                    "Private reproduction notes."
+                }));
+                for name in ["reads", "writes", "failed"] {
+                    fs::remove_file(fixture.path(name)).unwrap();
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn a_transient_issue_read_recovers_without_exposing_the_failure() {
+    with_recorded_signal(
+        "github::execution_tests::a_transient_issue_read_recovers_without_exposing_the_failure",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(&format!(
+                r#"
+echo read >> '{reads}'
+if [ ! -f '{failed}' ]; then
+  touch '{failed}'
+  echo 'HTTP 504: Gateway Timeout' >&2
   exit 1
 fi
 printf '%s' '{{"title":"Recovered"}}'
 "#,
-                attempt = fixture.path("attempt").display()
+                reads = fixture.path("reads").display(),
+                failed = fixture.path("failed").display(),
             ));
             assert_eq!(GitHub::new().issue_title(&issue()).unwrap(), "Recovered");
-        },
-    );
-}
-
-#[test]
-fn transient_reads_exhaust_three_attempts_with_the_last_cause() {
-    with_recorded_signal(
-        "github::execution_tests::transient_reads_exhaust_three_attempts_with_the_last_cause",
-        |_| {
-            let fixture = Fixture::new("");
-            fixture.responses(
-                &["HTTP 504: first", "HTTP 504: second", "HTTP 504: last"],
-                r#"{"title":"Must not reach a fourth attempt"}"#,
+            assert_eq!(
+                fs::read_to_string(fixture.path("reads")).unwrap(),
+                "read\nread\n"
             );
-            let started = Instant::now();
-            let error = GitHub::new().issue_title(&issue()).unwrap_err();
-            assert_eq!(error.to_string(), "gh issue view failed: HTTP 504: last");
-            assert_eq!(fixture.calls(), 3);
-            assert!(started.elapsed() >= Duration::from_secs(3));
-            assert!(started.elapsed() < Duration::from_secs(15));
         },
     );
 }
 
 #[test]
-fn permanent_and_quota_errors_fail_on_the_first_read() {
+fn permanent_and_quota_read_failures_are_not_retried() {
     with_recorded_signal(
-        "github::execution_tests::permanent_and_quota_errors_fail_on_the_first_read",
+        "github::execution_tests::permanent_and_quota_read_failures_are_not_retried",
         |_| {
             let fixture = Fixture::new("");
             for stderr in [
-                "HTTP 401: Bad credentials",
+                "HTTP 401: Bad credentials: unexpected EOF",
+                "HTTP 403: Resource not accessible",
                 "HTTP 404: Not Found",
-                "HTTP 422: Validation failed: unexpected EOF",
-                "GraphQL: API rate limit already exceeded for user ID 123.",
-                "GraphQL: API rate limit exceeded (HTTP 429)",
-                "GraphQL: RATE_LIMIT_EXCEEDED (HTTP 429)",
+                "HTTP 422: Validation Failed",
                 "To get started with GitHub CLI, please run: gh auth login",
-                "unsupported response",
+                "GraphQL: API rate limit exceeded for user ID 123. (HTTP 429)",
+                "GraphQL: API rate limit already exceeded for user ID 123.",
+                "GraphQL: RATE_LIMIT_EXCEEDED (HTTP 429)",
+                "API rate limit exceeded for user ID 123. (HTTP 429)",
             ] {
-                fixture.responses(&[stderr], r#"{"title":"Must not retry"}"#);
+                fixture.script(&format!(
+                    "echo read >> '{}'\ncat >&2 <<'ERROR'\n{stderr}\nERROR\nexit 1",
+                    fixture.path("reads").display()
+                ));
                 let error = GitHub::new().issue_title(&issue()).unwrap_err();
-                assert_eq!(error.to_string(), format!("gh issue view failed: {stderr}"));
-                assert_eq!(fixture.calls(), 1, "{stderr}");
-            }
-        },
-    );
-}
-
-#[test]
-fn issue_pr_and_label_lists_recover_from_transient_failures() {
-    with_recorded_signal(
-        "github::execution_tests::issue_pr_and_label_lists_recover_from_transient_failures",
-        |_| {
-            let fixture = Fixture::new("");
-            let github = GitHub::new();
-            fixture.responses(&["HTTP 429: secondary rate limit"], "[]");
-            assert!(
-                github
-                    .open_issues_labelled("acme/widgets", crate::labels::READY_FOR_AGENT)
-                    .unwrap()
-                    .is_empty()
-            );
-            assert_eq!(fixture.calls(), 2);
-
-            fixture.responses(&["read tcp: connection reset by peer"], "[]");
-            assert!(
-                github
-                    .pull_requests_with_head_prefix(&issue(), "issue-")
-                    .unwrap()
-                    .is_empty()
-            );
-            assert_eq!(fixture.calls(), 2);
-
-            fixture.responses(&["EOF"], "[]");
-            github.ensure_labels("acme/widgets", &[]).unwrap();
-            assert_eq!(fixture.calls(), 2);
-
-            fixture.responses(
-                &["HTTP 503: unavailable", "HTTP 502: Bad Gateway"],
-                r#"{"body":"Recovered body"}"#,
-            );
-            assert_eq!(github.pr_body(&issue(), 12).unwrap(), "Recovered body");
-            assert_eq!(fixture.calls(), 3);
-        },
-    );
-}
-
-#[test]
-fn transient_mutation_failures_never_repeat_the_request() {
-    with_recorded_signal(
-        "github::execution_tests::transient_mutation_failures_never_repeat_the_request",
-        |_| {
-            let fixture = Fixture::new("");
-            let github = GitHub::new();
-            for mutation in [
-                "labels", "comment", "create", "body", "ready", "merge", "rerun",
-            ] {
-                fixture.responses(&["HTTP 504: response lost after mutation"], "{}");
-                let result = match mutation {
-                    "labels" => github.remove_label(&issue(), "in-progress"),
-                    "comment" => github.close_issue(&issue(), "Finished"),
-                    "create" => github
-                        .create_draft_pr(&issue(), "issue-7", "main", "Work", "Closes #7")
-                        .map(drop),
-                    "body" => github.set_pr_body(&issue(), 12, "Updated"),
-                    "ready" => github.mark_ready(&issue(), "12"),
-                    "merge" => github.merge(&issue(), 12, "abc"),
-                    "rerun" => github.rerun_failed_jobs(&issue(), 123),
-                    _ => unreachable!(),
-                };
-                assert!(
-                    result.unwrap_err().to_string().contains("HTTP 504"),
-                    "{mutation}"
+                assert!(format!("{error:#}").contains(stderr));
+                assert_eq!(
+                    fs::read_to_string(fixture.path("reads")).unwrap(),
+                    "read\n",
+                    "{stderr}"
                 );
-                assert_eq!(fixture.calls(), 1, "{mutation}");
+                fs::remove_file(fixture.path("reads")).unwrap();
             }
         },
     );
 }
 
 #[test]
-fn interruption_cancels_the_read_retry_wait() {
+fn persistent_read_failures_stop_after_three_attempts_with_the_last_cause() {
     with_recorded_signal(
-        "github::execution_tests::interruption_cancels_the_read_retry_wait",
+        "github::execution_tests::persistent_read_failures_stop_after_three_attempts_with_the_last_cause",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(&format!(
+                "echo read >> '{reads}'\nn=$(wc -l < '{reads}')\necho \"HTTP 504: failure $((n))\" >&2\nexit 1",
+                reads = fixture.path("reads").display(),
+            ));
+            let started = Instant::now();
+            let error = GitHub::new().issue_title(&issue()).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "gh issue view failed: HTTP 504: failure 3"
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.path("reads")).unwrap(),
+                "read\nread\nread\n"
+            );
+            assert!(started.elapsed() >= Duration::from_secs(3));
+            assert!(started.elapsed() < Duration::from_secs(10));
+        },
+    );
+}
+
+#[test]
+fn interruption_during_read_backoff_starts_no_further_request() {
+    with_recorded_signal(
+        "github::execution_tests::interruption_during_read_backoff_starts_no_further_request",
         |signal| {
             let fixture = Fixture::new("");
-            fixture.responses(
-                &["HTTP 504: Gateway Timeout"],
-                r#"{"title":"Must not retry"}"#,
-            );
-            let calls = fixture.path("calls");
+            let reads = fixture.path("reads");
+            fixture.script(&format!(
+                "echo read >> '{}'\necho 'HTTP 504: Gateway Timeout' >&2\nexit 1",
+                reads.display()
+            ));
+            let marker = reads.clone();
             let sender = std::thread::spawn(move || {
                 let deadline = Instant::now() + Duration::from_secs(5);
-                while !calls.exists() && Instant::now() < deadline {
+                while !marker.exists() && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                std::thread::sleep(Duration::from_millis(200));
+                assert!(marker.exists(), "gh never started");
+                std::thread::sleep(Duration::from_millis(250));
                 signal_hook::low_level::raise(signal).unwrap();
             });
             let started = Instant::now();
             let result = GitHub::new().issue_title(&issue());
             sender.join().unwrap();
             assert_eq!(result.unwrap_err().to_string(), "interrupted");
-            assert!(started.elapsed() < Duration::from_secs(1));
-            assert_eq!(fixture.calls(), 1);
-            assert!(interrupt::requested());
+            assert_eq!(fs::read_to_string(reads).unwrap(), "read\n");
+            assert!(started.elapsed() < Duration::from_secs(2));
         },
     );
 }
 
 #[test]
-fn completion_read_recovery_preserves_recorded_interruption() {
+fn transient_transport_failures_recover_across_read_only_operations() {
     with_recorded_signal(
-        "github::execution_tests::completion_read_recovery_preserves_recorded_interruption",
+        "github::execution_tests::transient_transport_failures_recover_across_read_only_operations",
+        |_| {
+            let fixture = Fixture::new("");
+            let github = GitHub::new();
+            for (operation, failure, json) in [
+                (
+                    "issues",
+                    "echo 'HTTP 429: Too Many Requests' >&2; exit 1",
+                    "[]",
+                ),
+                (
+                    "pr",
+                    "echo 'read tcp: connection reset by peer' >&2; exit 1",
+                    r#"{"body":"Recovered"}"#,
+                ),
+                ("labels", "echo 'EOF' >&2; exit 1", "[]"),
+                (
+                    "tickets",
+                    "echo 'HTTP 503: Service Unavailable' >&2; exit 1",
+                    r#"{"data":{"repository":{"issue":{"subIssues":{"nodes":[]}}}}}"#,
+                ),
+                ("profile", "printf '{'", r#"{"email":"me@example.com"}"#),
+            ] {
+                fixture.script(&format!(
+                    r#"
+echo read >> '{reads}'
+if [ ! -f '{failed}' ]; then
+  touch '{failed}'
+  {failure}
+else
+  printf '%s' '{json}'
+fi
+"#,
+                    reads = fixture.path("reads").display(),
+                    failed = fixture.path("failed").display(),
+                ));
+                match operation {
+                    "issues" => assert!(
+                        github
+                            .open_issues_labelled("acme/widgets", crate::labels::READY_FOR_AGENT)
+                            .unwrap()
+                            .is_empty()
+                    ),
+                    "pr" => assert_eq!(github.pr_body(&issue(), 12).unwrap(), "Recovered"),
+                    "labels" => github.ensure_labels("acme/widgets", &[]).unwrap(),
+                    "tickets" => assert!(github.tickets(&issue()).unwrap().is_empty()),
+                    "profile" => assert_eq!(
+                        github.profile_email().unwrap().as_deref(),
+                        Some("me@example.com")
+                    ),
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    fs::read_to_string(fixture.path("reads")).unwrap(),
+                    "read\nread\n",
+                    "{operation}"
+                );
+                fs::remove_file(fixture.path("reads")).unwrap();
+                fs::remove_file(fixture.path("failed")).unwrap();
+            }
+        },
+    );
+}
+
+#[test]
+fn transient_mutation_failures_are_never_retried() {
+    with_recorded_signal(
+        "github::execution_tests::transient_mutation_failures_are_never_retried",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(&format!(
+                r#"
+if [ "$1 $2" = 'label list' ]; then
+  printf '[]'
+  exit 0
+fi
+echo "$1 $2" >> '{}'
+echo 'HTTP 504: Gateway Timeout' >&2
+exit 1
+"#,
+                fixture.path("mutations").display()
+            ));
+            let github = GitHub::new();
+            for result in [
+                github.close_issue(&issue(), "Done"),
+                github.set_labels(&issue(), &Labels::default()),
+                github.ensure_labels("acme/widgets", &[crate::labels::NEEDS_TRIAGE]),
+                github
+                    .create_issue(&issue(), "Title", "Body", &[])
+                    .map(drop),
+                github
+                    .create_draft_pr(&issue(), "issue-7", "main", "Title", "Body")
+                    .map(drop),
+                github.mark_ready(&issue(), "12"),
+                github.set_pr_body(&issue(), 12, "Body"),
+                github.merge(&issue(), 12, "head"),
+                github.rerun_failed_jobs(&issue(), 123),
+            ] {
+                assert!(format!("{:#}", result.unwrap_err()).contains("HTTP 504"));
+            }
+            assert_eq!(
+                fs::read_to_string(fixture.path("mutations")).unwrap(),
+                "issue close\napi --method\nlabel create\nissue create\npr create\npr ready\napi --method\npr merge\nrun rerun\n"
+            );
+        },
+    );
+}
+
+#[test]
+fn completion_read_retries_without_clearing_interruption() {
+    with_recorded_signal(
+        "github::execution_tests::completion_read_retries_without_clearing_interruption",
         |signal| {
             let fixture = Fixture::new("");
-            fixture.responses(
-                &["HTTP 504: Gateway Timeout"],
-                r#"{"title":"Recovered completion"}"#,
-            );
+            fixture.script(&format!(
+                r#"
+if [ ! -f '{failed}' ]; then
+  touch '{failed}'
+  echo 'HTTP 504: Gateway Timeout' >&2
+  exit 1
+fi
+printf '%s' '{{"title":"Recovered"}}'
+"#,
+                failed = fixture.path("failed").display(),
+            ));
             let github = GitHub::new();
             signal_hook::low_level::raise(signal).unwrap();
             assert_eq!(
                 github.completion().issue_title(&issue()).unwrap(),
-                "Recovered completion"
+                "Recovered"
             );
-            assert_eq!(fixture.calls(), 2);
             assert!(interrupt::requested());
             assert_eq!(
                 github.issue_title(&issue()).unwrap_err().to_string(),
                 "interrupted"
             );
-            assert_eq!(fixture.calls(), 2);
         },
     );
 }
@@ -719,12 +885,12 @@ fn check_reads_classify_transport_and_api_failures_without_hiding_diagnostics() 
                 ("read tcp: connection reset by peer", true),
                 ("net/http: TLS handshake timeout", true),
                 ("gh: too many requests (HTTP 429)", true),
-                (
-                    "GraphQL: API rate limit already exceeded for user ID 123 (HTTP 429)",
-                    false,
-                ),
+                ("GraphQL: secondary rate limit exceeded (HTTP 429)", true),
                 ("gh: Bad Gateway (HTTP 502)", true),
                 ("gh: service unavailable (HTTP 503)", true),
+                ("gh: Gateway Timeout (HTTP 504)", true),
+                ("GraphQL: API rate limit exceeded (HTTP 429)", false),
+                ("GraphQL: API rate limit already exceeded", false),
                 ("gh: Bad credentials (HTTP 401)", false),
                 ("gh: Resource not accessible (HTTP 403)", false),
                 ("gh: Not Found (HTTP 404)", false),

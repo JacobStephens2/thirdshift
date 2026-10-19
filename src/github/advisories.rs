@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::GitHub;
+use super::{GitHub, check_read};
 use crate::issue::IssueUrl;
 use crate::labels::{Label, NEEDS_TRIAGE};
 use crate::security::reproduction::{FixSize, Reproduction, Severity};
@@ -447,15 +447,8 @@ impl GitHub {
             ),
             RecordData::Issue { number, .. } => (format!("repos/{repo}/issues/{number}"), "body"),
         };
-        let output = self.output_with_input(&["api", &path], None)?;
-        if !output.status.success() {
-            bail!(
-                "reading the private record before linking its fix failed ({})",
-                output.status
-            );
-        }
-        let current: Value =
-            serde_json::from_slice(&output.stdout).context("private record is invalid JSON")?;
+        let current =
+            self.private_record(&path, "reading the private record before linking its fix")?;
         let current = current[field]
             .as_str()
             .context("the private record has no description")?;
@@ -475,6 +468,23 @@ impl GitHub {
             );
         }
         Ok(())
+    }
+
+    /// Retry only the observation before a private record's mutation. Raw
+    /// diagnostics stay available to classification, never to progress/errors.
+    fn private_record(&self, path: &str, operation: &str) -> Result<Value> {
+        self.retry_read(operation, || {
+            let output = self.output(&["api", path])?;
+            if !output.status.success() {
+                bail!(check_read::ReadFailure {
+                    command: operation.to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                    private_status: Some(output.status),
+                });
+            }
+            serde_json::from_slice(&output.stdout)
+                .with_context(|| format!("{operation} returned invalid JSON"))
+        })
     }
 
     pub fn security_fix_text(&self, issue: &IssueUrl) -> Result<String> {
@@ -599,15 +609,10 @@ impl GitHub {
                 SecurityRecords::issues(Vec::new()),
             ),
         };
-        let observed = self.output_with_input(&["api", &path], None)?;
-        if !observed.status.success() {
-            bail!(
-                "reading a private Security finding record before its update failed ({})",
-                observed.status
-            );
-        }
-        let observed: Value = serde_json::from_slice(&observed.stdout)
-            .context("reading a private Security finding record returned invalid JSON")?;
+        let observed = self.private_record(
+            &path,
+            "reading a private Security finding record before its update",
+        )?;
         let current = storage.decode_state(&observed)?;
         let (description, untriaged) = match &current {
             RecordData::Advisory {

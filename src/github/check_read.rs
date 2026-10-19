@@ -2,18 +2,25 @@
 //! failures remain causal errors, never successful empty observations.
 
 use std::fmt;
+use std::process::ExitStatus;
 
 /// A non-success API response, retaining gh's original diagnostics. This
-/// carries evidence only: the reader owns whether and when to retry it.
+/// carries evidence only: the caller owns whether and when to retry it.
 #[derive(Debug)]
 pub(super) struct ReadFailure {
     pub command: String,
     pub stderr: String,
+    /// Private record diagnostics may contain evidence. Classify the raw
+    /// stderr, but expose only this status in errors and retry progress.
+    pub private_status: Option<ExitStatus>,
 }
 
 impl fmt::Display for ReadFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} failed: {}", self.command, self.stderr)
+        match self.private_status {
+            Some(status) => write!(f, "{} failed ({status})", self.command),
+            None => write!(f, "{} failed: {}", self.command, self.stderr),
+        }
     }
 }
 
@@ -27,10 +34,11 @@ pub(crate) fn is_transient(error: &anyhow::Error) -> bool {
         return false;
     };
     let stderr = failure.stderr.trim().to_ascii_lowercase();
-    // Primary GraphQL quota exhaustion needs reset-aware deferral (#739),
-    // rather than another request a second later, even if gh reports 429.
-    if stderr.contains("graphql")
-        && (stderr.contains("api rate limit") || stderr.contains("rate_limit_exceeded"))
+    // Quota exhaustion belongs to quota-aware deferral, not a short retry.
+    // gh can report GraphQL quota errors with or without an HTTP status.
+    if stderr.contains("api rate limit")
+        || stderr.contains("rate_limited")
+        || stderr.contains("rate_limit_exceeded")
     {
         return false;
     }
