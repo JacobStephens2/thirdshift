@@ -283,17 +283,18 @@ Give both reviewers the timing checklist below, pasted in full into their prompt
 {checklist}
 """
 
+# Plan replays check out pre-rename commits, whose glossary is still CONTEXT.md.
 PLAN = """This is a read-only check of a plan an Architecture review published, for an experiment. The repository is checked out at the commit the plan was made on. The plan, as published, is in `{ctx}/plan.md`.
 
 The Architecture review rated this plan Strong. A candidate is Strong only when all of these hold:
 - The friction is real and you can point to it in the code.
 - The deepening passes the deletion test.
-- Its whole design can be settled from the code, `GLOSSARY.md` and the ADRs. A candidate with a decision only a human can make is not Strong.
+- Its whole design can be settled from the code, `CONTEXT.md` and the ADRs. A candidate with a decision only a human can make is not Strong.
 - It contradicts no ADR, or the friction is real enough to warrant reopening that ADR.
 
 The `thirdshift-codebase-design` skill holds the design vocabulary, including the deletion test.
 
-Check the plan yourself: re-apply the four tests, reading the plan, `GLOSSARY.md` if there is one, the ADRs and the code. Check too that the plan's decisions hold up against the code: anything that would make the change fail or go wrong when it is built. Then decide whether the plan should be stopped before thirdshift marks it ready for the factory to build.
+Check the plan yourself: re-apply the four tests, reading the plan, `CONTEXT.md` if there is one, the ADRs and the code. Check too that the plan's decisions hold up against the code: anything that would make the change fail or go wrong when it is built. Then decide whether the plan should be stopped before thirdshift marks it ready for the factory to build.
 
 {rules}
 
