@@ -43,6 +43,30 @@ impl Fixture {
         );
     }
 
+    /// Script consecutive external failures followed by a successful response.
+    fn responses(&self, failures: &[&str], stdout: &str) {
+        let _ = fs::remove_file(self.path("calls"));
+        let mut script = format!(
+            "echo call >> '{calls}'\nattempt=$(wc -l < '{calls}')\ncase $attempt in\n",
+            calls = self.path("calls").display()
+        );
+        for (index, stderr) in failures.iter().enumerate() {
+            script.push_str(&format!(
+                "{}) cat >&2 <<'ERROR'\n{stderr}\nERROR\nexit 1 ;;\n",
+                index + 1
+            ));
+        }
+        script.push_str(&format!("esac\ncat <<'JSON'\n{stdout}\nJSON"));
+        self.script(&script);
+    }
+
+    fn calls(&self) -> usize {
+        fs::read_to_string(self.path("calls"))
+            .unwrap()
+            .lines()
+            .count()
+    }
+
     fn pid(&self) -> Option<libc::pid_t> {
         fs::read_to_string(self.path("pid"))
             .ok()?
@@ -70,6 +94,202 @@ impl Drop for Fixture {
 
 fn issue() -> IssueUrl {
     IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
+}
+
+#[test]
+fn a_transient_issue_read_recovers() {
+    with_recorded_signal(
+        "github::execution_tests::a_transient_issue_read_recovers",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(&format!(
+                r#"
+if test ! -f '{attempt}'; then
+  touch '{attempt}'
+  echo 'HTTP 504: Gateway Timeout (https://api.github.com/graphql)' >&2
+  exit 1
+fi
+printf '%s' '{{"title":"Recovered"}}'
+"#,
+                attempt = fixture.path("attempt").display()
+            ));
+            assert_eq!(GitHub::new().issue_title(&issue()).unwrap(), "Recovered");
+        },
+    );
+}
+
+#[test]
+fn transient_reads_exhaust_three_attempts_with_the_last_cause() {
+    with_recorded_signal(
+        "github::execution_tests::transient_reads_exhaust_three_attempts_with_the_last_cause",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.responses(
+                &["HTTP 504: first", "HTTP 504: second", "HTTP 504: last"],
+                r#"{"title":"Must not reach a fourth attempt"}"#,
+            );
+            let started = Instant::now();
+            let error = GitHub::new().issue_title(&issue()).unwrap_err();
+            assert_eq!(error.to_string(), "gh issue view failed: HTTP 504: last");
+            assert_eq!(fixture.calls(), 3);
+            assert!(started.elapsed() >= Duration::from_secs(3));
+            assert!(started.elapsed() < Duration::from_secs(15));
+        },
+    );
+}
+
+#[test]
+fn permanent_and_quota_errors_fail_on_the_first_read() {
+    with_recorded_signal(
+        "github::execution_tests::permanent_and_quota_errors_fail_on_the_first_read",
+        |_| {
+            let fixture = Fixture::new("");
+            for stderr in [
+                "HTTP 401: Bad credentials",
+                "HTTP 404: Not Found",
+                "HTTP 422: Validation failed: unexpected EOF",
+                "GraphQL: API rate limit already exceeded for user ID 123.",
+                "GraphQL: API rate limit exceeded (HTTP 429)",
+                "GraphQL: RATE_LIMIT_EXCEEDED (HTTP 429)",
+                "To get started with GitHub CLI, please run: gh auth login",
+                "unsupported response",
+            ] {
+                fixture.responses(&[stderr], r#"{"title":"Must not retry"}"#);
+                let error = GitHub::new().issue_title(&issue()).unwrap_err();
+                assert_eq!(error.to_string(), format!("gh issue view failed: {stderr}"));
+                assert_eq!(fixture.calls(), 1, "{stderr}");
+            }
+        },
+    );
+}
+
+#[test]
+fn issue_pr_and_label_lists_recover_from_transient_failures() {
+    with_recorded_signal(
+        "github::execution_tests::issue_pr_and_label_lists_recover_from_transient_failures",
+        |_| {
+            let fixture = Fixture::new("");
+            let github = GitHub::new();
+            fixture.responses(&["HTTP 429: secondary rate limit"], "[]");
+            assert!(
+                github
+                    .open_issues_labelled("acme/widgets", crate::labels::READY_FOR_AGENT)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(fixture.calls(), 2);
+
+            fixture.responses(&["read tcp: connection reset by peer"], "[]");
+            assert!(
+                github
+                    .pull_requests_with_head_prefix(&issue(), "issue-")
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(fixture.calls(), 2);
+
+            fixture.responses(&["EOF"], "[]");
+            github.ensure_labels("acme/widgets", &[]).unwrap();
+            assert_eq!(fixture.calls(), 2);
+
+            fixture.responses(
+                &["HTTP 503: unavailable", "HTTP 502: Bad Gateway"],
+                r#"{"body":"Recovered body"}"#,
+            );
+            assert_eq!(github.pr_body(&issue(), 12).unwrap(), "Recovered body");
+            assert_eq!(fixture.calls(), 3);
+        },
+    );
+}
+
+#[test]
+fn transient_mutation_failures_never_repeat_the_request() {
+    with_recorded_signal(
+        "github::execution_tests::transient_mutation_failures_never_repeat_the_request",
+        |_| {
+            let fixture = Fixture::new("");
+            let github = GitHub::new();
+            for mutation in [
+                "labels", "comment", "create", "body", "ready", "merge", "rerun",
+            ] {
+                fixture.responses(&["HTTP 504: response lost after mutation"], "{}");
+                let result = match mutation {
+                    "labels" => github.remove_label(&issue(), "in-progress"),
+                    "comment" => github.close_issue(&issue(), "Finished"),
+                    "create" => github
+                        .create_draft_pr(&issue(), "issue-7", "main", "Work", "Closes #7")
+                        .map(drop),
+                    "body" => github.set_pr_body(&issue(), 12, "Updated"),
+                    "ready" => github.mark_ready(&issue(), "12"),
+                    "merge" => github.merge(&issue(), 12, "abc"),
+                    "rerun" => github.rerun_failed_jobs(&issue(), 123),
+                    _ => unreachable!(),
+                };
+                assert!(
+                    result.unwrap_err().to_string().contains("HTTP 504"),
+                    "{mutation}"
+                );
+                assert_eq!(fixture.calls(), 1, "{mutation}");
+            }
+        },
+    );
+}
+
+#[test]
+fn interruption_cancels_the_read_retry_wait() {
+    with_recorded_signal(
+        "github::execution_tests::interruption_cancels_the_read_retry_wait",
+        |signal| {
+            let fixture = Fixture::new("");
+            fixture.responses(
+                &["HTTP 504: Gateway Timeout"],
+                r#"{"title":"Must not retry"}"#,
+            );
+            let calls = fixture.path("calls");
+            let sender = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !calls.exists() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+                signal_hook::low_level::raise(signal).unwrap();
+            });
+            let started = Instant::now();
+            let result = GitHub::new().issue_title(&issue());
+            sender.join().unwrap();
+            assert_eq!(result.unwrap_err().to_string(), "interrupted");
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert_eq!(fixture.calls(), 1);
+            assert!(interrupt::requested());
+        },
+    );
+}
+
+#[test]
+fn completion_read_recovery_preserves_recorded_interruption() {
+    with_recorded_signal(
+        "github::execution_tests::completion_read_recovery_preserves_recorded_interruption",
+        |signal| {
+            let fixture = Fixture::new("");
+            fixture.responses(
+                &["HTTP 504: Gateway Timeout"],
+                r#"{"title":"Recovered completion"}"#,
+            );
+            let github = GitHub::new();
+            signal_hook::low_level::raise(signal).unwrap();
+            assert_eq!(
+                github.completion().issue_title(&issue()).unwrap(),
+                "Recovered completion"
+            );
+            assert_eq!(fixture.calls(), 2);
+            assert!(interrupt::requested());
+            assert_eq!(
+                github.issue_title(&issue()).unwrap_err().to_string(),
+                "interrupted"
+            );
+            assert_eq!(fixture.calls(), 2);
+        },
+    );
 }
 
 #[test]
@@ -499,6 +719,10 @@ fn check_reads_classify_transport_and_api_failures_without_hiding_diagnostics() 
                 ("read tcp: connection reset by peer", true),
                 ("net/http: TLS handshake timeout", true),
                 ("gh: too many requests (HTTP 429)", true),
+                (
+                    "GraphQL: API rate limit already exceeded for user ID 123 (HTTP 429)",
+                    false,
+                ),
                 ("gh: Bad Gateway (HTTP 502)", true),
                 ("gh: service unavailable (HTTP 503)", true),
                 ("gh: Bad credentials (HTTP 401)", false),

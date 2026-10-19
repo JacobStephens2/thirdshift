@@ -1378,6 +1378,53 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
 }
 
 #[test]
+fn a_recovered_github_read_continues_the_pass_without_a_failure_notification() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = scenario();
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    fs::create_dir(scenario.path("bin/real")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("bin/real/gh")).unwrap();
+    fs::write(
+        scenario.path("bin/gh"),
+        r#"#!/bin/sh
+if [ "$1 $2" = 'issue list' ] && [ ! -f "$TMPDIR/read-failed" ]; then
+    touch "$TMPDIR/read-failed"
+    echo 'HTTP 504: Gateway Timeout (https://api.github.com/graphql)' >&2
+    exit 1
+fi
+exec "$(dirname "$0")/real/gh" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--plan-only", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+    assert!(result.stderr.contains("HTTP 504"), "{}", result.stderr);
+    assert!(result.stderr.contains("attempt 1/3"), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("retrying in 1s"),
+        "{}",
+        result.stderr
+    );
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: plan published"
+    );
+    assert!(text.starts_with("Result:       plan published\n"), "{text}");
+    assert!(!text.contains("review failed"), "{text}");
+}
+
+#[test]
 fn plan_only_sends_one_notification_naming_the_plan() {
     let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);

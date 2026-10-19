@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::process::{Command, Output};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -751,8 +752,8 @@ impl GitHub {
     fn gh_api_items(&self, path: &str, field: &str) -> Result<Vec<Value>> {
         let output = self.output(&["api", "--paginate", "--jq", &format!(".{field}[]"), path])?;
         if !output.status.success() {
-            bail!(check_read::ApiFailure {
-                path: path.to_string(),
+            bail!(check_read::ReadFailure {
+                command: format!("gh api {path}"),
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
             });
         }
@@ -762,19 +763,39 @@ impl GitHub {
             .with_context(|| format!("gh api {path} returned invalid JSON"))
     }
 
-    /// Run `gh <args>` and parse its stdout as JSON, failing with gh's stderr if
-    /// it exits non-zero.
+    /// Read-only JSON commands only. Retry transient failures at most twice,
+    /// separated by one then two seconds, preserving the last cause. Mutations
+    /// use `gh_stdout` or `output_with_input`, which never retry.
     fn gh_json(&self, args: &[&str]) -> Result<Value> {
         let command = format!("gh {}", args[..2].join(" "));
-        let output = self.output(args)?;
-        if !output.status.success() {
-            bail!(
-                "{command} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+        for attempt in 1..=3 {
+            let result = (|| {
+                let output = self.output(args)?;
+                if !output.status.success() {
+                    bail!(check_read::ReadFailure {
+                        command: command.clone(),
+                        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                    });
+                }
+                serde_json::from_slice(&output.stdout)
+                    .with_context(|| format!("{command} returned invalid JSON"))
+            })();
+            match result {
+                Err(error) if attempt < 3 && check_read::is_transient(&error) => {
+                    let delay = Duration::from_secs(attempt);
+                    crate::progress::step(format!(
+                        "{command} failed (attempt {attempt}/3): {error:#}; retrying in {}s",
+                        delay.as_secs()
+                    ));
+                    match self.interruption {
+                        Interruption::Ordinary => crate::poll::sleep(delay)?,
+                        Interruption::Completion => std::thread::sleep(delay),
+                    }
+                }
+                result => return result,
+            }
         }
-        serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("{command} returned invalid JSON"))
+        unreachable!("the third attempt returns success or the last failure")
     }
     fn output(&self, args: &[&str]) -> Result<Output> {
         self.output_with_input(args, None)
