@@ -20,7 +20,7 @@
 # Before it pushes anything, it refuses a release that can't be cut: a version
 # that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
 # tag that already exists locally or on origin, or a latest CI run on main that
-# didn't succeed.
+# didn't succeed. If that CI run is still running, it waits for it first.
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
@@ -52,7 +52,7 @@ shopt -s inherit_errexit
 summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
 summary_manifest=$(dirname "$summary_prompt")/../Cargo.toml
 
-# Seconds between reads of the PR's workflow runs and the release workflow run.
+# Seconds between reads of main's CI, the PR's runs and the release run.
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
@@ -313,9 +313,9 @@ refuse() {
 # check_can_release <version> <tag> <base>
 # Refuses unless <version> is plain X.Y.Z and higher than the version in the
 # manifest at <base>, main's tip, no <tag> exists on origin or locally, and
-# the latest CI run on main is on <base> and succeeded.
+# the latest CI run on main is on <base> and succeeded, waiting if unfinished.
 check_can_release() {
-	local current short=${3:0:7} latest sha status conclusion
+	local current short=${3:0:7} latest sha status conclusion waiting=
 	if ! is_plain_version "$1"; then
 		refuse "it is not a plain X.Y.Z version, such as 0.4.0"
 	fi
@@ -333,14 +333,23 @@ check_can_release() {
 		refuse "$2 already exists locally"
 	fi
 
-	latest=$(gh run list --branch main --workflow ci.yml --event push --limit 1 \
-		--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
-	read -r sha status conclusion <<<"$latest"
-	if [ "$sha" != "$3" ]; then
-		refuse "CI has not run on main at $short yet"
-	elif [ "$status" != completed ]; then
-		refuse "CI on main at $short is $status, not finished"
-	elif [ "$conclusion" != success ]; then
+	while :; do
+		latest=$(gh run list --branch main --workflow ci.yml --event push --limit 1 \
+			--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
+		read -r sha status conclusion <<<"$latest"
+		if [ "$sha" != "$3" ]; then
+			refuse "CI has not run on main at $short yet"
+		fi
+		if [ "$status" = completed ]; then
+			break
+		fi
+		if [ -z "$waiting" ]; then
+			progress "waiting for CI on main at $short"
+			waiting=1
+		fi
+		sleep "$poll_seconds"
+	done
+	if [ "$conclusion" != success ]; then
 		refuse "CI on main at $short ended in $conclusion"
 	fi
 }

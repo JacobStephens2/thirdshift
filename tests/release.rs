@@ -1733,11 +1733,62 @@ fn a_red_ci_run_on_main_is_refused() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn an_unfinished_ci_run_on_main_is_refused() {
+fn an_unfinished_ci_run_on_main_is_watched_before_releasing() {
     let release = Release::new();
-    release.main_ci("in_progress", "");
+    release.gh(&[
+        "fake",
+        "run",
+        &json!({
+            "branch": "main",
+            "workflow": "ci.yml",
+            "event": "push",
+            "headSha": release.origin(&["rev-parse", "main"]),
+            "status": "completed",
+            "conclusion": "success",
+            "pending_polls": 2,
+        })
+        .to_string(),
+    ]);
+    release.ci_reports(GREEN);
 
-    assert_refused(&release, "0.2.0", &["CI on main", "in_progress"]);
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let waiting = err.find("waiting for CI on main at").expect(&err);
+    let bumping = err.find("bumping the version").expect(&err);
+    assert!(waiting < bumping, "{err}");
+    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.origin(&["rev-parse", "main"]))
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_ci_run_on_main_that_fails_after_waiting_is_refused() {
+    let release = Release::new();
+    release.main_ci("completed", "failure");
+    let state = release.gh_state();
+    let run = state["runs"].as_array().unwrap().last().unwrap();
+    release.gh(&[
+        "fake",
+        "run",
+        &json!({"databaseId": run["databaseId"], "pending_polls": 2}).to_string(),
+    ]);
+
+    assert_refused_by(
+        &release,
+        "CI failed after waiting",
+        &["ended in failure"],
+        || {
+            let output = release.run_script("0.2.0");
+            let err = stderr(&output);
+            assert!(err.contains("waiting for CI on main at"), "{err}");
+            output
+        },
+    );
 }
 
 #[test]
