@@ -235,6 +235,26 @@ impl Worktree {
             .ordinary(&self.launch, |operation| operation.head())
     }
 
+    /// Whether a merged PR includes all local work. Observe the acquired
+    /// checkout under the synchronization lock, without staging or committing.
+    pub fn fully_landed_at(&self, head: &str) -> Result<bool> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let entries = operation.run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
+            Ok(!index_hides_tracked_work(&entries)
+                && operation.head()? == head
+                && operation
+                    .run(&[
+                        "-c",
+                        "core.fsmonitor=false",
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=all",
+                        "--ignore-submodules=none",
+                    ])?
+                    .is_empty())
+        })
+    }
+
     /// Whether the committed tree at the Issue branch's head equals `commit`'s.
     /// Comparison errors are propagated, never treated as identical trees.
     pub fn same_tree_as(&self, commit: &str) -> Result<bool> {
@@ -349,6 +369,16 @@ impl Worktree {
             Ok(!operation.merged(&origin.commit)?)
         })
     }
+}
+
+/// Lowercase tags mark assume-unchanged entries; S marks skip-worktree.
+/// Neither permits a clean status to establish absence of tracked work.
+fn index_hides_tracked_work(entries: &str) -> bool {
+    entries.split('\0').any(|file| {
+        file.as_bytes()
+            .first()
+            .is_some_and(|flag| flag.is_ascii_lowercase() || *flag == b'S')
+    })
 }
 
 /// The local Issue branch head sampled for acquisition or advisory preflight.
