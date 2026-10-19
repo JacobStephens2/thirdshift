@@ -27,15 +27,8 @@ impl fmt::Display for UntrustedIssue {
 impl GitHub {
     /// Check the issue author and the most recent ready-for-agent label actor.
     pub fn issue_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
-        let json = self.gh_json(&[
-            "api",
-            &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
-        ])?;
-        let association = json["author_association"]
-            .as_str()
-            .context("gh api output has no author_association")?;
-        if !matches!(association, "OWNER" | "MEMBER" | "COLLABORATOR") {
-            return Ok(Some(UntrustedIssue::Author));
+        if let Some(check) = self.author_trust(issue)? {
+            return Ok(Some(check));
         }
         // A Claim removes the label, but its historical event still matters.
         // Read every page: a later reapplication supersedes an earlier one.
@@ -61,6 +54,22 @@ impl GitHub {
         };
         if !self.trusted_actor(issue, actor)? {
             return Ok(Some(UntrustedIssue::ReadyLabel));
+        }
+        Ok(None)
+    }
+
+    /// Check only the issue author. A Ticket needs no label of its own: its
+    /// Spec's ready-for-agent labelling already passed the full check.
+    pub fn author_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
+        let json = self.gh_json(&[
+            "api",
+            &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
+        ])?;
+        let association = json["author_association"]
+            .as_str()
+            .context("gh api output has no author_association")?;
+        if !matches!(association, "OWNER" | "MEMBER" | "COLLABORATOR") {
+            return Ok(Some(UntrustedIssue::Author));
         }
         Ok(None)
     }

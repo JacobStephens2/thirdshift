@@ -410,23 +410,27 @@ fn a_spec_stops_before_starting_a_ticket_written_by_an_untrusted_account() {
 }
 
 #[test]
-fn a_spec_stops_before_starting_a_ticket_labelled_by_an_untrusted_account() {
-    let scenario = linear_spec();
-    let mut state = scenario.gh_state();
-    state["trust_events"] = serde_json::json!({"21": [
-        {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
-    ]});
-    scenario.write_gh_state(&state);
+fn a_ticket_needs_only_a_trusted_author_not_a_ready_label_of_its_own() {
+    for events in [
+        serde_json::json!([]),
+        serde_json::json!([
+            {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
+        ]),
+    ] {
+        let scenario = linear_spec();
+        let mut state = scenario.gh_state();
+        state["trust_events"] = serde_json::json!({"21": events, "22": events});
+        scenario.write_gh_state(&state);
 
-    let result = scenario.run(&[&spec_url(&scenario)]);
+        let result = scenario.run(&["no-email", &spec_url(&scenario)]);
 
-    assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert_contains(
-        &result.stderr,
-        "Ticket #21: most recent ready-for-agent label actor is not a Trusted account",
-    );
-    assert!(scenario.claude_calls().is_empty());
-    assert!(scenario.origin_log("issue-21").is_none());
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert!(
+            !result.stderr.contains("Trusted account"),
+            "{}",
+            result.stderr
+        );
+    }
 }
 
 #[test]

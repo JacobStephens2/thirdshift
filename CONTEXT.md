@@ -113,7 +113,7 @@ An open issue a **Pickup run** may take: labelled `ready-for-agent`, written by 
 _Avoid_: queued issue, backlog item
 
 **Trusted account**:
-The repository's owner, a member of the organization that owns it, or a collaborator on it: an issue author's `authorAssociation` of `OWNER`, `MEMBER` or `COLLABORATOR`, or equivalent repository membership for an actor with no association field. The rule is fixed, with no **User config** setting.
+The repository's owner, a member of the organization that owns it, or a collaborator on it: an issue author's `authorAssociation` of `OWNER`, `MEMBER` or `COLLABORATOR`, or equivalent repository membership for an actor with no association field. The rule is fixed, with no **User config** setting. A **Spec run** stops before starting the Run of a **Ticket** whose author is not a Trusted account. A Ticket needs no `ready-for-agent` labelling of its own: the labelling that counts is its Spec's, checked when a **Pickup run** takes the Spec.
 
 **Architecture review**:
 The agent session that opens an **Architect run**: it scans the **Base branch** for deepening opportunities, skips any already covered by an open issue, and publishes the top recommendation as the **Architect plan**, but only when that recommendation is Strong. Otherwise it files the top recommendation as an **Architect idea** for the **Day shift**, or names the open issue that already covers it, and nothing is implemented. It changes nothing in the repository.
