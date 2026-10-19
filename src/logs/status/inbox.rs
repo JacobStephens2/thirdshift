@@ -1,11 +1,12 @@
 //! Owned Inbox presentation for the Console, from the same observations as status.
 use anyhow::Result;
 use chrono::{DateTime, Local};
+use std::path::Path;
 
 use super::{age, stage_text, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
-use crate::logs::reading::{Command, Entry, Group, Snapshot};
+use crate::logs::reading::{Command, Entry, Group, Health, Snapshot};
 
 pub(crate) struct Inbox {
     pub sections: Vec<Section>,
@@ -22,6 +23,11 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    pub id: String,
+    pub started_ms: i64,
+    pub live: bool,
+    pub logging: bool,
+    pub log_growth: String,
     pub subject: String,
     pub title: String,
     pub state: String,
@@ -48,11 +54,19 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .filter(|item| item.group == group)
                 .map(|item| {
                     let mut row = match item.command {
-                        Entry::Record(command) => row(command, now),
+                        Entry::Record(command) => row(command, now, None),
                         Entry::History(command) => {
                             let (subject, title) =
                                 subject(&command.repository, &command.kind, command.issue.as_ref());
                             Row {
+                                id: identity(&format!(
+                                    "history:{}:{}:{}",
+                                    command.repository, command.kind, command.started_at
+                                )),
+                                started_ms: timestamp(&command.started_at),
+                                live: false,
+                                logging: false,
+                                log_growth: String::new(),
                                 subject,
                                 title,
                                 state: command.state.into(),
@@ -139,10 +153,21 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
-fn row(command: &Command, now: DateTime<Local>) -> Row {
+fn row(command: &Command, now: DateTime<Local>, outer_log: Option<&Path>) -> Row {
     let facts = &command.record;
+    let log = outer_log.unwrap_or(&command.command_log);
+    let live = command.state == "live";
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
     Row {
+        id: identity(&command.record_path.to_string_lossy()),
+        started_ms: timestamp(&facts.started_at),
+        live,
+        logging: live && !matches!(command.health, Some(Health::Silent { .. })),
+        log_growth: format!(
+            "{}:{}",
+            log_length(Some(log)),
+            log_length(facts.session_log.as_deref())
+        ),
         subject,
         title,
         state: command.state.into(),
@@ -166,9 +191,29 @@ fn row(command: &Command, now: DateTime<Local>) -> Row {
             .dispatched
             .iter()
             .chain(&command.children)
-            .map(|child| row(child, now))
+            .map(|child| row(child, now, Some(log)))
             .collect(),
     }
+}
+
+fn log_length(path: Option<&Path>) -> u64 {
+    path.and_then(|path| std::fs::metadata(path).ok())
+        .map_or(0, |file| file.len())
+}
+
+fn timestamp(value: &str) -> i64 {
+    DateTime::parse_from_rfc3339(value).map_or(0, |time| time.timestamp_millis())
+}
+
+fn identity(value: &str) -> String {
+    // Encode the exact storage identity: issue numbers and timestamps alone
+    // can collide, and DOM IDs cannot contain whitespace.
+    let encoded: String = value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("command-{encoded}")
 }
 
 fn elapsed(time: &str, now: DateTime<Local>) -> String {

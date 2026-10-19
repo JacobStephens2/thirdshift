@@ -1,4 +1,6 @@
 //! The Console's public seam: the binary, fixture records and HTTP.
+mod support;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -14,6 +16,21 @@ struct Console {
     address: String,
     lines: Receiver<String>,
     reader: Option<JoinHandle<()>>,
+}
+
+struct HeldFixture {
+    run: Option<support::HeldRun>,
+    release: std::path::PathBuf,
+}
+
+impl Drop for HeldFixture {
+    fn drop(&mut self) {
+        // Release and reap the fixture even when a regression assertion fails.
+        let _ = fs::write(&self.release, "");
+        if let Some(run) = self.run.take() {
+            run.finish();
+        }
+    }
 }
 
 impl Console {
@@ -102,6 +119,119 @@ fn write_record(home: &Path, number: u64, record: &Value) {
         serde_json::to_vec(record).unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn command_changes_push_events_over_http() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let response = console.get("/events");
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    assert_eq!(response.headers()["x-accel-buffering"], "no");
+    let mut stream = BufReader::new(response);
+    fn changed(stream: &mut impl BufRead) {
+        let mut event = String::new();
+        loop {
+            let mut line = String::new();
+            assert!(stream.read_line(&mut line).unwrap() > 0, "stream ended");
+            if line.trim().is_empty() && event.contains("event: commands") {
+                assert!(event.contains("data: changed"), "{event}");
+                return;
+            }
+            if line.trim().is_empty() {
+                event.clear();
+            } else {
+                event.push_str(&line);
+            }
+        }
+    }
+    changed(&mut stream); // Reconnects always catch up, even if an event was missed.
+    let mut fixture = record(home.path(), 81, None, 0);
+    changed(&mut stream);
+    assert!(console.get("/").text().unwrap().contains("acme/widgets#81"));
+    fixture["stages"][0]["name"] = json!("CI watch");
+    write_record(home.path(), 81, &fixture);
+    changed(&mut stream);
+    assert!(
+        console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains("died at CI watch")
+    );
+    fixture["outcome"] = json!("merged");
+    fixture["ended_at"] = json!(chrono::Local::now().to_rfc3339());
+    write_record(home.path(), 81, &fixture);
+    changed(&mut stream);
+    assert!(console.get("/").text().unwrap().contains(">merged</p>"));
+}
+
+#[test]
+fn heartbeat_observes_log_lengths_and_is_flat_for_silent_runs() {
+    let scenario = support::Scenario::new();
+    scenario.user_config_is("[console]\nport = 0\n");
+    scenario.agent_does(&format!(
+        "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\nexit 1\n",
+        scenario.path("started").display(),
+        scenario.path("release").display()
+    ));
+    let _held = HeldFixture {
+        run: Some(scenario.run_until(&[&scenario.issue_url(7)], &[], "started")),
+        release: scenario.path("release"),
+    };
+    let dir = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+    let path = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".command.json"))
+        .unwrap();
+    let mut fixture: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let session = std::path::PathBuf::from(fixture["session_log"].as_str().unwrap());
+    let log = path.with_file_name(
+        path.file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .replace(".command.json", ".log"),
+    );
+    let began = (chrono::Local::now() - chrono::Duration::minutes(20)).to_rfc3339();
+    fixture["stages"] = json!([{"name": "implement", "began_at": began, "session_log": session}]);
+    fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+    fs::write(&log, "a").unwrap();
+    fs::write(&session, "ab").unwrap();
+    let console = Console::start(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        &scenario.path("home"),
+    );
+    let html = console.get("/").text().unwrap();
+    assert!(html.contains("data-log-growth=\"1:2\""), "{html}");
+    assert!(html.contains("data-logging=\"true\""));
+    fs::write(&session, "abcde").unwrap();
+    assert!(
+        console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains("data-log-growth=\"1:5\"")
+    );
+    for file in [&log, &session] {
+        fs::File::options()
+            .write(true)
+            .open(file)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::SystemTime::now() - Duration::from_secs(20 * 60)),
+            )
+            .unwrap();
+    }
+    let html = console.get("/").text().unwrap();
+    assert!(html.contains("data-state=\"Silent\""));
+    assert!(html.contains("data-logging=\"false\""));
+    assert!(html.contains("data-log-growth=\"1:5\""));
+    drop(console);
 }
 
 #[test]
@@ -291,6 +421,7 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     assert!(copied.success());
     let console = Console::start(&binary, home.path());
     assert_eq!(console.get("/").status(), 200);
+    let _open_stream = console.get("/events");
     let replacement = home.path().join("replacement");
     fs::write(&replacement, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/reexec-args\"\nprintf 'replacement executed\\n'\n").unwrap();
     fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).unwrap();

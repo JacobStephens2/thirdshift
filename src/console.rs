@@ -1,4 +1,5 @@
 //! The machine's Console. Async execution is confined to this module.
+mod live;
 mod restart;
 
 use std::io::Write;
@@ -23,12 +24,26 @@ static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/console/assets");
 struct PageRoute {
     path: &'static str,
     cli: &'static str,
+    view: View,
 }
 
-const PAGES: &[PageRoute] = &[PageRoute {
-    path: "/",
-    cli: "thirdshift status",
-}];
+enum View {
+    Inbox,
+    Changes,
+}
+
+const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/",
+        cli: "thirdshift status",
+        view: View::Inbox,
+    },
+    PageRoute {
+        path: "/events",
+        cli: "thirdshift status",
+        view: View::Changes,
+    },
+];
 
 pub fn serve(no_sign_in: bool) -> Result<()> {
     ensure!(
@@ -47,8 +62,15 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
         let watched = executable.clone();
-        axum::serve(listener, router())
-            .with_graceful_shutdown(async move { watched.replaced().await })
+        let (changes, observer) = live::observe(render_inbox("thirdshift status").await?);
+        axum::serve(listener, router(changes))
+            .with_graceful_shutdown(async move {
+                watched.replaced().await;
+                // Dropping the sole sender closes every SSE response before
+                // graceful shutdown waits for the connections to finish.
+                observer.abort();
+                let _ = observer.await;
+            })
             .await
             .context("Console server failed")?;
         Ok::<_, anyhow::Error>(())
@@ -58,14 +80,20 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
     executable.exec()
 }
 
-fn router() -> Router {
+fn router(changes: tokio::sync::watch::Receiver<u64>) -> Router {
     let mut router = Router::new();
     for page in PAGES {
         let cli = page.cli;
-        router = router.route(page.path, get(move || inbox(cli)));
+        router = router.route(
+            page.path,
+            match page.view {
+                View::Inbox => get(move || inbox(cli)),
+                View::Changes => get(live::events),
+            },
+        );
     }
     router = router.route("/assets/{*path}", get(asset));
-    router
+    router.with_state(changes)
 }
 
 #[derive(Template)]
@@ -79,6 +107,17 @@ struct InboxPage {
 }
 
 impl InboxPage {
+    fn needs_you(&self) -> usize {
+        self.inbox.sections[0].rows.len()
+    }
+
+    fn urgent(&self) -> bool {
+        self.inbox.sections[0]
+            .rows
+            .iter()
+            .any(|row| row.state != "Slow")
+    }
+
     fn row<'a>(&self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate { row }
     }
@@ -97,26 +136,33 @@ impl RowTemplate<'_> {
 }
 
 async fn inbox(cli: &'static str) -> Response {
-    // The shared observations and templates stay blocking, off the async executor.
-    match tokio::task::spawn_blocking(move || -> Result<String> {
-        let config = UserConfig::load()?;
-        Ok(InboxPage {
-            hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-            consoles: config.console.other_consoles.clone(),
-            theme: config.console.theme.clone(), cli,
-            inbox: status::inbox(&config)?,
-        }.render()?)
-    }).await {
-        Ok(Ok(html)) => (
+    match render_inbox(cli).await {
+        Ok(html) => (
             [(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
              (header::CACHE_CONTROL, "no-store"),
              (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], Html(html)
         ).into_response(),
-        error => {
-            eprintln!("thirdshift Console: can't read Inbox: {error:?}");
+        Err(error) => {
+            eprintln!("thirdshift Console: can't read Inbox: {error:#}");
             (StatusCode::INTERNAL_SERVER_ERROR, "Can't read the Inbox; check the Console's stderr.").into_response()
         }
     }
+}
+
+async fn render_inbox(cli: &'static str) -> Result<String> {
+    // The shared observations and templates stay blocking, off the async executor.
+    tokio::task::spawn_blocking(move || -> Result<String> {
+        let config = UserConfig::load()?;
+        Ok(InboxPage {
+            hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
+            consoles: config.console.other_consoles.clone(),
+            theme: config.console.theme.clone(),
+            cli,
+            inbox: status::inbox(&config)?,
+        }
+        .render()?)
+    })
+    .await?
 }
 
 async fn asset(Path(path): Path<String>) -> Response {
@@ -129,6 +175,7 @@ async fn asset(Path(path): Path<String>) -> Response {
     {
         Some("css") => "text/css; charset=utf-8",
         Some("js") => "text/javascript; charset=utf-8",
+        Some("svg") => "image/svg+xml",
         Some("woff2") => "font/woff2",
         _ => "text/plain; charset=utf-8",
     };
@@ -150,6 +197,11 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
     use tower_layer::Layer;
+
+    fn router() -> Router {
+        let (_, changes) = tokio::sync::watch::channel(0);
+        super::router(changes)
+    }
 
     // Router::route_layer walks every registered method service, including
     // routes added directly instead of through PAGES. Nothing is dispatched.
@@ -203,14 +255,12 @@ mod tests {
 
     #[test]
     fn every_console_route_has_a_cli_equivalent() {
-        assert_cli_parity(super::router());
+        assert_cli_parity(router());
     }
 
     #[test]
     #[should_panic(expected = "registered routes must all have a CLI pair")]
     fn parity_rejects_a_route_registered_without_a_cli_pair() {
-        assert_cli_parity(
-            super::router().route("/unpaired", get(|| async { "page with no CLI pair" })),
-        );
+        assert_cli_parity(router().route("/unpaired", get(|| async { "page with no CLI pair" })));
     }
 }
