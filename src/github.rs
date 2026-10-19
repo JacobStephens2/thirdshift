@@ -367,6 +367,7 @@ impl GitHub {
         };
         let mut shaped = Vec::new();
         let mut history = ClaimHistory::NeverClaimed;
+        let mut claim_generation = 0;
         for event in &label_events {
             let applied = match event["__typename"].as_str() {
                 Some("LabeledEvent") => true,
@@ -374,6 +375,9 @@ impl GitHub {
                 other => bail!("gh api graphql output has an unknown label event {other:?}"),
             };
             let name = event["label"]["name"].as_str();
+            if applied && name.is_some_and(|name| crate::claim::IN_PROGRESS.is_named(name)) {
+                claim_generation += 1;
+            }
             history = history.after(name, applied, label);
             if applied && name.is_some_and(|name| label.is_named(name)) {
                 shaped.push(Shaped {
@@ -399,6 +403,8 @@ impl GitHub {
             open_blockers,
             last_shaped: shaped.into_iter().max_by_key(|shaped| shaped.at),
             handed_back: matches!(history, ClaimHistory::HandedBack),
+            claim_generation,
+            claimed: matches!(history, ClaimHistory::Claimed),
         })
     }
 
@@ -936,6 +942,12 @@ pub struct Candidate {
     /// Complete label history records the last Claim ending, followed by a
     /// ready-label application, with neither withdrawn or superseded.
     pub handed_back: bool,
+    /// Number of Claim applications in complete timeline order. Detects a
+    /// Claim made since selection, even if it ended in the same second.
+    pub claim_generation: usize,
+    /// A Claim is active at the history sample, even if a prior issue listing
+    /// still showed only `ready-for-agent`.
+    pub claimed: bool,
 }
 
 impl Candidate {

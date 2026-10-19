@@ -701,10 +701,11 @@ mod in_memory {
 
         fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
             self.calls.push(Call::ReadySearch);
-            Ok(self
-                .ready
-                .clone()
-                .map(|(listed, is_spec)| ReadyIssue { listed, is_spec }))
+            Ok(self.ready.clone().map(|(listed, is_spec)| ReadyIssue {
+                listed,
+                is_spec,
+                claim_generation: 0,
+            }))
         }
 
         fn step(&mut self, line: String) {

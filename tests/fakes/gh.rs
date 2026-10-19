@@ -748,6 +748,47 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
     if !state.at("issues").has(n) {
         die("gh: Not Found (HTTP 404)", 1);
     }
+    // Model the real Claim and Ready transitions consumed by Pickup, including
+    // consecutive applications/removals within the same second. Other label
+    // histories are supplied explicitly by fixtures that need them.
+    let before = issue_labels(state, n).to_vec();
+    let contains = |labels: &[Json], name: &Json| {
+        labels
+            .iter()
+            .any(|label| label.str().eq_ignore_ascii_case(name.str()))
+    };
+    let at = string(now());
+    let events = before
+        .iter()
+        .filter(|label| !contains(&labels, label))
+        .map(|label| ("unlabeled", label))
+        .chain(
+            labels
+                .iter()
+                .filter(|label| !contains(&before, label))
+                .map(|label| ("labeled", label)),
+        )
+        .filter(|(_, label)| {
+            matches!(
+                label.str().to_ascii_lowercase().as_str(),
+                "in-progress" | "ready-for-agent"
+            )
+        })
+        .map(|(event, label)| {
+            object([
+                ("event", string(event)),
+                ("label", label.clone()),
+                ("at", at.clone()),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if !events.is_empty() {
+        state
+            .entry("timeline", object([]))
+            .entry(n, Array(Vec::new()))
+            .items_mut()
+            .extend(events);
+    }
     state.entry("labels", object([])).set(n, Array(labels));
     save(state);
 }

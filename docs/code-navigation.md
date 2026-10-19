@@ -5,7 +5,7 @@ Start with the issue's terms in `CONTEXT.md`, then use this index to find their 
 | Issue term | Owning implementation / search symbol | Supporting tests |
 | --- | --- | --- |
 | Claim | `src/claim.rs` — `Claim`, `make`, `end` | Inline tests; `tests/pickup_run.rs` |
-| Ready issue, Claim limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`; `src/pickup.rs` — `gates`, `sweep` | Inline tests; `tests/pickup_run.rs` |
+| Ready issue, Claim limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`, `refresh`; `src/pickup.rs` — `gates`, `sweep`; `src/pickup/reservation.rs` — cross-machine Pickup reservation | Inline tests; `tests/pickup_run.rs` |
 | Run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
 | Worktree | `src/worktree.rs` and `src/worktree/` | `src/worktree/acquisition_tests.rs`, `src/worktree/cleanup_tests.rs` |
 | Spec run, Spec branch, Spec PR | `src/spec_run.rs` | `tests/spec_run.rs` |
