@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How thirdshift works · thirdshift</title>
+<meta name="description" content="An engineer's guide from GitHub issue to reviewed pull request: worktrees, agent sessions, Delivery, Repairs, Spec runs and scheduled work.">
+<link rel="canonical" href="https://thirdshift.app/how-it-works/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="thirdshift">
+<meta property="og:url" content="https://thirdshift.app/how-it-works/">
+<meta property="og:title" content="How thirdshift works · thirdshift">
+<meta property="og:description" content="An engineer's guide from GitHub issue to reviewed pull request: worktrees, agent sessions, Delivery, Repairs, Spec runs and scheduled work.">
+<meta property="og:image" content="https://thirdshift.app/share-card.png">
+<meta property="og:image:alt" content="thirdshift: your issues go to press overnight.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How thirdshift works · thirdshift">
+<meta name="twitter:description" content="An engineer's guide from GitHub issue to reviewed pull request: worktrees, agent sessions, Delivery, Repairs, Spec runs and scheduled work.">
+<meta name="twitter:image" content="https://thirdshift.app/share-card.png">
+<meta name="twitter:image:alt" content="thirdshift: your issues go to press overnight.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/how-it-works/guide.css">
+<script src="/main.js" defer></script>
+</head>
+<body class="guide">
+<a class="skip-guide" href="#handoff">Skip to the process</a>
+<header class="hero page-head">
+  <div class="wrap">
+    <div class="paper-sheet">
+      <nav class="guide-nav" aria-label="Site"><a href="/">thirdshift / home</a><a href="/prompts/">Prompts and skills</a><a href="https://github.com/JacobStephens2/thirdshift">GitHub</a></nav>
+      <p class="eyebrow">An engineer's guide · from issue to pull request</p>
+      <h1>How thirdshift works</h1>
+      <p class="framing">You describe the work. thirdshift runs an unattended coding agent in its own Git checkout, asks it to implement and review the change, then checks the pull request against the repository's latest state. By default, you review before merging. A Merge run merges it when asked.</p>
+      <p class="as-of">Start with one issue below, then follow the same process into larger Specs and scheduled work. This guide describes <a href="https://github.com/JacobStephens2/thirdshift">the source on <code>main</code></a>; an installed release may differ.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <nav class="wrap guide-map" aria-label="Guide sections">
+    <p class="eyebrow">Follow one issue through the factory</p>
+    <ol class="guide-flow">
+      <li><a href="#handoff"><span>01 / Day shift</span>Shape an issue</a></li>
+      <li><a href="#checkout"><span>02 / Prepare</span>Create a worktree</a></li>
+      <li><a href="#session"><span>03 / Agent session</span>Implement + review</a></li>
+      <li><a href="#delivery"><span>04 / Delivery</span>Reconcile + check CI</a></li>
+      <li><a href="#outcomes"><span>05 / Handoff</span>Review or merge</a></li>
+    </ol>
+    <p class="guide-next">Then scale up: <a href="#specs">06 / Specs and Tickets</a> · <a href="#scheduled">07 / Scheduled work</a></p>
+  </nav>
+
+  <section class="sec" aria-labelledby="handoff-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">01 / The human handoff</p><h2 id="handoff-title">Start with work you can describe</h2></summary>
+      <div class="guide-content" id="handoff">
+      <p>The <strong>Day shift</strong> is you: settle what should change, what success looks like, and what is out of scope. Put that in a GitHub issue. One session's worth of work can stand alone; a larger <strong>Spec</strong> is an issue with <strong>Tickets</strong> as GitHub sub-issues. We'll follow a standalone issue first.</p>
+      <figure class="guide-diagram grid-bg">
+        <figcaption>Human intent becomes the agent's brief</figcaption>
+        <ol class="guide-flow">
+          <li><strong>Day shift</strong><span>Clarify the behavior and acceptance criteria</span></li>
+          <li><strong>GitHub issue</strong><span>Record the agreed work</span></li>
+          <li><strong>Run</strong><span>Give thirdshift the Issue URL</span></li>
+        </ol>
+      </figure>
+      <p>From a clone of the issue's repository, normally checked out on your intended <strong>Base branch</strong>, start a Run. In this example, <code>main</code> is the Base branch and the pull request will target it:</p>
+      <pre class="guide-command"><code>cd ~/repos/widgets
+thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
+      <p><code>--no-merge</code> explicitly leaves the pull request for review, even if your User config normally requests merging. Before starting, install and authenticate GitHub CLI (<code>gh</code>) and your chosen <strong>Harness</strong> (the agent CLI, such as Claude Code or Codex), configure Git's commit identity and push access, and install the repository's test toolchain. <code>thirdshift setup</code> chooses machine defaults.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="sec" aria-labelledby="checkout-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">02 / Where the work happens</p><h2 id="checkout-title">Give the Run its own checkout</h2></summary>
+      <div class="guide-content" id="checkout">
+      <p>thirdshift checks that the Issue URL matches the clone's <code>origin</code>, that the issue is open, and that the Base branch, Harness and Git identity are usable. It selects an <strong>Issue branch</strong>, marks the issue <code>in-progress</code> (its <strong>Claim</strong>), then acquires a sibling Git <strong>Worktree</strong>. A fresh Issue branch starts from the fetched Base branch on <code>origin</code>.</p>
+      <figure class="guide-diagram grid-bg">
+        <figcaption>Example: two checkouts, one Git repository</figcaption>
+        <div class="guide-pair">
+          <div class="guide-node"><strong>Launch directory</strong><code>~/repos/widgets/</code><span>Checked out on main</span><span>You start thirdshift here</span></div>
+          <div class="guide-node"><strong>Run's Worktree</strong><code>~/repos/widgets-issue-7/</code><span>Checked out on issue-7</span><span>The agent edits and tests here</span></div>
+        </div>
+        <p class="guide-connector">Shared Git history and remotes · separate checked-out files</p>
+      </figure>
+      <p>The work happens in the Worktree rather than switching your Launch directory to the Issue branch. If an existing Issue branch has no pull request or an open one, thirdshift continues it instead of starting over. An open pull request supplies its Base branch. Once a branch's pull request is closed or merged, later work uses a new numbered Issue branch.</p>
+      <aside class="guide-callout"><strong>A checkout is not a sandbox.</strong> Sessions run unattended as your user. The Harness has access to that account's files, credentials and tools; the separate Worktree keeps edits apart, but does not confine the process. <a href="/docs/#unattended-sessions">Read the permissions and cleanup details</a>.</aside>
+      </div>
+    </details>
+  </section>
+
+  <section class="sec" aria-labelledby="session-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">03 / What the agent does</p><h2 id="session-title">Let the agent implement and review</h2></summary>
+      <div class="guide-content" id="session">
+      <p>thirdshift starts a headless session in the selected Harness, in the Worktree. The <strong>Session prompt</strong> supplies the issue, Base branch, Issue branch and review instructions. <strong>Factory skills</strong> are linked where that Harness discovers them. The opening session carries the change from implementation through review to a committed branch and pull request.</p>
+      <figure class="guide-diagram grid-bg">
+        <figcaption>Inside the opening agent session</figcaption>
+        <ol class="guide-flow">
+          <li><strong>Implement</strong><span>Read the issue and repo instructions; test first where possible</span></li>
+          <li><strong>Review</strong><span>Independent Standards and Spec reviewers inspect the change</span></li>
+          <li><strong>Publish</strong><span>Address findings, commit, push and open the pull request</span></li>
+        </ol>
+      </figure>
+      <p>The <strong>Standards</strong> axis checks repository coding standards and code smells. The <strong>Spec</strong> axis checks the change against the issue. For findings that say behavior is wrong, the implementing agent must run the reviewer's reproducer before deciding: a demonstrated failure gets fixed with its test kept; a declined finding needs evidence that exercises it. Skipped findings go in the pull request's <strong>Unaddressed findings</strong> section, and decisions for the Day shift get a linked triage issue.</p>
+      <p>These are agent reviews, followed by deterministic Git and CI checks in Delivery. They do not guarantee correctness or replace your judgment. You can inspect <a href="/prompts/">the exact prompts and Factory skills</a>, including <a href="/prompts/#skill-thirdshift-code-review">the review procedure</a>.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="sec" aria-labelledby="delivery-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">04 / From a published change to a checked result</p><h2 id="delivery-title">Deliver against the latest Base branch</h2></summary>
+      <div class="guide-content" id="delivery">
+      <p>A pull request existing is not the finish line. <strong>Delivery</strong> runs the opening session, then keeps the captured pull request mergeable and checks CI. This orchestration is thirdshift's code; a <strong>Repair</strong> is another agent session started when the branch needs work.</p>
+      <figure class="guide-diagram grid-bg">
+        <figcaption>The Repair loop, after the opening session publishes</figcaption>
+        <ol class="guide-flow guide-flow-vertical">
+          <li id="delivery-sync"><strong>Merge in the Base branch</strong><span>Bring the latest upstream changes into the Issue branch; never rebase</span></li>
+          <li><strong>Push and watch CI on this head</strong><span>Check mergeability and whether the Base branch moved while checks ran</span></li>
+          <li><strong>Reach a checked pull request</strong><span>Mergeable, with CI green or no CI checks, and no upstream change still to reconcile</span></li>
+        </ol>
+        <div class="guide-pair guide-loop-branches">
+          <div class="guide-node"><strong>Conflict or the branch's own CI failure?</strong><span>Start a Repair to resolve or fix it.</span><a href="#delivery-sync">Then return to merging the Base branch ↑</a></div>
+          <div class="guide-node"><strong>Base branch moved during CI?</strong><span>Reconcile the new upstream state.</span><a href="#delivery-sync">Return to merging the Base branch ↑</a></div>
+        </div>
+      </figure>
+      <p>Repair and upstream-move budgets keep the loop bounded. If a CI-fix Repair leaves the same failing head, that head gets one <strong>Check re-run</strong>; if its own checks stay red, the Run fails rather than spending more Repairs on unchanged code.</p>
+      <p>An <strong>Inherited failure</strong> is a check that also failed under the same name on the Base branch commit last merged in. thirdshift does not ask a Repair to fix that on this Issue branch. It fails the Run, or, when allowed, starts a separate <strong>Base fix</strong> and waits before trying again.</p>
+      <p>An optional <strong>Security review</strong> runs after the opening session (or after the Spec review for a Spec PR). It fixes reproduced vulnerabilities introduced by this change; an introduced finding left unfixed holds Self-merge. <a href="/docs/#security-review">Security review details</a>.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="sec" aria-labelledby="outcomes-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">05 / The result and your next move</p><h2 id="outcomes-title">Know what comes back</h2></summary>
+      <div class="guide-content" id="outcomes">
+      <div class="guide-outcomes">
+        <article class="guide-node"><h3>Ready for review</h3><p>The usual successful result: an open pull request into the Base branch, ready, mergeable and passing CI (or with no checks). You review the diff, tests and Unaddressed findings before merging.</p></article>
+        <article class="guide-node"><h3>Merged, when requested</h3><p>A <code>thirdshift merge &lt;Issue URL&gt;</code> command requests a <strong>Merge run</strong>. thirdshift itself merges the exact head whose CI it watched. Foreign commits on the Issue branch are reconciled and their resulting changes reviewed first. Required human reviews can still block it, leaving the pull request ready for review.</p></article>
+        <article class="guide-node"><h3>Failed, with work preserved</h3><p>Unfinished work is committed and pushed; an open pull request normally becomes a draft. If pushing fails, the Worktree and local Issue branch are kept. Rerun the same Issue URL to continue. A stopped or failed run may need Day shift attention before scheduled Pickup takes it again.</p></article>
+      </div>
+      <p>Ordinary cleanup removes the factory-owned Worktree and local Issue branch after work reaches <code>origin</code>; the remote work remains available for review or continuation. Cleanup retains resources when ownership or preservation is uncertain. A successful Self-merge also deletes the remote Issue branch and closes the issue. A merge refused by repository policy can fail the Run while leaving the pull request ready.</p>
+      <p>You can watch progress without interrupting the agent:</p>
+      <pre class="guide-command"><code>thirdshift status
+thirdshift show https://github.com/acme/widgets/issues/7
+thirdshift logs https://github.com/acme/widgets/issues/7 --follow</code></pre>
+      <p>The <strong>Command log</strong> records the whole command; <strong>Session logs</strong> record the individual agent sessions, and the <strong>Activity log</strong> records starts and outcomes per repository. Optional email notifications report how the Run ended. <a href="/docs/#logs">Inspecting logs</a>.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="sec" aria-labelledby="specs-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">06 / The same primitive, composed</p><h2 id="specs-title">Scale one Run into a Spec run</h2></summary>
+      <div class="guide-content" id="specs">
+      <p>When the Issue URL has Tickets as GitHub sub-issues, thirdshift starts a <strong>Spec run</strong>. GitHub's “blocked by” links determine when a Ticket can start. Independent Tickets can run in parallel, each in its own Worktree; a blocked Ticket waits for its prerequisites to land.</p>
+      <figure class="guide-diagram grid-bg">
+        <figcaption>Example dependency graph: A and B are independent; C needs both</figcaption>
+        <div class="guide-pair">
+          <div class="guide-node"><strong>Ticket A / Run</strong><span>Worktree + Issue branch A</span><span>Merge its PR into the Spec branch ↓</span></div>
+          <div class="guide-node"><strong>Ticket B / Run</strong><span>Worktree + Issue branch B</span><span>Merge its PR into the Spec branch ↓</span></div>
+        </div>
+        <ol class="guide-flow guide-flow-vertical">
+          <li><strong>Ticket C / Run</strong><span>Starts after A and B land; merges its PR into the Spec branch ↓</span></li>
+          <li><strong>Spec review + Delivery</strong><span>Review the whole Spec branch against the Spec and Base branch</span></li>
+          <li><strong>Spec PR → Base branch</strong><span>One combined pull request for you to review, or for a requested Merge run to merge</span></li>
+        </ol>
+      </figure>
+      <p>Each Ticket is a Merge run into the <strong>Spec branch</strong>, not directly into <code>main</code>. The <strong>Spec PR</strong> gathers the result into the Base branch. A Ticket closing means its work landed on the Spec branch; the whole Spec has not shipped yet.</p>
+      <p>A failed Ticket stops only its dependents; other reachable Tickets can still run. Tickets marked for human work or triage also hold their dependents. An incomplete Spec leaves a draft Spec PR with a Tickets checklist. Rerunning continues existing branches. <a href="/docs/#spec-runs">Spec run controls and limits</a>.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="sec" aria-labelledby="scheduled-title">
+    <details class="wrap guide-section fold">
+      <summary class="sec-head"><p class="eyebrow">07 / Where the next issue comes from</p><h2 id="scheduled-title">Choose how the next work starts</h2></summary>
+      <div class="guide-content" id="scheduled">
+      <p>A direct Issue URL starts work you have already chosen. Other commands find work, then dispatch the same Run or Spec run you just followed. Each invocation makes one pass; your operating system's scheduler starts the next one.</p>
+      <figure class="guide-diagram grid-bg">
+        <figcaption>Different entry points, the same implementation and Delivery</figcaption>
+        <div class="guide-entrypoints">
+          <div class="guide-node"><strong>Pickup run</strong><span>Takes the lowest-numbered eligible Ready issue, labelled ready-for-agent</span></div>
+          <div class="guide-node"><strong>Architect run / Weeding</strong><span>Reviews architecture; a strong recommendation becomes an Architect plan, otherwise an idea waits for triage</span></div>
+          <div class="guide-node"><strong>Security run / Fencing</strong><span>Audits and reproduces findings; records them privately and dispatches fixes only when allowed</span></div>
+        </div>
+        <p class="guide-connector">Eligible work ↓ Run or Spec run ↓ reviewed pull request</p>
+      </figure>
+      <p>Pickup respects issue readiness, open blockers and the Claim limit. Architect and Security runs yield to ready human-shaped work. Gates can skip a pass without failure, and unresolved plans, ideas or findings can leave the next decision with the Day shift. This is scheduled CLI work on your machine, using your authenticated tools.</p>
+      <p>Next: <a href="/prompts/">inspect every prompt and skill</a>, see <a href="/#how-a-run-works">a real Run's recorded output</a>, or use the <a href="/docs/">manual for installation, commands and configuration</a>.</p>
+      </div>
+    </details>
+  </section>
+</main>
+<footer class="wrap foot">
+  <a href="/">thirdshift home</a>
+  <a href="/prompts/">Prompts and skills</a>
+  <a href="https://github.com/JacobStephens2/thirdshift">Source and documentation</a>
+  <a href="#handoff">Back to the process ↑</a>
+</footer>
+</body>
+</html>

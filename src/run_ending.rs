@@ -55,12 +55,15 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     review: None,
                     security_findings: None,
                     failed_reproduction: None,
+                    pre_audit_failure: None,
                     recovery: None,
                     urls: Vec::new(),
                 },
                 Err(failed) => Account::of_failure(
                     failed,
-                    if audited.failed_reproduction.is_some() {
+                    if !audited.audit_started {
+                        "pre-audit failed"
+                    } else if audited.failed_reproduction.is_some() {
                         "reproduction failed"
                     } else {
                         "audit failed"
@@ -68,6 +71,14 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 ),
             };
             Ok(Account {
+                pre_audit_failure: if !audited.audit_started {
+                    audited.outcome.as_ref().err().map(|failed| {
+                        crate::github::operational_cause(&failed.error)
+                            .unwrap_or("pre-audit checks failed")
+                    })
+                } else {
+                    None
+                },
                 failed_reproduction: audited.failed_reproduction,
                 security_findings: Some(&audited.findings),
                 advice: &audited.advice,
@@ -117,6 +128,8 @@ pub struct Account<'a> {
     pub review: Option<Review<'a>>,
     /// The failed reproduction, after a completed Security audit and private recording.
     pub failed_reproduction: Option<usize>,
+    /// A fixed operational cause when a Security audit never started.
+    pub pre_audit_failure: Option<&'static str>,
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
@@ -190,6 +203,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 failed_reproduction: None,
+                pre_audit_failure: None,
                 recovery: None,
                 urls: vec![&reached.pr_url],
             },
@@ -216,6 +230,7 @@ impl<'a> Account<'a> {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            pre_audit_failure: None,
             recovery: failed.recovery.as_deref(),
             urls: failed.pr_url.as_deref().into_iter().collect(),
         }
@@ -246,6 +261,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 failed_reproduction: None,
+                pre_audit_failure: None,
                 recovery: None,
                 urls: vec![reviewed.url()],
             },
@@ -537,6 +553,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            pre_audit_failure: None,
             recovery: None,
             urls: vec![PR],
         }
@@ -557,6 +574,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            pre_audit_failure: None,
             recovery: None,
             urls: Vec::new(),
         }
@@ -739,6 +757,7 @@ mod tests {
                     }),
                     security_findings: None,
                     failed_reproduction: None,
+                    pre_audit_failure: None,
                     recovery: None,
                     urls: vec![PLAN],
                 }

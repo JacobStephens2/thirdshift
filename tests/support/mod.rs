@@ -524,7 +524,19 @@ impl Scenario {
     /// without the file there, or if the file isn't there within
     /// [`WAIT_BOUND`].
     pub fn run_until(&self, args: &[&str], env: &[(&str, &str)], started: &str) -> HeldRun {
+        self.run_from_until(&self.launch_dir(), args, env, started)
+    }
+
+    /// Hold a Run from another clone, sharing this scenario's origin and GitHub.
+    pub fn run_from_until(
+        &self,
+        directory: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+        started: &str,
+    ) -> HeldRun {
         let mut command = self.command(args);
+        command.current_dir(directory);
         command.envs(env.iter().copied());
         self.spawn_until_started(command, started)
     }

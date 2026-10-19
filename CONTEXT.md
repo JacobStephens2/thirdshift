@@ -89,7 +89,7 @@ The factory finding and fixing vulnerabilities in a repository's codebase with n
 _Avoid_: patrol, continuous security, security loop
 
 **Pickup run**:
-One invocation of the factory with no **Issue URL**: it takes the lowest-numbered **Ready issue** in the repository and starts a **Spec run** or a **Run** on it, as the command on that issue's URL would. One issue per invocation, and thirdshift never schedules itself: the operating system's scheduler starts each one. It is skipped, doing nothing, when another **Pass** on the same repository is still running on the machine, its Spec run or Run included, when there is no Ready issue, or when the repository is at its **Claim limit**. Skipped is not a failure, and sends no **Run notification**.
+One invocation of the factory with no **Issue URL**: it takes the lowest-numbered **Ready issue** in the repository and starts a **Spec run** or a **Run** on it, as the command on that issue's URL would. One issue per invocation, and thirdshift never schedules itself: the operating system's scheduler starts each one. Before dispatch, it reserves the issue across machines and rechecks that it is Ready with no intervening **Claim** since selection. The reservation lasts through the dispatched run's ending, then is released only by its owner; after a crash it waits for the **Day shift** to confirm the owner has stopped and release it. It is skipped, doing nothing, when another **Pass** on the same repository is still running on the machine, its Spec run or Run included, when there is no Ready issue, when the repository is at its **Claim limit**, or when the selected issue is reserved or its selection is stale. Skipped is not a failure, and sends no **Run notification**.
 _Avoid_: watch, daemon, queue run, poll
 
 **Security run**:
@@ -219,7 +219,7 @@ A commit that appears on the **Issue branch** during a **Run** and was made neit
 A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. A Resume that ends the same way gets no second Resume and does not fail the **Run**: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the steps that follow decide the outcome. If the Run is then a **Failed run**, its cause names the killed work ahead of the step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
 
 **Session log**:
-The full transcript of one agent session, one per session, a **Resume** and each **Repair** included. Kept with its repository's other logs, named for the session's kind and stamped with the local time its command started, so all of a command's Session logs sort together. Model evidence is kept beside each Session log and belongs to the exact owning **Command**, including across child Runs. It survives an interrupted stream and is replaced by completed retained evidence only when a report is available, even when that report has no observed Models; an absent report leaves the stream evidence intact. Requested **Model** and **Effort** choices are recorded separately from observed Models. A session that ran the code review has its reviewers' reports kept beside its Session log.
+The full transcript of one agent session, one per session, a **Resume** and each **Repair** included. Kept with its repository's other logs, named for the session's kind and stamped with the local time its command started, so all of a command's Session logs sort together. The start stamp is a display and grouping fact; distinct Commands have distinct storage ownership even when their stamps agree. Model evidence is kept beside each Session log and belongs to the exact owning **Command**, including across child Runs. It survives an interrupted stream and is replaced by completed retained evidence only when a report is available, even when that report has no observed Models; an absent report leaves the stream evidence intact. Requested **Model** and **Effort** choices are recorded separately from observed Models. A session that ran the code review has its reviewers' reports kept beside its Session log.
 _Avoid_: transcript, session file
 
 **Command**:
@@ -227,7 +227,7 @@ One invocation of thirdshift that does factory work: a **Run** or **Spec run** s
 _Avoid_: invocation, job
 
 **Command log**:
-Everything one **Run**, **Spec run**, **Architect run**, **Pickup run** or **Security run** printed, kept in a file of its own with its repository's other logs, stamped like its **Session logs**. An Architect run's, Pickup run's or Security run's covers the Spec runs or Runs it dispatched, and a Spec run's covers its **Tickets**' Runs, as a Run's covers its **Base fix**: none of those keeps one of its own. It is kept once the command starts work: a Pickup run, Architect run or Security run skipped before doing any work keeps none, and neither does a Run that fails before it starts work, such as on **Origin match**.
+Everything one **Run**, **Spec run**, **Architect run**, **Pickup run** or **Security run** printed, kept in a file of its own with its repository's other logs, stamped like its **Session logs**. The start stamp is for display and grouping; Commands with the same start time still have distinct storage ownership for their Command logs, Session logs and **Command records**. An Architect run's, Pickup run's or Security run's covers the Spec runs or Runs it dispatched, and a Spec run's covers its **Tickets**' Runs, as a Run's covers its **Base fix**: none of those keeps one of its own. It is kept once the command starts work: a Pickup run, Architect run or Security run skipped before doing any work keeps none, and neither does a Run that fails before it starts work, such as on **Origin match**.
 _Avoid_: cron log, output log, run log (a **Run** is one kind of command)
 
 **Activity log**:
@@ -235,7 +235,7 @@ One running record per repository of what the factory did there: a line when a *
 _Avoid_: cron log, pass log, history
 
 **Console**:
-The web page a machine serves that shows every **Command** started on it, live ones first, with each one's child **Runs**, their stages and their logs, and from which a live Command can be stopped. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
+The web page a machine serves that shows every **Command** started on it, opening on its **Inbox**, with each one's child **Runs**, their stages and their logs, and from which a live Command can be stopped. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
 _Avoid_: dashboard, floor, UI, web UI
 
 **Command record**:
@@ -253,3 +253,27 @@ _Avoid_: user, login
 **Console log**:
 One running record per machine of what happened to its **Console accounts**: sign-ins, failed sign-ins, codes sent, passwords set and sign-outs, each naming the account. What people did to **Commands** goes in the **Activity log** instead, and what they only looked at is recorded nowhere.
 _Avoid_: audit log, access log
+
+**Inbox**:
+The **Console**'s first page, and `thirdshift status`'s order: a machine's **Commands** grouped by what each asks of the **Day shift**. **Needs you** comes first. Ready for review holds Commands that ended ready, with a pull request waiting. Landing holds live Runs at CI watch or **Self-merge**. Working holds every other live Command. Done holds Commands that ended in the last day, and Resolved holds older ones with nothing waiting. Commands older still are only in the history.
+_Avoid_: dashboard, feed, queue
+
+**Needs you**:
+The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** then **Slow** Runs, and then the ended ones: a Command that died, one that failed, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves when a later Command on the same issue starts on the machine, or once it is older than the period the **User config** sets. Nothing else clears it, since the **Console** does nothing the CLI can't.
+_Avoid_: alerts, attention, triage queue
+
+**Silent**:
+A live **Run** whose **Session log** and **Command log** have both stopped growing for longer than the silent time the **User config** sets, 10 minutes unless set: it may be stuck. Stages that wait on something else, such as CI watch, write a line at intervals while they wait, so silence means the same thing in every stage. A stall is silence, not a long stage: a Run that is past its **Usual range** but still logging is **Slow**.
+_Avoid_: stalled, stuck, hung
+
+**Slow**:
+A live **Run** whose stage has gone past the top of that stage's **Usual range** while its logs keep growing. It is still working; it only needs a look, unlike a **Silent** one.
+_Avoid_: late, overdue, stalled
+
+**Usual range**:
+How long a stage usually takes in a repository: the middle half of that stage's times over the repository's recent **Command records** on the machine, shown only once there are enough of them. It is what makes a Run **Slow**.
+_Avoid_: average, baseline, estimate
+
+**Theme**:
+How the **Console** looks, its colours, fonts, shapes, effects and motion, over a layout that every Theme shares. thirdshift comes with some, and a user can make their own. Choosing one changes how the page looks, never what it shows.
+_Avoid_: skin, style, variant

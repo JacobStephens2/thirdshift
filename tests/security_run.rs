@@ -3229,36 +3229,31 @@ fn a_skipped_security_run_sends_no_notification_requested_by_word_or_config() {
 
 #[test]
 fn failed_security_audits_send_one_notification_with_a_safe_status() {
-    for (script, failing_call, cause) in [
+    for (script, recording_fails, cause) in [
         (
             audit_script("[]").replace("Security audit: complete", "Security audit: incomplete"),
-            None,
+            false,
             "ended incomplete",
         ),
         (
             audit_script("[{}]"),
-            None,
+            false,
             "validator validate-findings.cjs",
         ),
         (
             audit_script(&json!([finding("new")]).to_string()),
-            Some("api --method POST"),
+            true,
             "creating a draft repository security advisory failed",
         ),
-        (audit_script("[]"), Some("issue list"), "gh issue list"),
     ] {
         let scenario = Scenario::new();
         scenario.agent_does(&script);
-        if let Some(call) = failing_call {
-            if call == "api --method POST" {
-                // The API consumes the request before rejecting it, avoiding
-                // a race between writing stdin and an early fake gh exit.
-                let mut github = scenario.gh_state();
-                github["advisory_create_fails_after"] = json!(0);
-                scenario.write_gh_state(&github);
-            } else {
-                scenario.gh_fails(call);
-            }
+        if recording_fails {
+            // The API consumes the request before rejecting it, avoiding
+            // a race between writing stdin and an early fake gh exit.
+            let mut github = scenario.gh_state();
+            github["advisory_create_fails_after"] = json!(0);
+            scenario.write_gh_state(&github);
         }
         let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
         let result =
@@ -3280,6 +3275,207 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
         assert!(!text.contains("Cause:"), "{text}");
         assert!(!text.contains("Private candidate write-up."), "{text}");
     }
+}
+
+#[test]
+fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran() {
+    for (diagnostic, expected_cause) in [
+        (
+            "GraphQL: API rate limit already exceeded for user ID PRIVATE-IDENTIFIER.",
+            "GitHub rate-limit exhaustion",
+        ),
+        (
+            "gh: API rate limit exceeded for PRIVATE-IDENTIFIER. (HTTP 403)",
+            "GitHub rate-limit exhaustion",
+        ),
+        (
+            "gh: You have exceeded a secondary rate limit. (HTTP 403)",
+            "GitHub rate-limit exhaustion",
+        ),
+        (
+            "gh: Resource not accessible by PRIVATE-IDENTIFIER (HTTP 403)",
+            "GitHub dependency failure",
+        ),
+        (
+            "HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+            "GitHub dependency failure",
+        ),
+        (
+            "HTTP 502: GraphQL: rate limit configuration unknown",
+            "GitHub dependency failure",
+        ),
+    ] {
+        for call in ["issue list", "api --paginate"] {
+            let scenario = Scenario::new();
+            scenario.user_config_is(&format!(
+                "[harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"high\"\n[logs]\ndir = {:?}\n",
+                scenario.path("custom-logs")
+            ));
+            scenario.gh_fails(call);
+            let mut github = scenario.gh_state();
+            github["failing_stderr"] = json!(format!(
+                "{diagnostic} token=PRIVATE-CREDENTIAL Private candidate write-up. Private provider/verifier diagnostic."
+            ));
+            scenario.write_gh_state(&github);
+            let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+            let result = scenario.run_with_env(
+                &["secure", "harness", "codex", "email", "me@example.com"],
+                &resend_env(&resend),
+            );
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
+            assert!(scenario.claude_calls().is_empty());
+            assert!(scenario.codex_calls().is_empty());
+            assert!(scenario.gh_calls_of("issue", "create").is_empty());
+            assert!(scenario.gh_state()["advisories"].is_null());
+            assert!(
+                !scenario
+                    .path("custom-logs/acme/widgets/commands/secure")
+                    .exists()
+            );
+            let (subject, text) = the_one_notification(&resend);
+            assert_eq!(
+                subject,
+                "[thirdshift] acme/widgets Security run: pre-audit failed"
+            );
+            assert!(text.contains("Result:       pre-audit failed"), "{text}");
+            assert!(text.contains("Audit:        not started"), "{text}");
+            assert!(
+                text.contains(&format!("Cause:        {expected_cause}")),
+                "{text}"
+            );
+            assert!(
+                text.contains("Diagnostics:  Check this command's stderr on "),
+                "{text}"
+            );
+            let started = text
+                .lines()
+                .find_map(|line| line.strip_prefix("Started (UTC): "))
+                .expect(&text);
+            chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S UTC").expect(&text);
+            let host = text
+                .lines()
+                .find_map(|line| line.strip_prefix("Host:         "))
+                .expect(&text);
+            assert!(
+                text.contains(&format!(
+                    "Check this command's stderr on {host} at that time"
+                )),
+                "{text}"
+            );
+            assert!(text.contains("gpt-6.1-sol · high (configured)"), "{text}");
+            assert!(text.contains("Configured:"), "{text}");
+            assert!(!text.contains("Built with"), "{text}");
+            for private in [
+                "PRIVATE-IDENTIFIER",
+                "PRIVATE-CREDENTIAL",
+                "Private candidate write-up.",
+                "GraphQL:",
+                "Private provider/verifier diagnostic.",
+                diagnostic,
+            ] {
+                assert!(
+                    !resend.requests()[0].body.to_string().contains(private),
+                    "{text}"
+                );
+            }
+            for absent in [
+                "Session log:",
+                "Command log:",
+                "Reproduction:",
+                "Session models:",
+                "cron.log",
+            ] {
+                assert!(!text.contains(absent), "{text}");
+            }
+        }
+    }
+}
+
+fn assert_pre_audit_response_dependency_cause(response: &str, diagnostic: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = Scenario::new();
+    let gh = scenario.path("bin/gh");
+    fs::remove_file(&gh).unwrap();
+    fs::write(&gh, format!("#!/bin/sh\nprintf '%s\\n' '{response}'\n")).unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_fake"),
+        ],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(
+        !requests[0]
+            .body
+            .to_string()
+            .contains("PRIVATE-INVALID-JSON")
+    );
+    assert!(
+        text.contains("Cause:        GitHub dependency failure"),
+        "{text}"
+    );
+}
+
+#[test]
+fn malformed_pre_audit_github_response_has_dependency_cause() {
+    assert_pre_audit_response_dependency_cause(
+        "PRIVATE-INVALID-JSON",
+        "gh issue list returned invalid JSON",
+    );
+}
+
+#[test]
+fn invalid_schema_pre_audit_github_response_has_dependency_cause() {
+    assert_pre_audit_response_dependency_cause("{}", "gh issue list did not return a list");
+}
+
+#[test]
+fn an_unavailable_github_cli_has_a_safe_pre_audit_dependency_cause() {
+    let scenario = Scenario::new();
+    let git = std::process::Command::new("which")
+        .arg("git")
+        .output()
+        .unwrap();
+    let git = String::from_utf8(git.stdout).unwrap();
+    std::os::unix::fs::symlink(git.trim(), scenario.path("bin/git")).unwrap();
+    fs::remove_file(scenario.path("bin/gh")).unwrap();
+    let path = scenario.path("bin");
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let mut env = resend_env(&resend).to_vec();
+    env.push(("PATH", path.to_str().unwrap()));
+    let result = scenario.run_with_env(&["secure", "email", "me@example.com"], &env);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("could not run gh"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": pre-audit failed"), "{subject}");
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(
+        text.contains("Cause:        GitHub dependency failure"),
+        "{text}"
+    );
+    assert!(!text.contains("could not run gh"), "{text}");
+    assert!(!text.contains("No such file"), "{text}");
 }
 
 #[test]
@@ -4185,4 +4381,108 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
     assert_eq!(state["labels"]["8"], json!(["ready-for-agent"]));
     assert!(state["prs"].as_array().unwrap().is_empty());
     assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn review_acquisition_failure_is_pre_audit() {
+    let scenario = Scenario::new();
+    fs::create_dir(scenario.path("work/widgets-architect")).unwrap();
+    fs::write(
+        scenario.path("work/widgets-architect/keep.txt"),
+        "unowned user work",
+    )
+    .unwrap();
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    let (subject, text) = the_one_notification(&resend);
+    assert!(
+        subject.ends_with(": pre-audit failed"),
+        "{subject}\n{text}\n{}",
+        result.stderr
+    );
+    assert!(text.contains("Audit:        not started"), "{text}");
+}
+
+#[test]
+fn review_malformed_github_response_keeps_dependency_category() {
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = Scenario::new();
+    fs::create_dir(scenario.path("bin/original")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("bin/original/gh")).unwrap();
+    fs::write(
+        scenario.path("bin/gh"),
+        r#"#!/bin/sh
+if [ "$1" = api ] && [ "$2" = --paginate ]; then
+  printf '%s' 'PRIVATE_RESPONSE_NOT_JSON'
+  exit 0
+fi
+exec "$(dirname "$0")/original/gh" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result =
+        scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": pre-audit failed"), "{subject}");
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(!text.contains("PRIVATE_RESPONSE_NOT_JSON"), "{text}");
+    assert!(
+        text.contains("Cause:        GitHub dependency failure"),
+        "{text}\n{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn invalid_parent_issue_url_retains_github_dependency_cause() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    fs::create_dir(scenario.path("bin/original")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("bin/original/gh")).unwrap();
+    fs::write(scenario.path("bin/gh"), r#"#!/bin/sh
+if [ "$1" = api ] && [ "$2" = graphql ]; then
+    printf '%s\n' '{"data":{"repository":{"issue":{"labelled":{"nodes":[],"pageInfo":{"hasNextPage":false}},"parent":{"url":"PRIVATE-INVALID-PARENT"}}}}}'
+    exit 0
+fi
+exec "$(dirname "$0")/original/gh" "$@"
+"#).unwrap();
+    fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_fake"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("not a GitHub issue URL: PRIVATE-INVALID-PARENT"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(!text.contains("PRIVATE-INVALID-PARENT"), "{text}");
+    assert!(
+        text.contains("Cause:        GitHub dependency failure"),
+        "{text}"
+    );
 }

@@ -104,7 +104,7 @@ pub trait Outside {
     /// Check Node.js before a Security audit needs its validators.
     fn check_node(&mut self) -> Result<()>;
     /// Audit the Base branch in a disposable checkout and validate its artifacts.
-    fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>);
+    fn audit(&mut self, base: &str) -> crate::security::audit::Attempt;
     /// Private advisory or issue records in every state.
     fn security_records(&mut self) -> Result<SecurityRecords>;
     /// Whether origin's prepared Base branch is the last completed audit's commit.
@@ -234,7 +234,7 @@ impl Outside for LaunchAndGitHub<'_> {
         crate::security::audit::check_node()
     }
 
-    fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+    fn audit(&mut self, base: &str) -> crate::security::audit::Attempt {
         logs::stage(logs::Stage::SecurityAudit);
         crate::security::audit::run(self.launch.git(), self.repo, base, self.harness)
     }
@@ -701,10 +701,11 @@ mod in_memory {
 
         fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
             self.calls.push(Call::ReadySearch);
-            Ok(self
-                .ready
-                .clone()
-                .map(|(listed, is_spec)| ReadyIssue { listed, is_spec }))
+            Ok(self.ready.clone().map(|(listed, is_spec)| ReadyIssue {
+                listed,
+                is_spec,
+                claim_generation: 0,
+            }))
         }
 
         fn step(&mut self, line: String) {
@@ -765,10 +766,7 @@ mod in_memory {
             Ok(())
         }
 
-        fn audit(
-            &mut self,
-            base: &str,
-        ) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+        fn audit(&mut self, base: &str) -> crate::security::audit::Attempt {
             self.calls.push(Call::SecurityAudit(base.to_string()));
             let audited = match self.audit_error.take() {
                 Some(cause) => Err(anyhow!(cause)),
@@ -776,7 +774,11 @@ mod in_memory {
                     findings: std::mem::take(&mut self.audit_findings),
                 }),
             };
-            (audited, self.session_log.clone())
+            crate::security::audit::Attempt {
+                started: true,
+                outcome: audited,
+                log: self.session_log.clone(),
+            }
         }
 
         fn security_records(&mut self) -> Result<SecurityRecords> {

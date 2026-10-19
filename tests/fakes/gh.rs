@@ -31,6 +31,8 @@
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
 //!  "failing"?: ["<command> <subcommand>", ...],
+//!  "failing_stderr"?: "<stderr for failing commands>",
+//!  "fail_next"?: {"call": "<command prefix>", "times": <count>, "error": "<stderr>"},
 //!  "advisory_create_fails_after"?: <number of records>,
 //!  "user_email"?: "<address>" | null,
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
@@ -766,6 +768,47 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
     check_repo_is(state, Some(repo));
     if !state.at("issues").has(n) {
         die("gh: Not Found (HTTP 404)", 1);
+    }
+    // Model the real Claim and Ready transitions consumed by Pickup, including
+    // consecutive applications/removals within the same second. Other label
+    // histories are supplied explicitly by fixtures that need them.
+    let before = issue_labels(state, n).to_vec();
+    let contains = |labels: &[Json], name: &Json| {
+        labels
+            .iter()
+            .any(|label| label.str().eq_ignore_ascii_case(name.str()))
+    };
+    let at = string(now());
+    let events = before
+        .iter()
+        .filter(|label| !contains(&labels, label))
+        .map(|label| ("unlabeled", label))
+        .chain(
+            labels
+                .iter()
+                .filter(|label| !contains(&before, label))
+                .map(|label| ("labeled", label)),
+        )
+        .filter(|(_, label)| {
+            matches!(
+                label.str().to_ascii_lowercase().as_str(),
+                "in-progress" | "ready-for-agent"
+            )
+        })
+        .map(|(event, label)| {
+            object([
+                ("event", string(event)),
+                ("label", label.clone()),
+                ("at", at.clone()),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if !events.is_empty() {
+        state
+            .entry("timeline", object([]))
+            .entry(n, Array(Vec::new()))
+            .items_mut()
+            .extend(events);
     }
     state.entry("labels", object([])).set(n, Array(labels));
     save(state);
@@ -2143,11 +2186,27 @@ pub fn main(args: Vec<String>) {
         let words: Vec<&str> = call.split(' ').collect();
         args.iter().map(String::as_str).take(words.len()).eq(words)
     };
+    if let Some(failure) = state.get("fail_next")
+        && starts_with(failure.at("call").str())
+        && failure.at("times").as_i64().unwrap() > 0
+    {
+        let left = failure.at("times").as_i64().unwrap() - 1;
+        let error = failure.at("error").str().to_owned();
+        state.at_mut("fail_next").set("times", number(left));
+        save(&state);
+        die(&error, 1);
+    }
     if failing
         .iter()
         .any(|failing| failing.as_str().is_some_and(starts_with))
     {
-        die("HTTP 502: Bad Gateway (https://api.github.com/graphql)", 1);
+        die(
+            state
+                .get("failing_stderr")
+                .and_then(Json::as_str)
+                .unwrap_or("HTTP 502: Bad Gateway (https://api.github.com/graphql)"),
+            1,
+        );
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let parsed = |rest: &[&str]| {

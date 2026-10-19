@@ -109,6 +109,12 @@ fn execute_session(root: &Path) -> anyhow::Error {
     let logs = Logs {
         name: "7".into(),
         dir: root.join("logs"),
+        recording: recording::Recording::new(
+            Some(root.join("7-20261003T120000-0400~fixture.log")),
+            None,
+            "20261003T120000-0400".into(),
+        )
+        .into(),
     };
     let choice = Choice {
         harness: Harness::OpenCode,
@@ -194,7 +200,7 @@ done
 echo another-line
 exec sleep 5"#,
     );
-    let log = fixture.path("logs/7-fixture-implement.jsonl");
+    let log = fixture.path("logs/7-20261003T120000-0400~fixture-implement.jsonl");
     assert!(Command::new("mkfifo").arg(&log).status().unwrap().success());
     let child = fixture
         .command("session::execution_tests::partial_stdout_is_reported_after_log_failure_with_a_blocked_prompt")
@@ -367,6 +373,12 @@ fn with_review_sessions(
     let logs = Logs {
         name: "7".into(),
         dir: root.join("logs"),
+        recording: recording::Recording::new(
+            Some(root.join("7-20261003T120000-0400~fixture.log")),
+            None,
+            "20261003T120000-0400".into(),
+        )
+        .into(),
     };
     let choice = Choice {
         harness,
@@ -448,7 +460,10 @@ fn a_resumes_review_reports_are_kept_beside_its_own_session_log() {
         let root = Path::new(&root);
         let (result, log) = execute_review(root, Harness::Claude);
         result.unwrap();
-        assert_eq!(log.file_name().unwrap(), "7-fixture-implement-resume.jsonl");
+        assert_eq!(
+            log.file_name().unwrap(),
+            "7-20261003T120000-0400~fixture-implement-resume.jsonl"
+        );
         assert_eq!(
             fs::read_to_string(log.with_extension("standards")).unwrap(),
             "Resume Standards report\nFiles read: src/prompt.rs\n"
@@ -459,7 +474,10 @@ fn a_resumes_review_reports_are_kept_beside_its_own_session_log() {
         );
         // The first session's reports remain with its own Session log.
         assert_eq!(
-            fs::read_to_string(root.join("logs/7-fixture-implement.standards")).unwrap(),
+            fs::read_to_string(
+                root.join("logs/7-20261003T120000-0400~fixture-implement.standards")
+            )
+            .unwrap(),
             "Standards report\nFiles read: src/session.rs\n"
         );
         return;

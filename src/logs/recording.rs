@@ -5,13 +5,13 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
 use super::command_record::{CommandRecord, CommandTree, Stage, StageName, TicketRecord};
 use super::effects::{Outside, Stream};
+use super::owner::{self, Owner};
 use super::{Begin, CommandKind, Pass, Work, root_under};
 use crate::config::UserConfig;
 use crate::harness::Choice;
@@ -19,11 +19,12 @@ use crate::issue::Repo;
 use crate::progress;
 
 const STAMP_FORMAT: &str = "%Y%m%dT%H%M%S%z";
-static NEXT_RECORD: AtomicU64 = AtomicU64::new(0);
 
 pub(super) struct Record<O: Outside> {
     outside: O,
     stamp: Option<String>,
+    owner: Option<Owner>,
+    owner_error: Option<String>,
     logs_dir: Option<PathBuf>,
     child: bool,
     command: CommandKind,
@@ -72,6 +73,8 @@ impl<O: Outside> Record<O> {
         Self {
             outside,
             stamp: None,
+            owner: None,
+            owner_error: None,
             logs_dir: None,
             child: false,
             command: CommandKind::Issue,
@@ -148,7 +151,7 @@ impl<O: Outside> Record<O> {
         let root = self.root(&work.repo());
         let stamp = self.stamp();
         let began = matches!(self.command_log, Log::Held { .. });
-        self.keep(work.command_log(&root, &stamp));
+        self.keep(&root, work, &stamp);
         if began {
             self.start_record(work, harness);
         }
@@ -216,26 +219,19 @@ impl<O: Outside> Record<O> {
         facts.parent_record = self.parent_record.clone();
         facts.parent_dispatch = self.parent_dispatch.clone();
         let path = if let Some(parent) = &self.parent_record {
-            let dispatch = self
-                .parent_dispatch
-                .as_ref()
-                .and_then(|issue| crate::issue::IssueUrl::parse(issue).ok())
-                .map_or_else(String::new, |issue| format!("dispatch-{}-", issue.number));
-            parent.with_extension(format!(
-                "{dispatch}issue-{}.child.json",
-                work.issue().unwrap()
-            ))
+            owner::child_record(
+                parent,
+                self.parent_dispatch.as_deref(),
+                work.issue().unwrap(),
+            )
         } else {
-            // Process identity and a serial separate Commands sharing a stamp.
-            let owner = format!(
-                "{}-{}-{}",
-                facts.process_id,
-                facts.process_start.replace(':', "-"),
-                NEXT_RECORD.fetch_add(1, Ordering::Relaxed)
-            );
-            let root = self.root(&work.repo());
-            work.command_log(&root, &stamp)
-                .with_extension(format!("{owner}.command.json"))
+            let Some(owner) = &self.owner else {
+                return;
+            };
+            let Some(path) = owner.record_path() else {
+                return;
+            };
+            path
         };
         self.command_record = Some((
             path,
@@ -401,6 +397,23 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn inherit_owner(&mut self, inherited: Result<Owner>) {
+        if self.owner.is_none() {
+            match inherited {
+                Ok(owner) => self.owner = Some(owner),
+                Err(error) => self.owner_error = Some(format!("{error:#}")),
+            }
+        }
+    }
+
+    pub(super) fn captured_owner(&self) -> Result<Owner, String> {
+        self.owner.clone().ok_or_else(|| {
+            self.owner_error
+                .clone()
+                .unwrap_or_else(|| "Command logging has not allocated an owner".into())
+        })
+    }
+
     pub(super) fn print(&mut self, line: &str) {
         self.output(Stream::Stdout, line.to_string());
     }
@@ -445,7 +458,7 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    fn keep(&mut self, path: PathBuf) {
+    fn keep(&mut self, root: &Path, work: Work<'_>, stamp: &str) {
         self.show_held();
         if !matches!(self.command_log, Log::Held { .. }) {
             return;
@@ -454,7 +467,10 @@ impl<O: Outside> Record<O> {
             unreachable!()
         };
         let created: Result<O::CommandLog> = (|| {
-            let mut writer = self.outside.open_command_log(&path)?;
+            let allocation = owner::allocate(&mut self.outside, root, work, stamp)?;
+            self.owner = Some(allocation.owner);
+            let mut writer = allocation.writer;
+            let path = self.owner.as_ref().unwrap().log_path().unwrap();
             for (_, line) in lines {
                 writeln!(writer, "{line}")
                     .with_context(|| format!("could not write {}", path.display()))?;
@@ -464,14 +480,25 @@ impl<O: Outside> Record<O> {
         match created {
             Ok(writer) => {
                 self.command_log = Log::Kept {
-                    path: path.clone(),
+                    path: self
+                        .owner
+                        .as_ref()
+                        .unwrap()
+                        .log_path()
+                        .unwrap()
+                        .to_path_buf(),
                     writer,
                 };
+                let path = self.command_log_path().unwrap();
                 self.step(format_args!("logging this command to {}", path.display()));
             }
             Err(error) => {
+                self.owner_error = Some(format!("{error:#}"));
                 self.command_log = Log::Failed {
-                    path: self.outside.command_log_exists(&path).then_some(path),
+                    path: self
+                        .owner
+                        .as_ref()
+                        .and_then(|owner| owner.log_path().map(Path::to_path_buf)),
                 };
                 self.step(format_args!(
                     "warning: could not keep the Command log: {error:#}"

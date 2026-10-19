@@ -22,6 +22,8 @@ pub struct ReadyIssue {
     pub listed: ListedIssue,
     /// Whether it is a Spec, an issue with sub-issues.
     pub is_spec: bool,
+    /// The Claim generation seen by this search, before reserving the issue.
+    pub claim_generation: usize,
 }
 
 /// The lowest-numbered Ready issue in `repo`, the Launch directory
@@ -39,6 +41,40 @@ pub fn first(launch: &Git, repo: &Repo, wait: TimeDelta) -> Result<Option<ReadyI
         .github
         .open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
     Search::new(&reads, candidates, Utc::now(), wait, progress::step).first_ready()
+}
+
+/// Recheck only the selected issue after Pickup reserves it on origin. A
+/// stale selection must not start a Continuation after the winner finished.
+/// Refresh Spec status as well: shaping may have changed since the listing.
+/// An intervening Claim invalidates selection even if failure restored Ready;
+/// the complete timeline's generation works with settling disabled and without
+/// relying on clocks or timestamp precision.
+pub fn refresh(launch: &Git, selected: ReadyIssue, wait: TimeDelta) -> Result<Option<ReadyIssue>> {
+    let reads = GitHubAndOrigin {
+        launch,
+        github: GitHub::new(),
+    };
+    let issue = selected.listed.issue;
+    let current = reads.github.issue(&issue)?;
+    if !current.is_open || !current.labels.has(READY_FOR_AGENT) {
+        return Ok(None);
+    }
+    let listed = ListedIssue {
+        issue,
+        title: current.title.unwrap_or_default(),
+        labels: current.labels,
+    };
+    match standing_of(&reads, &listed, Utc::now(), wait)? {
+        Standing::Ready {
+            is_spec,
+            claim_generation,
+        } if claim_generation == selected.claim_generation => Ok(Some(ReadyIssue {
+            listed,
+            is_spec,
+            claim_generation,
+        })),
+        _ => Ok(None),
+    }
 }
 
 /// What the search reads of an issue beyond its listing, each only when a
@@ -79,6 +115,7 @@ enum Standing {
     Ready {
         /// Whether it is a Spec, an issue with sub-issues.
         is_spec: bool,
+        claim_generation: usize,
     },
     /// It is not one, for this reason: the first that applies.
     PassedOver(Reason),
@@ -153,9 +190,16 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
     fn first_ready(mut self) -> Result<Option<ReadyIssue>> {
         for at in 0..self.candidates.len() {
             match self.standing(at)? {
-                Standing::Ready { is_spec } => {
+                Standing::Ready {
+                    is_spec,
+                    claim_generation,
+                } => {
                     let listed = self.candidates.swap_remove(at);
-                    return Ok(Some(ReadyIssue { listed, is_spec }));
+                    return Ok(Some(ReadyIssue {
+                        listed,
+                        is_spec,
+                        claim_generation,
+                    }));
                 }
                 Standing::PassedOver(reason) => {
                     if let Some(line) = self.line(at, &reason)? {
@@ -281,6 +325,9 @@ fn standing_of(
     {
         return passed_over(Reason::Started(started));
     }
+    if read.claimed {
+        return passed_over(Reason::Claimed);
+    }
     if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
         return passed_over(Reason::TicketsClosed);
     }
@@ -292,6 +339,7 @@ fn standing_of(
     }
     Ok(Standing::Ready {
         is_spec: read.has_sub_issues(),
+        claim_generation: read.claim_generation,
     })
 }
 
@@ -358,6 +406,8 @@ mod tests {
                 .push(Seen::CandidateRead(issue.number));
             let facts = self.facts(issue);
             Ok(Candidate {
+                claim_generation: 0,
+                claimed: false,
                 parent: facts.and_then(|facts| facts.parent.clone()),
                 sub_issue_is_open: facts
                     .map(|facts| facts.sub_issue_is_open.clone())
