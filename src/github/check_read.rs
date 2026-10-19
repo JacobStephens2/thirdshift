@@ -1,31 +1,40 @@
-//! Classification for the CI watch's read-only recovery policy. Unknown
+//! Classification for GitHub read-only recovery policies. Unknown
 //! failures remain causal errors, never successful empty observations.
 
 use std::fmt;
 
 /// A non-success API response, retaining gh's original diagnostics. This
-/// carries evidence only: the CI watch owns whether and when to retry it.
+/// carries evidence only: the caller owns whether and when to retry it.
 #[derive(Debug)]
-pub(super) struct ApiFailure {
-    pub path: String,
+pub(super) struct ReadFailure {
+    pub command: String,
     pub stderr: String,
 }
 
-impl fmt::Display for ApiFailure {
+impl fmt::Display for ReadFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "gh api {} failed: {}", self.path, self.stderr)
+        write!(f, "{} failed: {}", self.command, self.stderr)
     }
 }
 
-impl std::error::Error for ApiFailure {}
+impl std::error::Error for ReadFailure {}
 
 pub(crate) fn is_transient(error: &anyhow::Error) -> bool {
     if let Some(error) = error.downcast_ref::<serde_json::Error>() {
         return error.is_eof();
     }
-    let Some(failure) = error.downcast_ref::<ApiFailure>() else {
+    let Some(failure) = error.downcast_ref::<ReadFailure>() else {
         return false;
     };
+    let stderr = failure.stderr.trim().to_ascii_lowercase();
+    // Quota exhaustion belongs to quota-aware deferral, not a short retry.
+    // gh can report GraphQL quota errors with or without an HTTP status.
+    if stderr.contains("api rate limit")
+        || (stderr.contains("graphql") && stderr.contains("rate limit"))
+        || stderr.contains("rate_limited")
+    {
+        return false;
+    }
     // gh reports HTTP status in stderr. Prefer it to incidental prose, so
     // an authentication or validation failure mentioning EOF stays permanent.
     if let Some(status) = failure
@@ -36,7 +45,6 @@ pub(crate) fn is_transient(error: &anyhow::Error) -> bool {
     {
         return status == 429 || (500..600).contains(&status);
     }
-    let stderr = failure.stderr.trim().to_ascii_lowercase();
     if stderr == "eof" || stderr.ends_with(": eof") {
         return true;
     }

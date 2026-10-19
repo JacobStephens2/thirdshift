@@ -26,6 +26,7 @@
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
 //!  "failing"?: ["<command> <subcommand>", ...],
+//!  "fail_next"?: {"call": "<command prefix>", "times": <count>, "error": "<stderr>"},
 //!  "advisory_create_fails_after"?: <number of records>,
 //!  "user_email"?: "<address>" | null,
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
@@ -2091,6 +2092,16 @@ pub fn main(args: Vec<String>) {
         let words: Vec<&str> = call.split(' ').collect();
         args.iter().map(String::as_str).take(words.len()).eq(words)
     };
+    if let Some(failure) = state.get("fail_next")
+        && starts_with(failure.at("call").str())
+        && failure.at("times").as_i64().unwrap() > 0
+    {
+        let left = failure.at("times").as_i64().unwrap() - 1;
+        let error = failure.at("error").str().to_owned();
+        state.at_mut("fail_next").set("times", number(left));
+        save(&state);
+        die(&error, 1);
+    }
     if failing
         .iter()
         .any(|failing| failing.as_str().is_some_and(starts_with))

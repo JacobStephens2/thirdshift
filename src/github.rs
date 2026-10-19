@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::process::{Command, Output};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -751,8 +752,8 @@ impl GitHub {
     fn gh_api_items(&self, path: &str, field: &str) -> Result<Vec<Value>> {
         let output = self.output(&["api", "--paginate", "--jq", &format!(".{field}[]"), path])?;
         if !output.status.success() {
-            bail!(check_read::ApiFailure {
-                path: path.to_string(),
+            bail!(check_read::ReadFailure {
+                command: format!("gh api {path}"),
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
             });
         }
@@ -762,16 +763,38 @@ impl GitHub {
             .with_context(|| format!("gh api {path} returned invalid JSON"))
     }
 
-    /// Run `gh <args>` and parse its stdout as JSON, failing with gh's stderr if
-    /// it exits non-zero.
+    /// Read-only JSON commands get three attempts, separated by one then two
+    /// seconds, for transient failures only. Mutations use `gh_stdout` or
+    /// `output_with_input` instead; CI observations own their retry budget.
     fn gh_json(&self, args: &[&str]) -> Result<Value> {
         let command = format!("gh {}", args[..2].join(" "));
+        for attempt in 1..=3 {
+            let error = match self.gh_json_once(args, &command) {
+                Ok(json) => return Ok(json),
+                Err(error) => error,
+            };
+            if attempt == 3 || !check_read::is_transient(&error) {
+                return Err(error);
+            }
+            crate::progress::step(format!(
+                "{command} failed (attempt {attempt}/3): {error:#}; retrying in {attempt}s"
+            ));
+            let delay = Duration::from_secs(attempt);
+            match self.interruption {
+                Interruption::Ordinary => crate::poll::sleep(delay)?,
+                Interruption::Completion => std::thread::sleep(delay),
+            }
+        }
+        unreachable!("the third attempt returns success or the last cause")
+    }
+
+    fn gh_json_once(&self, args: &[&str], command: &str) -> Result<Value> {
         let output = self.output(args)?;
         if !output.status.success() {
-            bail!(
-                "{command} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            bail!(check_read::ReadFailure {
+                command: command.to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
         }
         serde_json::from_slice(&output.stdout)
             .with_context(|| format!("{command} returned invalid JSON"))
