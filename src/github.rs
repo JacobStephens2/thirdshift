@@ -22,7 +22,7 @@ pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,
 };
-pub use trust::UntrustedIssue;
+pub use trust::{IssueText, UntrustedIssue};
 
 #[cfg(test)]
 mod execution_tests;
@@ -232,6 +232,39 @@ impl GitHub {
         self.gh_json(&args)
     }
 
+    /// Every node of `issue`'s `connection`, the `what` that `query` reads
+    /// page by page through its `$after` cursor, with the last page's answer.
+    fn paged_nodes(
+        &self,
+        issue: &IssueUrl,
+        query: &str,
+        connection: &str,
+        what: &str,
+    ) -> Result<(Value, Vec<Value>)> {
+        let mut after = None;
+        let mut all = Vec::new();
+        loop {
+            let json = self.issue_query(issue, query, after.as_deref())?;
+            let page = &json["data"]["repository"]["issue"][connection];
+            all.extend(nodes(page, connection)?.iter().cloned());
+            let info = &page["pageInfo"];
+            if !info["hasNextPage"].as_bool().with_context(|| {
+                CommandFailure::InvalidResponse(format!("{what} has no hasNextPage"))
+            })? {
+                return Ok((json, all));
+            }
+            let next = info["endCursor"].as_str().with_context(|| {
+                CommandFailure::InvalidResponse(format!("{what} has no endCursor"))
+            })?;
+            if Some(next) == after.as_deref() {
+                bail!(CommandFailure::InvalidResponse(format!(
+                    "{what} cursor did not advance"
+                )));
+            }
+            after = Some(next.to_string());
+        }
+    }
+
     /// Close `issue` with `comment`.
     pub fn close_issue(&self, issue: &IssueUrl, comment: &str) -> Result<()> {
         self.gh(&[
@@ -407,33 +440,8 @@ impl GitHub {
     /// query per page of label history, oldest first. Every page is read so
     /// missing older Claims cannot be mistaken for never-Claimed work.
     pub fn candidate(&self, issue: &IssueUrl, label: Label) -> Result<Candidate> {
-        let mut after = None;
-        let mut label_events = Vec::new();
-        let json = loop {
-            let json = self.issue_query(issue, CANDIDATE_QUERY, after.as_deref())?;
-            let page = &json["data"]["repository"]["issue"]["labelled"];
-            label_events.extend(nodes(page, "labelled")?.iter().cloned());
-            let info = &page["pageInfo"];
-            if !info["hasNextPage"]
-                .as_bool()
-                .context(CommandFailure::InvalidResponse(
-                    "label history has no hasNextPage".into(),
-                ))?
-            {
-                break json;
-            }
-            let next = info["endCursor"]
-                .as_str()
-                .context(CommandFailure::InvalidResponse(
-                    "label history has no endCursor".into(),
-                ))?;
-            if Some(next) == after.as_deref() {
-                bail!(CommandFailure::InvalidResponse(
-                    "label history cursor did not advance".into()
-                ));
-            }
-            after = Some(next.to_string());
-        };
+        let (json, label_events) =
+            self.paged_nodes(issue, CANDIDATE_QUERY, "labelled", "label history")?;
         let issue = &json["data"]["repository"]["issue"];
         let parent = issue["parent"]["url"]
             .as_str()

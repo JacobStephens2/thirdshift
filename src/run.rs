@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
@@ -56,6 +57,11 @@ pub struct Reached {
     /// In a Spec run, a line on each Ticket it landed; empty in a Run.
     pub ticket_lines: Vec<String>,
 }
+
+/// How much earlier than its start a Run counts untrusted edits from. It
+/// covers the gap since the trust check that let it start, and GitHub's
+/// clock running behind this machine's: an edit in either is still caught.
+const STARTED_MARGIN: TimeDelta = TimeDelta::minutes(5);
 
 /// How a Run, or a Spec run, ended.
 pub struct Ended {
@@ -191,6 +197,7 @@ fn run(
         claim: None,
         issue_branch: None,
         child: started_by.child().is_some(),
+        started: Utc::now() - STARTED_MARGIN,
     };
     let outcome = start(
         &mut outside,
@@ -408,6 +415,9 @@ struct LaunchAndGitHub<'a> {
     claim: Option<Claim<'a>>,
     issue_branch: Option<String>,
     child: bool,
+    /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
+    /// for untrusted edits.
+    started: DateTime<Utc>,
 }
 
 impl LaunchAndGitHub<'_> {
@@ -451,6 +461,7 @@ impl LaunchAndGitHub<'_> {
             base_fix: self.base_fix,
             logs: &self.logs,
             harness: self.harness,
+            started: self.started,
         }
     }
 }

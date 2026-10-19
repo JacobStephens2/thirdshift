@@ -12,7 +12,8 @@
 //!  "bodies"?: {"<number>": "<body>"},
 //!  "comments"?: {"<number>": ["<body>", ...]},
 //!  "author_associations"?: {"<number>": "OWNER" | "MEMBER" | "COLLABORATOR" | "NONE"},
-//!  "trust_events"?: {"<number>": [<REST issue event>, ...]},
+//!  "trust_events"?: {"<number>": [<REST issue event with created_at>, ...]},
+//!  "edits"?: {"<number>": [{"kind": "body" | "title", "by": "<login>" | null, "at"}, ...]},
 //!  "collaborators"?: ["<login>", ...],
 //!  "org_members"?: ["<login>", ...],
 //!  "owner_type"?: "User" | "Organization",
@@ -55,10 +56,11 @@
 //!
 //! An issue's title is its entry in `titles`, else `Issue <number>`, and its
 //! `createdAt` its entry in `created`, else the first second of 2020.
-//! Trust defaults to an OWNER author and a historical ready-for-agent event
-//! by the repository owner. `trust_events` overrides that history, including
-//! an empty array for an issue never labelled ready-for-agent. The REST
-//! events endpoint streams every supplied event with --paginate --jq '.[]'.
+//! Trust defaults to an OWNER author and a ready-for-agent event by the
+//! repository owner at the first second of 2020. `trust_events` overrides
+//! that history, including an empty array for an issue never labelled
+//! ready-for-agent. The REST events endpoint streams every supplied event
+//! with --paginate --jq '.[]'.
 //!
 //! `gh api --method PUT repos/<repo>/issues/<number>/labels -f
 //! labels[]=<label> ...` sets an issue's labels to exactly those given.
@@ -110,7 +112,11 @@
 //! or `unlabeled` event as `labelled` in pages of 100, using the `$after`
 //! cursor and returning `pageInfo`, and the newest of its `sub_issue_added`,
 //! `sub_issue_removed`, `blocked_by_added` and `blocked_by_removed` events as
-//! `linked`. Any other query exits 2.
+//! `linked`. A query that asks for `userContentEdits`, or for
+//! `RENAMED_TITLE_EVENT`s, answers with issue `$number`'s `body` or `title`
+//! `edits`, oldest first, as `edits` in pages of 100 using the `$after`
+//! cursor, each with its `at` time and its `by` account as `actor`. Any
+//! other query exits 2.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
@@ -189,6 +195,8 @@
 //! gh fake repo-labels '<JSON list>'       set the repository's labels
 //! gh fake timeline <number> '<JSON list>' set issue <number>'s timeline
 //!                                         events, oldest first
+//! gh fake edits <number> '<JSON list>'    set issue <number>'s body and
+//!                                         title edits, oldest first
 //! ```
 //!
 //! Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
@@ -1292,6 +1300,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                     "actor",
                     object([("login", string(repo.split('/').next().unwrap()))]),
                 ),
+                ("created_at", string("2020-01-01T00:00:00Z")),
             ])];
             let events = state
                 .get("trust_events")
@@ -1865,7 +1874,17 @@ fn graphql(state: &Json, args: &[&str]) {
     let query = variables.remove("query").unwrap_or_default();
     let asks_for = |fields: &[&str]| fields.iter().all(|field| query.contains(field));
     let is_candidate = asks_for(&["parent", "subIssues", "blockedBy", "timelineItems"]);
-    if !is_candidate && !asks_for(&["subIssues", "blockedBy", "labels", "totalCount"]) {
+    let edits = if asks_for(&["userContentEdits"]) {
+        Some(("body", "editedAt"))
+    } else if asks_for(&["RENAMED_TITLE_EVENT"]) {
+        Some(("title", "createdAt"))
+    } else {
+        None
+    };
+    if !is_candidate
+        && edits.is_none()
+        && !asks_for(&["subIssues", "blockedBy", "labels", "totalCount"])
+    {
         die(&format!("fake gh: unsupported graphql query {query}"), 2);
     }
     check_repo_is(
@@ -1881,8 +1900,11 @@ fn graphql(state: &Json, args: &[&str]) {
             1,
         );
     }
-    let issue = if is_candidate {
-        candidate(state, n, variables.get("after").map(String::as_str))
+    let after = variables.get("after").map(String::as_str);
+    let issue = if let Some((kind, field)) = edits {
+        edit_history(state, n, kind, field, after)
+    } else if is_candidate {
+        candidate(state, n, after)
     } else {
         let nodes = listed(state, "sub_issues", n)
             .iter()
@@ -1950,6 +1972,37 @@ fn blockers(state: &Json, key: &str) -> Json {
         .map(|blocker| numbered_issue(state, blocker))
         .collect();
     object([("nodes", Array(blockers))])
+}
+
+/// Issue `n`'s `kind` edits, oldest first, each at its `field` time, as the
+/// edit queries read them: the page after the `after` cursor.
+fn edit_history(state: &Json, n: &str, kind: &str, field: &str, after: Option<&str>) -> Json {
+    let edits: Vec<Json> = listed(state, "edits", n)
+        .into_iter()
+        .filter(|edit| edit.at("kind").str() == kind)
+        .map(|edit| {
+            let actor = match edit.at("by") {
+                Null => Null,
+                login => object([("login", login.clone())]),
+            };
+            object([(field, edit.at("at").clone()), ("actor", actor)])
+        })
+        .collect();
+    let start = after
+        .map(|cursor| cursor.parse::<usize>().expect("edit cursor"))
+        .unwrap_or(0);
+    let end = (start + 100).min(edits.len());
+    let page_info = object([
+        ("hasNextPage", Bool(end < edits.len())),
+        ("endCursor", string(end.to_string())),
+    ]);
+    object([(
+        "edits",
+        object([
+            ("nodes", Array(edits[start..end].to_vec())),
+            ("pageInfo", page_info),
+        ]),
+    )])
 }
 
 /// Issue `n` as the candidate query reads it.
@@ -2140,6 +2193,7 @@ fn fake_command(state: &mut Json, args: &[&str]) {
         ["timeline", n, events] => state
             .entry("timeline", object([]))
             .set(n, parse_json(events)),
+        ["edits", n, edits] => state.entry("edits", object([])).set(n, parse_json(edits)),
         ["user-email", email] => state.set("user_email", parse_json(email)),
         ["fails", call] => state
             .entry("failing", Array(Vec::new()))
