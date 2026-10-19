@@ -139,7 +139,7 @@ impl StageName {
         }
     }
 
-    fn known(name: &str) -> bool {
+    pub(super) fn known(name: &str) -> bool {
         [
             Self::Implement,
             Self::Resume,

@@ -15,7 +15,8 @@ static WAITING_LINE_INTERVAL: OnceLock<Duration> = OnceLock::new();
 /// preserving the User config's choice of how many minutes to wait.
 pub fn configure_waiting_lines(interval: Duration) {
     let interval = millis_from_env("THIRDSHIFT_WAITING_MINUTE_MS")
-        .and_then(|minute| minute.checked_mul(u32::try_from(interval.as_secs() / 60).ok()?))
+        .and_then(|minute| minute.checked_mul(u32::try_from(interval.as_secs()).ok()?))
+        .map(|interval| interval / 60)
         .unwrap_or(interval);
     let _ = WAITING_LINE_INTERVAL.set(interval);
 }

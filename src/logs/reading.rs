@@ -1,6 +1,7 @@
 //! Filesystem observations of Commands, their Runs and exact ownership.
 //! Loading uses one sampled time; reading never prints or performs Stop effects.
 
+mod health;
 mod history;
 mod selection;
 #[cfg(test)]
@@ -17,6 +18,7 @@ use serde::Serialize;
 use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
 use super::{Pass, activity};
+pub(super) use health::{Health, UsualRange};
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use selection::{Detailed, Observation};
 
@@ -28,6 +30,14 @@ pub(super) struct Snapshot {
 
 impl Snapshot {
     pub(super) fn load(root: &Path, now: DateTime<Local>) -> Result<Self> {
+        Self::load_with_silence(root, now, std::time::Duration::from_secs(10 * 60))
+    }
+
+    pub(super) fn load_with_silence(
+        root: &Path,
+        now: DateTime<Local>,
+        silent: std::time::Duration,
+    ) -> Result<Self> {
         let mut records = BTreeMap::new();
         let mut commands = Vec::new();
         let mut idle_passes = Vec::new();
@@ -57,6 +67,7 @@ impl Snapshot {
                 );
             }
         }
+        let ranges = health::UsualRanges::from_records(&records);
         let roots: Vec<_> = records
             .iter()
             .filter(|(_, tree)| {
@@ -70,6 +81,11 @@ impl Snapshot {
                 .into_iter()
                 .map(|path| Entry::Record(Box::new(tree(&path, &mut records, &now)))),
         );
+        for entry in &mut commands {
+            if let Entry::Record(command) = entry {
+                health::observe(command, &now, silent, None, &ranges);
+            }
+        }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
         Ok(Self {
             commands,
@@ -179,6 +195,8 @@ pub(super) struct Command {
     pub(super) source: &'static str,
     pub(super) command_log: PathBuf,
     pub(super) dispatched: Vec<Command>,
+    pub(super) health: Option<Health>,
+    pub(super) usual_ranges: BTreeMap<String, UsualRange>,
 }
 
 #[derive(Serialize)]
@@ -213,6 +231,8 @@ impl Command {
             children: Vec::new(),
             source: "command_record",
             dispatched: Vec::new(),
+            health: None,
+            usual_ranges: BTreeMap::new(),
         }
     }
 }

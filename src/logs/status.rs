@@ -65,7 +65,15 @@ pub(super) fn print_history(command: &super::reading::HistoricalCommand) {
 
 pub fn show(json: bool, all: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let waiting = config.effective_waiting_line_interval();
+    if waiting != config.waiting_line_interval {
+        eprintln!(
+            "thirdshift: warning: logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time ({} sec) for waiting lines",
+            waiting.as_secs()
+        );
+    }
+    let snapshot =
+        Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
@@ -93,7 +101,7 @@ pub(super) fn stage_text(command: &Command) -> String {
     if let Some(outcome) = &command.record.outcome {
         return outcome.clone();
     }
-    command.stage.as_ref().map_or_else(
+    let mut text = command.stage.as_ref().map_or_else(
         || {
             if command.state == "died" {
                 "died before first stage".into()
@@ -108,7 +116,15 @@ pub(super) fn stage_text(command: &Command) -> String {
                 format!("{} · {}", stage.name, age(stage.age_seconds))
             }
         },
-    )
+    );
+    if let Some(health) = command
+        .health
+        .as_ref()
+        .and_then(super::reading::Health::text)
+    {
+        text.push_str(&format!(" · {health}"));
+    }
+    text
 }
 
 pub(super) fn print_tickets(facts: &CommandRecord, indent: &str) {

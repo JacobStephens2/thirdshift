@@ -1126,6 +1126,9 @@ from = \"ts@acme.dev\"
 dir = \"/var/log/thirdshift\"
 waiting_line_minutes = 5
 
+[inbox]
+silent_minutes = 10
+
 [activity]
 quiet_skips = true
 

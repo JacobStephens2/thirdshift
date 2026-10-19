@@ -34,6 +34,8 @@ pub struct UserConfig {
     /// `logs.waiting_line_minutes`: time between unchanged waiting lines,
     /// by default five minutes.
     pub waiting_line_interval: Duration,
+    /// `inbox.silent_minutes`: how long both logs may be quiet, default ten minutes.
+    pub silent_interval: Duration,
     /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
     pub quiet_skips: bool,
@@ -75,6 +77,15 @@ pub struct EmailSettings {
 }
 
 impl UserConfig {
+    /// Waiting stages must write before they could be observed as Silent.
+    pub fn effective_waiting_line_interval(&self) -> Duration {
+        if self.waiting_line_interval >= self.silent_interval {
+            self.silent_interval / 2
+        } else {
+            self.waiting_line_interval
+        }
+    }
+
     /// The User config under `$HOME`, or the defaults if there is none.
     pub fn load() -> Result<Self> {
         let (home, path) = home_and_path()?;
@@ -95,6 +106,7 @@ impl UserConfig {
             launch_pull: false,
             logs_dir: home.join(".thirdshift/logs"),
             waiting_line_interval: Duration::from_secs(5 * 60),
+            silent_interval: Duration::from_secs(10 * 60),
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
@@ -124,6 +136,7 @@ impl UserConfig {
                     | "base"
                     | "launch"
                     | "logs"
+                    | "inbox"
                     | "activity"
                     | "email"
                     | "spec"
@@ -153,15 +166,11 @@ impl UserConfig {
                     },
                     ("logs", "dir", _) => bail!("logs.dir must be a string in {file}"),
                     ("logs", "waiting_line_minutes", value) => {
-                        config.waiting_line_interval = value
-                            .as_integer()
-                            .filter(|minutes| *minutes > 0)
-                            .and_then(|minutes| u64::try_from(minutes).ok()?.checked_mul(60))
-                            .map(Duration::from_secs)
-                            .with_context(|| format!(
-                                "logs.waiting_line_minutes must be a whole number of minutes from 1 up \
-                                 within the supported range in {file}"
-                            ))?;
+                        config.waiting_line_interval =
+                            minutes(value, "logs.waiting_line_minutes", &file)?;
+                    }
+                    ("inbox", "silent_minutes", value) => {
+                        config.silent_interval = minutes(value, "inbox.silent_minutes", &file)?;
                     }
                     ("activity", "quiet_skips", Value::Boolean(quiet)) => {
                         config.quiet_skips = *quiet
@@ -749,6 +758,9 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
 
+[inbox]
+silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
+
 [activity]
 quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
 
@@ -807,6 +819,14 @@ fn with_email_to(to: Option<String>) -> String {
 
 /// `value`, which `file` gives the setting `key`, as a whole number from 1
 /// up, or an error naming both if it is anything else.
+fn minutes(value: &Value, key: &str, file: &str) -> Result<Duration> {
+    value.as_integer()
+        .filter(|minutes| *minutes > 0)
+        .and_then(|minutes| u64::try_from(minutes).ok()?.checked_mul(60))
+        .map(Duration::from_secs)
+        .with_context(|| format!("{key} must be a whole number of minutes from 1 up within the supported range in {file}"))
+}
+
 fn whole_number_from_1(value: &Value, key: &str, file: &str) -> Result<NonZeroUsize> {
     value
         .as_integer()
@@ -917,6 +937,7 @@ mod tests {
                 "email.from",
                 "logs.dir",
                 "logs.waiting_line_minutes",
+                "inbox.silent_minutes",
                 "activity.quiet_skips",
                 "spec.parallel",
                 "pickup.limit",
