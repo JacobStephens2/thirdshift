@@ -235,6 +235,61 @@ fn write_record(scenario: &Scenario, number: u32, started: &str, ended: Option<&
 }
 
 #[test]
+fn tokenless_sessions_require_explicit_evidence_to_belong_to_an_owned_command() {
+    for evidence in ["none", "record", "models"] {
+        let scenario = Scenario::new();
+        write_record(
+            &scenario,
+            7,
+            "2026-10-03T12:00:01-04:00",
+            Some("2026-10-03T13:00:00-04:00"),
+        );
+        let folder = scenario.path(LOGS);
+        let record = folder.join("7-20261003T120000-0400~ownerA.command.json");
+        fs::rename(folder.join("7-fixture.command.json"), &record).unwrap();
+        let log = folder.join("7-20261003T120000-0400~ownerA.log");
+        fs::write(&log, "owned Command output\n").unwrap();
+        let session = folder.join("7-20261003T120000-0400-implement.jsonl");
+        fs::write(&session, "tokenless Session\n").unwrap();
+        match evidence {
+            "record" => {
+                let mut facts: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+                facts["session_log"] = serde_json::json!(session);
+                fs::write(&record, serde_json::to_vec(&facts).unwrap()).unwrap();
+            }
+            "models" => fs::write(
+                session.with_extension("models.json"),
+                serde_json::json!({"command_log": log}).to_string(),
+            )
+            .unwrap(),
+            _ => {}
+        }
+        let status = scenario.run(&["status", "--all", "--json"]);
+        assert_eq!(status.code, Some(0), "{}", status.stderr);
+        let status: Value = serde_json::from_str(&status.stdout).unwrap();
+        assert_eq!(
+            status["commands"].as_array().unwrap().len(),
+            if evidence == "none" { 2 } else { 1 },
+            "{evidence}: {status}"
+        );
+        // The later record start keeps selection independent of equal-stamp
+        // ordering while we test the inventory of the owned Command.
+        let shown = scenario.run(&["show", "widgets#7", "--json"]);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+        assert_eq!(shown["command"]["source"], "command_record");
+        assert_eq!(
+            shown["command"]["session_logs"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(session)),
+            evidence != "none",
+            "{evidence}: {shown}"
+        );
+    }
+}
+
+#[test]
 fn status_shows_recent_outcomes_and_all_history_newest_first() {
     let scenario = Scenario::new();
     let now = chrono::Local::now();

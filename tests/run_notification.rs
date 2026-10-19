@@ -143,6 +143,9 @@ fn a_notification_keeps_current_models_when_an_unrelated_record_is_corrupt() {
         .strip_prefix("7-")
         .unwrap()
         .strip_suffix(".log")
+        .unwrap()
+        .split('~')
+        .next()
         .unwrap();
     std::fs::write(
         scenario
@@ -191,6 +194,9 @@ fn a_notification_excludes_an_unrelated_commands_models_with_the_same_stamp() {
         .strip_prefix("7-")
         .unwrap()
         .strip_suffix(".log")
+        .unwrap()
+        .split('~')
+        .next()
         .unwrap();
     let directory = scenario.path(folder);
 

@@ -624,10 +624,10 @@ Everything thirdshift logs goes under `~/.thirdshift/logs/`, or the `logs.dir` s
 ├── audits/                   each Security audit's report, with its evidence
 ├── security-reviews/         each Security review's private report of old findings
 └── commands/
-    ├── architect/            <stamp>.log and Session logs
-    ├── pickup/               <n>-<stamp>.log and Session logs
-    ├── secure/               <stamp>.log and Session logs
-    └── issue/                <n>-<stamp>.log and Session logs
+    ├── architect/            <stamp>~<token>.log and Session logs
+    ├── pickup/               <n>-<stamp>~<token>.log and Session logs
+    ├── secure/               <stamp>~<token>.log and Session logs
+    └── issue/                <n>-<stamp>~<token>.log and Session logs
 ```
 
 The folder already names the repository, so no file name repeats it. `audits/` and `security-reviews/` hold vulnerability evidence, so keep the logs private (see [Security runs](#security-runs)). A **Session log** is one session's full transcript, as the Harness's JSON output, such as Claude Code's `stream-json`:
@@ -646,11 +646,13 @@ A **Command log** is everything one command printed, stderr and stdout in the or
 
 The stamp is the local time the command started, with its UTC offset, as in `20261003T120000-0400`, in the machine's time zone, or `TZ`'s if set, so it agrees with `date` and `ls -l`. A command's Command log and all of its Session logs, its Tickets' Runs' and its Base fix's included, share that one stamp, so they sort together and each can be found from the other. When a Run fails, stderr ends with the path of its most recent Session log, the place to start looking, then that of its Command log.
 
+New Command logs insert `~<token>` immediately after the stamp. The random token gives each Command its own storage even when start times agree; its Command record uses that exact stem followed by `.command.json`. Human Command names stay the same. Session writers still use the tokenless examples above during this transition; readers also accept Session names with `~<token>`. A matching stamp alone does not attach a tokenless Session to a new Command: a record reference or exact Model evidence must establish that ownership. Legacy logs and records remain readable without renaming.
+
 The **Activity log**, `activity.log`, is a short running record of what the factory did on the repository ([ADR-0011](adr/0011-thirdshift-keeps-a-per-repository-activity-log.md)). A Run, a Spec run or a Pass writes a line when it starts work, naming its Command log, and one when it ends, with its outcome; a Run you type by hand writes them too, and the run a Pass dispatched, a Spec run's Tickets and a Base fix write none of their own. A skipped Pass writes a line only when its reason differs from the last line of its own kind, so a repository that sits idle shows one line, not one per pass, and the first skip after a pass that did work always shows: that is when the repository went idle. Every line starts with the local date and time:
 
 ```
 2026-10-03 02:00:01 Pickup run skipped: no Ready issue on acme/widgets
-2026-10-03 09:30:01 Pickup run #41 started: commands/pickup/41-20261003T093001-0400.log
+2026-10-03 09:30:01 Pickup run #41 started: commands/pickup/41-20261003T093001-0400~aB3cD4eF5gH6iJ7k.log
 2026-10-03 09:52:17 Pickup run #41 ended: PR https://github.com/acme/widgets/pull/42 is merged
 2026-10-03 10:00:01 Pickup run skipped: no Ready issue on acme/widgets
 ```
@@ -1086,7 +1088,7 @@ thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400
 thirdshift: 03:00:02 #18 labelled needs-info
 thirdshift: 03:00:03 #20 blocked by #17
 thirdshift: 03:00:04 taking Ready issue #22 "Sharpen the widgets", as thirdshift https://github.com/acme/widgets/issues/22 would
-thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/commands/pickup/22-20261003T030001-0400.log
+thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/commands/pickup/22-20261003T030001-0400~aB3cD4eF5gH6iJ7k.log
 ```
 
 ### One Run notification for the issue taken

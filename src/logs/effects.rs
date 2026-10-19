@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local};
 
-use super::{activity, command_log};
+use super::{activity, owner};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Stream {
@@ -21,13 +21,9 @@ pub(super) struct Tail {
     pub bytes: Vec<u8>,
 }
 
-pub(super) trait Outside {
-    type CommandLog: Write + Send;
-
+pub(super) trait Outside: owner::Files {
     fn now(&mut self) -> DateTime<FixedOffset>;
     fn emit(&mut self, stream: Stream, line: &str) -> io::Result<()>;
-    fn open_command_log(&mut self, path: &Path) -> Result<Self::CommandLog>;
-    fn command_log_exists(&mut self, path: &Path) -> bool;
     fn activity_tail(&mut self, path: &Path, limit: u64) -> Result<Tail>;
     fn append_activity(&mut self, path: &Path, line: &str) -> Result<()>;
     fn hostname(&mut self) -> String;
@@ -38,9 +34,15 @@ pub(super) trait Outside {
 
 pub(super) struct OnMachine;
 
-impl Outside for OnMachine {
+impl owner::Files for OnMachine {
     type CommandLog = File;
 
+    fn create_command_log(&mut self, path: &Path) -> io::Result<File> {
+        owner::create(path)
+    }
+}
+
+impl Outside for OnMachine {
     fn stop_request(&mut self, record: &Path) -> Option<super::stop::Request> {
         super::stop::requested(record)
     }
@@ -78,14 +80,6 @@ impl Outside for OnMachine {
             Stream::Stdout => to(io::stdout(), line),
             Stream::Stderr => to(io::stderr(), line),
         }
-    }
-
-    fn open_command_log(&mut self, path: &Path) -> Result<File> {
-        command_log::open(path)
-    }
-
-    fn command_log_exists(&mut self, path: &Path) -> bool {
-        path.exists()
     }
 
     fn activity_tail(&mut self, path: &Path, limit: u64) -> Result<Tail> {

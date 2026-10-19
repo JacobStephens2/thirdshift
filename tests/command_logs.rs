@@ -63,7 +63,7 @@ fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
 }
 
 /// The one Command log in `commands/<folder>`, which must be named
-/// `<prefix><stamp>.log`, and its stamp.
+/// `<prefix><stamp>~<owner>.log`, and its display stamp.
 fn the_one_command_log(scenario: &Scenario, folder: &str, prefix: &str) -> (PathBuf, String) {
     let logs: Vec<_> = logs_in(scenario, &format!("commands/{folder}"))
         .into_iter()
@@ -74,6 +74,8 @@ fn the_one_command_log(scenario: &Scenario, folder: &str, prefix: &str) -> (Path
         .strip_prefix(prefix)
         .and_then(|rest| rest.strip_suffix(".log"))
         .unwrap_or_else(|| panic!("not {prefix}<stamp>.log: {}", logs[0]));
+    let (stamp, token) = stamp.split_once('~').expect("owned Command log");
+    assert!(!token.is_empty());
     assert_local_stamp(stamp);
     let path = scenario
         .path(LOGS)
@@ -138,7 +140,7 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
         [
             format!("7-{stamp}-implement.jsonl"),
             format!("7-{stamp}-implement.models.json"),
-            format!("7-{stamp}.log")
+            path.file_name().unwrap().to_str().unwrap().to_string()
         ]
     );
     assert_eq!(logs_in(&scenario, ""), ["activity.log", "commands"]);
@@ -204,7 +206,7 @@ fn a_pickup_run_that_takes_an_issue_keeps_a_command_log_from_its_first_line() {
         [
             format!("7-{stamp}-implement.jsonl"),
             format!("7-{stamp}-implement.models.json"),
-            format!("7-{stamp}.log")
+            path.file_name().unwrap().to_str().unwrap().to_string()
         ]
     );
 }
@@ -220,13 +222,13 @@ fn a_pickup_spec_keeps_its_tickets_session_logs_beside_its_command_log() {
     let result = run_in_zone(&scenario, &["pickup"], &[]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    let (_, stamp) = the_one_command_log(&scenario, "pickup", "20-");
+    let (path, stamp) = the_one_command_log(&scenario, "pickup", "20-");
     assert_eq!(
         logs_in(&scenario, "commands/pickup"),
         [
             format!("20-{stamp}-spec-review.jsonl"),
             format!("20-{stamp}-spec-review.models.json"),
-            format!("20-{stamp}.log"),
+            path.file_name().unwrap().to_str().unwrap().to_string(),
             format!("21-{stamp}-implement.jsonl"),
             format!("21-{stamp}-implement.models.json"),
             format!("22-{stamp}-implement.jsonl"),
