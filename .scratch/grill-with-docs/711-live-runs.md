@@ -491,7 +491,7 @@ Though alternatively I'm considering allowing users to "Acknowledge" by adding a
 *Checked:* A themes folder that holds fonts too is Q47.
 
 **Q43 - Glossary terms and ADRs.** The candidates:
-- **For `CONTEXT.md`:** **Inbox** (naming its groups), **Needs you**, **Silent**, **Slow**, **Usual range** and **Theme**. Each group and page name is a heading on the page, not a term.
+- **For `GLOSSARY.md`:** **Inbox** (naming its groups), **Needs you**, **Silent**, **Slow**, **Usual range** and **Theme**. Each group and page name is a heading on the page, not a term.
 - **An ADR,** "The Console has one layout, and its looks are themes made of tokens". It's hard to reverse once people have exported themes, a reader might wonder why there aren't several layouts, and you weighed both.
 
 Silence as the stall rule goes in Silent's definition. "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules, since they're cheap to change.
@@ -500,7 +500,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 
 *Answer:* agree
 
-*Checked:* `CONTEXT.md` now has Inbox, Needs you, Silent, Slow, Usual range and Theme, and the Console entry opens on the Inbox. The ADR is [0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md).
+*Checked:* `GLOSSARY.md` now has Inbox, Needs you, Silent, Slow, Usual range and Theme, and the Console entry opens on the Inbox. The ADR is [0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md).
 
 **Q44 - Recording the verdict.** #711 is closed, now that the CLI has shipped, so the pointer belongs on #776. The options:
 - (a) **Copy the three research notes from the prototype branch onto `web-ui` and commit them with this round.** Leave the prototype on `prototype/711-console`. Post a comment on #776 with the verdict and the branch commit. Then rewrite #776's body (the look, the pages, the new stories and rules) and run `/to-tickets 776`.
@@ -608,7 +608,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 - **All seven pages are wanted** (Q40 a). Scope is handled when the Specs and Tickets are cut (Q48).
 - **Built-in Themes are compiled in. Settings live in the User config, which the page can write in part** (Q41 a and b). What it may write is Q46, and where user Themes live is Q47.
 - **The built-in Themes' fonts are embedded,** as Latin-subset woff2 files at the weights they use (Q42 a). Users' own fonts are Q47.
-- **`CONTEXT.md` has Inbox, Needs you, Silent, Slow, Usual range and Theme,** and [ADR 0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md) records one layout with Themes made of tokens (Q43). "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules.
+- **`GLOSSARY.md` has Inbox, Needs you, Silent, Slow, Usual range and Theme,** and [ADR 0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md) records one layout with Themes made of tokens (Q43). "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules.
 - **The research notes are on `web-ui`, the prototype stays on its branch, and the verdict is on #776** (Q44 a).
 - **Three new User config settings** (Q45 a):
   - `inbox.days = 7`: how long an ended problem stays in Needs you, and how far back Resolved reaches. Done is one day.
@@ -667,7 +667,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 ## Research results (2026-10-19)
 
 - **#711, the CLI, has shipped and is closed.** Its Tickets #768 to #774 merged as #777 and #779 to #784, `thirdshift stop --requeue` included. Confirmed by `gh issue view` and `src/args.rs` on `main`.
-- **#776 is also labelled `architect-idea`,** so an Architecture review chose it as the next move. While it's `needs-triage`, every Architect run on thirdshift is skipped (CONTEXT.md, Architect idea). Confirmed by `gh issue view 776`.
+- **#776 is also labelled `architect-idea`,** so an Architecture review chose it as the next move. While it's `needs-triage`, every Architect run on thirdshift is skipped (GLOSSARY.md, Architect idea). Confirmed by `gh issue view 776`.
 - **Session log lines carry no time.** A Codex Session log is bare `thread.started`, `item.completed` and similar events. The Command log stamps every line `HH:MM:SS`, including one line per tool call (`implement: $ rg …`). Confirmed by `712-20261018T210511-0400-implement.jsonl` and its `.log`.
 - **CI watch logs only when the count of running checks changes.** #712's CI watch had gaps of up to 2.5 minutes, so a longer CI run could go 10 minutes without a line. Confirmed by `712-20261018T210511-0400.log`, lines 218 to 223.
 - **Session logs moved beside their Command log on 2026-10-09** (#599, commit `b26821d`). The ones before that are in `sessions/`. Confirmed by `git log` and `ls`.
