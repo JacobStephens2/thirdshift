@@ -94,3 +94,19 @@ test("the Inbox works without JavaScript and Focus auto follows system light and
   await page.emulateMedia({ colorScheme: "dark" });
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
 });
+
+test("explicit Focus light and dark override the system preference", async t => {
+  const page = await pageFor(t, { javaScriptEnabled: false });
+  const config = join(home, ".thirdshift/config.toml");
+  try {
+    for (const [theme, system, expected] of [
+      ["focus-light", "dark", "rgb(247, 247, 245)"],
+      ["focus-dark", "light", "rgb(18, 18, 20)"]
+    ]) {
+      await writeFile(config, `[console]\nport = 0\ntheme = "${theme}"\n`);
+      await page.emulateMedia({ colorScheme: system });
+      await page.goto(origin);
+      assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), expected);
+    }
+  } finally { await writeFile(config, "[console]\nport = 0\n"); }
+});

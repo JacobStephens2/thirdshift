@@ -3,33 +3,21 @@
 
 /* Focus tokens from prototype/711-console themes.js (05b1b0a), ADR 0018. */
 :root {
-  color-scheme: light;
-  --bg: #F7F7F5; --panel: #FFFFFF; --panel-2: #F0F0EE; --sel-bg: #EEEEEB;
-  --text: #18181A; --head: #18181A; --dim: #6B6B70; --rule: #E3E3E0; --link: #18181A;
-  --urgent: #D7263D; --urgent-text: #9A1424; --look: #B06800; --look-text: #7E4C00;
-  --working: #5E5E63; --working-text: #4A4A4F; --landing: #6B6B70;
-  --ready: #3F3F44; --ready-text: #3F3F44; --done: #6B6B70;
+  color-scheme: light dark;
+  --bg: light-dark(#F7F7F5, #121214); --panel: light-dark(#FFFFFF, #19191C);
+  --panel-2: light-dark(#F0F0EE, #212125); --sel-bg: light-dark(#EEEEEB, #2A2A2F);
+  --text: light-dark(#18181A, #E8E8EA); --head: var(--text); --link: var(--text);
+  --dim: light-dark(#6B6B70, #A0A0A8); --rule: light-dark(#E3E3E0, #2C2C31);
+  --urgent: light-dark(#D7263D, #FF6B78); --urgent-text: light-dark(#9A1424, #FFB0B5);
+  --look: light-dark(#B06800, #FFB020); --look-text: light-dark(#7E4C00, #FFB52E);
+  --working: light-dark(#5E5E63, #A8A8B0); --working-text: light-dark(#4A4A4F, #B4B4BC);
+  --landing: light-dark(#6B6B70, #9A9AA2); --ready: light-dark(#3F3F44, #C4C4CA);
+  --ready-text: var(--ready); --done: var(--landing);
   --font-head: "IBM Plex Sans", sans-serif; --font-body: "IBM Plex Sans", sans-serif;
   --font-mono: "IBM Plex Mono", monospace; --body-size: 14px; --head-weight: 600; --radius: 4px;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="focus-light"]) {
-    color-scheme: dark;
-    --bg: #121214; --panel: #19191C; --panel-2: #212125; --sel-bg: #2A2A2F;
-    --text: #E8E8EA; --head: #E8E8EA; --dim: #A0A0A8; --rule: #2C2C31; --link: #E8E8EA;
-    --urgent: #FF6B78; --urgent-text: #FFB0B5; --look: #FFB020; --look-text: #FFB52E;
-    --working: #A8A8B0; --working-text: #B4B4BC; --landing: #9A9AA2;
-    --ready: #C4C4CA; --ready-text: #C4C4CA; --done: #9A9AA2;
-  }
-}
-:root[data-theme="focus-dark"] {
-  color-scheme: dark;
-  --bg: #121214; --panel: #19191C; --panel-2: #212125; --sel-bg: #2A2A2F;
-  --text: #E8E8EA; --head: #E8E8EA; --dim: #A0A0A8; --rule: #2C2C31; --link: #E8E8EA;
-  --urgent: #FF6B78; --urgent-text: #FFB0B5; --look: #FFB020; --look-text: #FFB52E;
-  --working: #A8A8B0; --working-text: #B4B4BC; --landing: #9A9AA2;
-  --ready: #C4C4CA; --ready-text: #C4C4CA; --done: #9A9AA2;
-}
+:root[data-theme="focus-light"] { color-scheme: light; }
+:root[data-theme="focus-dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0 auto; max-width: 1120px; padding: 20px 28px; background: var(--bg); color: var(--text); font: var(--body-size)/1.4 var(--font-body); }
 header { border-bottom: 2px solid var(--head); padding-bottom: 14px; }

@@ -46,14 +46,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             .context("can't listen for the Console on localhost")?;
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
-        let mut router = Router::new();
-        for page in PAGES {
-            let cli = page.cli;
-            router = router.route(page.path, get(move || inbox(cli)));
-        }
-        router = router.route("/assets/{*path}", get(asset));
         let watched = executable.clone();
-        axum::serve(listener, router)
+        axum::serve(listener, router())
             .with_graceful_shutdown(async move { watched.replaced().await })
             .await
             .context("Console server failed")?;
@@ -62,6 +56,16 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
     // Drop the runtime (and its sockets) before replacing the process.
     drop(runtime);
     executable.exec()
+}
+
+fn router() -> Router {
+    let mut router = Router::new();
+    for page in PAGES {
+        let cli = page.cli;
+        router = router.route(page.path, get(move || inbox(cli)));
+    }
+    router = router.route("/assets/{*path}", get(asset));
+    router
 }
 
 #[derive(Template)]
@@ -140,8 +144,42 @@ async fn asset(Path(path): Path<String>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn every_console_route_has_a_cli_equivalent() {
+    use axum::{
+        Router,
+        routing::{Route, get},
+    };
+    use std::sync::{Arc, Mutex};
+    use tower_layer::Layer;
+
+    // Router::route_layer walks every registered method service, including
+    // routes added directly instead of through PAGES. Nothing is dispatched.
+    #[derive(Clone)]
+    struct Routes(Arc<Mutex<Vec<Route>>>);
+
+    impl Layer<Route> for Routes {
+        type Service = Route;
+        fn layer(&self, route: Route) -> Route {
+            self.0.lock().unwrap().push(route.clone());
+            route
+        }
+    }
+
+    fn registered_methods(router: Router) -> usize {
+        let routes = Routes(Arc::default());
+        let _router = router.route_layer(routes.clone());
+        routes.0.lock().unwrap().len()
+    }
+
+    fn assert_cli_parity(router: Router) {
+        // Measure the GET registration footprint through axum's public layer
+        // interface, so this does not depend on its implicit HEAD/fallback count.
+        let get_methods = registered_methods(Router::new().route("/known", get(|| async {})));
+        let expected = (super::PAGES.len() + 1) * get_methods; // one static-resource route
+        assert_eq!(
+            registered_methods(router),
+            expected,
+            "registered routes must all have a CLI pair; only static resources are exempt"
+        );
         for route in super::PAGES {
             assert!(
                 !route.cli.trim().is_empty(),
@@ -161,5 +199,18 @@ mod tests {
                 route.cli
             );
         }
+    }
+
+    #[test]
+    fn every_console_route_has_a_cli_equivalent() {
+        assert_cli_parity(super::router());
+    }
+
+    #[test]
+    #[should_panic(expected = "registered routes must all have a CLI pair")]
+    fn parity_rejects_a_route_registered_without_a_cli_pair() {
+        assert_cli_parity(
+            super::router().route("/unpaired", get(|| async { "page with no CLI pair" })),
+        );
     }
 }
