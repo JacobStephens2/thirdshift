@@ -514,7 +514,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 
 *Checked:* Read as (b), two Specs, since `/to-tickets` runs "for each spec". The ADR is written: [ADR 0016](../../docs/adr/0016-the-console-is-a-long-running-reader.md).
 
-## Round 7 (open)
+## Round 7 (answered)
 
 **Q45 - The new settings: names, and what they govern.** Q37 and Q38 add three settings to the User config. `thirdshift status` reads them too, so they belong outside `[console]`. The options:
 - (a) **`inbox.days = 7`** sets how long an ended problem stays in Needs you, and how far back Resolved reaches. Done stays at one day. **`inbox.silent_minutes = 10`** sets when a Run is Silent; it escalates at three times that. **`logs.waiting_line_minutes = 5`** sets how often a waiting stage, such as CI watch or Self-merge, writes a line. If the waiting line doesn't come more often than the silent time, `status`, the page and Setup warn, and thirdshift uses half the silent time instead, so a waiting stage never reads as Silent.
@@ -522,7 +522,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 
 *Recommended:* (a). Your answer named one period, and with one number Needs you and Resolved never disagree about what happened this week. Clamping the waiting line keeps a typo from turning every CI watch red.
 
-*Answer:* 
+*Answer:* agree
 
 **Q46 - What the page may write.** You'd like settings on this host to live in the User config, so a Theme follows you from browser to browser, and the page can change them. The options:
 - (a) **The page writes only the Console's look, under `[console]`: the chosen Theme and the hidden sections.** It never writes the allowlist, the addresses, the thresholds, or any other section. Every write is also a CLI command: `thirdshift console theme <name>` and `thirdshift console sections`. Each one keeps the file's comments, as Setup does, and goes in the Console log naming the account. The setting is per machine, so every account on that Console sees the same Theme. "New since you last looked", Pause motion, what's folded, and the peek stay in the browser. ADR 0016 is amended: the page reads, Stops, and sets its own look.
@@ -531,7 +531,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 
 *Recommended:* (a). One place for settings is what you asked for, and a signed-in phone that can change only the look can't widen who signs in. (b) is worth doing only once a machine has more than one person.
 
-*Answer:* 
+*Answer:* agree
 
 **Q47 - Your own Themes and fonts.** The options:
 - (a) **A folder, `~/.thirdshift/console/themes/`, holds one `<name>.json` per Theme you made, and a `fonts/` folder of `woff2`, `woff`, `otf` or `ttf` files.** The Console serves those fonts from its own address, so nothing comes from another site. A Theme names a font in one of three ways: a built-in family, a system stack, or a file in `fonts/`. The page's editor saves Themes into the folder. Fonts are added by copying files in, not by uploading them through the page. The CLI has `thirdshift console theme list`, `import <file>` and `export <name>`.
@@ -540,7 +540,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 
 *Recommended:* (a). Copying a font file in is one `scp` for whoever runs the machine. An upload form would be the page's first way of putting arbitrary files on the server, for little gain.
 
-*Answer:* 
+*Answer:* agree
 
 **Q48 - How the Console's Specs are cut, and the charts.** Q40 put all seven pages in, with scope managed through `/to-spec` and `/to-tickets`. The options:
 - (a) **Rewrite #776 to cover all seven pages, Themes and the settings.** `/to-tickets` puts the Waterfall's Tickets last, including matching tool calls to the Command log's times. Charts get an issue of their own (`needs-triage`), to be grilled later, since nothing yet says what they'd show. Candidates are Commands per day by outcome, each stage's time week by week, and tokens per day.
@@ -548,7 +548,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 
 *Recommended:* (a). The Waterfall is settled enough to cut Tickets for, and the charts aren't. Putting the charts in a Spec now would hold the Waterfall up behind questions nobody has asked yet.
 
-*Answer:* 
+*Answer:* agree
 
 ## Settled by earlier answers (shout if any is wrong)
 
@@ -610,6 +610,15 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 - **The built-in Themes' fonts are embedded,** as Latin-subset woff2 files at the weights they use (Q42 a). Users' own fonts are Q47.
 - **`CONTEXT.md` has Inbox, Needs you, Silent, Slow, Usual range and Theme,** and [ADR 0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md) records one layout with Themes made of tokens (Q43). "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules.
 - **The research notes are on `web-ui`, the prototype stays on its branch, and the verdict is on #776** (Q44 a).
+- **Three new User config settings** (Q45 a):
+  - `inbox.days = 7`: how long an ended problem stays in Needs you, and how far back Resolved reaches. Done is one day.
+  - `inbox.silent_minutes = 10`: when a Run is Silent. It escalates at three times that.
+  - `logs.waiting_line_minutes = 5`: how often a waiting stage writes a line.
+
+  If the waiting line doesn't come more often than the silent time, `status`, the page and Setup warn, and thirdshift uses half the silent time.
+- **The page writes only its own look, under `[console]`: the chosen Theme and the hidden sections** (Q46 a). Each write is also a CLI command (`thirdshift console theme <name>`, `thirdshift console sections`). It keeps the file's comments and goes in the Console log naming the account. The look is per machine, the same for every account. "New since you last looked", Pause motion, what's folded and the peek stay in the browser. ADR 0016 is amended to say the page reads, Stops and sets its own look.
+- **Your own Themes are files in `~/.thirdshift/console/themes/`, with a `fonts/` folder** (Q47 a). The Console serves those fonts from its own address. A Theme names a built-in family, a system stack or a file in `fonts/`. The page's editor saves Themes there. Fonts are copied in, never uploaded through the page. The CLI has `console theme list`, `import <file>` and `export <name>`.
+- **#776 is rewritten to cover all seven pages, Themes and the settings,** with the Waterfall's Tickets last (Q48 a). Charts get an issue of their own, `needs-triage`, to be grilled later.
 - **The confirm step's "requeue instead" is `thirdshift stop --requeue`,** which shipped with #773 and #774. The laptop agent thought the flag was invented; it was settled in Q12.
 - **The page borrows** nested child Runs, each stage with its age, a one-line latest event, and Stop only while the process is alive, with a confirm step on the page. Session logs get folded tool calls, collapsed thinking, a renderer per tool over a plain fallback, and appends rather than redraws (Q16 a).
 
