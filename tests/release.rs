@@ -1733,11 +1733,46 @@ fn a_red_ci_run_on_main_is_refused() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn an_unfinished_ci_run_on_main_is_refused() {
+fn an_unfinished_ci_run_on_main_is_watched_before_releasing() {
     let release = Release::new();
-    release.main_ci("in_progress", "");
+    release.ci_reports(GREEN);
+    let run = json!({
+        "branch": "main",
+        "workflow": "ci.yml",
+        "event": "push",
+        "headSha": release.origin(&["rev-parse", "main"]),
+        "status": "completed",
+        "conclusion": "success",
+        "pending_polls": 3,
+    });
+    release.gh(&["fake", "run", &run.to_string()]);
 
-    assert_refused(&release, "0.2.0", &["CI on main", "in_progress"]);
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("waiting for CI on main at"));
+    assert!(release.origin_tag("v0.2.0").is_some());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn an_unfinished_ci_run_on_main_that_does_not_succeed_pushes_nothing() {
+    for conclusion in ["failure", "cancelled", "timed_out", "skipped"] {
+        let release = Release::new();
+        let run = json!({
+            "branch": "main",
+            "workflow": "ci.yml",
+            "event": "push",
+            "headSha": release.origin(&["rev-parse", "main"]),
+            "status": "completed",
+            "conclusion": conclusion,
+            "pending_polls": 2,
+        });
+        release.gh(&["fake", "run", &run.to_string()]);
+
+        assert_refused(&release, "0.2.0", &["CI on main", conclusion]);
+        assert!(release.agent_calls().is_empty());
+    }
 }
 
 #[test]
