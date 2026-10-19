@@ -1314,9 +1314,10 @@ pub enum Mergeable {
     Unknown,
 }
 
-/// What GitHub said of a check run or commit status, under GitHub's own name
-/// for it: a check run's conclusion, or a commit status's state. What each
-/// means for CI is CI watch's to read.
+/// What GitHub said of a check run or commit status: a check run's
+/// conclusion, or that it has not completed, or a commit status's state,
+/// each named as GitHub names it. What each means for CI is CI watch's to
+/// read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Conclusion {
     /// A check run that has not completed.

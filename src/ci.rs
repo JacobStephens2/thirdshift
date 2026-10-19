@@ -477,10 +477,10 @@ fn is_failed(check: &Check) -> bool {
     reading(check) == Reading::Failed
 }
 
-fn count(checks: &[Check], reading_of: Reading) -> usize {
+fn count(checks: &[Check], wanted: Reading) -> usize {
     checks
         .iter()
-        .filter(|check| reading(check) == reading_of)
+        .filter(|check| reading(check) == wanted)
         .count()
 }
 
@@ -1096,6 +1096,23 @@ mod tests {
 
     /// Every conclusion GitHub can report, with its reading.
     fn every_conclusion() -> Vec<(Conclusion, Reading)> {
+        // No wildcard arm: a new conclusion fails to compile here until it
+        // has a row below.
+        match Conclusion::Unfinished {
+            Conclusion::Unfinished
+            | Conclusion::Pending
+            | Conclusion::Success
+            | Conclusion::Neutral
+            | Conclusion::Skipped
+            | Conclusion::Failure
+            | Conclusion::Cancelled
+            | Conclusion::TimedOut
+            | Conclusion::ActionRequired
+            | Conclusion::Stale
+            | Conclusion::StartupFailure
+            | Conclusion::Error
+            | Conclusion::Unrecognised(_) => {}
+        }
         vec![
             (Conclusion::Unfinished, Reading::Pending),
             (Conclusion::Pending, Reading::Pending),
