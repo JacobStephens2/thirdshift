@@ -12,9 +12,10 @@
 //! `Scripted`, in tests, from a script, recording each call.
 
 use std::cell::Cell;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
 mod repair_loop;
@@ -24,6 +25,7 @@ use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
+use crate::git::Git;
 use crate::github::{GitHub, IssueText};
 use crate::harness::Choice;
 use crate::interrupt;
@@ -36,6 +38,7 @@ use crate::run::{Goal, Reached};
 use crate::run_ending::Cause;
 use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
 use crate::session::{Logs, Sessions};
+use crate::skills;
 use crate::worktree::{ForeignCommits, Merge, PendingMerge, Preserved, Worktree};
 
 use repair_loop::{Repair, Upstream};
@@ -110,13 +113,16 @@ impl Delivery<'_> {
             harness: self.harness,
         };
         pull_request.begin_delivery();
-        let (issue, started) = (self.issue, self.started);
-        let unedited = move || no_untrusted_edit_since(issue, started);
+        let (issue, started, path) = (self.issue, self.started, worktree.path());
+        let before_each = move || {
+            no_untrusted_edit_since(issue, started)?;
+            hand_over_issue(issue, path)
+        };
         let (delivered, log) = Sessions::checked_within(
             self.logs,
             worktree.path(),
             self.harness,
-            &unedited,
+            &before_each,
             |sessions| {
                 let mut outside = InWorktree {
                     stage: &stage,
@@ -421,6 +427,17 @@ fn no_untrusted_edit_since(issue: &IssueUrl, started: DateTime<Utc>) -> Result<(
         .into()),
         None => Ok(()),
     }
+}
+
+/// Write `issue` to [`prompt::ISSUE_FILE`] in `worktree`, kept out of git,
+/// for the session about to start to work from: its title, its body and only
+/// the comments of Trusted accounts, as [`GitHub::issue_for_session`] gives
+/// them. Written again before each session, so each has the latest.
+fn hand_over_issue(issue: &IssueUrl, worktree: &Path) -> Result<()> {
+    skills::exclude(&Git::new(worktree), &format!("/{}", prompt::ISSUE_FILE))?;
+    let text = GitHub::new().issue_for_session(issue)?;
+    let path = worktree.join(prompt::ISSUE_FILE);
+    fs::write(&path, text).with_context(|| format!("could not write {}", path.display()))
 }
 
 /// Issue `number`'s `text` was edited during its Run by an account that is
