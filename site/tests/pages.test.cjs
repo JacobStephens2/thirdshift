@@ -5,6 +5,8 @@ const { readFile } = require("node:fs/promises");
 const { join } = require("node:path");
 const { chromium } = require("playwright");
 
+const publicPaths = ["/", "/docs/", "/how-it-works/", "/prompts/"];
+
 let server, browser, origin;
 before(async () => {
   server = createServer(async (request, response) => {
@@ -39,7 +41,7 @@ test("every public page identifies its canonical URL and purpose without JavaScr
   const page = await pageForTest(t, { javaScriptEnabled: false });
   const titles = new Set();
   const descriptions = new Set();
-  for (const path of ["/", "/docs/", "/how-it-works/", "/prompts/"]) {
+  for (const path of publicPaths) {
     assert.equal((await page.goto(`${origin}${path}`)).status(), 200);
     assert.equal(await page.locator('link[rel="canonical"]').count(), 1, path);
     assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), `https://thirdshift.app${path}`);
@@ -74,16 +76,8 @@ test("robots advertises a valid sitemap of reachable canonical pages", async (t)
     }
     return [...document.querySelectorAll("urlset > url > loc")].map(node => node.textContent);
   }, await sitemap.text());
-  assert.deepEqual(urls.sort(), [
-    "https://thirdshift.app/",
-    "https://thirdshift.app/docs/",
-    "https://thirdshift.app/how-it-works/",
-    "https://thirdshift.app/prompts/",
-  ]);
-  for (const url of urls) {
-    assert.equal((await page.goto(`${origin}${new URL(url).pathname}`)).status(), 200, url);
-    assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), url);
-  }
+  // The metadata test checks reachability and canonical URLs for this inventory.
+  assert.deepEqual(urls.sort(), publicPaths.map(path => `https://thirdshift.app${path}`));
 });
 
 test("the homepage declares the site name as static structured data", async (t) => {
