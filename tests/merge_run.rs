@@ -1097,14 +1097,14 @@ fn a_trusted_edit_while_the_run_is_under_way_leaves_its_repairs_running() {
 #[test]
 fn an_untrusted_edit_dated_just_before_the_runs_local_start_still_stops_repairs() {
     let scenario = Scenario::new();
+    // GitHub dates the edit before this machine's clock says the Run
+    // started: the gap since the trust check, or clock lag.
+    let at = (chrono::Utc::now() - chrono::TimeDelta::seconds(30)).format("%Y-%m-%dT%H:%M:%SZ");
     scenario.agent_does_in_session(
         1,
         &format!(
-            "{AGENT_OPENS_PR}{}{}",
+            "{AGENT_OPENS_PR}{}gh fake edits 7 '[{{\"kind\": \"body\", \"by\": \"outsider\", \"at\": \"{at}\"}}]'\n",
             checks_on_head(RED),
-            // GitHub dates the edit before this machine's clock says the Run
-            // started: the gap since the trust check, or clock lag.
-            "gh fake edits 7 \"[{\\\"kind\\\": \\\"body\\\", \\\"by\\\": \\\"outsider\\\", \\\"at\\\": \\\"$(date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)\\\"}]\"\n"
         ),
     );
     let result = scenario.run(&["merge", &scenario.issue_url(7)]);
