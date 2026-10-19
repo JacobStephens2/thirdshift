@@ -1229,15 +1229,33 @@ fn merge_merges_the_dispatched_runs_pull_request_into_the_named_branch() {
 fn a_named_branch_that_is_not_on_origin_is_rejected_before_any_work() {
     let scenario = scenario();
     scenario.launch_git(&["branch", "local-only"]);
+    let refs = scenario.launch_git(&["show-ref"]);
+    let remote_refs = scenario.origin_git(&["show-ref"]);
 
-    for branch in ["nowhere", "local-only"] {
+    for (branch, guidance) in [
+        (
+            "nowhere",
+            "base branch nowhere does not exist on origin or locally; \
+             create or obtain that branch first, or select a valid Base branch",
+        ),
+        (
+            "local-only",
+            "base branch local-only does not exist on origin; push it first with: \
+             git push --set-upstream origin 'refs/heads/local-only:refs/heads/local-only'",
+        ),
+    ] {
         let result = scenario.run(&["architect", "base", branch]);
 
-        scenario.assert_rejected_before_any_work(
-            &result,
-            &format!("base branch {branch} does not exist on origin; push it first"),
-        );
+        scenario.assert_rejected_before_any_work(&result, guidance);
         assert_eq!(result.code, Some(1), "{branch}");
+        assert_eq!(scenario.launch_git(&["show-ref"]), refs);
+        assert_eq!(scenario.origin_git(&["show-ref"]), remote_refs);
+        assert_eq!(
+            scenario
+                .launch_git(&["symbolic-ref", "--short", "HEAD"])
+                .trim(),
+            "main"
+        );
     }
 }
 
@@ -1746,6 +1764,122 @@ while [ -d "$root" ] && [ ! -e "$root/release" ]; do sleep 0.05; done
 /// Let an agent held by [`AGENT_WAITS_FOR_RELEASE`] go on.
 fn release(scenario: &Scenario) {
     fs::write(scenario.path("release"), "").unwrap();
+}
+
+#[test]
+fn status_names_a_live_architecture_review_by_kind_and_command_stamp() {
+    let scenario = scenario();
+    scenario.agent_does(&format!(
+        "{AGENT_WAITS_FOR_RELEASE}{AGENT_PUBLISHES_A_TICKET}"
+    ));
+    let held = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    let result = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    release(&scenario);
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+    let command = &status["commands"][0];
+    assert_eq!(command["kind"], "Architect run", "{status}");
+    assert_eq!(command["issue"], serde_json::Value::Null);
+    assert_eq!(command["state"], "live");
+    assert_eq!(command["stage"]["name"], "Architecture review");
+    assert!(command["stage"]["age_seconds"].is_number());
+    let log = scenario.log_files(
+        "home/.thirdshift/logs/acme/widgets/commands/architect",
+        "log",
+    );
+    let name = format!("architect-{}", log[0].strip_suffix(".log").unwrap());
+    assert_eq!(command["name"], name);
+    assert!(text.stdout.contains(&name), "{}", text.stdout);
+    assert!(
+        text.stdout.contains("Architecture review ·"),
+        "{}",
+        text.stdout
+    );
+}
+
+#[test]
+fn status_nests_the_architect_plans_run_or_spec_run_under_its_pass() {
+    for (plan, held_issue, base, kind, stage) in [
+        (
+            single_ticket_plan as fn() -> Scenario,
+            8,
+            "main",
+            "Run",
+            "implement",
+        ),
+        (|| spec_plan(""), 9, "issue-8", "Spec run", "Tickets"),
+    ] {
+        let scenario = plan();
+        scenario.agent_does_for(
+            held_issue,
+            &format!(
+                "{AGENT_WAITS_FOR_RELEASE}{}",
+                agent_opens_pr(held_issue, base)
+            ),
+        );
+        let held = scenario.run_until(&["architect"], &[], "started");
+        let result = scenario.run(&["status", "--json"]);
+        let text = scenario.run(&["status"]);
+        release(&scenario);
+        let ended = held.finish();
+        assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+        let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(status["commands"].as_array().unwrap().len(), 1, "{status}");
+        let pass = &status["commands"][0];
+        assert_eq!(pass["kind"], "Architect run");
+        assert_eq!(pass["issue"], serde_json::Value::Null);
+        let dispatched = &pass["dispatched"][0];
+        assert_eq!(dispatched["kind"], kind, "{status}");
+        assert_eq!(dispatched["issue"]["number"], 8);
+        assert_eq!(dispatched["stage"]["name"], stage);
+        assert!(dispatched["stage"]["age_seconds"].is_number());
+        if kind == "Spec run" {
+            assert_eq!(dispatched["children"][0]["issue"]["number"], held_issue);
+            assert_eq!(dispatched["children"][0]["stage"]["name"], "implement");
+            assert_eq!(dispatched["children"][0]["state"], "live");
+        }
+        assert!(
+            text.stdout.contains(&format!("\n  {kind} acme/widgets#8")),
+            "{}",
+            text.stdout
+        );
+        let folder = "home/.thirdshift/logs/acme/widgets/commands/architect";
+        let record = scenario.command_record(folder);
+        assert_eq!(record["outcome"], "ready for review");
+        assert_eq!(record["dispatched"][0]["outcome"], "ready for review");
+        assert_eq!(record["dispatched"][0]["issue_branch"], "issue-8");
+        assert_eq!(
+            record["dispatched"][0]["pull_request"],
+            pr_from(&scenario, "issue-8")["url"]
+        );
+    }
+}
+
+#[test]
+fn a_dispatch_that_fails_its_launch_checks_still_has_a_record() {
+    let scenario = scenario();
+    scenario.agent_does_in_session(
+        1,
+        &format!("{AGENT_PUBLISHES_A_TICKET}\ngit config user.name ''\n"),
+    );
+    let ended = scenario.run(&["architect"]);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert!(
+        ended.stderr.contains("git user.name is not set"),
+        "{}",
+        ended.stderr
+    );
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/architect";
+    let record = scenario.command_record(folder);
+    assert_eq!(
+        record["dispatched"].as_array().unwrap().len(),
+        1,
+        "{record}"
+    );
+    assert_eq!(record["dispatched"][0]["issue"]["number"], 8);
+    assert_eq!(record["dispatched"][0]["outcome"], "failed");
 }
 
 #[test]

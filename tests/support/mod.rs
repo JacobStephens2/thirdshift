@@ -223,15 +223,26 @@ impl Drop for TerminalCommand {
 }
 
 /// An event on an issue's timeline that a Pickup run reads to tell whether
-/// the issue has settled.
+/// the issue has settled or been handed back after a Claim.
+#[derive(Clone, Copy)]
 pub enum TimelineEvent<'a> {
     /// This label was applied.
     Labelled(&'a str),
+    /// This label was removed.
+    Unlabelled(&'a str),
     SubIssueAdded,
     SubIssueRemoved,
     BlockedByAdded,
     BlockedByRemoved,
 }
+
+/// A successful session for issue #7: commit a feature and open a PR into main.
+pub const AGENT_COMMITS_AND_OPENS_PR: &str = r#"
+echo "feature" > feature.txt
+git add feature.txt
+git commit -q -m "Add feature"
+gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
+"#;
 
 pub struct RunResult {
     pub stdout: String,
@@ -342,6 +353,19 @@ pub fn after_start<'a>(stderr: &'a str, starting: &str) -> &'a str {
         "not starting as {starting:?}: {stderr}"
     );
     rest
+}
+
+/// The elapsed summary appears once, directly before the final outcome.
+pub fn assert_elapsed_before(stderr: &str, outcome: &str) {
+    let lines: Vec<_> = stderr.lines().collect();
+    let elapsed: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("Took: "))
+        .collect();
+    assert_eq!(elapsed.len(), 1, "{stderr}");
+    assert!(elapsed[0].1.starts_with("thirdshift: Took: "), "{stderr}");
+    assert_eq!(lines.get(elapsed[0].0 + 1), Some(&outcome), "{stderr}");
 }
 
 /// The lines that end a Failed run's `stderr` once its cause is given, the
@@ -460,6 +484,11 @@ impl Scenario {
         self.command(args).output().unwrap().into()
     }
 
+    /// Like [`Scenario::run`], launched from `dir` with the same isolated environment.
+    pub fn run_from(&self, dir: &Path, args: &[&str]) -> RunResult {
+        self.command(args).current_dir(dir).output().unwrap().into()
+    }
+
     /// Like [`Scenario::run`], with extra environment variables.
     pub fn run_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> RunResult {
         let mut command = self.command(args);
@@ -498,6 +527,18 @@ impl Scenario {
         let mut command = self.command(args);
         command.envs(env.iter().copied());
         self.spawn_until_started(command, started)
+    }
+
+    /// Start a reader with stdout in a file, so tests can observe streaming
+    /// output before the Command being read ends. The caller must finish it.
+    pub fn read_to_file(&self, args: &[&str], output: &Path) -> HeldRun {
+        let mut command = self.command(args);
+        command.stdout(fs::File::create(output).unwrap());
+        command.stderr(Stdio::piped());
+        HeldRun {
+            child: command.spawn().unwrap(),
+            exited: false,
+        }
     }
 
     /// Run a copy of thirdshift, `installed/thirdshift` in the scenario root,
@@ -880,6 +921,9 @@ test -f {root}/{COPY_REPLACED}
                 let event = match event {
                     TimelineEvent::Labelled(label) => {
                         return json!({"event": "labeled", "label": label, "at": at});
+                    }
+                    TimelineEvent::Unlabelled(label) => {
+                        return json!({"event": "unlabeled", "label": label, "at": at});
                     }
                     TimelineEvent::SubIssueAdded => "sub_issue_added",
                     TimelineEvent::SubIssueRemoved => "sub_issue_removed",
@@ -1281,6 +1325,17 @@ test -f {root}/{COPY_REPLACED}
                     .is_some_and(|ext| ext == extension)
             })
             .collect()
+    }
+
+    /// The single retained Command record in a command folder.
+    pub fn command_record(&self, folder: &str) -> Value {
+        let records: Vec<_> = self
+            .entries(folder)
+            .into_iter()
+            .filter(|name| name.ends_with(".command.json"))
+            .collect();
+        assert_eq!(records.len(), 1, "{records:?}");
+        serde_json::from_slice(&fs::read(self.path(folder).join(&records[0])).unwrap()).unwrap()
     }
 
     /// Point the launch clone's origin at `url`, another spelling of the

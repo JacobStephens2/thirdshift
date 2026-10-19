@@ -482,3 +482,72 @@ fn a_ticket_or_blocker_without_a_valid_url_fails_the_graph_read() {
         },
     );
 }
+
+#[test]
+fn check_reads_classify_transport_and_api_failures_without_hiding_diagnostics() {
+    with_recorded_signal(
+        "github::execution_tests::check_reads_classify_transport_and_api_failures_without_hiding_diagnostics",
+        |_| {
+            let fixture = Fixture::new("");
+            for (stderr, transient) in [
+                ("unexpected end of JSON input", true),
+                ("Get https://api.github.com: unexpected EOF", true),
+                ("Get \"https://api.github.com\": EOF", true),
+                ("EOF", true),
+                ("error connecting to api.github.com", true),
+                ("dial tcp: lookup api.github.com: no such host", true),
+                ("read tcp: connection reset by peer", true),
+                ("net/http: TLS handshake timeout", true),
+                ("gh: too many requests (HTTP 429)", true),
+                ("gh: Bad Gateway (HTTP 502)", true),
+                ("gh: service unavailable (HTTP 503)", true),
+                ("gh: Bad credentials (HTTP 401)", false),
+                ("gh: Resource not accessible (HTTP 403)", false),
+                ("gh: Not Found (HTTP 404)", false),
+                ("gh: Validation Failed (HTTP 422)", false),
+                ("gh: Bad credentials (HTTP 401): unexpected EOF", false),
+                ("gh: Bad credentials (HTTP 401): EOF", false),
+                (
+                    "To get started with GitHub CLI, please run: gh auth login",
+                    false,
+                ),
+                ("unknown flag: --paginate", false),
+                ("unsupported response format", false),
+            ] {
+                fixture.script(&format!("cat >&2 <<'ERROR'\n{stderr}\nERROR\nexit 1"));
+                let error = GitHub::new().checks_on(&issue(), "abc").err().unwrap();
+                assert_eq!(check_read_is_transient(&error), transient, "{error:#}");
+                assert!(format!("{error:#}").contains(stderr));
+            }
+            for (stdout, transient) in [("{\"name\":", true), ("invalid", false), ("{}", false)] {
+                fixture.script(&format!("cat <<'JSON'\n{stdout}\nJSON"));
+                let error = GitHub::new().checks_on(&issue(), "abc").err().unwrap();
+                assert_eq!(check_read_is_transient(&error), transient, "{error:#}");
+            }
+        },
+    );
+}
+
+#[test]
+fn cancellation_during_a_ci_check_read_starts_no_further_request() {
+    with_recorded_signal(
+        "github::execution_tests::cancellation_during_a_ci_check_read_starts_no_further_request",
+        |signal| {
+            let fixture = Fixture::new("");
+            fixture.script(&format!(
+                "echo read >> '{}'\nkill -{signal} {}\nexec sleep 3",
+                fixture.path("reads").display(),
+                std::process::id()
+            ));
+            let started = Instant::now();
+            let error = crate::ci::watch(&issue(), "abc", None, &mut || Ok(()))
+                .err()
+                .unwrap();
+
+            assert_eq!(error.to_string(), "interrupted");
+            assert_eq!(fs::read_to_string(fixture.path("reads")).unwrap(), "read\n");
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(!exists(fixture.pid().unwrap()));
+        },
+    );
+}

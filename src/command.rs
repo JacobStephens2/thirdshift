@@ -12,6 +12,7 @@
 //! skipped pass.
 
 use std::process::ExitCode;
+use std::time::Instant;
 
 use crate::architect::{self, Reviewed};
 use crate::config::UserConfig;
@@ -84,6 +85,8 @@ impl From<pickup::Skipped> for Skip {
 /// one, to finish with its [`Ending`].
 pub struct Started {
     notification: Option<RunNotification>,
+    /// Only the top-level command reports elapsed wall time.
+    started: Option<Instant>,
 }
 
 /// Start a command that begins in the logs as `begin` says: load the User
@@ -97,6 +100,7 @@ pub fn start(
     ask: impl FnOnce(&UserConfig) -> NotificationAsk,
     about: About,
 ) -> Result<(UserConfig, Started), ExitCode> {
+    let started = (!matches!(begin, Begin::ChildRun(..))).then(Instant::now);
     logs::begin(begin);
     let config = setup::offer()
         .and_then(|()| UserConfig::load())
@@ -111,7 +115,13 @@ pub fn start(
         }
         NotificationAsk::Skip => None,
     };
-    Ok((config, Started { notification }))
+    Ok((
+        config,
+        Started {
+            notification,
+            started,
+        },
+    ))
 }
 
 impl Started {
@@ -144,7 +154,17 @@ impl Started {
             Err(skip) => return run_ending::show_skip(skip),
         };
         logs::ended(account.summary());
-        let code = account.show();
+        logs::finished(&account);
+        let elapsed = match &ending {
+            Ending::Run(_)
+            | Ending::Architect {
+                dispatched: Some(_),
+                ..
+            }
+            | Ending::SecurityFix { .. } => self.started.map(|started| started.elapsed()),
+            _ => None,
+        };
+        let code = account.show(elapsed);
         if let Some(notification) = self.notification {
             notification.send(&account);
         }

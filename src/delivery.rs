@@ -11,6 +11,7 @@
 //! [`FailedOutside`]: [`InWorktree`] and [`OnFailure`] do each for real;
 //! `Scripted`, in tests, from a script, recording each call.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -26,13 +27,15 @@ use crate::github::GitHub;
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::logs::{self, Stage as CommandStage};
 use crate::progress;
 use crate::prompt;
+use crate::recovery::{Preservation, Recovery, Stage};
 use crate::run::{Goal, Reached};
 use crate::run_ending::Cause;
 use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
 use crate::session::{Logs, Sessions};
-use crate::worktree::{ForeignCommits, Merge, PendingMerge, Worktree};
+use crate::worktree::{ForeignCommits, Merge, PendingMerge, Preserved, Worktree};
 
 use repair_loop::{Repair, Upstream};
 /// A Delivery of the pull request for `issue`, the Run's issue or the Spec,
@@ -87,6 +90,11 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
+        let stage = Cell::new(if opening.catch_up_from_origin {
+            Stage::SpecReview
+        } else {
+            Stage::Implementation
+        });
         let route = Route {
             security_review: self.security_review,
             issue: self.issue,
@@ -99,6 +107,7 @@ impl Delivery<'_> {
         let (delivered, log) =
             Sessions::within(self.logs, worktree.path(), self.harness, |sessions| {
                 let mut outside = InWorktree {
+                    stage: &stage,
                     issue: self.issue,
                     worktree: &worktree,
                     base: self.base,
@@ -116,12 +125,21 @@ impl Delivery<'_> {
                 ticket_lines: Vec::new(),
             }),
             Err(error) => {
+                if error.is::<SecurityHold>() {
+                    stage.set(Stage::SecurityReview);
+                }
+                let path = worktree.path().to_path_buf();
                 let mut outside = OnFailure {
                     base: self.base,
                     worktree,
                     pull_request,
                 };
-                Err(fail(&mut outside, log, error))
+                let mut failed = fail(&mut outside, log, error);
+                if let Some(recovery) = &mut failed.recovery {
+                    recovery.stage = stage.get();
+                    recovery.worktree = Some(path);
+                }
+                Err(failed)
             }
         }
     }
@@ -237,9 +255,10 @@ impl Route<'_> {
             outside.warn(
                 &error,
                 format!(
-                    "could not close issue #{number}, so if it is still open, close it by hand: \
+                    "could not close issue #{number} ({url}), so if it is still open, close it by hand: \
                      gh issue close {number} --repo {repo} --comment '{quoted}'",
                     number = issue.number,
+                    url = issue.url,
                     repo = issue.repo_slug(),
                     quoted = comment.replace('\'', r"'\''")
                 ),
@@ -287,11 +306,20 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
     let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
     let keep_ready = error.is::<PolicyRefusal>() || error.is::<SecurityHold>();
-    if !keep_ready && let Err(problem) = outside.preserve_failed_run(&reason) {
-        outside.step(format!(
-            "could not push the failed run's work, so it may exist only locally: {problem:#}"
-        ));
-    }
+    let preservation = if keep_ready {
+        Preservation::Remote
+    } else {
+        match outside.preserve_failed_run(&reason) {
+            Ok(Preserved::Pushed) => Preservation::Remote,
+            Ok(Preserved::NoChanges) => Preservation::None,
+            Err(problem) => {
+                outside.step(format!(
+                    "could not push the failed run's work, so it may exist only locally: {problem:#}"
+                ));
+                Preservation::Local
+            }
+        }
+    };
     let pr_url = match outside.finish_pr(keep_ready) {
         Ok(pr_url) => pr_url,
         Err(problem) => {
@@ -300,6 +328,7 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
         }
     };
     FailedRun {
+        recovery: Some(Box::new(Recovery::new(Stage::Implementation, preservation))),
         error,
         pr_url,
         log,
@@ -346,7 +375,7 @@ trait Outside {
 trait FailedOutside {
     /// Preserve the Failed run's work for `reason`, retaining it locally if
     /// preservation fails.
-    fn preserve_failed_run(&mut self, reason: &str) -> Result<()>;
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<Preserved>;
     /// Finish the captured PR through completion operations after preservation.
     fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>>;
     /// Whether an interrupt was requested.
@@ -358,6 +387,7 @@ trait FailedOutside {
 /// A Delivery's worktree, its sessions, its Base fix, and its issue and pull
 /// request on GitHub.
 struct InWorktree<'a> {
+    stage: &'a Cell<Stage>,
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
     base: &'a str,
@@ -372,11 +402,28 @@ impl Outside for InWorktree<'_> {
     }
 
     fn session(&mut self, kind: &str, prompt: &str) -> Result<()> {
-        self.sessions.run(kind, prompt)
+        self.stage.set(if kind == "spec-review" {
+            Stage::SpecReview
+        } else {
+            Stage::Implementation
+        });
+        self.sessions.run(kind, prompt)?;
+        self.pull_request.ensure_actionable(false)
     }
 
     fn security_review(&mut self, prompt: &str) -> Result<Review> {
-        crate::security::review::run(self.sessions, self.worktree, self.issue, self.base, prompt)
+        self.stage.set(Stage::SecurityReview);
+        logs::stage(CommandStage::SecurityReview);
+        self.pull_request.ensure_actionable(false)?;
+        let review = crate::security::review::run(
+            self.sessions,
+            self.worktree,
+            self.issue,
+            self.base,
+            prompt,
+        )?;
+        self.pull_request.ensure_actionable(false)?;
+        Ok(review)
     }
 
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()> {
@@ -384,7 +431,11 @@ impl Outside for InWorktree<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
-        self.worktree.push()
+        self.stage.set(Stage::Push);
+        logs::stage(CommandStage::PullRequest);
+        self.pull_request.ensure_actionable(false)?;
+        self.worktree
+            .push_if_actionable(&mut || self.pull_request.ensure_actionable(false))
     }
 
     fn write_built_with(&mut self, choice: &Choice) -> Result<()> {
@@ -392,11 +443,15 @@ impl Outside for InWorktree<'_> {
     }
 
     fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified> {
+        self.stage.set(Stage::PullRequest);
+        logs::stage(CommandStage::PullRequest);
         self.pull_request.mark_ready(checklist)
     }
 
     fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()> {
+        self.stage.set(Stage::Repair);
         let mut outside = RunOutside {
+            stage: self.stage,
             issue: self.issue,
             worktree: self.worktree,
             base: self.base,
@@ -442,8 +497,15 @@ struct OnFailure<'a> {
 }
 
 impl FailedOutside for OnFailure<'_> {
-    fn preserve_failed_run(&mut self, reason: &str) -> Result<()> {
-        self.worktree.preserve_failed_run(self.base, reason)
+    fn preserve_failed_run(&mut self, reason: &str) -> Result<Preserved> {
+        if let Err(error) = self.pull_request.ensure_preservable() {
+            self.worktree.retain_local();
+            return Err(error);
+        }
+        self.worktree
+            .preserve_failed_run(self.base, reason, &mut || {
+                self.pull_request.ensure_preservable()
+            })
     }
 
     fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>> {
@@ -462,6 +524,7 @@ impl FailedOutside for OnFailure<'_> {
 /// What a Run's Repair loop reaches outside itself: the Run's worktree, its
 /// Repair sessions, its Base fix, its issue and its pull request.
 struct RunOutside<'a> {
+    stage: &'a Cell<Stage>,
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
     base: &'a str,
@@ -474,7 +537,17 @@ struct RunOutside<'a> {
 impl repair_loop::Outside for RunOutside<'_> {
     type Pending = PendingMerge;
 
+    fn stage(&mut self, stage: Stage) {
+        self.stage.set(stage);
+        match stage {
+            Stage::SelfMerge => logs::stage(CommandStage::SelfMerge),
+            Stage::PullRequest => logs::stage(CommandStage::PullRequest),
+            _ => {}
+        }
+    }
+
     fn merge_base_branch(&mut self) -> Result<Merge> {
+        self.pull_request.ensure_actionable(true)?;
         self.worktree.merge_base_branch(self.base)
     }
 
@@ -487,11 +560,19 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
-        self.worktree.push()
+        self.stage.set(Stage::Push);
+        logs::stage(CommandStage::PullRequest);
+        self.pull_request.ensure_actionable(true)?;
+        self.worktree
+            .push_if_actionable(&mut || self.pull_request.ensure_actionable(true))
     }
 
     fn head(&mut self) -> Result<String> {
         self.worktree.head()
+    }
+
+    fn same_tree_as(&mut self, commit: &str) -> Result<bool> {
+        self.worktree.same_tree_as(commit)
     }
 
     fn base_branch_moved(&mut self) -> Result<bool> {
@@ -499,11 +580,16 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn new_commits_on_origin(&mut self) -> Result<ForeignCommits> {
+        self.pull_request.ensure_actionable(true)?;
         self.worktree.new_commits_on_origin()
     }
 
     fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
-        ci::watch(self.issue, head, base_commit)
+        self.stage.set(Stage::Ci);
+        logs::stage(CommandStage::CiWatch);
+        ci::watch(self.issue, head, base_commit, &mut || {
+            self.pull_request.ensure_actionable(true)
+        })
     }
 
     fn rerun(
@@ -512,10 +598,16 @@ impl repair_loop::Outside for RunOutside<'_> {
         base_commit: Option<&str>,
         failed: &FailedChecks,
     ) -> Result<Option<Ci>> {
-        ci::rerun(self.issue, head, base_commit, failed)
+        self.stage.set(Stage::Ci);
+        logs::stage(CommandStage::CiWatch);
+        ci::rerun(self.issue, head, base_commit, failed, &mut || {
+            self.pull_request.ensure_actionable(true)
+        })
     }
 
     fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
+        self.stage.set(Stage::Repair);
+        logs::stage(CommandStage::Repair);
         let (issue, base, pr_url) = (self.issue, self.base, self.pr_url);
         let branch = self.worktree.branch();
         let prompt = match repair {
@@ -528,7 +620,9 @@ impl repair_loop::Outside for RunOutside<'_> {
             Repair::CiFix(failed) => prompt::ci_fix_repair(issue, base, branch, pr_url, failed),
             Repair::Review { from } => prompt::review_repair(issue, branch, pr_url, from),
         };
-        self.sessions.run(kind, &prompt)
+        self.pull_request.ensure_actionable(true)?;
+        self.sessions.run(kind, &prompt)?;
+        self.pull_request.ensure_actionable(true)
     }
 
     fn sees_inherited_failures(&mut self) -> bool {
@@ -536,6 +630,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn base_fix(&mut self, base_commit: &str, failed: &FailedChecks) -> Result<()> {
+        self.stage.set(Stage::BaseFix);
         self.base_fix.fix(
             self.worktree.launch(),
             self.issue,
@@ -551,6 +646,8 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn merge(&mut self, head: &str) -> Result<MergeAttempt> {
+        self.stage.set(Stage::SelfMerge);
+        logs::stage(CommandStage::SelfMerge);
         self.pull_request.merge(head)
     }
 
@@ -691,9 +788,10 @@ mod tests {
     }
 
     impl FailedOutside for Scripted {
-        fn preserve_failed_run(&mut self, reason: &str) -> Result<()> {
+        fn preserve_failed_run(&mut self, reason: &str) -> Result<Preserved> {
             self.calls.push(Call::Preserve(reason.to_string()));
-            self.check(Fails::Preserve)
+            self.check(Fails::Preserve)?;
+            Ok(Preserved::Pushed)
         }
         fn finish_pr(&mut self, keep_ready: bool) -> Result<Option<String>> {
             self.calls.push(Call::Finish(keep_ready));

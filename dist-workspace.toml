@@ -1,10 +1,13 @@
 [workspace]
 members = ["cargo:."]
 
-# Config for 'dist'. Change it here, then run `dist generate` to regenerate
+# Config for dist. Run `python3 scripts/generate-release.py` to regenerate
 # .github/workflows/release.yml; never edit that file by hand.
 [dist]
 cargo-dist-version = "0.33.0"
+# Supported opt-out for event policy absent from dist 0.33. CI checks our
+# generator instead; it still generates all build and publication jobs.
+allow-dirty = ["ci"]
 ci = "github"
 targets = ["x86_64-unknown-linux-musl", "aarch64-apple-darwin"]
 installers = ["shell"]

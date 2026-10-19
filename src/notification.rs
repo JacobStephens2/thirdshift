@@ -144,6 +144,7 @@ impl RunNotification {
         let host = host::name();
         let command_log = logs::command_log_path();
         let mut text = body(
+            &self.subject,
             account,
             self.built_with.as_deref(),
             command_log.as_deref(),
@@ -204,13 +205,15 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 }
 
 /// The plain-text body of the notification for a command that ended as
-/// `account` tells, with its configured `built_with` line, if known,
+/// `account` tells, about `subject`, with its configured `built_with` line, if known,
 /// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
-/// outcome, as the subject gives it. An Architect run's then tells how its
+/// outcome, as the subject gives it, then the original Issue URL when the
+/// subject names an issue. An Architect run's then tells how its
 /// review ended, and the outcome of the run it dispatched, if any. The cause
 /// is left out of an interrupted command's, whose outcome says so.
 fn body(
+    subject: &Subject,
     account: &Account,
     built_with: Option<&str>,
     command_log: Option<&Path>,
@@ -218,6 +221,9 @@ fn body(
     took: Duration,
 ) -> String {
     let mut text = format!("Result:       {}\n", account.outcome);
+    if let Subject::Issue { issue, .. } = subject {
+        text += &format!("Issue:        {}\n", issue.url);
+    }
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
             Err(_) if account.failed_reproduction.is_some() => "audit complete",
@@ -296,27 +302,19 @@ fn body(
         text += &format!("{built_with}\n");
     }
     text += &format!("Host:         {host}\n");
-    text += &format!("Took:         {}\n", self::took(took));
+    text += &format!("Took:         {}\n", progress::duration(took));
     if !account.ticket_lines.is_empty() {
         text += "\nTickets:\n";
         for line in account.ticket_lines {
             text += &format!("{line}\n");
         }
     }
-    text
-}
-
-/// `duration` to the second, as in `1h 2m 3s`, `2m 3s` or `3s`.
-fn took(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
-    if hours > 0 {
-        format!("{hours}h {minutes}m {seconds}s")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
-    } else {
-        format!("{seconds}s")
+    if let Some(recovery) = account.recovery {
+        for line in recovery.lines() {
+            text += &format!("{line}\n");
+        }
     }
+    text
 }
 
 #[cfg(test)]
@@ -360,6 +358,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            recovery: None,
             urls: vec![PR],
         }
     }
@@ -379,6 +378,7 @@ mod tests {
             review: None,
             security_findings: None,
             failed_reproduction: None,
+            recovery: None,
             urls: Vec::new(),
         }
     }
@@ -386,13 +386,20 @@ mod tests {
     /// The subject and body of the notification about `subject` for a
     /// command that ended as `account` tells, if it sends one.
     fn told(subject: &Subject, account: &Account) -> Option<(String, String)> {
-        subject_line(subject, account.outcome).map(|subject| (subject, body_of(account)))
+        subject_line(subject, account.outcome).map(|line| (line, body_of(subject, account)))
     }
 
     /// The body for a command that ended as `account` tells, run on
     /// `droplet-1` for 4s with no Command log.
-    fn body_of(account: &Account) -> String {
-        body(account, None, None, "droplet-1", Duration::from_secs(4))
+    fn body_of(subject: &Subject, account: &Account) -> String {
+        body(
+            subject,
+            account,
+            None,
+            None,
+            "droplet-1",
+            Duration::from_secs(4),
+        )
     }
 
     #[test]
@@ -403,6 +410,7 @@ mod tests {
                 "[thirdshift] acme/widgets#123 Add export button: merged".to_string(),
                 format!(
                     "Result:       merged\n\
+                     Issue:        https://github.com/acme/widgets/issues/123\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
                      Host:         droplet-1\n\
@@ -422,6 +430,7 @@ mod tests {
                 "[thirdshift] acme/widgets#123 Add export button: failed".to_string(),
                 format!(
                     "Result:       failed\n\
+                     Issue:        https://github.com/acme/widgets/issues/123\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session log:  {LOG}\n\
@@ -444,6 +453,7 @@ mod tests {
             Some((
                 "[thirdshift] acme/widgets#123 Add export button: interrupted".to_string(),
                 "Result:       interrupted\n\
+                 Issue:        https://github.com/acme/widgets/issues/123\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
                     .to_string()
@@ -492,6 +502,7 @@ mod tests {
                 line: format!("idea filed: {PLAN}"),
                 dispatched: None,
             }),
+            recovery: None,
             urls: vec![PLAN],
             ..merged()
         };
@@ -557,7 +568,7 @@ mod tests {
     #[test]
     fn the_body_leaves_out_what_the_run_does_not_have() {
         assert_eq!(
-            body_of(&failed("origin mismatch")),
+            body_of(&Subject::Pending, &failed("origin mismatch")),
             "Result:       failed\n\
              Cause:        origin mismatch\n\
              Host:         droplet-1\n\
@@ -569,6 +580,7 @@ mod tests {
         };
         assert_eq!(
             body(
+                &Subject::Pending,
                 &account,
                 Some("Built with claude · opus · high"),
                 Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
@@ -593,7 +605,7 @@ mod tests {
             ..failed("claude exited 1")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        claude exited 1\n\
@@ -622,7 +634,7 @@ mod tests {
             ..failed("CI red on test, which also fails on main at 362b9ca; fix main first")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        CI red on test, which also fails on main at 362b9ca; fix main first\n\
@@ -645,7 +657,7 @@ mod tests {
             ..failed("Tickets not done: #21, #22")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Cause:        Tickets not done: #21, #22\n\
              Host:         droplet-1\n\
@@ -668,18 +680,5 @@ mod tests {
             architect_subject(None, "review failed"),
             "[thirdshift] Architect run: review failed"
         );
-    }
-
-    #[test]
-    fn took_is_to_the_second() {
-        for (seconds, text) in [
-            (0, "0s"),
-            (59, "59s"),
-            (60, "1m 0s"),
-            (3599, "59m 59s"),
-            (3723, "1h 2m 3s"),
-        ] {
-            assert_eq!(took(Duration::from_secs(seconds)), text);
-        }
     }
 }

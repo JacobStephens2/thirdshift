@@ -4,6 +4,13 @@ use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 use crate::labels::{NEEDS_TRIAGE, READY_FOR_AGENT};
 
+/// Shared by sessions that may edit source. Read-only sessions omit this;
+/// a Resume retains the original session's guidance in its context.
+const SOURCE_EDITS: &str = "For source edits, prefer an available structured patch/edit tool that makes the intended context and changed regions explicit \
+    (for example, `apply_patch` on Codex). Use the Harness's equivalent when available. \
+    Normal language-specific code generation and narrowly justified scripts remain appropriate; \
+    scope scripted replacements to the intended region and check the diff for unrelated changes.\n";
+
 /// Every prompt ends with this, worded for either Harness. A session exits
 /// once the agent ends its turn, killing any background task still running.
 /// Other sessions on the same machine run the same commands, so a wait on a
@@ -19,6 +26,13 @@ const HEADLESS: &str = "You run headless: nobody is watching, and ending your tu
     Never end your turn while a background task you depend on is still running: ending the turn kills it. \
     Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): \
     a task still running when your turn ends is taken as work you were waiting on.\n";
+
+/// Shared by sessions that can work on a Delivery PR, including Resumes.
+const PR_LIFECYCLE: &str = "Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. \
+    If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. \
+    During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. \
+    If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. \
+    Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.\n";
 
 /// Sessions replaces this placeholder with its git-ignored report directory.
 pub const REVIEW_REPORTS_DIRECTORY: &str = "<review reports directory>";
@@ -87,6 +101,8 @@ pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
          Push branch {branch} and create a pull request against {base} using the `thirdshift-pr` skill, marked ready for review.\n\
          {unaddressed_findings}\n\
          Include \"Closes #{number}\" in the PR body.\n\
+         {SOURCE_EDITS}\n\
+         {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
         number = issue.number,
@@ -124,6 +140,8 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
          \n\
+         {SOURCE_EDITS}\n\
+         {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
         number = issue.number,
@@ -153,6 +171,8 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
          \n\
+         {SOURCE_EDITS}\n\
+         {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = spec.url,
         number = spec.number,
@@ -197,6 +217,7 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
          {IDEA_LINE}<URL of the issue you filed>\n\
          {ALREADY_FILED_LINE}<URL of the open issue that already covers it>\n\
          \n\
+         {SOURCE_EDITS}\n\
          {HEADLESS}",
     )
 }
@@ -213,6 +234,8 @@ pub fn conflict_repair(issue: &IssueUrl, merging: &str, branch: &str, pr_url: &s
          \n\
          Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n\
          \n\
+         {SOURCE_EDITS}\n\
+         {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
     )
@@ -245,13 +268,15 @@ pub fn ci_fix_repair(
          {inherited}\
          \n\
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
-         Run the affected checks locally, commit, and push {branch}.\n\
+         Run the affected checks locally. Commit only changed files, and push {branch} only when needed to publish real changes or required upstream reconciliation.\n\
          \n\
          Compare the failing test or check with the branch's diff against {base}. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
          Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on {base}). Do not change code for those unrelated failures.\n\
          \n\
          Do not re-run CI jobs yourself (`gh run rerun` or the API), and do not wait on CI. Re-running and watching checks belongs to thirdshift's Check re-run.\n\
          \n\
+         {SOURCE_EDITS}\n\
+         {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
     )
@@ -272,8 +297,10 @@ pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &st
          \n\
          {unaddressed_findings}\n\
          \n\
-         Commit and push {branch}. Do not rebase or force-push.\n\
+         Commit only if the review changes files. If no files change, make no commit, including no `--allow-empty` commit. If there is no new review information, leave the PR body unchanged; still record actual declined findings as required above. Push {branch} when needed to publish changes or reconcile upstream commits. Do not rebase or force-push.\n\
          \n\
+         {SOURCE_EDITS}\n\
+         {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
         address_findings = review.address_findings(),
@@ -291,6 +318,7 @@ pub fn resume(killed: &[&str]) -> String {
          If the re-run hangs or is moved to the background again, stop it by its task id (with the `TaskStop` tool, if you have it), \
          and say what could not be run, rather than leaving it running.\n\
          \n\
+         {PR_LIFECYCLE}\n\
          {HEADLESS}",
         killed = killed.join("; "),
     )
@@ -340,6 +368,8 @@ pub fn security_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
          After a complete review, end your final message with exactly one line of the form:\n\
          Security review: {{\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}}\n\
          unaddressed_count counts only unaddressed findings introduced by this change; findings is an array of their short titles, with one title per finding. pre_existing_count is the number of entries in the private report. No old-finding details belong in this line.\n\n\
+         {SOURCE_EDITS}\n\
+         {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
     )
@@ -381,4 +411,79 @@ pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
          End your final message for a single public fix with exactly:\n{STAGED_PROPOSAL_MARKER}\n{STAGED_TITLE_MARKER} <title>\n{STAGED_BODY_MARKER}\n<body>\nFor a public spec, end with exactly:\n{STAGED_SPEC_MARKER}\n{STAGED_TITLE_MARKER} <spec title>\n{STAGED_BODY_MARKER}\n<spec body>\n{STAGED_TICKET_MARKER} <ticket 1 title>\n{STAGED_BODY_MARKER}\n<ticket 1 body>\n{STAGED_BLOCKED_BY_MARKER} none\n{STAGED_TICKET_MARKER} <ticket 2 title>\n{STAGED_BODY_MARKER}\n<ticket 2 body>\n{STAGED_BLOCKED_BY_MARKER} 1\nwith each later Ticket naming the 1-based positions of the Tickets that block it, or none. For a private bigger fix, end with exactly `{SECURITY_FIX_SPEC_LINE}<Issue URL>`, naming the top issue.\n\n\
          Private record:\n{finding}\n\n{HEADLESS}"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_sessions_and_resumes_do_not_add_source_editing_guidance() {
+        let root = std::path::Path::new("/tmp/audit");
+        for prompt in [
+            security_audit("main", "abc123", root, root, None),
+            security_reproduction("abc123", "<finding>", root),
+            security_fix("main", "<private record>", "<finding>"),
+            resume(&["cargo test"]),
+        ] {
+            assert!(!prompt.contains("structured patch/edit tool"), "{prompt}");
+            assert!(!prompt.contains("apply_patch"), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn source_editing_sessions_prefer_available_structured_tools_and_allow_scoped_scripts() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let failed = FailedChecks {
+            own: Vec::new(),
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+        for prompt in [
+            fresh(&issue, "main", "issue-7"),
+            continuation(&issue, "main", "issue-7", None),
+            continuation(&issue, "main", "issue-7", Some("<pr>")),
+            spec_review(&issue, "main", "spec-7", "<pr>"),
+            architecture_review("main", None),
+            conflict_repair(&issue, "main", "issue-7", "<pr>"),
+            ci_fix_repair(&issue, "main", "issue-7", "<pr>", &failed),
+            review_repair(&issue, "issue-7", "<pr>", "abc123"),
+            security_review(&issue, "main", "issue-7"),
+        ] {
+            for instruction in [
+                "prefer an available structured patch/edit tool",
+                "intended context and changed regions explicit",
+                "`apply_patch` on Codex",
+                "Harness's equivalent when available",
+                "Normal language-specific code generation and narrowly justified scripts remain appropriate",
+                "scope scripted replacements to the intended region",
+                "check the diff for unrelated changes",
+            ] {
+                assert!(
+                    prompt.contains(instruction),
+                    "missing {instruction}: {prompt}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_review_without_file_changes_commits_nothing_and_preserves_review_information() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let prompt = review_repair(&issue, "issue-7", "<pr>", "abc123");
+
+        for instruction in [
+            "Commit only if the review changes files.",
+            "If no files change, make no commit, including no `--allow-empty` commit.",
+            "If there is no new review information, leave the PR body unchanged",
+            "still record actual declined findings as required above",
+            "Push issue-7 when needed to publish changes or reconcile upstream commits.",
+            "Add each skipped finding to the \"Unaddressed findings\" section",
+        ] {
+            assert!(
+                prompt.contains(instruction),
+                "missing {instruction}: {prompt}"
+            );
+        }
+    }
 }

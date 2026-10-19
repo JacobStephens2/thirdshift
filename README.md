@@ -69,6 +69,135 @@ An issue closed some other way, as when you merge its pull request by hand, keep
 
 The designed behaviour described in this README is implemented. Known gaps and planned work are tracked in the [open issues](https://github.com/JacobStephens2/thirdshift/issues).
 
+## Machine status
+
+`thirdshift status` names this host and lists live Commands across every repository in `logs.dir`, with their issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Runs or Spec runs they dispatch beneath themselves, each Spec's Tickets and their Runs, and each Run's Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. After the live Commands it lists those that ended in the last 24 hours, with their outcomes. `thirdshift status --all` lists every Command this machine has logs for, newest start first. A Command or child Run with no outcome whose process has gone shows as `died at <stage>` in either view. Process start identifiers distinguish a reused process id on Linux and macOS. Records remain beside their Command logs, as `*.command.json`, with child records named for their issue as `*.issue-<n>.child.json`. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.
+
+History uses each source only for Commands missing from the preceding sources: Command records, then Activity log start/end lines with their Command logs, then Session logs in the current `<logs.dir>/<owner>/<repo>/commands/<kind>/` layout. Activity entries have start and end times and outcomes, with no stages. Session entries group logs by issue and Command stamp; they have no known end or outcome and appear only with `--all`. Sessions covered by a Spec run or Pass's stamp belong to that Command. The flat layout from before [ADR 0011](docs/adr/0011-thirdshift-keeps-a-per-repository-activity-log.md) is ignored.
+
+For each repository and kind of Pass whose latest Activity log line is a skip, status also shows that Pass as idle with its reason, even when the skip is older than another kind's activity. A later start or end for that kind clears its idle entry. For example:
+
+```text
+Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: https://github.com/acme/widgets/issues/7
+```
+
+`thirdshift status --json` is the versioned API for agents and the coming [Console](docs/adr/0016-the-console-is-a-long-running-reader.md). It runs outside a repository too. Version 1 has this shape:
+
+```json
+{
+  "version": 1,
+  "hostname": "factory",
+  "commands": [{
+    "version": 1,
+    "kind": "Run",
+    "repository": "acme/widgets",
+    "name": "acme/widgets#7",
+    "issue": {"number": 7, "url": "https://github.com/acme/widgets/issues/7", "title": "Make widgets"},
+    "hostname": "factory",
+    "process_id": 1234,
+    "process_start": "<OS process start identifier>",
+    "harness": "claude",
+    "model": "opus",
+    "effort": "high",
+    "started_at": "2026-10-18T12:00:00-04:00",
+    "ended_at": null,
+    "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"}],
+    "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl",
+    "issue_branch": "issue-7",
+    "pull_request": null,
+    "outcome": null,
+    "cause": null,
+    "source": "command_record",
+    "command_log": "/logs/acme/widgets/commands/issue/7-stamp.log",
+    "dispatched": [],
+    "state": "live",
+    "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+    "parent_record": null,
+    "parent_dispatch": null,
+    "tickets": [],
+    "children": []
+  }],
+  "idle_passes": [{
+    "repository": "acme/widgets",
+    "kind": "Pickup run",
+    "reason": "no Ready issue on acme/widgets"
+  }]
+}
+```
+
+Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause`, `ended_at`, `parent_record` and `parent_dispatch` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run`, `Security run` and `Base fix`. `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source`, `command_log` and `children` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
+
+`state` is `live`, `died`, `ended`, or `unknown` when historical evidence has no ending. `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets`, `Spec review`, `Architecture review`, `Security audit`, `Security reproduction` and `Security fix publishing`. A Pass retains its own stages while its dispatched work records its stages separately.
+
+`children` recursively contains the immediate child Runs in separate processes, with the same fields as their parent. A Pickup's `dispatched` contains its Run or Spec run. A Spec's `tickets` is its complete roster in issue-number order; each entry has `issue` (`number`, `url`, nullable `title`), `state` (`running`, `merged`, `failed`, `waiting`, or `not started`) and `blockers` (the named open blocking issues, with the same issue fields). Match a Ticket's `issue.url` to the Run in that Spec's `children` for its stage, age, liveness and Base fix descendants. Tickets without a Run remain in the roster. Completed child Runs stay in the tree while its Command is listed. A killed child's `state: "died"` remains independent of the Spec's Ticket accounting. `parent_record` links each child to its parent's exact file; `parent_dispatch`, when present, names the dispatched issue's URL within that file. A top-level Command has null for both. Records from before these fields existed read as having no children or Tickets.
+
+For example, this tree excerpt omits the common Run fields shown above:
+
+```json
+{
+  "kind": "Pickup run",
+  "dispatched": [{
+    "kind": "Spec run",
+    "stage": {"name": "Tickets", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+    "tickets": [
+      {"issue": {"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": null}, "state": "running", "blockers": []},
+      {"issue": {"number": 22, "url": "https://github.com/acme/widgets/issues/22", "title": null}, "state": "waiting", "blockers": [{"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": null}]},
+      {"issue": {"number": 23, "url": "https://github.com/acme/widgets/issues/23", "title": null}, "state": "merged", "blockers": []},
+      {"issue": {"number": 24, "url": "https://github.com/acme/widgets/issues/24", "title": null}, "state": "not started", "blockers": []}
+    ],
+    "children": [{
+      "kind": "Run",
+      "issue": {"number": 21, "url": "https://github.com/acme/widgets/issues/21", "title": "Make widgets"},
+      "state": "live",
+      "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
+      "children": []
+    }]
+  }]
+}
+```
+Every entry has `source`: `command_record`, `activity_log` or `session_log`. The latter two carry `repository`, `kind`, nullable `issue` (number, URL, nullable title), `harness`, `model`, `effort`, `started_at`, nullable `ended_at` and `outcome`, nullable `command_log`, `session_logs` (paths), `state`, `stages: []` and `stage: null`. They omit record-only fields such as process identity and branch information. Activity times use the UTC offset in the Command log's stamp; their outcome is the Activity log's full ending text. A Session entry has null Harness, Model, Effort, end time and outcome, and lists its grouped Session logs. Both flags can be combined as `status --all --json`.
+
+## Show and read one Command
+
+Name a Command by `widgets#7`, `acme/widgets#7`, or its full Issue URL. The owner is needed only when repositories on this machine share the name; an ambiguous short name is refused with the matching repositories. When several Commands worked on the issue, the live one wins, otherwise the latest start wins. A Ticket's issue names its Run within the Spec run. A Pass with no issue is named by kind and stamp, such as `architect-20261018T120000-0400`, as listed by `status`.
+
+```sh
+thirdshift show 'widgets#7'
+thirdshift show https://github.com/acme/widgets/issues/7 --json
+thirdshift logs 'widgets#7'
+thirdshift logs 'widgets#7' --session implement
+thirdshift logs 'widgets#7' --session repair --follow
+```
+
+`show` includes the Runs, stage history with start times, outcomes, and Command and Session log paths. Each live Run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session log. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session logs leave the event unavailable.
+
+`show --json` is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:
+
+```json
+{
+  "version": 1,
+  "hostname": "factory",
+  "command": {
+    "version": 1,
+    "kind": "Run",
+    "repository": "acme/widgets",
+    "name": "acme/widgets#7",
+    "state": "live",
+    "latest_event": "Bash: cargo test",
+    "stages": [{"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"}],
+    "command_log": "/logs/acme/widgets/commands/issue/7-stamp.log",
+    "session_log": "/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl",
+    "session_logs": ["/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl"],
+    "children": [],
+    "dispatched": []
+  }
+}
+```
+
+The Command excerpt omits the common fields documented for `status --json`; all those fields are retained, including process identity, issue, Harness, Model, Effort and nullable outcome. `children` and `dispatched` retain the same recursive shape. `session_logs` lists the selected Run's Session log paths, including original sessions and Resumes that share a stage. `latest_event` is optional, present only when a live Run has a readable event, including in child Runs. History without a Command record uses the same Activity-log or Session-log shape as `status --all --json`, with Session logs discovered by issue/kind and Command stamp, without invented stages or liveness.
+
+`logs` writes the Command log verbatim. `--session <kind>` writes that kind's latest Session log as raw JSON lines; `implement` and `spec-review` include a later Resume, and `repair` selects the latest numbered Repair. A missing log or session kind gives an error. `--follow` first prints the selected log, then flushes appended bytes until the owning Command ends or dies, including its final output. A Ticket shares its Command's Command log but selects its own Session logs. The selected Command and Session log stay fixed while following.
+
 ## Install
 
 ```sh
@@ -139,6 +268,22 @@ cd ~/repos/widgets          # a clone of the issue's repository, on the Base bra
 thirdshift https://github.com/acme/widgets/issues/7
 ```
 
+You can use a positive decimal issue number anywhere a Run takes an Issue URL:
+
+```sh
+thirdshift 7
+thirdshift merge 7
+thirdshift --no-merge 7 harness codex
+```
+
+The number resolves against the Launch directory's `origin`, including from nested
+directories in the clone. Supported origins are `https://github.com/owner/repo`,
+`git@github.com:owner/repo` and `ssh://git@github.com/owner/repo`, with or without
+`.git`. The Run uses the same Issue URL and Origin match as the full-URL form.
+Zero, overflow and malformed numbers are rejected. A missing or non-GitHub
+`origin`, or starting outside a clone, stops shorthand resolution before any
+session or tracker change. All Run options work with either form.
+
 A Run takes minutes to tens of minutes.
 
 To have the Run merge its pull request instead of leaving it for your review, start a **Merge run**:
@@ -165,8 +310,12 @@ thirdshift --email you@example.com https://github.com/acme/widgets/issues/7
 It sends one [Run notification](#run-notifications), whatever the outcome. To have every Run on a machine send one, set `email.always` in the [User config](#user-config); `no-email` (or `--no-email`) then skips it for one Run.
 
 - **stdout** carries only the pull request's URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as `url=$(thirdshift "$issue") && echo "ready: $url"`.
-- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. Each line starts with the local time it was printed, as in `thirdshift: 12:14:49 pushing issue-7`, so a quiet terminal shows how long the Run has been on its last step. The first line of a Run, a Spec run or a Pass also names the date and the UTC offset, as in `thirdshift: 12:00:01 starting on https://github.com/acme/widgets/issues/7, 2026-10-03 -0400`, so a log that collects many commands, such as a crontab line's, reads as a dated list. Everything on stderr and stdout is kept in the command's [Command log](#logs) too. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
-- **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin`, closing the issue or removing `in-progress` from it then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the command is one thirdshift can't use: the Issue URL is missing or isn't a GitHub Issue URL, there is an argument other than the URL and the Run flags, a Run flag is repeated or contradicts another, or `parallel` isn't followed by a whole number from 1 up; the error and the help text go to stderr, before any work. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
+- **stderr** carries everything else: errors, cleanup problems, and progress lines while sessions run. Each line starts with the local time it was printed, as in `thirdshift: 12:14:49 pushing issue-7`, so a quiet terminal shows how long the Run has been on its last step. The first line of a Run, a Spec run or a Pass also names the date and the UTC offset, as in `thirdshift: 12:00:01 starting on https://github.com/acme/widgets/issues/7, 2026-10-03 -0400`, so a log that collects many commands, such as a crontab line's, reads as a dated list. Everything on stderr and stdout is kept in the command's [Command log](#logs) too. A top-level Run or Spec run prints its elapsed wall time near the end, as `Took: 1h 2m 3s`, before its final outcome or failure cause. This also covers graceful interruption, works without email, and adds no summary for child Runs or skipped Passes. A successful Run's last line names the pull request too: `PR <url> is ready for review`, or `PR <url> is merged` after a Merge run, followed only by a `warning:` line if a [Run notification](#run-notifications) can't be sent.
+- **Exit code** `0` means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on `origin`, closing the issue or removing `in-progress` from it then fails: the merge can't be undone, so each failed step is a `warning:` line on stderr naming the command to run by hand, and the Run still exits `0` with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. `2` means the command is one thirdshift can't use: the issue argument is missing or isn't a GitHub Issue URL or positive decimal number, there is an argument other than the issue and the Run flags, a Run flag is repeated or contradicts another, or `parallel` isn't followed by a whole number from 1 up; the error and the help text go to stderr, before any work. Failure to resolve a number against the clone's origin exits `1`. A [User config](#user-config) thirdshift can't use exits `1`, also before any work. Any other failure exits `1`.
+
+During a CI wait, `CI on <short sha>: 3 still running out of 4 checks listed so far` counts the checks GitHub currently lists, including commit statuses. Dependent jobs and matrix jobs may become visible later, so both the pending count and the listed total can rise as CI progresses. A change to either count prints a new progress line; identical repeated counts stay quiet. The listed total is not a prediction of the final workflow total. This reporting does not change which checks count as passing or when Delivery may merge.
+
+CI check observations get at most three total attempts: the original read and two retries, with interruptible delays of one second then two seconds. Transport failures, HTTP 429 or 5xx responses, and truncated JSON can recover this way; known permanent errors and unclassified failures stop immediately with their diagnostics. This applies to the initial watch, pending-check polling, Base comparison and Check re-run reconciliation. Each retry reads the same repository and full commit again. Failed reads never count as passing or absent CI, never start a Repair, and never repeat a workflow re-run request. Progress lines retain each failure and delay; exhaustion reports all three attempts and their causes. Cancellation stops active reads and backoff without another request.
 
 The other commands:
 
@@ -423,17 +572,45 @@ The Credentials are read only when `RESEND_API_KEY` is unset or empty, and only 
 A Run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and a key is found, in `RESEND_API_KEY` or else the Credentials. If either fails, or the Credentials are broken, the Run stops, exits `1` naming what's wrong (with no key, the message above listing every way to give one), and sends nothing. A Run that asks for no notification never reads the Credentials, so a broken file can't stop it, and `update`, `version` and `help` never read it either. Once they pass, every way the Run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed run](#failed-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
 
 - **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
-- **Body**, plain text: a `Result:` line with the same outcome as the subject, so it is readable even when a long issue title hides the end of the subject; then the pull request URL (if any), the failure cause (if failed), after an Inherited failure with no Base fix taken its [`Base check:`, `Retry with:` and `Or set:` lines](#an-inherited-failure-links-the-base-branchs-checks), the session log path (if any), the [Command log](#logs) path as a `Command log:` line, the hostname and how long the Run took.
+- **Body**, plain text: a `Result:` line with the same outcome as the subject, so it is readable even when a long issue title hides the end of the subject; immediately followed by one `Issue:` line with the full original Issue URL, including after failure or interruption with no pull request; then the pull request URL (if any), the failure cause (if failed), after an Inherited failure with no Base fix taken its [`Base check:`, `Retry with:` and `Or set:` lines](#an-inherited-failure-links-the-base-branchs-checks), the session log path (if any), the [Command log](#logs) path as a `Command log:` line, the hostname and how long the Run took.
 
 The email's `Built with` line names the command's configured Harness, Model and Effort and is marked `(configured)`. A `Session models` section lists sessions whose Harness was launched, including failed or interrupted sessions, Resumes and child Runs belonging to that Command. Models evidenced by the Harness's output or retained records are marked `(reported)`, including model switches and delegated Claude answers. When the Harness supplies no model evidence, the requested Model is labelled `(requested; actual model not reported)`, or its default is labelled `Harness default (actual model not reported)`. A listed session proves the Harness was launched; an unconfirmed request does not prove that Model executed. Effort is the session's configured Effort; it does not describe a delegated answer's Effort. Attribution records (`*.models.json`) are kept beside the Session logs; a failure to write or read them is a warning and never changes the Run's outcome.
 
-A [Spec run](#spec-runs) sends at most one notification for the whole Spec, under the same rules, with its checks made once before any Ticket starts. Its subject names the Spec, its outcome is the Spec run's, and its body, after what a Run's holds (the Spec PR, if any), lists each Ticket's outcome, one line per Ticket as in the summary on stderr, such as `#21 landed with https://github.com/acme/widgets/pull/1` or `#22 blocked by #21`. The Ticket Runs inside it never send a notification of their own, whatever the User config says.
+A [Spec run](#spec-runs) sends at most one notification for the whole Spec, under the same rules, with its checks made once before any Ticket starts. Its subject names the Spec, its `Issue:` line links the parent Spec rather than a Ticket or pull request, its outcome is the Spec run's, and its body, after what a Run's holds (the Spec PR, if any), lists each Ticket's outcome, one line per Ticket as in the summary on stderr, such as `#21 landed with https://github.com/acme/widgets/pull/1` or `#22 blocked by #21`. The Ticket Runs inside it never send a notification of their own, whatever the User config says.
 
 An [Architect run](#architect-runs) takes the same flags and the same `email.always`, and sends [one notification](#one-run-notification) covering its review and the run it dispatched.
 
 A [Pickup run](#pickup-runs) takes the same flags and the same `email.always` too. One that took an issue sends [one notification](#one-run-notification-for-the-issue-taken), the one the run it dispatched would have sent by hand, and a skipped one sends none.
 
 A notification that can't be sent is a `warning:` line on stderr with Resend's error. It never changes the Run's outcome, stdout or exit code.
+
+### Stopping a Command
+
+`thirdshift stop widgets#7` stops a live Run and waits for its cleanup. It accepts
+the same Command names as `show`: `owner/repo#number`, an Issue URL, or a Pass's
+`kind-stamp` name. It works from any directory and never prompts. Ended and died
+Commands are refused; Stop sends SIGTERM only to the recorded process, with no
+forced kill.
+
+Stopping a Spec run ends its Tickets' Runs too, saving their unfinished work.
+Only the Spec's issue receives Stop labels; its Tickets' labels stay as they
+were. A Stop on a Pickup run applies to the issue it took, whether a Run or a
+Spec run. A Pass still without an issue, such as an Architect run in its
+Architecture review or a Security run in its audit, ends without changing
+labels. Stop refuses a Ticket's issue and names the Spec run to stop instead.
+
+By default, Stop leaves the issue for the Day shift: it adds `needs-triage` and
+does not put `ready-for-agent` back. It removes `in-progress` when nothing reached
+`origin`, and keeps it when an Issue branch or pull request remains. Add
+`--requeue` to release the Claim and put `ready-for-agent` back even after a push;
+the next Run continues that Issue branch. Ordinary interruption without a Stop
+keeps its usual Claim rules.
+
+The Stop request is kept beside the Command record with the Unix user who asked
+and whether to requeue. The Command writes `<subject> stopped from the CLI by
+<who>` to its Activity log before its `ended:` line. Stop prints `still ending`
+each minute while cleanup runs, then the outcome and any Issue branch or pull
+request left behind.
 
 ### Logs
 
@@ -635,7 +812,7 @@ A second focus, a repeated flag, `merge` with `no-merge`, `base-fix` with `no-ba
 
 An Architect run:
 
-1. Makes the checks a Run makes that don't need an issue, before creating anything: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached, and the Base branch exists on `origin` with your local copy not ahead of it. With `base <branch>`, a detached HEAD is fine, since the checkout no longer picks the Base branch, and the other two checks are made on `<branch>`: `base branch <branch> does not exist on origin; push it first`, or `local <branch> is <n> commit(s) ahead of origin/<branch>; push them first`. There is no **Origin match**, since there is no Issue URL: the repository is the one `origin` names. If another Pass on the repository is still running, it is [skipped](#one-at-a-time) here, and if not, it is skipped when an earlier [Architect plan is still open](#one-architect-plan-at-a-time), and if not, when an [Architect idea waits for triage](#an-architect-idea-waits-for-triage), and if not, when the repository has a [Ready issue](#a-ready-issue-goes-first). With `launch.pull = true` in the [User config](#user-config), it then fast-forwards your checkout of the Base branch, as a Run does, and so only when the Base branch is the branch checked out: with `base <branch>` from a clone on another branch, your checkout is left alone.
+1. Makes the checks a Run makes that don't need an issue, before creating anything: `origin` is a GitHub repository, git has a `user.name` and `user.email`, HEAD is not detached, and the Base branch exists on `origin` with your local copy not ahead of it. With `base <branch>`, a detached HEAD is fine, since the checkout no longer picks the Base branch, and the other two checks are made on `<branch>`: `base branch <branch> does not exist on origin; push it first with: git push --set-upstream origin 'refs/heads/<branch>:refs/heads/<branch>'` when that branch exists locally (the command quotes the actual refspec safely), or `local <branch> is <n> commit(s) ahead of origin/<branch>; push them first`. If `<branch>` is absent both locally and on origin, the error instead says to create or obtain it first, or select a valid Base branch; no push command is suggested. Preflight makes no push, checkout or branch creation. There is no **Origin match**, since there is no Issue URL: the repository is the one `origin` names. If another Pass on the repository is still running, it is [skipped](#one-at-a-time) here, and if not, it is skipped when an earlier [Architect plan is still open](#one-architect-plan-at-a-time), and if not, when an [Architect idea waits for triage](#an-architect-idea-waits-for-triage), and if not, when the repository has a [Ready issue](#a-ready-issue-goes-first). With `launch.pull = true` in the [User config](#user-config), it then fast-forwards your checkout of the Base branch, as a Run does, and so only when the Base branch is the branch checked out: with `base <branch>` from a clone on another branch, your checkout is left alone.
 2. Creates a git worktree next to your clone, named `<repo>-architect`, detached at the head of the Base branch on `origin`, with no **Issue branch**. Your checkout, its uncommitted changes and its untracked files are never touched or scanned.
 3. Runs the **Architecture review** there: a headless session on the Harness, with the **Factory skills** loaded, started with the [Architecture review prompt](prompts/architecture-review.md). It looks for deepening opportunities, skips any an open issue already covers, and takes the top recommendation. If it is Strong, the review publishes it as the plan, labelled `needs-triage`: a **Spec** with **Tickets**, or a single Ticket when one session is enough. It may edit files in the worktree to check an idea, but commits and pushes nothing. It ends its final message with one line naming the plan: `Architecture review plan: <Issue URL>`. thirdshift reads only that line. With [no Strong candidate](#no-strong-candidate) the line names another issue, which thirdshift labels an **Architect idea**, and steps 5 to 7 are skipped.
 4. Removes the worktree once the session ends, whatever the outcome. The temporary directory the Factory skills were written out to goes as the Architect run ends.
@@ -711,7 +888,7 @@ thirdshift marks every Architect plan with the label `architect-plan`, in step 6
 
 It applies to every Architect run, with or without `--plan-only`, and no flag overrides it. The rule is released by finishing the Architect plan, since merging its work closes the issue, by closing the issue, or by removing its `architect-plan` label. The check reads GitHub, so unlike the lock it holds across machines.
 
-An Architect run never retries or dispatches an existing Architect plan. One whose dispatched run failed stays open, and picking it up is yours to do, with `thirdshift <plan URL>`, which continues whatever branch and pull request the failed run left. What isn't labelled `architect-plan` never counts here: a plan that a failed or interrupted review left `needs-triage`, or an [Architect idea](#no-strong-candidate), which [pauses Architect runs](#an-architect-idea-waits-for-triage) by its own rule, only while it waits for triage.
+An Architect run never retries or dispatches an existing Architect plan. One whose dispatched run failed stays open for you: run `thirdshift <plan URL>` to continue whatever branch and pull request it left, or remove its `in-progress` Claim and then apply `ready-for-agent` to hand it back to Pickup after settling. The other Ready issue gates still apply. What isn't labelled `architect-plan` never counts here: a plan that a failed or interrupted review left `needs-triage`, or an [Architect idea](#no-strong-candidate), which [pauses Architect runs](#an-architect-idea-waits-for-triage) by its own rule, only while it waits for triage.
 
 The check comes after the lock so that the plan of an Architect run that is still running, labelled already while its Spec run or Run goes on, is reported as [already running](#one-at-a-time), not as an unfinished plan. A skipped run sends no [Run notification](#one-run-notification), even when asked: its stdout carries the open Architect plans' URLs, and its stderr line their commands.
 
@@ -838,7 +1015,7 @@ A Ready issue is an open issue that:
 - is not a sub-issue. A sub-issue is a **Ticket** of a **Spec**, and is never run on its own, whatever the Spec's labels: it is reached through its Spec, when the Spec is itself a Ready issue, so its work always goes through the **Spec branch**. Labelling one Ticket never promotes its Spec, either;
 - is not labelled `base-fix` or `security-fix`: the Run that opened a [Base fix](#base-fix)'s issue, or the Security run that dispatched a fix, owns it. A failed Security fix is still passed over if GitHub prevented its Claim from being made;
 - has no open blocker, by GitHub's "blocked by" links, never the text of its body. Once every blocker is closed, it can be taken;
-- was never started: no **Issue branch** for it is on `origin`, and no pull request from one exists, open, merged or closed. So a Pickup run never does a [Continuation](#continuation), and an issue whose Run failed waits for you;
+- either was never started (no **Issue branch** on `origin` and no pull request from one, open, merged or closed), or you handed it back by applying `ready-for-agent` after its last [Claim](#the-claim) ended. For started work, the full label history must show `in-progress` applied, then removed, then `ready-for-agent` applied. Work never Claimed, or without that later hand-back, stays with you. An eligible branch with no PR or an open PR follows the existing [Continuation](#continuation) rule; merged or closed PRs follow ADR 0002 and start a fresh numbered branch. This is deliberate hand-back, not automatic retries;
 - is not a **Spec** whose **Tickets** are all closed. With nothing started on it, such a Spec was done some other way, and the [Spec run](#spec-runs) it would be dispatched as stops with nothing to do, so a Pickup run passes it over rather than take it on every pass. Waiting never makes it a Ready issue, so this comes before the next condition, however lately the Spec was labelled: close it, or take its `ready-for-agent` off. A Spec with at least one open Ticket is taken;
 - is settled: by default, thirty minutes have passed since the latest of `ready-for-agent` being applied to it, a sub-issue being added to it or removed, and a "blocked by" link being added to it or removed. So a Spec is not taken while its Tickets are still being attached. These are read from the issue's timeline, since adding a sub-issue does not change the issue's update time, and `pickup.wait_minutes` in the [User config](#user-config) sets the window in whole minutes from 0 up, within the supported duration range; 0 disables waiting. The setting also controls this same Ready issue search for Architect runs. A later pass takes the issue once it has settled.
 
@@ -855,7 +1032,7 @@ A Pickup run:
 
 `pickup` is a command only as the first argument, and takes nothing but those flags, each at most once: a focus, `--plan-only`, an Issue URL, a repeated or contradictory flag, or any other argument is an argument error (exit `2`).
 
-The dispatched run's ending is the Pickup run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Pickup run fails as that [Failed run](#failed-runs) or Failed spec run does. After an [Inherited failure](#an-inherited-failure-links-the-base-branchs-checks), the command it offers is `thirdshift <Issue URL>` with the dispatched run's flags and `base-fix`, since another Pickup run would not take a started issue again.
+The dispatched run's ending is the Pickup run's: its exit code, its pull request's URL alone on stdout, and its last line on stderr, `PR <url> is ready for review` or `PR <url> is merged`. If it fails, the Pickup run fails as that [Failed run](#failed-runs) or Failed spec run does. After an [Inherited failure](#an-inherited-failure-links-the-base-branchs-checks), the command it offers is `thirdshift <Issue URL>` with the dispatched run's flags and `base-fix`, since another Pickup run needs you to remove its Claim and then apply `ready-for-agent` before it can take started work again.
 
 A pass is **skipped** when the lock is held, when the repository is at its Claim limit, or when the repository has no Ready issue: it exits `0` with stdout empty and one line of reason on stderr, `another Pass is already running on <owner>/<repo>`, `at the Claim limit on <owner>/<repo>: <count> open issue(s) labelled in-progress, pickup.limit is <limit>` or `no Ready issue on <owner>/<repo>`, the last after the lines on the issues it passed over. Skipped is not a failure. A skipped pass starts no agent session, makes no Claim, and sends no Run notification. One skipped for the lock changes no label at all; the others have made the Sweep, whose lines come before the reason.
 
@@ -888,8 +1065,8 @@ thirdshift: 03:00:02 #19 labelled in-progress
 thirdshift: 03:00:03 #21 is a Ticket of #20, which is not ready
 thirdshift: 03:00:03 #26 labelled base-fix
 thirdshift: 03:00:04 #30 blocked by #29
-thirdshift: 03:00:05 #31 already started: issue-31 is on origin
-thirdshift: 03:00:06 #32 already started: PR https://github.com/acme/widgets/pull/37
+thirdshift: 03:00:05 #31 started: issue-31 is on origin; no ready-for-agent hand-back after the last Claim ended
+thirdshift: 03:00:06 #32 started: PR https://github.com/acme/widgets/pull/37; no ready-for-agent hand-back after the last Claim ended
 thirdshift: 03:00:06 #33 every Ticket is closed
 thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than 30 minutes ago
 thirdshift: 03:00:07 #35 not settled: a sub-issue added or removed less than 30 minutes ago
@@ -897,7 +1074,7 @@ thirdshift: 03:00:08 #36 not settled: a "blocked by" link added or removed less 
 thirdshift: 03:00:08 no Ready issue on acme/widgets
 ```
 
-A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A Spec with every Ticket closed that was started, with its Spec branch on `origin` or a pull request from it, gets the `already started` line, so `every Ticket is closed` is only ever said of one with nothing on `origin`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
+A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A started issue without a recorded hand-back gets the `started` line. Even with a hand-back, a Spec with every Ticket closed is passed over with `every Ticket is closed`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
 
 ```
 thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400
@@ -912,7 +1089,7 @@ thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/com
 A Pickup run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one when it took a Ready issue: the notification the Spec run or Run it dispatched would have sent started by hand. An address after `email` wins over `email.to`, as for a Run.
 
 - **Subject**: that run's, `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, naming the issue taken, with the outcome `ready for review`, `merged`, `failed` or `interrupted`.
-- **Body**: that run's too: what a Run's notification holds, and after a Spec run a line per Ticket. The time it gives is the whole pass's, the search for the Ready issue included.
+- **Body**: that run's too: what a Run's notification holds, with `Issue:` immediately after `Result:` linking the issue it took (the parent Spec when it dispatched a Spec run), and after a Spec run a line per Ticket. The time it gives is the whole pass's, the search for the Ready issue included.
 
 The email goes after the outcome is final and printed, and a failed send is only a `warning:` line on stderr: it changes neither the exit code nor stdout. The dispatched run sends no notification of its own, whatever the User config says, as with an [Architect run](#one-run-notification), nor do a Spec run's Ticket Runs.
 
@@ -957,7 +1134,7 @@ The command's flags and the User config decide what a pass does with the issue i
 */30 * * * * cd ~/repos/widgets && thirdshift pickup base main no-merge >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
-An issue whose run failed [keeps its Claim](#when-the-claim-ends) and waits for the **Day shift**: it stays `in-progress`, with the Issue branch and any draft pull request the run left, no later pass takes it, and it counts towards the Claim limit until it is closed or you take the label off. To send it round again by hand, run `thirdshift <Issue URL>` from the clone, with the Base branch checked out, since that command takes no `base <branch>`: it picks up where the failed run stopped, as a [Continuation](#continuation) does. Labelling it `ready-for-agent` again doesn't do it: a Pickup run never takes an issue that was started. For an ordinary Run, the one failure a later pass does retry is one that left nothing on `origin`, such as a usage limit or an expired login: its Claim is released, so the issue is a Ready issue again once it has settled. A failed Security fix is always left for the Day shift, even with nothing on `origin`.
+An issue whose run failed [keeps its Claim](#when-the-claim-ends) and waits for the **Day shift**: it stays `in-progress`, with the Issue branch and any draft pull request the run left, no later pass takes it, and it counts towards the Claim limit until it is closed or you take the label off. To send it round again by hand, run `thirdshift <Issue URL>` from the clone, with the Base branch checked out, since that command takes no `base <branch>`: it picks up where the failed run stopped, as a [Continuation](#continuation) does. To hand it back to Pickup instead, remove `in-progress` and then apply `ready-for-agent`: after settling, a pass can continue it if every other Ready issue gate still permits it. Applying the ready label before the last Claim ends does not hand it back. For an ordinary Run, the one failure a later pass does retry is one that left nothing on `origin`, such as a usage limit or an expired login: its Claim is released, so the issue is a Ready issue again once it has settled. A failed Security fix is always left for the Day shift, even with nothing on `origin`.
 
 When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](https://github.com/mattpocock/skills), keep a **Spec** labelled `needs-triage` until every **Ticket** is published, attached as a sub-issue and linked to its blockers; then replace it with `ready-for-agent`. A Spec with no Tickets yet looks exactly like a standalone Ticket, so a pass would start a plain Run on it. This repository's Day shift follows the publication procedure in [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md), required by [`AGENTS.md`](AGENTS.md), which overrides the imported skills' defaults and survives their updates. The settling window (thirty minutes by default) is only a second line of defence: it covers Tickets attached within minutes of the label, not a Spec left labelled and without Tickets for longer.
 
@@ -1022,7 +1199,7 @@ Before it pushes anything, it refuses a release that can't be cut and says why: 
 
 If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done, without the checks above, which the first run passed. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. Once the tag is on the merge of the pull request, it says the release is already tagged and picks up from the release workflow run: it waits for a run still going, prints the GitHub Release's URL and exits `0` for one that succeeded, and exits `1` as above for one that failed, reporting the run's latest attempt, so a rerun of its failed jobs counts. So you can stop it with Ctrl-C while it waits and run it again to carry on waiting. A `v<version>` tag anywhere else on origin is still refused.
 
-The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`. It builds the Linux and macOS binaries and the installer, checks that the Linux binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
+The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`, with the event policy applied by `python3 scripts/generate-release.py` (`--check` verifies freshness). It builds the Linux and macOS binaries and the installer, checks that the Linux binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
 
 ## Credits and license
 

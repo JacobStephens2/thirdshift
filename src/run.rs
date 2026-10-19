@@ -2,7 +2,7 @@
 //! with sub-issues is a Spec instead, handed to a Spec run.
 
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 
@@ -123,7 +123,14 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
             review: asks.security_review,
         },
     );
-    let outcome = run(issue, asks, started_by, &mut base_fix);
+    let mut outcome = run(issue, asks, started_by, &mut base_fix);
+    if let Err(failed) = &mut outcome
+        && let Some(recovery) = &mut failed.recovery
+    {
+        recovery
+            .local_child_work
+            .extend_from_slice(base_fix.local_work());
+    }
     Ended {
         outcome,
         base_fix: base_fix.report(),
@@ -182,14 +189,18 @@ fn run(
         logs: Logs::of_run(issue),
         harness: &asks.harness,
         claim: None,
+        issue_branch: None,
+        child: started_by.child().is_some(),
     };
-    start(
+    let outcome = start(
         &mut outside,
         issue,
         asks,
         started_by,
         directory.checked_out(),
-    )
+    );
+    outside.record_branch_left();
+    outcome
 }
 
 /// [`run`], once the Launch directory is open, with `checked_out` the branch
@@ -224,9 +235,10 @@ fn start<O: Outside>(
         Some(_) => Vec::new(),
         None => outside.tickets()?,
     };
-    outside.started(match tickets.is_empty() {
-        true => Work::Run(issue),
-        false => Work::SpecRun(issue),
+    outside.started(match (started_by.child(), tickets.is_empty()) {
+        (Some(Kind::BaseFix { .. }), _) => Work::BaseFix(issue),
+        (_, true) => Work::Run(issue),
+        (_, false) => Work::SpecRun(issue),
     });
     if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(
@@ -260,7 +272,8 @@ fn start<O: Outside>(
     if claims {
         outside.make_claim()?;
     }
-    let outcome = start_in_worktree(
+    let is_spec = !tickets.is_empty();
+    let mut outcome = start_in_worktree(
         outside,
         issue,
         tickets,
@@ -268,6 +281,21 @@ fn start<O: Outside>(
         &base,
         asks.tickets_at_once,
     );
+    if let Err(failed) = &mut outcome
+        && let Some(recovery) = &mut failed.recovery
+    {
+        if recovery.preservation == crate::recovery::Preservation::None
+            && matches!(selection, Selection::Continuation { .. })
+        {
+            recovery.preservation = crate::recovery::Preservation::Remote;
+        }
+        recovery.continuation = Some(crate::recovery::Continuation {
+            command: crate::args::continuation(issue, asks, is_spec),
+            launch: outside.launch_path().to_path_buf(),
+            base: base.clone(),
+            branch: selection.branch().to_string(),
+        });
+    }
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));
     }
@@ -320,6 +348,8 @@ enum Checkout {
 trait Outside {
     /// The worktree the Run's work is done in.
     type Worktree;
+
+    fn launch_path(&self) -> &Path;
 
     /// The issue's Tickets, its sub-issues, if it is a Spec.
     fn tickets(&mut self) -> Result<Vec<Ticket>>;
@@ -376,9 +406,40 @@ struct LaunchAndGitHub<'a> {
     logs: Logs,
     harness: &'a Choice,
     claim: Option<Claim<'a>>,
+    issue_branch: Option<String>,
+    child: bool,
 }
 
 impl LaunchAndGitHub<'_> {
+    /// Observe retained resources after acquisition, preservation and cleanup
+    /// have finished. Neither success nor failure implies branch absence.
+    fn record_branch_left(&self) {
+        let Some(branch) = self.issue_branch.as_deref() else {
+            return;
+        };
+        let git = self.directory.git().completion();
+        let observed = (|| -> Result<bool> {
+            let reference = format!("refs/heads/{branch}");
+            if git
+                .run(&["for-each-ref", "--format=%(refname)", &reference])?
+                .lines()
+                .any(|name| name == reference)
+            {
+                return Ok(true);
+            }
+            git.on_origin(branch)
+        })();
+        match observed {
+            Ok(left) => logs::issue_branch(left.then_some(branch)),
+            Err(error) => {
+                logs::issue_branch(Some(branch));
+                progress::step(format_args!(
+                    "warning: could not check whether Issue branch {branch} remains: {error:#}"
+                ));
+            }
+        }
+    }
+
     /// The Delivery of the issue into the Base branch `base`.
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
@@ -397,16 +458,26 @@ impl LaunchAndGitHub<'_> {
 impl<'a> Outside for LaunchAndGitHub<'a> {
     type Worktree = Worktree;
 
+    fn launch_path(&self) -> &Path {
+        self.directory.git().dir()
+    }
+
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
         GitHub::new().tickets(self.issue)
     }
 
     fn started(&mut self, work: Work) {
         logs::started(work, self.harness);
+        if self.child {
+            logs::issue_title(GitHub::new().issue_title(self.issue).ok());
+        }
     }
 
     fn select(&mut self) -> Result<Selection> {
-        branch::select(self.directory.git(), &GitHub::new(), self.issue)
+        let selection = branch::select(self.directory.git(), &GitHub::new(), self.issue)?;
+        self.issue_branch = Some(selection.branch().into());
+        logs::issue_branch(Some(selection.branch()));
+        Ok(selection)
     }
 
     fn prepare_base_branch(&mut self, named: Option<&str>, pull: bool) -> Result<String> {
@@ -422,7 +493,14 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn make_claim(&mut self) -> Result<()> {
-        self.claim = Some(claim::make(self.issue, self.directory.git())?);
+        self.claim = Some(claim::make(
+            self.issue,
+            self.directory.git(),
+            self.issue_branch
+                .as_deref()
+                .expect("branch selected before Claim"),
+        )?);
+        logs::issue_title(GitHub::new().issue_title(self.issue).ok());
         Ok(())
     }
 
@@ -564,6 +642,10 @@ mod tests {
         /// How it was created.
         type Worktree = Checkout;
 
+        fn launch_path(&self) -> &Path {
+            Path::new("/launch")
+        }
+
         fn tickets(&mut self) -> Result<Vec<Ticket>> {
             self.calls.push(Call::Tickets);
             Ok(self
@@ -577,7 +659,7 @@ mod tests {
 
         fn started(&mut self, work: Work) {
             let spec_run = match work {
-                Work::Run(_) => false,
+                Work::Run(_) | Work::BaseFix(_) => false,
                 Work::SpecRun(_) => true,
                 Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
                     panic!("not a Run's work")
@@ -597,7 +679,10 @@ mod tests {
                 pull,
             });
             if self.script.base_fails {
-                bail!("base branch gone does not exist on origin; push it first");
+                bail!(
+                    "base branch gone does not exist on origin or locally; \
+                     create or obtain that branch first, or select a valid Base branch"
+                );
             }
             Ok(named.unwrap_or(CHECKED_OUT).to_string())
         }
@@ -1033,7 +1118,8 @@ mod tests {
 
         assert_eq!(
             cause(ended),
-            "base branch gone does not exist on origin; push it first"
+            "base branch gone does not exist on origin or locally; \
+             create or obtain that branch first, or select a valid Base branch"
         );
         assert_eq!(calls.last(), Some(&base_branch(None)));
     }
