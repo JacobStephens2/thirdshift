@@ -308,6 +308,8 @@ The variations would live in `.scratch/prototypes/711-console/` and go on a thro
 
 *Checked:* Open until you pick a variant (see Waiting on research). The handoff predates Q18's accounts, so its prototype sign-in is a single password field. An email field and the code step (Q30) are worth a look in whichever variant you pick.
 
+*Checked (2026-10-19):* decided on your laptop: the `console` variant, opening on its Inbox page. It's on the throwaway branch `prototype/711-console` (commit `05b1b0a`), with three research notes. The verdict is under "Settled" (the Q27 bullets), and the questions it raised are Round 6. The prototype's sign-in is still a stub; the real one is Q18 and Q30.
+
 ## Round 4 (answered)
 
 **Q28 - Where Console accounts are kept.** This builds on your Q18 answer: email and password accounts, for the addresses the User config allows. Each account is an email, a password hash, and whether the address has been verified. Its sign-ins need to survive a restart of `thirdshift console`, since a session lasts 30 days. Accounts change from the page (create, reset), but the Credentials are written by Setup and hold the Resend key. The options:
@@ -396,7 +398,157 @@ The options:
 
 *Answer:* we'll run /to-spec to create the specs, then /to-tickets for each spec
 
+## Round 6 (answered)
+
+From the Q27 verdict. Everything in #711, the CLI, has shipped (see Research results, 2026-10-19), so changes to the CLI below become Tickets in #776, the Console Spec.
+
+**Q35 - The Inbox replaces "live Commands first, then history".** In the prototype you chose, the Console opens on the **Inbox**: Commands grouped by what they ask of you, not by whether they're live. The groups are Needs you, Ready for review, Landing, Working, Done and Resolved. That reopens Q1's "live ones first". The options:
+- (a) **The Inbox is the Console's home page.** The History page holds every ended Command, newest first, with filters for outcome and repository, back to the oldest logs.
+- (b) Keep "live first, then history" as the home page, and make the Inbox a page of its own.
+
+*Recommended:* (a). It's what you picked after trying both. A failure from last night needs you more than a Run that's working fine, and "live first" puts the Run first.
+
+*Answer:* agree
+
+**Q36 - What goes in Needs you, and in what order.** In the prototype, Needs you holds:
+- **Died:** the process is gone with no outcome.
+- **Silent:** a live Run whose logs have stopped growing (Q38).
+- **Failed.**
+- **Triage:** a Stop that labelled the issue `needs-triage`.
+- **A Security finding waiting** on you.
+- **Slow,** shown as "look" rather than urgent.
+
+It sorts urgent first, then by escalation step, then oldest first. That puts yesterday's failures above a Run that's silent right now. The options:
+- (a) **Live problems first** (Silent, then Slow), then the ended ones (Died, Failed, Triage, Finding), each newest first.
+- (b) Keep the prototype's order.
+
+*Recommended:* (a), as the laptop agent recommended too. A live problem still costs machine time, and a Stop can still save it. An ended one waits the same either way.
+
+*Answer:* agree
+
+**Q37 - How an item leaves Needs you.** "Acknowledge" is ruled out (nothing the CLI can't do), and the Console reads only this machine's files. In the prototype, a failure stays in Needs you forever, so nine months of failures would pile up. The options:
+- (a) **It leaves when a later Command on the same issue starts on this machine, or once it is 7 days old.** After that it's only on History. Done shows the last 24 hours; Resolved shows Commands that ended 1 to 7 days ago with nothing waiting.
+- (b) It leaves when GitHub says the issue moved on (closed, or relabelled). That means the Console reading GitHub on every refresh, which neither it nor `status` does today.
+- (c) It leaves by age alone.
+
+*Recommended:* (a). A later Command on the issue means someone (you, or a Pickup run) has already acted. 7 days covers a weekend away, and nothing is read from GitHub.
+
+*Answer:* agree, and I want the user to be able to configure in their User config how long they want that period for being moved to resolved is - for 7 to be the default but for the view in the web ui console to be controlled by that user config.
+
+*Checked:* The setting's name, and whether it also sets how far back Resolved reaches, is Q45.
+
+Though alternatively I'm considering allowing users to "Acknowledge" by adding a folder to .thirdshift which stores some web ui state - initially probably just these acknowledgements / dismissals. I'm a bit wary to do this though as that introduces maybe a new kind of state stored on the machine. However, it's not entirely groundbreaking, as while much state is stored on GitHub, the log, trace, and configuration data is still stored on the host. I want to weigh the tradeoffs here. The CLI would need to be able to read this state file. I suppose though that this means there's a way to write to the server from the Console, which may be fine and worth it, just an expanding of the console.
+
+**Q38 - Silent and Slow, precisely.** The research says a stall is silence, not stage length, and you accepted that. These need definitions the CLI and the page share. The options:
+- (a) **Silent** means a Run in a stage whose Session log and Command log have both stopped growing for 10 minutes. It escalates at 30 ("silent 45 min · past 30"). Stages that wait, such as CI watch and Self-merge, write a waiting line to the Command log at least every 5 minutes. Today CI watch logs only when the count of running checks changes (see Research results), so a long CI run would read as silent. **Slow** means the stage has run past the top of its **usual range**, and it escalates at twice that. The **usual range** is the middle half (the 25th to 75th percentile) of that stage's times over the last 30 Command records in the same repository. It's shown only when there are at least 3. The thresholds are fixed in code, not User config settings.
+- (b) The same, but the usual range is machine-wide, across all repositories, as in the prototype.
+- (c) The thresholds go in the User config.
+
+*Recommended:* (a). chart35's checks take far longer than thirdshift's, so a machine-wide range would call one repository slow and miss slowness in the other. Settings can come later if a fixed number turns out wrong.
+
+*Answer:* agree, and I want the silent time definition to be configurable in the User config (default 10 minutes), as well as maybe the waiting line write frequency (default 5 min as it is now).
+
+*Checked:* Both settings are read by `thirdshift status` as well as by the page, so they can't sit under `[console]`. Their names and the check that the waiting line comes more often than the silent time are Q45.
+
+**Q39 - The CLI's side of the new pages.** Every view must also be a CLI command with `--json` (Q10). The options:
+- (a) **`thirdshift status` shows the Inbox's groups in the Inbox's order,** Needs you first, with the Silent and Slow words. `--json` gives each Command its group and health. Lanes, Stages and Waterfall draw data that `status --all --json` and `show --json` already carry: stage start times, with the usual range added. So they get no commands of their own, and the parity test pairs each page with the command whose JSON holds its data. Choosing a theme only changes how the page looks, not what it shows about Commands, so it has no CLI command.
+- (b) A new `thirdshift inbox` command, with `status` left as it is.
+
+*Recommended:* (a). `status` already answers "what's on this machine", and one ordering for both means the page and the terminal never disagree about what needs you.
+
+*Answer:* agree
+
+**Q40 - Which pages #776 builds.** You chose seven pages: 1 Inbox, 2 Lanes, 3 Stages, 4 Waterfall, 5 History, 6 Logs, 7 Security. #776's Out of Scope says "charts", and the handoff left them out. The options:
+- (a) All seven in #776.
+- (b) **Inbox, Lanes, Stages, History, Logs and Security in #776. Waterfall gets a follow-up issue.**
+- (c) Inbox, History, Logs and Security now; the three time views later.
+
+*Recommended:* (b). Lanes and Stages need only stage start times and the usual range (Q38). The Waterfall goes down to single tool calls, and Session log lines carry no time (see Research results). Its times would have to be matched from the Command log's `HH:MM:SS` lines, which is a parser of its own. Out of Scope then reads "the Waterfall, and charts of totals over time".
+
+*Answer:* a, but we'll handle the scope by the to-spec skill then to-tickets workflow, so we can make additional tickets to handle the waterfall extra, or make two specs then two ticket sets alternatively. Then we can fit charts in somehow too.
+
+*Checked:* How the Specs are cut, and the charts, are Q48.
+
+**Q41 - Where themes and other per-viewer choices live.** In the prototype, the chosen theme, the themes you make, "new since you last looked", hidden sections and Pause motion are all kept in the browser. None of them hides a problem. Each machine's Console is its own site, so one browser's choices don't carry from `console.thirdshift.app` to `thirdshift.stephens.page`. The options:
+- (a) **The built-in themes are compiled into the binary. Everything per-viewer stays in the browser,** and themes move between Consoles by JSON export and import. Nothing is saved on the server.
+- (b) Also a machine default in the User config (`[console] theme = …`) and theme files in the config folder. The page reads them but doesn't write them.
+
+*Recommended:* (a) now. (b) gets an issue if moving themes by hand gets tiresome. It is read-only, so it fits Q10, but it means more for #776 to build.
+
+*Answer:* a and b - though thinking again here about the Q37 answer and how much if any writing to the server to allow right now from the console. And then wondering whether to make it so that from the console the user can write to the console section of their User Config. That could be nice for them and intuitive - that that is where all their thirdshift settings on that host live, rather than some in their browser and some in the server, and that would smooth out using multiple browsers too - one theme showing on different browsers for a user on that host by the server.
+
+*Checked:* The page writing the User config is a second action beside Stop, so ADR 0016 ("only reads, and does what the CLI does") needs amending, and each write needs a CLI command too (Q10). What the page may write is Q46.
+
+**Q42 - Fonts, given "nothing loaded from another site".** #776 says no CDN, fonts included. The prototype and thirdshift.app both load Google Fonts. The built-in themes use ten families: Big Shoulders Display, JetBrains Mono, Inter, Caprasimo, Nunito, Barlow Condensed, Titillium Web, Atkinson Hyperlegible, IBM Plex Sans and IBM Plex Mono. All are under the SIL Open Font License, which allows bundling. The editor lists eight more. The options:
+- (a) **Embed Latin-subset woff2 files for the built-in themes' fonts only, at the weights they use.** The editor offers those, plus the system font stacks. A theme naming any other font falls back to its stack.
+- (b) Let themes load from Google Fonts. That breaks the rule, and tells Google about every page view.
+- (c) System fonts only. Press and Factory would lose their look.
+
+*Recommended:* (a). Ten families at one or two weights each comes to a few hundred KB in a binary already measured in MB, and the page works with no internet at all.
+
+*Answer:* agree, though I wonder how easy or difficult it will be in this case for users to use their own fonts. I wonder about a theme system that allows putting fonts in a .thirdshift/console/themes folder or something.
+
+*Checked:* A themes folder that holds fonts too is Q47.
+
+**Q43 - Glossary terms and ADRs.** The candidates:
+- **For `CONTEXT.md`:** **Inbox** (naming its groups), **Needs you**, **Silent**, **Slow**, **Usual range** and **Theme**. Each group and page name is a heading on the page, not a term.
+- **An ADR,** "The Console has one layout, and its looks are themes made of tokens". It's hard to reverse once people have exported themes, a reader might wonder why there aren't several layouts, and you weighed both.
+
+Silence as the stall rule goes in Silent's definition. "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules, since they're cheap to change.
+
+*Recommended:* yes to both.
+
+*Answer:* agree
+
+*Checked:* `CONTEXT.md` now has Inbox, Needs you, Silent, Slow, Usual range and Theme, and the Console entry opens on the Inbox. The ADR is [0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md).
+
+**Q44 - Recording the verdict.** #711 is closed, now that the CLI has shipped, so the pointer belongs on #776. The options:
+- (a) **Copy the three research notes from the prototype branch onto `web-ui` and commit them with this round.** Leave the prototype on `prototype/711-console`. Post a comment on #776 with the verdict and the branch commit. Then rewrite #776's body (the look, the pages, the new stories and rules) and run `/to-tickets 776`.
+- (b) The same, but leave the research notes on the prototype branch.
+
+*Recommended:* (a). The notes cite primary sources and are the reasons behind Silent, the Inbox and Focus, and `docs/research/` is where such notes live. Posting the comment and pushing are the steps you asked to approve first; "agree" approves both.
+
+*Answer:* agree
+
+*Checked:* The three notes are copied to `docs/research/`, pointing at the prototype branch. The software-factory note's claim that `--requeue` was invented is corrected. Committed and pushed with this round, and the verdict is posted on #776. #776's body is rewritten once Round 7 is answered.
+
 *Checked:* Read as (b), two Specs, since `/to-tickets` runs "for each spec". The ADR is written: [ADR 0016](../../docs/adr/0016-the-console-is-a-long-running-reader.md).
+
+## Round 7 (answered)
+
+**Q45 - The new settings: names, and what they govern.** Q37 and Q38 add three settings to the User config. `thirdshift status` reads them too, so they belong outside `[console]`. The options:
+- (a) **`inbox.days = 7`** sets how long an ended problem stays in Needs you, and how far back Resolved reaches. Done stays at one day. **`inbox.silent_minutes = 10`** sets when a Run is Silent; it escalates at three times that. **`logs.waiting_line_minutes = 5`** sets how often a waiting stage, such as CI watch or Self-merge, writes a line. If the waiting line doesn't come more often than the silent time, `status`, the page and Setup warn, and thirdshift uses half the silent time instead, so a waiting stage never reads as Silent.
+- (b) The same settings, but one for Needs you and another for Resolved.
+
+*Recommended:* (a). Your answer named one period, and with one number Needs you and Resolved never disagree about what happened this week. Clamping the waiting line keeps a typo from turning every CI watch red.
+
+*Answer:* agree
+
+**Q46 - What the page may write.** You'd like settings on this host to live in the User config, so a Theme follows you from browser to browser, and the page can change them. The options:
+- (a) **The page writes only the Console's look, under `[console]`: the chosen Theme and the hidden sections.** It never writes the allowlist, the addresses, the thresholds, or any other section. Every write is also a CLI command: `thirdshift console theme <name>` and `thirdshift console sections`. Each one keeps the file's comments, as Setup does, and goes in the Console log naming the account. The setting is per machine, so every account on that Console sees the same Theme. "New since you last looked", Pause motion, what's folded, and the peek stay in the browser. ADR 0016 is amended: the page reads, Stops, and sets its own look.
+- (b) The same, but each account's look is kept with its Console account, so two people on one machine can each have their own.
+- (c) As (a), but the page can also change the `inbox.*` settings.
+
+*Recommended:* (a). One place for settings is what you asked for, and a signed-in phone that can change only the look can't widen who signs in. (b) is worth doing only once a machine has more than one person.
+
+*Answer:* agree
+
+**Q47 - Your own Themes and fonts.** The options:
+- (a) **A folder, `~/.thirdshift/console/themes/`, holds one `<name>.json` per Theme you made, and a `fonts/` folder of `woff2`, `woff`, `otf` or `ttf` files.** The Console serves those fonts from its own address, so nothing comes from another site. A Theme names a font in one of three ways: a built-in family, a system stack, or a file in `fonts/`. The page's editor saves Themes into the folder. Fonts are added by copying files in, not by uploading them through the page. The CLI has `thirdshift console theme list`, `import <file>` and `export <name>`.
+- (b) As (a), with font uploads through the page too.
+- (c) Themes inline in the User config, and no font files.
+
+*Recommended:* (a). Copying a font file in is one `scp` for whoever runs the machine. An upload form would be the page's first way of putting arbitrary files on the server, for little gain.
+
+*Answer:* agree
+
+**Q48 - How the Console's Specs are cut, and the charts.** Q40 put all seven pages in, with scope managed through `/to-spec` and `/to-tickets`. The options:
+- (a) **Rewrite #776 to cover all seven pages, Themes and the settings.** `/to-tickets` puts the Waterfall's Tickets last, including matching tool calls to the Command log's times. Charts get an issue of their own (`needs-triage`), to be grilled later, since nothing yet says what they'd show. Candidates are Commands per day by outcome, each stage's time week by week, and tokens per day.
+- (b) Two Specs: #776 without the Waterfall, and a second for the Waterfall and the charts.
+
+*Recommended:* (a). The Waterfall is settled enough to cut Tickets for, and the charts aren't. Putting the charts in a Spec now would hold the Waterfall up behind questions nobody has asked yet.
+
+*Answer:* agree
 
 ## Settled by earlier answers (shout if any is wrong)
 
@@ -404,7 +556,7 @@ The options:
 - Logs keep their place, `<logs.dir>/<owner>/<repo>/`, and their names. The Console reads them where they are (ADR 0011).
 - The Console can't assume `thirdshift.app`. Someone else running thirdshift has their own domain, or none, so the address is a setting, not built in. Here it's `console.thirdshift.app` (Q8).
 - **The page does nothing the CLI can't** (your note before Q1, Q10). Every view and action reaches the CLI first or at the same time, Stop included, and a test pairs each page route with its command. The CLI's `--json` is the only API anyone is promised.
-- **The first version can act, so it's more than a viewer** (Q1 c). It lists every Command on this host, live ones first, with their logs, and it can Stop a live one.
+- **The first version can act, so it's more than a viewer** (Q1 c). It lists every Command on this host, with their logs, and it can Stop a live one. "Live ones first" is reopened by the Inbox (Q35).
 - **History goes back as far as the logs in the current layout do** (Q1, Q26 b). From 2026-10-03, Commands come from the Activity logs and Command logs, without stages until the Command record exists. From 2026-09-25 to 2026-10-02 there are only Session logs, grouped by issue and stamp, with no outcome.
 - **Each machine serves its own Console** (Q2 a). Nothing needs a list of machines. Finding from GitHub which machine a Run is on is left for when there's a second machine.
 - **Each Command keeps a Command record:** one file beside its Command log, kept after it ends, with its process id, its issue, each child Run's stages and when each began, and its outcome (Q3 b, Q11 a). One whose process is gone, with no outcome, shows as died at its last stage. A SQLite index built from these files can come later, if a query gets slow. The term is now in `CONTEXT.md`.
@@ -423,7 +575,7 @@ The options:
   A Command is named by its issue, such as `chart35#239` or the issue URL, or for a Pass with no issue, by its kind and stamp.
 - **A Spec run shows every Ticket:** running (with its stage and age), merged, failed, waiting on named blockers, or not started (Q20 a).
 - **The code stays portable,** with systemd only in `console install`. An issue will be filed for launchd on macOS (Q21 a).
-- **Only the current log layout is read** (Q26 b). stephens.page's flat Session logs from before ADR 0011 aren't shown unless you move them. This host's earliest Session logs, from 2026-09-25, are already in the current layout, so they still show.
+- **Only the current log layout is read** (Q26 b). stephens.page's flat Session logs from before ADR 0011 aren't shown unless you move them. **Corrected 2026-10-19:** this host's Session logs from 2026-09-25 to about 2026-10-12 are in `sessions/`, which isn't the current layout. Since #599 (2026-10-09), Session logs sit beside their Command log. So those older Commands show from their Command logs, without their Session logs, unless you move them. Shout if you'd rather the Console also read `sessions/`.
 - **Console accounts are kept in a file of their own** beside the Credentials, readable only by you, holding argon2id hashes and hashed session tokens (Q28 a). Taking an address off the allowlist ends its sessions and blocks it at once, but keeps the account. With nobody on the list, `thirdshift console` refuses to start unless `--no-sign-in` is given (Q29 a).
 - **One "set your password" flow by email code creates an account or resets its password** (Q30 a). The page answers the same way whether or not an address is allowed. A code is 6 digits, valid for 15 minutes, with 5 tries, and codes go out at most once a minute and 10 times a day per address. `thirdshift console password --email <address>` does the same on the CLI. Without a Resend key, the email flows are off and the CLI is how accounts get passwords (Q31 a). Sign-in emails come from `email.from`.
 - **Setup asks whether to run the Console,** its whole address (with an example), and the allowed emails, which default to `email.to`. Then it offers `console install` (Q32 a).
@@ -431,6 +583,43 @@ The options:
 - **Who did what** (Q33 a). A Stop writes an Activity log line naming who asked: the account's email from the Console, or the Unix user from the CLI. Account events go in a **Console log** per machine, which `thirdshift console log` prints and the page shows. Page views aren't recorded. `CONTEXT.md` has the Console log, and the Activity log and Stop entries now mention who asked.
 - **Two Specs, made with `/to-spec`, then `/to-tickets` for each** (Q34 b). #711 is the CLI: the Command record, `status`/`show`/`logs`, then Stop. A new Spec covers the Console: the read-only page with the Session log view, accounts and sign-in, Stop on the page, `console install`, Setup's questions, the Console log, and the look last, once Q27 is decided. The follow-up issues are filed separately: launchd on macOS, stopping a single Ticket's Run, and a Claim that names its machine. The CLI Spec goes first and doesn't wait on Q27; the Console Spec's last Ticket, the look, does (your note on 2026-10-18).
 - **ADR 0016 records `thirdshift console` as a reader that runs all the time,** next to ADR 0009's "nothing schedules itself".
+- **The look (Q27), from the `console` prototype,** in your words where quoted:
+  - **One layout, many themes:** "I want the layout to be the same, but for there to be an idea of appearance themes that the user can choose between or even create themselves". A theme is design tokens: colours, fonts, shape, effects and motion. There's a picker and an editor, and themes export and import as JSON.
+  - **The default is Focus, following the system's light or dark setting.** The picker lists Focus, Plain, Press, Signal, Garden and Factory, each as auto, light and dark. Focus means "weight follows need". Plain is the quiet inbox look. Press is thirdshift.app's press look in plain words. Signal uses colour only for state, in Okabe–Ito colours. Garden and Factory are themed; Factory takes after Factorio. Every built-in theme passes AA text contrast, and Focus also passes APCA.
+  - **Pages, a level above sections:** 1 Inbox, 2 Lanes, 3 Stages, 4 Waterfall, 5 History, 6 Logs, 7 Security. Keys `1` to `7` switch pages, and the page is in the URL as `?page=`. Lanes has 3.5 h, 12 h and 24 h windows: "I like how the lanes variant shows the time different processes take". Which pages #776 builds is Q40.
+  - **Inbox rows** show a state word (never colour alone), the issue and title, a one-line now-line and the age. A Spec run's Tickets show under it as a plan checklist. Needs you is open on load and can be folded.
+  - **The peek** is the details beside the list, or a bottom sheet on a phone, and it's closed on load.
+  - **A stall is silence, not stage length.** "Slower than usual (12–17 min), still working" is different from "no output for 14 min, may be stuck". Problems escalate in words: "silent 45 min · past 30", "3× usual". It's defined in Q38.
+  - **Motion only for thirdshift's activity:** "I want animation to be reserved to communication of some activity of thirdshift". That keeps the Working spinner, a heartbeat dot when a log moves, the latest-line flash, the live log cursor, the stopping bar, and stripes on the running stage. A silent alarm pulses three times, then holds. Factory's conveyor and Garden's bed move only while a Command is live. A Pause motion control meets WCAG 2.2.2.
+  - **Visual calm:** no coloured bars between sections, though the title's bar is fine. With Needs you open, every section heading fits above the fold on a 14" laptop.
+  - **Keys:**
+    - `j` and `k` walk rows and section headings, and wrap.
+    - `space` folds a heading, or opens or closes the peek on a row. `enter` opens the full log.
+    - `esc` closes things one layer at a time, then hides the selection mark.
+    - `g` plus a letter jumps to a section or page; a tooltip lists them. `z` folds the current section. `?` lists every key. `Shift+T` opens themes.
+  - **Chrome:** a Sections chooser hides the sections you pick. The tab title says "‹n› need you", and the favicon gets a dot when something is urgent.
+  - **The page has no acknowledge, shelve or steer,** since the CLI can't do them (Q10). The research agrees.
+  - **It works at 390 px** with no sideways scroll.
+- **The Inbox is the home page** (Q35 a). History holds every ended Command, newest first, filtered by outcome and repository.
+- **Needs you puts live problems first** (Q36 a): Silent, then Slow, then Died, Failed, Triage and Finding, each newest first.
+- **An ended problem leaves Needs you** when a later Command on the same issue starts on this machine, or once it's older than a User config setting, 7 days by default (Q37 a). Done is the last day. Nothing is read from GitHub. The setting is Q45.
+- **Silent and Slow** (Q38 a). Silent is no growth in the Session log or Command log for the silent time, a User config setting with a default of 10 minutes. Waiting stages write a line at a set interval, a User config setting with a default of 5 minutes. Slow is past the top of the usual range, which is the middle half of that stage's last 30 times in the repository, shown once there are 3. Their names are Q45.
+- **`thirdshift status` shows the Inbox's groups and order,** and `--json` carries each Command's group and health (Q39 a). Lanes, Stages and Waterfall draw `status --all --json` and `show --json`, with the usual range added. Choosing a Theme has a CLI command only because the page writes it (Q46).
+- **All seven pages are wanted** (Q40 a). Scope is handled when the Specs and Tickets are cut (Q48).
+- **Built-in Themes are compiled in. Settings live in the User config, which the page can write in part** (Q41 a and b). What it may write is Q46, and where user Themes live is Q47.
+- **The built-in Themes' fonts are embedded,** as Latin-subset woff2 files at the weights they use (Q42 a). Users' own fonts are Q47.
+- **`CONTEXT.md` has Inbox, Needs you, Silent, Slow, Usual range and Theme,** and [ADR 0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md) records one layout with Themes made of tokens (Q43). "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules.
+- **The research notes are on `web-ui`, the prototype stays on its branch, and the verdict is on #776** (Q44 a).
+- **Three new User config settings** (Q45 a):
+  - `inbox.days = 7`: how long an ended problem stays in Needs you, and how far back Resolved reaches. Done is one day.
+  - `inbox.silent_minutes = 10`: when a Run is Silent. It escalates at three times that.
+  - `logs.waiting_line_minutes = 5`: how often a waiting stage writes a line.
+
+  If the waiting line doesn't come more often than the silent time, `status`, the page and Setup warn, and thirdshift uses half the silent time.
+- **The page writes only its own look, under `[console]`: the chosen Theme and the hidden sections** (Q46 a). Each write is also a CLI command (`thirdshift console theme <name>`, `thirdshift console sections`). It keeps the file's comments and goes in the Console log naming the account. The look is per machine, the same for every account. "New since you last looked", Pause motion, what's folded and the peek stay in the browser. ADR 0016 is amended to say the page reads, Stops and sets its own look.
+- **Your own Themes are files in `~/.thirdshift/console/themes/`, with a `fonts/` folder** (Q47 a). The Console serves those fonts from its own address. A Theme names a built-in family, a system stack or a file in `fonts/`. The page's editor saves Themes there. Fonts are copied in, never uploaded through the page. The CLI has `console theme list`, `import <file>` and `export <name>`.
+- **#776 is rewritten to cover all seven pages, Themes and the settings,** with the Waterfall's Tickets last (Q48 a). Charts get an issue of their own, `needs-triage`, to be grilled later.
+- **The confirm step's "requeue instead" is `thirdshift stop --requeue`,** which shipped with #773 and #774. The laptop agent thought the flag was invented; it was settled in Q12.
 - **The page borrows** nested child Runs, each stage with its age, a one-line latest event, and Stop only while the process is alive, with a confirm step on the page. Session logs get folded tool calls, collapsed thinking, a renderer per tool over a plain fallback, and appends rather than redraws (Q16 a).
 
 ## Research results (2026-10-17)
@@ -475,6 +664,19 @@ The options:
 - **stephens.page's DNS:** Cloudflare, with a `*.stephens.page` wildcard to 68.183.62.24. `console.stephens.page` is taken: a redirect to `dashboard.stephens.page`, behind Cloudflare's proxy. No enabled site mentions `thirdshift`. Confirmed by `dig` and `grep` over `sites-enabled`.
 - **Lingering is off for you on stephens.page,** and the long-running apps there are system units. `systemctl --user` works only because a desktop session is open. Confirmed by `loginctl` and `/etc/systemd/system/`.
 
+## Research results (2026-10-19)
+
+- **#711, the CLI, has shipped and is closed.** Its Tickets #768 to #774 merged as #777 and #779 to #784, `thirdshift stop --requeue` included. Confirmed by `gh issue view` and `src/args.rs` on `main`.
+- **#776 is also labelled `architect-idea`,** so an Architecture review chose it as the next move. While it's `needs-triage`, every Architect run on thirdshift is skipped (CONTEXT.md, Architect idea). Confirmed by `gh issue view 776`.
+- **Session log lines carry no time.** A Codex Session log is bare `thread.started`, `item.completed` and similar events. The Command log stamps every line `HH:MM:SS`, including one line per tool call (`implement: $ rg …`). Confirmed by `712-20261018T210511-0400-implement.jsonl` and its `.log`.
+- **CI watch logs only when the count of running checks changes.** #712's CI watch had gaps of up to 2.5 minutes, so a longer CI run could go 10 minutes without a line. Confirmed by `712-20261018T210511-0400.log`, lines 218 to 223.
+- **Session logs moved beside their Command log on 2026-10-09** (#599, commit `b26821d`). The ones before that are in `sessions/`. Confirmed by `git log` and `ls`.
+- **thirdshift.app and the prototype load Google Fonts.** The built-in themes use ten families, all under the SIL Open Font License. Confirmed by `site/index.html` and the prototype's `themes.js`.
+- **From the laptop's research notes** (on `prototype/711-console`, each citing primary sources):
+  - `docs/research/console-run-monitoring-ui.md` covers CI, workflow and trace UIs, and the SRE book. It's the source of silence as the stall rule, "usually" ranges, the Stop wording and the Stage grid.
+  - `docs/research/software-factory-console-trends.md` covers 2025–26 agent consoles. It's the source of the Inbox's grouping and the tab title's count.
+  - `docs/research/focus-theme-attention.md` covers alarm and HMI standards (ISA-18.2 and ISA-101, EEMUA 191), WCAG 2.2 and APCA. It's the source of the Focus theme.
+
 ## Waiting on research
 
-- **Q27, the look:** an agent on your laptop is building the variations from `/tmp/handoff-711-console-prototypes.md`. They are garden, plain, plain with a garden accent, and the press floor.
+- Nothing. Q27 came back from your laptop on 2026-10-19.

@@ -17,10 +17,12 @@ mod check_read;
 pub(crate) use check_read::is_transient as check_read_is_transient;
 
 mod advisories;
+mod trust;
 pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,
 };
+pub use trust::UntrustedIssue;
 
 #[cfg(test)]
 mod execution_tests;

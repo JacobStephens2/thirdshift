@@ -392,6 +392,48 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
 }
 
 #[test]
+fn a_spec_stops_before_starting_a_ticket_written_by_an_untrusted_account() {
+    let scenario = linear_spec();
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"21": "CONTRIBUTOR"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "Ticket #21: issue author is not a Trusted account",
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.origin_log("issue-21").is_none());
+}
+
+#[test]
+fn a_ticket_needs_only_a_trusted_author_not_a_ready_label_of_its_own() {
+    for events in [
+        serde_json::json!([]),
+        serde_json::json!([
+            {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
+        ]),
+    ] {
+        let scenario = linear_spec();
+        let mut state = scenario.gh_state();
+        state["trust_events"] = serde_json::json!({"21": events, "22": events});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["no-email", &spec_url(&scenario)]);
+
+        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+        assert!(
+            !result.stderr.contains("Trusted account"),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn security_review_runs_once_after_spec_review_over_the_whole_spec_branch() {
     let scenario = linear_spec();
     let base_commit = scenario.launch_git(&["rev-parse", "main"]);

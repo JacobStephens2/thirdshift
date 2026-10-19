@@ -1903,6 +1903,133 @@ fn a_model_claude_refuses_fails_the_pass_once_it_has_taken_an_issue_before_any_w
 }
 
 #[test]
+fn an_issue_written_by_an_untrusted_account_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&["#7 issue author is not a Trusted account"]),
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+#[test]
+fn an_issue_labelled_by_an_untrusted_account_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": [
+        {"event": "labeled", "label": {"name": "ready-for-agent"},
+         "actor": {"login": "acme"}},
+        {"event": "unlabeled", "label": {"name": "ready-for-agent"},
+         "actor": {"login": "acme"}},
+        {"event": "labeled", "label": {"name": "ready-for-agent"},
+         "actor": {"login": "outsider"}}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[
+            "#7 most recent ready-for-agent label actor is not a Trusted account",
+        ]),
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+#[test]
+fn missing_ready_label_history_or_actor_cannot_authorize_pickup() {
+    for events in [
+        serde_json::json!([]),
+        serde_json::json!([
+            {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": null}
+        ]),
+    ] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        let mut state = scenario.gh_state();
+        state["trust_events"] = serde_json::json!({"7": events});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_skipped(
+            &scenario,
+            &result,
+            &no_ready_issue_after(&[
+                "#7 most recent ready-for-agent label actor is not a Trusted account",
+            ]),
+        );
+        assert!(scenario.claude_calls().is_empty());
+    }
+}
+
+#[test]
+fn trusted_authors_and_the_latest_trusted_ready_label_authorize_pickup() {
+    for (association, actor, owner_type, collaborators, members) in [
+        ("OWNER", "ACME", "User", vec![], vec![]),
+        ("COLLABORATOR", "reader", "User", vec!["reader"], vec![]),
+        ("MEMBER", "member", "Organization", vec![], vec!["member"]),
+    ] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+        let mut state = scenario.gh_state();
+        state["author_associations"] = serde_json::json!({"7": association});
+        state["owner_type"] = serde_json::json!(owner_type);
+        state["collaborators"] = serde_json::json!(collaborators);
+        state["org_members"] = serde_json::json!(members);
+        state["trust_events"] = serde_json::json!({"7": [
+            {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}},
+            {"event": "unlabeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+            {"event": "labeled", "label": {"name": "READY-for-AGENT"}, "actor": {"login": actor}},
+            {"event": "labeled", "label": {"name": "bug"}, "actor": {"login": "outsider"}}
+        ]});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+        assert!(!result.stderr.contains("warning:"), "{}", result.stderr);
+    }
+}
+
+#[test]
+fn a_failed_label_actor_membership_lookup_starts_no_work() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": [
+        {"event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "reader"}}
+    ]});
+    state["failing"] = serde_json::json!(["api --include repos/acme/widgets/collaborators/reader"]);
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("could not check Trusted account membership"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+}
+
+#[test]
 fn a_handed_back_branch_is_continued_without_losing_interrupted_work() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
@@ -1973,39 +2100,25 @@ fn a_handed_back_open_pr_is_continued_using_its_base() {
 }
 
 #[test]
-fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
-    use TimelineEvent::{Labelled as On, Unlabelled as Off};
-    let claim = On(IN_PROGRESS);
-    let end = Off(IN_PROGRESS);
-    let ready = On(READY_FOR_AGENT);
-    let histories = [
-        vec![],
-        vec![ready],
-        vec![end, ready],
-        vec![claim, ready],
-        vec![claim, ready, end],
-        vec![claim, end],
-        vec![claim, end, ready, claim, end],
-        vec![claim, end, ready, claim, ready, end],
-        vec![claim, end, ready, Off(READY_FOR_AGENT)],
-    ];
-    for history in histories {
-        let scenario = Scenario::new();
-        ready_issue(&scenario, 7, &[]);
-        scenario.origin_has_branch("issue-7", "main", &["Human or interrupted work"]);
-        let events: Vec<_> = history.into_iter().map(|event| (event, 60)).collect();
-        scenario.issue_timeline(7, &events);
+fn a_recent_hand_back_on_a_later_history_page_waits_for_settling() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    let mut events = vec![(TimelineEvent::Labelled(IN_PROGRESS), 90)];
+    events.extend((0..101).map(|_| (TimelineEvent::Labelled("bug"), 65)));
+    events.extend([
+        (TimelineEvent::Unlabelled(IN_PROGRESS), 2),
+        (TimelineEvent::Labelled(READY_FOR_AGENT), 1),
+    ]);
+    scenario.issue_timeline(7, &events);
 
-        let result = scenario.run(&["pickup"]);
+    let result = scenario.run(&["pickup"]);
 
-        assert_skipped(
-            &scenario,
-            &result,
-            &no_ready_issue_after(&[
-                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended",
-            ]),
-        );
-    }
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[LABELLED_TOO_RECENTLY]),
+    );
 }
 
 #[test]
@@ -2047,23 +2160,37 @@ fn label_history_is_read_past_one_page_before_accepting_or_rejecting_a_hand_back
 }
 
 #[test]
-fn a_recent_hand_back_on_a_later_history_page_waits_for_settling() {
-    let scenario = Scenario::new();
-    ready_issue(&scenario, 7, &[]);
-    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
-    let mut events = vec![(TimelineEvent::Labelled(IN_PROGRESS), 90)];
-    events.extend((0..101).map(|_| (TimelineEvent::Labelled("bug"), 65)));
-    events.extend([
-        (TimelineEvent::Unlabelled(IN_PROGRESS), 2),
-        (TimelineEvent::Labelled(READY_FOR_AGENT), 1),
-    ]);
-    scenario.issue_timeline(7, &events);
+fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
+    use TimelineEvent::{Labelled as On, Unlabelled as Off};
+    let claim = On(IN_PROGRESS);
+    let end = Off(IN_PROGRESS);
+    let ready = On(READY_FOR_AGENT);
+    let histories = [
+        vec![],
+        vec![ready],
+        vec![end, ready],
+        vec![claim, ready],
+        vec![claim, ready, end],
+        vec![claim, end],
+        vec![claim, end, ready, claim, end],
+        vec![claim, end, ready, claim, ready, end],
+        vec![claim, end, ready, Off(READY_FOR_AGENT)],
+    ];
+    for history in histories {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.origin_has_branch("issue-7", "main", &["Human or interrupted work"]);
+        let events: Vec<_> = history.into_iter().map(|event| (event, 60)).collect();
+        scenario.issue_timeline(7, &events);
 
-    let result = scenario.run(&["pickup"]);
+        let result = scenario.run(&["pickup"]);
 
-    assert_skipped(
-        &scenario,
-        &result,
-        &no_ready_issue_after(&[LABELLED_TOO_RECENTLY]),
-    );
+        assert_skipped(
+            &scenario,
+            &result,
+            &no_ready_issue_after(&[
+                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended",
+            ]),
+        );
+    }
 }
