@@ -1,0 +1,174 @@
+<!doctype html>
+<!-- Generated from docs/guide/observing.md; edit Markdown and run npm run docs in site/. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observing Commands · thirdshift</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="docs-header"><nav aria-label="Site"><a href="/">thirdshift / home</a> · <a href="/docs/">Documentation</a> · <a href="/how-it-works/">How it works</a> · <a href="/prompts/">Prompts and skills</a></nav></header>
+<main class="docs-content">
+<h1 id="observing-commands">Observing Commands</h1>
+<h2 id="machine-status">Machine status</h2>
+<p><code>thirdshift status</code> names this host and lists live Commands across every repository in <code>logs.dir</code>, with their issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Runs or Spec runs they dispatch beneath themselves, each Spec&#39;s Tickets and their Runs, and each Run&#39;s Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Pass with no issue is named by its kind and Command log stamp, such as <code>architect-20261018T120000-0400</code> or <code>secure-20261018T120000-0400</code>. After the live Commands it lists those that ended in the last 24 hours, with their outcomes. <code>thirdshift status --all</code> lists every Command this machine has logs for, newest start first. A Command or child Run with no outcome whose process has gone shows as <code>died at &lt;stage&gt;</code> in either view. Process start identifiers distinguish a reused process id on Linux and macOS. Records remain beside their Command logs, as <code>*.command.json</code>, with child records named for their issue as <code>*.issue-&lt;n&gt;.child.json</code>. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.</p>
+<p>History uses each source only for Commands missing from the preceding sources: Command records, then Activity log start/end lines with their Command logs, then Session logs in the current <code>&lt;logs.dir&gt;/&lt;owner&gt;/&lt;repo&gt;/commands/&lt;kind&gt;/</code> layout. Activity entries have start and end times and outcomes, with no stages. Session entries group logs by issue and Command stamp; they have no known end or outcome and appear only with <code>--all</code>. Sessions covered by a Spec run or Pass&#39;s stamp belong to that Command. The flat layout from before <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0011-thirdshift-keeps-a-per-repository-activity-log.md">ADR 0011</a> is ignored.</p>
+<p>For each repository and kind of Pass whose latest Activity log line is a skip, status also shows that Pass as idle with its reason, even when the skip is older than another kind&#39;s activity. A later start or end for that kind clears its idle entry. For example:</p>
+<pre><code class="language-text">Architect run idle on acme/widgets: Ready issue #7 &quot;Make widgets&quot; goes first: https://github.com/acme/widgets/issues/7
+</code></pre>
+<p><code>thirdshift status --json</code> is the versioned API for agents and the coming <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0016-the-console-is-a-long-running-reader.md">Console</a>. It runs outside a repository too. Version 1 has this shape:</p>
+<pre><code class="language-json">{
+  &quot;version&quot;: 1,
+  &quot;hostname&quot;: &quot;factory&quot;,
+  &quot;commands&quot;: [{
+    &quot;version&quot;: 1,
+    &quot;kind&quot;: &quot;Run&quot;,
+    &quot;repository&quot;: &quot;acme/widgets&quot;,
+    &quot;name&quot;: &quot;acme/widgets#7&quot;,
+    &quot;issue&quot;: {&quot;number&quot;: 7, &quot;url&quot;: &quot;https://github.com/acme/widgets/issues/7&quot;, &quot;title&quot;: &quot;Make widgets&quot;},
+    &quot;hostname&quot;: &quot;factory&quot;,
+    &quot;process_id&quot;: 1234,
+    &quot;process_start&quot;: &quot;&lt;OS process start identifier&gt;&quot;,
+    &quot;harness&quot;: &quot;claude&quot;,
+    &quot;model&quot;: &quot;opus&quot;,
+    &quot;effort&quot;: &quot;high&quot;,
+    &quot;started_at&quot;: &quot;2026-10-18T12:00:00-04:00&quot;,
+    &quot;ended_at&quot;: null,
+    &quot;stages&quot;: [{&quot;name&quot;: &quot;implement&quot;, &quot;began_at&quot;: &quot;2026-10-18T12:00:01-04:00&quot;, &quot;session_log&quot;: &quot;/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl&quot;}],
+    &quot;session_log&quot;: &quot;/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl&quot;,
+    &quot;issue_branch&quot;: &quot;issue-7&quot;,
+    &quot;pull_request&quot;: null,
+    &quot;outcome&quot;: null,
+    &quot;cause&quot;: null,
+    &quot;source&quot;: &quot;command_record&quot;,
+    &quot;command_log&quot;: &quot;/logs/acme/widgets/commands/issue/7-stamp.log&quot;,
+    &quot;dispatched&quot;: [],
+    &quot;state&quot;: &quot;live&quot;,
+    &quot;stage&quot;: {&quot;name&quot;: &quot;implement&quot;, &quot;began_at&quot;: &quot;2026-10-18T12:00:01-04:00&quot;, &quot;age_seconds&quot;: 52},
+    &quot;parent_record&quot;: null,
+    &quot;parent_dispatch&quot;: null,
+    &quot;tickets&quot;: [],
+    &quot;children&quot;: []
+  }],
+  &quot;idle_passes&quot;: [{
+    &quot;repository&quot;: &quot;acme/widgets&quot;,
+    &quot;kind&quot;: &quot;Pickup run&quot;,
+    &quot;reason&quot;: &quot;no Ready issue on acme/widgets&quot;
+  }]
+}
+</code></pre>
+<p>Times are RFC 3339; ages are nonnegative seconds. <code>model</code> and <code>effort</code> are null when left to the Harness. <code>issue</code> is null for a Pass with no issue; <code>session_log</code>, <code>issue_branch</code>, <code>pull_request</code>, <code>outcome</code>, <code>cause</code>, <code>ended_at</code>, <code>parent_record</code> and <code>parent_dispatch</code> are nullable. Command kinds are <code>Run</code>, <code>Spec run</code>, <code>Architect run</code>, <code>Pickup run</code>, <code>Security run</code> and <code>Base fix</code>. <code>name</code> identifies an issue or a Pass&#39;s kind and stamp. <code>dispatched</code> is an array of the Runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty <code>dispatched</code> array); it shares the Pass&#39;s process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed <code>state</code>, <code>stage</code>, <code>source</code>, <code>command_log</code> and <code>children</code> or empty leaf <code>dispatched</code> arrays. Older records without an end time use their last modification time. <code>idle_passes</code> contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of <code>commands</code>, and never creates a Command record or log for a skipped Pass.</p>
+<p><code>state</code> is <code>live</code>, <code>died</code>, <code>ended</code>, or <code>unknown</code> when historical evidence has no ending. <code>stage</code> is null before the first known stage. Readers skip unknown stage names. Known stages are <code>implement</code>, <code>Resume</code>, <code>Security review</code>, <code>pull request</code>, <code>CI watch</code>, <code>Repair</code>, <code>Self-merge</code>, <code>cleanup</code>, <code>Tickets</code>, <code>Spec review</code>, <code>Architecture review</code>, <code>Security audit</code>, <code>Security reproduction</code> and <code>Security fix publishing</code>. A Pass retains its own stages while its dispatched work records its stages separately.</p>
+<p><code>children</code> recursively contains the immediate child Runs in separate processes, with the same fields as their parent. A Pickup&#39;s <code>dispatched</code> contains its Run or Spec run. A Spec&#39;s <code>tickets</code> is its complete roster in issue-number order; each entry has <code>issue</code> (<code>number</code>, <code>url</code>, nullable <code>title</code>), <code>state</code> (<code>running</code>, <code>merged</code>, <code>failed</code>, <code>waiting</code>, or <code>not started</code>) and <code>blockers</code> (the named open blocking issues, with the same issue fields). Match a Ticket&#39;s <code>issue.url</code> to the Run in that Spec&#39;s <code>children</code> for its stage, age, liveness and Base fix descendants. Tickets without a Run remain in the roster. Completed child Runs stay in the tree while its Command is listed. A killed child&#39;s <code>state: &quot;died&quot;</code> remains independent of the Spec&#39;s Ticket accounting. <code>parent_record</code> links each child to its parent&#39;s exact file; <code>parent_dispatch</code>, when present, names the dispatched issue&#39;s URL within that file. A top-level Command has null for both. Records from before these fields existed read as having no children or Tickets.</p>
+<p>For example, this tree excerpt omits the common Run fields shown above:</p>
+<pre><code class="language-json">{
+  &quot;kind&quot;: &quot;Pickup run&quot;,
+  &quot;dispatched&quot;: [{
+    &quot;kind&quot;: &quot;Spec run&quot;,
+    &quot;stage&quot;: {&quot;name&quot;: &quot;Tickets&quot;, &quot;began_at&quot;: &quot;2026-10-18T12:00:01-04:00&quot;, &quot;age_seconds&quot;: 52},
+    &quot;tickets&quot;: [
+      {&quot;issue&quot;: {&quot;number&quot;: 21, &quot;url&quot;: &quot;https://github.com/acme/widgets/issues/21&quot;, &quot;title&quot;: null}, &quot;state&quot;: &quot;running&quot;, &quot;blockers&quot;: []},
+      {&quot;issue&quot;: {&quot;number&quot;: 22, &quot;url&quot;: &quot;https://github.com/acme/widgets/issues/22&quot;, &quot;title&quot;: null}, &quot;state&quot;: &quot;waiting&quot;, &quot;blockers&quot;: [{&quot;number&quot;: 21, &quot;url&quot;: &quot;https://github.com/acme/widgets/issues/21&quot;, &quot;title&quot;: null}]},
+      {&quot;issue&quot;: {&quot;number&quot;: 23, &quot;url&quot;: &quot;https://github.com/acme/widgets/issues/23&quot;, &quot;title&quot;: null}, &quot;state&quot;: &quot;merged&quot;, &quot;blockers&quot;: []},
+      {&quot;issue&quot;: {&quot;number&quot;: 24, &quot;url&quot;: &quot;https://github.com/acme/widgets/issues/24&quot;, &quot;title&quot;: null}, &quot;state&quot;: &quot;not started&quot;, &quot;blockers&quot;: []}
+    ],
+    &quot;children&quot;: [{
+      &quot;kind&quot;: &quot;Run&quot;,
+      &quot;issue&quot;: {&quot;number&quot;: 21, &quot;url&quot;: &quot;https://github.com/acme/widgets/issues/21&quot;, &quot;title&quot;: &quot;Make widgets&quot;},
+      &quot;state&quot;: &quot;live&quot;,
+      &quot;stage&quot;: {&quot;name&quot;: &quot;implement&quot;, &quot;began_at&quot;: &quot;2026-10-18T12:00:01-04:00&quot;, &quot;age_seconds&quot;: 52},
+      &quot;children&quot;: []
+    }]
+  }]
+}
+</code></pre>
+<p>Every entry has <code>source</code>: <code>command_record</code>, <code>activity_log</code> or <code>session_log</code>. The latter two carry <code>repository</code>, <code>kind</code>, nullable <code>issue</code> (number, URL, nullable title), <code>harness</code>, <code>model</code>, <code>effort</code>, <code>started_at</code>, nullable <code>ended_at</code> and <code>outcome</code>, nullable <code>command_log</code>, <code>session_logs</code> (paths), <code>state</code>, <code>stages: []</code> and <code>stage: null</code>. They omit record-only fields such as process identity and branch information. Activity times use the UTC offset in the Command log&#39;s stamp; their outcome is the Activity log&#39;s full ending text. A Session entry has null Harness, Model, Effort, end time and outcome, and lists its grouped Session logs. Both flags can be combined as <code>status --all --json</code>.</p>
+<h2 id="show-and-read-one-command">Show and read one Command</h2>
+<p>Name a Command by <code>widgets#7</code>, <code>acme/widgets#7</code>, or its full Issue URL. The owner is needed only when repositories on this machine share the name; an ambiguous short name is refused with the matching repositories. When several Commands worked on the issue, the live one wins, otherwise the latest start wins. A Ticket&#39;s issue names its Run within the Spec run. A Pass with no issue is named by kind and stamp, such as <code>architect-20261018T120000-0400</code>, as listed by <code>status</code>.</p>
+<pre><code class="language-sh">thirdshift show &#39;widgets#7&#39;
+thirdshift show https://github.com/acme/widgets/issues/7 --json
+thirdshift logs &#39;widgets#7&#39;
+thirdshift logs &#39;widgets#7&#39; --session implement
+thirdshift logs &#39;widgets#7&#39; --session repair --follow
+</code></pre>
+<p><code>show</code> includes the Runs, stage history with start times, outcomes, and Command and Session log paths. Each live Run also gets its latest event, such as <code>Bash: cargo test</code>, from the last 64 KiB of its current Session log. It uses the Harness&#39;s stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session logs leave the event unavailable.</p>
+<p><code>show --json</code> is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:</p>
+<pre><code class="language-json">{
+  &quot;version&quot;: 1,
+  &quot;hostname&quot;: &quot;factory&quot;,
+  &quot;command&quot;: {
+    &quot;version&quot;: 1,
+    &quot;kind&quot;: &quot;Run&quot;,
+    &quot;repository&quot;: &quot;acme/widgets&quot;,
+    &quot;name&quot;: &quot;acme/widgets#7&quot;,
+    &quot;state&quot;: &quot;live&quot;,
+    &quot;latest_event&quot;: &quot;Bash: cargo test&quot;,
+    &quot;stages&quot;: [{&quot;name&quot;: &quot;implement&quot;, &quot;began_at&quot;: &quot;2026-10-18T12:00:01-04:00&quot;, &quot;session_log&quot;: &quot;/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl&quot;}],
+    &quot;command_log&quot;: &quot;/logs/acme/widgets/commands/issue/7-stamp.log&quot;,
+    &quot;session_log&quot;: &quot;/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl&quot;,
+    &quot;session_logs&quot;: [&quot;/logs/acme/widgets/commands/issue/7-stamp-implement.jsonl&quot;],
+    &quot;children&quot;: [],
+    &quot;dispatched&quot;: []
+  }
+}
+</code></pre>
+<p>The Command excerpt omits the common fields documented for <code>status --json</code>; all those fields are retained, including process identity, issue, Harness, Model, Effort and nullable outcome. <code>children</code> and <code>dispatched</code> retain the same recursive shape. <code>session_logs</code> lists the selected Run&#39;s Session log paths, including original sessions and Resumes that share a stage. <code>latest_event</code> is optional, present only when a live Run has a readable event, including in child Runs. History without a Command record uses the same Activity-log or Session-log shape as <code>status --all --json</code>, with Session logs discovered by issue/kind and Command stamp, without invented stages or liveness.</p>
+<p><code>logs</code> writes the Command log verbatim. <code>--session &lt;kind&gt;</code> writes that kind&#39;s latest Session log as raw JSON lines; <code>implement</code> and <code>spec-review</code> include a later Resume, and <code>repair</code> selects the latest numbered Repair. A missing log or session kind gives an error. <code>--follow</code> first prints the selected log, then flushes appended bytes until the owning Command ends or dies, including its final output. A Ticket shares its Command&#39;s Command log but selects its own Session logs. The selected Command and Session log stay fixed while following.</p>
+<h2 id="stopping-a-command">Stopping a Command</h2>
+<p><code>thirdshift stop widgets#7</code> stops a live Run and waits for its cleanup. It accepts
+the same Command names as <code>show</code>: <code>owner/repo#number</code>, an Issue URL, or a Pass&#39;s
+<code>kind-stamp</code> name. It works from any directory and never prompts. Ended and died
+Commands are refused; Stop sends SIGTERM only to the recorded process, with no
+forced kill.</p>
+<p>Stopping a Spec run ends its Tickets&#39; Runs too, saving their unfinished work.
+Only the Spec&#39;s issue receives Stop labels; its Tickets&#39; labels stay as they
+were. A Stop on a Pickup run applies to the issue it took, whether a Run or a
+Spec run. A Pass still without an issue, such as an Architect run in its
+Architecture review or a Security run in its audit, ends without changing
+labels. Stop refuses a Ticket&#39;s issue and names the Spec run to stop instead.</p>
+<p>By default, Stop leaves the issue for the Day shift: it adds <code>needs-triage</code> and
+does not put <code>ready-for-agent</code> back. It removes <code>in-progress</code> when nothing reached
+<code>origin</code>, and keeps it when an Issue branch or pull request remains. Add
+<code>--requeue</code> to release the Claim and put <code>ready-for-agent</code> back even after a push;
+the next Run continues that Issue branch. Ordinary interruption without a Stop
+keeps its usual Claim rules.</p>
+<p>The Stop request is kept beside the Command record with the Unix user who asked
+and whether to requeue. The Command writes <code>&lt;subject&gt; stopped from the CLI by &lt;who&gt;</code> to its Activity log before its <code>ended:</code> line. Stop prints <code>still ending</code>
+each minute while cleanup runs, then the outcome and any Issue branch or pull
+request left behind.</p>
+<h2 id="logs">Logs</h2>
+<p>Everything thirdshift logs goes under <code>~/.thirdshift/logs/</code>, or the <code>logs.dir</code> set in the <a href="/docs/configuration/#user-config">User config</a>, in a folder per repository, <code>&lt;owner&gt;/&lt;repo&gt;/</code>, named for the GitHub repository rather than your checkout, so a fork and its upstream never share one and every checkout or worktree of a repository logs to the same place. thirdshift creates each folder as it needs it, so a repository&#39;s first pass needs nothing made by hand:</p>
+<pre><code>~/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/
+├── activity.log              the Activity log
+├── audits/                   each Security audit&#39;s report, with its evidence
+├── security-reviews/         each Security review&#39;s private report of old findings
+└── commands/
+    ├── architect/            &lt;stamp&gt;.log and Session logs
+    ├── pickup/               &lt;n&gt;-&lt;stamp&gt;.log and Session logs
+    ├── secure/               &lt;stamp&gt;.log and Session logs
+    └── issue/                &lt;n&gt;-&lt;stamp&gt;.log and Session logs
+</code></pre>
+<p>The folder already names the repository, so no file name repeats it. <code>audits/</code> and <code>security-reviews/</code> hold vulnerability evidence, so keep the logs private (see <a href="/docs/passes/#security-runs">Security runs</a>). A <strong>Session log</strong> is one session&#39;s full transcript, as the Harness&#39;s JSON output, such as Claude Code&#39;s <code>stream-json</code>:</p>
+<pre><code>~/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/issue/&lt;n&gt;-&lt;stamp&gt;-implement.jsonl
+~/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/issue/&lt;n&gt;-&lt;stamp&gt;-repair-&lt;i&gt;.jsonl
+~/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/architect/architect-&lt;stamp&gt;-architecture-review.jsonl
+</code></pre>
+<p>Session logs share the owning command&#39;s folder: a Pickup run&#39;s dispatched Run logs in <code>commands/pickup/</code>, an Architect run&#39;s in <code>commands/architect/</code>, and a Security run&#39;s in <code>commands/secure/</code>. Tickets and Base fixes inherit that folder too.</p>
+<p>A Resume is logged as its session&#39;s kind plus <code>-resume</code>, e.g. <code>implement-resume.jsonl</code>.</p>
+<p>A <strong>Command log</strong> is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: <code>thirdshift &lt;Issue URL&gt;</code>, a Run or a Spec run, in <code>issue/</code>, <code>thirdshift pickup</code> in <code>pickup/</code>, named for the issue it took, and <code>thirdshift architect</code> in <code>architect/</code>. A Spec run&#39;s covers its Tickets&#39; Runs, a Run&#39;s covers its <a href="/docs/runs/#base-fix">Base fix</a>, and a Pass&#39;s covers the Spec run or Run it dispatched: none of those keeps one of its own. So <code>ls -t ~/.thirdshift/logs/acme/widgets/commands/pickup/*.log | head</code> lists the recent passes on acme/widgets that took an issue. A command keeps its Command log once it starts work: a Pass skipped before doing any work keeps none, nor does a Run that fails before it starts work, as on the <a href="/docs/runs/#what-a-run-does">Origin match</a>, and <code>setup</code>, <code>email-test</code>, <code>update</code>, <code>version</code> and <code>help</code> never keep one. Lines printed before the Command log&#39;s name is known, such as a Pickup run&#39;s lines on the issues it <a href="/docs/passes/#why-an-issue-was-passed-over">passed over</a> before it took one, are written first, and once it is created a progress line says <code>logging this command to &lt;path&gt;</code>. A Command log that can&#39;t be written produces one <code>warning:</code> line on stderr. A failure confined to the Command log leaves the outcome, stdout and exit code unchanged; if the shared folder also prevents writing a Session log, the Run fails before starting that session.</p>
+<p>The stamp is the local time the command started, with its UTC offset, as in <code>20261003T120000-0400</code>, in the machine&#39;s time zone, or <code>TZ</code>&#39;s if set, so it agrees with <code>date</code> and <code>ls -l</code>. A command&#39;s Command log and all of its Session logs, its Tickets&#39; Runs&#39; and its Base fix&#39;s included, share that one stamp, so they sort together and each can be found from the other. When a Run fails, stderr ends with the path of its most recent Session log, the place to start looking, then that of its Command log.</p>
+<p>The <strong>Activity log</strong>, <code>activity.log</code>, is a short running record of what the factory did on the repository (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0011-thirdshift-keeps-a-per-repository-activity-log.md">ADR-0011</a>). A Run, a Spec run or a Pass writes a line when it starts work, naming its Command log, and one when it ends, with its outcome; a Run you type by hand writes them too, and the run a Pass dispatched, a Spec run&#39;s Tickets and a Base fix write none of their own. A skipped Pass writes a line only when its reason differs from the last line of its own kind, so a repository that sits idle shows one line, not one per pass, and the first skip after a pass that did work always shows: that is when the repository went idle. Every line starts with the local date and time:</p>
+<pre><code>2026-10-03 02:00:01 Pickup run skipped: no Ready issue on acme/widgets
+2026-10-03 09:30:01 Pickup run #41 started: commands/pickup/41-20261003T093001-0400.log
+2026-10-03 09:52:17 Pickup run #41 ended: PR https://github.com/acme/widgets/pull/42 is merged
+2026-10-03 10:00:01 Pickup run skipped: no Ready issue on acme/widgets
+</code></pre>
+<p>Each line is appended whole, so passes that run at once on one repository never garble it. One that can&#39;t be written is one <code>warning:</code> line on stderr, and the command carries on as for a Command log. thirdshift never rotates it: collapsed skips keep it small. Existing logs, including Session logs in <code>&lt;owner&gt;/&lt;repo&gt;/sessions/</code> and logs from before the per-repository layout, are not moved.</p>
+<p>With <code>quiet_skips = true</code> in the <code>[activity]</code> section of the <a href="/docs/configuration/#user-config">User config</a>, a skipped Pass prints nothing on stdout or stderr, its dated first line included, and leaves only its Activity log line. A pass that does work, or fails, prints as ever, so a scheduler&#39;s log file catches only what went wrong. Without it, a skipped pass prints as it always has, for a pass you type by hand.</p>
+</main>
+<footer class="docs-footer"><a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/guide/observing.md">Read or edit this page as Markdown on GitHub</a></footer>
+</body>
+</html>

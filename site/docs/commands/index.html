@@ -1,0 +1,75 @@
+<!doctype html>
+<!-- Generated from docs/guide/commands.md; edit Markdown and run npm run docs in site/. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commands · thirdshift</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="docs-header"><nav aria-label="Site"><a href="/">thirdshift / home</a> · <a href="/docs/">Documentation</a> · <a href="/how-it-works/">How it works</a> · <a href="/prompts/">Prompts and skills</a></nav></header>
+<main class="docs-content">
+<h1 id="commands">Commands</h1>
+<h2 id="usage">Usage</h2>
+<pre><code class="language-sh">cd ~/repos/widgets          # a clone of the issue&#39;s repository, on the Base branch
+thirdshift https://github.com/acme/widgets/issues/7
+</code></pre>
+<p>You can use a positive decimal issue number anywhere a Run takes an Issue URL:</p>
+<pre><code class="language-sh">thirdshift 7
+thirdshift merge 7
+thirdshift --no-merge 7 harness codex
+</code></pre>
+<p>The number resolves against the Launch directory&#39;s <code>origin</code>, including from nested
+directories in the clone. Supported origins are <code>https://github.com/owner/repo</code>,
+<code>git@github.com:owner/repo</code> and <code>ssh://git@github.com/owner/repo</code>, with or without
+<code>.git</code>. The Run uses the same Issue URL and Origin match as the full-URL form.
+Zero, overflow and malformed numbers are rejected. A missing or non-GitHub
+<code>origin</code>, or starting outside a clone, stops shorthand resolution before any
+session or tracker change. All Run options work with either form.</p>
+<p>A Run takes minutes to tens of minutes.</p>
+<p>To have the Run merge its pull request instead of leaving it for your review, start a <strong>Merge run</strong>:</p>
+<pre><code class="language-sh">thirdshift merge https://github.com/acme/widgets/issues/7
+</code></pre>
+<p><code>thirdshift --merge &lt;Issue URL&gt;</code> does the same, and either goes before or after the URL. The agent gets the same implement prompt either way; the differences are the Self-merge at the end and the review of <a href="/docs/runs/#foreign-commits-in-a-merge-run">Foreign commits</a>. To make every Run on a machine a Merge run, set <code>merge.always</code> in the <a href="/docs/configuration/#user-config">User config</a>; <code>no-merge</code> (or <code>--no-merge</code>), before or after the URL, then makes one Run end ready for review instead. Giving a flag twice, or <code>merge</code> together with <code>no-merge</code>, is an argument error.</p>
+<p>A Merge run ends in one of four ways:</p>
+<ul>
+<li><strong>Merged</strong>: exit <code>0</code>, the pull request&#39;s URL on stdout, and <code>PR &lt;url&gt; is merged</code> as stderr&#39;s last line.</li>
+<li><strong>Review required</strong>: the PR&#39;s <code>reviewDecision</code> is <code>REVIEW_REQUIRED</code> or <code>CHANGES_REQUESTED</code> just before a Self-merge attempt. Exit <code>1</code>, the PR URL on stdout, and <code>PR &lt;url&gt; needs an approving review before it can merge; it is ready for review</code> on stderr and in the Run notification. The Run notification and Activity log summary name <code>review required</code>. The PR stays ready, the Claim is kept, and no merge attempt or further Repair round runs. An empty or <code>APPROVED</code> decision, or a failed read, leaves the existing merge behavior in place.</li>
+<li><strong>Policy refusal</strong>: GitHub refused the merge and a round of merging the Base branch and watching CI found nothing left to fix. Exit <code>1</code>, the pull request&#39;s URL on stdout, and GitHub&#39;s error on stderr. The pull request stays open and ready for review, not a draft, for you to merge by hand or to change the repository&#39;s settings. thirdshift never reads GitHub&#39;s error text to decide this.</li>
+<li><strong>Any other failure</strong>: a <a href="/docs/runs/#failed-runs">Failed run</a>, as for a Run without <code>merge</code>.</li>
+</ul>
+<p>To be emailed when the Run ends, add <code>--email</code> (or <code>email</code>), optionally followed by the address, before or after the URL and alongside <code>merge</code>:</p>
+<pre><code class="language-sh">thirdshift --email you@example.com https://github.com/acme/widgets/issues/7
+</code></pre>
+<p>It sends one <a href="/docs/configuration/#email">Run notification</a>, whatever the outcome. To have every Run on a machine send one, set <code>email.always</code> in the <a href="/docs/configuration/#user-config">User config</a>; <code>no-email</code> (or <code>--no-email</code>) then skips it for one Run.</p>
+<ul>
+<li><strong>stdout</strong> carries only the pull request&#39;s URL: on success, and on a Failed run that leaves an open pull request, a draft or, after a policy refusal, one ready for review. The exit code tells the two apart, so script it as <code>url=$(thirdshift &quot;$issue&quot;) &amp;&amp; echo &quot;ready: $url&quot;</code>.</li>
+<li><strong>stderr</strong> carries everything else: errors, cleanup problems, and progress lines while sessions run. Each line starts with the local time it was printed, as in <code>thirdshift: 12:14:49 pushing issue-7</code>, so a quiet terminal shows how long the Run has been on its last step. The first line of a Run, a Spec run or a Pass also names the date and the UTC offset, as in <code>thirdshift: 12:00:01 starting on https://github.com/acme/widgets/issues/7, 2026-10-03 -0400</code>, so a log that collects many commands, such as a crontab line&#39;s, reads as a dated list. Everything on stderr and stdout is kept in the command&#39;s <a href="/docs/observing/#logs">Command log</a> too. A top-level Run or Spec run prints its elapsed wall time near the end, as <code>Took: 1h 2m 3s</code>, before its final outcome or failure cause. This also covers graceful interruption, works without email, and adds no summary for child Runs or skipped Passes. A successful Run&#39;s last line names the pull request too: <code>PR &lt;url&gt; is ready for review</code>, or <code>PR &lt;url&gt; is merged</code> after a Merge run, followed only by a <code>warning:</code> line if a <a href="/docs/configuration/#email">Run notification</a> can&#39;t be sent.</li>
+<li><strong>Exit code</strong> <code>0</code> means the Run ended with a pull request the factory stands behind, merged in a Merge run. Once the Self-merge has merged, the Run succeeds even if deleting the Issue branch on <code>origin</code>, closing the issue or removing <code>in-progress</code> from it then fails: the merge can&#39;t be undone, so each failed step is a <code>warning:</code> line on stderr naming the command to run by hand, and the Run still exits <code>0</code> with the URL on stdout. Ctrl-C likewise: before the merge it makes a Failed run, after it thirdshift finishes these steps and exits as merged. <code>2</code> means the command is one thirdshift can&#39;t use: the issue argument is missing or isn&#39;t a GitHub Issue URL or positive decimal number, there is an argument other than the issue and the Run flags, a Run flag is repeated or contradicts another, or <code>parallel</code> isn&#39;t followed by a whole number from 1 up; the error and the help text go to stderr, before any work. Failure to resolve a number against the clone&#39;s origin exits <code>1</code>. A <a href="/docs/configuration/#user-config">User config</a> thirdshift can&#39;t use exits <code>1</code>, also before any work. Any other failure exits <code>1</code>.</li>
+</ul>
+<p>During a CI wait, <code>CI on &lt;short sha&gt;: 3 still running out of 4 checks listed so far</code> counts the checks GitHub currently lists, including commit statuses. Dependent jobs and matrix jobs may become visible later, so both the pending count and the listed total can rise as CI progresses. A change to either count prints a new progress line; identical repeated counts stay quiet. The listed total is not a prediction of the final workflow total. This reporting does not change which checks count as passing or when Delivery may merge.</p>
+<p>CI check observations get at most three total attempts: the original read and two retries, with interruptible delays of one second then two seconds. Transport failures, HTTP 429 or 5xx responses, and truncated JSON can recover this way; known permanent errors and unclassified failures stop immediately with their diagnostics. This applies to the initial watch, pending-check polling, Base comparison and Check re-run reconciliation. Each retry reads the same repository and full commit again. Failed reads never count as passing or absent CI, never start a Repair, and never repeat a workflow re-run request. Progress lines retain each failure and delay; exhaustion reports all three attempts and their causes. Cancellation stops active reads and backoff without another request.</p>
+<p>The other commands:</p>
+<pre><code class="language-sh">thirdshift architect [&lt;focus&gt;]      # review the Base branch&#39;s architecture, publish a plan and run it (see Architect runs)
+thirdshift architect [&lt;focus&gt;] --plan-only   # publish the plan, mark it ready and stop there
+thirdshift architect base &lt;branch&gt; [&lt;focus&gt;]   # do either with &lt;branch&gt; as the Base branch, from a clone on any branch
+thirdshift pickup                   # take the lowest-numbered Ready issue in the repository and run it (see Pickup runs)
+thirdshift pickup base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
+thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
+thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
+thirdshift email-test [&lt;address&gt;]   # send a test email through Resend (see Email)
+thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
+thirdshift update                   # update to the latest release (see Updating)
+thirdshift version                  # print thirdshift &lt;version&gt;
+thirdshift help                     # print a compact command and option reference
+</code></pre>
+<p><code>help</code> lists commands and shared options, with a link to the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/README.md">project README</a>, which points to these guides for workflow details, settings, Harness setup, email, logs and scheduling.</p>
+<p><code>version</code> and <code>help</code> print to stdout and exit <code>0</code>. <code>update</code>, <code>setup</code> and <code>email-test</code> follow the Run&#39;s rule: stdout stays empty, messages go to stderr. <code>architect</code> follows it too: stdout carries the pull request&#39;s URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with <code>--plan-only</code>, or its idea when the review published no plan. A skipped Architect run prints nothing there when <a href="/docs/passes/#one-at-a-time">another is still running</a>, the URL of each Architect plan that is <a href="/docs/passes/#one-architect-plan-at-a-time">still open</a>, the URL of each <a href="/docs/passes/#an-architect-idea-waits-for-triage">Architect idea waiting for triage</a>, and the URL of the <a href="/docs/passes/#a-ready-issue-goes-first">Ready issue that goes first</a>. <code>pickup</code> follows it as well: stdout carries the pull request&#39;s URL of the run it dispatches, and nothing when the <a href="/docs/passes/#pickup-runs">Pickup run</a> is skipped. So does <code>secure</code>: stdout carries the pull request&#39;s URL of a fix it dispatches, and nothing otherwise.</p>
+<p>Uncommitted changes in your clone are fine: the Run works in its own worktree from <code>origin</code>, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.</p>
+</main>
+<footer class="docs-footer"><a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/guide/commands.md">Read or edit this page as Markdown on GitHub</a></footer>
+</body>
+</html>

@@ -1,0 +1,13 @@
+.docs-header, .docs-content, .docs-footer { max-width: 88ch; margin-inline: auto; }
+.docs-header { padding-block: 2rem; border-bottom: 1px solid var(--rule); }
+.docs-content { padding-block: 2rem; overflow-wrap: anywhere; }
+.docs-content h1 { font-size: clamp(2.5rem, 7vw, 4rem); margin-bottom: 2rem; }
+.docs-content h2 { font-size: 2rem; margin-top: 3rem; }
+.docs-content h3 { font-size: 1.5rem; margin-top: 2rem; }
+.docs-content :is(h1, h2, h3, h4) { scroll-margin-top: 1rem; }
+.docs-content pre { padding: 1rem; background: var(--k2); border: 1px solid var(--rule); overflow-x: auto; }
+.docs-content :not(pre) > code { color: var(--y); }
+.docs-content table { display: block; overflow-x: auto; border-collapse: collapse; }
+.docs-content :is(th, td) { text-align: left; padding: .5rem; border: 1px solid var(--rule); min-width: 10ch; }
+.docs-content li + li { margin-top: .5rem; }
+.docs-footer { padding-block: 2rem; border-top: 1px solid var(--rule); font-size: .875rem; }

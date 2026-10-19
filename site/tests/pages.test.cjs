@@ -35,6 +35,42 @@ async function pageForTest(t, options) {
   return page;
 }
 
+test("the shared documentation is reachable and readable without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  await page.goto(`${origin}/`);
+  await page.getByRole("link", { name: "Documentation", exact: true }).first().click();
+  assert.equal(new URL(page.url()).pathname, "/docs/");
+  await page.locator("main").getByRole("link", { name: "Configuration", exact: true }).click();
+  assert.equal(await page.locator("#user-config").isVisible(), true);
+  assert.ok(await page.locator("pre").first().textContent().then(text => text.includes("[merge]")));
+  await page.locator("main").getByRole("link", { name: "Harness, Model and Effort", exact: true }).first().click();
+  assert.equal(new URL(page.url()).hash, "#harness-model-and-effort");
+  assert.equal(await page.locator("#harness-model-and-effort").isVisible(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+});
+
+test("every documentation link reaches a page and its named section", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const links = new Set();
+  for (const topic of ["", "installation/", "commands/", "configuration/", "runs/", "observing/", "passes/", "development/"]) {
+    const response = await page.goto(`${origin}/docs/${topic}`);
+    assert.equal(response.status(), 200);
+    for (const href of await page.locator('a[href]').evaluateAll(nodes => nodes.map(node => node.href))) {
+      if (href.startsWith(origin)) links.add(href);
+    }
+    assert.equal(await page.locator("main h1").count(), 1);
+  }
+  for (const href of links) {
+    const response = await page.request.get(href);
+    assert.equal(response.status(), 200, href);
+    const fragment = new URL(href).hash.slice(1);
+    if (fragment) {
+      await page.goto(href);
+      assert.equal(await page.evaluate(id => document.getElementById(id) !== null, decodeURIComponent(fragment)), true, href);
+    }
+  }
+});
+
 test("the homepage leads to a guide that teaches the process in order", async (t) => {
   const page = await pageForTest(t);
   await page.goto(`${origin}/`);

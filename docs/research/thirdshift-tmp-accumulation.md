@@ -52,7 +52,7 @@ The handoff called the collection “about 3.4 GB.” Do not add its subgroups a
 
 ### 2. Agent scratch and tool installations
 
-**Source-inspected:** [README, “What sessions leave behind”](../../README.md#what-sessions-leave-behind) deliberately retains user-level agent writes outside factory resources, giving `/tmp/pw`, PR drafts and a JDK under `~/.local/jdk/` as examples. It recommends preinstalling toolchains and browser dependencies. This is intended retention, not proof of a factory cleanup defect.
+**Source-inspected:** [Installation, “What sessions leave behind”](../guide/installation.md#what-sessions-leave-behind) deliberately retains user-level agent writes outside factory resources, giving `/tmp/pw`, PR drafts and a JDK under `~/.local/jdk/` as examples. It recommends preinstalling toolchains and browser dependencies. This is intended retention, not proof of a factory cleanup defect.
 
 **Historically observed:** the handoff attributed about 508 entries and repeated Mermaid installations to sessions. **Hypothetical (medium confidence for named scratch, low for generic tooling):** current other `thirdshift-*` names include PR drafts, test logs and review artifacts, consistent with that history. The 559-name count includes handoffs and other investigations, and the tooling cues have no creator evidence; neither group is wholly attributable to production Runs.
 
