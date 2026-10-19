@@ -28,6 +28,13 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
+    fn identity(&self) -> Identity<'_> {
+        Identity {
+            stamp: &self.stamp,
+            token: self.token.as_deref(),
+        }
+    }
+
     pub fn log_path(&self) -> Option<&Path> {
         self.command_log.as_deref()
     }
@@ -57,12 +64,7 @@ impl Owner {
         };
         let session = path.with_file_name(format!("{stem}.jsonl"));
         decode(&session).is_some_and(|decoded| {
-            decoded.session_kind.is_some()
-                && decoded.identity
-                    == Identity {
-                        stamp: &self.stamp,
-                        token: self.token.as_deref(),
-                    }
+            decoded.session_kind.is_some() && decoded.identity == self.identity()
         })
     }
 
@@ -87,12 +89,7 @@ impl Owner {
         if let Some(log) = owner.log_path() {
             let decoded = decode(log).context("invalid inherited Command log path")?;
             ensure!(
-                decoded.session_kind.is_none()
-                    && decoded.identity
-                        == Identity {
-                            stamp: &owner.stamp,
-                            token: owner.token.as_deref()
-                        },
+                decoded.session_kind.is_none() && decoded.identity == owner.identity(),
                 "inherited Command log disagrees with its owner"
             );
         }
