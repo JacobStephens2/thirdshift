@@ -103,7 +103,7 @@
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
-//! its head branch or its number; numeric merge reads that PR's actual head.
+//! its head branch, number or URL; a number or URL selects that PR's actual head.
 //!
 //! `gh issue close` closes the issue, recording its `--comment`; on an issue
 //! already closed it only warns, as gh does.
@@ -267,9 +267,11 @@ fn check_repo(state: &Json, flags: &Flags) {
 
 /// Fail unless `repo`, if any, is the fake's. `{owner}/{repo}` is gh's
 /// placeholder for the current directory's repo, which is always the fake's.
+/// The local origin path stands in for that repository's remote URL.
 fn check_repo_is(state: &Json, repo: Option<&str>) {
     if let Some(repo) = repo
         && repo != "{owner}/{repo}"
+        && Path::new(repo) != origin_repo()
         && repo.to_lowercase() != state.at("repo").str().to_lowercase()
     {
         die(&format!("fake gh: unknown repo {repo}"), 1);
@@ -288,9 +290,14 @@ fn newest_pr_from(state: &Json, head: &str) -> usize {
         .unwrap_or_else(|| no_pr_for(head))
 }
 
-/// Resolve a numeric identity or, for fake agents, a head branch.
+/// Resolve a number or URL, or, for fake agents, a head branch.
 fn selected_pr(state: &Json, name: &str) -> usize {
-    if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+    if name.starts_with("https://") {
+        prs(state)
+            .iter()
+            .rposition(|pr| pr.at("url").str() == name)
+            .unwrap_or_else(|| no_pr_for(name))
+    } else if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
         prs(state)
             .iter()
             .rposition(|pr| pr.at("number").as_i64() == name.parse().ok())
@@ -464,6 +471,8 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
 const PR_LINE_OF_NEWEST: &str =
     r#".[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")""#;
 
+const PR_LINE_OF_NEWEST_WITH_OWNERSHIP: &str = r#".[0] // empty | "\(.isCrossRepository) \(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")""#;
+
 const WORKFLOW_RUN_LINES: &str = r#".workflow_runs[] | "\(.status) \(.conclusion) \(.name)""#;
 
 const COMMIT_PR_LINES: &str = r#".[] | "\(.merge_commit_sha) \(.number)""#;
@@ -476,7 +485,7 @@ const FAILED_JOB_NAMES: &str = r#"[.jobs[] | select(.conclusion != "success" and
 
 /// Newest first. `--search head:<prefix>` matches head branches starting with
 /// <prefix>, as GitHub's search does; `--head <branch>` matches that branch
-/// exactly. `--jq` is supported only as `PR_LINE_OF_NEWEST`.
+/// exactly. `--jq` supports the newest-PR line with or without its ownership.
 fn pr_list(state: &Json, flags: &Flags) {
     let wanted_state = flag(flags, "state").unwrap_or("open").to_uppercase();
     let search = flag(flags, "search").unwrap_or("");
@@ -500,7 +509,7 @@ fn pr_list(state: &Json, flags: &Flags) {
         .collect();
     match flag(flags, "jq") {
         None => println!("{}", Array(listed)),
-        Some(PR_LINE_OF_NEWEST) => {
+        Some(jq @ (PR_LINE_OF_NEWEST | PR_LINE_OF_NEWEST_WITH_OWNERSHIP)) => {
             if let Some(pr) = listed.first() {
                 let merge = match pr.at("mergeCommit") {
                     commit if commit.truthy() => {
@@ -508,8 +517,12 @@ fn pr_list(state: &Json, flags: &Flags) {
                     }
                     _ => String::new(),
                 };
+                let ownership = match jq {
+                    PR_LINE_OF_NEWEST_WITH_OWNERSHIP => format!("{} ", pr.at("isCrossRepository")),
+                    _ => String::new(),
+                };
                 let line = format!(
-                    "{} {} {} {merge}",
+                    "{ownership}{} {} {} {merge}",
                     pr.at("state").python(),
                     pr.at("url").python(),
                     pr.at("headRefOid").python()
