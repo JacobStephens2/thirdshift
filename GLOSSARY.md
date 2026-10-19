@@ -232,7 +232,7 @@ One running record per repository of what the factory did there: a line when a *
 _Avoid_: cron log, pass log, history
 
 **Console**:
-The web page a machine serves that shows every **Command** started on it, live ones first, with each one's child **Runs**, their stages and their logs, and from which a live Command can be stopped. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
+The web page a machine serves that shows every **Command** started on it, opening on its **Inbox**, with each one's child **Runs**, their stages and their logs, and from which a live Command can be stopped. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
 _Avoid_: dashboard, floor, UI, web UI
 
 **Command record**:
@@ -250,3 +250,27 @@ _Avoid_: user, login
 **Console log**:
 One running record per machine of what happened to its **Console accounts**: sign-ins, failed sign-ins, codes sent, passwords set and sign-outs, each naming the account. What people did to **Commands** goes in the **Activity log** instead, and what they only looked at is recorded nowhere.
 _Avoid_: audit log, access log
+
+**Inbox**:
+The **Console**'s first page, and `thirdshift status`'s order: a machine's **Commands** grouped by what each asks of the **Day shift**. **Needs you** comes first. Ready for review holds Commands that ended ready, with a pull request waiting. Landing holds live Runs at CI watch or **Self-merge**. Working holds every other live Command. Done holds Commands that ended in the last day, and Resolved holds older ones with nothing waiting. Commands older still are only in the history.
+_Avoid_: dashboard, feed, queue
+
+**Needs you**:
+The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** then **Slow** Runs, and then the ended ones: a Command that died, one that failed, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves when a later Command on the same issue starts on the machine, or once it is older than the period the **User config** sets. Nothing else clears it, since the **Console** does nothing the CLI can't.
+_Avoid_: alerts, attention, triage queue
+
+**Silent**:
+A live **Run** whose **Session log** and **Command log** have both stopped growing for longer than the silent time the **User config** sets, 10 minutes unless set: it may be stuck. Stages that wait on something else, such as CI watch, write a line at intervals while they wait, so silence means the same thing in every stage. A stall is silence, not a long stage: a Run that is past its **Usual range** but still logging is **Slow**.
+_Avoid_: stalled, stuck, hung
+
+**Slow**:
+A live **Run** whose stage has gone past the top of that stage's **Usual range** while its logs keep growing. It is still working; it only needs a look, unlike a **Silent** one.
+_Avoid_: late, overdue, stalled
+
+**Usual range**:
+How long a stage usually takes in a repository: the middle half of that stage's times over the repository's recent **Command records** on the machine, shown only once there are enough of them. It is what makes a Run **Slow**.
+_Avoid_: average, baseline, estimate
+
+**Theme**:
+How the **Console** looks, its colours, fonts, shapes, effects and motion, over a layout that every Theme shares. thirdshift comes with some, and a user can make their own. Choosing one changes how the page looks, never what it shows.
+_Avoid_: skin, style, variant
