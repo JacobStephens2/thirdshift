@@ -1,6 +1,6 @@
 //! Headless agent sessions on the chosen Harness, and their logs.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 #[cfg(test)]
 use std::fs::{self, File};
 #[cfg(test)]
@@ -55,6 +55,7 @@ pub struct Logs {
     /// `architect` for an Architect run.
     name: String,
     dir: PathBuf,
+    recording: OnceCell<recording::Recording>,
 }
 
 impl Logs {
@@ -63,6 +64,7 @@ impl Logs {
         Logs {
             name: issue.number.to_string(),
             dir: logs::session_dir(&issue.repo()),
+            recording: OnceCell::new(),
         }
     }
 
@@ -71,6 +73,7 @@ impl Logs {
         Logs {
             name: "architect".to_string(),
             dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
         }
     }
 
@@ -79,14 +82,20 @@ impl Logs {
         Logs {
             name: "secure".to_string(),
             dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
         }
     }
 
     /// Where a session's stream is logged:
-    /// `<root>/commands/<command>/<name>-<stamp>-<kind>.jsonl`.
-    pub fn path(&self, kind: &str) -> PathBuf {
-        self.dir
-            .join(format!("{}-{}-{kind}.jsonl", self.name, logs::stamp()))
+    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.jsonl`.
+    pub fn path(&self, kind: &str) -> Result<PathBuf> {
+        self.recording().session_path(&self.dir, &self.name, kind)
+    }
+
+    /// Runs construct Logs before work starts. Capture once the first Session
+    /// needs it, after the Command has allocated its immutable owner.
+    fn recording(&self) -> &recording::Recording {
+        self.recording.get_or_init(recording::Recording::capture)
     }
 }
 
@@ -133,6 +142,7 @@ impl<'a> Sessions<'a> {
             worktree: worktree.to_path_buf(),
             harness: harness.clone(),
             adapter,
+            recording: logs.recording().clone(),
         };
         let (taken, log) = Sessions::taking(logs, worktree, Box::new(on_machine), steps);
         (taken, log.filter(|log| log.exists()))
@@ -256,7 +266,7 @@ impl<'a> Sessions<'a> {
         prompt: &str,
         reports: Option<&ReviewReports>,
     ) -> Result<Ended> {
-        let log = self.logs.path(kind);
+        let log = self.logs.path(kind)?;
         logs::session(kind, &log);
         self.step(format!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
@@ -305,6 +315,7 @@ struct OnMachine {
     worktree: PathBuf,
     harness: Choice,
     adapter: &'static dyn Adapter,
+    recording: recording::Recording,
 }
 
 impl Outside for OnMachine {
@@ -361,7 +372,7 @@ impl Outside for OnMachine {
         } else {
             None
         };
-        let ended = recording::Recording::capture().run(
+        let ended = self.recording.run(
             kind,
             &self.harness,
             &mut command,
@@ -410,6 +421,7 @@ mod tests {
             let logs = Logs {
                 name: "670".into(),
                 dir: worktree.path().join("session-logs"),
+                recording: OnceCell::new(),
             };
             let choice = Choice {
                 harness,
@@ -488,6 +500,70 @@ mod tests {
         Logs {
             name: "7".to_string(),
             dir: PathBuf::from("/logs/sessions"),
+            recording: recording::Recording::new(
+                Some(PathBuf::from("/logs/7-20261003T120000-0400~fixture.log")),
+                None,
+                "20261003T120000-0400".into(),
+            )
+            .into(),
+        }
+    }
+
+    #[test]
+    fn same_second_commands_keep_session_model_and_review_contents_separate() {
+        let root = crate::test_support::scratch_worktree();
+        let stamp = "20261003T120000-0400";
+        let mut captured = Vec::new();
+        for marker in ["first", "second"] {
+            let recording = recording::Recording::new(
+                Some(root.path().join(format!("7-{stamp}~{marker}.log"))),
+                None,
+                stamp.into(),
+            );
+            let logs = Logs {
+                name: "7".into(),
+                dir: root.path().into(),
+                recording: recording.clone().into(),
+            };
+            let log = logs.path("implement").unwrap();
+            recording.run(
+                "implement", &Choice::default(),
+                Command::new("/bin/sh").args(["-c", &format!(
+                    "echo '{{\"type\":\"assistant\",\"message\":{{\"model\":\"{marker}-model\",\"content\":[]}}}}'"
+                )]), None, &log,
+                crate::harness::Harness::Claude.adapter().interpretation(root.path(), ""),
+            ).unwrap();
+            let reports = ReviewReports::new(root.path()).unwrap();
+            for axis in ["standards", "spec"] {
+                fs::write(
+                    Path::new(&reports.prompt(prompt::REVIEW_REPORTS_DIRECTORY))
+                        .join(format!("{axis}.md")),
+                    format!("{marker} {axis}"),
+                )
+                .unwrap();
+            }
+            assert!(reports.keep(&log).is_empty());
+            captured.push((marker, log, recording));
+        }
+        for (marker, log, recording) in captured {
+            assert!(
+                fs::read_to_string(&log)
+                    .unwrap()
+                    .contains(&format!("{marker}-model")),
+                "lost {marker} Session"
+            );
+            for axis in ["standards", "spec"] {
+                assert_eq!(
+                    fs::read_to_string(log.with_extension(axis)).unwrap(),
+                    format!("{marker} {axis}")
+                );
+            }
+            assert_eq!(
+                recording.notification_lines(),
+                [format!(
+                    "- implement: claude · {marker}-model (reported) · session effort: default effort"
+                )]
+            );
         }
     }
 
@@ -514,7 +590,7 @@ mod tests {
             kind: kind.to_string(),
             resume: resume.map(String::from),
             prompt: prompt.to_string(),
-            log: logs().path(kind),
+            log: logs().path(kind).unwrap(),
         }
     }
 
@@ -522,7 +598,7 @@ mod tests {
     fn logging(kind: &str) -> Call {
         Call::Step(format!(
             "logging the session to {}",
-            logs().path(kind).display()
+            logs().path(kind).unwrap().display()
         ))
     }
 
@@ -549,7 +625,7 @@ mod tests {
             calls,
             [logging("implement"), session("implement", None, "do it")]
         );
-        assert_eq!(log, Some(logs().path("implement")));
+        assert_eq!(log, Some(logs().path("implement").unwrap()));
     }
 
     #[test]
@@ -580,7 +656,7 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(log, Some(logs().path("implement-resume")));
+        assert_eq!(log, Some(logs().path("implement-resume").unwrap()));
     }
 
     #[test]
@@ -637,7 +713,7 @@ mod tests {
             format!("{:#}", taken.unwrap_err()),
             format!("implement session {TESTS_KILLED}, and a later step failed: no PR found")
         );
-        assert_eq!(log, Some(logs().path("implement-resume")));
+        assert_eq!(log, Some(logs().path("implement-resume").unwrap()));
     }
 
     #[test]
@@ -661,7 +737,7 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(log, Some(logs().path("implement")));
+        assert_eq!(log, Some(logs().path("implement").unwrap()));
     }
 
     #[test]
@@ -679,7 +755,7 @@ mod tests {
             [logging("implement"), session("implement", None, "do it")]
         );
         // The failing session's log is still the last log.
-        assert_eq!(log, Some(logs().path("implement")));
+        assert_eq!(log, Some(logs().path("implement").unwrap()));
     }
 
     #[test]

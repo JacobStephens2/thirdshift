@@ -15,6 +15,6 @@ This replaces ADR 0009's consequence that a skip leaves only its line in the sch
 
 ## Consequences
 
-- The repository in the path is the GitHub repository, `<owner>/<repo>`, not the name of the local checkout, so log file names drop it: `commands/pickup/41-<stamp>~<token>.log`. Command logs are exclusively allocated with an immutable random owner token, so Commands sharing a start stamp retain separate output and records. Session writers temporarily retain `commands/pickup/41-<stamp>-implement.jsonl` until the Session-ownership Ticket; readers accept both tokenless and token-bearing Session names. Existing legacy Command logs and records remain readable.
+- The repository in the path is the GitHub repository, `<owner>/<repo>`, not the name of the local checkout, so log file names drop it: `commands/pickup/41-<stamp>~<token>.log`. Command logs are exclusively allocated with an immutable random owner token, so Commands sharing a start stamp retain separate output and records. Session logs share the captured stamp and token, as `commands/pickup/41-<stamp>~<token>-implement.jsonl`, including across child Runs. Model sidecars and review reports use that Session's owned stem. Start stamps remain display and grouping facts. Existing legacy Command logs, Session logs and records remain readable without migration.
 - Whether the scheduler is still firing is no longer a line per pass: an idle repository's Activity log ends on one skip line.
 - Logs written before this, under `<logs.dir>/sessions/` and `<logs.dir>/commands/`, are not moved by thirdshift.

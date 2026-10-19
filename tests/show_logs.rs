@@ -8,6 +8,45 @@ use support::Scenario;
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
 #[test]
+fn same_stamp_session_history_keeps_legacy_and_owned_inventories_disjoint() {
+    let scenario = Scenario::new();
+    let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    for owner in ["", "~first", "~second"] {
+        let stem = format!("7-20261003T120000-0400{owner}");
+        fs::write(
+            folder.join(format!("{stem}.log")),
+            format!("{owner} Command\n"),
+        )
+        .unwrap();
+        for kind in ["implement", "implement-resume", "repair-1", "repair-2"] {
+            fs::write(
+                folder.join(format!("{stem}-{kind}.jsonl")),
+                format!("{owner} {kind}\n"),
+            )
+            .unwrap();
+        }
+    }
+    let result = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(status["version"], 1);
+    let commands = status["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 3, "{status}");
+    for command in commands {
+        assert_eq!(command["source"], "session_log");
+        let log = std::path::Path::new(command["command_log"].as_str().unwrap());
+        let stem = log.file_stem().unwrap().to_str().unwrap();
+        let sessions = command["session_logs"].as_array().unwrap();
+        assert_eq!(sessions.len(), 4, "{command}");
+        for kind in ["implement", "implement-resume", "repair-1", "repair-2"] {
+            let path = folder.join(format!("{stem}-{kind}.jsonl"));
+            assert!(sessions.contains(&serde_json::json!(path)), "{command}");
+        }
+    }
+}
+
+#[test]
 fn owned_and_legacy_commands_keep_exact_paths_and_record_precedence() {
     let scenario = Scenario::new();
     let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");

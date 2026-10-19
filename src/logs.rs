@@ -14,7 +14,7 @@
 mod activity;
 mod command_record;
 mod effects;
-mod owner;
+pub(crate) mod owner;
 mod process_identity;
 mod recording;
 pub mod status;
@@ -130,6 +130,7 @@ const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
 pub fn begin(begin: Begin) {
     let mut record = record();
     if matches!(begin, Begin::ChildRun(..)) {
+        record.inherit_owner(owner::Owner::inherited());
         record.child_of(std::env::var_os(PARENT_RECORD).map(PathBuf::from));
         record.child_dispatch(std::env::var(PARENT_DISPATCH).ok());
     }
@@ -297,6 +298,10 @@ pub fn stamp() -> String {
 /// Where the Command log is, if this command created one.
 pub fn command_log_path() -> Option<PathBuf> {
     record().command_log_path()
+}
+
+pub(crate) fn captured_owner() -> Result<owner::Owner, String> {
+    record().captured_owner()
 }
 
 /// Print `line` on stderr, and keep it in the Command log.
